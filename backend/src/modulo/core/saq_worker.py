@@ -3096,6 +3096,88 @@ def staging_system_settings() -> dict[str, Any]:
     return {**_base_worker_settings(_system_queue_name(), _system_functions()), "cron_jobs": _system_cron_jobs()}
 
 
+async def _set_duplicate_terminal_cooldown() -> None:
+    """Set the flood cooldown on worker start so the probe (same process)
+    does not auto-trigger a rollback on PR A's OWN rollout restart burst.
+    """
+    from modulo.core.cost_controller.probe import set_duplicate_terminal_cooldown
+
+    try:
+        await set_duplicate_terminal_cooldown(_make_session_factory())
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_worker.cooldown_set_failed")
+
+
+async def _disconnect_started_worker(worker: Worker[Any]) -> None:
+    """Disconnect the worker's queue after a start attempt.
+
+    A disconnect failure must never mask the startup failure the caller exits
+    on, but it is still worth a log line.
+    """
+    try:
+        await worker.queue.disconnect()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_worker.system_worker_disconnect_failed")
+
+
+async def _start_system_worker(
+    worker: Worker[Any],
+    loop: asyncio.AbstractEventLoop,
+    startup_failure: list[Exception],
+) -> None:
+    """Connect, reconcile crons and start the worker, recording any failure.
+
+    Deliberately NOT ``sys.exit(1)`` from inside this task: a ``SystemExit``
+    raised in a task only becomes a process exit because asyncio re-raises
+    ``BaseException`` out of the loop, and any exception raised in the
+    ``finally`` below (a queue disconnect failure on a half-started worker is
+    normal) replaces it. The task then completes with the disconnect error,
+    the done-callback retrieves it, and the web app serves forever with a dead
+    scheduler — the exact degraded state FAR-2099 removes.
+    """
+    try:
+        await worker.queue.connect()
+        await reconcile_cron_registrations(cast(RedisQueue, worker.queue), worker.cron_jobs)
+        await worker.start()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.exception("SAQ system worker failed to start — stopping the web app and exiting non-zero")
+        startup_failure.append(exc)
+        loop.stop()
+    finally:
+        await _disconnect_started_worker(worker)
+
+
+def _serve_web_until_startup_outcome(
+    web: Any,
+    app: Any,
+    loop: asyncio.AbstractEventLoop,
+    startup_failure: list[Exception],
+) -> None:
+    """Serve the web app, exiting non-zero when the worker failed to start.
+
+    ``aiohttp.web.run_app`` drives the loop through ``run_until_complete``, so a
+    loop stopped by a startup failure surfaces as ``RuntimeError`` ("Event loop
+    stopped before Future completed"). That is the expected consequence of the
+    deliberate stop (run_app's own cleanup already ran); anything else is a
+    genuine serving failure and is re-raised.
+    """
+    try:
+        web.run_app(app, host=_SYSTEM_WEB_HOST, port=_SYSTEM_WEB_PORT, loop=loop)
+    except RuntimeError:
+        if not startup_failure:
+            raise
+
+    if startup_failure:
+        _log.error("saq_worker.system_worker_exiting_nonzero")
+        sys.exit(1)
+
+
 def run_system_web() -> None:
     """Run the SAQ system worker + web UI bound to 127.0.0.1 (custom runner).
 
@@ -3128,53 +3210,8 @@ def run_system_web() -> None:
     #: HEALTHY to an orchestrator, so it must never be left running (FAR-2099).
     startup_failure: list[Exception] = []
 
-    async def _set_duplicate_terminal_cooldown() -> None:
-        """Set the flood cooldown on worker start so the probe (same process)
-        does not auto-trigger a rollback on PR A's OWN rollout restart burst.
-        """
-        from modulo.core.cost_controller.probe import set_duplicate_terminal_cooldown
-
-        try:
-            await set_duplicate_terminal_cooldown(_make_session_factory())
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("saq_worker.cooldown_set_failed")
-
     _cooldown_task = loop.create_task(_set_duplicate_terminal_cooldown())
     _cooldown_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-
-    async def _worker_start() -> None:
-        try:
-            await worker.queue.connect()
-            await reconcile_cron_registrations(cast(RedisQueue, worker.queue), worker.cron_jobs)
-            await worker.start()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            # Record the failure and stop the loop; the caller exits non-zero
-            # once ``web.run_app`` returns.
-            #
-            # Deliberately NOT ``sys.exit(1)`` from inside this task: a
-            # ``SystemExit`` raised in a task only becomes a process exit
-            # because asyncio re-raises ``BaseException`` out of the loop, and
-            # any exception raised in the ``finally`` below (a queue disconnect
-            # failure on a half-started worker is normal) replaces it. The task
-            # then completes with the disconnect error, the done-callback
-            # retrieves it, and the web app serves forever with a dead
-            # scheduler — the exact degraded state FAR-2099 removes.
-            _log.exception("SAQ system worker failed to start — stopping the web app and exiting non-zero")
-            startup_failure.append(exc)
-            loop.stop()
-        finally:
-            # A disconnect failure must never mask the startup failure the
-            # caller exits on, but it is still worth a log line.
-            try:
-                await worker.queue.disconnect()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("saq_worker.system_worker_disconnect_failed")
 
     async def _shutdown(_app: Any) -> None:
         await worker.stop()
@@ -3183,22 +3220,9 @@ def run_system_web() -> None:
     app = create_app([queue])
     app.on_shutdown.append(_shutdown)
 
-    startup_task = loop.create_task(_worker_start())
+    startup_task = loop.create_task(_start_system_worker(worker, loop, startup_failure))
     startup_task.add_done_callback(lambda fut: None if fut.cancelled() else fut.exception())
-    try:
-        web.run_app(app, host=_SYSTEM_WEB_HOST, port=_SYSTEM_WEB_PORT, loop=loop)
-    except RuntimeError:
-        # ``aiohttp.web.run_app`` drives the loop through ``run_until_complete``,
-        # so a loop stopped by the startup failure above surfaces as
-        # "Event loop stopped before Future completed". That is the expected
-        # consequence of the deliberate stop (run_app's own cleanup already
-        # ran); anything else is a genuine serving failure.
-        if not startup_failure:
-            raise
-
-    if startup_failure:
-        _log.error("saq_worker.system_worker_exiting_nonzero")
-        sys.exit(1)
+    _serve_web_until_startup_outcome(web, app, loop, startup_failure)
 
 
 def main() -> None:

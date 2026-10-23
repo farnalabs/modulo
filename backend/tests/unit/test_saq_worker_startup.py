@@ -825,3 +825,56 @@ class TestRunSystemWebStartupFailure:
         worker.queue.disconnect.assert_awaited_once()
         assert "saq_worker.system_worker_disconnect_failed" in caplog.text
         assert "saq_worker.system_worker_exiting_nonzero" in caplog.text
+
+    async def test_disconnect_cancelled_error_is_reraised(self) -> None:
+        """A cancellation during the disconnect propagates, never being logged as a failure."""
+        worker = MagicMock()
+        worker.queue.disconnect = AsyncMock(side_effect=asyncio.CancelledError())
+
+        with pytest.raises(asyncio.CancelledError):
+            await sw._disconnect_started_worker(worker)
+
+        worker.queue.disconnect.assert_awaited_once()
+
+    def test_serving_runtime_error_without_startup_failure_is_reraised(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A ``RuntimeError`` from ``run_app`` with a healthy worker is a real serving failure."""
+        web = MagicMock()
+        web.run_app = MagicMock(side_effect=RuntimeError("Event loop stopped before Future completed"))
+
+        with pytest.raises(RuntimeError, match="Event loop stopped"):
+            sw._serve_web_until_startup_outcome(web, MagicMock(), MagicMock(), [])
+
+    def test_serving_without_startup_failure_returns_cleanly(self) -> None:
+        """A clean ``run_app`` return with a started worker exits the runner normally."""
+        web = MagicMock()
+        web.run_app = MagicMock(return_value=None)
+
+        sw._serve_web_until_startup_outcome(web, MagicMock(), MagicMock(), [])
+
+        web.run_app.assert_called_once()
+
+    async def test_cooldown_cancelled_error_is_reraised(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A cancellation while setting the cooldown propagates untouched."""
+        monkeypatch.setattr(sw, "_make_session_factory", MagicMock())
+        monkeypatch.setattr(
+            "modulo.core.cost_controller.probe.set_duplicate_terminal_cooldown",
+            AsyncMock(side_effect=asyncio.CancelledError()),
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await sw._set_duplicate_terminal_cooldown()
+
+    async def test_cooldown_failure_is_logged_not_raised(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A Redis blip setting the cooldown must not crash the worker at boot."""
+        monkeypatch.setattr(sw, "_make_session_factory", MagicMock())
+        monkeypatch.setattr(
+            "modulo.core.cost_controller.probe.set_duplicate_terminal_cooldown",
+            AsyncMock(side_effect=ConnectionError("redis gone")),
+        )
+
+        with caplog.at_level("ERROR", logger="modulo.core.saq_worker"):
+            await sw._set_duplicate_terminal_cooldown()
+
+        assert "saq_worker.cooldown_set_failed" in caplog.text
