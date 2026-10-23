@@ -861,13 +861,29 @@ def _configure_license_and_otel(settings: Settings) -> None:
     if settings.modulo_public_url in ("", "http://localhost:8000"):
         logger.warning("startup.default_public_url")
 
-    if settings.modulo_license_public_key:
-        from modulo.core.license import set_public_key
+    from modulo.core.license import set_public_key
 
-        set_public_key(settings.modulo_license_public_key)
+    if settings.modulo_license_public_key:
+        try:
+            set_public_key(settings.modulo_license_public_key)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"MODULO_LICENSE_PUBLIC_KEY is not a valid Ed25519 public key (expected 64 hex characters): {exc}"
+            ) from exc
         logger.info("startup.license_public_key_configured")
     elif not settings.debug:
-        logger.warning("startup.default_license_key_in_use")
+        if settings.modulo_license_key:
+            # Fail closed (FAR-2091): a licence is configured, but verification
+            # would use the built-in DEVELOPMENT anchor, which cannot verify a
+            # Farnalabs-signed production licence. Booting anyway is the silent
+            # failure mode that made paying customers believe their key was bad.
+            raise RuntimeError(
+                "MODULO_LICENSE_KEY is set but MODULO_LICENSE_PUBLIC_KEY is not. Licences are "
+                "Ed25519-signed and the built-in trust anchor is a DEVELOPMENT key, so a production "
+                "licence cannot verify against it. Set MODULO_LICENSE_PUBLIC_KEY to the public key "
+                "Farnalabs issued with your licence."
+            )
+        logger.warning("startup.license_anchor_not_configured")
     from modulo.core.license import check_production_public_key
 
     try:

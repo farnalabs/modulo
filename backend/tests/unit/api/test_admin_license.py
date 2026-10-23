@@ -378,7 +378,28 @@ class TestUploadLicense:
         key = _sign_license_payload(payload, private_key=wrong_kp["private_key"])
         resp = client.post(self.URL, json={"license_key": key})
         assert resp.status_code == 422
-        assert "Signature" in resp.json()["detail"]
+        body = resp.json()
+        assert "Signature" in body["detail"]
+        # FAR-2091: the failure is classified, and the most common cause is named.
+        assert body["reason"] == "signature_mismatch"
+        assert "anchor mismatch" in body["detail"].lower()
+        assert body["hint"]
+
+    def test_rejects_production_key_under_dev_anchor_with_actionable_error(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The customer-facing failure: a real key, no MODULO_LICENSE_PUBLIC_KEY set."""
+        monkeypatch.setattr("modulo.core.license._configured_public_key_hex", None)
+        kp = generate_keypair()
+        key = _sign_license_payload(_make_valid_payload(), private_key=kp["private_key"])
+
+        resp = client.post(self.URL, json={"license_key": key})
+
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["reason"] == "anchor_mismatch"
+        assert "MODULO_LICENSE_PUBLIC_KEY" in body["detail"]
+        assert "anchor mismatch" in body["detail"].lower()
 
     def test_rejects_expired_license(self, client: TestClient) -> None:
         payload = _make_valid_payload(
@@ -387,11 +408,14 @@ class TestUploadLicense:
         key = _sign_license_payload(payload)
         resp = client.post(self.URL, json={"license_key": key})
         assert resp.status_code == 422
-        assert "expired" in resp.json()["detail"].lower()
+        body = resp.json()
+        assert "expired" in body["detail"].lower()
+        assert body["reason"] == "expired"
 
     def test_rejects_malformed_key(self, client: TestClient) -> None:
         resp = client.post(self.URL, json={"license_key": "not-a-valid-key"})
         assert resp.status_code == 422
+        assert resp.json()["reason"] == "malformed"
 
     def test_rejects_empty_key(self, client: TestClient) -> None:
         resp = client.post(self.URL, json={"license_key": ""})
@@ -464,6 +488,18 @@ class TestIssueLicense:
         assert resp.status_code == 201
         data = resp.json()
         assert data["features"] == ["sso"]
+
+    def test_fails_closed_when_signing_key_and_anchor_do_not_match(self, issue_client: TestClient) -> None:
+        """FAR-2091: issuing a key the deployment cannot verify names the anchor mismatch."""
+        set_public_key(generate_keypair()["public_key"])
+
+        resp = issue_client.post(self.URL, json={"org_name": "Acme"})
+
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["reason"] == "signature_mismatch"
+        assert "anchor mismatch" in body["detail"].lower()
+        assert "MODULO_LICENSE_PRIVATE_KEY" in body["detail"]
 
     def test_issues_with_email_sends_background_email(self, issue_client: TestClient) -> None:
         with patch("modulo.api.routes.admin_license.email_team_license", new=AsyncMock()) as mock_email:

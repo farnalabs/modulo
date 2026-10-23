@@ -17,6 +17,7 @@ code:
   - frontend/src/stores/planStore.ts
 unit-tests:
   - backend/tests/unit/core/test_license_key.py
+  - backend/tests/unit/core/test_license_anchor.py
   - backend/tests/unit/core/test_license_signing.py
   - backend/tests/unit/core/test_stripe_fulfilment.py
   - backend/tests/unit/api/test_admin_license.py
@@ -58,8 +59,41 @@ tier-catalogue and feature-flag inspection endpoints. (The public, unauthenticat
 licence, then a verified env-var key - and reports community / `is_valid: false` when
 neither is valid; see Behaviours.)
 
+## Trust anchor
+
+Licence keys are Ed25519-signed, and verification uses exactly ONE anchor: the
+built-in public key in `core/license.py` unless `MODULO_LICENSE_PUBLIC_KEY`
+overrides it. The built-in key is the real public half of the DEVELOPMENT
+keypair — it is **not** the anchor production licences are signed with, so a
+Farnalabs-issued production licence CANNOT verify against it.
+
+| Deployment | Anchor | What happens |
+|---|---|---|
+| Development / test | built-in development key, no configuration | licences signed by the development keypair verify; production keys do not |
+| Self-hosted production | `MODULO_LICENSE_PUBLIC_KEY` set to the public key issued with the licence | production licences verify |
+| Self-hosted production, licence configured without an anchor | built-in development key | **startup fails closed** with an actionable error telling the operator to set `MODULO_LICENSE_PUBLIC_KEY` |
+| Community install, no licence | built-in development key | the instance boots; a licence uploaded later is rejected with a structured error naming the anchor mismatch until the anchor is set |
+
+`MODULO_LICENSE_PRIVATE_KEY` is only used to ISSUE keys (admin
+`POST /api/v1/admin/license/issue` and Stripe fulfilment). It must be the
+private half of the same keypair as the configured anchor; a mismatch makes
+issuance fail closed with an anchor-mismatch error rather than emailing a key
+the deployment would reject.
+
 ## Behaviours
 
+- [x] The licence trust anchor is explicit and fails closed (FAR-2091). The
+      built-in public key in `core/license.py` is the DEVELOPMENT anchor, not
+      the production one. Outside debug, an API configured with
+      `MODULO_LICENSE_KEY` but no `MODULO_LICENSE_PUBLIC_KEY` refuses to boot
+      with an actionable error, and a licence upload that cannot verify
+      returns HTTP 422 with a structured body — `detail` prose plus
+      `reason` (`anchor_mismatch` / `signature_mismatch` / `malformed` /
+      `expired`) and an operator `hint` naming `MODULO_LICENSE_PUBLIC_KEY` —
+      instead of only logging the failure. `POST /api/v1/admin/license/issue`
+      fails the same way (500, anchor mismatch) when the signing key and the
+      anchor are not one keypair (`test_license_anchor.py`,
+      `test_admin_license.py`)
 - [x] A valid Team license uploads (200) and reports its tier plus features
       (`sso, team_rbac, audit_viewer, admin_spend_limits`); a tampered key is rejected
       (422 "Signature") and an expired key is rejected (422 "expired")
@@ -191,6 +225,29 @@ neither is valid; see Behaviours.)
   cited above.
 
 ## QA History
+
+- 2026-10-23: **FAR-2091** - made the licence trust anchor honest and surfaced
+  verification failure at install. The built-in public key in `core/license.py`
+  had the comment "This is the dev/test key — replace for production
+  deployments", which was ACCURATE: the vault holds two keypairs, and the
+  built-in key's derived public half matches `license-signing-private-key-dev`,
+  while production licences are signed by the separate
+  `license-signing-private-key` whose public half is published as
+  `MODULO_LICENSE_PUBLIC_KEY`. The failure mode was therefore real but
+  mis-scoped: an instance that installs a correctly-signed licence without
+  setting the anchor fails verification, and the only signal was a log line.
+  Fixed by (1) renaming the constant to `_BUILTIN_DEV_PUBLIC_KEY_HEX` (old name
+  kept as an alias) and documenting the two keypairs, (2) failing startup
+  closed when `MODULO_LICENSE_KEY` is configured without
+  `MODULO_LICENSE_PUBLIC_KEY` outside debug, (3) returning a structured 422
+  from the upload path (`detail` prose + machine-readable `reason` +
+  operator `hint`), and (4) the same treatment for the issue path when the
+  signing key and anchor are not one keypair. A Community instance with no
+  licence still boots (a blanket anchor requirement would strand every
+  unlicensed self-hoster); the install path fails closed instead. The admin
+  licence view already renders `detail` through `formatApiError`, so no UI
+  change was needed. `test_license_anchor.py` and `test_admin_license.py`
+  prove the new behaviour.
 
 - 2026-10-16: **FAR-1809** - documented the caller-scoped `GET /api/v1/plan`
   endpoint (delivered by **FAR-1806**; nothing here had drifted - this is a

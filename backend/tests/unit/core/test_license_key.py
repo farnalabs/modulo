@@ -440,7 +440,8 @@ class TestCheckProductionPublicKey:
         with caplog.at_level("CRITICAL", logger="modulo.core.license"):
             check_production_public_key(SimpleNamespace(debug=False))
         assert "LICENSE_CRITICAL" in caplog.text
-        assert "dev/test license public key" in caplog.text
+        assert "DEVELOPMENT licence anchor" in caplog.text
+        assert "MODULO_LICENSE_PUBLIC_KEY" in caplog.text
 
     def test_dev_key_silent_when_debug(self, caplog: pytest.LogCaptureFixture) -> None:
         set_public_key(_ORIGINAL_KEY)
