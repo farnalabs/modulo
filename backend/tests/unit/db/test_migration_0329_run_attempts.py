@@ -1,4 +1,4 @@
-"""Unit tests for migration 0326_run_attempts (FAR-2078 storage slice).
+"""Unit tests for migration 0329_run_attempts (FAR-2078 storage slice).
 
 Structural contract (no Postgres / Testcontainers needed). Sibling migrations
 pin their own shape with a dedicated test; this pins the four things a reviewer
@@ -44,9 +44,9 @@ from modulo.db.models.run_attempt import (
 from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0326_run_attempts"
+_MIGRATION_NAME = "0329_run_attempts"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0325_run_seam_coverage"
+_DOWN_REVISION = "0327_runs_execution_attempt_count"
 
 _TABLE = "run_attempts"
 _ORG_INDEX = "ix_run_attempts_organisation_id"
@@ -165,7 +165,7 @@ class TestChain:
     def test_single_linear_head(self) -> None:
         assert_single_linear_head(script_directory())
 
-    def test_down_revision_is_0325_run_seam_coverage(self) -> None:
+    def test_down_revision_is_0327_runs_execution_attempt_count(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
