@@ -170,7 +170,10 @@ async function verifyKey() {
       body: { license_key: newLicenseKey.value.trim() },
     })
     if (err) {
-      verifyResult.value = { valid: false, message: String(err) }
+      // `err` is the response BODY (an object). `String(err)` rendered
+      // "[object Object]", swallowing the server's actionable detail — most
+      // importantly the anchor-mismatch hint on an install failure (FAR-2091).
+      verifyResult.value = { valid: false, message: formatApiError(err) }
     } else {
       verifyResult.value = {
         valid: true,

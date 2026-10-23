@@ -30,7 +30,13 @@ _OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 
 
 class OpenCodeBackend(OpenAICompatibleBackend):
-    def __init__(self, api_key: str, model_id: str, **default_params: Any) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model_id: str,
+        base_url: str | None = None,
+        **default_params: Any,
+    ) -> None:
         # FAR-1139: session ID stable across all model calls within this
         # backend instance (= one pipeline run).  The gateway uses this for
         # routing and prompt caching.
@@ -52,7 +58,7 @@ class OpenCodeBackend(OpenAICompatibleBackend):
         super().__init__(
             api_key=api_key,
             model_id=model_id,
-            base_url=_OPENCODE_BASE_URL,
+            base_url=base_url or _OPENCODE_BASE_URL,
             provider="opencode",
             default_headers=existing_headers,
             **default_params,

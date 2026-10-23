@@ -155,11 +155,16 @@ _EXCLUDED_NETWORKS = [
 
 # IPv6 ranges that are never valid HTTP egress targets and must never be made
 # reachable by an allowlist: site-local (deprecated but still routed in some
-# stacks) and multicast. These sit alongside link-local / the metadata ranges
-# above as a NON-NEGOTIABLE blocked floor.
+# stacks), multicast, and the AWS IMDS IPv6 endpoint. These sit alongside
+# link-local / the metadata ranges above as a NON-NEGOTIABLE blocked floor —
+# fd00:ec2::254 is inside the ULA range, which a self-hosted deployment may
+# plausibly allowlist for its internal gateways, so it must be blocked BEFORE
+# the allowlist is consulted (FAR-2046).
 _NON_NEGOTIABLE_BLOCKED = [
     ipaddress.ip_network("fec0::/10"),  # IPv6 site-local
     ipaddress.ip_network("ff00::/8"),  # IPv6 multicast
+    # fd00:ec2::254/128 is the AWS EC2 IMDS IPv6 endpoint.
+    ipaddress.ip_network("fd00:ec2::254/128"),  # NOSONAR - AWS IMDS IPv6
 ]
 
 # Proxy environment variables that, when trusted, would route the pinned
@@ -755,6 +760,23 @@ async def validate_outbound_url_async(url: str, *, allow_networks: Sequence[str]
         _validate_literal_ip(target.literal_ip, extra)
         return  # literal IP handled above
     _check_resolved(target.host, await _resolve_all_async(target.host), extra)
+
+
+def validate_outbound_url_syntax(url: str) -> tuple[str, str]:
+    """Strictly parse an outbound URL and return ``(scheme, host)``.
+
+    Runs only the DNS-free syntax floor of :func:`_parse_url_target`: an
+    ``http(s)`` scheme, no userinfo credentials, a valid hostname, a valid
+    port, and no non-canonical IP-literal encoding (decimal/hex integers and
+    mixed-base dotted strings are rejected). It does NOT resolve or validate
+    the destination address, so a caller may use it to parse a target it will
+    validate separately (or deliberately allow, e.g. a model backend aimed at
+    an internal network).
+
+    Raises ``ValueError`` with an actionable message for an invalid URL.
+    """
+    target = _parse_url_target(url)
+    return target.scheme, target.host
 
 
 def validate_outbound_url_preflight(url: str, *, allow_networks: Sequence[str] | None = None) -> None:

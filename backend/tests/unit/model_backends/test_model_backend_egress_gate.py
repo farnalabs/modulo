@@ -19,8 +19,14 @@ Remove either ``validate_outbound_url*`` call and the matching case here fails.
 import pytest
 
 from modulo.core import ssrf
+from modulo.core.model_backend_hub import _build_backend
+from modulo.core.ssrf import PinnedAsyncHTTPTransport
+from modulo.model_backends.anthropic import AnthropicBackend
 from modulo.model_backends.base import openai_compatible_health_check
+from modulo.model_backends.cohere import CohereBackend
+from modulo.model_backends.gemini import GeminiBackend
 from modulo.model_backends.lm_studio import LmStudioBackend
+from modulo.model_backends.mistral import MistralBackend
 from modulo.model_backends.module import OpenAICompatibleBackend
 from modulo.model_backends.ollama import OllamaBackend
 from modulo.model_backends.vllm import VllmBackend
@@ -28,6 +34,7 @@ from modulo.model_backends.vllm import VllmBackend
 pytestmark = pytest.mark.real_ssrf_dns
 
 API_KEY = "test-key"  # nosec B105 - test fixture value, not a credential
+PUBLIC_URL = "https://models.example.com/v1"
 
 BLOCKED_URLS = [
     "http://127.0.0.1:11434/v1",
@@ -113,3 +120,87 @@ def test_public_base_url_still_constructs(monkeypatch) -> None:
         provider="custom",
     )
     assert backend.base_url == "https://models.example.com/v1"
+
+
+def test_hub_custom_base_url_still_goes_through_the_ssrf_gate() -> None:
+    """FAR-2046: honouring a custom endpoint does not bypass the pinned SSRF gate."""
+    with pytest.raises(ValueError, match="private/internal"):
+        _build_backend(
+            "openai",
+            "m",
+            {"api_key": API_KEY, "base_url": "http://10.1.2.3:8000/v1"},
+            {},
+        )
+
+
+# ---------------------------------------------------------------------------
+# FAR-2046: the legacy provider adapters (anthropic / cohere / gemini /
+# mistral) take an operator-supplied endpoint too. They must go through the
+# same SSRF gate as the OpenAI-compatible path — a target that is internal,
+# link-local (IMDS) or loopback-without-opt-in must fail construction.
+#
+# These drive the REAL adapter constructors (no patched LangChain class). The
+# gate fires before the provider client is built, so a blocked target never
+# reaches the network.
+# ---------------------------------------------------------------------------
+
+_ENDPOINT_KWARG: dict[type, str] = {
+    AnthropicBackend: "anthropic_api_url",
+    CohereBackend: "base_url",
+    GeminiBackend: "base_url",
+    MistralBackend: "endpoint",
+}
+
+
+@pytest.mark.parametrize("backend_cls", list(_ENDPOINT_KWARG))
+@pytest.mark.parametrize("blocked_url", BLOCKED_URLS)
+def test_legacy_adapter_refuses_blocked_custom_endpoint(backend_cls: type, blocked_url: str) -> None:
+    """Each adapter fails closed on a private/internal custom endpoint."""
+    with pytest.raises(ValueError, match="private/internal"):
+        backend_cls(api_key=API_KEY, model_id="m", **{_ENDPOINT_KWARG[backend_cls]: blocked_url})
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "cohere", "gemini", "mistral"])
+def test_hub_custom_endpoint_for_legacy_adapters_goes_through_the_gate(provider: str) -> None:
+    """The hub's provider-specific endpoint kwarg cannot bypass the gate."""
+    with pytest.raises(ValueError, match="private/internal"):
+        _build_backend(provider, "m", {"api_key": API_KEY, "base_url": "http://10.1.2.3:8000/v1"}, {})
+
+
+@pytest.mark.parametrize("backend_cls", list(_ENDPOINT_KWARG))
+async def test_legacy_adapter_accepts_public_custom_endpoint(
+    backend_cls: type,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Control case: a legitimate public endpoint still constructs."""
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["93.184.216.34"])
+    backend = backend_cls(api_key=API_KEY, model_id="m", **{_ENDPOINT_KWARG[backend_cls]: PUBLIC_URL})
+    aclose = getattr(backend, "aclose", None)
+    if aclose is not None:
+        await aclose()
+    assert backend is not None
+
+
+@pytest.mark.parametrize("backend_cls", [GeminiBackend, MistralBackend])
+def test_pinned_adapters_carry_the_pinned_transport(
+    backend_cls: type,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adapters that CAN accept a client/transport must actually pin it.
+
+    This is the rebinding guarantee: a bare URL pass-through would leave the
+    provider SDK free to re-resolve the host at connect time. The assertion
+    reads the transport the provider client would use, so an upgrade that
+    silently drops the injected transport fails here.
+    """
+    monkeypatch.setattr(ssrf, "_resolve_all_sync", lambda _host: ["93.184.216.34"])
+    backend = backend_cls(api_key=API_KEY, model_id="m", **{_ENDPOINT_KWARG[backend_cls]: PUBLIC_URL})
+    if backend_cls is MistralBackend:
+        transport = backend._model.async_client._transport  # type: ignore[attr-defined]
+        # The adapter issues requests on relative paths, so the injected client
+        # must also carry the endpoint as its base_url.
+        assert str(backend._model.async_client.base_url).rstrip("/") == PUBLIC_URL  # type: ignore[attr-defined]
+    else:
+        genai_client = backend._model.client._api_client  # type: ignore[attr-defined]
+        transport = genai_client._async_httpx_client._transport
+    assert isinstance(transport, PinnedAsyncHTTPTransport)

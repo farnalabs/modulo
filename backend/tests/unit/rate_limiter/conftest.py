@@ -17,7 +17,7 @@ from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 
 
 @pytest.fixture
-def mock_redis() -> MagicMock:
+def auth_redis() -> MagicMock:
     """Auth-flavoured Redis mock used by AuthRateLimiter/middleware tests."""
     return make_redis_client(auth=True)
 

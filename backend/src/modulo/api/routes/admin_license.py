@@ -7,6 +7,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -19,8 +20,11 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.feature_flags import resolve_effective_license
 from modulo.core.license import (
+    REASON_MALFORMED,
+    REASON_SIGNATURE_MISMATCH,
     LicenseData,
     LicenseError,
+    LicenseValidation,
     parse_and_verify,
     store_license,
 )
@@ -77,6 +81,26 @@ class LicenseIssueResponse(BaseModel):
     tier: str
     features: list[str]
     org_id: str
+
+
+def _license_failure_body(validation: LicenseValidation) -> dict[str, object]:
+    """Structured, actionable body for a licence key that failed verification.
+
+    ``detail`` stays a STRING so every existing consumer (admin UI
+    ``formatApiError``, BDD steps) keeps rendering it, while ``reason`` gives
+    machine-readable classification and ``hint`` names the likely cause — an
+    anchor mismatch being the most common one (FAR-2091).
+    """
+    detail = validation.error or "Invalid license key"
+    if validation.hint:
+        detail = f"{detail}. {validation.hint}"
+    body: dict[str, object] = {
+        "detail": detail,
+        "reason": validation.reason or REASON_MALFORMED,
+    }
+    if validation.hint:
+        body["hint"] = validation.hint
+    return body
 
 
 def _license_status(data: LicenseData, *, has_license: bool = True) -> LicenseStatusResponse:
@@ -228,25 +252,32 @@ async def get_license_status(
     "",
     dependencies=[Depends(audited("license_uploaded", "license", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_200_OK,
+    # The route returns either the success model or a structured 422 JSONResponse;
+    # pin the documented model explicitly so the union annotation is not introspected.
+    response_model=LicenseUploadResponse,
 )
 @handle_db_errors("admin.license.upload_license")
 async def upload_license(
     req: LicenseUploadRequest,
     settings: Annotated[Settings, Depends(get_settings)],
     _: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
-) -> LicenseUploadResponse:
+) -> LicenseUploadResponse | JSONResponse:
     try:
         validation = parse_and_verify(req.license_key)
     except LicenseError as exc:
-        raise HTTPException(
+        return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        ) from exc
+            content={"detail": str(exc), "reason": REASON_MALFORMED},
+        )
 
     if not validation.valid or validation.license_data is None:
-        raise HTTPException(
+        # FAR-2091: a key that cannot verify must surface WHY (anchor mismatch,
+        # signature mismatch, malformed, expired) on the install surface, not
+        # only in a log line. The body keeps ``detail`` as prose (existing
+        # consumers render it) and adds ``reason``/``hint``.
+        return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=validation.error or "Invalid license key",
+            content=_license_failure_body(validation),
         )
 
     store_license(req.license_key, validation.license_data)
@@ -271,6 +302,9 @@ async def upload_license(
     "/issue",
     dependencies=[Depends(audited("license_issued", "license", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_201_CREATED,
+    # The route returns either the issued-key model or a structured error JSONResponse;
+    # pin the documented model explicitly so the union annotation is not introspected.
+    response_model=LicenseIssueResponse,
 )
 @handle_db_errors("admin.license.issue_license")
 async def issue_license(
@@ -278,7 +312,7 @@ async def issue_license(
     background_tasks: BackgroundTasks,
     settings: Annotated[Settings, Depends(get_settings)],
     _: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
-) -> LicenseIssueResponse:
+) -> LicenseIssueResponse | JSONResponse:
     """Manually issue (sign) a team license key for a customer.
 
     Uses the same signing service as the Stripe purchase fulfilment webhook.
@@ -294,11 +328,30 @@ async def issue_license(
 
     validation = parse_and_verify(license_key)
     if not validation.valid or validation.license_data is None:
-        logger.error("license.issue_verification_failed error=%s", validation.error)
-        raise HTTPException(
+        logger.error(
+            "license.issue_verification_failed error=%s reason=%s",
+            validation.error,
+            validation.reason,
+        )
+        # The deployment just signed a key and then failed to verify it: the
+        # signing key (MODULO_LICENSE_PRIVATE_KEY) and the trust anchor
+        # (MODULO_LICENSE_PUBLIC_KEY) are not the same keypair. Name that.
+        return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Generated license key failed signature verification.",
-        ) from None
+            content={
+                "detail": (
+                    "Generated license key failed signature verification against this deployment's "
+                    "trust anchor. Check that MODULO_LICENSE_PRIVATE_KEY and MODULO_LICENSE_PUBLIC_KEY "
+                    "belong to the same Ed25519 keypair (anchor mismatch)."
+                ),
+                "reason": validation.reason or REASON_SIGNATURE_MISMATCH,
+                "hint": (
+                    "The signing key and the anchor must be the two halves of one keypair. "
+                    "Set MODULO_LICENSE_PUBLIC_KEY to the public key derived from "
+                    "MODULO_LICENSE_PRIVATE_KEY."
+                ),
+            },
+        )
 
     data = validation.license_data
 

@@ -20,12 +20,16 @@ work through the repo writers.
 import itertools
 import json
 import uuid
+import warnings
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import event, select, update
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import SAWarning
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.run_node_outputs import (
@@ -38,6 +42,8 @@ from modulo.db.crud.run_node_outputs import (
     RunBlobs,
     _jsonb_canonical_key,
     _sanitise_jsonb,
+    _targeted_upsert_stmt,
+    _upsert_group_stmt,
     dialect_insert,
     parse_marker_node_id,
     persist_artifact_pointers,
@@ -52,7 +58,7 @@ from modulo.db.crud.run_node_outputs import (
 )
 from modulo.db.models.base import Base
 from modulo.db.models.run import Run
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from modulo.db.models.run_node_outputs import SENTINEL_NODE_ID_PREFIX, RunNodeOutput
 from modulo.db.rls import OutputsRlsMismatch, set_rls_org
 
 _TABLE_NAMES = {"organisations", "runs", "run_node_outputs"}
@@ -895,6 +901,264 @@ class TestUpsertRowsIgnoreConflicts:
             )
         row = await _read_row(session, run, node_id="n1", attempt_key=attempt_key)
         assert row.outputs_json == {"v": 1}
+
+
+#: A stamp far enough in the past that any "moved to now" write is unambiguous
+#: (``func.current_timestamp()`` has second granularity on SQLite).
+_AGED_STAMP = datetime(2020, 1, 1, 12, 0, 0)
+
+
+async def _read_stamp(session: AsyncSession, run: Run, *, attempt_key: str) -> datetime:
+    """Read one row's ``updated_at`` as a bare COLUMN select.
+
+    A plain ``select(RunNodeOutput)`` would return the identity-mapped instance,
+    whose attributes are NOT refreshed after a commit (``expire_on_commit=False``
+    in the test sessionmaker) — so it can serve a stale stamp.
+    """
+    async with session.begin():
+        value = (
+            await session.execute(
+                select(RunNodeOutput.updated_at).where(
+                    RunNodeOutput.run_id == run.id,
+                    RunNodeOutput.attempt_key == attempt_key,
+                )
+            )
+        ).scalar_one()
+    return value.replace(tzinfo=None)
+
+
+async def _age_row(session: AsyncSession, run: Run, *, attempt_key: str) -> None:
+    async with session.begin():
+        await session.execute(
+            update(RunNodeOutput)
+            .where(RunNodeOutput.run_id == run.id, RunNodeOutput.attempt_key == attempt_key)
+            .values(updated_at=_AGED_STAMP)
+        )
+
+
+class TestMarkerUpdatedAtProvenance:
+    """FAR-2083: marker rows carry PER-ROW ``updated_at`` provenance.
+
+    ``write_run_markers`` always upserts the WHOLE merged marker dict, so before
+    this fix one write by the current attempt re-stamped ``updated_at`` on
+    every earlier attempt's marker row in the run (reproduced: an attempt-1 row
+    aged to 2020 was rewritten to "now" by a single later call). The intended
+    semantics are per-row: only a row whose own value changed moves its stamp.
+    Flipping either fix (removing the ``DO UPDATE ... WHERE``, or stamping the
+    whole dict unconditionally) fails these.
+    """
+
+    async def test_write_touching_one_key_leaves_another_rows_stamp_alone(self, session: AsyncSession) -> None:
+        run = await _seed_run(session)
+        aged_key = f"run:{run.id}:node:n1:0"
+        new_key = f"run:{run.id}:node:n1:1"
+        await _write_markers(session, run, {aged_key: {"raw": "attempt-1"}})
+        await _age_row(session, run, attempt_key=aged_key)
+
+        # The canonical write shape: the caller hands write_run_markers the whole
+        # merged dict, so the unchanged attempt-1 entry is re-sent verbatim.
+        await _write_markers(session, run, {aged_key: {"raw": "attempt-1"}, new_key: {"raw": "attempt-2"}})
+
+        assert await _read_stamp(session, run, attempt_key=aged_key) == _AGED_STAMP
+        assert await _read_stamp(session, run, attempt_key=new_key) > datetime(2024, 1, 1)
+
+    async def test_rewriting_an_unchanged_value_does_not_move_its_stamp(self, session: AsyncSession) -> None:
+        run = await _seed_run(session)
+        key = f"run:{run.id}:node:n1:0"
+        await _write_markers(session, run, {key: {"raw": "same", "pr_url": "https://x/1"}})
+        await _age_row(session, run, attempt_key=key)
+
+        await _write_markers(session, run, {key: {"raw": "same", "pr_url": "https://x/1"}})
+
+        assert await _read_stamp(session, run, attempt_key=key) == _AGED_STAMP
+
+    async def test_rewriting_a_changed_value_does_move_its_stamp(self, session: AsyncSession) -> None:
+        """The guard must not freeze the stamp: a real change still re-dates."""
+        run = await _seed_run(session)
+        key = f"run:{run.id}:node:n1:0"
+        await _write_markers(session, run, {key: {"raw": "before"}})
+        await _age_row(session, run, attempt_key=key)
+
+        await _write_markers(session, run, {key: {"raw": "after"}})
+
+        assert await _read_stamp(session, run, attempt_key=key) > datetime(2024, 1, 1)
+
+
+class TestPerRowPredicateIsPostgresTypeSafe:
+    """FAR-2083: the per-row predicate must be type-safe on Postgres.
+
+    ``schema_enforcement_json`` is plain ``json`` on Postgres (migration 0251
+    adds it as ``sa.JSON()``) while its four siblings are ``jsonb``
+    (0192/0220). ``json`` has no ``=`` operator, so an uncast ``IS DISTINCT
+    FROM`` raises ``operator does not exist: json = json`` at PARSE time — which
+    fails EVERY enforcement write, not only a conflicting one, and the
+    best-effort caller swallows it as ``schema_enforcement.persist_failed``.
+
+    The rest of this module runs on in-memory SQLite, where the same predicate
+    compiles to ``IS NOT`` and the defect is invisible, so these tests compile
+    the writers' REAL statements for the ``postgresql`` dialect and assert the
+    cast is in the emitted SQL. Compilation is the strongest check available
+    here: there is no Postgres integration test for these writers (a known,
+    recorded gap — compilation proves the SQL we ship, not that PG accepts it).
+    """
+
+    def test_schema_enforcement_column_is_json_not_jsonb_on_postgres(self) -> None:
+        """The premise of the cast: this column really has no ``=`` operator."""
+        column = RunNodeOutput.__table__.c.schema_enforcement_json
+        assert not isinstance(column.type.dialect_impl(postgresql.dialect()), postgresql.JSONB)
+
+    def test_blob_columns_are_jsonb_on_postgres(self) -> None:
+        """The siblings DO have ``=``: they are jsonb, so the cast is conservative."""
+        table = RunNodeOutput.__table__
+        for name in ("outputs_json", "node_telemetry_json", "raw_output_markers", "artifacts_json"):
+            assert isinstance(table.c[name].type.dialect_impl(postgresql.dialect()), postgresql.JSONB), name
+
+    def test_enforcement_writer_casts_both_sides_to_text(self) -> None:
+        stmt = _targeted_upsert_stmt(
+            pg_insert,
+            {
+                "run_id": uuid.uuid4(),
+                "organisation_id": uuid.uuid4(),
+                "node_id": "n1",
+                "attempt_key": "run:x:node:n1:0",
+                "schema_enforcement_json": {"outcome": "ok"},
+            },
+            "schema_enforcement_json",
+        )
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "CAST(excluded.schema_enforcement_json AS TEXT)" in sql
+        assert "CAST(run_node_outputs.schema_enforcement_json AS TEXT)" in sql
+        assert "IS DISTINCT FROM" in sql
+        # The UNCAST comparison is exactly the parse-time failure this prevents.
+        assert "excluded.schema_enforcement_json IS DISTINCT FROM" not in sql
+
+    def test_artifact_writer_casts_both_sides_to_text(self) -> None:
+        stmt = _targeted_upsert_stmt(
+            pg_insert,
+            {
+                "run_id": uuid.uuid4(),
+                "organisation_id": uuid.uuid4(),
+                "node_id": "n1",
+                "attempt_key": "run:x:node:n1:0",
+                "artifacts_json": [{"stream": "stdout"}],
+            },
+            "artifacts_json",
+        )
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "CAST(excluded.artifacts_json AS TEXT)" in sql
+        assert "CAST(run_node_outputs.artifacts_json AS TEXT)" in sql
+
+    def test_group_upsert_casts_every_written_blob_column(self) -> None:
+        """The marker path writes all four sides — each one must be cast."""
+        stmt = _upsert_group_stmt(
+            pg_insert,
+            signature=(True, True, True, True),
+            run_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+            ignore_conflicts=False,
+        )
+        # This statement is compiled ahead of its executemany params: node_id and
+        # attempt_key are supplied per row at execute time, so they are absent
+        # from the statement's VALUES by design and SQLAlchemy warns about the
+        # composite PK. The warning is expected here, not a defect under test.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SAWarning)
+            sql = str(stmt.compile(dialect=postgresql.dialect()))
+        for name in ("outputs_json", "node_telemetry_json", "raw_output_markers", "artifacts_json"):
+            assert f"CAST(excluded.{name} AS TEXT)" in sql, name
+            assert f"CAST(run_node_outputs.{name} AS TEXT)" in sql, name
+
+    def test_group_upsert_with_no_written_sides_makes_the_conflict_a_no_op(self) -> None:
+        """FAR-2083: no payload column written ⇒ nothing changed ⇒ keep the row.
+
+        ``_row_changed_predicate`` is handed the set of written columns; when no
+        side is present (a writer upserting only the identity/metadata columns)
+        there is nothing that can have changed, so the ``DO UPDATE`` must be
+        guarded by a constant-false predicate — the row keeps its value AND its
+        stamp instead of being re-dated by an empty write.
+        """
+        stmt = _upsert_group_stmt(
+            pg_insert,
+            signature=(False, False, False, False),
+            run_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+            ignore_conflicts=False,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SAWarning)
+            sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "WHERE false" in sql
+
+
+def _is_node_progress_row(node_id: str) -> bool:
+    """The rule every zero-progress predicate already applies (FAR-2052).
+
+    A row in the reserved ``__`` sentinel namespace is bookkeeping, never node
+    progress — exactly the ``substr(node_id, 1, 2) <> '__'`` leg that
+    ``cron_helpers._final_row_absent_expr`` and ``_ZERO_PROGRESS_SHAPE_SQL``
+    implement.
+    """
+    return not node_id.startswith(SENTINEL_NODE_ID_PREFIX)
+
+
+class TestCancelTriageMarkerAttribution:
+    """FAR-2082: a deadline-kill's marker is bookkeeping, not node progress.
+
+    The cancellation path used to persist the FAR-704 triage marker under the
+    node's NORMAL attempt key, so a kill that produced nothing was
+    indistinguishable from work by row existence. Both arms below fail if the
+    attribution is reverted.
+    """
+
+    async def test_cancelled_node_marker_is_rejected_by_the_progress_rule(self, session: AsyncSession) -> None:
+        from modulo.core.pipeline_engine.node_runner import _cancel_triage_attempt_key
+
+        run = await _seed_run(session)
+        real_key = f"run:{run.id}:node:n1:3"
+        triage_key = _cancel_triage_attempt_key(str(run.id), "n1", real_key)
+
+        await _write_markers(
+            session,
+            run,
+            {triage_key: {"deadline_triage": True, "node_id": "n1", "attempt_key": real_key}},
+        )
+
+        # The evidence IS retained (the diagnostic value is the point) ...
+        row = await _read_row(session, run, node_id=UNKNOWN_NODE_ID, attempt_key=triage_key)
+        # ... but it is attributed to the bookkeeping namespace, so it can never
+        # be read as this node's work.
+        assert _is_node_progress_row(row.node_id) is False
+        # The node's OWN attempt key carries no row at all — a kill that
+        # produced nothing leaves no progress-shaped evidence behind.
+        async with session.begin():
+            own_rows = (
+                await session.execute(
+                    select(RunNodeOutput.run_id).where(
+                        RunNodeOutput.run_id == run.id,
+                        RunNodeOutput.attempt_key == real_key,
+                    )
+                )
+            ).first()
+        assert own_rows is None
+        # The payload keeps the REAL attribution the content-driven readers use
+        # (delivery_done node matching, the FAR-704 triage projection and the
+        # log-correlation reader all read these fields, not the row identity).
+        assert row.raw_output_markers["node_id"] == "n1"
+        assert row.raw_output_markers["attempt_key"] == real_key
+        # And the evidence is still served by the public markers reader, so the
+        # deadline-triage projection (which selects on the marker's own
+        # ``deadline_triage`` flag, never on the key) still finds it.
+        markers = (await _read_blobs(session, run)).markers or {}
+        assert markers[triage_key]["deadline_triage"] is True
+
+    async def test_real_work_marker_is_accepted_by_the_progress_rule(self, session: AsyncSession) -> None:
+        run = await _seed_run(session)
+        real_key = f"run:{run.id}:node:n1:3"
+
+        await _write_markers(session, run, {real_key: {"raw": "produced something"}})
+
+        row = await _read_row(session, run, node_id="n1", attempt_key=real_key)
+        assert _is_node_progress_row(row.node_id) is True
 
 
 class TestBytesAccounting:

@@ -7,15 +7,19 @@ stay hermetic (many of them would otherwise attempt network calls at init).
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import HumanMessage
 
 from modulo.core.model_backend_hub import (
+    _CUSTOM_ENDPOINT_KWARGS,
+    _NON_OPENAI_COMPATIBLE,
+    BASE_URL_CAPABLE_PROVIDERS,
     _backend_class,
     _build_backend,
     _build_custom_stub_backend,
+    supports_custom_base_url,
 )
 from modulo.model_backends.base import HealthResult
 
@@ -325,3 +329,178 @@ def test_backend_class_imports_provider_module() -> None:
     # proves it imports lazily by name and fails for non-existent adapters.
     with pytest.raises(ModuleNotFoundError):
         _backend_class("custom", "NopeBackend")
+
+
+# ---------------------------------------------------------------------------
+# FAR-2046: operator-supplied custom endpoint overrides the provider default
+# ---------------------------------------------------------------------------
+
+
+def test_build_backend_openai_honours_custom_base_url() -> None:
+    """``openai`` has no default URL — a credential base_url must be used."""
+    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            "openai",
+            "gpt-4o",
+            {"api_key": "k", "base_url": "https://gateway.internal.example/v1"},
+            {},
+        )
+    assert result.kwargs["base_url"] == "https://gateway.internal.example/v1"
+
+
+def test_build_backend_named_local_provider_custom_base_url_overrides_default() -> None:
+    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            "ollama",
+            "llama3",
+            {"api_key": "k", "base_url": "http://gpu-node-7:11434/v1"},
+            {},
+        )
+    assert result.kwargs["base_url"] == "http://gpu-node-7:11434/v1"
+
+
+def test_build_backend_legacy_default_params_base_url_is_honoured_without_duplicate_kwarg() -> None:
+    """A base_url left in default_params (pre-FAR-2046 UI) must not raise TypeError."""
+    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            "openai",
+            "gpt-4o",
+            {"api_key": "k"},
+            {"base_url": "https://legacy.internal.example/v1", "temperature": 0.2},
+        )
+    assert result.kwargs["base_url"] == "https://legacy.internal.example/v1"
+    assert result.kwargs["temperature"] == pytest.approx(0.2)
+
+
+def test_build_backend_credentials_base_url_wins_over_legacy_default_params() -> None:
+    with patch("modulo.model_backends.module.OpenAICompatibleBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            "openai",
+            "gpt-4o",
+            {"api_key": "k", "base_url": "https://new.internal.example/v1"},
+            {"base_url": "https://legacy.internal.example/v1"},
+        )
+    assert result.kwargs["base_url"] == "https://new.internal.example/v1"
+
+
+def test_build_backend_opencode_honours_custom_base_url() -> None:
+    with patch("modulo.model_backends.opencode.OpenCodeBackend") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            "opencode",
+            "glm-5.3-flash",
+            {"api_key": "k", "base_url": "https://zen.internal.example/v1"},
+            {},
+        )
+    assert result.kwargs["base_url"] == "https://zen.internal.example/v1"
+
+
+def test_build_backend_warns_when_custom_base_url_cannot_be_applied(caplog) -> None:
+    """A stored endpoint on a provider that cannot use one is loud, not silent."""
+    import logging
+
+    with (
+        patch("modulo.core.model_backend_hub._backend_class") as klass,
+        caplog.at_level(logging.WARNING, logger="modulo.core.model_backend_hub"),
+    ):
+        klass.side_effect = lambda *_a, **_k: _DummyBackend
+        _build_backend(
+            "bedrock",
+            "claude-3",
+            {
+                "aws_access_key_id": "x",
+                "aws_secret_access_key": "y",
+                "base_url": "https://gateway.internal.example/v1",
+            },
+            {},
+        )
+    assert "Ignoring custom base_url" in caplog.text
+
+
+def test_every_non_openai_adapter_declares_an_endpoint_kwarg() -> None:
+    """Every non-OpenAI adapter must map a custom endpoint to a constructor arg.
+
+    ``_apply_custom_endpoint`` looks the kwarg up directly so a missing entry
+    fails loudly instead of silently dropping the operator's endpoint; that
+    contract only holds while the two maps cover the same providers.
+    """
+    assert set(_CUSTOM_ENDPOINT_KWARGS) == set(_NON_OPENAI_COMPATIBLE)
+
+
+def test_capability_map_is_the_single_source_of_truth() -> None:
+    """Every provider whose constructor/health path can honour an endpoint."""
+    for provider in (
+        "openai",
+        "ollama",
+        "vllm",
+        "opencode",
+        "anthropic",
+        "cohere",
+        "gemini",
+        "mistral",
+    ):
+        assert provider in BASE_URL_CAPABLE_PROVIDERS
+        assert supports_custom_base_url(provider)
+    for provider in ("azure_openai", "bedrock", "vertexai", "watsonx", "custom"):
+        assert provider not in BASE_URL_CAPABLE_PROVIDERS
+        assert not supports_custom_base_url(provider)
+
+
+@pytest.mark.parametrize(
+    ("provider", "class_name", "endpoint_kwarg", "creds"),
+    [
+        ("anthropic", "AnthropicBackend", "anthropic_api_url", {"api_key": "k"}),
+        ("cohere", "CohereBackend", "base_url", {"api_key": "k"}),
+        ("gemini", "GeminiBackend", "base_url", {"api_key": "k"}),
+        ("mistral", "MistralBackend", "endpoint", {"api_key": "k"}),
+    ],
+    ids=["anthropic", "cohere", "gemini", "mistral"],
+)
+def test_build_backend_passes_custom_endpoint_to_capable_adapter(
+    provider: str, class_name: str, endpoint_kwarg: str, creds: dict[str, str]
+) -> None:
+    with patch(f"modulo.model_backends.{provider}.{class_name}") as klass:
+        klass.side_effect = _DummyBackend
+        result = _build_backend(
+            provider,
+            "model-1",
+            {**creds, "base_url": "https://gateway.internal.example/v1"},
+            {},
+        )
+    assert result.kwargs[endpoint_kwarg] == "https://gateway.internal.example/v1"
+
+
+@pytest.mark.parametrize(
+    ("provider", "module_name", "class_name"),
+    [
+        ("anthropic", "anthropic", "AnthropicBackend"),
+        ("cohere", "cohere", "CohereBackend"),
+        ("gemini", "gemini", "GeminiBackend"),
+        ("mistral", "mistral", "MistralBackend"),
+    ],
+    ids=["anthropic", "cohere", "gemini", "mistral"],
+)
+@pytest.mark.anyio
+async def test_capable_adapter_health_check_probes_its_effective_endpoint(
+    provider: str, module_name: str, class_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The health check must probe the custom endpoint, not the vendor default."""
+    module = __import__(f"modulo.model_backends.{module_name}", fromlist=[class_name])
+    health_mock = AsyncMock(return_value=HealthResult(ok=True))
+    # FAR-2046: adapters validate a custom endpoint at construction; resolve the
+    # non-routable test host to a public address so construction clears the gate.
+    monkeypatch.setattr("modulo.core.ssrf._resolve_all_sync", lambda _host: ["93.184.216.34"])
+    with patch.object(module, "openai_compatible_health_check", new=health_mock):
+        backend = _build_backend(
+            provider,
+            "model-1",
+            {"api_key": "k", "base_url": "https://gateway.internal.example/v1"},
+            {},
+        )
+        await backend.health_check()
+        health_mock.assert_awaited_once()
+        assert health_mock.await_args.kwargs["base_url"] == "https://gateway.internal.example/v1"

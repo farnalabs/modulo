@@ -12980,7 +12980,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     run_id=run_id,
                     org_id=org_id,
                     node_id=node_id,
-                    attempt_key=attempt_key,
+                    # FAR-2082: the kill's evidence is stored under its OWN key,
+                    # never the node's normal attempt key — a kill that produced
+                    # nothing must not look like work by row existence, and it
+                    # must not overwrite the attempt's real marker. The marker
+                    # payload keeps the real attempt_key/node_id (evidence
+                    # attribution); only the ROW identity moves.
+                    attempt_key=_cancel_triage_attempt_key(run_id, node_id, attempt_key),
                     marker=_cancel_marker,
                 )
             # Nested cancellation here is deliberate — idempotency-gate cleanup
@@ -13320,6 +13326,56 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # the caller still sees a cancelled task rather than a swallowed one.
         if _gh_settle_cancelled is not None:
             raise _gh_settle_cancelled
+
+
+# FAR-2082: the cancellation-retention marker gets its OWN attempt-key identity.
+#
+# A node-deadline kill writes the FAR-704 triage marker from inside the
+# CancelledError handler. Storing it under the node's NORMAL attempt key
+# (``run:<run>:node:<node>:<claim_count>``) made "this attempt wrote a marker
+# row" and "this attempt produced something" the same observation: a kill that
+# produced nothing was indistinguishable from work by row existence, and the
+# triage write also merged into (and so overwrote) the attempt's real marker.
+#
+# The key is DELIBERATELY UNPARSEABLE by the ``run:<uuid>:node:<id>:<suffix>``
+# grammar, exactly like the run-level ``terminal-triage:`` / ``redispatch-triage:``
+# keys in ``cron_helpers``. That is load-bearing, not cosmetic:
+#   * it derives the ``__unknown__`` sentinel node id (an ALLOWED ``__``
+#     bookkeeping row — FAR-188 preserves the full key as evidence), so every
+#     existing reader that already excludes the reserved
+#     ``SENTINEL_NODE_ID_PREFIX`` namespace treats the row as bookkeeping rather
+#     than node progress, with NO new exclusion rule anywhere;
+#   * a PARSEABLE key deriving a new ``__cancel_triage__`` node id would be
+#     REJECTED by ``run_node_outputs._validate_sentinel_keys`` (qa M19b:
+#     sentinel squatting via the grammar), so the unparseable shape is also the
+#     only sentinel-namespace attribution the write path permits.
+#
+# The NODE ID and the attempt's own suffix both ride in the key, so it stays
+# unique per (node, attempt): two nodes in one run cancelled on the same claim
+# count must not collide (``write_run_markers`` keys the merged dict by this
+# string, so a collision would silently drop one node's evidence). The marker
+# PAYLOAD keeps the REAL ``node_id`` / ``attempt_key`` fields — the evidence
+# attribution every content-driven reader uses (``_marker_delivery_done_for_node``
+# matches ``:node:<node_id>:`` in ``marker["attempt_key"]``; the FAR-704 triage
+# projection and the log-correlation reader both read ``marker["node_id"]``),
+# so moving the ROW's identity does not move the delivery/triage attribution.
+_CANCEL_TRIAGE_ATTEMPT_KEY_PREFIX = "cancel-triage:"
+# Used when the caller had no attempt key (the same ``fallback`` suffix
+# ``_write_raw_output_marker`` falls back to).
+_CANCEL_TRIAGE_SUFFIX_FALLBACK = "fallback"
+
+
+def _cancel_triage_attempt_key(run_id: str, node_id: str, attempt_key: str | None) -> str:
+    """The dedicated retention-store key for a cancellation-triage marker.
+
+    See the block comment above: unparseable by the marker grammar (so the row
+    lands on the ``__unknown__`` bookkeeping sentinel) and unique per
+    ``(node, attempt)`` so two cancelled nodes never share a key.
+    """
+    suffix = attempt_key.rsplit(":", 1)[-1] if attempt_key else ""
+    if not suffix:
+        suffix = _CANCEL_TRIAGE_SUFFIX_FALLBACK
+    return f"{_CANCEL_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}:{node_id}:{suffix}"
 
 
 async def _sandbox_cancel_retention_persist(

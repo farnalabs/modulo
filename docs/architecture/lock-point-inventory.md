@@ -195,7 +195,7 @@ unrelated writer or is held across non-lock work.
 
 | # | file:line | function | lock | txn | hold / blocking scope | over-serialises |
 |---|---|---|---|---|---|---|
-| C4 | `api/routes/model_backends.py:667` | `create_model_backend_endpoint` | FOR UPDATE | mutation txn, **bounded** (FAR-1825: `set_mutation_row_lock_timeout` at the top of the route transaction) | Locks existing same-name `ModelBackend` row for creation uniqueness (409 on clash). | no. |
+| C4 | `api/routes/model_backends.py:1043` | `_create_backend_in_transaction` | FOR UPDATE | mutation txn, **bounded** (FAR-1825: `set_mutation_row_lock_timeout` at the top of the create transaction helper) | Locks existing same-name `ModelBackend` row for creation uniqueness (409 on clash). | no. |
 | C5 | `db/crud/organisation.py:107` | `get_organisation` | FOR UPDATE (opt-in) | caller txn, **bounded** by `_take_settings_patch_lock_wait` in `update_org_json_column_patch` | Generic org row lock used by org-updating callers. Marks itself FAR-1624: intentionally plain `FOR UPDATE`, not `FOR NO KEY UPDATE`. Since FAR-1830/1832 its only caller is the atomic settings patch's **generic-dialect (SQLite/MariaDB) fallback** (`_apply_json_column_patch_generic`) – on Postgres the patch is a single `UPDATE` and never takes this. | **watch** – Organisation row (Postgres never reaches it). |
 | C6 | `db/crud/organisation.py:718` (`_apply_json_column_patch_generic`; entered via `db/crud/observability.py::update_otel_config` → shared machinery) | `_apply_json_column_patch_generic` | FOR UPDATE (generic-dialect fallback only) | caller txn, **bounded** by `_take_settings_patch_lock_wait` (the shared patch bounds before it dispatches here) | **FAR-1832 (QA F3):** routes through the shared atomic JSON-column patch (`update_org_json_column_patch`) – the Postgres path is a single-statement atomic `otel_config_json = COALESCE(…) || :patch` write with no pre-lock; the `FOR UPDATE` survives only on the SQLite/MariaDB fallback branch (`_apply_json_column_patch_generic`, which never runs on Postgres). Deliberately `require_live_row=False` (still `include_soft_deleted` on the generic read) – FAR-1025 keeps OTel config writable during the pending-deletion window (unlike `settings_json`, whose writers now refuse soft-deleted orgs). QA F3 also gave this path the same fail-closed tenant guard as the settings writer (it previously trusted `org_id` verbatim – and `organisations` is not RLS-scoped, so that guard is the only tenant control). | no – never reached on Postgres. |
 | C7 | `db/crud/parameter_set.py:91` | `update_set` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the lock) | Parameter-set version bump RMW. | no. |
@@ -305,7 +305,7 @@ single-use rows for credentials/entities.
   mutation transactions, the two team-gate helpers (A2, A3) and the two
   `request_cancellation` callers (A7) all call it; FAR-1610 closed A7, the hold-out this
   inventory originally flagged. **FAR-1825 closed the category-C sweep:** every C site a
-  request path can reach now issues the bound itself (C4 at the route's transaction top,
+  request path can reach now issues the bound itself (C4 at the create transaction helper's top,
   C7–C9/C12–C20/C22–C23 at the CRUD helper's first lock), while C5/C6 inherit the shared
   org-patch helper's bound. C10/C11/C21 are deliberately unbounded because no production
   request path reaches them (see §3 C and §10).
@@ -447,7 +447,7 @@ original finding.
    `set_mutation_row_lock_timeout` at the transaction top where the first lock is unbounded.
    *(Categories C + B.)*
    **DELIVERED for category C – FAR-1825.** Re-derived the C set from §1 against the
-   branch tip, bounded every reachable site (C4 route-level; C7–C9, C12–C20, C22–C23 at the
+   branch tip, bounded every reachable site (C4 create-transaction helper; C7–C9, C12–C20, C22–C23 at the
    CRUD helper; C5/C6 already bounded by the shared org-patch helper), and recorded C10/C11/
    C21 as deliberately unbounded (no production caller). Pinned by
    `backend/tests/unit/api/test_far1825_lock_timeout_sweep.py`. Category B is unchanged by
@@ -621,7 +621,7 @@ in §3, so it is not counted as a row-lock site.
 **Disposition of every category-C site** (the `txn` column in §3 carries the per-row note):
 
 - **Bounded by this sweep, at the request transaction's first lock:**
-  C4 (route top), C7, C8, C9, C12, C13, C14, C15, C16, C17, C18, C19, C20, C22, C23.
+  C4 (create transaction helper), C7, C8, C9, C12, C13, C14, C15, C16, C17, C18, C19, C20, C22, C23.
   Each now issues `set_mutation_row_lock_timeout(session)` before its first
   `SELECT … FOR UPDATE`. The helper is transaction-scoped (`SET LOCAL lock_timeout`,
   Postgres-only), so a contended row raises SQLSTATE 55P03 — never an unbounded wait.
