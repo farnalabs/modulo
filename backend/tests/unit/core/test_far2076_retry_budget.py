@@ -29,6 +29,7 @@ These tests pin, in order:
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -585,6 +586,50 @@ async def test_reconcile_terminalises_a_pending_row_beyond_budget() -> None:
     dispatch_mock.assert_not_awaited()
 
 
+def _running_pre_node_row(*, execution_attempt_count: int) -> SimpleNamespace:
+    """A RUNNING row whose last attempt died pre-node.
+
+    Phase ``claimed`` + a heartbeat stale past the window + ``started_at``
+    younger than the nodeless window: selected by the generic stale-heartbeat
+    leg, refused by the nodeless repair (too young), and NOT held by the
+    node-started belt (no node started). This is the shape that reached the
+    final ``execute_run`` enqueue before the gate covered non-terminal rows.
+    """
+    row = _pending_row(execution_attempt_count=execution_attempt_count)
+    row.status = "running"
+    row.dispatch_phase = "claimed"
+    row.started_at = datetime.now(UTC) - timedelta(seconds=60)
+    row.heartbeat_at = datetime.now(UTC) - timedelta(seconds=1200)
+    return row
+
+
+async def test_reconcile_does_not_redispatch_a_running_pre_node_row_at_the_ceiling() -> None:
+    """FAR-2076: the gate covers EVERY non-terminal ``execute_run``, not just
+    ``pending``. A running at-ceiling pre-node row must not be re-dispatched;
+    the guarded terminal UPDATE matches no row, so it is skipped this tick and
+    left to the nodeless/age backstop."""
+    row = _running_pre_node_row(execution_attempt_count=_CEILING)
+
+    dispatch_mock, budget_fail_mock, summary, terminalized = await _run_one_row(row, writer_result=False)
+
+    dispatch_mock.assert_not_awaited()
+    budget_fail_mock.assert_awaited_once()
+    assert terminalized == []
+    assert summary["skipped"] == 1
+
+
+async def test_reconcile_still_redispatches_a_running_pre_node_row_below_the_ceiling() -> None:
+    """Below the ceiling the recovery behaviour is unchanged."""
+    row = _running_pre_node_row(execution_attempt_count=2)
+
+    dispatch_mock, budget_fail_mock, _summary, _terminalized = await _run_one_row(row)
+
+    budget_fail_mock.assert_not_awaited()
+    dispatch_mock.assert_awaited_once()
+    assert dispatch_mock.await_args is not None
+    assert dispatch_mock.await_args.args[4] == "execute_run"
+
+
 async def test_reconcile_still_recovers_a_within_budget_pending_row() -> None:
     row = _pending_row(execution_attempt_count=2)
 
@@ -884,6 +929,116 @@ async def test_a_capacity_demoted_attempt_spends_nothing() -> None:
     """The run never began — the same request with a full slot must not count."""
     sessions, _run_id = await _execute_with_capacity(active_runs=1, max_concurrent=1)
     assert not _bump_calls(sessions)
+
+
+# ---------------------------------------------------------------------------
+# 6b. Admission is the single gate — the ceiling is enforced where every
+#     execution is granted (FAR-2076 defence in depth)
+# ---------------------------------------------------------------------------
+
+
+class _AdmissionSession:
+    """AsyncSession double for the policy read in ``_claim_under_capacity``."""
+
+    def __init__(self, retry_policy: Any) -> None:
+        self.retry_policy = retry_policy
+        self._bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+    def in_transaction(self) -> bool:
+        return True
+
+    def get_bind(self) -> Any:
+        return self._bind
+
+    def begin(self) -> _FakeBegin:
+        return _FakeBegin()
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
+        return SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(retry_policy=self.retry_policy))
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    async def close(self) -> None:
+        return None
+
+
+async def _admit(*, retry_policy: Any, execution_attempt_count: int) -> tuple[Any, AsyncMock, AsyncMock, AsyncMock]:
+    """Drive the REAL ``_claim_under_capacity`` with a slot free; return the
+    result plus the claim / bump / terminal-write mocks."""
+    run = SimpleNamespace(
+        status="running",
+        execution_attempt_count=execution_attempt_count,
+        cancellation_requested=False,
+    )
+    terminal = SimpleNamespace(status="failed", error_code=_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED)
+    executor = PipelineExecutor(MagicMock())
+    executor._claim_token = "tok"
+    executor._session_factory = MagicMock(return_value=_AdmissionSession(retry_policy))
+    claim = AsyncMock(return_value=run)
+    bump = AsyncMock(return_value=True)
+    update = AsyncMock(return_value=terminal)
+    with (
+        patch.object(ex, "set_rls_org", AsyncMock()),
+        patch.object(ex, "set_rls_execution_context", AsyncMock()),
+        patch.object(ex, "set_mutation_row_lock_timeout", AsyncMock()),
+        patch.object(ex, "get_run", AsyncMock(return_value=run)),
+        patch.object(ex, "count_active_runs_for_pipeline", AsyncMock(return_value=0)),
+        patch.object(executor, "_claim_run_and_audit", claim),
+        patch.object(ex, "update_run_status", update),
+        patch("modulo.core.pipeline_execution.bump_execution_attempt_count", bump),
+    ):
+        result = await executor._claim_under_capacity(
+            run_id=uuid.uuid4(),
+            org_id=ORG,
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            org_sandbox_cap=None,
+            org_sandbox_host_only=False,
+            org_sandbox_population="all",
+            org_run_limit=None,
+        )
+    return result, claim, bump, update
+
+
+async def test_admission_at_the_ceiling_terminalises_with_the_budget_code_and_does_not_execute() -> None:
+    """No enqueue path can exceed the ceiling: the ONE admission point refuses
+    the execution and terminalises with the SAME error code the reconcile
+    backstop uses."""
+    result, claim, bump, update = await _admit(retry_policy=_POLICY, execution_attempt_count=_CEILING)
+
+    update.assert_awaited_once()
+    assert update.await_args is not None
+    assert update.await_args.args[2] == "failed"
+    assert update.await_args.kwargs["error_code"] == _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED
+    assert "execution_attempt_count=" + str(_CEILING) in update.await_args.kwargs["error_detail"]
+    assert result.status == "failed"
+    claim.assert_not_awaited()
+    bump.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("retry_policy", "execution_attempt_count"),
+    [
+        (_POLICY, _CEILING - 1),
+        (None, 99),
+        ({}, 99),
+    ],
+)
+async def test_admission_below_the_ceiling_or_without_a_policy_still_executes(
+    retry_policy: Any, execution_attempt_count: int
+) -> None:
+    result, claim, bump, update = await _admit(
+        retry_policy=retry_policy, execution_attempt_count=execution_attempt_count
+    )
+
+    update.assert_not_awaited()
+    claim.assert_awaited_once()
+    bump.assert_awaited_once()
+    assert result.status == "running"
 
 
 # ---------------------------------------------------------------------------
