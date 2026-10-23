@@ -818,6 +818,32 @@ class SandboxCapacityExceededError(Exception):
         )
 
 
+class AdmissionLockTimeoutError(Exception):
+    """FAR-2076: the claim-time admission transaction kept hitting a row lock.
+
+    Raised after the bounded retry in :meth:`PipelineExecutor._check_capacity`
+    is exhausted (two consecutive SQLSTATE 55P03 waits). The admission+bump
+    transaction rolled back BOTH times, so the run consumed **zero** executions
+    and nothing was uncounted. By the time this is raised the executor has
+    already performed the fenced pending-reset, so the run is ``pending`` and
+    recovered by ``dispatcher_reconcile``'s re-enqueue leg — a transient lock
+    wait must never terminal-fail a run that never executed.
+
+    ``pipeline_execution._handle_executor_failure`` maps THIS type to the
+    non-terminal ``{"status": "deferred"}`` outcome (the same deferral contract
+    ``dispatch_run`` returns for a non-dispatched run). Any OTHER executor
+    exception still terminal-fails as before.
+    """
+
+    def __init__(self, run_id: uuid.UUID, attempts: int) -> None:
+        self.run_id = run_id
+        self.attempts = attempts
+        super().__init__(
+            f"Admission for run {run_id} still hit a row-lock timeout after {attempts} attempts; "
+            "the run was left pending for dispatcher_reconcile (no execution consumed)"
+        )
+
+
 async def _teardown_hub(hub: Any) -> None:
     """Await a hub's ``__aexit__`` shielded against cancellation.
 
@@ -2463,8 +2489,13 @@ class PipelineExecutor:
 
         FAR-2076: a 55P03 row-lock timeout on the admission transaction is
         retried ONCE. That transaction also spends one execution attempt, so a
-        silent recovery would let the graph run uncounted; a second timeout is
-        re-raised rather than swallowed.
+        silent recovery would let the graph run uncounted. A second consecutive
+        timeout does NOT terminalise: the executor performs the fenced
+        pending-reset and raises :class:`AdmissionLockTimeoutError`, which
+        ``run_executor_with_watchdog`` maps to the non-terminal ``deferred``
+        outcome. The run consumed zero executions (both admissions rolled
+        back), so ``dispatcher_reconcile`` re-dispatches it and the next
+        admission counts the attempt.
         """
         org_sandbox_cap, org_sandbox_host_only, org_sandbox_population = await self._read_org_sandbox_cap_full(
             org_id, graph_json, snapshot_id
@@ -2475,9 +2506,19 @@ class PipelineExecutor:
         # the retry budget (see ``_claim_under_capacity``). A 55P03 row-lock
         # timeout rolls that transaction back WHOLE — including the bump — so
         # proceeding after recovery would execute the graph UNCOUNTED. Retry the
-        # admission+bump transaction exactly once; if the second attempt also
-        # times out, re-raise so the failure is visible instead of silently
-        # executing past the budget.
+        # admission+bump transaction exactly once.
+        #
+        # If the second attempt also times out, DEFER rather than terminalise.
+        # Both attempts rolled back, so the run has consumed zero executions;
+        # killing it ``executor_failed`` would be worse than the capacity-lock
+        # behaviour this replaced. The run was already claimed ``running``, so
+        # it must be handed back explicitly: the fenced pending-reset (the
+        # established non-terminal deferral path used by the retry policy and
+        # the watchdogs) leaves it recoverable by ``dispatcher_reconcile``'s
+        # re-enqueue leg. Safe for a non-idempotent graph despite
+        # ``_fenced_pending_reset``'s idempotency rule: ZERO nodes have
+        # executed here (admission precedes streaming), so a re-dispatch cannot
+        # repeat a side effect.
         last_lock_timeout: Exception | None = None
         for attempt in (0, 1):
             try:
@@ -2498,15 +2539,36 @@ class PipelineExecutor:
                     raise
                 last_lock_timeout = exc
                 if attempt == 1:
+                    # Second consecutive timeout: hand the claimed run back to
+                    # ``pending`` (fenced on our claim token + status='running')
+                    # so ``dispatcher_reconcile`` re-dispatches it. A failed
+                    # reset is logged, never allowed to terminalise the run: it
+                    # stays ``running`` and the age/stale-run sweep is the
+                    # backstop.
+                    reset = 0
+                    try:
+                        reset = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.warning(
+                            "pipeline.capacity_check_lock_timeout run=%s — fenced pending-reset "
+                            "failed after the second admission timeout; the run is left as-is "
+                            "for the stale-run sweep",
+                            run_id,
+                            exc_info=True,
+                        )
                     _log.warning(
                         "pipeline.capacity_check_lock_timeout run=%s — second bounded "
                         "mutation_row_lock_timeout_ms wait expired; the admission and its "
                         "execution-budget bump rolled back, so the attempt is NOT executed "
-                        "uncounted",
+                        "uncounted. Deferring (fenced pending-reset=%s) instead of "
+                        "terminal-failing a run that consumed zero executions",
                         run_id,
+                        reset,
                         exc_info=True,
                     )
-                    raise
+                    raise AdmissionLockTimeoutError(run_id, attempts=2) from exc
                 _log.warning(
                     "pipeline.capacity_check_lock_timeout run=%s — bounded "
                     "mutation_row_lock_timeout_ms wait expired on the claim-time "

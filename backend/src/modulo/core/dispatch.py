@@ -310,45 +310,65 @@ async def _org_capacity_deferred(
     return True
 
 
-async def _saq_retries_for_run(session: AsyncSession, run_id: uuid.UUID, *, job_type: str) -> int:
+async def _saq_retries_for_run(run_id: uuid.UUID, *, org_id: uuid.UUID, job_type: str) -> int:
     """Transport retry allowance for one enqueue, bounded by the policy (FAR-2076).
 
-    SAQ's ``retries`` is a RE-attempt count, so ``retries=N`` lets the job
-    execute the run up to ``N + 1`` times. Left at ``settings.saq_run_retries``
-    it silently outran a pipeline's ``retry_policy.max_retries`` — the
-    transport granted executions the policy had already refused (a run with
-    ``max_retries: 2`` reached attempt 4). The clamp comes from the ONE shared
-    helper (``modulo.core.retry_budget.clamp_saq_retries``), which reads the
-    durable execution counter ``runs.execution_attempt_count`` — never
-    ``claim_count`` (it grows on capacity-demoted and resume claims).
+    Measured against the pinned ``saq==0.26.4``: ``Job.retryable`` is
+    ``retries > attempts`` (``saq/job.py:262``) and the worker increments
+    ``job.attempts`` BEFORE processing (``saq/worker.py:356``), so
+    ``retries=N`` grants **N total attempts** and ``retries=0`` still grants
+    one. Left at ``settings.saq_run_retries`` the transport silently outran a
+    pipeline's ``retry_policy.max_retries`` — the transport granted executions
+    the policy had already refused. The clamp comes from the ONE shared helper
+    (``modulo.core.retry_budget.clamp_saq_retries``), which reads the durable
+    execution counter ``runs.execution_attempt_count`` — never ``claim_count``
+    (it grows on capacity-demoted and resume claims).
 
     ``resume_run`` is NOT clamped: a resume continues from the run's LangGraph
     checkpoint rather than re-executing the graph, so the retry policy does not
-    govern resumes. A load failure fails OPEN to the configured value — the
-    clamp is a budget guard, never an admission authority.
+    govern resumes.
+
+    Runs in its OWN short session, deliberately, and is called BEFORE the
+    admission transaction opens (FAR-2076). The clamp is a best-effort budget
+    guard, never an admission authority, so a read failure must fail OPEN to
+    the configured value. Swallowing that failure inside the admission
+    transaction would be unreachable: the DB error aborts the transaction
+    (25P02), the caller's next statement raises ``InFailedSQLTransactionError``
+    and the dispatch hard-fails instead of deferring. Reading it separately
+    makes the fail-open genuine; the counter only grows, so a slightly stale
+    read can only OVER-grant a transport retry — it can never under-grant one
+    and lose an execution the policy still permits. Retry GRANTING (the
+    transient-decision path, the watchdogs and the reconcile backstop) still
+    re-reads the live counter, so ``runs.execution_attempt_count`` remains the
+    single budget authority.
     """
     from modulo.db.crud.run import get_run
     from modulo.db.models.pipeline import Pipeline
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
     from modulo.db.soft_delete import include_soft_deleted
 
     configured = int(get_settings().saq_run_retries)
     if job_type == "resume_run":
         return configured
+    session = _open_session()
     try:
-        run = await get_run(session, run_id)
-        if run is None:
-            return configured
-        # FAR-1025 parity with the capacity checks: an in-flight run's pipeline
-        # may be soft-deleted after dispatch.
-        pipeline = (
-            await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
-        ).scalar_one_or_none()
-        policy = getattr(pipeline, "retry_policy", None) if pipeline is not None else None
-        return clamp_saq_retries(
-            policy,
-            execution_attempt_count=getattr(run, "execution_attempt_count", 0),
-            configured=configured,
-        )
+        async with session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            run = await get_run(session, run_id)
+            if run is None:
+                return configured
+            # FAR-1025 parity with the capacity checks: an in-flight run's
+            # pipeline may be soft-deleted after dispatch.
+            pipeline = (
+                await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
+            ).scalar_one_or_none()
+            policy = getattr(pipeline, "retry_policy", None) if pipeline is not None else None
+            return clamp_saq_retries(
+                policy,
+                execution_attempt_count=getattr(run, "execution_attempt_count", 0),
+                configured=configured,
+            )
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -360,6 +380,8 @@ async def _saq_retries_for_run(session: AsyncSession, run_id: uuid.UUID, *, job_
             exc_info=True,
         )
         return configured
+    finally:
+        await session.close()
 
 
 async def _record_dispatched(session: AsyncSession, run_id: uuid.UUID) -> None:
@@ -770,10 +792,12 @@ async def dispatch_run(
     oid = uuid.UUID(str(org_id))
     queue_name = queue or settings.saq_runs_queue
     # FAR-2076: transport retry allowance, clamped to the pipeline retry
-    # policy's remaining execution budget. Resolved inside the admission
-    # transaction below; initialised to the configured value so every early
-    # return / rollback path keeps the historical allowance until it is known.
-    saq_retries = int(settings.saq_run_retries)
+    # policy's remaining execution budget. Resolved BEFORE the admission
+    # transaction opens, in its own short session: the lookup is a best-effort
+    # budget guard whose fail-open must actually be reachable, and a DB error
+    # raised INSIDE the admission transaction would abort it (25P02) instead of
+    # failing open — turning a clamp read into a hard dispatch failure.
+    saq_retries = await _saq_retries_for_run(rid, org_id=oid, job_type=job_type)
 
     # Capacity check FIRST (plan F3b/F3e). The run itself is excluded from the
     # count so a resume never counts against its own slot; a capacity-deferred
@@ -802,7 +826,6 @@ async def dispatch_run(
                 # refused here; this also hardens resumes against terminal runs.
                 _log.info("dispatch_run: run %s already terminal (%s) — not dispatched", rid, run.status)
                 return ("terminal_skipped", None)
-            saq_retries = await _saq_retries_for_run(session, rid, job_type=job_type)
             if await _capacity_deferred(session, rid):
                 _log.info("dispatch_run: run %s capacity-deferred (no enqueue)", rid)
                 return ("deferred", None)

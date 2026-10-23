@@ -2673,9 +2673,12 @@ async def run_executor_with_watchdog(
     actually reached ``complete``; a generic executor exception is
     terminal-failed with ``executor_failed`` (token-guarded) and returns
     ``{"status": "failed"}``; a HITL-decision resume capacity denial returns
-    ``{"status": "capacity_deferred"}``; an ``awaiting_human`` pause returns
-    ``{"status": "awaiting_human"}``; a HITL rejection that ended the run
-    (FAR-1487) returns ``{"status": "rejected"}``. The caller only runs
+    ``{"status": "capacity_deferred"}``; a claim-time admission that could not
+    acquire its row lock after the bounded retry returns
+    ``{"status": "deferred"}`` (FAR-2076 — the run is pending, not terminal, and
+    ``dispatcher_reconcile`` re-dispatches it); an ``awaiting_human`` pause
+    returns ``{"status": "awaiting_human"}``; a HITL rejection that ended the
+    run (FAR-1487) returns ``{"status": "rejected"}``. The caller only runs
     ``mark_complete`` on a genuine ``complete``.
     """
     rid = uuid.UUID(run_id)
@@ -2925,6 +2928,14 @@ async def _handle_executor_failure(
 ) -> dict[str, Any]:
     """Classify an executor exception into a deferred or terminal outcome.
 
+    FAR-2076: an ``AdmissionLockTimeoutError`` is a DEFERRAL, not a failure —
+    the claim-time admission retried and still hit a row lock, so the run
+    consumed zero executions and the executor has already fenced it back to
+    ``pending``. Report the non-terminal ``deferred`` outcome (the same
+    vocabulary ``dispatch_run`` uses for a run that was not dispatched and is
+    recovered by ``dispatcher_reconcile``) instead of terminal-failing a run
+    that never ran.
+
     FAR-1831: a sandbox-capacity denial on a resume carrying a COMMITTED HITL
     decision must NOT terminal-fail the run — the decision would be lost. Reset
     the row to ``awaiting_human`` (fenced, and refunding the contested claim) so
@@ -2942,9 +2953,24 @@ async def _handle_executor_failure(
     the reset cannot misfire on a first dispatch.
     """
     from modulo.core.pipeline_engine.executor import (
+        AdmissionLockTimeoutError as _AdmissionLockTimeoutError,
+    )
+    from modulo.core.pipeline_engine.executor import (
         SandboxCapacityExceededError as _SandboxCapacityExceededError,
     )
 
+    if isinstance(exec_exc, _AdmissionLockTimeoutError):
+        # The executor already performed the fenced pending-reset; the run is
+        # pending and dispatcher_reconcile re-dispatches it. The next admission
+        # counts its execution attempt. NOT terminal.
+        _log.warning(
+            "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
+            "admission kept hitting row-lock timeouts; run left pending and NOT "
+            "terminal-failed; dispatcher_reconcile will re-dispatch it",
+            run_id,
+            exec_exc.attempts,
+        )
+        return {"status": "deferred"}
     if hitl_decision_resume and isinstance(exec_exc, _SandboxCapacityExceededError):
         reset = await defer_capacity_denied_run_to_awaiting_human(aeng, run_id, org_id, claim_token=claim_token)
         _log.warning(

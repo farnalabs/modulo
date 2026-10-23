@@ -135,21 +135,30 @@ def clamp_saq_retries(
 ) -> int:
     """Bound the SAQ transport retry allowance by the policy budget (FAR-2076).
 
-    SAQ's ``retries`` is the number of RE-attempts after the first execution,
-    so a job enqueued with ``retries=N`` can execute a run up to ``N + 1``
-    times. Left at ``settings.saq_run_retries`` (5) it silently outran a
-    pipeline's ``retry_policy.max_retries`` (2): the transport granted
-    executions the policy had already refused.
+    MEASURED against the pinned ``saq==0.26.4`` (quoted, not assumed):
+
+    * ``saq/job.py:262`` — ``def retryable(self) -> bool: return self.retries >
+      self.attempts``
+    * ``saq/worker.py:356`` — ``job.attempts += 1``, executed BEFORE the job is
+      processed.
+
+    So ``retries=N`` grants **N total attempts** (not ``N + 1``), and
+    ``retries=0`` still grants one attempt. The allowance this returns is
+    therefore the number of ATTEMPTS the job may take, and it is compared
+    directly against ``remaining`` — the executions the ceiling still permits
+    including the one this enqueue creates. Left at
+    ``settings.saq_run_retries`` (5) the transport silently outran a pipeline's
+    ``retry_policy.max_retries`` (2): the transport granted executions the
+    policy had already refused.
 
     Returns the configured value unchanged when the policy imposes no ceiling
-    (existing behaviour preserved), else ``min(configured, remaining - 1)``
-    where ``remaining`` is the executions the ceiling still permits including
-    the one this enqueue creates. Never negative: a run already at or beyond
-    its ceiling is enqueued with zero transport retries (the reconcile
-    backstop terminal-fails that shape instead of re-dispatching it).
+    (existing behaviour preserved), else ``min(configured, remaining)``. Never
+    negative: a run already at or beyond its ceiling is enqueued with zero
+    transport retries — SAQ's floor of one attempt still applies, and the
+    reconcile backstop terminal-fails that shape instead of re-dispatching it.
     """
     ceiling = retry_max_executions(policy)
     if ceiling is None:
         return configured
     remaining = ceiling - retry_executions_consumed(execution_attempt_count=execution_attempt_count)
-    return max(0, min(configured, remaining - 1))
+    return max(0, min(configured, remaining))
