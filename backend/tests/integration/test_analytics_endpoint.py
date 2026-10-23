@@ -106,6 +106,8 @@ async def _insert_fact(
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
     total_queue_wait_ms: int | None = None,
+    dispatch_phase: str | None = None,
+    dispatch_phase_entered_at: datetime | None = None,
 ) -> None:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
@@ -115,10 +117,11 @@ async def _insert_fact(
                 "queue_wait_ms, final_idle_ms, cancellation_requested, dispatcher, node_count, "
                 "sandbox_agent_node_count, max_node_timeout_seconds, parent_run_id, snapshot_id, "
                 "run_number, output_bytes, rate_limited, pipeline_id, team_name, dispatched_at, "
-                "started_at, completed_at, total_queue_wait_ms) "
+                "started_at, completed_at, total_queue_wait_ms, dispatch_phase, dispatch_phase_entered_at) "
                 "VALUES (:id, :oid, :rid, :day, :created, :tt, :st, :cost, :tok, :err, :claims, "
                 ":qwait, :fidle, :cancel, :disp, :ncount, :sa_count, :max_to, :parent, :snap, "
-                ":rnum, :obytes, :rlim, :pid, :tname, :disp_at, :started, :completed, :tqwait)",
+                ":rnum, :obytes, :rlim, :pid, :tname, :disp_at, :started, :completed, :tqwait, "
+                ":dphase, :dphase_at)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -152,6 +155,8 @@ async def _insert_fact(
                 "started": started_at,
                 "completed": completed_at,
                 "tqwait": total_queue_wait_ms,
+                "dphase": dispatch_phase,
+                "dphase_at": dispatch_phase_entered_at,
             },
         )
 
@@ -1291,6 +1296,89 @@ class TestScanEndpoint:
         """A scan with no credentials must be 401, never a 200 stream."""
         resp = await integration_client.get("/api/v1/analytics/scan")
         assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
+
+
+class TestFAR2079QueueWaitNonNegative:
+    """FAR-2079: the endpoint never reports a negative queue wait.
+
+    A re-dispatched/resumed run has ``dispatched_at`` rewritten past the
+    once-stamped ``started_at``, so facts written before the writer guard carry
+    a negative ``queue_wait_ms`` (observed on the Branch Fixer pipeline:
+    -42,935 … -4,312,681 ms). The read path excludes those samples, so the
+    bucket is non-negative for historical facts without a data rewrite.
+    """
+
+    async def test_negative_queue_wait_fact_is_excluded_from_the_bucket(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        today = datetime.now(UTC).date()
+        created = datetime.combine(today, datetime.min.time(), tzinfo=UTC)
+        # Isolate from the other tests in this module: they share the org (and
+        # thus its facts) and several write to ``today``. A freshly seeded
+        # pipeline + a pipeline_id filter keeps the bucket to these three rows.
+        pipeline_id = await _seed_pipeline_for_fact(db_engine, org_a, user_a, "far-2079-queue-wait")
+        # (a) dispatch-phase timestamp SET — the normal first-dispatch shape.
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            created_at=created,
+            dispatched_at=created,
+            started_at=created + timedelta(seconds=2),
+            dispatch_phase="claimed",
+            dispatch_phase_entered_at=created + timedelta(seconds=1),
+            queue_wait_ms=500,
+            pipeline_id=pipeline_id,
+        )
+        # (b) dispatch-phase timestamp ABSENT — the fact falls back to
+        # started_at for the claim→dispatch latency, still with a valid queue
+        # wait (this is the acceptance's "phase timestamp absent" shape).
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            created_at=created,
+            dispatched_at=created,
+            started_at=created + timedelta(seconds=1),
+            queue_wait_ms=300,
+            pipeline_id=pipeline_id,
+        )
+        # (c) the pinned inversion: started_at (09:00 on attempt 1) precedes a
+        # re-dispatch's rewritten dispatched_at, so the OLD writer stored a
+        # large negative value. It is not a queue wait and must not enter the
+        # mean.
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            created_at=created,
+            started_at=created + timedelta(seconds=1),
+            dispatched_at=created + timedelta(minutes=72),
+            dispatch_phase="claimed",
+            dispatch_phase_entered_at=created + timedelta(minutes=72),
+            queue_wait_ms=-4_312_681,
+            pipeline_id=pipeline_id,
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}"
+            f"&pipeline_id={pipeline_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        bucket = resp.json()["buckets"][0]
+        # (500 + 300) / 2 — the negative sample is excluded, not clamped to 0.
+        assert bucket["avg_queue_wait_ms"] == 400.0
+        assert bucket["avg_queue_wait_ms"] >= 0
+        assert bucket["avg_dispatch_latency_ms"] >= 0
 
 
 class TestBackfillEnrichment:

@@ -3454,6 +3454,37 @@ def test_cancel_triage_attempt_key_falls_back_when_caller_has_no_key():
     assert nr._cancel_triage_attempt_key("run-1", "node-a", "") == "cancel-triage:run-1:node-a:fallback"
 
 
+# FAR-2084: the cancellation-triage reader must carry through EVERY attempt
+# suffix shape the writer produces (the shared rule: any non-empty suffix
+# after ``run:<run>:node:<node>:`` is the attempt identity). One case per
+# shape; dropping one from the shared helper fails here.
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        pytest.param("3", id="numeric-claim-count"),
+        pytest.param("agent", id="agent-slot"),
+        pytest.param("connector", id="connector-slot"),
+        pytest.param("fallback", id="fallback"),
+        pytest.param("claim-unknown", id="claim-unknown"),
+        pytest.param("0123456789abcdef", id="fail-open-hex"),
+    ],
+)
+def test_cancel_triage_attempt_key_carries_every_attempt_suffix_shape(suffix: str):
+    attempt_key = f"run:{_RUN_ID}:node:node-a:{suffix}"
+    assert nr._cancel_triage_attempt_key(_RUN_ID, "node-a", attempt_key) == (f"cancel-triage:{_RUN_ID}:node-a:{suffix}")
+
+
+def test_cancel_triage_attempt_key_rejects_a_key_that_is_not_attempt_scoped():
+    """FAR-2084: a key without a ``:node:`` segment is NOT this attempt.
+
+    It must fall back to the deterministic suffix rather than fabricating an
+    attempt identity from an arbitrary string tail.
+    """
+    assert nr._cancel_triage_attempt_key("run-1", "node-a", "not-an-attempt-key") == (
+        "cancel-triage:run-1:node-a:fallback"
+    )
+
+
 async def test_sandbox_cancellation_log_tail_fetch_failure_does_not_block_marker(caplog):
     """FAR-704: a failing log-tail probe degrades to an empty tail — the triage
     marker is still persisted, then the original cancellation re-raises."""

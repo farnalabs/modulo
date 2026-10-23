@@ -3820,6 +3820,12 @@ elements:
       - testid: pipeline-editor-queue-timeout
         type: input
         dynamic_testid: false
+      - testid: pipeline-editor-node-worst-case
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-retry-policy-worst-case
+        type: element
+        dynamic_testid: false
       - testid: pipeline-editor-ownerless-gate-advisory
         type: element
         dynamic_testid: false
@@ -4551,6 +4557,21 @@ elements:
         type: element
         dynamic_testid: false
       - testid: run-detail-warnings-strip
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-worst-case
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-worst-case-node
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-worst-case-ceiling
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-worst-case-unavailable
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-worst-case-attempt
         type: element
         dynamic_testid: false
       - testid: hitl-gate-card

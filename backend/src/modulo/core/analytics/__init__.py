@@ -86,16 +86,38 @@ def _fact_duration_ms(run: Run) -> int | None:
 
 
 def _fact_queue_wait_ms(run: Run) -> int | None:
-    """Run.started_at - Run.dispatched_at when both present, else NULL.
+    """Run.started_at - Run.dispatched_at when both present and ordered, else NULL.
 
-    Semantics: ``dispatched_at`` is stamped by the dispatcher BEFORE the run is
-    enqueued and ``started_at`` when a worker claims it, so
-    ``dispatched_at < started_at`` in time and the stat is a POSITIVE queue
-    wait. ``dispatched_at`` is read via ``getattr`` so any run-shaped object
-    (legacy fakes without the attribute) degrades to NULL instead of raising.
+    Semantics: on the FIRST dispatch ``dispatched_at`` is stamped before the run
+    is enqueued and ``started_at`` when a worker claims it, so
+    ``dispatched_at < started_at`` and the stat is a POSITIVE queue wait.
+
+    FAR-2079 — that ordering does NOT hold for a re-dispatched run, and the two
+    timestamps then belong to DIFFERENT attempts:
+
+      * ``started_at`` is stamped at most once, on the first transition to
+        ``running`` (``db/crud/run.py::_apply_run_claim_fields`` and the fenced
+        SQL's ``CASE WHEN started_at IS NULL``), and no reset path clears it
+        (``worker_handoff._HANDBACK_RESET_SQL`` / ``run_admission._RECONCILE_RUNS_SQL``
+        / ``executor._fenced_pending_reset`` only touch dispatched_at /
+        dispatcher / heartbeat_at).
+      * ``dispatched_at`` is REWRITTEN on every dispatch
+        (``core/dispatch.py::_record_dispatched`` — ``SET dispatched_at=now()``),
+        including the dispatcher_reconcile re-enqueue leg (``_re_enqueue_run``)
+        and a HITL resume dispatch.
+
+    So after a re-dispatch or resume ``dispatched_at > started_at``, and the
+    naive subtraction yields a large NEGATIVE "queue wait" (observed on the
+    Branch Fixer pipeline: -42,935 … -4,312,681 ms). There is no valid
+    single-attempt wait to report in that case — the final attempt's own start
+    instant is not stored — so this returns NULL (no sample) rather than a
+    fabricated 0 or a negative number.
+
+    ``dispatched_at`` is read via ``getattr`` so any run-shaped object (legacy
+    fakes without the attribute) degrades to NULL instead of raising.
     """
     dispatched_at = getattr(run, "dispatched_at", None)
-    if dispatched_at is not None and run.started_at is not None:
+    if dispatched_at is not None and run.started_at is not None and dispatched_at <= run.started_at:
         return int((run.started_at - dispatched_at).total_seconds() * 1000)
     return None
 

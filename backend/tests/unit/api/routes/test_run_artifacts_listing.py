@@ -245,6 +245,39 @@ class TestArtifactListingHappy:
         assert keys[0] == "10"
         assert keys == ["10", "9", "8", "7", "6", "5", "4", "3", "2", "1", "0", "__final__"]
 
+    def test_fail_open_attempt_shapes_are_listed_not_dropped(self) -> None:
+        """FAR-2084: every non-empty attempt suffix shape is an attempt identity.
+
+        The fail-open shapes (``claim-unknown`` / 16-hex) and ``fallback`` must
+        appear beside the numeric claim count. The numeric suffix is read as a
+        number ONLY to order attempts (the one ordered family); the others trail
+        it deterministically and are never filtered out.
+        """
+
+        def _row(attempt_key: str) -> MagicMock:
+            return _make_artifact_row(
+                attempt_key=attempt_key,
+                artifacts=[{"stream": "stdout", "size_bytes": 1, "sha256": "x", "compression": "none"}],
+            )
+
+        rows = [
+            _row("run:abc:node:sandbox_1:2"),
+            _row("run:abc:node:sandbox_1:claim-unknown"),
+            _row("run:abc:node:sandbox_1:0123456789abcdef"),
+            _row("run:abc:node:sandbox_1:fallback"),
+        ]
+        session = _make_session()
+        _queue_execute(session, [_result(rows=rows)])
+        _override_deps(session)
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get(
+            f"/api/v1/runs/{_RUN_ID}/nodes/{_NODE_ID}/artifacts",
+        )
+
+        assert resp.status_code == 200
+        keys = [a["attempt_key"].rsplit(":", 1)[-1] for a in resp.json()["artifacts"]]
+        assert keys == ["2", "fallback", "claim-unknown", "0123456789abcdef"]
+
     def test_list_empty_when_no_artifacts(self) -> None:
         """Node has output rows but no artifacts -> empty list."""
         row = _make_artifact_row(
