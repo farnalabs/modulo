@@ -942,6 +942,7 @@ class _AdmissionSession:
 
     def __init__(self, retry_policy: Any) -> None:
         self.retry_policy = retry_policy
+        self.info: dict[str, Any] = {}
         self._bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
 
     def in_transaction(self) -> bool:
@@ -966,26 +967,45 @@ class _AdmissionSession:
         return None
 
 
-async def _admit(*, retry_policy: Any, execution_attempt_count: int) -> tuple[Any, AsyncMock, AsyncMock, AsyncMock]:
+_TERMINAL_LANDED: Any = object()
+
+
+async def _admit(
+    *,
+    retry_policy: Any,
+    execution_attempt_count: int,
+    terminal_write: Any = _TERMINAL_LANDED,
+    rerun_row: Any = None,
+) -> tuple[Any, AsyncMock, AsyncMock, AsyncMock]:
     """Drive the REAL ``_claim_under_capacity`` with a slot free; return the
-    result plus the claim / bump / terminal-write mocks."""
+    result plus the claim / bump / terminal-write mocks.
+
+    ``terminal_write`` defaults to a landed terminal row; pass ``None`` to model
+    a terminal write REJECTED by the fence (``rerun_row`` is then the re-read).
+    """
     run = SimpleNamespace(
         status="running",
         execution_attempt_count=execution_attempt_count,
         cancellation_requested=False,
+        claim_token="tok",
     )
-    terminal = SimpleNamespace(status="failed", error_code=_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED)
+    terminal = (
+        SimpleNamespace(status="failed", error_code=_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED)
+        if terminal_write is _TERMINAL_LANDED
+        else terminal_write
+    )
     executor = PipelineExecutor(MagicMock())
     executor._claim_token = "tok"
     executor._session_factory = MagicMock(return_value=_AdmissionSession(retry_policy))
     claim = AsyncMock(return_value=run)
     bump = AsyncMock(return_value=True)
     update = AsyncMock(return_value=terminal)
+    get_run = AsyncMock(return_value=run) if rerun_row is None else AsyncMock(side_effect=[run, rerun_row])
     with (
         patch.object(ex, "set_rls_org", AsyncMock()),
         patch.object(ex, "set_rls_execution_context", AsyncMock()),
         patch.object(ex, "set_mutation_row_lock_timeout", AsyncMock()),
-        patch.object(ex, "get_run", AsyncMock(return_value=run)),
+        patch.object(ex, "get_run", get_run),
         patch.object(ex, "count_active_runs_for_pipeline", AsyncMock(return_value=0)),
         patch.object(executor, "_claim_run_and_audit", claim),
         patch.object(ex, "update_run_status", update),
@@ -1039,6 +1059,124 @@ async def test_admission_below_the_ceiling_or_without_a_policy_still_executes(
     claim.assert_awaited_once()
     bump.assert_awaited_once()
     assert result.status == "running"
+
+
+async def test_at_ceiling_fence_rejection_never_hands_back_a_running_row() -> None:
+    """FAR-2076: a rejected terminal write must not re-admit the execution.
+
+    ``execute()`` only refuses to stream on ``status != "running"``. A
+    SUPERSEDED row (a successor rotated the claim token) is still ``running``,
+    so returning it would execute the graph past the ceiling — exactly what the
+    gate exists to prevent. The attempt must raise a non-executing error
+    instead.
+    """
+    superseded = SimpleNamespace(status="running", claim_token="successor", cancellation_requested=False)
+
+    with pytest.raises(ex.RetryBudgetGateRefusedError) as excinfo:
+        await _admit(
+            retry_policy=_POLICY,
+            execution_attempt_count=_CEILING,
+            terminal_write=None,
+            rerun_row=superseded,
+        )
+
+    assert excinfo.value.reason == "superseded claim token"
+
+
+async def test_at_ceiling_fence_rejection_on_a_cancelling_row_is_non_executing() -> None:
+    """A cancellation-pending row is ALSO still ``running`` (the cancel-wins
+    guard rejected the ``failed`` write), so it cannot be handed to
+    ``execute()`` either."""
+    cancelling = SimpleNamespace(status="running", claim_token="tok", cancellation_requested=True)
+
+    with pytest.raises(ex.RetryBudgetGateRefusedError) as excinfo:
+        await _admit(
+            retry_policy=_POLICY,
+            execution_attempt_count=_CEILING,
+            terminal_write=None,
+            rerun_row=cancelling,
+        )
+
+    assert excinfo.value.reason == "cancellation pending"
+
+
+async def test_at_ceiling_fence_rejection_does_not_stream_in_execute() -> None:
+    """End-to-end through the REAL ``execute()``: the at-ceiling gate's fence
+    loss stops before ANY execution work — ``_init_run_environment`` (hub init /
+    graph compile / node streaming) is never reached."""
+    run_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    run = SimpleNamespace(
+        status="running",
+        pipeline_id=pipeline_id,
+        variant_config_snapshot=None,
+        input_payload={},
+        execution_attempt_count=_CEILING,
+        cancellation_requested=False,
+        claim_token="tok",
+    )
+    superseded = SimpleNamespace(status="running", claim_token="successor", cancellation_requested=False)
+    snapshot = SimpleNamespace(policy_gate_pins_json=None)
+    executor = object.__new__(PipelineExecutor)
+    executor._claim_token = "tok"
+    executor._dispatch_phase_tracker = None
+    executor._session_factory = MagicMock(return_value=_AdmissionSession(_POLICY))
+    executor._check_policy_gate_pin = AsyncMock(return_value=None)
+    stream = AsyncMock(side_effect=AssertionError("the graph must not stream past the ceiling"))
+
+    with (
+        patch.object(
+            executor,
+            "_load_execution_context",
+            AsyncMock(return_value=(run, SimpleNamespace(), snapshot, {"nodes": [], "edges": []}, {})),
+        ),
+        patch.object(
+            executor,
+            "_capture_execution_scalars",
+            MagicMock(
+                return_value={
+                    "pipeline_id": pipeline_id,
+                    "max_concurrent": 1,
+                    "pipeline_retry_policy": _POLICY,
+                    "guard": None,
+                    "snapshot_id": uuid.uuid4(),
+                    "thread_id": "thread",
+                    "is_correction_run": False,
+                    "run_number": 1,
+                }
+            ),
+        ),
+        patch.object(executor, "_load_eval_defs_for_pipeline", AsyncMock(return_value=[])),
+        patch.object(executor, "_build_eval_defs_by_node", MagicMock(return_value={})),
+        patch.object(executor, "_read_org_sandbox_cap_full", AsyncMock(return_value=(None, False, "all"))),
+        patch.object(executor, "_read_org_run_concurrency_limit", AsyncMock(return_value=None)),
+        patch.object(ex, "count_active_runs_for_pipeline", AsyncMock(return_value=0)),
+        patch.object(ex, "get_run", AsyncMock(side_effect=[run, superseded])),
+        patch.object(ex, "update_run_status", AsyncMock(return_value=None)),
+        patch.object(executor, "_claim_run_and_audit", AsyncMock(return_value=run)),
+        patch.object(executor, "_init_run_environment", stream),
+        pytest.raises(ex.RetryBudgetGateRefusedError),
+    ):
+        await executor.execute(run_id=run_id, org_id=ORG, input_payload={}, claim_token="tok")
+
+    stream.assert_not_awaited()
+
+
+async def test_at_ceiling_fence_rejection_maps_to_a_non_terminal_outcome() -> None:
+    """The wrapper must treat the refusal as a DEFERRAL: nothing executed and
+    this attempt owns nothing, so it must not terminalise the run."""
+    fail_run = AsyncMock()
+    with patch("modulo.core.pipeline_execution.fail_run_terminal", fail_run):
+        outcome = await pe._handle_executor_failure(
+            MagicMock(),
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
+            claim_token="tok",
+            exec_exc=ex.RetryBudgetGateRefusedError(uuid.uuid4(), reason="superseded claim token"),
+            hitl_decision_resume=False,
+        )
+    assert outcome == {"status": "deferred"}
+    fail_run.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

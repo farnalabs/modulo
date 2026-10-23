@@ -63,6 +63,15 @@ exactly as before — a retry decision must never prevent a run from reaching
 a terminal state. An UNREADABLE delivery record is treated as "delivered"
 (the veto engages): an unreadable fact must never license a re-dispatch.
 
+The ONE exception to "fail closed to a terminal fail" is the fenced reset
+itself timing out (FAR-2076). ``_fenced_pending_reset`` returns ``None`` on its
+bounded 55P03, which means the row is most likely still ``running`` under OUR
+claim token — so the watchdog's untokened ``fail_run_terminal`` would LAND and
+permanently kill a run with budget remaining. That path returns ``None``
+(defer): neither terminal-fail nor re-dispatch, leaving the row to the
+nodeless/age backstop. A ``0`` rowcount still means a genuine fence loss and
+keeps the terminal fail.
+
 Known residual race (bounded): between the hook's ``exec_task.done()``
 re-check and the fenced pending-reset the executor task could complete
 concurrently. The fenced reset is a conditional
@@ -124,7 +133,7 @@ _log = logging.getLogger(__name__)
 #
 # ``Callable[..., ...]`` because the kwargs are optional and call sites without
 # them must keep working.
-WatchdogRetryHook = Callable[..., Awaitable[bool]]
+WatchdogRetryHook = Callable[..., Awaitable[bool | None]]
 
 # Runtime SAQ job function names are FULLY-QUALIFIED ("modulo.core.saq_worker.execute_run"
 # / "...resume_run" — see dispatch.py SAQ_*_RUN_FUNCTION and the registered
@@ -141,11 +150,15 @@ class WatchdogRetryOutcome:
 
     ``requested=True`` means the hook performed the fenced pending-reset and
     the wrapper must raise ``RunRetryPolicyError`` (so SAQ re-dispatches the
-    job) instead of standing down. The wrapper awaits the watchdogs to
-    completion before reading this box, so the flags are always settled.
+    job) instead of standing down. ``deferred=True`` (FAR-2076) means the reset
+    TIMED OUT: the row is left running for the nodeless/age backstop and the
+    wrapper reports the non-terminal ``deferred`` outcome. The wrapper awaits
+    the watchdogs to completion before reading this box, so the flags are
+    always settled.
     """
 
     requested: bool = False
+    deferred: bool = False
     final_status: str = ""
     retry_budget: int = 0
 
@@ -173,10 +186,12 @@ def create_watchdog_retry_hook(
     """Build the watchdog retry hook + its outcome box for one run.
 
     The hook signature is ``(final_status, error_code, *, zero_node=False,
-    veto_if_delivered=False) -> bool``: ``True`` when the run was re-dispatched
-    (the watchdog must NOT terminal-fail), ``False`` when it must terminal-fail
-    exactly as before. ``zero_node`` opts the caller into the FAR-1088 zero-node
-    failure carve-out; ``veto_if_delivered`` opts it into the FAR-2053 delivery
+    veto_if_delivered=False) -> bool | None``: ``True`` when the run was
+    re-dispatched (the watchdog must NOT terminal-fail), ``False`` when it must
+    terminal-fail exactly as before, ``None`` when the fenced reset timed out
+    (FAR-2076 — DEFER: neither terminal-fail nor re-dispatch; the row is left
+    running for the nodeless/age backstop). ``zero_node`` opts the caller into
+    the FAR-1088 zero-node failure carve-out; ``veto_if_delivered`` opts it into the FAR-2053 delivery
     veto. Both default off, so every existing caller's behaviour is unchanged.
     """
     box = WatchdogRetryOutcome()
@@ -187,7 +202,7 @@ def create_watchdog_retry_hook(
         *,
         zero_node: bool = False,
         veto_if_delivered: bool = False,
-    ) -> bool:
+    ) -> bool | None:
         return await watchdog_retry_after_policy(
             aeng=aeng,
             run_id=run_id,
@@ -428,7 +443,7 @@ async def watchdog_retry_after_policy(
     zero_node: bool = False,
     veto_if_delivered: bool = False,
     outcome: WatchdogRetryOutcome | None = None,
-) -> bool:
+) -> bool | None:
     """Consult the run's retry_policy for a watchdog kill; re-dispatch if allowed.
 
     Returns ``True`` when the re-dispatch was performed: the fenced
@@ -439,6 +454,15 @@ async def watchdog_retry_after_policy(
     policy coverage, exhausted budget, correction run, non-idempotent graph,
     superseded claim, stale script lease, lost fence, or any load failure —
     fail closed).
+
+    Returns ``None`` when the retry was covered but the fenced pending-reset
+    TIMED OUT (FAR-2076). The outcome is then unknown and the row is most
+    likely still ``running`` under OUR claim token — not a successor's — so the
+    caller's untokened ``fail_run_terminal`` would succeed and permanently kill
+    a run with budget remaining. ``None`` is therefore a DEFERRAL: the caller
+    must neither terminal-fail nor re-dispatch; the row is left running for the
+    nodeless/age backstop. ``outcome.deferred`` is set so the wrapper reports a
+    non-terminal outcome.
 
     FAR-1088 zero-node failure carve-out — ``zero_node=True`` ONLY (the
     in-process zombie watchdog passes it; its kill fires pre-first-progress,
@@ -534,10 +558,28 @@ async def watchdog_retry_after_policy(
 
     schedule_state, effective_sleep = _resolve_schedule_state(policy, attempt_count, run_id)
     reset_rowcount = await executor._fenced_pending_reset(run_id=run_id, org_id=org_id)
+    if reset_rowcount is None:
+        # FAR-2076: the bounded reset TIMED OUT. Unlike a fence loss below, the
+        # row is probably STILL ``running`` under OUR claim token, so the
+        # caller's untokened ``fail_run_terminal`` would succeed and kill a run
+        # that still has retry budget. Defer instead: no terminal fail, no
+        # re-dispatch — the row is left for the nodeless/age backstop.
+        box.deferred = True
+        _log.warning(
+            "pipeline.watchdog_retry_deferred_reset_timeout run=%s status=%s error_code=%s "
+            "attempt=%s budget=%s — the fenced pending-reset timed out; the row is left "
+            "running for the nodeless/age backstop (no terminal fail, no re-dispatch)",
+            run_id,
+            final_status,
+            error_code,
+            attempt_count,
+            retry_budget,
+        )
+        return None
     if not reset_rowcount:
-        # Fence lost — a successor owns the run (or it just reached a terminal
-        # state). Stand down: the watchdog's token/status-guarded
-        # fail_run_terminal is a no-op either way.
+        # Fence lost (rowcount 0) — a successor owns the run, or it just
+        # reached a terminal state. Stand down: the watchdog's
+        # token/status-guarded fail_run_terminal is a no-op either way.
         return False
     # FAR-525 observability: count only CONFIRMED resets (same seam as the
     # in-execute path — same counter, same reason vocabulary).
