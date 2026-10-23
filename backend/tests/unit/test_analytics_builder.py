@@ -626,6 +626,60 @@ class TestFAR102Metrics:
         assert bucket["avg_capacity_wait_ms"] is None
 
 
+class TestFAR2079QueueWaitNonNegative:
+    """FAR-2079: ``avg_queue_wait_ms`` must never be negative.
+
+    ``queue_wait_ms`` is ``started_at - dispatched_at``. That ordering holds on
+    a first dispatch only: ``started_at`` is stamped once and never reset,
+    while ``dispatched_at`` is rewritten on every dispatch (reconcile
+    re-enqueue, HITL resume) — so facts written by the unguarded writer carry
+    a large NEGATIVE value whose two timestamps belong to different attempts.
+    The read path excludes those samples from the mean (avg ignores NULL)
+    instead of clamping them to a fabricated 0, so historical facts are fixed
+    without a data rewrite.
+    """
+
+    def test_select_excludes_negative_stored_queue_wait_samples(self) -> None:
+        stmt, _ = build_facts_query(_query())
+        expr = str(stmt.selected_columns["avg_queue_wait_ms"].element.compile(dialect=postgresql.dialect()))
+        assert "CASE WHEN" in expr.upper(), "the average must filter samples, not average raw values"
+        assert "queue_wait_ms >=" in expr, "negative stored samples must be excluded from the mean"
+        assert "THEN run_daily_facts.queue_wait_ms END" in expr, (
+            "the guard is on the STORED column (historical facts), not on a derived expression"
+        )
+
+    def test_non_negative_samples_average_to_a_non_negative_bucket(self) -> None:
+        # The valid (ordered) path: two facts, one whose dispatch-phase
+        # timestamp is set and one where it is NULL. Both queue-wait samples
+        # are non-negative, so the bucket mean is non-negative.
+        rows = [
+            _row(date(2026, 8, 5), count=1, avg_queue_wait_ms=500.0),
+            _row(date(2026, 8, 5), count=1, avg_queue_wait_ms=300.0),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["avg_queue_wait_ms"] == 400.0
+        assert out[0]["avg_queue_wait_ms"] >= 0
+
+    def test_bucket_with_only_invalid_samples_is_null_not_negative(self) -> None:
+        # Every sample in the bucket was a re-dispatch inversion → the SQL
+        # guard leaves no sample at all, so the bucket reports NULL ("no
+        # measured queue wait"), never 0 and never a negative number.
+        out = bucket_rows(
+            [_row(date(2026, 8, 5), count=2, avg_queue_wait_ms=None)],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["avg_queue_wait_ms"] is None
+
+
 class TestFAR1421DispatchLatency:
     """FAR-1421: claim→dispatch latency, bucketed per trigger_type / trigger_id.
 

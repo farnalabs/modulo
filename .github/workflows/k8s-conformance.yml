@@ -349,7 +349,10 @@ jobs:
         # The CLI -m overrides the backend/pyproject.toml addopts deselection
         # (pytest keeps the last -m), so the selection is explicit - the suite
         # is never implicitly on and never silently skipped green here.
-        run: uv run --no-build --no-sync pytest tests/conformance/ -m runtime_provider_conformance --tb=short -q --timeout=600
+        # ``tests/conformance`` is in GATED_SUITE_ROOTS (audited green against
+        # kind on 2026-10-23), so the escalation rides along for defence in
+        # depth and the architecture gate pins it here.
+        run: uv run --no-build --no-sync pytest tests/conformance/ -m runtime_provider_conformance --tb=short -q --timeout=600 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
 
       - name: Cluster diagnostics (evidence dump)
         if: always() && steps.detect.outputs.changed == 'true'
@@ -490,7 +493,7 @@ jobs:
       - name: Run the runtime-provider conformance suite
         shell: bash
         timeout-minutes: 25
-        run: uv run --no-build --no-sync pytest tests/conformance/ -m runtime_provider_conformance --tb=short -q --timeout=600
+        run: uv run --no-build --no-sync pytest tests/conformance/ -m runtime_provider_conformance --tb=short -q --timeout=600 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
 
       - name: Cluster diagnostics (evidence dump)
         if: always()

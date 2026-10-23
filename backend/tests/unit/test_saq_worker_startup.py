@@ -4,9 +4,11 @@ The hook must:
 * be wired into ``_base_worker_settings`` (flows through both
   ``Worker(**settings())`` in ``run_system_web`` and the plain
   ``python -m saq ...runs_settings`` CLI);
+* (FAR-2093) apply the SAME licence trust anchor the API applies at startup —
+  fail-closed, unlike every other step;
 * invoke ``register_listeners()`` + ``configure_event_bus(RedisEventBroker)``;
 * spawn the connect+subscribe background task (workers subscribe, never relay);
-* NEVER raise — a Redis blip at boot must not crash the worker
+* otherwise NEVER raise — a Redis blip at boot must not crash the worker
   (``policy="always"`` crash-loop risk); broker init raising must leave the
   worker settings buildable and the hook non-fatal.
 """
@@ -15,12 +17,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import modulo.core.saq_worker as sw
+from modulo.core import license as license_mod
 from modulo.core.events import worker_subscription as ws
+from modulo.core.feature_flags import resolve_effective_license
+from modulo.core.license import using_builtin_dev_anchor
+from modulo.core.license_signing import encode_license_key
+from modulo.core.registry.crypto import generate_keypair
 from modulo.db import capacity as db_capacity
 
 
@@ -37,9 +46,22 @@ def _settings(**overrides: object) -> MagicMock:
         "saq_auth_username": "admin",
         "fernet_key": "x" * 44,
         "modulo_library_sync_interval_seconds": 300,
+        # FAR-2093: the startup hook applies the licence anchor, so the
+        # settings the tests drive it with must carry the licence fields.
+        "debug": False,
+        "modulo_license_key": "",
+        "modulo_license_public_key": "",
     }
     base.update(overrides)
     return MagicMock(**base)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_license_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The licence anchor lives in module globals; reset it per test."""
+    monkeypatch.setattr(license_mod, "_configured_public_key_hex", None)
+    monkeypatch.setattr(license_mod, "_dev_anchor_trusted", False)
+    monkeypatch.setattr(license_mod, "_current_license", None)
 
 
 @pytest.fixture(autouse=True)
@@ -92,6 +114,90 @@ class TestSettingsWireStartupHook:
         ):
             settings = sw._base_worker_settings("runs", [])
         assert settings["startup"] is sw._startup_event_bus_hook
+
+
+def _team_payload() -> dict[str, Any]:
+    return {
+        "tier": "team",
+        "features": ["sso"],
+        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "org_id": "worker-anchor-test-org",
+    }
+
+
+class TestStartupHookAppliesLicenseAnchor:
+    """FAR-2093: the worker applies the SAME licence trust anchor as the API.
+
+    Licence verification reads process-global state, so a worker that never
+    applies the anchor verifies a production-signed licence against the
+    built-in DEVELOPMENT key, fails, and silently resolves to Community.
+    """
+
+    @staticmethod
+    async def _run_hook(settings: MagicMock) -> None:
+        with (
+            patch("modulo.core.events.register_listeners"),
+            patch("modulo.core.events.configure_event_bus", new_callable=AsyncMock),
+            patch.object(sw, "get_settings", return_value=settings),
+            patch("modulo.core.events.worker_subscription.spawn_worker_event_subscription"),
+        ):
+            await sw._startup_event_bus_hook({})
+
+    async def test_applies_the_configured_public_key(self) -> None:
+        kp = generate_keypair()
+        settings = _settings(modulo_license_public_key=kp["public_key"])
+
+        await self._run_hook(settings)
+
+        assert using_builtin_dev_anchor() is False
+        assert license_mod._configured_public_key_hex == kp["public_key"]
+
+    async def test_production_licence_resolves_to_its_tier_in_worker_context(self) -> None:
+        """The FAR-2093 regression: the SAME licence the API reports as Team
+        must resolve as Team in the worker — not Community."""
+        kp = generate_keypair()
+        licence_key = encode_license_key(_team_payload(), kp["private_key"])
+        settings = _settings(
+            modulo_license_public_key=kp["public_key"],
+            modulo_license_key=licence_key,
+        )
+
+        # Before the hook the worker process only carries the built-in
+        # development anchor, so a production-signed licence cannot verify.
+        assert resolve_effective_license(settings, None) is None
+
+        await self._run_hook(settings)
+
+        data = resolve_effective_license(settings, None)
+        assert data is not None
+        assert data.tier == "team"
+        assert data.features == ["sso"]
+
+    async def test_anchor_is_applied_before_the_no_redis_early_return(self) -> None:
+        # The hook returns early when Redis is absent; the anchor is process
+        # state and must be applied regardless of the event-bus steps.
+        kp = generate_keypair()
+        settings = _settings(redis_url="", modulo_license_public_key=kp["public_key"])
+
+        await self._run_hook(settings)
+
+        assert using_builtin_dev_anchor() is False
+
+    async def test_licence_without_anchor_fails_closed(self) -> None:
+        settings = _settings(modulo_license_key="a.b")
+
+        with (
+            patch.object(sw, "get_settings", return_value=settings),
+            pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"),
+        ):
+            await sw._startup_event_bus_hook({})
+
+    async def test_debug_worker_with_licence_and_no_anchor_boots(self) -> None:
+        settings = _settings(debug=True, modulo_license_key="a.b")
+
+        await self._run_hook(settings)
+
+        assert license_mod._dev_anchor_trusted is True
 
 
 class TestStartupHook:
@@ -243,6 +349,8 @@ class TestStartupHook:
         contract) so shutdown still propagates, rather than being logged and
         swallowed as an observability failure."""
         with (
+            # FAR-2093: the licence anchor is applied first and reads settings.
+            patch.object(sw, "get_settings", return_value=_settings()),
             patch(
                 "modulo.core.health_alerts.install_event_loop_stall_attribution",
                 side_effect=asyncio.CancelledError,
@@ -550,6 +658,8 @@ class TestSpawnWorkerEventSubscription:
 class TestStartupHookCancellationPropagates:
     async def test_register_listeners_cancellation_propagates(self) -> None:
         with (
+            # FAR-2093: the licence anchor is applied first and reads settings.
+            patch.object(sw, "get_settings", return_value=_settings()),
             patch("modulo.core.events.register_listeners", side_effect=asyncio.CancelledError()),
             pytest.raises(asyncio.CancelledError),
         ):
