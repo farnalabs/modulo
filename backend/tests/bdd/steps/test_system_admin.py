@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from modulo.core.license import LicenseValidation
+
 # ---------------------------------------------------------------------------
 # Register feature files
 # ---------------------------------------------------------------------------
@@ -233,7 +235,7 @@ def _view_org_license(request, client):
 
     if getattr(request.node, "_org_has_invalid_key", False):
         org.settings_json = {"license_key": "expired.key"}
-        validation = SimpleNamespace(valid=False, error="Invalid license key", license_data=None)
+        validation = LicenseValidation(valid=False, error="Invalid license key", license_data=None)
         with (
             patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
             patch("modulo.core.license.parse_and_verify", return_value=validation),
@@ -242,7 +244,7 @@ def _view_org_license(request, client):
             resp = client.get(f"/api/v1/admin/orgs/{org_id}/license")
     elif getattr(request.node, "_org_has_key", False):
         org.settings_json = {"license_key": "org.license.key"}
-        validation = SimpleNamespace(
+        validation = LicenseValidation(
             valid=True,
             error=None,
             license_data=SimpleNamespace(
@@ -283,7 +285,7 @@ def _set_valid_org_license(key: str, request, client):
     org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
     org = _make_mock_org(id=org_id, slug=getattr(request.node, "_org_slug", "test-org"))
     org.settings_json = {"existing": True}
-    validation = SimpleNamespace(
+    validation = LicenseValidation(
         valid=True,
         error=None,
         license_data=SimpleNamespace(tier="team", features=["sso"], expires_at=None, org_id="test-org"),
@@ -306,7 +308,7 @@ def _set_invalid_org_license(key: str, request, client):
     org_id = getattr(request.node, "_org_uuid", uuid.uuid4())
     org = _make_mock_org(id=org_id, slug=getattr(request.node, "_org_slug", "test-org"))
     org.settings_json = {}
-    validation = SimpleNamespace(valid=False, error="Invalid license key", license_data=None)
+    validation = LicenseValidation(valid=False, error="Invalid license key", license_data=None)
     with (
         patch("modulo.api.routes.admin_orgs.get_organisation", new_callable=AsyncMock, return_value=org),
         patch(
