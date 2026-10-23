@@ -30,6 +30,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import harden_session_double
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/swappable_binding.feature")
 
@@ -65,6 +67,7 @@ def _connector_instance(
 def _session_returning(rows: list[Any]) -> AsyncMock:
     """Mock session whose execute() returns the given rows via .scalars().all()."""
     session = AsyncMock()
+    harden_session_double(session)
     scalars_result = MagicMock()
     scalars_result.all.return_value = rows
     execute_result = MagicMock()

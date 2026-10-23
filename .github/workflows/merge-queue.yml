@@ -1403,7 +1403,7 @@ jobs:
           # description is written (the old script's `TEST_EXIT=$?` line was
           # unreachable on a pytest failure for that reason).
           set +e
-          uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+          uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
           TEST_EXIT=$?
           set -e
 

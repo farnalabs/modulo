@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import harden_session_double
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/variants/variant_groups.feature")
 
@@ -152,6 +154,7 @@ def batch_run_triggered(ctx: dict[str, Any]) -> None:
 
     async def _run():
         session = AsyncMock()
+        harden_session_double(session)
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -213,6 +216,7 @@ def sequential_run_triggered(ctx: dict[str, Any]) -> None:
 
     async def _run():
         session = AsyncMock()
+        harden_session_double(session)
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -274,6 +278,7 @@ def coverage_gap_signal_computed(ctx: dict[str, Any]) -> None:
     scalar_result = MagicMock()
     scalar_result.scalars.return_value = [eval_def]
     session = AsyncMock()
+    harden_session_double(session)
     session.execute = AsyncMock(return_value=scalar_result)
 
     async def _run():
@@ -290,6 +295,7 @@ def single_run_triggered(ctx: dict[str, Any]) -> None:
 
     async def _run():
         session = AsyncMock()
+        harden_session_double(session)
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -500,6 +506,7 @@ def batch_comparison_computed(ctx: dict[str, Any]) -> None:
 
     async def _run():
         session = AsyncMock()
+        harden_session_double(session)
 
         def _rows(stmt, *args: Any, **kwargs: Any) -> Any:
             # get_batch_runs select(Run) → .scalars().all()

@@ -33,38 +33,44 @@ class TestReconcileCronRegistrations:
         self, saq_settings_env: str, saq_redis_url: str
     ) -> None:
         redis_client = aioredis.from_url(saq_redis_url, socket_connect_timeout=10)
-        q = RedisQueue(redis_client, name="system")
+        try:
+            q = RedisQueue(redis_client, name="system")
 
-        # --- seed a STALE unique-cron registration ---------------------------
-        stale_key = "cron:my_dummy_cron"
-        stale_jid = q.job_id(stale_key)
-        incomplete = q.namespace("incomplete")
-        queued = q.namespace("queued")
-        await redis_client.set(stale_jid, b"{}")
-        await redis_client.zadd(incomplete, {stale_jid: 9999999999.0})
-        await redis_client.lpush(queued, stale_jid)
+            # --- seed a STALE unique-cron registration ---------------------------
+            stale_key = "cron:my_dummy_cron"
+            stale_jid = q.job_id(stale_key)
+            incomplete = q.namespace("incomplete")
+            queued = q.namespace("queued")
+            await redis_client.set(stale_jid, b"{}")
+            await redis_client.zadd(incomplete, {stale_jid: 9999999999.0})
+            await redis_client.lpush(queued, stale_jid)
 
-        # --- seed a NON-unique cron registration that must survive -----------
-        other_key = "cron:my_other_cron"
-        other_jid = q.job_id(other_key)
-        await redis_client.set(other_jid, b"{}")
-        await redis_client.zadd(incomplete, {other_jid: 9999999999.0})
-        await redis_client.lpush(queued, other_jid)
+            # --- seed a NON-unique cron registration that must survive -----------
+            other_key = "cron:my_other_cron"
+            other_jid = q.job_id(other_key)
+            await redis_client.set(other_jid, b"{}")
+            await redis_client.zadd(incomplete, {other_jid: 9999999999.0})
+            await redis_client.lpush(queued, other_jid)
 
-        unique_job = CronJob(function=my_dummy_cron, cron="* * * * *", unique=True)
-        non_unique_job = CronJob(function=my_dummy_cron, cron="* * * * *", unique=False)
+            unique_job = CronJob(function=my_dummy_cron, cron="* * * * *", unique=True)
+            non_unique_job = CronJob(function=my_dummy_cron, cron="* * * * *", unique=False)
 
-        await reconcile_cron_registrations(q, [unique_job, non_unique_job])
+            await reconcile_cron_registrations(q, [unique_job, non_unique_job])
 
-        # Stale UNIQUE registration fully cleared.
-        assert await redis_client.exists(stale_jid) == 0
-        assert await redis_client.zscore(incomplete, stale_jid) is None
-        assert await redis_client.lpos(queued, stale_jid) is None
+            # Stale UNIQUE registration fully cleared.
+            assert await redis_client.exists(stale_jid) == 0
+            assert await redis_client.zscore(incomplete, stale_jid) is None
+            assert await redis_client.lpos(queued, stale_jid) is None
 
-        # NON-unique registration left untouched.
-        assert await redis_client.exists(other_jid) == 1
-        assert await redis_client.zscore(incomplete, other_jid) is not None
-        assert await redis_client.lpos(queued, other_jid) is not None
+            # NON-unique registration left untouched.
+            assert await redis_client.exists(other_jid) == 1
+            assert await redis_client.zscore(incomplete, other_jid) is not None
+            assert await redis_client.lpos(queued, other_jid) is not None
 
-        # The function is reachable on the module (import smoke).
-        assert sw.reconcile_cron_registrations is reconcile_cron_registrations
+            # The function is reachable on the module (import smoke).
+            assert sw.reconcile_cron_registrations is reconcile_cron_registrations
+        finally:
+            # Close the client explicitly: an unclosed redis connection leaks its
+            # socket/StreamWriter and surfaces as a ResourceWarning (an error
+            # under the unraisable-warning gate).
+            await redis_client.aclose()
