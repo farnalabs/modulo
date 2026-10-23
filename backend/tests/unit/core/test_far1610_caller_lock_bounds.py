@@ -53,8 +53,18 @@ async def _acm(obj: Any):
 
 
 def _begin_session() -> AsyncMock:
-    """Session double whose ``begin()`` is a proper async context manager."""
+    """Session double whose ``begin()`` is a proper async context manager.
+
+    ``execute`` is async but yields a SYNC SQLAlchemy ``Result``: callers that
+    reach the admission retry-budget gate call ``.scalar_one_or_none()`` on it.
+    Leaving ``execute`` a bare AsyncMock makes that call return a coroutine
+    object that is never awaited, surfacing as a teardown-time
+    ``PytestUnraisableExceptionWarning`` (and a red Test (Backend) shard).
+    """
     session = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=None)
+    session.execute = AsyncMock(return_value=result)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
