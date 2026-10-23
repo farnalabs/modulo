@@ -29,18 +29,20 @@ those suites.
 A gate that can be deleted silently is not a gate. These tests pin:
 
 - the effective behaviour: for an item in a gated suite (``unit``,
-  ``integration``, ``bdd``, ``architecture``, ``connectors``) the hook lands an
-  ``error`` filter ahead of the ini ``default`` and a warned
-  ``PytestUnraisableExceptionWarning`` actually raises;
-- the deliberate SCOPE: an item in an UNAUDITED suite (``conformance``,
-  ``determination``, ``load``, ``docker``) must not install the filter;
+  ``integration``, ``bdd``, ``architecture``, ``connectors``,
+  ``conformance``) the hook lands an ``error`` filter ahead of the ini
+  ``default`` and a warned ``PytestUnraisableExceptionWarning`` actually
+  raises;
+- the deliberate SCOPE: an item in an UNAUDITED suite (``determination``,
+  ``load``, ``docker``) must not install the filter;
 - the exact audited set in ``GATED_SUITE_ROOTS``;
 - every workflow command that names a gated-suite path still carries the
   byte-identical escalation and no longer disables the warnings plugin (BDD
   workflow, main-integration workflow, deploy pre-deploy unit and integration
   steps, CI email-settings/step-rot BDD steps, CI integration-changed, CI
   tier1b-light, CI architecture and connector-contract steps, merge-queue unit
-  run, schemathesis and Tier 1b nightly runs);
+  run, schemathesis and Tier 1b nightly runs, and both conformance-suite
+  commands in the k8s-conformance workflow);
 - EVERY pytest invocation in ``.github/scripts/coverage-thresholds.sh`` still
   carries the byte-identical escalation. The unit suite is run as shards, so
   the script passes an enumerated file list rather than a literal
@@ -82,6 +84,7 @@ BDD_WORKFLOW = REPO / ".github" / "workflows" / "bdd.yml"
 MAIN_INTEGRATION_WORKFLOW = REPO / ".github" / "workflows" / "main-integration.yml"
 DEPLOY_WORKFLOW = REPO / ".github" / "workflows" / "deploy.yml"
 MERGE_QUEUE_WORKFLOW = REPO / ".github" / "workflows" / "merge-queue.yml"
+K8S_CONFORMANCE_WORKFLOW = REPO / ".github" / "workflows" / "k8s-conformance.yml"
 SCHEMATHESIS_WORKFLOW = REPO / ".github" / "workflows" / "schemathesis-nightly.yml"
 TIER1B_NIGHTLY_WORKFLOW = REPO / ".github" / "workflows" / "tier1b-nightly.yml"
 WORKFLOWS_DIR = REPO / ".github" / "workflows"
@@ -98,13 +101,13 @@ _GATED_SAMPLES = {
     "bdd": ("steps", "test_auth.py"),
     "architecture": ("test_workflow_structure.py",),
     "connectors": ("test_connector_contract.py",),
+    "conformance": ("runtime_provider", "test_k8s_conformance.py"),
 }
 
 #: One representative item per UNAUDITED suite. ``load`` and ``determination``
 #: hold no test modules at all (only support files and fixture data) but are
 #: named so a future test module cannot enter either tree ungated.
 _UNGATED_SAMPLES = {
-    "conformance": ("test_pipeline_conformance.py",),
     "determination": ("test_determination.py",),
     "load": ("test_load_profile.py",),
     "docker": ("test_docker_compose.py",),
@@ -201,12 +204,13 @@ def test_unaudited_suite_item_does_not_install_the_filter(suite: str) -> None:
 
 
 def test_gated_suite_roots_are_the_verified_set() -> None:
-    """The audited set is exactly unit + integration + BDD + architecture + connectors.
+    """The audited set is exactly unit + integration + BDD + architecture + connectors + conformance.
 
     Widening the gate is a claim that a suite was audited under the escalation
     and ran green; that must be a deliberate edit here, never a side effect.
-    ``conformance`` (needs a live cluster) and ``docker`` (two pre-existing
-    failures on main) were NOT able to reach green and stay excluded.
+    ``conformance`` (a live single-node kind cluster, 13/13 under the
+    escalation on 2026-10-23) is gated; ``docker`` (two pre-existing failures on
+    main), ``load`` and ``determination`` (no test modules) stay excluded.
     """
     assert tuple(_root_conftest.GATED_SUITE_ROOTS) == (
         "unit",
@@ -214,6 +218,7 @@ def test_gated_suite_roots_are_the_verified_set() -> None:
         "bdd",
         "architecture",
         "connectors",
+        "conformance",
     )
 
 
@@ -251,6 +256,9 @@ def _workflow_run_commands(path: Path) -> Iterator[str]:
         (MERGE_QUEUE_WORKFLOW, "pytest tests/unit/"),
         (SCHEMATHESIS_WORKFLOW, "pytest tests/integration/test_schemathesis.py"),
         (TIER1B_NIGHTLY_WORKFLOW, "tests/integration/test_tier1b_connectors_heavy.py"),
+        # Both the kind and the managed leg run the conformance suite - the
+        # parametrised check asserts EVERY matching command carries the flag.
+        (K8S_CONFORMANCE_WORKFLOW, "pytest tests/conformance/"),
     ],
     ids=[
         "bdd",
@@ -268,6 +276,7 @@ def _workflow_run_commands(path: Path) -> Iterator[str]:
         "merge-queue-unit",
         "schemathesis-nightly",
         "tier1b-nightly",
+        "k8s-conformance",
     ],
 )
 def test_ci_command_for_a_gated_suite_carries_the_escalation(workflow: Path, needle: str) -> None:
