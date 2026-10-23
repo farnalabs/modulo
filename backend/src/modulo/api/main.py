@@ -861,7 +861,19 @@ def _configure_license_and_otel(settings: Settings) -> None:
     if settings.modulo_public_url in ("", "http://localhost:8000"):
         logger.warning("startup.default_public_url")
 
-    from modulo.core.license import set_public_key
+    from modulo.core.license import (
+        DEV_ANCHOR_STARTUP_ERROR,
+        check_production_public_key,
+        is_dev_anchor_in_use,
+        set_dev_anchor_trusted,
+        set_public_key,
+    )
+
+    # FAR-2061: fail closed. Outside debug the shipped development public key
+    # is not a trust anchor, so a licence that would only verify against it is
+    # refused by ``core.license.parse_and_verify``. Debug opts the anchor back
+    # in (that is what the local dev/test keypair is for).
+    set_dev_anchor_trusted(settings.debug)
 
     if settings.modulo_license_public_key:
         try:
@@ -872,19 +884,14 @@ def _configure_license_and_otel(settings: Settings) -> None:
             ) from exc
         logger.info("startup.license_public_key_configured")
     elif not settings.debug:
-        if settings.modulo_license_key:
-            # Fail closed (FAR-2091): a licence is configured, but verification
-            # would use the built-in DEVELOPMENT anchor, which cannot verify a
-            # Farnalabs-signed production licence. Booting anyway is the silent
-            # failure mode that made paying customers believe their key was bad.
-            raise RuntimeError(
-                "MODULO_LICENSE_KEY is set but MODULO_LICENSE_PUBLIC_KEY is not. Licences are "
-                "Ed25519-signed and the built-in trust anchor is a DEVELOPMENT key, so a production "
-                "licence cannot verify against it. Set MODULO_LICENSE_PUBLIC_KEY to the public key "
-                "Farnalabs issued with your licence."
-            )
-        logger.warning("startup.license_anchor_not_configured")
-    from modulo.core.license import check_production_public_key
+        logger.warning("startup.default_license_key_in_use")
+
+    # A configured licence that can only be checked against the development
+    # anchor can never verify, so fail the boot with the FIX rather than start
+    # an instance that silently runs on Community. Booting WITHOUT a licence
+    # key stays valid - that is the ordinary self-hosted Community deployment.
+    if not settings.debug and settings.modulo_license_key and is_dev_anchor_in_use():
+        raise RuntimeError(DEV_ANCHOR_STARTUP_ERROR)
 
     try:
         check_production_public_key(settings)

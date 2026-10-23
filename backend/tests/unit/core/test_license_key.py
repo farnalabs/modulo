@@ -6,11 +6,15 @@ import re
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
+import modulo.core.license as license_module
 from modulo.core.license import (
     _LICENSE_PUBLIC_KEY_HEX,
+    DEV_ANCHOR_NOT_TRUSTED_ERROR,
+    DEV_ANCHOR_STARTUP_ERROR,
     LICENCE_GRACE_DAYS,
     LicenseData,
     LicenseError,
@@ -20,7 +24,9 @@ from modulo.core.license import (
     check_production_public_key,
     clear_license,
     get_license,
+    is_dev_anchor_in_use,
     parse_and_verify,
+    set_dev_anchor_trusted,
     set_public_key,
     store_license,
     verify_license_key,
@@ -46,10 +52,40 @@ def _build_signed_key(payload: dict, private_key_hex: str) -> str:
     return f"{payload_b64}.{sig_b64}"
 
 
+def _team_licence(kp: dict) -> str:
+    """A genuinely signed Team licence, bound to ``kp``'s private key."""
+    return _build_signed_key(
+        {
+            "tier": "team",
+            "org_id": "o1",
+            "features": ["sso"],
+            "expires_at": "2999-01-01T00:00:00+00:00",
+        },
+        kp["private_key"],
+    )
+
+
 @pytest.fixture(autouse=True)
-def _reset_key() -> Generator[None, None, None]:
+def _reset_key(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    monkeypatch.setattr(license_module, "_dev_anchor_trusted", False)
     yield
     set_public_key(_ORIGINAL_KEY)
+
+
+@pytest.fixture
+def dev_anchor(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Make a generated keypair THE built-in development anchor.
+
+    Models the shipped development anchor exactly as FAR-2061 found it: no
+    production key configured, the module's built-in key is the verifier, and
+    the anchor is untrusted (the default outside debug). The test holds the
+    matching private half so a genuinely signed Team licence can be presented -
+    the position an attacker holding the shipped private key is in.
+    """
+    kp = generate_keypair()
+    monkeypatch.setattr(license_module, "_LICENSE_PUBLIC_KEY_HEX", kp["public_key"])
+    monkeypatch.setattr(license_module, "_configured_public_key_hex", None)
+    return kp
 
 
 class TestDefaultPublicKey:
@@ -104,12 +140,141 @@ class TestSetPublicKeyValidates:
 
 
 class TestSignThenVerifyWithDefaultKey:
-    def test_default_key_rejects_unknown_signature(self) -> None:
+    def test_default_key_refuses_to_verify_outside_debug(self) -> None:
+        """FAR-2061: the dev anchor is refused before the signature is checked."""
         kp = generate_keypair()
         payload = {"tier": "community", "org_id": "test"}
         result = parse_and_verify(_build_signed_key(payload, kp["private_key"]))
         assert result.valid is False
+        assert "MODULO_LICENSE_PUBLIC_KEY" in (result.error or "")
+
+    def test_in_debug_a_bad_signature_still_reports_signature_failure(self) -> None:
+        """With debug's opt-in the anchor verifies, so bad signatures surface normally."""
+        set_dev_anchor_trusted(True)
+        kp = generate_keypair()
+        result = parse_and_verify(_build_signed_key({"tier": "community"}, kp["private_key"]))
+        assert result.valid is False
         assert "Signature" in (result.error or "")
+
+
+# ---------------------------------------------------------------------------
+# FAR-2061 - the built-in development key is not a trust anchor outside debug
+# ---------------------------------------------------------------------------
+
+
+class TestDevAnchorIsNotATrustAnchorOutsideDebug:
+    """A Team licence minted with the shipped development key must be rejected."""
+
+    def test_team_licence_rejected_outside_debug_with_no_configured_key(self, dev_anchor: dict) -> None:
+        result = parse_and_verify(_team_licence(dev_anchor))
+        assert result.valid is False
+        assert result.license_data is None
+        assert result.error == DEV_ANCHOR_NOT_TRUSTED_ERROR
+
+    def test_verify_license_key_also_rejects_it(self, dev_anchor: dict) -> None:
+        """The sync per-key verifier every presence-trusting caller uses."""
+        assert verify_license_key(_team_licence(dev_anchor)) is None
+
+    def test_shared_licence_ladder_rung_rejects_it(self, dev_anchor: dict) -> None:
+        """``feature_flags._verified_license_key`` - the ladder - inherits the gate."""
+        from modulo.core.feature_flags import resolve_effective_license
+
+        clear_license()
+        settings = SimpleNamespace(modulo_license_key=_team_licence(dev_anchor))
+        assert resolve_effective_license(settings, None) is None
+
+    def test_debug_opt_in_restores_verification(self, dev_anchor: dict) -> None:
+        """The decision is debug, not merely "a key is present": this really verifies."""
+        set_dev_anchor_trusted(True)
+        result = parse_and_verify(_team_licence(dev_anchor))
+        assert result.valid is True
+        assert result.license_data is not None
+        assert result.license_data.tier == "team"
+
+    def test_the_gate_is_the_anchor_not_the_absence_of_a_configured_key(self, dev_anchor: dict) -> None:
+        """Explicitly configuring the dev key is the same trust decision as falling back to it."""
+        set_public_key(dev_anchor["public_key"])
+        assert is_dev_anchor_in_use() is True
+        assert parse_and_verify(_team_licence(dev_anchor)).valid is False
+
+    def test_a_configured_production_key_still_verifies(self) -> None:
+        """Control: a real (non-dev) key is unaffected by the gate."""
+        kp = generate_keypair()
+        set_public_key(kp["public_key"])
+        assert is_dev_anchor_in_use() is False
+        result = parse_and_verify(_team_licence(kp))
+        assert result.valid is True
+        assert result.license_data is not None
+
+    def test_refusal_and_startup_error_name_the_missing_configuration(self) -> None:
+        assert "MODULO_LICENSE_PUBLIC_KEY" in DEV_ANCHOR_NOT_TRUSTED_ERROR
+        assert "MODULO_LICENSE_PUBLIC_KEY" in DEV_ANCHOR_STARTUP_ERROR
+        assert "MODULO_LICENSE_KEY" in DEV_ANCHOR_STARTUP_ERROR
+
+
+# ---------------------------------------------------------------------------
+# FAR-2061 - startup fail-closed wiring in api.main
+# ---------------------------------------------------------------------------
+
+
+def _startup_settings(**overrides: object) -> SimpleNamespace:
+    values: dict[str, object] = {
+        "modulo_public_url": "https://app.example.com",
+        "modulo_license_public_key": "",
+        "modulo_license_key": "",
+        "debug": False,
+        "modulo_db": "postgres",
+        "redis_url": "redis://localhost:6379/0",
+        "modulo_otel_service_name": "modulo-test",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+class TestStartupFailsClosedOnLicenceWithoutProductionKey:
+    def test_licence_key_without_public_key_fails_startup(self) -> None:
+        from modulo.api import main as main_module
+
+        with pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"):
+            main_module._configure_license_and_otel(_startup_settings(modulo_license_key="a.b"))
+
+    def test_explicitly_configured_dev_key_fails_startup(self) -> None:
+        from modulo.api import main as main_module
+
+        with pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"):
+            main_module._configure_license_and_otel(
+                _startup_settings(modulo_license_key="a.b", modulo_license_public_key=_ORIGINAL_KEY)
+            )
+
+    def test_community_boot_without_a_licence_key_is_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The ticket's hard constraint: unlicensed Community self-hosting still boots."""
+        from modulo.api import main as main_module
+
+        mock_setup_otel = MagicMock()
+        monkeypatch.setattr(main_module, "setup_otel", mock_setup_otel)
+        monkeypatch.setattr(main_module, "is_telemetry_enabled", MagicMock(return_value=False))
+        main_module._configure_license_and_otel(_startup_settings())
+        mock_setup_otel.assert_called_once()
+
+    def test_debug_with_a_licence_key_is_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import main as main_module
+
+        mock_setup_otel = MagicMock()
+        monkeypatch.setattr(main_module, "setup_otel", mock_setup_otel)
+        monkeypatch.setattr(main_module, "is_telemetry_enabled", MagicMock(return_value=False))
+        main_module._configure_license_and_otel(_startup_settings(debug=True, modulo_license_key="a.b"))
+        mock_setup_otel.assert_called_once()
+
+    def test_production_key_with_a_licence_key_boots(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api import main as main_module
+
+        monkeypatch.setattr(main_module, "setup_otel", lambda **_kwargs: None)
+        monkeypatch.setattr(main_module, "is_telemetry_enabled", lambda: False)
+        kp = generate_keypair()
+        main_module._configure_license_and_otel(
+            _startup_settings(modulo_license_key="a.b", modulo_license_public_key=kp["public_key"])
+        )
+        assert is_dev_anchor_in_use() is False
 
 
 # ---------------------------------------------------------------------------

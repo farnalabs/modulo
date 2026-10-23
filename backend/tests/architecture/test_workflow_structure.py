@@ -440,10 +440,17 @@ def test_merge_queue_branch_fixer_dispatch_failures_are_attributable() -> None:
     already-failing run's log, so PR #1925 sat conflicted with nothing on the PR
     (or anywhere durable) saying the Branch Fixer had never been asked to
     reconcile it. Each notify step's failure arm must therefore name the
-    affected PR(s), comment on each of them, and still fail the step.
+    affected PR(s) and comment on each of them.
 
-    The POST itself is now the shared script (and its retry policy); what this
-    test pins is unchanged: the durable, per-PR failure arm around it.
+    The POST itself is now the shared script (and its retry policy). Since
+    2026-10-21 (run ``39633573993``) the durable signal, not the webhook
+    delivery, decides the step's verdict: an undelivered notification that was
+    recorded on every affected PR warns loudly and lets the pass continue (an
+    unconditional ``exit 1`` there discarded a merge that had already
+    completed), while one that left a PR with NO signal still fails the step.
+    ``backend/tests/unit/test_merge_queue_notify_failopen.py`` owns that
+    fail-open/fail-hard split; this test keeps pinning the attributable,
+    durable per-PR failure arm around it.
     """
     steps = _queue_steps(_load_yaml(MERGE_QUEUE_YML))
     posting = [step for step in steps if BRANCH_FIXER_POST in (step.get("run") or "")]
@@ -461,12 +468,16 @@ def test_merge_queue_branch_fixer_dispatch_failures_are_attributable() -> None:
             violations.append(
                 f"  {name!r}: env has no GH_TOKEN — the failure arm's `gh pr comment` cannot authenticate"
             )
-        attributed = [line.strip() for line in arm.splitlines() if "::error::" in line and "not delivered" in line]
+        attributed = [
+            line.strip()
+            for line in arm.splitlines()
+            if ("::error::" in line or "::warning::" in line) and "not delivered" in line
+        ]
         if not attributed:
-            violations.append(f"  {name!r}: failure arm has no 'was not delivered' ::error:: annotation")
+            violations.append(f"  {name!r}: failure arm has no 'was not delivered' ::error::/::warning:: annotation")
         for line in attributed:
             if "PR" not in line or "${" not in line:
-                violations.append(f"  {name!r}: failure-arm ::error:: does not name the affected PR(s): {line!r}")
+                violations.append(f"  {name!r}: failure-arm annotation does not name the affected PR(s): {line!r}")
         if 'gh pr comment "$NUM"' not in arm:
             violations.append(
                 f'  {name!r}: failure arm has no `gh pr comment "$NUM"` — the undelivered notification '
@@ -478,7 +489,12 @@ def test_merge_queue_branch_fixer_dispatch_failures_are_attributable() -> None:
             )
         if "exit 1" not in arm:
             violations.append(
-                f"  {name!r}: failure arm has no `exit 1` — an undelivered notification must keep failing the step"
+                f"  {name!r}: failure arm has no `exit 1` — a PR left with no durable signal must fail the step"
+            )
+        if "exit 0" not in arm:
+            violations.append(
+                f"  {name!r}: failure arm has no `exit 0` — a durably signalled notification failure must "
+                "let the pass continue instead of discarding a completed merge"
             )
     assert not violations, (
         "merge-queue.yml Branch Fixer notifications can be dropped silently (FAR-1939):\n" + "\n".join(violations)

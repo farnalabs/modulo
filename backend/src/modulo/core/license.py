@@ -66,8 +66,38 @@ _LICENSE_PUBLIC_KEY_HEX: str = _BUILTIN_DEV_PUBLIC_KEY_HEX
 #: is in use (and :func:`using_builtin_dev_anchor` reports True).
 _configured_public_key_hex: str | None = None
 
+#: Whether the BUILT-IN development key may be used to ACCEPT a licence.
+#:
+#: Fail-closed: ``False`` by default, so only a process that has explicitly
+#: opted in (``set_dev_anchor_trusted(settings.debug)`` at startup) honours a
+#: licence signed against the shipped development anchor. An entry point that
+#: never configures verification therefore REFUSES such a licence instead of
+#: silently trusting a key whose private half ships with the product.
+_dev_anchor_trusted: bool = False
+
+#: Actionable refusal returned when a licence would only verify against the
+#: built-in development key outside debug.
+DEV_ANCHOR_NOT_TRUSTED_ERROR = (
+    "License could not be verified against a trusted key: MODULO_LICENSE_PUBLIC_KEY is not "
+    "configured, so only the built-in development public key is available and that key is not "
+    "a trust anchor outside debug. Set MODULO_LICENSE_PUBLIC_KEY to the Ed25519 public key "
+    "(64 hex chars) that signed this license, then restart."
+)
+
+#: Actionable startup error for an instance that is configured to ACCEPT a
+#: licence (``MODULO_LICENSE_KEY``) while only the development anchor exists.
+DEV_ANCHOR_STARTUP_ERROR = (
+    "MODULO_LICENSE_KEY is configured but MODULO_LICENSE_PUBLIC_KEY is not (or is the built-in "
+    "development key), and debug is off. The built-in development public key is not a trust "
+    "anchor outside debug, so no licence can be verified. Set MODULO_LICENSE_PUBLIC_KEY to the "
+    "Ed25519 public key (64 hex chars) that signed your licence, or unset MODULO_LICENSE_KEY to "
+    "run on the Community tier."
+)
+
 # In-memory store for the current validated license.
 _current_license: LicenseData | None = None
+
+_log = logging.getLogger(__name__)
 
 
 def _validate_public_key_hex(hex_key: str) -> None:
@@ -86,7 +116,7 @@ _validate_public_key_hex(_BUILTIN_DEV_PUBLIC_KEY_HEX)
 
 def _get_effective_public_key() -> str:
     """Return the configured key if set, otherwise fall back to the built-in key."""
-    return _configured_public_key_hex if _configured_public_key_hex is not None else _BUILTIN_DEV_PUBLIC_KEY_HEX
+    return _configured_public_key_hex if _configured_public_key_hex is not None else _LICENSE_PUBLIC_KEY_HEX
 
 
 def using_builtin_dev_anchor() -> bool:
@@ -97,13 +127,33 @@ def using_builtin_dev_anchor() -> bool:
     verify against that anchor, so a signature failure is an ANCHOR mismatch
     rather than a malformed/corrupt key.
     """
-    return _get_effective_public_key() == _BUILTIN_DEV_PUBLIC_KEY_HEX
+    return _get_effective_public_key() == _LICENSE_PUBLIC_KEY_HEX
 
 
 def set_public_key(hex_key: str) -> None:
     global _configured_public_key_hex
     _validate_public_key_hex(hex_key)
     _configured_public_key_hex = hex_key
+
+
+def is_dev_anchor_in_use() -> bool:
+    """Whether the effective verification key is the BUILT-IN development anchor.
+
+    True both when nothing is configured (the fall-back in
+    ``_get_effective_public_key``) and when the development key has been
+    configured explicitly — the two are the same trust decision.
+    """
+    return _get_effective_public_key() == _LICENSE_PUBLIC_KEY_HEX
+
+
+def set_dev_anchor_trusted(allowed: bool) -> None:
+    """Allow (debug) or refuse (everything else) the built-in development anchor.
+
+    Called once at startup with ``settings.debug``. Refusing is the DEFAULT, so
+    a process that never calls this inherits the secure behaviour.
+    """
+    global _dev_anchor_trusted
+    _dev_anchor_trusted = allowed
 
 
 @dataclass
@@ -213,6 +263,14 @@ def parse_and_verify(key: str) -> LicenseValidation:
             reason=REASON_MALFORMED,
         )
 
+    # The built-in development key is not a trust anchor outside debug: a key
+    # whose private half ships with the product must never activate a licence
+    # on a real deployment. Refused before the signature check so the operator
+    # sees the misconfiguration, not an unhelpful "bad signature".
+    if is_dev_anchor_in_use() and not _dev_anchor_trusted:
+        _log.error("license.dev_anchor_verification_refused")
+        return LicenseValidation(valid=False, error=DEV_ANCHOR_NOT_TRUSTED_ERROR)
+
     sig_hex = sig_bytes.hex()
 
     if not verify_signature(payload, sig_hex, _get_effective_public_key()):
@@ -280,9 +338,6 @@ def clear_license() -> None:
     _current_license = None
 
 
-_log = logging.getLogger(__name__)
-
-
 def verify_license_key(key: str) -> LicenseData | None:
     """Return the parsed licence when ``key`` verifies, else ``None``.
 
@@ -290,11 +345,12 @@ def verify_license_key(key: str) -> LicenseData | None:
     licence-ladder check (``core.feature_flags.resolve_effective_license``,
     whose key rungs share this fall-through contract via
     ``_verified_license_key``): an absent key, a bad signature, a licence
-    lapsed past its fixed delivery grace (``LICENCE_GRACE_DAYS``), or any
-    unexpected parse failure all resolve to ``None`` so the caller falls
-    through to the next rung (or the unlicensed default). A key is NEVER
-    trusted on mere presence, and a key inside its grace window is NOT treated
-    as lapsed.
+    lapsed past its fixed delivery grace (``LICENCE_GRACE_DAYS``), a licence
+    that would only verify against the built-in development anchor outside
+    debug (FAR-2061), or any unexpected parse failure all resolve to ``None``
+    so the caller falls through to the next rung (or the unlicensed default).
+    A key is NEVER trusted on mere presence, and a key inside its grace window
+    is NOT treated as lapsed.
     """
     if not key:
         return None
@@ -316,6 +372,10 @@ def check_production_public_key(settings: Any) -> None:
     Startup refuses to boot when a licence is configured without an anchor
     (see ``api.main._configure_license_and_otel``); this check is the backstop
     for a Community instance that later receives a licence at runtime.
+
+    Advisory only: the enforcing gate is ``parse_and_verify``, which refuses any
+    licence that would only verify against this anchor unless a process has
+    opted in through ``set_dev_anchor_trusted``.
     """
     if using_builtin_dev_anchor() and not getattr(settings, "debug", False):
         _log.critical(
