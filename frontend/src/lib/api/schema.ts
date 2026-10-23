@@ -13129,6 +13129,16 @@ export interface components {
              * @enum {string}
              */
             dispatch_action: "trigger_run" | "get_run_status" | "get_run_logs" | "list_runs";
+            /** Resource */
+            resource?: string | null;
+            /** Filters */
+            filters?: {
+                [key: string]: unknown;
+            } | null;
+            /** Data */
+            data?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** ConnectorCreate */
         ConnectorCreate: {
