@@ -34,6 +34,7 @@ from modulo.core.cost_controller.finalize import (
     _REPORTED_TOKEN_FIELD_MAP,
     _attributed_cost_present,
     _derive_total_tokens,
+    _dispatch_marker_is_live,
     _enrich_union,
     _fold_model_cost,
     _fold_reported_token_fallback,
@@ -49,6 +50,7 @@ from modulo.core.cost_controller.finalize import (
     _split_merge_outputs,
     _token_cost,
     _wall_clock_ms,
+    _worker_lost_wall_hours,
     _write_back_node_cost,
     derive_node_type_map,
     finalize_cancelled_run,
@@ -1679,6 +1681,98 @@ def test_finalize_failed_run_dispatch_marker_evidence_defaults_off() -> None:
     """The deadline path's call site supplies no dispatch evidence — unchanged."""
     default = inspect.signature(finalize_failed_run).parameters["dispatch_marker_evidence"].default
     assert default is False
+
+
+async def test_finalize_worker_lost_run_returns_early_when_row_is_gone() -> None:
+    """A row deleted between the terminal write and the booking is left alone."""
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+    with patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs:
+        await finalize_worker_lost_run(
+            session,
+            run_id=uuid.uuid4(),
+            org_id=_ORG_ID,
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+    mock_urs.assert_not_awaited()
+
+
+async def test_finalize_worker_lost_run_withholds_when_no_window_and_no_evidence() -> None:
+    """Neither a provable window NOR sandbox evidence ⇒ nothing is written.
+
+    The booking must never fabricate a duration when the run row retains no
+    ``started_at``/``completed_at`` and no dispatch reservation.
+    """
+    run = _worker_lost_run(started_at=None, completed_at=None, sandbox_id=None, sandbox_dispatch_state=None)
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with (
+        patch("modulo.core.cost_controller.finalize.read_run_blobs", new=AsyncMock()) as mock_blobs,
+        patch("modulo.core.cost_controller.finalize.update_run_status", new=AsyncMock()) as mock_urs,
+    ):
+        await finalize_worker_lost_run(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+    mock_blobs.assert_not_awaited()
+    mock_urs.assert_not_awaited()
+
+
+def test_worker_lost_wall_hours_requires_both_stamps() -> None:
+    """Either missing stamp means the occupancy window is unprovable."""
+    started = datetime(2026, 10, 22, 9, 0, tzinfo=UTC)
+    completed = datetime(2026, 10, 22, 11, 30, tzinfo=UTC)
+    assert _worker_lost_wall_hours(MagicMock(started_at=None, completed_at=completed)) is None
+    assert _worker_lost_wall_hours(MagicMock(started_at=started, completed_at=None)) is None
+
+
+def test_worker_lost_wall_hours_rejects_mismatched_awareness() -> None:
+    """A naive/aware subtraction raises TypeError — no proof, no cost."""
+    started = datetime(2026, 10, 22, 9, 0, tzinfo=UTC)
+    completed = datetime(2026, 10, 22, 11, 30)  # deliberately naive
+    assert _worker_lost_wall_hours(MagicMock(started_at=started, completed_at=completed)) is None
+
+
+class _FakeDelta:
+    def __init__(self, seconds: float) -> None:
+        self._seconds = seconds
+
+    def total_seconds(self) -> float:
+        return self._seconds
+
+
+class _FakeStamp:
+    """Minimal stand-in whose subtraction yields a chosen duration."""
+
+    def __init__(self, seconds: float) -> None:
+        self._seconds = seconds
+
+    def __sub__(self, other: object) -> _FakeDelta:
+        return _FakeDelta(self._seconds)
+
+
+def test_worker_lost_wall_hours_rejects_non_positive_and_non_finite_windows() -> None:
+    """A zero/negative or non-finite window is not a duration to bill."""
+    non_positive = MagicMock(started_at=_FakeStamp(0.0), completed_at=_FakeStamp(-1.0))
+    non_finite = MagicMock(started_at=_FakeStamp(0.0), completed_at=_FakeStamp(float("inf")))
+    assert _worker_lost_wall_hours(non_positive) is None
+    assert _worker_lost_wall_hours(non_finite) is None
+
+
+def test_dispatch_marker_is_live_classifies_legacy_and_non_object_values() -> None:
+    """Legacy bare literals and non-object JSON are live; tombstones are not."""
+    assert _dispatch_marker_is_live("dispatching") is True
+    assert _dispatch_marker_is_live("[1, 2]") is True
+    assert _dispatch_marker_is_live("{}") is True
+    assert _dispatch_marker_is_live(None) is False
+    assert _dispatch_marker_is_live("   ") is False
+    assert _dispatch_marker_is_live('{"state": "cleared_at_hitl"}') is False
 
 
 # ---------------------------------------------------------------------------
