@@ -233,21 +233,28 @@ Before writing, every schema is sanitised:
 
 - **Stripped at every level:** `description`, `title`, `examples`
 - **Never stripped:** `default` (functional keyword)
-- **Bounds checked:** `const` strings capped at 256 characters; `enum` arrays
-  capped at 50 entries. Exceeding a cap triggers fallback to the original
-  schema (no silent truncation).
+- **Bounds checked:** `const` strings and each `enum` entry capped at 256
+  characters; `enum` arrays capped at 50 entries. Exceeding a cap triggers
+  fallback to the original schema (no silent truncation).
 
 ### Contract version
 
 Every written file carries `_schema_contract_version` (currently `1`) as a
-top-level integer key. The host-side validator reads and compares this value.
-A version mismatch triggers a warn (lenient) or re-render (strict).
+top-level integer key. It is advisory metadata only: the contract is written
+and consumed within a single node dispatch, so the pipeline does not gate on
+a version mismatch. A host-side reader helper (`read_schema_contract_version`
+in `modulo.core.schema_registry`) exposes the stamped value for operator
+tooling.
 
 ### Sentinel
 
-When schema files cannot be written (any error in the write path), a sentinel
-`{"_schema_available": false}` file is emitted so consumers can detect absence
-structurally. A write failure never fails the node.
+When a node direction has no schema assigned, the writer emits a sentinel
+`{"_schema_available": false}` file (stamped with the contract version) for
+that direction instead of a schema, so consumers can structurally distinguish
+"no schema" from a missing or unreadable file. On a write failure no sentinel
+is emitted: the failed direction's files are rolled back so no half-written
+state remains, and the failure is surfaced as a warning. A write failure
+never fails the node.
 
 ### Atomicity
 
@@ -290,10 +297,14 @@ be satisfied when a pipeline is published.
 
 ## Deprecation lifecycle
 
-1. Mark version as `deprecated`. The graph validator emits warnings but does
-   not block existing pipeline runs.
-2. Pipelines using deprecated schemas can still run (backward-compatible).
-3. New pipeline versions must pin a non-deprecated schema version.
+Deprecation is a schema-level operation:
+`PATCH /api/v1/schemas/{schema_id}/deprecate` sets `deprecated` on the schema
+and stamps `deprecated_at`.
+
+- The `SchemaVersion` model carries a `deprecated` flag, but no endpoint or
+  validator reads it today.
+- Deprecation is advisory: neither the graph validator nor snapshot schema
+  pinning blocks pipelines that reference a deprecated schema.
 
 ## See also
 

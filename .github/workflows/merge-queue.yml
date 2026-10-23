@@ -966,20 +966,49 @@ jobs:
             # an already-failing run's log - PR #1925 stayed conflicted with
             # nothing on the PR, or anywhere durable, saying the Branch Fixer
             # had never been asked to reconcile it. So: name the PR(s) in the
-            # annotation AND leave a durable comment on each of them, then keep
-            # failing this step. The retry policy itself (cap, budget, backoff)
-            # is the SHARED one now.
-            echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${CONFLICTS} (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-conflict notification was not delivered."
+            # annotation AND leave a durable comment on each of them. The retry
+            # policy itself (cap, budget, backoff) is the SHARED one.
+            #
+            # 2026-10-21 (run 39633573993): this step then exited 1
+            # UNCONDITIONALLY, and that DISCARDED a completed merge. The
+            # 'Merge PRs into merge-queue' step had already succeeded (it wrote
+            # `squash! Merge PR #2153` and logged 'PR #2153 merged successfully'),
+            # then this step failed on `HTTP 429: Concurrent run limit of 8
+            # reached` and every later step - combined validation, `gh pr merge`
+            # to main, Linear/GitHub ticket closing, cleanup - was skipped. The
+            # batch was thrown away because a NOTIFICATION could not be
+            # delivered.
+            #
+            # So the hard failure is now narrower than "the webhook failed": it
+            # is "the signal is actually LOST". Each attempt to record the
+            # failure on a PR is counted. If every affected PR got its durable
+            # comment, the FAR-1939 intent (never silent, attributable to the
+            # PR) is satisfied, so this step warns loudly and exits 0 - the pass
+            # continues to validation and merge. It exits 1 only when at least
+            # one affected PR has NO signal at all (its comment failed), or when
+            # no PR could be identified to attribute the failure to.
+            DURABLE_COMMENT_PR_COUNT=0
+            UNDELIVERED_PR_COUNT=0
+            UNDELIVERED_PRS=""
             for NUM in $CONFLICTS; do
               [ -z "$NUM" ] && continue
               UNDELIVERED_BODY="The merge queue could NOT deliver its merge-conflict notification to the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled, this PR stays conflicted and the queue keeps skipping it. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
                 echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
+                DURABLE_COMMENT_PR_COUNT=$((DURABLE_COMMENT_PR_COUNT + 1))
               else
                 echo "::error::PR #$NUM: could not post the undelivered-notification comment either — this PR has NO durable signal that the Branch Fixer was never asked to reconcile it (webhook HTTP ${LAST_HTTP}: ${DETAIL})."
+                UNDELIVERED_PR_COUNT=$((UNDELIVERED_PR_COUNT + 1))
+                UNDELIVERED_PRS="$UNDELIVERED_PRS $NUM"
               fi
             done
-            exit 1
+            UNDELIVERED_PRS="${UNDELIVERED_PRS# }"
+            if [ "$UNDELIVERED_PR_COUNT" -ne 0 ] || [ "$DURABLE_COMMENT_PR_COUNT" -eq 0 ]; then
+              echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${CONFLICTS:-<none>} (HTTP ${LAST_HTTP}: ${DETAIL}) and the durable failure comment could not be recorded on every affected PR (recorded on ${DURABLE_COMMENT_PR_COUNT}, failed on ${UNDELIVERED_PR_COUNT}: ${UNDELIVERED_PRS:-<none>}) — the merge-conflict notification now has NO durable signal. Failing hard."
+              exit 1
+            fi
+            echo "::warning::Branch Fixer webhook dispatch failed for PR(s) ${CONFLICTS:-<none>} (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-conflict notification was not delivered, BUT a durable comment recording the failure was posted on all ${DURABLE_COMMENT_PR_COUNT} affected PR(s). The signal is not silent, so this pass CONTINUES to validation and merge instead of discarding a completed batch."
+            exit 0
           fi
       - name: Exit if nothing to merge
         if: steps.merge.outputs.merged_count == '0'
@@ -1269,6 +1298,11 @@ jobs:
           # independently of) the webhook. The old detector exited early when the
           # webhook URL was unset, which with skip-instead-of-abort would leave a
           # PR silently excluded from every batch with no trace on the PR itself.
+          # This comment is also the PR's FIRST durable signal, so a PR whose
+          # exclusion comment fails is tracked in NO_SIGNAL_PRS and the
+          # dispatch-failure gate below only clears it if that second comment
+          # lands (a PR's signal is lost only when BOTH comments fail).
+          NO_SIGNAL_PRS=""
           DETAILS=$(cat /tmp/migration_collision_details.txt 2>/dev/null || true)
           for NUM in $COLLISIONS; do
             [ -z "$NUM" ] && continue
@@ -1290,6 +1324,7 @@ jobs:
               echo "  PR #$NUM: posted the exclusion reason as a durable comment."
             else
               echo "::error::PR #$NUM: could not post the exclusion-reason comment - the PR is excluded from the batch with no durable trace."
+              NO_SIGNAL_PRS="$NO_SIGNAL_PRS $NUM"
             fi
           done
 
@@ -1335,18 +1370,44 @@ jobs:
             # must be attributable to the PR(s) it concerns (see the merge-
             # conflict notify step above for the incident). The excluded PR(s)
             # already got the durable exclusion comment above; record the failed
-            # dispatch on each of them too, then fail the step.
-            echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${COLLISIONS} (HTTP ${LAST_HTTP}: ${DETAIL}) — migration-collision notification was not delivered."
+            # dispatch on each of them too.
+            #
+            # 2026-10-21 (see the merge-conflict step above): an unconditional
+            # `exit 1` here would abort the pass for a NOTIFICATION failure and
+            # discard a batch that had not yet been validated or merged. So the
+            # step now fails only when a PR's signal is actually LOST - i.e. BOTH
+            # its exclusion comment and this dispatch-failure comment failed.
+            # NO_SIGNAL_PRS is seeded by the exclusion loop above; a successful
+            # comment here clears that PR from it.
+            UNDELIVERED_PR_COUNT=0
             for NUM in $COLLISIONS; do
               [ -z "$NUM" ] && continue
               UNDELIVERED_BODY="The merge queue could NOT deliver its migration-number-collision notification to the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL}). This PR has been EXCLUDED from the merge batch and its migration must be renumbered before it can land. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
                 echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
+                if [ -n "$NO_SIGNAL_PRS" ]; then
+                  REMAINING_NO_SIGNAL=""
+                  for P in $NO_SIGNAL_PRS; do
+                    if [ "$P" != "$NUM" ]; then REMAINING_NO_SIGNAL="$REMAINING_NO_SIGNAL $P"; fi
+                  done
+                  NO_SIGNAL_PRS="$REMAINING_NO_SIGNAL"
+                fi
               else
                 echo "::error::PR #$NUM: could not post the undelivered-notification comment either — this PR has NO durable signal that the Branch Fixer was never asked to renumber its migration (webhook HTTP ${LAST_HTTP}: ${DETAIL})."
+                UNDELIVERED_PR_COUNT=$((UNDELIVERED_PR_COUNT + 1))
+                # No set mutation: a PR is in NO_SIGNAL_PRS only because its
+                # exclusion comment already failed, and it stays there. A PR
+                # whose exclusion comment landed keeps that durable signal, so a
+                # failed dispatch-failure comment here does NOT make it silent.
               fi
             done
-            exit 1
+            NO_SIGNAL_PRS="${NO_SIGNAL_PRS# }"
+            if [ -n "$NO_SIGNAL_PRS" ]; then
+              echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${COLLISIONS:-<none>} (HTTP ${LAST_HTTP}: ${DETAIL}) and PR(s) ${NO_SIGNAL_PRS} have NO durable signal at all (no exclusion comment and no dispatch-failure comment; ${UNDELIVERED_PR_COUNT} dispatch-failure comment(s) failed) — the migration-collision notification is SILENT for them. Failing hard."
+              exit 1
+            fi
+            echo "::warning::Branch Fixer webhook dispatch failed for PR(s) ${COLLISIONS:-<none>} (HTTP ${LAST_HTTP}: ${DETAIL}) — migration-collision notification was not delivered, BUT every affected PR carries a durable comment recording it (the exclusion reason and/or the dispatch failure). The signal is not silent, so this pass CONTINUES instead of discarding the batch."
+            exit 0
           fi
 
       # Backend lint+tests and the full frontend pipeline run CONCURRENTLY in
@@ -1403,7 +1464,7 @@ jobs:
           # description is written (the old script's `TEST_EXIT=$?` line was
           # unreachable on a pytest failure for that reason).
           set +e
-          uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
+          uv run --no-build --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
           TEST_EXIT=$?
           set -e
 
@@ -2363,20 +2424,37 @@ jobs:
             # must be attributable to the PR(s) it concerns (see the merge-
             # conflict notify step for the incident). The affected PRs are the
             # ones whose combined validation on the queue branch failed, plus any
-            # conflicts reported alongside it; each gets the durable comment and
-            # this step still fails afterwards.
+            # conflicts reported alongside it; each gets the durable comment.
+            #
+            # 2026-10-21 (see the merge-conflict notify step): the step now fails
+            # only when the signal is actually LOST - i.e. at least one affected
+            # PR could not get its durable comment (or no PR could be identified
+            # at all). If every affected PR got one, the job is already failing
+            # for the real reason, so this step warns and exits 0 rather than
+            # adding a second, misleading failure.
+            DURABLE_COMMENT_PR_COUNT=0
+            UNDELIVERED_PR_COUNT=0
+            UNDELIVERED_PRS=""
             AFFECTED=$(echo "$MERGED $CONFLICTS" | xargs)
-            echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${AFFECTED} (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-queue CI-failure notification was not delivered."
             for NUM in $AFFECTED; do
               [ -z "$NUM" ] && continue
               UNDELIVERED_BODY="The merge queue could NOT deliver its CI-failure notification to the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL}). The combined validation on the merge-queue branch failed (${FAILURE_DESC}), so nothing was merged and no fix was dispatched. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
                 echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
+                DURABLE_COMMENT_PR_COUNT=$((DURABLE_COMMENT_PR_COUNT + 1))
               else
                 echo "::error::PR #$NUM: could not post the undelivered-notification comment either — this PR has NO durable signal that the Branch Fixer was never asked to fix the queue branch (webhook HTTP ${LAST_HTTP}: ${DETAIL})."
+                UNDELIVERED_PR_COUNT=$((UNDELIVERED_PR_COUNT + 1))
+                UNDELIVERED_PRS="$UNDELIVERED_PRS $NUM"
               fi
             done
-            exit 1
+            UNDELIVERED_PRS="${UNDELIVERED_PRS# }"
+            if [ "$UNDELIVERED_PR_COUNT" -ne 0 ] || [ "$DURABLE_COMMENT_PR_COUNT" -eq 0 ]; then
+              echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${AFFECTED:-<none>} (HTTP ${LAST_HTTP}: ${DETAIL}) and the durable failure comment could not be recorded on every affected PR (recorded on ${DURABLE_COMMENT_PR_COUNT}, failed on ${UNDELIVERED_PR_COUNT}: ${UNDELIVERED_PRS:-<none>}) — the CI-failure notification now has NO durable signal. Failing hard."
+              exit 1
+            fi
+            echo "::warning::Branch Fixer webhook dispatch failed for PR(s) ${AFFECTED:-<none>} (HTTP ${LAST_HTTP}: ${DETAIL}) — CI-failure notification was not delivered, BUT a durable comment recording the failure was posted on all ${DURABLE_COMMENT_PR_COUNT} affected PR(s). The job still fails for the real validation reason; this notification step does not add a second failure."
+            exit 0
           fi
 
       # The run's verdict on unmerged PRs. MUST stay the LAST step of this job:

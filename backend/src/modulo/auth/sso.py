@@ -23,7 +23,6 @@ from modulo.auth.oidc_verify import OidcVerifyError, verify_id_token
 from modulo.auth.saml_handler import ModuloSamlAuth, SamlAuthError
 from modulo.auth.secret_storage import decode_stored_secret
 from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
-from modulo.core.license import verify_license_key
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.ssrf import (
     derive_oidc_allowed_hosts,
@@ -1365,9 +1364,14 @@ async def _saml_config_from_db(
 async def _saml_config_from_env(settings: Settings) -> tuple[str, str, str | None, str | None, None]:
     """Fetch env-var SAML IdP metadata and build the resolved config tuple.
 
-    Licence gating (``modulo_saml_enabled`` / ``modulo_license_key``) is
-    applied fail-closed by the orchestrator ``_resolve_saml_config`` BEFORE
-    this helper runs; it is intentionally not repeated here.
+    Availability is a CONFIGURATION question (``modulo_saml_enabled`` plus IdP
+    metadata), never a licence question (FAR-2059). Sign-in is an
+    authentication concern: refusing to build the config on a lapsed licence
+    locks every administrator out of the instance — and therefore out of the
+    licence screen — which is precisely the state the product promises can
+    never happen. Earning the Team tier is enforced where it belongs:
+    ``require_feature("sso")`` gates the admin configuration surface, and the
+    post-auth plan gates licensed runtime features.
     """
     try:
         idp_metadata = await _saml_fetch_idp_metadata(settings)
@@ -1405,19 +1409,14 @@ async def _resolve_saml_config(
     if db_saml is not None:
         return await _saml_config_from_db(provider_id, db_saml, settings)
 
-    # Env-var fallback. Licence gating stays fail-closed here (verbatim):
-    # a config that should be refused must still be refused.
+    # Env-var fallback: CONFIGURATION decides availability, never licence state
+    # (FAR-2059). An instance whose only sign-in path is env-configured SAML
+    # must still be able to complete SAML login on a lapsed licence; otherwise
+    # the lapse locks every administrator out of the licence screen with no way
+    # back in. The Team entitlement is enforced at the admin configuration
+    # surface (``require_feature("sso")``) and post-auth, not here.
     if not settings.modulo_saml_enabled:
         raise ValueError("SAML is not enabled")
-    # FAR-1733: the env-var key must VERIFY (Ed25519 signature + expiry), not
-    # merely exist. An unverifiable key fails closed with the SAME message as
-    # an absent one, so the pre-auth 400 surface never discloses whether a key
-    # is configured; the server-side warning is the operator diagnostic.
-    env_key = getattr(settings, "modulo_license_key", "") or ""
-    if verify_license_key(env_key) is None:
-        if env_key:
-            _log.warning("saml.env_license_key_unverified")
-        raise ValueError("SAML requires a license key (Team feature)")
 
     return await _saml_config_from_env(settings)
 

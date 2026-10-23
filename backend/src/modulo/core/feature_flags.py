@@ -471,6 +471,13 @@ def resolve_effective_license(settings: Any, org: Any | None) -> LicenseData | N
     rung change cannot silently drift between the copies. Returns ``None`` when
     no valid licence resolves.
 
+    Grace: capability expiry is ``expires_at + LICENCE_GRACE_DAYS`` (a fixed,
+    non-configurable delivery window in ``modulo.core.license``), so a key that
+    expired fewer than ``LICENCE_GRACE_DAYS`` ago still resolves here and keeps
+    granting its tier. Past the grace every rung falls through to the
+    unlicensed (Community) default — the lapse is never a lockout, because
+    authentication does not depend on this ladder.
+
     Local imports keep ``modulo.core.license.{get_license,parse_and_verify}``
     patchable at call time (tests patch the source module, not this one).
     """

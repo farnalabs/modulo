@@ -1654,8 +1654,10 @@ export interface paths {
          *     licensed path keeps the configured name, as before.
          *
          *     SAML is enabled on the single-org path if any enabled SAML provider exists
-         *     in the DB, or if env-var SAML is fully configured (enabled + license +
-         *     metadata); on the multi-org path only the env-var configuration counts.
+         *     in the DB, or if env-var SAML is fully configured (enabled + metadata); on
+         *     the multi-org path only the env-var configuration counts. Licence state
+         *     does not affect either rung (FAR-2059) — a lapse must not remove the only
+         *     sign-in method from the login page.
          */
         get: operations["sso_providers_api_v1_auth_sso_providers_get"];
         put?: never;
@@ -19902,6 +19904,8 @@ export interface components {
             guardrail_summary?: {
                 [key: string]: number;
             } | null;
+            /** Seam Coverage */
+            seam_coverage?: components["schemas"]["SeamCoverageStatement"][] | null;
             /** Trigger Type */
             trigger_type?: string | null;
             /** Execution Origin */
@@ -20471,6 +20475,41 @@ export interface components {
             active: boolean;
             /** Externalid */
             externalId?: string | null;
+        };
+        /**
+         * SeamCoverageProvenance
+         * @description The ADR-042 provenance classes, bound to the canonical constants.
+         *
+         *     Members are assigned FROM ``modulo.core.provenance`` so a rename there
+         *     propagates instead of drifting; a test asserts this enum covers the whole
+         *     canonical set (a new ADR-042 class must be added here too).
+         * @enum {string}
+         */
+        SeamCoverageProvenance: "observed" | "derived" | "reported" | "attested";
+        /**
+         * SeamCoverageState
+         * @description Whether a Modulo-owned control covered the seam for this run.
+         * @enum {string}
+         */
+        SeamCoverageState: "enforced" | "degraded" | "not_applicable";
+        /**
+         * SeamCoverageStatement
+         * @description One seam-scoped coverage statement on a run.
+         *
+         *     ``extra="forbid"``: a stored value carrying fields this contract does not
+         *     know is malformed for the read path, which degrades it (never a 500, never
+         *     an arbitrary string round-tripped to the UI).
+         */
+        SeamCoverageStatement: {
+            /**
+             * Seam
+             * @enum {string}
+             */
+            seam: "ingestion_edge" | "node_output_edge" | "runtime_loop";
+            state: components["schemas"]["SeamCoverageState"];
+            provenance: components["schemas"]["SeamCoverageProvenance"];
+            /** Reason */
+            reason: string;
         };
         /** SearchResponse */
         SearchResponse: {

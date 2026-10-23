@@ -33,6 +33,7 @@ from modulo.cli.break_glass import (
     smoke,
     status_rows,
 )
+from tests.unit.api.mock_session import configure_mock_session
 
 _NOW = datetime.now(UTC)
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -57,7 +58,13 @@ def _txn() -> object:
 
 
 def _mock_session() -> AsyncMock:
-    session = AsyncMock()
+    # Contract-correct double: ``_bg_provision_account`` calls ``session.add``
+    # synchronously and the RLS preamble reads ``in_transaction()`` /
+    # ``get_bind()`` synchronously; on a bare AsyncMock each returns a
+    # never-awaited coroutine, which surfaces at GC as
+    # PytestUnraisableExceptionWarning (the 2026-10-21 terminal-writer outage
+    # class). ``execute`` stays overridable per test.
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.begin = MagicMock(return_value=_txn())
     session.flush = AsyncMock()
     return session

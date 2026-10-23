@@ -84,6 +84,7 @@ const RunsListView = () => import('../views/RunsListView.vue')
 const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
 const EvidenceView = () => import('../views/EvidenceView.vue')
+const EvidenceIndexView = () => import('../views/EvidenceIndexView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
 const AdminFeatureFlagsView = () => import('../views/AdminFeatureFlagsView.vue')
 const AdminPluginsView = () => import('../views/AdminPluginsView.vue')
@@ -100,6 +101,7 @@ const AdminConnectorsView = () => import('../views/AdminConnectorsView.vue')
 const AdminNodeCategoriesView = () => import('../views/AdminNodeCategoriesView.vue')
 const AdminViewsView = () => import('../views/AdminViewsView.vue')
 const AdminEvidenceRedactionView = () => import('../views/AdminEvidenceRedactionView.vue')
+const ComplianceEvidenceIndexView = () => import('../views/ComplianceEvidenceIndexView.vue')
 const AdminModelBackendsView = () => import('../views/AdminModelBackendsView.vue')
 const AdminOrgSettingsView = () => import('../views/AdminOrgSettingsView.vue')
 const AdminRunRetentionView = () => import('../views/AdminRunRetentionView.vue')
@@ -451,6 +453,16 @@ const router = createRouter({
       path: '/admin/evidence-redaction',
       name: 'admin-evidence-redaction',
       component: AdminEvidenceRedactionView,
+    },
+    {
+      path: '/admin/compliance/evidence-index',
+      name: 'admin-compliance-evidence-index',
+      component: ComplianceEvidenceIndexView,
+    },
+    {
+      path: '/admin/evidence',
+      name: 'admin-evidence-index',
+      component: EvidenceIndexView,
     },
     {
       path: '/admin/model-backends',
@@ -864,6 +876,22 @@ export function hydrateManifestMeta(to: RouteLocationTarget): void {
 }
 
 /**
+ * Resolve whether the current user holds at least one of the route's
+ * manifest-declared permissions.  Extracted from the navigation guard to keep
+ * its cognitive complexity within the SonarCloud budget.  Routes with no
+ * declared permissions pass without fetching anything.
+ */
+async function hasRequiredPermissions(
+  to: Parameters<Parameters<typeof router.beforeEach>[0]>[0],
+): Promise<boolean> {
+  const requiredPermissions = to.meta?.requiredPermissions
+  if (!requiredPermissions?.length) return true
+  const planStore = usePlanStore()
+  await planStore.fetchPermissions()
+  return requiredPermissions.some((permission) => planStore.userPermissions.includes(permission))
+}
+
+/**
  * Enforce role, tier, and devMode/visibility access rules.  Returns a
  * redirect route-object when access is denied, or `true` when the caller
  * may continue.  The plan store is lazily fetched so the guard sees the
@@ -877,6 +905,10 @@ export async function enforceRoleTierVisibility(
   const payload = decodeJwtPayload(token)
 
   if (to.meta?.requiresSystemAdmin && !payload?.is_system_admin) {
+    return { name: 'dashboard' }
+  }
+
+  if (!(await hasRequiredPermissions(to))) {
     return { name: 'dashboard' }
   }
 
@@ -945,7 +977,12 @@ async function enforceManifestGate(
   to: RouteLocationTarget,
   token: string,
 ): Promise<{ name: string } | true> {
-  if (to.meta?.requiresSystemAdmin || to.meta?.requiredRoles?.length || to.meta?.requiredTier) {
+  if (
+    to.meta?.requiresSystemAdmin ||
+    to.meta?.requiredRoles?.length ||
+    to.meta?.requiredPermissions?.length ||
+    to.meta?.requiredTier
+  ) {
     return enforceRoleTierVisibility(to, token)
   }
   // FAR-1950: the manifest declares a gate for this path but hydration left

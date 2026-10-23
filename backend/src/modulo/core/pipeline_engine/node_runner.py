@@ -7642,6 +7642,86 @@ async def _connector_invoke_phase(
         return False, failure
 
 
+async def _run_connector_node(
+    state: dict[str, Any],
+    *,
+    binding: dict[str, Any],
+    node_id: str,
+    connector_type: str,
+    allowed_connectors: list[str] | None,
+    op: str,
+    dispatch_action: str,
+    await_completion: bool,
+    dispatch_wait_seconds: float | None,
+    session_factory: Callable[..., Any] | None,
+) -> dict[str, Any]:
+    instance_id = _parse_uuid_opt(binding.get("instance_id"))
+    await _run_conformance_gate(
+        state,
+        node_id=node_id,
+        connector_instance_ids=_conformance_instance_ids(instance_id),
+    )
+
+    connector, error_artifact = _connector_resolve_or_error(binding, node_id, connector_type, allowed_connectors)
+    if error_artifact is not None:
+        return error_artifact
+
+    resource, filters, data = _connector_inputs(binding, state)
+    suppress_envelope: dict[str, Any] | None = None
+    intent_active = False
+    if op == "write":
+        suppress_envelope, intent_active = await _connector_write_gate_phase(
+            state, session_factory, node_id, connector, resource, filters, data
+        )
+    if suppress_envelope is not None:
+        return suppress_envelope
+
+    ok, result = await _connector_invoke_phase(
+        connector,
+        op,
+        resource,
+        filters,
+        data,
+        dispatch_action=dispatch_action,
+        await_completion=await_completion,
+        dispatch_wait_seconds=dispatch_wait_seconds,
+        session_factory=session_factory,
+        state=state,
+        node_id=node_id,
+        intent_active=intent_active,
+    )
+    if not ok:
+        return cast(dict[str, Any], result)
+
+    if op == "dispatch":
+        result = _stamp_dispatch_provenance(result, str(instance_id) if instance_id is not None else "")
+
+    success_block = await _connector_success_phase(
+        session_factory,
+        connector,
+        state,
+        node_id,
+        op,
+        resource,
+        filters,
+        data,
+        intent_active,
+        result,
+    )
+    if success_block is not None:
+        return success_block
+
+    if op == "dispatch" and dispatch_action == "trigger_run":
+        failed_envelope = _dispatch_trigger_failure_envelope(node_id, result)
+        if failed_envelope is not None:
+            return failed_envelope
+
+    return {
+        "artifacts": [{"node_id": node_id, "status": "completed", "output": result}],
+        "output": result,
+    }
+
+
 def make_connector_fn(
     node_def: dict[str, Any],
     *,
@@ -7744,82 +7824,18 @@ def make_connector_fn(
 
     @cancellable_node(timeout=timeout)
     async def _connector_node(state: dict[str, Any]) -> dict[str, Any]:
-        # FAR-215: mid-run capability re-check at node start (block -> HITL).
-        # The gate raises a LangGraph interrupt on block; control only reaches
-        # the node body when the node may proceed.
-        instance_id = _parse_uuid_opt(binding.get("instance_id"))
-        await _run_conformance_gate(
+        return await _run_connector_node(
             state,
+            binding=binding,
             node_id=node_id,
-            connector_instance_ids=_conformance_instance_ids(instance_id),
-        )
-
-        connector, error_artifact = _connector_resolve_or_error(binding, node_id, connector_type, allowed_connectors)
-        if error_artifact is not None:
-            return error_artifact
-
-        resource, filters, data = _connector_inputs(binding, state)
-
-        # FAR-458 connector-write UNKNOWN-recovery: the read-before-write dedupe
-        # decision point (gate + FAR-531 intent marker), extracted to
-        # ``_connector_write_gate_phase``. Only a WRITE is side-effecting.
-        suppress_envelope: dict[str, Any] | None = None
-        intent_active = False
-        if op == "write":
-            suppress_envelope, intent_active = await _connector_write_gate_phase(
-                state, session_factory, node_id, connector, resource, filters, data
-            )
-        if suppress_envelope is not None:
-            return suppress_envelope
-
-        ok, result = await _connector_invoke_phase(
-            connector,
-            op,
-            resource,
-            filters,
-            data,
+            connector_type=connector_type,
+            allowed_connectors=allowed_connectors,
+            op=op,
             dispatch_action=dispatch_action,
             await_completion=await_completion,
             dispatch_wait_seconds=dispatch_wait_seconds,
             session_factory=session_factory,
-            state=state,
-            node_id=node_id,
-            intent_active=intent_active,
         )
-        if not ok:
-            # ``_connector_invoke_phase`` returns the failure envelope here.
-            return cast(dict[str, Any], result)
-
-        if op == "dispatch":
-            # FAR-1141: every successful dispatch result is stamped as WITNESSED
-            # external state (not an executed node) BEFORE the secret guard, so
-            # the guard inspects exactly what enters run state.
-            result = _stamp_dispatch_provenance(result, str(instance_id) if instance_id is not None else "")
-
-        success_block = await _connector_success_phase(
-            session_factory,
-            connector,
-            state,
-            node_id,
-            op,
-            resource,
-            filters,
-            data,
-            intent_active,
-            result,
-        )
-        if success_block is not None:
-            return success_block
-
-        if op == "dispatch" and dispatch_action == "trigger_run":
-            failed_envelope = _dispatch_trigger_failure_envelope(node_id, result)
-            if failed_envelope is not None:
-                return failed_envelope
-
-        return {
-            "artifacts": [{"node_id": node_id, "status": "completed", "output": result}],
-            "output": result,
-        }
 
     _connector_node.__name__ = f"connector_{node_id}"
     return _connector_node

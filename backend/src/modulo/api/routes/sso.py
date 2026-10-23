@@ -44,7 +44,6 @@ from modulo.auth.sso import (
     verify_state,
 )
 from modulo.core.audit_coverage import audited_system, bind_audit_org
-from modulo.core.license import verify_license_key
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.sanitize_log import sanitise_log_value
 from modulo.db.crud.sso_provider import (
@@ -294,15 +293,16 @@ async def _get_enabled_saml_global(
 
 
 def _env_saml_available(settings: Settings) -> bool:
-    """Environment-level SAML availability (verified licence + IdP metadata).
+    """Environment-level SAML availability (enabled + IdP metadata configured).
 
-    FAR-1733: the env-var licence key is verified (signature + expiry), never
-    trusted on mere presence — an unverifiable key does NOT enable the env
-    SAML path (fail-closed).
+    Licence state is deliberately NOT consulted (FAR-2059). Hiding the SAML
+    option on a lapsed licence strands an SSO-only instance: the login page
+    would offer no way for an administrator to sign in and reach the licence
+    screen. Entitlement is enforced post-auth (the plan resolves to Community)
+    and on the admin configuration surface by ``require_feature("sso")``.
     """
     return bool(
         settings.modulo_saml_enabled
-        and verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
         and (bool(settings.modulo_saml_idp_metadata_url) or bool(settings.modulo_saml_idp_metadata_xml))
     )
 
@@ -316,8 +316,10 @@ async def is_saml_available(
 
     SAML is available when either:
     1. An enabled SAML provider exists in the DB with metadata configured, OR
-    2. The env-var SAML config is fully set (enabled + a VERIFIED licence key
-       + metadata URL/XML).
+    2. The env-var SAML config is fully set (enabled + metadata URL/XML).
+
+    Licence state is not consulted: authentication must stay reachable on a
+    lapsed licence (FAR-2059), and the DB rung has never been licence-gated.
 
     NOTE: SAML is single-provider-per-instance (``get_enabled_saml_provider``
     returns the first enabled provider globally via ``.limit(1)``).  This is
@@ -374,8 +376,10 @@ async def sso_providers(
     licensed path keeps the configured name, as before.
 
     SAML is enabled on the single-org path if any enabled SAML provider exists
-    in the DB, or if env-var SAML is fully configured (enabled + license +
-    metadata); on the multi-org path only the env-var configuration counts.
+    in the DB, or if env-var SAML is fully configured (enabled + metadata); on
+    the multi-org path only the env-var configuration counts. Licence state
+    does not affect either rung (FAR-2059) — a lapse must not remove the only
+    sign-in method from the login page.
     """
     plan, scoped_org = await resolve_anonymous_plan_with_tenant(settings, session)
     # FAR-2059: only a DETERMINATE refusal hides the providers. With no valid

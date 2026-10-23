@@ -43,6 +43,7 @@ from modulo.core.trigger_engine.pre_guardrail import (
 )
 from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _SNAP = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -120,7 +121,11 @@ def _make_session(
     4=dedup SELECT, 5=dedup DELETE, 6=count active, 7=pipeline lookup,
     8=recent rate-limited count, 9+=other.
     """
-    session = AsyncMock()
+    # Contract-correct double: the webhook path's RLS preamble reads
+    # ``in_transaction()``, ``get_bind()`` and ``info`` SYNCHRONOUSLY; on a
+    # bare AsyncMock ``in_transaction()`` returns a never-awaited coroutine
+    # (PytestUnraisableExceptionWarning at GC). ``execute`` is overridden below.
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
 
     lock_result = MagicMock()
     lock_result.scalar_one.return_value = True
@@ -543,7 +548,9 @@ def _make_replay_session(
     4=WebhookPayload lookup, 5=guardrail rows (detection-only), 6=count active,
     7=pipeline lookup, 8=recent count, 9+=other.
     """
-    session = AsyncMock()
+    # Same contract-correct double as ``_make_session``: the replay path runs
+    # the RLS preamble, whose sync reads must not become coroutines.
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
 
     event_result = MagicMock()
     event_result.scalar_one_or_none.return_value = event

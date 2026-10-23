@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.mcp_server import create_secret, delete_secret, list_secrets
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import FERNET_KEY, AuthContext, make_session_context
 
 
@@ -35,7 +36,7 @@ class TestCreateSecretErrors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -50,7 +51,7 @@ class TestCreateSecretErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await create_secret(key="   ", value="secret-value")
 
@@ -64,7 +65,7 @@ class TestCreateSecretErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await create_secret(key="k" * 256, value="secret-value")
 
@@ -78,7 +79,7 @@ class TestCreateSecretErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await create_secret(key="gh_token", value="")
 
@@ -101,7 +102,7 @@ class TestCreateSecretSuccess(AuthContext):
         mock_get_settings.return_value = _make_settings()
         backend = AsyncMock()
         mock_create_backend.return_value = backend
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await create_secret(key="gh_token", value="super-secret")
 
@@ -139,7 +140,7 @@ class TestListSecretsErrors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -236,7 +237,7 @@ class TestDeleteSecretErrors(AuthContext):
     ) -> None:
         from modulo.core.mcp.scope_validator import MCPAuthorizationError
 
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -251,7 +252,7 @@ class TestDeleteSecretErrors(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await delete_secret(key="")
 
@@ -274,7 +275,7 @@ class TestDeleteSecretSuccess(AuthContext):
         mock_get_settings.return_value = _make_settings()
         backend = AsyncMock()
         mock_create_backend.return_value = backend
-        mock_session.return_value = make_session_context(AsyncMock())
+        mock_session.return_value = make_session_context(make_session_scope())
 
         result = await delete_secret(key="gh_token")
 

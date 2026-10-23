@@ -2,7 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1276,3 +1276,116 @@ class TestSpendCeilingEndpoints:
         assert resp.status_code == 200
         assert store["max_run_cost_cents"] == 1234  # untouched
         assert store["spend_ceiling_cents"] == 20000
+
+    def test_put_zero_org_ceiling_is_a_kill_switch(self, client: TestClient) -> None:
+        """0 must persist as 0 cents, never collapse to the NULL "unlimited" sentinel.
+
+        ``cents_from_usd(0)`` returns ``0`` and the response coercion must keep it
+        as ``0.0`` — a falsy check anywhere on this path would silently turn the
+        kill switch back into "no ceiling", which is the opposite guarantee.
+        """
+        store: dict[str, Any] = {
+            "max_run_cost_cents": None,
+            "spend_ceiling_cents": 10000,
+            "org_cumulative_spend_cents": 4000,
+        }
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
+            patch("modulo.api.routes.costs.set_rls_org"),
+            _cost_state_store_cm(store),
+        ):
+            resp = client.put(
+                "/api/v1/admin/costs/ceiling",
+                json={"spend_ceiling": 0},
+            )
+
+        assert resp.status_code == 200
+        assert store["spend_ceiling_cents"] == 0
+        data = resp.json()
+        assert data["spend_ceiling"] == 0.0
+        # Remaining budget is 0 (exhausted), NOT None (= no ceiling configured).
+        assert data["remaining_budget_usd"] == 0.0
+
+    def test_put_zero_per_run_ceiling_is_a_kill_switch(self, client: TestClient) -> None:
+        """The per-run ceiling keeps the same 0-means-block-everything semantics."""
+        store: dict[str, Any] = {
+            "max_run_cost_cents": 500,
+            "spend_ceiling_cents": None,
+            "org_cumulative_spend_cents": 0,
+        }
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
+            patch("modulo.api.routes.costs.set_rls_org"),
+            _cost_state_store_cm(store),
+        ):
+            resp = client.put(
+                "/api/v1/admin/costs/ceiling",
+                json={"max_run_cost": 0},
+            )
+
+        assert resp.status_code == 200
+        assert store["max_run_cost_cents"] == 0
+        assert store["spend_ceiling_cents"] is None  # omitted field untouched
+        assert resp.json()["max_run_cost"] == 0.0
+
+    def test_get_zero_ceiling_reports_exhausted_not_unlimited(self, client: TestClient) -> None:
+        """A stored 0 ceiling reads back as an exhausted budget, not as "unset"."""
+        state = _cost_state(max_run_cost_cents=0, spend_ceiling_cents=0, org_cumulative_spend_cents=0)
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=MagicMock(id=_ORG_ID)),
+            patch("modulo.api.routes.costs.get_org_cost_state", new=AsyncMock(return_value=state)),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get("/api/v1/admin/costs/ceiling")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["max_run_cost"] == 0.0
+        assert data["spend_ceiling"] == 0.0
+        assert data["remaining_budget_usd"] == 0.0
+
+
+class TestRollingAnomalyDetection:
+    """The 2x-rolling-7-day-average detector behind GET /admin/costs/anomalies.
+
+    The endpoint tests above only exercise the persisted-row merge path (they
+    stub ``list_anomalies``), so the detection rule itself — the behaviour the
+    product map claims — is pinned directly here.
+    """
+
+    @staticmethod
+    def _series(spends: list[float]) -> list[tuple[Any, float]]:
+        return [(date(2025, 1, 1 + index), spend) for index, spend in enumerate(spends)]
+
+    def test_flags_a_day_above_twice_the_prior_week_average(self) -> None:
+        from modulo.api.routes.costs import _build_rolling_anomalies
+
+        anomalies = _build_rolling_anomalies(self._series([100.0] * 7 + [250.0]))
+
+        assert len(anomalies) == 1
+        assert anomalies[0]["anomaly_date"] == "2025-01-08"
+        assert anomalies[0]["amount"] == 250.0
+        assert anomalies[0]["baseline"] == 100.0
+        assert anomalies[0]["percent_above"] == 150.0
+        assert anomalies[0]["dismissed"] is False
+
+    def test_exactly_twice_the_average_is_not_flagged(self) -> None:
+        """The rule is strictly ``> 2x`` — a day at exactly 2x stays quiet."""
+        from modulo.api.routes.costs import _build_rolling_anomalies
+
+        assert not _build_rolling_anomalies(self._series([100.0] * 7 + [200.0]))
+
+    def test_zero_baseline_never_flags(self) -> None:
+        """A week of zero spend gives no ratio to compare against (no division by zero)."""
+        from modulo.api.routes.costs import _build_rolling_anomalies
+
+        assert not _build_rolling_anomalies(self._series([0.0] * 7 + [50.0]))
+
+    def test_first_seven_days_have_no_baseline_and_are_skipped(self) -> None:
+        """Days without a full prior week cannot be judged, however large they are."""
+        from modulo.api.routes.costs import _build_rolling_anomalies
+
+        assert not _build_rolling_anomalies(self._series([1000.0] * 7))

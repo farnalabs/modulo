@@ -1,4 +1,4 @@
-"""FAR-2040: the 0325 backfill reports progress, so a long migration is not a hang.
+"""FAR-2040: the 0326 backfill reports progress, so a long migration is not a hang.
 
 A 10M-row ``eval_results`` table is thousands of batches; emitting only the
 final total makes the release command look hung. The cadence is pinned here:
@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-_MIGRATION = importlib.import_module("modulo.db.migrations.versions.0325_eval_verdict_contract")
+_MIGRATION = importlib.import_module("modulo.db.migrations.versions.0326_eval_verdict_contract")
 _LOGGER_NAME = "alembic.runtime.migration"
 
 

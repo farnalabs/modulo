@@ -43,6 +43,7 @@ from modulo.db.crud.pipeline import (
 )
 from modulo.db.models.eval import Eval
 from modulo.db.models.policy_gate import PolicyGate
+from tests.unit.api.mock_session import configure_mock_session
 
 _ASYNCIO = pytest.mark.asyncio(loop_scope="module")
 
@@ -151,7 +152,7 @@ def _make_source() -> _Row:
 
 
 def _read_session(snapshot_row: _Row) -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(
         side_effect=[
             _scalar_result(_make_source()),
@@ -172,7 +173,7 @@ def _read_session(snapshot_row: _Row) -> AsyncMock:
 
 
 def _main_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.add = MagicMock()
     session.flush = AsyncMock()
     return session

@@ -722,19 +722,44 @@ routes:
         deprecated: false
 
     /admin/evidence-redaction:
-        name: admin-evidence-redaction
-        breadcrumb: Evidence Redaction
+         name: admin-evidence-redaction
+         breadcrumb: Evidence Redaction
+         parent: /
+         product_map: [feat-evidence]
+         sidebar_group: admin
+         sidebar_order: 11
+         type: list_page
+         # The redaction-rules GET/PUT surface is admin-gated (not plan-gated),
+         # so this page stays community-tier with an explicit ["admin"] role
+         # list — the FAR-462 pattern used by /admin/users and /admin/org.
+         <<: *community
+         required_roles: [admin]
+         deprecated: false
+
+    /admin/evidence:
+         name: admin-evidence-index
+         breadcrumb: Evidence Index
+         parent: /
+         product_map: [feat-evidence]
+         sidebar_group:
+         sidebar_order:
+         type: page
+         <<: *community
+         required_roles: [admin]
+         deprecated: false
+
+    /admin/compliance/evidence-index:
+        name: admin-compliance-evidence-index
+        breadcrumb: Compliance Evidence Index
         parent: /
         product_map: [feat-evidence]
-        sidebar_group: admin
-        sidebar_order: 11
-        type: list_page
-        # The redaction-rules GET/PUT surface is admin-gated (not plan-gated),
-        # so this page stays community-tier with an explicit ["admin"] role
-        # list — the FAR-462 pattern used by /admin/users and /admin/org.
+        sidebar_group: monitor
+        sidebar_order: 10
+        type: page
         <<: *community
-        required_roles: [admin]
+        required_permissions: [compliance.evidence_index.read]
         deprecated: false
+
 
     /admin/errors:
         name: admin-errors
@@ -2698,12 +2723,29 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+    /admin/evidence:
+      - testid: evidence-index-page
+        type: element
+        dynamic_testid: false
+      - testid: page-header-right
+        type: element
+        dynamic_testid: false
+      - testid: evidence-index-refresh
+        type: button
+        dynamic_testid: false
+      - testid: evidence-index-loading
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
     /admin/evidence-redaction:
       - testid: admin-evidence-redaction-add
         type: button
         dynamic_testid: false
       - testid: admin-evidence-redaction-server-note
         type: element
+
         dynamic_testid: false
       - testid: admin-evidence-redaction-fail-closed-note
         type: element
@@ -2765,6 +2807,56 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+    /admin/compliance/evidence-index:
+      - testid: compliance-evidence-index
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-scope-note
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-loading
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-error
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-permission-denied
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-incomplete
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-lower-bounds
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-pack-version
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-pack-hash
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-product-version
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-frameworks
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-pack-published-at
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-generated-at
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-coverage
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-artifact-count
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-customer-responsibility
+        type: element
+        dynamic_testid: false
+
     /analytics:
       - testid: analytics-view
         type: element
@@ -4581,6 +4673,12 @@ elements:
       - testid: run-detail-guardrail-override-panel
         type: element
         dynamic_testid: false
+      - testid: run-detail-seam-coverage
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-seam-coverage-row
+        type: element
+        dynamic_testid: false
       - testid: run-detail-override-guardrail
         type: button
         dynamic_testid: false
@@ -6378,7 +6476,7 @@ features:
             # Cost controls + hard spend ceilings (FAR-391)
             - "[x] GET /api/v1/admin/costs/controls returns teams with daily limits, the org budget, max_run_cost / spend_ceiling (USD at the API boundary, stored as integer cents), org_cumulative_spend_usd, alert thresholds, the circuit-breaker toggle, currency (USD/EUR/GBP) and billing period (monthly/quarterly/annual)"
             - "[x] PUT /api/v1/admin/costs/controls updates cost-control fields; alert_thresholds must be a non-empty list of integers in 1..100 (422 otherwise) and omitted fields are preserved"
-            - "[x] The dedicated /ceiling surface manages max_run_cost (per-run) and spend_ceiling (per-org) independently: explicit null clears one ceiling back to unlimited, omitting a field leaves it unchanged, and 0 is a kill-switch; remaining_budget_usd is derived from the org ceiling (test_spend_ceiling_endpoints.py)"
+            - "[x] The dedicated /ceiling surface manages max_run_cost (per-run) and spend_ceiling (per-org) independently: explicit null clears one ceiling back to unlimited, omitting a field leaves it unchanged, and 0 is a kill-switch; remaining_budget_usd is derived from the org ceiling (backend/tests/unit/api/test_costs.py::TestSpendCeilingEndpoints)"
             - "[x] Ceiling enforcement runs before the daily-ledger write: a run exceeding its per-run ceiling or the org cumulative ceiling has its ledger refused (never billed beyond the ceiling) and terminalizes as 'cost_ceiling_exceeded' — except an explicit cancelled status, which is preserved; within ceilings the org cumulative spend is incremented (test_cost_finalize_ceiling.py)"
             - "[x] POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset re-enables a tripped pipeline and re-activates its non-deleted triggers; a missing pipeline is 404"
             # Configurable, Community-tier pipeline spend circuit breaker (FAR-1182)
@@ -6425,6 +6523,8 @@ features:
             - "[x] Migration 0320_evidence_redaction_rules creates evidence_redaction_rules (OrgScoped + soft-delete, UNIQUE (organisation_id, key_pattern, role), role CHECK in admin/operator/viewer), applies the four-step RLS pattern, and seeds the mandatory catch-all row key_pattern='*' / role='viewer' / redacted_fields='{sensitive_output, internal_metadata}' for every existing organisation"
             - "[x] The /evidence route renders under the MONITOR sidebar group; EvidenceView.vue fetches the already-redacted payload and renders it as-is with NO client-side redaction or conditional field hiding, with i18n-backed strings and role=status/aria-live status regions (frontend/src/views/EvidenceView.vue, frontend/src/manifest.yaml)"
             - "[x] The /admin/evidence-redaction route (ADMIN sidebar group) renders AdminEvidenceRedactionView.vue, which lists the org's rules and creates/edits them through the PUT /api/v1/evidence/redaction-rules upsert keyed on (key_pattern, role): creating needs an unused pair and at least one redacted class (both rejected inline before any request), editing keeps key_pattern/role immutable and changes only redacted_fields, and the page has no delete surface; redacted_fields is limited to the backend REDACTION_CLASS_FIELDS vocabulary (an unrecognised stored class stays visible so it can be removed, and an unrecognised stored role is shown read-only with Save disabled). The seeded '*' / viewer catch-all is shown as mandatory, and the page explains the per-role fail-closed default — it configures the SERVER boundary only and never redacts or hides evidence values client-side (frontend/src/views/AdminEvidenceRedactionView.vue, frontend/src/manifest.yaml)"
+            - "[x] The /admin/compliance/evidence-index route fetches GET /api/v1/compliance/evidence-index with the compliance.evidence_index.read permission, renders pack metadata, framework coverage counts, present/absent/customer-supplied artefacts, identifiers/locations/provenance/mapping row IDs, missing artefact warnings and the human-only lower-bound warning; customer-responsibility rows are explained as customer-owned records because the API intentionally omits them (frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
+            - "[x] The /admin/evidence route renders the operator/admin evidence index from GET /api/v1/compliance/evidence-index, showing pack metadata, completeness, missing artefact types, and each indexed artefact's status, provenance, record count, and location (frontend/src/views/EvidenceIndexView.vue, frontend/src/stores/evidence.ts)"
         deferrals:
             - "Risk/Assessment (sub-scope B, FAR-941) is a separate ticket and is not part of this entry; the decision-record NULL-duplicate grouping (acceptance criteria 12-14) belongs to the decision-record read path and is not implemented here"
     feat-governance-stack:
@@ -6570,7 +6670,7 @@ features:
             - "[x] Stripe webhook handling verifies signatures and processes invoice.paid events"
             - "[x] Tier catalogue endpoints resolve plan tiers and feature entitlements"
             - "[x] Caller-scoped plan bootstrap: GET /api/v1/plan returns 200 to ANY authenticated org member with license.tier / expires_at / org_id, dev_mode, and the FULL known flag set with the org feature_overrides overlay applied (inactive flags present as currently_active: false), so a non-admin reads their org's real tier, dev mode and effective flags instead of the bootstrap defaults left by the instance-admin-only /api/v1/admin/feature-flags + /api/v1/admin/license reads; the frontend planStore bootstraps from it alongside the viewer-readable /api/v1/admin/tiers catalogue, and the admin endpoints keep their system-admin gates for the inspection/toggle UI (backend/src/modulo/api/routes/viewmodel.py plan_bootstrap, backend/tests/unit/api/test_viewmodel_plan.py, frontend/src/stores/planStore.ts, docs/product-map/licensing/license.md; FAR-1806 + FAR-1809)"
-            - "[x] Plan/license-based gating is wired at the composition root (require_feature / get_plan_context): the Team-tier licensed surfaces (SSO providers, /api/v1/teams, audit export, admin spend limits) return 402 naming the gated feature without a valid Team license and pass with one; the license resolves from the org settings with a system-license fallback (team_gates.feature, docs/product-map/licensing/license.md)"
+            - "[x] Plan/license-based gating is wired at the composition root (require_feature / get_plan_context): the Team-tier licensed surfaces (SSO administration, /api/v1/teams, audit export, admin spend limits) return 402 naming the gated feature without a valid Team license and pass with one; SSO AUTHENTICATION entry points are exempt from that 402 when NO license resolves at all, so a lapse never locks an administrator out of the licence screen (env-var SAML availability/config are configuration-only; FAR-2059/FAR-2060); the license resolves from the org settings with a system-license fallback (team_gates.feature, test_sso_licence_admin_invariant.py, docs/product-map/licensing/license.md)"
             - "[ ] License-driven gating is not applied to EVERY registered feat-* surface — gating targets the licensed Team-tier surfaces, not the whole feature registry"
         deferrals:
             - "Universal license gating of every registered feature is tracked under feat-license"

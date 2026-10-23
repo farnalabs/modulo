@@ -27,6 +27,7 @@ import pytest
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core import cron_helpers as ch
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
+from tests.unit.api.mock_session import make_redis_client, make_session_factory
 
 ORG = uuid.uuid4()
 TRIGGER_A = uuid.uuid4()
@@ -184,7 +185,7 @@ def _compiled_update(stmt: Any) -> str:
 
 
 def _redis() -> AsyncMock:
-    return AsyncMock()
+    return make_redis_client()
 
 
 @pytest.fixture(autouse=True)
@@ -634,7 +635,7 @@ async def test_fire_report_trigger_forwards_epoch_and_bounds_redis_timeouts():
     with (
         patch.object(ch, "get_settings", return_value=_settings()),
         patch.object(ch, "AsyncRedis") as redis_cls,
-        patch.object(ch, "_open_factory", return_value=MagicMock()),
+        patch.object(ch, "_open_factory", return_value=make_session_factory()),
         patch(
             "modulo.core.reports.scheduler._fire_scheduled_report",
             new_callable=AsyncMock,
@@ -1922,8 +1923,8 @@ async def test_run_reconcile_sweeps_records_summary(caplog):
         "dispatch_failed_terminalized": 0,
     }
     with (
-        patch.object(ch, "_open_factory", return_value=MagicMock()),
-        patch.object(ch, "_open_system_factory", return_value=MagicMock()),
+        patch.object(ch, "_open_factory", return_value=make_session_factory()),
+        patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
         patch.object(
             ch,
             "run_classification_reconcile",
@@ -1964,8 +1965,8 @@ async def test_run_reconcile_sweeps_swallows_each_failure(caplog):
         "dispatch_failed_terminalized": 0,
     }
     with (
-        patch.object(ch, "_open_factory", return_value=MagicMock()),
-        patch.object(ch, "_open_system_factory", return_value=MagicMock()),
+        patch.object(ch, "_open_factory", return_value=make_session_factory()),
+        patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
         patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, side_effect=RuntimeError("db down")),
         patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, side_effect=RuntimeError("redis down")),
         patch(
@@ -2002,7 +2003,7 @@ async def test_update_reconcile_telemetry_records_stall_reasons():
     record = MagicMock()
     with (
         patch.object(ch, "is_telemetry_enabled", return_value=True),
-        patch.object(ch, "_open_system_factory", return_value=MagicMock()),
+        patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
         patch("modulo.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock),
         patch("modulo.core.error_tracking.metrics.sample_error_group_metrics", new_callable=AsyncMock),
         patch("modulo.core.error_tracking.metrics.record_stall_reason", record),
@@ -2039,7 +2040,7 @@ async def test_update_reconcile_telemetry_skips_zero_hitl_keys():
     record = MagicMock()
     with (
         patch.object(ch, "is_telemetry_enabled", return_value=True),
-        patch.object(ch, "_open_system_factory", return_value=MagicMock()),
+        patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
         patch("modulo.core.error_tracking.metrics.sample_run_runtime_metrics", new_callable=AsyncMock),
         patch("modulo.core.error_tracking.metrics.sample_error_group_metrics", new_callable=AsyncMock),
         patch("modulo.core.error_tracking.metrics.record_stall_reason", record),
@@ -2076,7 +2077,7 @@ async def test_update_reconcile_telemetry_reraises_cancellation():
     }
     with (
         patch.object(ch, "is_telemetry_enabled", return_value=True),
-        patch.object(ch, "_open_system_factory", return_value=MagicMock()),
+        patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
         patch(
             "modulo.core.error_tracking.metrics.sample_run_runtime_metrics",
             new_callable=AsyncMock,
@@ -2472,16 +2473,16 @@ async def test_run_reconcile_sweeps_reraises_cancellation(sweep_patch: tuple[str
     with ExitStack() as stack:
         stack.enter_context(patcher)
         if needs_factories:
-            stack.enter_context(patch.object(ch, "_open_factory", return_value=MagicMock()))
-            stack.enter_context(patch.object(ch, "_open_system_factory", return_value=MagicMock()))
+            stack.enter_context(patch.object(ch, "_open_factory", return_value=make_session_factory()))
+            stack.enter_context(patch.object(ch, "_open_system_factory", return_value=make_session_factory()))
         with pytest.raises(asyncio.CancelledError):
             await ch._run_reconcile_sweeps(redis_client, summary)
 
 
 def _patch_reconcile_sweeps_before_enforcement(stack: ExitStack) -> None:
     """Neutralise every sweep before the FAR-902 enforcement block."""
-    stack.enter_context(patch.object(ch, "_open_factory", return_value=MagicMock()))
-    stack.enter_context(patch.object(ch, "_open_system_factory", return_value=MagicMock()))
+    stack.enter_context(patch.object(ch, "_open_factory", return_value=make_session_factory()))
+    stack.enter_context(patch.object(ch, "_open_system_factory", return_value=make_session_factory()))
     stack.enter_context(patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, return_value={}))
     stack.enter_context(patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, return_value={}))
     stack.enter_context(patch.object(ch, "_sweep_workspace_input_drift_flags", new_callable=AsyncMock, return_value={}))
@@ -2860,8 +2861,8 @@ async def test_run_reconcile_sweeps_records_drift_sweep(
     # inside ``_run_reconcile_sweeps`` are patched at their source module.
     # The factory helpers are stubbed so argument evaluation never reaches a
     # real engine (the patched sweeps ignore the value anyway).
-    monkeypatch.setattr(ch, "_open_system_factory", lambda: MagicMock())
-    monkeypatch.setattr(ch, "_open_factory", lambda: MagicMock())
+    monkeypatch.setattr(ch, "_open_system_factory", lambda: make_session_factory())
+    monkeypatch.setattr(ch, "_open_factory", lambda: make_session_factory())
     monkeypatch.setattr(ch, "run_classification_reconcile", AsyncMock(return_value={}))
     monkeypatch.setattr(ch, "enforce_no_delivery_streaks", AsyncMock(return_value={}))
     monkeypatch.setattr("modulo.auth.api_key.revoke_run_api_key_sweep", AsyncMock(return_value={}))
@@ -2874,7 +2875,7 @@ async def test_run_reconcile_sweeps_records_drift_sweep(
     monkeypatch.setattr("modulo.core.error_tracking.metrics.sample_error_group_metrics", AsyncMock())
 
     summary: dict[str, Any] = {}
-    redis_client = AsyncMock()
+    redis_client = make_redis_client()
     await ch._run_reconcile_sweeps(redis_client, summary)
     assert summary.get("drift_sweep_scanned") == 3
     assert summary.get("drift_sweep_corrected") == 2

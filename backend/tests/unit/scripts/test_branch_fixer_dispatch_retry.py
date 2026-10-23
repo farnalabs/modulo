@@ -27,23 +27,19 @@ import re
 import shutil
 import stat
 import subprocess
-import sys
 from pathlib import Path
 from typing import NamedTuple
 
 import pytest
 import yaml
 
-#: The suite executes the CI step's real ``run:`` block under ``bash -e`` with
-#: stubbed ``curl``/``gh``/``sleep`` placed first on PATH, so it needs a POSIX
-#: shell that honours executable bits and a ``jq`` binary. A Windows host
-#: satisfies neither faithfully (MSYS bash ignores the mode bits on the stubs,
-#: WSL bash cannot see Windows-style PATH entries), so the suite runs on Linux
-#: CI - not skipped coverage on POSIX hosts.
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="requires a POSIX shell with executable-bit semantics and jq; runs on Linux CI",
-)
+#: This module executes the CI step's real ``run:`` block under ``bash -e`` with
+#: stubbed ``curl``/``gh``/``sleep`` placed first on PATH - so it needs a POSIX
+#: shell that honours executable bits, a PATH the shell can read, and ``jq``.
+#: The platform requirement is declared once, as a marker; the gate that skips it
+#: on Windows lives in ``backend/tests/conftest.py`` (``POSIX_ONLY_MARKER``) and
+#: Linux CI executes this suite for real.
+pytestmark = pytest.mark.posix_only
 
 #: The step that owns the PR-failure dispatch (its body is executed below).
 PR_JOB = "notify-pr-failure"

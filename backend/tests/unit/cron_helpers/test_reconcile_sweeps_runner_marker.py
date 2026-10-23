@@ -19,12 +19,13 @@ import asyncio
 import logging
 from contextlib import ExitStack
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from modulo.core import cron_helpers as ch
 from modulo.core.runner_capacity import RunnerMarkerSweepError
+from tests.unit.api.mock_session import make_redis_client, make_session_factory
 
 _PARTIAL_FAILURE_TOKEN = "runner_marker_sweep_partial_failure"
 _RUNNER_MARKER_FAILED_TOKEN = "runner_marker_sweep_failed"
@@ -36,8 +37,8 @@ def _enter_benign_sweeps(stack: ExitStack) -> None:
     """Patch the six non-runner-marker sweeps benign so a test exercises only
     the runner-marker block. Sweeps imported inside the function are patched at
     their source module; the module-level ones on ``cron_helpers`` itself."""
-    stack.enter_context(patch.object(ch, "_open_factory", lambda: MagicMock()))
-    stack.enter_context(patch.object(ch, "_open_system_factory", lambda: MagicMock()))
+    stack.enter_context(patch.object(ch, "_open_factory", lambda: make_session_factory()))
+    stack.enter_context(patch.object(ch, "_open_system_factory", lambda: make_session_factory()))
     stack.enter_context(patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, return_value={}))
     stack.enter_context(patch.object(ch, "_sweep_workspace_input_drift_flags", new_callable=AsyncMock, return_value={}))
     stack.enter_context(patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, return_value={}))
@@ -65,7 +66,7 @@ async def test_runner_marker_partial_failure_lands_counts_and_zeroes_violations(
     """The partial-failure arm (qa F5): ``RunnerMarkerSweepError`` carries the
     tick's partial counts into the summary and zeroes the capacity-violation
     signal, and the failure is logged loudly."""
-    redis_client = AsyncMock()
+    redis_client = make_redis_client()
     summary: dict[str, Any] = {}
     error = RunnerMarkerSweepError(scanned=5, cleared=2, transitioned=1, org_failures=1)
 
@@ -92,7 +93,7 @@ async def test_runner_marker_partial_failure_lands_counts_and_zeroes_violations(
 @pytest.mark.asyncio
 async def test_runner_marker_success_records_counters(caplog: pytest.LogCaptureFixture) -> None:
     """The success arm: every key the sweep returns lands in the summary."""
-    redis_client = AsyncMock()
+    redis_client = make_redis_client()
     summary: dict[str, Any] = {}
 
     with ExitStack() as stack:
@@ -121,13 +122,13 @@ async def test_best_effort_sweeps_swallow_drift_runner_enforcement_failures(
     """The generic fail-open arms: a raising drift / runner-marker /
     enforcement sweep must never abort the caller — each is logged and the
     counter it owns is zeroed."""
-    redis_client = AsyncMock()
+    redis_client = make_redis_client()
     summary: dict[str, Any] = {}
     boom = RuntimeError("boom")
 
     with ExitStack() as stack:
-        stack.enter_context(patch.object(ch, "_open_factory", lambda: MagicMock()))
-        stack.enter_context(patch.object(ch, "_open_system_factory", lambda: MagicMock()))
+        stack.enter_context(patch.object(ch, "_open_factory", lambda: make_session_factory()))
+        stack.enter_context(patch.object(ch, "_open_system_factory", lambda: make_session_factory()))
         stack.enter_context(patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, return_value={}))
         stack.enter_context(
             patch.object(ch, "_sweep_workspace_input_drift_flags", new_callable=AsyncMock, side_effect=boom)
@@ -175,7 +176,7 @@ async def test_capacity_alerts_sweep_lands_counts_and_logs_when_it_dispatches(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """FAR-1344: a dispatch (or an org error) is logged and counted."""
-    redis_client = AsyncMock()
+    redis_client = make_redis_client()
     summary: dict[str, Any] = {}
 
     with ExitStack() as stack:
@@ -206,7 +207,7 @@ async def test_capacity_alerts_sweep_lands_counts_and_logs_when_it_dispatches(
 @pytest.mark.asyncio
 async def test_capacity_alerts_sweep_reraises_cancelled() -> None:
     """Cancellation must abort the reconcile tick, not be swallowed as a warning."""
-    redis_client = AsyncMock()
+    redis_client = make_redis_client()
     summary: dict[str, Any] = {}
 
     with ExitStack() as stack:
@@ -227,7 +228,7 @@ async def test_capacity_alerts_sweep_swallows_a_generic_failure(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A failure in the capacity sweep is a warning, never an aborted tick."""
-    redis_client = AsyncMock()
+    redis_client = make_redis_client()
     summary: dict[str, Any] = {}
 
     with ExitStack() as stack:

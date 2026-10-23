@@ -24,6 +24,7 @@ from modulo.db.crud.agent_runner_binding import (
 )
 from modulo.db.models.agent_runner_binding import AgentRunnerBinding
 from modulo.db.models.model_backend import ModelBackend
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _AGENT_ID = uuid.uuid4()
@@ -42,7 +43,7 @@ def _backend(provider: str = "openai") -> MagicMock:
 
 
 def _session(backend: MagicMock) -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.scalars.return_value = [backend]
     result.scalar_one_or_none.return_value = None
@@ -64,7 +65,7 @@ def _binding_row() -> MagicMock:
 
 
 async def test_list_bindings_for_agent_orders_asc() -> None:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     rows = [_binding_row(), _binding_row()]
     result = MagicMock()
     result.scalars.return_value = rows
@@ -145,7 +146,7 @@ async def test_replace_agent_bindings_integrity_error_409() -> None:
 
 
 async def test_delete_all_bindings_for_agent_returns_rowcount() -> None:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.rowcount = 3
     session.execute.return_value = result
@@ -153,7 +154,7 @@ async def test_delete_all_bindings_for_agent_returns_rowcount() -> None:
 
 
 async def test_delete_binding_present() -> None:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     row = _binding_row()
     result = MagicMock()
     result.scalar_one_or_none.return_value = row
@@ -163,7 +164,7 @@ async def test_delete_binding_present() -> None:
 
 
 async def test_delete_binding_absent() -> None:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
     session.execute.return_value = result
@@ -171,7 +172,7 @@ async def test_delete_binding_absent() -> None:
 
 
 async def test_count_bindings_for_backend() -> None:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.scalar_one.return_value = 7
     session.execute.return_value = result
@@ -179,7 +180,7 @@ async def test_count_bindings_for_backend() -> None:
 
 
 async def test_delete_org_binding_rows_returns_rowcount() -> None:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
     result.rowcount = 4
     session.execute.return_value = result

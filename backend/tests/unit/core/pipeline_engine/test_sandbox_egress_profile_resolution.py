@@ -19,6 +19,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from tests.unit.api.mock_session import make_session_factory
 
 from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
 
@@ -106,7 +107,7 @@ def _none_route() -> _FakeRoute:
     return _FakeRoute(provider_type="none", profile=None)
 
 
-_SESSION_FACTORY_MOCK = MagicMock()  # non-None session_factory to enter route resolution
+_SESSION_FACTORY_MOCK = make_session_factory()  # non-None session_factory to enter route resolution
 
 
 # ---------------------------------------------------------------------------

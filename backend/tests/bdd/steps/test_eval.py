@@ -29,6 +29,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import harden_session_double
+
 ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
@@ -857,7 +859,7 @@ def step_feedback_human_provides(ctx, request):
     from modulo.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
-    mock_session.add = MagicMock()
+    harden_session_double(mock_session)
     mock_session.flush = AsyncMock()
 
     mgr = FeedbackManager(mock_session, ORG_ID)
@@ -891,6 +893,7 @@ def step_feedback_change_status(new_status, ctx, request):
     from modulo.core.feedback_manager import FeedbackManager, InvalidTransitionError
 
     mock_session = AsyncMock()
+    harden_session_double(mock_session)
     mock_session.get = AsyncMock()
 
     mgr = FeedbackManager(mock_session, ORG_ID)
@@ -931,6 +934,11 @@ def step_feedback_detect_eval_gap(ctx, request):
     from modulo.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
+    # A SQLAlchemy result object is SYNC; an AsyncMock session's default
+    # execute return_value is another AsyncMock, so result readers
+    # (scalar_one_or_none/scalars/first) return never-awaited coroutines.
+    mock_session.execute.return_value = MagicMock()
+    harden_session_double(mock_session)
     mock_session.get = AsyncMock()
 
     # Mock a feedback record
@@ -972,6 +980,7 @@ def step_feedback_spawn_correction(ctx, request):
     from modulo.core.feedback_manager import FeedbackManager
 
     mock_session = AsyncMock()
+    harden_session_double(mock_session)
     fake_run_id = uuid.uuid4()
 
     # Mock get_run to return a fake run

@@ -9,7 +9,7 @@ new-code duplication/coverage gate as source).
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from sqlalchemy.exc import InvalidRequestError, ProgrammingError, SQLAlchemyError
 
@@ -29,6 +29,7 @@ from modulo.api.mcp_server import (
     update_parameter_set,
     validate_parameter_schema,
 )
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 from tests.unit.mcp.test_mcp_parameter_schema_write_tools import (
     _make_mock_schema,
@@ -39,7 +40,7 @@ NOW = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
 
 
 def _session():
-    return make_session_context(AsyncMock())
+    return make_session_context(make_session_scope())
 
 
 def _assert_session_contract(result: dict) -> None:

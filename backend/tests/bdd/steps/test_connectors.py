@@ -17,6 +17,7 @@ from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.connectors.base import HealthResult
 from modulo.settings import Settings, get_settings
+from tests.bdd.conftest import harden_session_double
 
 # ---------------------------------------------------------------------------
 # Connector Health feature (active — 3 scenarios)
@@ -65,6 +66,7 @@ def _make_health_session() -> AsyncMock:
     un-seeded queries are deterministic.
     """
     session = AsyncMock()
+    harden_session_double(session)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.get_bind = AsyncMock(return_value=bind)

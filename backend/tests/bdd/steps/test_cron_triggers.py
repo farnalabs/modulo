@@ -14,7 +14,7 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/cron.feature")
 
 from modulo.db.models.trigger import Trigger
-from tests.bdd.conftest import make_mock_run
+from tests.bdd.conftest import harden_session_double, make_mock_run
 
 
 def _make_mock_trigger(**overrides) -> MagicMock:
@@ -167,6 +167,7 @@ def fire_cron_trigger(request, client):
     )
 
     session = AsyncMock()
+    harden_session_double(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

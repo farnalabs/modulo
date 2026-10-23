@@ -28,6 +28,7 @@ from modulo.core.hitl_manager import (
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
 from modulo.db.crud.hitl_review_config import EVENT_HUMAN_ONLY_DENIED
 from modulo.db.crud.hitl_review_config import MSG_HUMAN_ONLY_DENY as _MSG_HUMAN_ONLY_DENY
+from tests.unit.api.mock_session import configure_mock_session, make_session_scope
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -126,7 +127,7 @@ class TestGetPipelineGraph(_AuthContext):
         mock_get_pipeline_graph: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_get_pipeline_graph.return_value = None
 
@@ -145,7 +146,7 @@ class TestGetPipelineGraph(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         edges = [_make_mock_edge(), _make_mock_edge()]
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_get_pipeline_graph.return_value = ([{"id": "node-1", "node_type": "agent"}], edges)
 
@@ -170,7 +171,7 @@ class TestGetPipelineGraph(_AuthContext):
         mock_get_pipeline_graph: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_get_pipeline_graph.side_effect = ProgrammingError("stmt", {}, Exception("boom"))
 
@@ -205,7 +206,7 @@ class TestListPipelines(_AuthContext):
         pipeline.visibility = "org"
         page = _make_page_result([pipeline], total=1, has_more=False)
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_list_pipelines.return_value = page
 
@@ -228,7 +229,7 @@ class TestListPipelines(_AuthContext):
         mock_list_pipelines: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_list_pipelines.side_effect = ProgrammingError("stmt", {}, Exception("boom"))
 
@@ -259,7 +260,7 @@ class TestCreatePipeline(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -290,7 +291,7 @@ class TestCreatePipeline(_AuthContext):
         pipeline.default_autonomy_level = "manual_approval"
         pipeline.created_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_db_create_pipeline.return_value = pipeline
 
@@ -315,7 +316,7 @@ class TestCreatePipeline(_AuthContext):
         mock_db_create_pipeline: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_db_create_pipeline.side_effect = ProgrammingError("stmt", {}, Exception("boom"))
 
@@ -346,7 +347,7 @@ class TestDeletePipeline(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -376,7 +377,7 @@ class TestDeletePipeline(_AuthContext):
         mock_soft_delete_pipeline: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_soft_delete_pipeline.return_value = None
 
@@ -394,7 +395,7 @@ class TestDeletePipeline(_AuthContext):
         mock_soft_delete_pipeline: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_soft_delete_pipeline.return_value = MagicMock()
 
@@ -413,7 +414,7 @@ class TestDeletePipeline(_AuthContext):
         mock_soft_delete_pipeline: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_soft_delete_pipeline.side_effect = ProgrammingError("stmt", {}, Exception("boom"))
 
@@ -459,7 +460,7 @@ class TestListPendingHitl(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -500,7 +501,7 @@ class TestListPendingHitl(_AuthContext):
         snapshot_rows_result = MagicMock()
         snapshot_rows_result.all.return_value = []
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 count_result,
@@ -568,7 +569,7 @@ class TestListPendingHitl(_AuthContext):
         snapshot_rows_result = MagicMock()
         snapshot_rows_result.all.return_value = [(snapshot_id, graph)]
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 count_result,
@@ -601,7 +602,7 @@ class TestListPendingHitl(_AuthContext):
         gates_result = MagicMock()
         gates_result.scalars.return_value = []
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result])
         mock_session.return_value = _make_session_context(mock_sesh)
 
@@ -629,7 +630,7 @@ class TestListPendingHitl(_AuthContext):
         snapshot_rows_result = MagicMock()
         snapshot_rows_result.all.return_value = []
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 count_result,
@@ -664,7 +665,7 @@ class TestListPendingHitl(_AuthContext):
         gates_result = MagicMock()
         gates_result.scalars.return_value = []
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(side_effect=[count_result, gates_result])
         mock_session.return_value = _make_session_context(mock_sesh)
 
@@ -683,7 +684,7 @@ class TestListPendingHitl(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("boom")))
         mock_session.return_value = _make_session_context(mock_sesh)
 
@@ -729,7 +730,7 @@ class TestReviewHitl(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = _make_session_context(AsyncMock())
+        mock_session.return_value = _make_session_context(make_session_scope())
         with patch(
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
@@ -805,7 +806,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.claim = AsyncMock(return_value=claimed)
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -835,7 +836,7 @@ class TestReviewHitl(_AuthContext):
         gate_row_result = MagicMock()
         gate_row_result.scalar_one_or_none.return_value = None
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_row_result])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -864,7 +865,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.reject = AsyncMock()
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -893,7 +894,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.deliver_manual = AsyncMock()
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         # 1: run lookup; 2: gate-config snapshot lookup (gate id "gate-1" is
         # not a hitl_review_* id, so the human_only check resolves None).
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
@@ -936,7 +937,7 @@ class TestReviewHitl(_AuthContext):
         self._set_role_operator()
         manager = MagicMock()
         manager.approve = AsyncMock()
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -961,8 +962,8 @@ class TestReviewHitl(_AuthContext):
         """hitl_claims.account_id is FK'd to accounts.id — the claimant must be
         the account id, never the key id (REST passes principal.account_id)."""
         manager = MagicMock()
-        manager.claim = AsyncMock()
-        mock_sesh = AsyncMock()
+        manager.claim = AsyncMock(return_value=MagicMock(expires_at=None))
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -987,7 +988,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.reject = AsyncMock()
         manager.deliver_manual = AsyncMock()
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(),
@@ -1034,7 +1035,7 @@ class TestReviewHitl(_AuthContext):
         _ctx_user_id.set(account_id)
         manager = MagicMock()
         manager.approve = AsyncMock()
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -1065,7 +1066,7 @@ class TestReviewHitl(_AuthContext):
         _ctx_user_id.set(None)
         manager = MagicMock()
         manager.approve = AsyncMock()
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(side_effect=[_make_run_lookup_result(), _make_run_lookup_result(None)])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -1093,7 +1094,7 @@ class TestReviewHitl(_AuthContext):
         _ctx_user_id.set(None)
         manager = MagicMock()
         manager.claim = AsyncMock()
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -1134,7 +1135,7 @@ class TestReviewHitl(_AuthContext):
             ],
         }
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
@@ -1186,7 +1187,7 @@ class TestReviewHitl(_AuthContext):
             ],
         }
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
@@ -1233,7 +1234,7 @@ class TestReviewHitl(_AuthContext):
             ],
         }
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
@@ -1287,7 +1288,7 @@ class TestReviewHitl(_AuthContext):
             ],
         }
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
@@ -1334,7 +1335,7 @@ class TestReviewHitl(_AuthContext):
             ],
         }
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
@@ -1382,7 +1383,7 @@ class TestReviewHitl(_AuthContext):
             ],
         }
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
@@ -1425,7 +1426,7 @@ class TestReviewHitl(_AuthContext):
         run.snapshot_id = None
         run.pipeline_id = uuid.uuid4()
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         # 1: run lookup; 2: live-edge miss; 3: live graph_nodes_json miss;
         # 4: fail-closed claim lookup — the gate fired.
         # _make_run_lookup_result cannot produce a None row (it always yields a
@@ -1475,7 +1476,7 @@ class TestReviewHitl(_AuthContext):
         run.snapshot_id = None
         run.pipeline_id = uuid.uuid4()
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         # 1: run lookup; 2: live-edge miss; 3: live graph_nodes_json miss;
         # 4: fail-closed claim lookup — no claim row.
         none_result = MagicMock()
@@ -1529,7 +1530,7 @@ class TestReviewHitl(_AuthContext):
             ],
         }
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
@@ -1584,7 +1585,7 @@ class TestReviewHitl(_AuthContext):
             ],
         }
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
@@ -1644,7 +1645,7 @@ class TestReviewHitl(_AuthContext):
             ],
         }
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(
             side_effect=[
                 _make_run_lookup_result(run),
@@ -1674,7 +1675,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.claim = AsyncMock(side_effect=GateNotFoundError(run_id_uuid, "gate-1"))
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -1698,7 +1699,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.claim = AsyncMock(side_effect=AlreadyClaimedError(uuid.uuid4(), "gate-1"))
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -1719,7 +1720,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.claim = AsyncMock(side_effect=NotTeamMemberError(uuid.uuid4(), "gate-1", uuid.uuid4(), uuid.uuid4()))
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -1741,7 +1742,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.approve = AsyncMock(side_effect=ClaimTokenInvalidError())
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         run_result = MagicMock()
         run_result.scalar_one_or_none.return_value = MagicMock()  # the run
         gate_result = MagicMock()
@@ -1767,7 +1768,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.reject = AsyncMock(side_effect=ClaimTokenExpiredError())
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -1790,7 +1791,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.approve = AsyncMock(side_effect=GateAlreadyDecidedError(uuid.uuid4(), "gate-1"))
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         run_result = MagicMock()
         run_result.scalar_one_or_none.return_value = MagicMock()  # the run
         gate_result = MagicMock()
@@ -1819,7 +1820,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.claim = AsyncMock(side_effect=RunNotAwaitingError(uuid.uuid4(), "complete"))
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -1845,7 +1846,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.approve = AsyncMock(side_effect=DecisionPayloadError("decision_payload must be a JSON object"))
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         run_result = MagicMock()
         run_result.scalar_one_or_none.return_value = MagicMock()  # the run
         gate_result = MagicMock()
@@ -1877,7 +1878,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.claim = AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("boom")))
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
@@ -1899,7 +1900,7 @@ class TestReviewHitl(_AuthContext):
         manager = MagicMock()
         manager.approve = AsyncMock(side_effect=RuntimeError("boom"))
 
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         run_result = MagicMock()
         run_result.scalar_one_or_none.return_value = MagicMock()  # the run
         gate_result = MagicMock()
@@ -1958,7 +1959,7 @@ class TestCopyLibraryPrimitive(_AuthContext):
         mock_library_copy: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_library_copy.side_effect = LookupError("missing")
 
@@ -1980,7 +1981,7 @@ class TestCopyLibraryPrimitive(_AuthContext):
         copied.id = uuid.uuid4()
         copied.name = "my-agent"
         copied.slug = "my-agent"
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_library_copy.return_value = copied
 
@@ -2002,7 +2003,7 @@ class TestCopyLibraryPrimitive(_AuthContext):
         mock_library_copy: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_sesh = AsyncMock()
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_library_copy.side_effect = ProgrammingError("stmt", {}, Exception("boom"))
 

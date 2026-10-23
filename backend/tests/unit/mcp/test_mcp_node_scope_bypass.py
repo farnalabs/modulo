@@ -31,6 +31,7 @@ from modulo.api.mcp_server import (
     search_documentation,
     validate_payload,
 )
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 
 # A pipeline list page shaped like ``modulo.db.crud.base.PageResult``.
@@ -156,7 +157,7 @@ class TestBypassToolNodeScopeEnforcement(AuthContext):
     async def test_in_scope_list_pipelines_is_allowed(self) -> None:
         with (
             patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(AsyncMock())),
+            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
             patch("modulo.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=_PAGE)),
             _node_scope(["list_pipelines"]),
         ):
@@ -170,7 +171,7 @@ class TestBypassToolNodeScopeEnforcement(AuthContext):
         """``None`` (legacy: no node scope) leaves the tool unrestricted."""
         with (
             patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(AsyncMock())),
+            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
             patch("modulo.db.crud.pipeline.list_pipelines", new=AsyncMock(return_value=_PAGE)),
             _node_scope(None),
         ):
@@ -225,7 +226,7 @@ class TestSnapshotDetailResourceRequiresBothTwins(AuthContext):
         returns its own result (here: snapshot-not-found), never a refusal."""
         with (
             patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(AsyncMock())),
+            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
             patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(
                 "modulo.db.crud.pipeline_snapshot_versioning.get_snapshot_detail",
@@ -243,7 +244,7 @@ class TestSnapshotDetailResourceRequiresBothTwins(AuthContext):
         requiring both twins must not turn into requiring either one."""
         with (
             patch("modulo.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(AsyncMock())),
+            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
             patch("modulo.api.mcp_server._pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch(
                 "modulo.db.crud.pipeline_snapshot_versioning.get_snapshot_detail",

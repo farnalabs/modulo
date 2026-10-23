@@ -658,6 +658,15 @@ class Run(OrgScoped):
     # JSONB_COL keeps the ORM declaration honest while preserving
     # SQLite/MariaDB parity.
     guardrail_summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB_COL)
+    # FAR-2054 seam-scoped guardrail coverage (migration 0325) — the exhaustive
+    # per-seam list written at create_run: [{seam, state, provenance, reason}]
+    # over the known seams (ingestion_edge / node_output_edge / runtime_loop).
+    # ``enforced`` is only ever stored with ADR-042 ``attested`` provenance
+    # (Modulo acted); ``runtime_loop`` is always ``not_applicable`` because
+    # Alpha does not consume a runtime tool-event stream. JSONB in 0325;
+    # JSONB_COL keeps the ORM declaration honest while preserving
+    # SQLite/MariaDB parity. NULL only for runs created before this shipped.
+    seam_coverage_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB_COL)
     # FAR-801: workspace-input drift detection flag — written by the audit
     # layer (record_drift) in the SAME transaction as the audit row so
     # terminalization sees the flag before it classifies the run.  NULL =

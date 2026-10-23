@@ -174,14 +174,19 @@ async def snapshot(db_engine: AsyncEngine, org: uuid.UUID, pipeline: uuid.UUID) 
     return await _seed_snapshot(db_engine, org, pipeline)
 
 
-@pytest.fixture
-def saq_hooks_engine(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Any:
+@pytest_asyncio.fixture
+async def saq_hooks_engine(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Point ``saq_hooks``'s process-global engine at the testcontainers DB.
 
     ``saq_hooks._get_engine()`` builds a fresh engine from
     ``get_settings().database_url`` when ``_ENGINE`` is None, so forcing
     ``_ENGINE = None`` after pointing settings at the migrated test DB makes the
     ``after_process`` hook write to the real test Postgres.
+
+    The engine built during the test is disposed on the SAME event loop before
+    the process-global is restored: leaving it to garbage collection leaks its
+    asyncpg connections (``Connection.__del__`` -> ResourceWarning ->
+    ``PytestUnraisableExceptionWarning`` under the warning gate).
     """
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", "a" * 40)
@@ -190,7 +195,10 @@ def saq_hooks_engine(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> A
     saved = saq_hooks._ENGINE
     saq_hooks._ENGINE = None
     yield migrated_db_url
+    built = saq_hooks._ENGINE
     saq_hooks._ENGINE = saved
+    if built is not None and built is not saved:
+        await built.dispose()
     get_settings.cache_clear()
 
 

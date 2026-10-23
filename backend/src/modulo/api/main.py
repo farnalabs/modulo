@@ -861,14 +861,32 @@ def _configure_license_and_otel(settings: Settings) -> None:
     if settings.modulo_public_url in ("", "http://localhost:8000"):
         logger.warning("startup.default_public_url")
 
-    if settings.modulo_license_public_key:
-        from modulo.core.license import set_public_key
+    from modulo.core.license import (
+        DEV_ANCHOR_STARTUP_ERROR,
+        check_production_public_key,
+        is_dev_anchor_in_use,
+        set_dev_anchor_trusted,
+        set_public_key,
+    )
 
+    # FAR-2061: fail closed. Outside debug the shipped development public key
+    # is not a trust anchor, so a licence that would only verify against it is
+    # refused by ``core.license.parse_and_verify``. Debug opts the anchor back
+    # in (that is what the local dev/test keypair is for).
+    set_dev_anchor_trusted(settings.debug)
+
+    if settings.modulo_license_public_key:
         set_public_key(settings.modulo_license_public_key)
         logger.info("startup.license_public_key_configured")
     elif not settings.debug:
         logger.warning("startup.default_license_key_in_use")
-    from modulo.core.license import check_production_public_key
+
+    # A configured licence that can only be checked against the development
+    # anchor can never verify, so fail the boot with the FIX rather than start
+    # an instance that silently runs on Community. Booting WITHOUT a licence
+    # key stays valid - that is the ordinary self-hosted Community deployment.
+    if not settings.debug and settings.modulo_license_key and is_dev_anchor_in_use():
+        raise RuntimeError(DEV_ANCHOR_STARTUP_ERROR)
 
     try:
         check_production_public_key(settings)

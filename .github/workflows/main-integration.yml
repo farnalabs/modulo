@@ -105,7 +105,7 @@ jobs:
       # excluded (they own dedicated jobs with sized boot budgets).
       - name: Integration tests
         working-directory: backend
-        run: uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 -q
+        run: uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"

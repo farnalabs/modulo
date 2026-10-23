@@ -1,8 +1,12 @@
 """Eval judge verdict contract: ``outcome``, error state, judge envelope (ADR 066 S1).
 
-Revision ID: 0325_eval_verdict_contract
-Revises: 0324_purge_eval_definitions
+Revision ID: 0326_eval_verdict_contract
+Revises: 0325_run_seam_coverage
 Create Date: 2026-10-21
+
+Renumbered from ``0325_eval_verdict_contract`` when main independently landed
+``0325_run_seam_coverage``: two files can share a number without a git merge
+conflict, so the chain is re-pointed here rather than leaving a second root.""
 
 **EXPAND release — this migration deliberately does NOT set ``outcome`` NOT NULL
 and does NOT narrow the eval-type vocabulary.** Deploy ordering is
@@ -42,11 +46,13 @@ Contents:
 
 Locking / online safety (FAR-403 class, and a deadlock found in review):
 
-* ``evals`` DDL/DML stays on the **migration connection**. ``0324_purge`` (the
-  same Alembic transaction) holds ACCESS SHARE on ``public.evals``; a side
-  connection taking ACCESS EXCLUSIVE there would wait on a lock the same
-  transaction holds — a self-deadlock. The migration connection can upgrade its
-  own lock.
+* ``evals`` DDL/DML stays on the **migration connection**. ``0324_purge`` (an
+  earlier revision, so the same Alembic transaction) holds ACCESS SHARE on
+  ``public.evals``; a side connection taking ACCESS EXCLUSIVE there would wait
+  on a lock the same transaction holds — a self-deadlock. The migration
+  connection can upgrade its own lock. ``0325_run_seam_coverage`` now sits
+  between the two revisions; it only adds a nullable column to ``runs``, so it
+  does not change the lock story.
 * ``eval_results`` DDL and the backfill run on a dedicated AUTOCOMMIT
   connection: every ``ALTER`` commits immediately (so its ACCESS EXCLUSIVE is
   held for that statement only, never across the following ``VALIDATE`` scan,
@@ -89,8 +95,8 @@ from typing import Any
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0325_eval_verdict_contract"
-down_revision: str | None = "0324_purge_eval_definitions"
+revision: str = "0326_eval_verdict_contract"
+down_revision: str | None = "0325_run_seam_coverage"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
@@ -272,10 +278,10 @@ def _backfill_outcome() -> int:
     last: Any = _ZERO_UUID
     with _autocommit_connection() as conn:
         if not _relation_visible(conn):
-            logger.info("0325_eval_verdict_contract: fresh chain, no rows to backfill")
+            logger.info("0326_eval_verdict_contract: fresh chain, no rows to backfill")
             return 0
         logger.info(
-            "0325_eval_verdict_contract: starting online outcome backfill "
+            "0326_eval_verdict_contract: starting online outcome backfill "
             "(batch_size=%d, primary-key keyset, resumable via WHERE outcome IS NULL; "
             "progress every %d batches or %ds)",
             _BATCH_SIZE,
@@ -298,14 +304,14 @@ def _backfill_outcome() -> int:
                 time.monotonic() - progress_started >= _PROGRESS_EVERY_SECONDS
             ):
                 logger.info(
-                    "0325_eval_verdict_contract: backfill progress rows=%d batches=%d cursor=%s",
+                    "0326_eval_verdict_contract: backfill progress rows=%d batches=%d cursor=%s",
                     total,
                     batches,
                     last,
                 )
                 progress_started = time.monotonic()
     logger.info(
-        "0325_eval_verdict_contract: backfilled outcome on %d row(s) in %d batch(es)",
+        "0326_eval_verdict_contract: backfilled outcome on %d row(s) in %d batch(es)",
         total,
         batches,
     )

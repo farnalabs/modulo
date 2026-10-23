@@ -361,6 +361,41 @@ Emergency situation
 
 ---
 
+## 8. Licence Verification Key
+
+A licence key is only as trustworthy as the public key used to verify it.
+Modulo ships a built-in development key so local development and the test suite
+work out of the box. **Outside debug mode that development key is not a trust
+anchor**: a licence that would only verify against it is refused, and the
+instance stays on the Community tier.
+
+To activate a Team licence, configure the production public key that signed it:
+
+```bash
+# Ed25519 public key, 64 hex characters (the PUBLIC half, not the private key)
+MODULO_LICENSE_PUBLIC_KEY=<public-key-hex>
+```
+
+Set it wherever your other secrets live (for example `/etc/modulo/modulo.env`,
+your container environment, or `fly secrets set`), then restart the API and
+worker processes.
+
+Behaviour:
+
+| Condition | What happens |
+|---|---|
+| No licence key configured (ordinary Community self-hosting) | Boots normally on the Community tier. |
+| `MODULO_LICENSE_KEY` configured, no `MODULO_LICENSE_PUBLIC_KEY`, debug off | **Startup fails** with an error naming `MODULO_LICENSE_PUBLIC_KEY`. No licence can be verified, so the instance refuses to boot rather than run silently unlicensed. |
+| Licence uploaded through the admin API while only the development key is available | The upload is rejected and the message names `MODULO_LICENSE_PUBLIC_KEY`; the instance keeps running on its current tier. |
+| `MODULO_LICENSE_PUBLIC_KEY` set to the real production key | Licences signed by the matching private key verify normally. |
+| `MODULO_LICENSE_PUBLIC_KEY` set to the built-in development key, debug off | Treated exactly like leaving it unset: the development key is not trusted. |
+| `debug` is on | The development key remains usable, for local development only. Never enable debug on a production deployment. |
+
+Every process (API and workers) reads the same environment. Restart all of them
+after changing the key.
+
+---
+
 ## Cross-Reference
 
 | Topic | Document |
