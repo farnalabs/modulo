@@ -1223,10 +1223,9 @@ def _seam_coverage_from_run(run: Any) -> list[SeamCoverageStatement] | None:
     never a 500. ``None`` means the run predates the column (no claim made).
     """
     raw = getattr(run, "seam_coverage_json", None)
-    parsed = parse_seam_coverage(raw)
-    if raw is not None and parsed is None:
+    if raw is not None and not isinstance(raw, list):
         _log.warning("runs.seam_coverage_invalid", extra={"run_id": str(getattr(run, "id", ""))})
-    return parsed
+    return parse_seam_coverage(raw)
 
 
 @dataclass(frozen=True)

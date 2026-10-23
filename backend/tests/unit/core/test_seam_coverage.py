@@ -199,6 +199,15 @@ def test_legacy_null_exposes_no_coverage() -> None:
     assert parse_seam_coverage(None) is None
 
 
+def test_non_mapping_persisted_entry_is_dropped_safely() -> None:
+    """A list entry that is not an object degrades to "missing", never a crash."""
+    parsed = parse_seam_coverage([42, "not-a-statement", None])
+
+    assert parsed is not None
+    assert [statement.seam for statement in parsed] == list(SEAM_ORDER)
+    assert all(statement.state is not SeamCoverageState.ENFORCED for statement in parsed)
+
+
 # ---------------------------------------------------------------------------
 # Derivation at run creation
 # ---------------------------------------------------------------------------
@@ -214,6 +223,38 @@ def test_no_guardrails_bound_yields_three_not_applicable_seams() -> None:
     assert [statement.seam for statement in statements] == list(SEAM_ORDER)
     assert all(statement.state is SeamCoverageState.NOT_APPLICABLE for statement in statements)
     assert all(statement.reason for statement in statements)
+
+
+def test_all_zero_ingestion_summary_is_not_applicable() -> None:
+    """A summary with no bound/evaluated/errored guardrails makes no claim."""
+    statements = derive_seam_coverage(
+        blocked_before_runtime=False,
+        ingestion_summary={"bound": 0, "evaluated": 0, "errored": 0},
+        output_guardrail_count=0,
+    )
+    ingestion = _by_seam(statements)[SEAM_INGESTION_EDGE]
+
+    assert ingestion.state is SeamCoverageState.NOT_APPLICABLE
+    assert ingestion.provenance is SeamCoverageProvenance.DERIVED
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        {"bound": True, "evaluated": 0, "errored": 0},
+        {"bound": 2, "evaluated": "2", "errored": 0},
+    ],
+)
+def test_non_integer_counts_are_treated_as_zero(summary: dict[str, object]) -> None:
+    """A malformed count (bool/non-int) is never interpreted as enforcement."""
+    statements = derive_seam_coverage(
+        blocked_before_runtime=False,
+        ingestion_summary=summary,
+        output_guardrail_count=0,
+    )
+    ingestion = _by_seam(statements)[SEAM_INGESTION_EDGE]
+
+    assert ingestion.state is not SeamCoverageState.ENFORCED
 
 
 def test_ingestion_guardrail_that_ran_is_enforced_and_attested() -> None:
