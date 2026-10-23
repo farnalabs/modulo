@@ -1317,6 +1317,24 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     wrapper.unmount()
   })
 
+  // -- convertBackendNode: connector keeps its own canvas type --
+  // This is the path that decides which card a backend connector node renders
+  // as: both canvas load paths map through convertBackendNode, so a missing
+  // 'connector' entry in CANVAS_TYPE_BY_BACKEND_TYPE would emit `type: 'agent'`
+  // and render the #node-agent card while the panel says Connector.
+  it('convertBackendNode keeps a connector node on its own canvas type', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    const converted = vm.convertBackendNode({ id: 'c1', node_type: 'connector', label: 'Slack', position: { x: 0, y: 0 } })
+    expect(converted.type).toBe('connector')
+    expect(converted.data.node_type).toBe('connector')
+    wrapper.unmount()
+  })
+
   // -- saveGraph: with selectedNodeData param sync --
   it('saveGraph syncs param set and overrides into selectedNodeData', async () => {
     router.push('/pipelines/test-pipeline-id/editor')

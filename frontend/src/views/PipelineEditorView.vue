@@ -923,9 +923,12 @@
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
                   </div></template>
-          <!-- FAR-2089: connector nodes render with their own badge/colour so
-               they never fall back to the `agent` node rendering. Display
-               only — no config panel or palette entry in this slice. -->
+          <!-- FAR-2089: connector nodes render with their own badge/colour
+               instead of the generic `agent` card. Reachable because
+               CANVAS_TYPE_BY_BACKEND_TYPE maps 'connector' to this canvas
+               type; without that entry the node would be emitted as an
+               `agent` node and this slot would never render. Display only —
+               no config panel or palette entry in this slice. -->
           <template #node-connector="nodeProps"><div class="rounded-lg border-2 border-teal-500/60 bg-teal-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-teal-700 dark:text-teal-300">{{ $t('views.PipelineEditorView.node_connector_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_connector_label') }}</div>
@@ -3280,8 +3283,12 @@ async function loadParamSets() {
 const canConvert = computed(() => pickerAgentId.value !== '__all__' && pickerConnectorId.value !== '__all__')
 
 // Backend node types that map 1:1 onto their canvas type. Everything else
-// (including 'agent') collapses into the generic agent node — except dispatch,
-// which is a first-class canvas type (FAR-1141) and must never be collapsed.
+// (including 'agent') collapses into the generic agent node — except dispatch
+// (FAR-1141) and connector (FAR-2089), which are first-class canvas types with
+// their own `#node-<type>` slot and must never be collapsed. Every canvas
+// node originates here — both loadGraph() and loadViewedSnapshot() map through
+// convertBackendNode — so this map is the single place that decides which
+// card a node renders as.
 // A Map (not an object literal) so an unknown node_type such as 'constructor'
 // or 'toString' cannot resolve to an inherited Object.prototype member — it
 // must fall through to 'agent', matching the original ternary chain.
@@ -3290,6 +3297,7 @@ const CANVAS_TYPE_BY_BACKEND_TYPE = new Map<string, string>([
   ['router', 'router'],
   ['hitl', 'hitl'],
   ['dispatch', 'dispatch'],
+  ['connector', 'connector'],
 ])
 
 function convertBackendNode(n: any): any {
