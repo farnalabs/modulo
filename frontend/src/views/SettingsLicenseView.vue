@@ -6,6 +6,10 @@
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
 
     <template v-else>
+      <!-- Renewal countdown / grace / lapsed surface (FAR-2075). The state and
+           every date come from the backend; this page only renders them. -->
+      <LicenceRenewalNotice :status="licenseInfo" @install-key="focusLicenseKeyInput" />
+
       <!-- Current Tier Card -->
       <div class="rounded-lg border bg-card p-6 shadow-sm">
         <div v-if="licenseInfo.tier === 'team'" class="flex items-start justify-between">
@@ -110,20 +114,18 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Badge from 'primevue/badge'
 import FormDialog from '../components/shared/FormDialog.vue'
+import LicenceRenewalNotice from '../components/licence/LicenceRenewalNotice.vue'
 import { ExternalLink } from '@lucide/vue'
 import { format } from 'date-fns'
 import { shortId } from '../utils/format'
+import type { components } from '../lib/api/schema'
 
 const { t } = useI18n()
 const planStore = usePlanStore()
 
-interface LicenseStatus {
-  has_license: boolean
-  tier: string
-  features: string[]
-  expires_at: string | null
-  org_id: string | null
-}
+// The wire shape is the generated OpenAPI type, never a hand-maintained copy:
+// a renamed backend field fails `vue-tsc` here instead of rendering `undefined`.
+type LicenseStatus = components['schemas']['LicenseStatusResponse']
 
 const defaultLicense: LicenseStatus = {
   has_license: false,
@@ -131,6 +133,8 @@ const defaultLicense: LicenseStatus = {
   features: [],
   expires_at: null,
   org_id: null,
+  renewal_mode: 'manual',
+  licence_state: 'none',
 }
 
 const { loading, error: loadError, data: licenseInfo, load: loadAll } = useDataFetch<LicenseStatus>(
@@ -152,6 +156,17 @@ const removeDialogOpen = ref(false)
 const maskedKey = computed(() => {
   return licenseInfo.value.has_license ? t('views.SettingsLicenseView.team_license_key_active') : '—'
 })
+
+/**
+ * Move the admin to the key input after choosing "install a key" from the
+ * renewal surface. The input already lives on this page, so no navigation.
+ */
+function focusLicenseKeyInput() {
+  const input = document.getElementById('settingslicenseview-field-1')
+  if (!input) return
+  input.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  input.focus()
+}
 
 function formatDate(iso: string): string {
   try {

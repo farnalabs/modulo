@@ -11,6 +11,8 @@ const mockLicenseFree = {
   features: [],
   expires_at: null,
   org_id: null,
+  renewal_mode: 'manual',
+  licence_state: 'none',
 }
 
 const mockLicenseTeam = {
@@ -19,6 +21,8 @@ const mockLicenseTeam = {
   features: ['parallel_branches', 'eval_system'],
   expires_at: '2026-12-31T23:59:59Z',
   org_id: '11111111-2222-3333-4444-555555555555',
+  renewal_mode: 'manual',
+  licence_state: 'active',
 }
 
 const mockFlagsFree = {
@@ -60,6 +64,14 @@ const formDialogStub = {
   props: ['open', 'title', 'description', 'confirmText', 'loading'],
   emits: ['confirm'],
   template: `<button v-if="open" class="formdialog-confirm" @click="$emit('confirm')">{{ confirmText }}</button>`,
+}
+
+// Renders the renewal notice's dialog body + footer so the grace actions are
+// reachable (a bare `true` stub would swallow the slot content).
+const primeDialogStub = {
+  name: 'Dialog',
+  props: ['visible'],
+  template: '<div v-if="visible"><slot /><slot name="footer" /></div>',
 }
 
 // Object form of the stubs (name -> true) so we can also override FormDialog.
@@ -302,5 +314,93 @@ describe('SettingsLicenseView', () => {
     await wrapper.find('.formdialog-confirm').trigger('click')
     await nextTick(); await flushPromises(); await nextTick()
     expect(wrapper.text()).toContain('Failed to remove')
+  })
+
+  // ── FAR-2075: renewal surface ───────────────────────────────────────
+
+  it('renders the renewal countdown from the backend licence_state', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(
+      api.GET,
+      { ...mockLicenseTeam, licence_state: 'renewal_due', renewal_mode: 'manual', days_until_expiry: 9 },
+      mockFlagsTeam,
+    )
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, Dialog: primeDialogStub } },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    const banner = wrapper.find('[data-testid="licence-renewal-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.attributes('data-renewal-mode')).toBe('manual')
+    expect(wrapper.find('[data-testid="licence-renewal-renew-link"]').exists()).toBe(true)
+  })
+
+  it('does not offer a purchase path when the licence renews automatically', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(
+      api.GET,
+      { ...mockLicenseTeam, licence_state: 'renewal_due', renewal_mode: 'auto', days_until_expiry: 9 },
+      mockFlagsTeam,
+    )
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, Dialog: primeDialogStub } },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="licence-renewal-banner"]').attributes('data-renewal-mode')).toBe('auto')
+    expect(wrapper.find('[data-testid="licence-renewal-renew-link"]').exists()).toBe(false)
+  })
+
+  it('shows the grace dialog from the backend licence_state', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(
+      api.GET,
+      {
+        ...mockLicenseTeam,
+        licence_state: 'grace',
+        days_until_expiry: -2,
+        grace_ends_at: '2027-01-14T23:59:59Z',
+      },
+      mockFlagsTeam,
+    )
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, Dialog: primeDialogStub } },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="licence-grace-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="licence-grace-install-action"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="licence-grace-buy-action"]').exists()).toBe(true)
+  })
+
+  it('moves focus to the key input when the renewal surface asks to install a key', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(
+      api.GET,
+      { ...mockLicenseTeam, licence_state: 'lapsed', has_license: false, tier: 'community' },
+      mockFlagsFree,
+    )
+
+    const wrapper = mount(SettingsLicenseView, {
+      attachTo: document.body,
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, Dialog: primeDialogStub } },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    await wrapper.get('[data-testid="licence-lapsed-install-action"]').trigger('click')
+    expect(document.activeElement).toBe(document.getElementById('settingslicenseview-field-1'))
+    wrapper.unmount()
   })
 })

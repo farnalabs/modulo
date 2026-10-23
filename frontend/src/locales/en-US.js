@@ -4271,6 +4271,24 @@ export default {
     }
   },
   "components": {
+    "LicenceRenewalNotice": {
+      "renewal_due_auto_title": "Your Team license renews on {date}",
+      "renewal_due_auto_body": "Team capability — single sign-on, team roles and the audit log — continues after {date}. A replacement key is sent to your billing contact when the renewal is charged. If it does not arrive, install it on this page.",
+      "renewal_due_manual_title": "Your Team license expires on {date}",
+      "renewal_due_manual_body": "Team capability — single sign-on, team roles and the audit log — stops on {date}. Renew before then to keep it.",
+      "days_until_expiry": "{count} day left | {count} days left",
+      "renew_action": "Renew license",
+      "install_action": "Install a key",
+      "grace_title": "Your Team license has expired",
+      "grace_body": "It expired on {date}. Team capability keeps working until {graceEndsAt}, then turns off.",
+      "grace_no_key_body": "If the renewal payment failed — an expired card, a declined charge, or a billing contact who has left — no new key was sent. Buying a new license is the other way to restore Team capability.",
+      "grace_install_action": "I have a new key",
+      "grace_buy_action": "Buy a new license",
+      "lapsed_title": "Team capability is off",
+      "lapsed_body": "The Team license expired on {date} and the delivery grace has ended. Single sign-on, team roles and the audit log are unavailable until a valid license key is installed. The rest of Modulo keeps working.",
+      "lapsed_body_no_date": "The Team license has expired and the delivery grace has ended. Single sign-on, team roles and the audit log are unavailable until a valid license key is installed. The rest of Modulo keeps working.",
+      "lapsed_install_action": "Install a license key"
+    },
     "FlowControls": {
       "zoom_in": "Zoom in",
       "zoom_out": "Zoom out",

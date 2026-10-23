@@ -658,7 +658,10 @@ OWNED_PAGES = {
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
-    "/settings/license": "frontend/src/views/SettingsLicenseView.vue",
+    "/settings/license": (
+        "frontend/src/views/SettingsLicenseView.vue",
+        "frontend/src/components/licence/LicenceRenewalNotice.vue",
+    ),
     "/settings/assistant": "frontend/src/views/UserAssistantSkillsView.vue",
     "/admin/model-backends": (
         "frontend/src/views/AdminModelBackendsView.vue",
