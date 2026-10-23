@@ -6603,6 +6603,10 @@ def _connector_inputs(binding: dict[str, Any], state: dict[str, Any]) -> tuple[s
     """
     run_context = state.get("run_context") or {}
     raw_input = run_context.get("input", {})
+    # FAR-2089: a persisted ``None`` (older graph writes emitted explicit nulls
+    # for the optional inputs) must fall back to the documented defaults rather
+    # than reaching the connector as ``None`` — ``dict(None)`` raises TypeError
+    # and ``resource=None`` bypasses the "command" default.
     resource: str = binding.get("resource") or "command"
     filters = dict(binding.get("filters") or {})
     data = dict(binding.get("data") or {})

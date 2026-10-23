@@ -187,6 +187,88 @@ class TestUpdatePipelineGraphGuardrailStrip:
         assert result["pipeline_id"] == str(pipeline_id)
         mock_replace_graph.assert_awaited_once()
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[])
+    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    async def test_connector_binding_payload_reaches_shared_graph_write(
+        self,
+        mock_replace_graph: AsyncMock,
+        mock_guardrail_rows: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """MCP validation retains connector query/write inputs."""
+        _set_ctx(role="admin")
+        pipeline_id = uuid.uuid4()
+        binding = {
+            "type": "filesystem",
+            "instance_id": str(uuid.uuid4()),
+            "operation": "query",
+            "resource": "list_files",
+            "filters": {"path": "/workspace", "recursive": True},
+            "data": {"include_hidden": False},
+        }
+        node = {
+            "id": str(uuid.uuid4()),
+            "node_type": "agent",
+            "agent_id": str(uuid.uuid4()),
+            "position": {"x": 0, "y": 0},
+            "connector_binding": binding,
+        }
+        mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None, graph_nodes_json=[])
+        mock_replace_graph.return_value = ([node], [])
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
+
+        result = await update_pipeline_graph(pipeline_id=str(pipeline_id), nodes=[node], edges=[])
+
+        assert "error" not in result, result
+        written_binding = mock_replace_graph.await_args.kwargs["nodes"][0]["connector_binding"]
+        assert written_binding["resource"] == "list_files"
+        assert written_binding["filters"] == {"path": "/workspace", "recursive": True}
+        assert written_binding["data"] == {"include_hidden": False}
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[])
+    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    async def test_connector_binding_without_inputs_persists_no_null_keys(
+        self,
+        mock_replace_graph: AsyncMock,
+        mock_guardrail_rows: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """MCP re-saves must not turn absent optional inputs into nulls (FAR-2089)."""
+        _set_ctx(role="admin")
+        pipeline_id = uuid.uuid4()
+        node = {
+            "id": str(uuid.uuid4()),
+            "node_type": "agent",
+            "agent_id": str(uuid.uuid4()),
+            "position": {"x": 0, "y": 0},
+            "connector_binding": {"type": "github", "instance_id": str(uuid.uuid4())},
+        }
+        mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None, graph_nodes_json=[])
+        mock_replace_graph.return_value = ([node], [])
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
+
+        result = await update_pipeline_graph(pipeline_id=str(pipeline_id), nodes=[node], edges=[])
+
+        assert "error" not in result, result
+        written_binding = mock_replace_graph.await_args.kwargs["nodes"][0]["connector_binding"]
+        assert "resource" not in written_binding
+        assert "filters" not in written_binding
+        assert "data" not in written_binding
+
 
 def _hitl_node(node_id: uuid.UUID, hitl_config: dict | None) -> dict:
     return {

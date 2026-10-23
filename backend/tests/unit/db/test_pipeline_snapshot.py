@@ -17,6 +17,7 @@ from sqlalchemy.pool import NullPool
 from modulo.core.exceptions import SnapshotLockNotAvailableError
 from modulo.core.guardrails import fingerprint_guardrail_pins
 from modulo.core.model_class_registry import ModelClassResolutionError
+from modulo.core.pipeline_engine.node_runner import _connector_inputs
 from modulo.db.crud.pipeline_snapshot import (
     SNAPSHOT_LOCK_ATTEMPTS,
     SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS,
@@ -112,6 +113,9 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
             "connector_binding": {
                 "type": "filesystem",
                 "instance_id": str(connector_id),
+                "resource": "list_files",
+                "filters": {"path": "/workspace", "recursive": True},
+                "data": {"include_hidden": False},
             },
         },
         {"id": str(target_id), "agent_id": None, "connector_binding": None},
@@ -214,6 +218,19 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
         }
     ]
     assert snapshot.connector_bindings_json[0]["instance_name"] == "Workspace"
+    snapshot_binding = snapshot.graph_json["nodes"][0]["connector_binding"]
+    assert snapshot_binding["resource"] == "list_files"
+    assert snapshot_binding["filters"] == {"path": "/workspace", "recursive": True}
+    assert snapshot_binding["data"] == {"include_hidden": False}
+
+    # The engine consumes the immutable snapshot node, not the live row. Prove
+    # the binding survives that boundary with the same real helper used by the
+    # connector node runner.
+    resource, filters, data = _connector_inputs(snapshot_binding, {"run_context": {"input": {}}})
+    assert resource == "list_files"
+    assert filters == {"path": "/workspace", "recursive": True, "provider_ref": "/"}
+    assert data == {"include_hidden": False}
+
     assert snapshot.schema_pins_json == [
         {"schema_id": str(input_schema_id), "version": "1.0", "abstract_name": "input"},
         {"schema_id": str(output_schema_id), "version": "2.0", "abstract_name": "output"},

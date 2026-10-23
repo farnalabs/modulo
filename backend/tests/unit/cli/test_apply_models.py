@@ -716,6 +716,16 @@ class TestPipelineEntityContracts:
 
         assert set(ApplyGraphConnectorBinding.model_fields) == set(ConnectorBinding.model_fields)
 
+    def test_connector_binding_field_set_mirrors_api_model(self) -> None:
+        """FAR-2089 drift alarm: the apply binding mirror must cover every API
+        ``ConnectorBinding`` field. ``extra="forbid"`` makes an undeclared key a
+        loud load-time rejection, so a missing field means declarative apply
+        cannot express the capability the API stores."""
+        from modulo.api.routes.pipelines import ConnectorBinding
+        from modulo.cli.apply.models import ApplyGraphConnectorBinding
+
+        assert set(ApplyGraphConnectorBinding.model_fields) == set(ConnectorBinding.model_fields)
+
     def test_connector_node_with_query_binding_round_trips(self) -> None:
         """A ``connector`` node and its resource/filters/data reach the API payload."""
         tx = {
@@ -751,6 +761,41 @@ class TestPipelineEntityContracts:
         assert payload["connector_binding"]["resource"] == "pull"
         assert payload["connector_binding"]["filters"] == {"state": "open"}
         assert payload["connector_binding"]["data"] == {"note": "round-trip"}
+
+    def test_connector_binding_resource_filters_data_round_trip(self) -> None:
+        """FAR-2089: a declarative manifest can carry resource/filters/data on a
+        connector binding, and they survive into the API node payload."""
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "pipelines": [
+                    {
+                        "name": "sample",
+                        "graph": {
+                            "nodes": [
+                                {
+                                    "id": "00000000-0000-0000-0000-0000000000a1",
+                                    "agent": "worker",
+                                    "position": {"x": 0, "y": 0},
+                                    "connector_binding": {
+                                        "type": "github",
+                                        "instance_id": "00000000-0000-0000-0000-0000000000c1",
+                                        "resource": "repos",
+                                        "filters": {"repo": "x/y", "state": "open"},
+                                        "data": {"title": "t"},
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        }
+        node = _config(tx).entities.pipelines[0].graph.nodes[0]
+        binding = node.api_node_payload()["connector_binding"]
+        assert binding["resource"] == "repos"
+        assert binding["filters"] == {"repo": "x/y", "state": "open"}
+        assert binding["data"] == {"title": "t"}
 
     def test_node_single_pr_per_run_accepted(self) -> None:
         """FAR-1273: the declarative CLI model carries the explicit

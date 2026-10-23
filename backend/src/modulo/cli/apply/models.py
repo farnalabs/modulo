@@ -276,7 +276,14 @@ class ApplyGraphConnectorBinding(BaseModel):
     # FAR-2089: resource/filters/data for connector query/write operations —
     # the API ``ConnectorBinding`` twins. ``extra="forbid"`` makes an absent
     # declaration a load-time rejection of a config the API accepts, so the two
-    # surfaces would disagree on the same graph contract.
+    # surfaces would disagree on the same graph contract; a silently-dropped
+    # field would also create permanent plan drift.
+    #
+    # ``filters`` / ``data`` default to an empty dict, matching the API model,
+    # NOT ``None``: ``api_node_payload`` is a plain ``model_dump(mode="json")``,
+    # so a ``None`` default would send ``"filters": null`` for a resource-only
+    # binding — a payload the API model (and the engine's ``dict(...)``) cannot
+    # accept.
     resource: str | None = Field(default=None, max_length=200)
     filters: dict[str, Any] = Field(default_factory=dict)
     data: dict[str, Any] = Field(default_factory=dict)
