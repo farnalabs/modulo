@@ -876,6 +876,22 @@ export function hydrateManifestMeta(to: RouteLocationTarget): void {
 }
 
 /**
+ * Resolve whether the current user holds at least one of the route's
+ * manifest-declared permissions.  Extracted from the navigation guard to keep
+ * its cognitive complexity within the SonarCloud budget.  Routes with no
+ * declared permissions pass without fetching anything.
+ */
+async function hasRequiredPermissions(
+  to: Parameters<Parameters<typeof router.beforeEach>[0]>[0],
+): Promise<boolean> {
+  const requiredPermissions = to.meta?.requiredPermissions
+  if (!requiredPermissions?.length) return true
+  const planStore = usePlanStore()
+  await planStore.fetchPermissions()
+  return requiredPermissions.some((permission) => planStore.userPermissions.includes(permission))
+}
+
+/**
  * Enforce role, tier, and devMode/visibility access rules.  Returns a
  * redirect route-object when access is denied, or `true` when the caller
  * may continue.  The plan store is lazily fetched so the guard sees the
@@ -892,12 +908,8 @@ export async function enforceRoleTierVisibility(
     return { name: 'dashboard' }
   }
 
-  if (to.meta?.requiredPermissions?.length) {
-    const planStore = usePlanStore()
-    await planStore.fetchPermissions()
-    if (!to.meta.requiredPermissions.some((permission) => planStore.userPermissions.includes(permission))) {
-      return { name: 'dashboard' }
-    }
+  if (!(await hasRequiredPermissions(to))) {
+    return { name: 'dashboard' }
   }
 
   if (to.meta?.requiredRoles?.length) {

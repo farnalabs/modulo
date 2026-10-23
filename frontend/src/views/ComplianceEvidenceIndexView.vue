@@ -215,19 +215,17 @@ const permissionDenied = computed(() => {
   return typeof error === 'string' && /forbidden|permission|not allowed|access denied/i.test(error)
 })
 
-const coverageRows = computed<CoverageRow[]>(() => {
-  if (!indexData.value) return []
-  return Object.entries(indexData.value.coverage).flatMap(([framework, categories]) =>
+const coverageRows = computed<CoverageRow[]>(() =>
+  Object.entries(indexData.value!.coverage).flatMap(([framework, categories]) =>
     Object.entries(categories).map(([category, count]) => ({ framework, category, count })),
-  )
-})
+  ),
+)
 
-const lowerBoundArtifacts = computed(() => {
-  if (!indexData.value) return []
-  return indexData.value.artifacts
+const lowerBoundArtifacts = computed(() =>
+  indexData.value!.artifacts
     .filter((artifact) => artifact.detail.human_only_counts_are_lower_bounds === true)
-    .map((artifact) => artifact.artifact_type)
-})
+    .map((artifact) => artifact.artifact_type),
+)
 
 function statusClass(status: string): string {
   if (status === 'present') return 'border-success/40 bg-success/10 text-success-text'

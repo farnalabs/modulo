@@ -139,6 +139,53 @@ describe('ComplianceEvidenceIndexView', () => {
     warn.mockRestore()
   })
 
+  it('renders the empty state when the index payload is absent', async () => {
+    mockGet.mockResolvedValue({ data: null, error: undefined })
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.text()).toContain('No evidence index available')
+    expect(wrapper.find('[data-testid="compliance-evidence-index-coverage"]').exists()).toBe(false)
+  })
+
+  it('shows absence reasons and treats missing record counts and mapping rows as unavailable', async () => {
+    mockGet.mockResolvedValue({
+      data: payload({
+        artifacts: [
+          artifact({
+            artifact_type: 'vendor_assessments',
+            status: 'absent',
+            absence_reason: 'Not produced by this deployment',
+            record_count: null,
+            mapping_row_ids: [],
+          }),
+        ],
+      }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await settle()
+
+    const text = wrapper.text()
+    expect(text).toContain('Not produced by this deployment')
+    expect(text).toContain('Not available')
+  })
+
+  it('falls back to the raw timestamp and labels customer-supplied evidence', async () => {
+    mockGet.mockResolvedValue({
+      data: payload({
+        pack_published_at: 'not-a-timestamp',
+        artifacts: [artifact({ status: 'customer_supplied', provenance: 'customer_supplied' })],
+      }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.text()).toContain('not-a-timestamp')
+    expect(wrapper.text()).toContain('Customer supplied')
+  })
+
   it('renders a permission-restricted state instead of a generic retry error', async () => {
     mockGet.mockResolvedValue({
       data: undefined,
