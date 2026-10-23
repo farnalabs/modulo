@@ -64,7 +64,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard, cast, get_args
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn, TypeGuard, cast, get_args
 
 import httpx
 import jinja2
@@ -7444,8 +7444,8 @@ async def _connector_action_failure(
     data: dict[str, Any],
     intent_active: bool,
     exc: Exception,
-) -> dict[str, Any]:
-    """QA Fix 1: classify a RAISED connector error, then return the failure envelope.
+) -> NoReturn:
+    """QA Fix 1: classify a RAISED connector error, then raise ConnectorNodeFailedError.
 
     The raised connector error is classified by the SINGLE authority
     (``_resolve_connector_write_outcome``) as AMBIGUOUS — a raise cannot tell
@@ -7453,6 +7453,10 @@ async def _connector_action_failure(
     validation failure), so the in-flight intent marker is left AS-IS:
     fail_closed suppresses the re-fire ("possible silent miss"), fail_open
     re-fires (unchanged). No no-delivery evidence is persisted for a raise.
+
+    Then raises ``ConnectorNodeFailedError`` to propagate the failure to the
+    executor, which terminalizes the run with ``connector.side_effect_unknown``
+    (FAR-2090).
     """
     await _connector_write_outcome_for_state(
         session_factory,
@@ -7466,7 +7470,9 @@ async def _connector_action_failure(
         intent_active=intent_active,
         exception=exc,
     )
-    return {"artifacts": [{"node_id": node_id, "status": "failed", "error": str(exc)}]}
+    from modulo.core.pipeline_engine.errors import ConnectorNodeFailedError
+
+    raise ConnectorNodeFailedError(node_id, str(exc))
 
 
 async def _connector_success_phase(
@@ -7628,7 +7634,7 @@ async def _connector_invoke_phase(
     except DispatchWaitTimeoutError:
         raise
     except Exception as exc:
-        failure = await _connector_action_failure(
+        await _connector_action_failure(
             session_factory,
             connector,
             state,
@@ -7639,7 +7645,6 @@ async def _connector_invoke_phase(
             intent_active,
             exc,
         )
-        return False, failure
 
 
 async def _run_connector_node(
@@ -13371,8 +13376,19 @@ def _cancel_triage_attempt_key(run_id: str, node_id: str, attempt_key: str | Non
     See the block comment above: unparseable by the marker grammar (so the row
     lands on the ``__unknown__`` bookkeeping sentinel) and unique per
     ``(node, attempt)`` so two cancelled nodes never share a key.
+
+    FAR-2084: the attempt suffix is read through the ONE shared parser
+    (``run_node_outputs.marker_attempt_suffix``), never an inline ``rsplit``, so
+    every attempt-identity shape the writer produces (numeric claim count, the
+    fail-open hex / ``claim-unknown`` suffixes, ``fallback``, the ``agent`` /
+    ``connector`` slots) carries through unchanged. A caller key that is not
+    attempt-scoped at all (empty or missing the ``:node:`` segment) is NOT this
+    attempt's identity and falls back to the same deterministic suffix the
+    raw-output retention writer uses.
     """
-    suffix = attempt_key.rsplit(":", 1)[-1] if attempt_key else ""
+    from modulo.db.crud.run_node_outputs import marker_attempt_suffix
+
+    suffix = marker_attempt_suffix(attempt_key) if attempt_key else None
     if not suffix:
         suffix = _CANCEL_TRIAGE_SUFFIX_FALLBACK
     return f"{_CANCEL_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}:{node_id}:{suffix}"

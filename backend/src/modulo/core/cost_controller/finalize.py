@@ -29,6 +29,7 @@ imports ``modulo.api`` or ``modulo.db.crud.run``'s caller graph.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import uuid
@@ -105,7 +106,7 @@ from modulo.core.node_output_split import (
 )
 from modulo.core.provenance import PROVENANCE_KEY, PROVENANCE_REPORTED
 from modulo.core.run_outputs_dualwrite import guard_dual_write
-from modulo.core.runner_capacity import lock_org_cost_state
+from modulo.core.runner_capacity import MARKER_STATE_CLEARED_AT_HITL, lock_org_cost_state
 from modulo.core.spend_ceiling import (
     ORG_CEILING_EXCEEDED,
     SpendCeilingDecision,
@@ -3358,6 +3359,69 @@ def _cancel_liveness_wall_hours(run: Run) -> float | None:
     return seconds / 3600.0
 
 
+def _worker_lost_wall_hours(run: Run) -> float | None:
+    """Elapsed sandbox occupancy of a worker-lost run, in hours (FAR-2077).
+
+    The run was EXECUTING when its worker was shut down, so ``started_at`` to
+    ``completed_at`` (the shutdown hook's terminal write) is the proven
+    occupancy window. Unlike the cancel path this deliberately does NOT require
+    a heartbeat: a worker can die between heartbeats, and the terminal write
+    itself is the end of the window (the handback runs seconds after the
+    cancellation).
+
+    Returns ``None`` when either stamp is missing or the window is not a
+    positive finite duration — a caller must then attribute nothing rather than
+    invent one.
+    """
+    started: datetime | None = getattr(run, "started_at", None)
+    completed: datetime | None = getattr(run, "completed_at", None)
+    if started is None or completed is None:
+        return None
+    try:
+        seconds: float = (completed - started).total_seconds()
+    except TypeError:
+        # Mismatched tz-awareness (or a non-datetime fixture value) — no proof.
+        return None
+    if not math.isfinite(seconds) or seconds <= 0:
+        return None
+    return seconds / 3600.0
+
+
+def _dispatch_marker_is_live(marker: object) -> bool:
+    """Whether ``runs.sandbox_dispatch_state`` is a LIVE sandbox dispatch.
+
+    The structured marker is JSON; a legacy tier-less value is the bare literal
+    ``dispatching``. Only the HITL tombstone (``cleared_at_hitl``) is a
+    non-live marker — it means the sandbox was released at a HITL boundary.
+    """
+    if not isinstance(marker, str) or not marker.strip():
+        return False
+    try:
+        payload = json.loads(marker)
+    except (TypeError, ValueError):
+        # Legacy bare literal (``dispatching``) — live.
+        return True
+    if not isinstance(payload, dict):
+        return True
+    return payload.get("state") != MARKER_STATE_CLEARED_AT_HITL
+
+
+def _worker_lost_sandbox_evidence(run: Run) -> bool:
+    """Whether a worker-lost run had a sandbox attempt IN FLIGHT (FAR-2077).
+
+    The run's own dispatch reservation is the durable proof: ``sandbox_id`` and
+    ``sandbox_dispatch_state`` are written when a sandbox is acquired and
+    cleared only when the node tears down, so either surviving at shutdown
+    proves a sandbox was executing. This is needed because the shutdown
+    terminaliser can run before/without the node's cancellation-retention
+    marker (FAR-1886 B1), so the marker-only proof
+    (:func:`_has_sandbox_attempt_evidence`) is not guaranteed on this path.
+    """
+    if getattr(run, "sandbox_id", None):
+        return True
+    return _dispatch_marker_is_live(getattr(run, "sandbox_dispatch_state", None))
+
+
 def _salvage_breakdown_entry(salvage: _SalvagedAttemptEvidence) -> dict[str, Any]:
     """The ``self_reported`` breakdown entry for salvaged agent spend.
 
@@ -3652,6 +3716,7 @@ async def _finalize_failed_run(
     derived_sandbox_wall_hours: float | None,
     derived_from: str,
     killed_node_id: str | None = None,
+    dispatch_marker_evidence: bool = False,
 ) -> None:
     """Body of :func:`finalize_failed_run` (fail-open envelope lives there)."""
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
@@ -3672,7 +3737,9 @@ async def _finalize_failed_run(
         # caller names the killed node (the deadline watchdog), the marker must
         # belong to THAT node; an age-gate/cancel caller leaves it None because
         # its duration is the run's own liveness window (run-scoped proof).
-        sandbox_evidence = _has_sandbox_attempt_evidence(stored_blobs.markers, node_id=killed_node_id)
+        sandbox_evidence = (
+            _has_sandbox_attempt_evidence(stored_blobs.markers, node_id=killed_node_id) or dispatch_marker_evidence
+        )
         has_derived_duration = (
             derived_sandbox_wall_hours is not None
             and math.isfinite(derived_sandbox_wall_hours)
@@ -3724,6 +3791,7 @@ async def finalize_failed_run(
     derived_sandbox_wall_hours: float | None = None,
     derived_from: str = "node_deadline_watchdog",
     killed_node_id: str | None = None,
+    dispatch_marker_evidence: bool = False,
 ) -> None:
     """Finalise a run already terminalised ``failed`` by a raw writer (FAR-1993).
 
@@ -3762,6 +3830,13 @@ async def finalize_failed_run(
     timeout as sandbox spend. The age gate and cancel salvage omit it (their
     duration is the run's liveness window, so run-scoped evidence is correct).
 
+    *dispatch_marker_evidence* (FAR-2077) is an EXTRA run-scoped proof the
+    caller supplies when the run retained a live sandbox dispatch reservation
+    (``runs.sandbox_id`` / ``sandbox_dispatch_state``) — the worker-shutdown
+    terminaliser's evidence, which can exist without a per-attempt retention
+    marker. It is OR-ed with the marker proof and defaults to ``False`` so the
+    deadline and age-gate callers are unchanged.
+
     FAIL-OPEN: this is a compensating write on a path that has already
     terminalised the run, so ordinary failures log and are swallowed.
     ``asyncio.CancelledError`` is re-raised (worker shutdown is not ours to
@@ -3780,6 +3855,7 @@ async def finalize_failed_run(
             derived_sandbox_wall_hours=derived_sandbox_wall_hours,
             derived_from=derived_from,
             killed_node_id=killed_node_id,
+            dispatch_marker_evidence=dispatch_marker_evidence,
         )
     except asyncio.CancelledError:
         raise
@@ -3791,3 +3867,85 @@ async def finalize_failed_run(
             extra={"run_id": str(run_id), "error_code": error_code},
             exc_info=True,
         )
+
+
+#: Provenance label for a worker-shutdown run's derived sandbox cost
+#: (FAR-2077): the duration is the run's ``started_at`` -> terminal-write
+#: elapsed window, not a node deadline or a heartbeat-proven liveness window.
+WORKER_LOST_DERIVED_FROM = "worker_lost_elapsed"
+
+
+async def finalize_worker_lost_run(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    error_code: str,
+    error_detail: str,
+    derived_from: str = WORKER_LOST_DERIVED_FROM,
+) -> None:
+    """Book derived sandbox spend for a worker-shutdown terminal fail (FAR-2077).
+
+    ``worker_handoff`` terminalises a run with a raw writer
+    (``pipeline_execution.fail_run_terminal``) that records NO cost columns, so
+    a run that occupied a sandbox for hours reached the ledger as ``null`` and
+    contributed $0 to every cost report. The elapsed time is known — the run was
+    executing from ``started_at`` until the terminal write — so this mirrors
+    ``_record_derived_deadline_cost``: re-read the row the raw writer just
+    failed, derive the sandbox wall-clock window, and attribute it through
+    :func:`finalize_failed_run` with ``source="derived"`` provenance.
+
+    Gates, in order:
+
+    * the row must still be the failure THIS path wrote — ``status='failed'``
+      with the caller's ``error_code`` — so a relabelled or successor-owned row
+      is never repriced;
+    * the run must not already carry attributed cost
+      (:func:`_attributed_cost_present`) — a retried run that was finalised (or
+      a re-entry of this booking) must never be charged twice;
+    * the elapsed window must be provable, and the derived sandbox line still
+      requires sandbox evidence: a retained per-attempt marker OR a live
+      dispatch reservation (``_worker_lost_sandbox_evidence``). Nothing
+      provable ⇒ nothing written (never fabricated spend).
+
+    The fail-open envelope belongs to the caller
+    (``pipeline_execution.record_worker_lost_derived_cost``): this is a
+    compensating write on an already-terminal run.
+    """
+    run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
+    if run is None:
+        _log.warning("cost_finalize.worker_lost_run_not_found", extra={"run_id": str(run_id)})
+        return
+    if getattr(run, "status", None) != "failed" or getattr(run, "error_code", None) != error_code:
+        _log.info(
+            "cost_finalize.worker_lost_run_not_ours",
+            extra={
+                "run_id": str(run_id),
+                "status": getattr(run, "status", None),
+                "error_code": getattr(run, "error_code", None),
+            },
+        )
+        return
+    if _attributed_cost_present(run):
+        # A run that already carries cost (a retried run finalised earlier, or
+        # a re-entry of this booking) must never be charged again.
+        _log.info(
+            "cost_finalize.worker_lost_cost_already_attributed",
+            extra={"run_id": str(run_id)},
+        )
+        return
+    wall_hours = _worker_lost_wall_hours(run)
+    dispatch_evidence = _worker_lost_sandbox_evidence(run)
+    if wall_hours is None and not dispatch_evidence:
+        _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
+        return
+    await finalize_failed_run(
+        session,
+        run_id=run_id,
+        org_id=org_id,
+        error_code=error_code,
+        error_detail=error_detail,
+        derived_sandbox_wall_hours=wall_hours,
+        derived_from=derived_from,
+        dispatch_marker_evidence=dispatch_evidence,
+    )

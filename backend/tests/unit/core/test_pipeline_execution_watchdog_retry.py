@@ -43,6 +43,7 @@ from modulo.core.pipeline_execution import (
     _salvage_cancelled_run_cost,
     _sweep_org_stale_runs,
     _watchdog_retry_enabled_for_job,
+    record_worker_lost_derived_cost,
     run_executor_with_watchdog,
     zombie_watchdog,
 )
@@ -379,6 +380,83 @@ async def test_record_derived_deadline_cost_rereises_cancelled_error() -> None:
             derived_sandbox_wall_hours=300 / 3600.0,
             killed_node_id="n1",
         )
+
+
+# ---------------------------------------------------------------------------
+# FAR-2077 — the worker-loss derived-cost booking (compensating write)
+# ---------------------------------------------------------------------------
+
+
+async def test_record_worker_lost_derived_cost_bounds_lock_and_delegates_uuids() -> None:
+    """The booking bounds the row lock FIRST, then delegates with UUIDs.
+
+    Prove-the-fix: without the booking the shutdown terminaliser leaves every
+    cost column ``null``; with it the just-failed row is re-read and priced.
+    """
+    order: list[str] = []
+    captured: dict[str, Any] = {}
+    run_id, org_id = uuid.uuid4(), uuid.uuid4()
+    session = _begin_bound_session()
+
+    async def _bound(_session: Any) -> None:
+        order.append("bound")
+
+    async def _finalize(_session: Any, **kwargs: Any) -> None:
+        order.append("finalize")
+        captured.update(kwargs)
+
+    with (
+        patch("modulo.core.pipeline_execution.async_sessionmaker", return_value=_session_factory(session)),
+        patch("modulo.core.pipeline_execution.set_rls_org", new=AsyncMock()) as mock_rls,
+        patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout", new=_bound),
+        patch("modulo.core.cost_controller.finalize.finalize_worker_lost_run", new=_finalize),
+    ):
+        await record_worker_lost_derived_cost(
+            MagicMock(),
+            str(run_id),
+            str(org_id),
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+    assert order == ["bound", "finalize"]
+    assert captured["run_id"] == run_id
+    assert captured["org_id"] == org_id
+    assert captured["error_code"] == "harness.worker_lost"
+    assert captured["error_detail"] == "worker shut down mid-run"
+    mock_rls.assert_awaited_once_with(session, org_id)
+
+
+async def test_record_worker_lost_derived_cost_rereises_cancelled_error() -> None:
+    """Worker shutdown is not ours to swallow."""
+    with (
+        patch("modulo.core.pipeline_execution.async_sessionmaker", side_effect=asyncio.CancelledError()),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await record_worker_lost_derived_cost(
+            MagicMock(),
+            "run-1",
+            "org-1",
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+
+async def test_record_worker_lost_derived_cost_swallows_ordinary_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """An ordinary failure is logged and swallowed — the terminal write stands."""
+    with (
+        patch("modulo.core.pipeline_execution.async_sessionmaker", side_effect=RuntimeError("db down")),
+        caplog.at_level(logging.WARNING),
+    ):
+        await record_worker_lost_derived_cost(
+            MagicMock(),
+            "run-1",
+            "org-1",
+            error_code="harness.worker_lost",
+            error_detail="worker shut down mid-run",
+        )
+
+    assert "worker_lost_cost_record_failed" in caplog.text
 
 
 # ---------------------------------------------------------------------------

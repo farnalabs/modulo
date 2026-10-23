@@ -17,7 +17,9 @@ below — either the claim is released (row reset to ``pending``, so
 terminal-failed right there with the same truthful ``harness.worker_lost``
 code when a re-run is NOT safe. Either way the operator reads "the worker
 died" in seconds instead of a misleading dispatch-path code 30-35 minutes
-later.
+later. The terminal arm additionally books the run's elapsed sandbox
+occupancy as derived spend (FAR-2077): the raw terminal writer records no cost
+columns, so without it hours of sandbox time reach the ledger as ``null``.
 
 Two gates decide which path a run takes, and neither is optional:
 
@@ -580,8 +582,13 @@ async def _terminalise_entry(
     ``fail_run_terminal``'s own bounded lock (or any other write error) counts
     the run as skipped and continues — it stays ``running`` and the sweeps
     remain the backstop.
+
+    FAR-2077: the raw terminal write records no cost columns, so after a write
+    that LANDED the run's elapsed sandbox occupancy is booked as derived spend
+    (``record_worker_lost_derived_cost``). A fenced-out write books nothing —
+    the row's fate belongs to another writer.
     """
-    from modulo.core.pipeline_execution import fail_run_terminal
+    from modulo.core.pipeline_execution import fail_run_terminal, record_worker_lost_derived_cost
 
     try:
         ok = await fail_run_terminal(
@@ -610,6 +617,18 @@ async def _terminalise_entry(
             entry.org_id,
             reason,
             WORKER_LOST_ERROR_CODE,
+        )
+        # FAR-2077: the raw terminal write above records no cost columns, so
+        # book the run's elapsed sandbox occupancy as derived spend. Only after
+        # a terminal write that LANDED (a fenced-out row belongs to another
+        # writer). Fail-open inside the helper — the terminal write already
+        # committed and must never be undone by its cost booking.
+        await record_worker_lost_derived_cost(
+            async_engine,
+            str(entry.run_id),
+            str(entry.org_id),
+            error_code=WORKER_LOST_ERROR_CODE,
+            error_detail=f"{WORKER_LOST_NOT_REQUEUED_DETAIL}{reason}.",
         )
         return 1, 0
     _log.info(

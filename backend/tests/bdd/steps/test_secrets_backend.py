@@ -7,9 +7,10 @@ scoping goes through the real ``WHERE organisation_id = :oid`` SQL the backend
 emits, key validation / RLS-context / no-session failures go through the real
 ``validate_key`` and ``_read_org_id_from_session`` paths, the rotation fallback
 decrypts under a real old key, and the factory exercises its real default /
-unknown-name / no-unlicensed-downgrade logic (the lapsed-licence state is
-forced by patching ``_check_external_secrets_licensed`` exactly as the unit
-suite does, so the scenario is deterministic in any tier). External ``vault``
+unknown-name / no-licence-downgrade logic (external backends are available on
+every tier since FAR-2100 retired the entitlement flag, so the unconfigured
+external backend either builds or fails hard in its constructor with no
+licence state involved). External ``vault``
 / ``aws`` construction stays unit-tested — those backends call out to live
 services. The lapsed-licence scenario proves only the invariant the factory
 owns here: a licence lapse never substitutes a Fernet backend, so the
@@ -22,13 +23,11 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Callable
-from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.core import secrets_backend as secrets_module
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 from modulo.db.models.base import Base
@@ -235,11 +234,13 @@ def step_factory_named(request, name: str) -> None:
 
 @when(parsers.parse('I ask the factory for the "{name}" secret backend without a license'))
 def step_factory_named_unlicensed(request, name: str) -> None:
-    with patch.object(secrets_module, "_check_external_secrets_licensed", return_value=False):
-        _capture_factory(
-            request,
-            lambda: create_secrets_backend(fernet_key=Fernet.generate_key().decode(), backend_name=name),
-        )
+    # FAR-2100: there is no licence gate to bypass — a configured backend is
+    # constructed on every tier, so the "without a license" scenario calls the
+    # same real factory as the named-backend scenario.
+    _capture_factory(
+        request,
+        lambda: create_secrets_backend(fernet_key=Fernet.generate_key().decode(), backend_name=name),
+    )
 
 
 def _capture_factory(request, call: Callable[[], object]) -> None:

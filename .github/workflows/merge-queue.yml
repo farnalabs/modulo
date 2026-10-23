@@ -531,6 +531,19 @@ jobs:
           # the closure comment can state the evidence it acted on (FAR-2064).
           : > /tmp/duplicate_verdicts.txt
 
+          # FAR-2098: the head SHA of each conflicted PR, as "<num> <sha>" per
+          # line, so 'Notify fixer of conflicts' can tell "the same conflict,
+          # already notified" from "a new conflict state" and stop re-dispatching
+          # an unchanged head every ~15-min pass (PR #2144, 2026-10-21: 8 retry
+          # attempts per pass against a fixer already at its 8-run cap).
+          # Deliberately a PARALLEL file rather than a new format for
+          # /tmp/conflict_prs.txt: three other consumers read that file as a
+          # whitespace-separated PR-number list (the Alembic-heads rebuild, the
+          # merge-conflict payload, the CI-failure payload), and its shape is
+          # their contract. An entry is missing only when the SHA could not be
+          # resolved, and the notify step then dispatches without dedupe.
+          : > /tmp/conflict_pr_heads.txt
+
           # Refresh origin/main so the duplicate content check compares against
           # the current upstream tip rather than the checkout snapshot. A failed
           # refresh is not fatal: classify_duplicate falls back to the local main
@@ -805,6 +818,18 @@ jobs:
               git reset --hard HEAD 2>/dev/null || true
               echo "MERGE CONFLICT in PR #$NUM -- skipping."
               conflict_prs="$conflict_prs $NUM"
+              # FAR-2098: record the exact head that conflicted. `pr-$NUM` is the
+              # ref this iteration just fetched and tried to squash-merge, so it
+              # IS the conflicted commit - no extra API call and no staleness
+              # from reading the PR again later. A PR whose SHA cannot be
+              # resolved simply gets no entry here, and the notify step then
+              # dispatches without dedupe (fail open) rather than suppressing.
+              CONFLICT_HEAD=$(git rev-parse --verify --quiet "refs/heads/pr-$NUM" 2>/dev/null || true)
+              if [ -n "$CONFLICT_HEAD" ]; then
+                printf '%s %s\n' "$NUM" "$CONFLICT_HEAD" >> /tmp/conflict_pr_heads.txt
+              else
+                echo "::warning::PR #$NUM: could not resolve the conflicted head SHA - the merge-conflict notification for this PR will not be deduped (fail open)."
+              fi
             fi
           done < <(jq -c '.[]' /tmp/prs_batch.json)
 
@@ -918,6 +943,183 @@ jobs:
         run: |
           if [ -z "$DISPATCH_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
           CONFLICTS=$(cat /tmp/conflict_prs.txt 2>/dev/null || echo "")
+
+          # --- FAR-2098: never re-notify the fixer about an UNCHANGED head ---------
+          # The queue re-dispatched the same conflicted PR on every ~15-min pass.
+          # PR #2144 sat conflicted all day on 2026-10-21 and each pass burned 8
+          # retry attempts against a fixer already at its 8-run cap (HTTP 429),
+          # accumulated `merge-queue/failed-*` branches, and spent up to 120s of
+          # this job's ~8 min headroom - on retries that could not change the
+          # outcome, because re-notifying the same commit asks the fixer to
+          # reconcile the same conflict again.
+          #
+          # So a dispatch is suppressed when the PR ITSELF records that this exact
+          # head was already notified inside a cooldown. The record is a hidden
+          # marker inside a comment this step posts on the PR - durable, visible
+          # in the PR, and no cross-pass state file:
+          #   <!-- merge-queue-fixer-notified head=<sha> at=<iso8601> -->
+          # It is written on a successful dispatch AND inside the FAR-1939 durable
+          # comment on a failed one, so the record always exists wherever a
+          # notification attempt was made. A changed head ALWAYS dispatches.
+          #
+          # FAIL OPEN, ALWAYS. Every lookup or parse problem below - no recorded
+          # head, a failed `gh api`, unparseable JSON, no comments, no marker, a
+          # malformed marker, an unparseable timestamp - dispatches exactly as
+          # before and emits a ::warning::. The dedupe must never be able to
+          # suppress a needed notification; its worst failure is a redundant one.
+          #
+          # BOUNDED READ: at most MAX_COMMENT_PAGES pages of COMMENTS_PER_PAGE
+          # comments, NEWEST FIRST (`sort=created&direction=desc`). The normal
+          # path is ONE request, because this workflow writes the marker and it is
+          # therefore the newest comment on a conflicted PR unless newer comments
+          # arrived after it. If no marker is found inside that bound the pass
+          # dispatches (fail open), so a long comment thread costs a redundant
+          # notification, never a lost one.
+          #
+          # Residual risk (accepted, FAR-2098): anyone who can comment on the PR
+          # can paste the marker. An exact head match only ever suppresses ONE
+          # notification, and either a new commit (the fix, which changes the head)
+          # or the cooldown expiry recovers it. A future-dated `at` is rejected
+          # outright below rather than trusted, so a marker cannot suppress
+          # indefinitely - and a stale marker whose head matches can never survive
+          # a force-push, because a force-push changes the head SHA.
+          REPO="${GITHUB_REPOSITORY:-}"
+          COOLDOWN_SECONDS=86400
+          MAX_COMMENT_PAGES=3
+          COMMENTS_PER_PAGE=100
+          MARKER_RE='<!--[[:space:]]*merge-queue-fixer-notified[[:space:]]+head=([0-9A-Fa-f]{7,64})[[:space:]]+at=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)[[:space:]]*-->'
+
+          # The head SHA the merge step recorded for this PR. Prints nothing when
+          # there is no entry, which the caller treats as "unknown -> dispatch".
+          conflict_head_sha() {
+            local num="$1" path="/tmp/conflict_pr_heads.txt"
+            [ -f "$path" ] || return 0
+            awk -v want="$num" '($1 == want) { print $2; exit }' "$path" 2>/dev/null || return 0
+            return 0
+          }
+
+          # 0 = this exact head was already notified inside the cooldown: skip the
+          # dispatch. 1 = dispatch. EVERY error path returns 1 with a warning.
+          fixer_notified_recently() {
+            local num="$1" head="$2"
+            local page=1 comments="" match_token="" body="" page_count=0
+            local marker_head="" marker_at="" at_epoch="" now_epoch="" expiry=""
+            now_epoch=$(date -u +%s 2>/dev/null) || now_epoch=""
+            if [ -z "$now_epoch" ]; then
+              echo "::warning::PR #$num: could not read the clock, so the ${COOLDOWN_SECONDS}s notification cooldown cannot be evaluated - dispatching the Branch Fixer notification (fail open)."
+              return 1
+            fi
+            while [ "$page" -le "$MAX_COMMENT_PAGES" ]; do
+              if ! comments=$(gh api "repos/${REPO}/issues/${num}/comments?per_page=${COMMENTS_PER_PAGE}&sort=created&direction=desc&page=${page}" 2>/dev/null); then
+                echo "::warning::PR #$num: could not read the PR's comments (page ${page}) - dispatching the Branch Fixer notification without dedupe (fail open)."
+                return 1
+              fi
+              # Newest first: only the most recent marker describes the current
+              # notification state, so take the first match on the newest page.
+              if ! match_token=$(printf '%s' "$comments" | jq -r 'if type == "array" then ([ .[] | (.body // "") | select(contains("merge-queue-fixer-notified")) ] | (.[0] // "") | @base64) else error("comments response is not an array") end' 2>/dev/null); then
+                echo "::warning::PR #$num: the PR's comments response was not parseable JSON - dispatching the Branch Fixer notification without dedupe (fail open)."
+                return 1
+              fi
+              if [ -n "$match_token" ]; then
+                body=$(printf '%s' "$match_token" | base64 -d 2>/dev/null) || body=""
+                if [[ "$body" =~ $MARKER_RE ]]; then
+                  marker_head="${BASH_REMATCH[1]}"
+                  marker_at="${BASH_REMATCH[2]}"
+                  break
+                fi
+                echo "::warning::PR #$num: a fixer-notification marker on page ${page} is malformed (no exact head/at fields) - dispatching without dedupe (fail open)."
+                return 1
+              fi
+              if ! page_count=$(printf '%s' "$comments" | jq -r 'if type == "array" then length else error("comments response is not an array") end' 2>/dev/null); then
+                echo "::warning::PR #$num: could not read the PR's comment count (page ${page}) - dispatching the Branch Fixer notification without dedupe (fail open)."
+                return 1
+              fi
+              # A page shorter than the page size is the last one.
+              if [ "${page_count:-0}" -lt "$COMMENTS_PER_PAGE" ]; then
+                break
+              fi
+              page=$((page + 1))
+            done
+            if [ -z "$marker_head" ]; then
+              # Never notified for a head we can see (or the marker is older than
+              # the read bound): dispatch.
+              return 1
+            fi
+            if [ "$marker_head" != "$head" ]; then
+              echo "PR #${num}: the head changed since the last fixer notification (${marker_head} -> ${head}) - notifying."
+              return 1
+            fi
+            if ! at_epoch=$(date -u -d "$marker_at" +%s 2>/dev/null); then
+              echo "::warning::PR #$num: the fixer-notification marker's timestamp (${marker_at}) could not be parsed - dispatching (fail open)."
+              return 1
+            fi
+            if [ "$at_epoch" -gt "$now_epoch" ]; then
+              echo "::warning::PR #$num: the fixer-notification marker's timestamp (${marker_at}) is in the future - ignoring the marker and dispatching (fail open)."
+              return 1
+            fi
+            if [ $((now_epoch - at_epoch)) -lt "$COOLDOWN_SECONDS" ]; then
+              expiry=$(date -u -d "@$((at_epoch + COOLDOWN_SECONDS))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || expiry=""
+              if [ -z "$expiry" ]; then
+                expiry="epoch $((at_epoch + COOLDOWN_SECONDS))"
+              fi
+              echo "::notice::PR #${num}: the Branch Fixer was already notified about head ${head} at ${marker_at} - skipping the dispatch. The cooldown expires at ${expiry}; a changed head notifies immediately."
+              return 0
+            fi
+            echo "PR #${num}: the last fixer notification for head ${head} was at ${marker_at}, outside the ${COOLDOWN_SECONDS}s cooldown - notifying again."
+            return 1
+          }
+
+          NOTIFY_PRS=""
+          DEDUPED_PRS=""
+          for NUM in $CONFLICTS; do
+            if [ -z "$NUM" ]; then continue; fi
+            # /tmp/conflict_prs.txt is written by the merge step from jq'd PR
+            # numbers. Anything else is unexpected input: skip it rather than
+            # pass it into a `gh` command line.
+            case "$NUM" in
+              *[!0-9]*)
+                echo "::warning::ignoring an unexpected entry in the conflict list ('${NUM}') - the merge step writes PR numbers."
+                continue
+                ;;
+            esac
+            if [ -z "$REPO" ]; then
+              echo "::warning::GITHUB_REPOSITORY is empty, so the notification history cannot be read - dispatching without dedupe (fail open)."
+              NOTIFY_PRS="$NOTIFY_PRS $NUM"
+              continue
+            fi
+            PR_HEAD=$(conflict_head_sha "$NUM")
+            if [ -z "$PR_HEAD" ]; then
+              echo "::warning::PR #$NUM: no head SHA was recorded for this conflict, so \"already notified for this head\" cannot be established - dispatching without dedupe (fail open)."
+              NOTIFY_PRS="$NOTIFY_PRS $NUM"
+              continue
+            fi
+            if fixer_notified_recently "$NUM" "$PR_HEAD"; then
+              DEDUPED_PRS="$DEDUPED_PRS $NUM"
+              continue
+            fi
+            NOTIFY_PRS="$NOTIFY_PRS $NUM"
+          done
+          TARGETS=$(printf '%s\n' "$NOTIFY_PRS" | xargs 2>/dev/null || true)
+          DEDUPED_PRS=$(printf '%s\n' "$DEDUPED_PRS" | xargs 2>/dev/null || true)
+          if [ -n "$DEDUPED_PRS" ]; then
+            echo "FAR-2098 dedupe: kept the Branch Fixer notification for${DEDUPED_PRS} (already notified for the current head inside the ${COOLDOWN_SECONDS}s cooldown)."
+          fi
+          if [ -z "$TARGETS" ] && [ -n "$DEDUPED_PRS" ]; then
+            # Every conflicted PR already carries a notification record for its
+            # current head. Dispatch nothing AND post no comment: the record is
+            # already on each PR, and a second "the Branch Fixer was never
+            # notified" comment would now be false (FAR-2092's signal must mean
+            # what it says).
+            echo "::notice::FAR-2098 dedupe: every conflicted PR was already notified for its current head - no Branch Fixer dispatch and no new PR comment this pass (deduped:${DEDUPED_PRS:- <none>})."
+            exit 0
+          fi
+          if [ -z "$TARGETS" ]; then
+            # Defensive: nothing could be deduped and no PR number survived (the
+            # step's `if:` gate normally prevents an empty list). Keep the
+            # pre-FAR-2098 behaviour of dispatching that (empty) list rather than
+            # inventing a new path.
+            TARGETS="$CONFLICTS"
+          fi
           # taskKind marks this as a CONFLICT task so the Branch Fixer selects the
           # conflict task profile (ONE long attempt) rather than the CI-failure
           # retry ladder — the same structural marker pr-conflict-reconcile.yml
@@ -926,11 +1128,14 @@ jobs:
           # inherited the wrong profile. Extra payload keys flow through
           # harmlessly; an absent marker keeps the ladder, so older dispatches
           # keep working.
+          # The payload names only the PRs this pass actually notifies (FAR-2098:
+          # an unchanged head is not re-notified). The shape is unchanged; the
+          # set is the dedupe's whole point.
           BODY=$(jq -n \
             --arg repo "${{ github.repository }}" \
             --arg phase "merge-conflict" \
             --arg taskKind "conflict" \
-            --arg conflictPrs "$CONFLICTS" \
+            --arg conflictPrs "$TARGETS" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             '{repository: $repo, phase: $phase, taskKind: $taskKind, conflictPrs: $conflictPrs, runUrl: $run_url}')
           # One shared retry policy (scripts/dispatch_with_retry.sh): 429
@@ -949,10 +1154,36 @@ jobs:
           DISPATCH_RESULT_FILE="/tmp/last_dispatch_result_conflicts.env"
           rm -f "${DISPATCH_RESULT_FILE}"
           DISPATCH_OK="false"
+          # FAR-2098: stamped once, before the outcome is known, so BOTH arms can
+          # record the attempt for the dedupe. An empty value (clock unavailable)
+          # only means no marker is written and the PR is re-notified next pass.
+          DISPATCH_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || DISPATCH_AT=""
           if DISPATCH_RESULT_FILE="${DISPATCH_RESULT_FILE}" \
              DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh; then
             DISPATCH_OK="true"
-            echo "Fixer notified of conflicts in PRs: $CONFLICTS"
+            echo "Fixer notified of conflicts in PRs: $TARGETS"
+            # FAR-2098: the dispatch was DELIVERED, so record it on each PR with
+            # the hidden marker the next pass parses. Best-effort BY DESIGN: the
+            # notification has already succeeded, so a comment failure only costs
+            # a redundant notification next pass (no marker -> fail open) - it
+            # must never fail this pass, and it must never post anything claiming
+            # a notification failed.
+            for NUM in $TARGETS; do
+              [ -z "$NUM" ] && continue
+              PR_HEAD=$(conflict_head_sha "$NUM")
+              if [ -z "$PR_HEAD" ] || [ -z "$DISPATCH_AT" ]; then
+                echo "::warning::PR #$NUM: the Branch Fixer was notified, but the dedupe marker could not be written (head='${PR_HEAD}', at='${DISPATCH_AT}') - this PR will be re-notified next pass (fail open)."
+                continue
+              fi
+              NOTIFIED_BODY="The merge queue asked the Branch Fixer to reconcile this PR's merge conflict with main (head ${PR_HEAD}). It will not ask again for this same head within 24 hours; a new commit always notifies immediately.
+
+          <!-- merge-queue-fixer-notified head=${PR_HEAD} at=${DISPATCH_AT} -->"
+              if gh pr comment "$NUM" --body "$NOTIFIED_BODY" > /dev/null 2>&1; then
+                echo "::notice::PR #$NUM: recorded the fixer notification for head ${PR_HEAD}."
+              else
+                echo "::warning::PR #$NUM: could not post the fixer-notification marker comment - this PR will be re-notified next pass (fail open)."
+              fi
+            done
           fi
           if [ "$DISPATCH_OK" != "true" ]; then
             # shellcheck disable=SC1090
@@ -990,9 +1221,28 @@ jobs:
             DURABLE_COMMENT_PR_COUNT=0
             UNDELIVERED_PR_COUNT=0
             UNDELIVERED_PRS=""
-            for NUM in $CONFLICTS; do
+            # FAR-2098: $TARGETS, not $CONFLICTS - a PR deduped above was never
+            # dispatched this pass, so claiming its notification failed would be
+            # false. The record for it is the marker already on the PR.
+            for NUM in $TARGETS; do
               [ -z "$NUM" ] && continue
               UNDELIVERED_BODY="The merge queue could NOT deliver its merge-conflict notification to the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled, this PR stays conflicted and the queue keeps skipping it. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              # FAR-2098: this durable comment also RECORDS the attempt for this
+              # head, so the next pass can tell this conflict is already known
+              # instead of dispatching it again every ~15 min. No marker (no
+              # resolvable head, or no clock) means the next pass retries.
+              PR_HEAD=$(conflict_head_sha "$NUM")
+              if [ -n "$PR_HEAD" ] && [ -n "$DISPATCH_AT" ]; then
+                # The marker line is indented to the block scalar's own
+                # indentation so the YAML block continues (and the leading
+                # whitespace it leaves in the comment body is harmless: the
+                # parser anchors on the `<!--` token).
+                UNDELIVERED_BODY="${UNDELIVERED_BODY}
+
+          <!-- merge-queue-fixer-notified head=${PR_HEAD} at=${DISPATCH_AT} -->"
+              else
+                echo "::warning::PR #$NUM: the dedupe marker could not be written into the undelivered-notification comment (head='${PR_HEAD}', at='${DISPATCH_AT}') - this PR will be re-notified next pass (fail open)."
+              fi
               if gh pr comment "$NUM" --body "$UNDELIVERED_BODY" > /dev/null 2>&1; then
                 echo "::notice::PR #$NUM: posted a comment recording that the Branch Fixer was never notified."
                 DURABLE_COMMENT_PR_COUNT=$((DURABLE_COMMENT_PR_COUNT + 1))
@@ -1004,12 +1254,13 @@ jobs:
             done
             UNDELIVERED_PRS="${UNDELIVERED_PRS# }"
             if [ "$UNDELIVERED_PR_COUNT" -ne 0 ] || [ "$DURABLE_COMMENT_PR_COUNT" -eq 0 ]; then
-              echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${CONFLICTS:-<none>} (HTTP ${LAST_HTTP}: ${DETAIL}) and the durable failure comment could not be recorded on every affected PR (recorded on ${DURABLE_COMMENT_PR_COUNT}, failed on ${UNDELIVERED_PR_COUNT}: ${UNDELIVERED_PRS:-<none>}) — the merge-conflict notification now has NO durable signal. Failing hard."
+              echo "::error::Branch Fixer webhook dispatch failed for PR(s) ${TARGETS:-<none>} (HTTP ${LAST_HTTP}: ${DETAIL}) and the durable failure comment could not be recorded on every affected PR (recorded on ${DURABLE_COMMENT_PR_COUNT}, failed on ${UNDELIVERED_PR_COUNT}: ${UNDELIVERED_PRS:-<none>}) — the merge-conflict notification now has NO durable signal. Failing hard."
               exit 1
             fi
-            echo "::warning::Branch Fixer webhook dispatch failed for PR(s) ${CONFLICTS:-<none>} (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-conflict notification was not delivered, BUT a durable comment recording the failure was posted on all ${DURABLE_COMMENT_PR_COUNT} affected PR(s). The signal is not silent, so this pass CONTINUES to validation and merge instead of discarding a completed batch."
+            echo "::warning::Branch Fixer webhook dispatch failed for PR(s) ${TARGETS:-<none>} (HTTP ${LAST_HTTP}: ${DETAIL}) — merge-conflict notification was not delivered, BUT a durable comment recording the failure was posted on all ${DURABLE_COMMENT_PR_COUNT} affected PR(s). The signal is not silent, so this pass CONTINUES to validation and merge instead of discarding a completed batch."
             exit 0
           fi
+
       - name: Exit if nothing to merge
         if: steps.merge.outputs.merged_count == '0'
         run: |

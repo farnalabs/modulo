@@ -5,8 +5,8 @@ from unittest.mock import patch
 import pytest
 from cryptography.fernet import Fernet
 
-from modulo.core.license import LicenseData, LicenseValidation
-from modulo.core.secrets_backend import _check_external_secrets_licensed, create_secrets_backend, validate_key
+from modulo.core.feature_flags import _KNOWN_FLAGS, FeatureFlagRegistry
+from modulo.core.secrets_backend import create_secrets_backend, validate_key
 from modulo.core.secrets_backend.fernet import FernetSecretsBackend
 
 _KEY = Fernet.generate_key().decode()
@@ -24,7 +24,6 @@ def test_vault_backend_created_by_name(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
     monkeypatch.setenv("VAULT_TOKEN", "x")
     with (
-        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
         patch("modulo.core.secrets_backend.vault._hvac"),
     ):
@@ -39,7 +38,6 @@ def test_aws_backend_created_by_name(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "x")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "y")
     with (
-        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
         patch("modulo.core.secrets_backend.aws._boto3"),
     ):
@@ -53,14 +51,13 @@ def test_unknown_backend_raises_value_error():
 
 
 @pytest.mark.parametrize("backend_name", ["vault", "aws"])
-def test_configured_external_backend_is_not_downgraded_when_unlicensed(
+def test_configured_external_backend_is_constructed_on_every_tier(
     monkeypatch: pytest.MonkeyPatch, backend_name: str
 ) -> None:
-    """FAR-2059: a licence lapse must not switch a configured backend to fernet.
+    """FAR-2059 / FAR-2100: the factory never consults licence or tier state.
 
-    The entitlement gates CHANGING the configuration, never the runtime
-    resolution path. ``_check_external_secrets_licensed`` is patched to False
-    (the lapsed state) to prove the factory ignores it for construction.
+    External backends are available on every tier and a configured backend is
+    always constructed - a licence lapse must not switch it to fernet.
     """
     if backend_name == "vault":
         from modulo.core.secrets_backend.vault import VaultSecretsBackend
@@ -68,7 +65,6 @@ def test_configured_external_backend_is_not_downgraded_when_unlicensed(
         monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
         monkeypatch.setenv("VAULT_TOKEN", "x")
         with (
-            patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False),
             patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
             patch("modulo.core.secrets_backend.vault._hvac"),
         ):
@@ -82,7 +78,6 @@ def test_configured_external_backend_is_not_downgraded_when_unlicensed(
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "x")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "y")
     with (
-        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False),
         patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
         patch("modulo.core.secrets_backend.aws._boto3"),
     ):
@@ -99,7 +94,6 @@ def test_external_backend_does_not_require_a_fernet_key(monkeypatch: pytest.Monk
         monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
         monkeypatch.setenv("VAULT_TOKEN", "x")
         with (
-            patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False),
             patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
             patch("modulo.core.secrets_backend.vault._hvac"),
         ):
@@ -111,7 +105,6 @@ def test_external_backend_does_not_require_a_fernet_key(monkeypatch: pytest.Monk
 
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     with (
-        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=False),
         patch("modulo.core.secrets_backend.aws._MODULE_AVAILABLE", True),
         patch("modulo.core.secrets_backend.aws._boto3"),
     ):
@@ -135,60 +128,35 @@ def test_unconfigured_vault_backend_fails_hard_not_silently(monkeypatch: pytest.
         create_secrets_backend(fernet_key=_KEY, backend_name="vault")
 
 
-def _team_license() -> LicenseData:
-    return LicenseData(
-        tier="team",
-        features=[],
-        expires_at="",
-        org_id="",
-        raw_payload={},
-        raw_key="",
-    )
+def test_external_secrets_flag_is_not_registered():
+    """FAR-2100: the entitlement is retired — there is no runtime surface to gate."""
+    registry = FeatureFlagRegistry()
+    assert registry.get_flag("external_secrets") is None
+    assert "external_secrets" not in {flag.name for flag in _KNOWN_FLAGS}
 
 
-def test_external_secrets_licensed_when_license_file_present(monkeypatch: pytest.MonkeyPatch):
-    """A stored team-tier license unlocks the external_secrets flag."""
-    monkeypatch.delenv("MODULO_LICENSE_KEY", raising=False)
-    with patch("modulo.core.license.get_license", return_value=_team_license()):
-        assert _check_external_secrets_licensed() is True
+def test_external_secrets_flag_absent_from_seed_catalog():
+    """The tier catalog seed is derived from ``_KNOWN_FLAGS``; the flag is gone there too."""
+    from modulo.core.seed_data.catalog import FLAGS
+
+    assert "external_secrets" not in {entry["name"] for entry in FLAGS}
 
 
-def test_external_secrets_not_licensed_when_community(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("MODULO_LICENSE_KEY", raising=False)
-    with patch("modulo.core.license.get_license", return_value=None):
-        assert _check_external_secrets_licensed() is False
+def test_external_secrets_flag_absent_on_community_tier():
+    registry = FeatureFlagRegistry(current_tier="community", has_license_key=False)
+    assert registry.get_flag("external_secrets") is None
 
 
-def test_external_secrets_licensed_via_env_key(monkeypatch: pytest.MonkeyPatch):
-    """With no stored license, a valid MODULO_LICENSE_KEY enables the flag."""
-    validation = LicenseValidation(valid=True, license_data=_team_license())
-    monkeypatch.setenv("MODULO_LICENSE_KEY", "some-key")
-    with (
-        patch("modulo.core.license.get_license", return_value=None),
-        patch("modulo.core.license.parse_and_verify", return_value=validation),
-    ):
-        assert _check_external_secrets_licensed() is True
+def test_external_secrets_flag_absent_on_team_tier():
+    registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
+    assert registry.get_flag("external_secrets") is None
 
 
-def test_external_secrets_not_licensed_with_invalid_env_key(monkeypatch: pytest.MonkeyPatch):
-    invalid = LicenseValidation(valid=False, error="Signature verification failed")
-    monkeypatch.setenv("MODULO_LICENSE_KEY", "bad-key")
-    with (
-        patch("modulo.core.license.get_license", return_value=None),
-        patch("modulo.core.license.parse_and_verify", return_value=invalid),
-    ):
-        assert _check_external_secrets_licensed() is False
+def test_external_secrets_licence_helper_is_removed():
+    """The factory must not consult licence state for backend construction."""
+    import modulo.core.secrets_backend as secrets_module
 
-
-def test_external_secrets_license_valid_without_data_is_not_enabled(monkeypatch: pytest.MonkeyPatch):
-    """A valid signature that carries no license_data must NOT unlock external secrets."""
-    validation = LicenseValidation(valid=True, license_data=None)
-    monkeypatch.setenv("MODULO_LICENSE_KEY", "some-key")
-    with (
-        patch("modulo.core.license.get_license", return_value=None),
-        patch("modulo.core.license.parse_and_verify", return_value=validation),
-    ):
-        assert _check_external_secrets_licensed() is False
+    assert not hasattr(secrets_module, "_check_external_secrets_licensed")
 
 
 def test_env_var_used_when_no_backend_name(monkeypatch: pytest.MonkeyPatch):
@@ -213,7 +181,6 @@ def test_backend_name_normalized(monkeypatch: pytest.MonkeyPatch, name: str, sou
     monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
     monkeypatch.setenv("VAULT_TOKEN", "x")
     with (
-        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
         patch("modulo.core.secrets_backend.vault._hvac"),
     ):
@@ -254,7 +221,6 @@ def test_fernet_key_optional_for_external_backend(
     for k, v in env_vars.items():
         monkeypatch.setenv(k, v)
     with (
-        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
         patch(f"{module_patch}._MODULE_AVAILABLE", True),
         patch(lib_patch),
     ):
