@@ -1,6 +1,8 @@
 <template>
   <!--
-    Renewal state surface for the licence page (FAR-2075).
+    Renewal state surface for the authenticated shell (FAR-2075) — mounted by
+    components/AppLayout.vue so an administrator sees it on every route, not
+    only on the licence page.
 
     Every state comes from the backend (``licence_state``) and every date is
     already computed there (``expires_at`` / ``grace_ends_at``). This component

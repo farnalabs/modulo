@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { readFileSync } from 'node:fs'
@@ -134,6 +135,23 @@ describe('LicenceRenewalNotice', () => {
       const wrapper = mountNotice({ licence_state: 'grace', days_until_expiry: -3 })
       await wrapper.get('[data-testid="licence-grace-install-action"]').trigger('click')
       expect(wrapper.emitted('install-key')).toHaveLength(1)
+    })
+
+    it('is dismissible, but returns on the next visit while the licence is still unrenewed', async () => {
+      const first = mountNotice({ licence_state: 'grace', days_until_expiry: -3 })
+      expect(first.find('[data-testid="licence-grace-dialog"]').exists()).toBe(true)
+
+      // Dismissing is allowed — the admin must always be able to reach the key
+      // input below the dialog.
+      first.findComponent({ name: 'Dialog' }).vm.$emit('update:visible', false)
+      await nextTick()
+      expect(first.find('[data-testid="licence-grace-dialog"]').exists()).toBe(false)
+
+      // A fresh mount (the next visit) with the same backend state re-opens it:
+      // the warning is driven by the licence state, not by whether the admin
+      // dismissed it.
+      const second = mountNotice({ licence_state: 'grace', days_until_expiry: -3 })
+      expect(second.find('[data-testid="licence-grace-dialog"]').exists()).toBe(true)
     })
   })
 

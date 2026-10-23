@@ -17,6 +17,21 @@
     >
       <div class="relative z-10 space-y-2">
         <DbCapacityBanner v-if="isAdminUser" />
+        <!--
+          FAR-2075: the renewal countdown / grace dialog belongs to the shell,
+          not to /settings/license. An administrator who never opens the licence
+          page would otherwise never see it, and the warning has to stay until
+          the licence is renewed. The state comes from the shell's status query
+          below (the notice itself only renders it), so renewal clears the
+          warning; dismissing the grace dialog only hides it until the next
+          visit.
+        -->
+        <div v-if="showsLicenceNotice" class="px-6">
+          <LicenceRenewalNotice
+            :status="licenceStatusValue"
+            @install-key="openLicenceKeyInput"
+          />
+        </div>
         <DemoBanner />
         <OnboardingBanner />
         <div class="px-6">
@@ -45,9 +60,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
-import { clearAccessTokenForLogout } from "../lib/api/client";
+import { ref, computed, nextTick, onMounted, provide } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { api, clearAccessTokenForLogout } from "../lib/api/client";
 import { useCurrentUser } from "../composables/useCurrentUser";
+import { useDataFetch } from "../composables/useDataFetch";
 import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
 import AssistantPanel from "./assistant/AssistantPanel.vue";
@@ -62,6 +79,8 @@ import DemoBanner from "./DemoBanner.vue";
 import CommandPalette from "./CommandPalette.vue";
 import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
 import ProductAnalyticsConsentPrompt from "./product-analytics/ProductAnalyticsConsentPrompt.vue";
+import LicenceRenewalNotice from "./licence/LicenceRenewalNotice.vue";
+import type { components } from "../lib/api/schema";
 
 const planStore = usePlanStore();
 const assistantStore = useAssistantStore();
@@ -154,6 +173,100 @@ const userRole = computed(() => orgRole.value || null);
 const isAdminUser = computed(
   () => isSystemAdmin.value || userRole.value === "admin",
 );
+
+// ---------------------------------------------------------------------------
+// FAR-2075 — licence renewal notice (shell-level, admin-only)
+//
+// The notice has to be visible on every authenticated route, not only on
+// /settings/license, so the status read belongs here: this component mounts
+// once per authenticated session, never per route change. The same query is
+// PROVIDED to the licence page, which consumes it instead of issuing a second
+// GET against /api/v1/admin/license on every visit.
+//
+// The key is a documented string shared with frontend/src/views/
+// SettingsLicenseView.vue — there is no module both files can import (a
+// per-SFC export would drag the whole shell into the page's chunk).
+// ---------------------------------------------------------------------------
+const LICENCE_STATUS_INJECTION_KEY = "modulo:licence-status";
+
+// GET /api/v1/admin/license is guarded by `org.license.manage`, which the
+// permission registry assigns to the org "admin" role. Gate on exactly that
+// role: a non-admin never fetches it (the request would 403) and never sees
+// licence-administration copy. A system admin whose org role is below admin is
+// excluded too — they cannot read the licence state, so there is nothing to
+// show them.
+const canManageLicence = computed(() => userRole.value === "admin");
+
+const licenceStatus = useDataFetch<components["schemas"]["LicenseStatusResponse"]>(
+  () => (api as any).GET("/api/v1/admin/license"),
+  {
+    initialValue: {
+      has_license: false,
+      tier: "community",
+      features: [],
+      expires_at: null,
+      org_id: null,
+      renewal_mode: "manual",
+      licence_state: "none",
+    },
+    immediate: canManageLicence.value,
+  },
+);
+
+const licenceStatusValue = computed(() => licenceStatus.data.value);
+
+const showsLicenceNotice = computed(
+  () =>
+    canManageLicence.value &&
+    ["renewal_due", "grace", "lapsed"].includes(licenceStatusValue.value.licence_state),
+);
+
+if (canManageLicence.value) {
+  provide(LICENCE_STATUS_INJECTION_KEY, {
+    data: licenceStatus.data,
+    loading: licenceStatus.loading,
+    error: licenceStatus.error,
+    load: licenceStatus.load,
+  });
+}
+
+const route = useRoute();
+const router = useRouter();
+
+/**
+ * Send the administrator to the licence key input from anywhere in the app.
+ *
+ * The licence page renders its textarea only after its own status read
+ * resolves, so poll for the node on a bounded number of frames rather than
+ * focusing one that is not there yet. When the page is already mounted (the
+ * shared status is resolved) the first frame finds it.
+ */
+async function openLicenceKeyInput() {
+  if (route.name !== "settings-license") {
+    await router.push({ name: "settings-license" });
+  }
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const input = document.getElementById("settingslicenseview-field-1");
+    if (input) {
+      input.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      input.focus();
+      return;
+    }
+    await nextTick();
+    await nextFrame();
+  }
+}
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    // jsdom (unit tests) and older embedded webviews may not expose rAF.
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 16);
+  });
+}
 
 onMounted(() => {
   planStore.fetchPlan().catch(() => {});

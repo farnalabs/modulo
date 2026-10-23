@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick as vueNextTick } from 'vue'
+import { computed, nextTick as vueNextTick, ref } from 'vue'
 
 async function nextTick() { await vueNextTick(); await flushPromises() }
 
@@ -316,9 +316,9 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.text()).toContain('Failed to remove')
   })
 
-  // ── FAR-2075: renewal surface ───────────────────────────────────────
+  // ── FAR-2075: shell-owned renewal surface ───────────────────────────
 
-  it('renders the renewal countdown from the backend licence_state', async () => {
+  it('does not render the renewal surface itself — the authenticated shell owns it', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(
       api.GET,
@@ -333,74 +333,72 @@ describe('SettingsLicenseView', () => {
     await nextTick()
     await nextTick()
 
-    const banner = wrapper.find('[data-testid="licence-renewal-banner"]')
-    expect(banner.exists()).toBe(true)
-    expect(banner.attributes('data-renewal-mode')).toBe('manual')
-    expect(wrapper.find('[data-testid="licence-renewal-renew-link"]').exists()).toBe(true)
+    // Mounting it here as well would show two banners (and, in grace, two
+    // dialogs) on this one page.
+    expect(wrapper.find('[data-testid="licence-renewal-banner"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="licence-grace-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="licence-lapsed-banner"]').exists()).toBe(false)
   })
 
-  it('does not offer a purchase path when the licence renews automatically', async () => {
+  it('reuses the shell-provided licence status instead of fetching it again', async () => {
     const { api } = await import('../lib/api/client')
-    mockApiResponses(
-      api.GET,
-      { ...mockLicenseTeam, licence_state: 'renewal_due', renewal_mode: 'auto', days_until_expiry: 9 },
-      mockFlagsTeam,
-    )
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+
+    const status = ref({ ...mockLicenseTeam, licence_state: 'renewal_due', days_until_expiry: 9 })
+    const source = {
+      data: status,
+      loading: computed(() => false),
+      error: computed(() => null),
+      load: vi.fn(async () => {}),
+    }
 
     const wrapper = mount(SettingsLicenseView, {
-      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, Dialog: primeDialogStub } },
-    })
-    await nextTick()
-    await nextTick()
-    await nextTick()
-
-    expect(wrapper.find('[data-testid="licence-renewal-banner"]').attributes('data-renewal-mode')).toBe('auto')
-    expect(wrapper.find('[data-testid="licence-renewal-renew-link"]').exists()).toBe(false)
-  })
-
-  it('shows the grace dialog from the backend licence_state', async () => {
-    const { api } = await import('../lib/api/client')
-    mockApiResponses(
-      api.GET,
-      {
-        ...mockLicenseTeam,
-        licence_state: 'grace',
-        days_until_expiry: -2,
-        grace_ends_at: '2027-01-14T23:59:59Z',
+      global: {
+        plugins: [createPinia()],
+        provide: { 'modulo:licence-status': source },
+        stubs: { ...dialogStubObj, Dialog: primeDialogStub },
       },
-      mockFlagsTeam,
-    )
-
-    const wrapper = mount(SettingsLicenseView, {
-      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, Dialog: primeDialogStub } },
     })
     await nextTick()
     await nextTick()
-    await nextTick()
 
-    expect(wrapper.find('[data-testid="licence-grace-dialog"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="licence-grace-install-action"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="licence-grace-buy-action"]').exists()).toBe(true)
+    // Rendered from the provided status…
+    expect(wrapper.text()).toContain('Team')
+    expect(wrapper.text()).toContain('#11111111')
+    // …and no second GET against the endpoint the shell already read.
+    const licenceGets = (api.GET as any).mock.calls.filter(
+      ([path]: [string]) => path === '/api/v1/admin/license',
+    )
+    expect(licenceGets).toHaveLength(0)
   })
 
-  it('moves focus to the key input when the renewal surface asks to install a key', async () => {
+  it('refreshes the shared status after a licence key is applied', async () => {
     const { api } = await import('../lib/api/client')
-    mockApiResponses(
-      api.GET,
-      { ...mockLicenseTeam, licence_state: 'lapsed', has_license: false, tier: 'community' },
-      mockFlagsFree,
-    )
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.POST as any).mockResolvedValue({ data: { tier: 'team', expires_at: '2027-01-01' }, error: undefined })
+
+    const source = {
+      data: ref({ ...mockLicenseTeam, licence_state: 'lapsed', has_license: false, tier: 'community' }),
+      loading: computed(() => false),
+      error: computed(() => null),
+      load: vi.fn(async () => {}),
+    }
 
     const wrapper = mount(SettingsLicenseView, {
-      attachTo: document.body,
-      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, Dialog: primeDialogStub } },
+      global: {
+        plugins: [createPinia()],
+        provide: { 'modulo:licence-status': source },
+        stubs: { ...dialogStubObj, FormDialog: formDialogStub },
+      },
     })
     await nextTick()
-    await nextTick()
-    await nextTick()
+    await wrapper.find('textarea').setValue('some-key')
+    await wrapper.find('[data-testid="license-apply-btn"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
 
-    await wrapper.get('[data-testid="licence-lapsed-install-action"]').trigger('click')
-    expect(document.activeElement).toBe(document.getElementById('settingslicenseview-field-1'))
-    wrapper.unmount()
+    // The shell's banner clears only if the shared query is refreshed.
+    expect(source.load).toHaveBeenCalledTimes(1)
   })
 })
