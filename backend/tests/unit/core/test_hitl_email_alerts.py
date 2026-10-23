@@ -417,6 +417,58 @@ class TestSendHitlEmailAlerts:
         assert "Description:" not in body_text
 
 
+class TestSubjectHeaderSafety:
+    """A multi-line gate label must never abort (or inject into) a message header.
+
+    ``EmailMessage`` raises ``ValueError`` on a linefeed in a header; that
+    raise lands in the best-effort ``except Exception`` of the dispatch
+    functions, so the notification would be silently DROPPED. The subject is
+    built from the collapsed label instead.
+    """
+
+    _MULTI_LINE_GATE = "deploy-gate\nX-Injected: yes\r\nsecond line"
+
+    def test_subject_collapses_line_breaks(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_email
+
+        subject, _, _ = _build_email(self._MULTI_LINE_GATE, _RUN_LINK, None)
+        assert "\n" not in subject
+        assert "\r" not in subject
+        assert subject == "HITL gate awaiting review - deploy-gate X-Injected: yes second line"
+
+    def test_deadline_subject_collapses_line_breaks(self) -> None:
+        from modulo.core.hitl_email_alerts import _build_deadline_email
+
+        subject, _, _ = _build_deadline_email(self._MULTI_LINE_GATE, _RUN_LINK, "P", 5)
+        assert "\n" not in subject
+        assert "\r" not in subject
+        assert subject == "HITL review deadline approaching - deploy-gate X-Injected: yes second line"
+
+    def test_collapsed_subject_is_accepted_by_emailmessage(self) -> None:
+        """Prove the contract: the value sets a real ``EmailMessage`` header."""
+        from email.message import EmailMessage
+
+        from modulo.core.hitl_email_alerts import _build_email
+
+        subject, _, _ = _build_email(self._MULTI_LINE_GATE, _RUN_LINK, None)
+        msg = EmailMessage()
+        msg["Subject"] = subject  # raises ValueError on a linefeed
+        assert msg["Subject"].strip()
+
+    async def test_multiline_label_still_dispatches(self) -> None:
+        """The dispatch is not dropped: send_email is still called for every recipient."""
+        with (
+            patch.object(hitl_email_alerts, "get_settings", return_value=_settings_mock()),
+            patch.object(hitl_email_alerts, "send_email") as mock_send,
+        ):
+            await send_hitl_email_alerts([_RUNNER_EMAIL], _RUN, self._MULTI_LINE_GATE)
+
+        assert mock_send.call_count == 1
+        subject = mock_send.call_args_list[0].args[2]
+        assert "\n" not in subject
+        assert "\r" not in subject
+
+
 class TestBuildEmailBriefing:
     """Tests for _build_email briefing rendering."""
 

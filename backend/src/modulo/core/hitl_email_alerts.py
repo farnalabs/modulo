@@ -71,6 +71,22 @@ _DEADLINE_SUBJECT_TEMPLATE = "HITL review deadline approaching - {gate_label}"
 # Log prefix for every swallowed dispatch failure (warning level).
 _DISPATCH_FAILED_LOG = "hitl_email.dispatch_failed: %s"
 
+
+def _header_safe(text: str) -> str:
+    """Collapse CR/LF so untrusted text cannot inject (or abort) an email header.
+
+    ``gate_label`` is operator-supplied through the pipeline's
+    ``hitl_review_config`` (length-bounded, otherwise unconstrained), and
+    ``EmailMessage`` raises ``ValueError`` on a linefeed in a header. That
+    raise lands in the best-effort ``except Exception`` in
+    :func:`send_hitl_email_alerts` / :func:`send_hitl_deadline_alerts`, so
+    the notification email would be silently DROPPED for every recipient.
+    Fold any line break to one line instead: the alert stays deliverable and
+    header injection stays impossible.
+    """
+    return " ".join(str(text).splitlines())
+
+
 # Character budget for the rendered email body (plain-text + HTML combined).
 # Keeps the email concise: a full 2KB briefing would overwhelm recipients.
 _EMAIL_BODY_BUDGET_CHARS = 1500
@@ -175,7 +191,7 @@ def _build_email(
     can evaluate the gate *before* claiming it. A ``None`` or legacy briefing
     degrades to the original plain label-only format.
     """
-    subject = _SUBJECT_TEMPLATE.format(gate_label=gate_label)
+    subject = _SUBJECT_TEMPLATE.format(gate_label=_header_safe(gate_label))
     pairs = _collect_briefing_pairs(briefing)
     if pairs:
         body_html, body_text = _render_briefing_body(gate_label, run_url, pairs)
@@ -330,7 +346,7 @@ def _build_deadline_email(
     time-boxed, not advisory. HTML is built from the same escaped values as
     the plain text (single source for the interpolated fields).
     """
-    subject = _DEADLINE_SUBJECT_TEMPLATE.format(gate_label=gate_label)
+    subject = _DEADLINE_SUBJECT_TEMPLATE.format(gate_label=_header_safe(gate_label))
     body_text = (
         "A HITL gate is approaching its review deadline.\n\n"
         f"Gate: {gate_label}\n"
