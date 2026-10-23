@@ -87,10 +87,17 @@ the deployment would reject.
       the production one. Outside debug, an API configured with
       `MODULO_LICENSE_KEY` but no `MODULO_LICENSE_PUBLIC_KEY` refuses to boot
       with an actionable error, and a licence upload that cannot verify
-      returns HTTP 422 with a structured body — `detail` prose plus
-      `reason` (`anchor_mismatch` / `signature_mismatch` / `malformed` /
-      `expired`) and an operator `hint` naming `MODULO_LICENSE_PUBLIC_KEY` —
-      instead of only logging the failure. `POST /api/v1/admin/license/issue`
+      returns HTTP 422 with a structured body — `detail` prose plus a
+      machine-readable `reason` (`anchor_mismatch` / `signature_mismatch` /
+      `dev_anchor_not_trusted` / `malformed` / `expired`) — instead of only
+      logging the failure. The signature is verified BEFORE the
+      development-anchor refusal, so a production key presented to an
+      anchor-less deployment is classified `anchor_mismatch` (not a generic
+      refusal, and never `malformed`), and both mismatch reasons carry an
+      operator `hint` naming `MODULO_LICENSE_PUBLIC_KEY`.
+      `dev_anchor_not_trusted` is the distinct case of a key that genuinely
+      verifies against the built-in development anchor outside debug.
+      `POST /api/v1/admin/license/issue`
       fails the same way (500, anchor mismatch) when the signing key and the
       anchor are not one keypair (`test_license_anchor.py`,
       `test_admin_license.py`)
@@ -247,7 +254,12 @@ the deployment would reject.
   unlicensed self-hoster); the install path fails closed instead. The admin
   licence view already renders `detail` through `formatApiError`, so no UI
   change was needed. `test_license_anchor.py` and `test_admin_license.py`
-  prove the new behaviour.
+  prove the new behaviour. Review follow-up: the development-anchor refusal
+  ran before the signature check, so a production key under the built-in
+  anchor never reached the `anchor_mismatch` classification and fell back to
+  `malformed`; the refusal now runs AFTER verification, giving an anchor
+  mismatch its own reason and hint while a genuinely dev-signed key still
+  fails closed as `dev_anchor_not_trusted`.
 
 - 2026-10-16: **FAR-1809** - documented the caller-scoped `GET /api/v1/plan`
   endpoint (delivered by **FAR-1806**; nothing here had drifted - this is a

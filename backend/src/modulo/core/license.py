@@ -173,6 +173,7 @@ class LicenseData:
 REASON_MALFORMED = "malformed"
 REASON_SIGNATURE_MISMATCH = "signature_mismatch"
 REASON_ANCHOR_MISMATCH = "anchor_mismatch"
+REASON_DEV_ANCHOR_NOT_TRUSTED = "dev_anchor_not_trusted"
 REASON_EXPIRED = "expired"
 
 _ANCHOR_MISMATCH_HINT = (
@@ -263,21 +264,20 @@ def parse_and_verify(key: str) -> LicenseValidation:
             reason=REASON_MALFORMED,
         )
 
-    # The built-in development key is not a trust anchor outside debug: a key
-    # whose private half ships with the product must never activate a licence
-    # on a real deployment. Refused before the signature check so the operator
-    # sees the misconfiguration, not an unhelpful "bad signature".
-    if is_dev_anchor_in_use() and not _dev_anchor_trusted:
-        _log.error("license.dev_anchor_verification_refused")
-        return LicenseValidation(
-            valid=False,
-            error=DEV_ANCHOR_NOT_TRUSTED_ERROR,
-            reason=REASON_ANCHOR_MISMATCH,
-            hint=_ANCHOR_MISMATCH_HINT,
-        )
-
     sig_hex = sig_bytes.hex()
 
+    # Verify the signature BEFORE applying the built-in-dev-anchor refusal, so
+    # the two distinct failures stay distinguishable outside debug:
+    #
+    # - a key signed by some OTHER keypair (a production key with no anchor
+    #   configured) fails verification, and the cause is the ANCHOR, not the
+    #   key: reported as an anchor mismatch with the fix (FAR-2091);
+    # - a key that VERIFIES against the built-in development anchor was signed
+    #   with a private half that ships with the product, and must never
+    #   activate a licence on a real deployment: refused (FAR-2061).
+    #
+    # Refusing before the signature check conflated the two and reported every
+    # production key as a generic configuration refusal with no classification.
     if not verify_signature(payload, sig_hex, _get_effective_public_key()):
         if using_builtin_dev_anchor():
             return LicenseValidation(
@@ -291,6 +291,14 @@ def parse_and_verify(key: str) -> LicenseValidation:
             error="Signature verification failed",
             reason=REASON_SIGNATURE_MISMATCH,
             hint=_SIGNATURE_MISMATCH_HINT,
+        )
+
+    if is_dev_anchor_in_use() and not _dev_anchor_trusted:
+        _log.error("license.dev_anchor_verification_refused")
+        return LicenseValidation(
+            valid=False,
+            error=DEV_ANCHOR_NOT_TRUSTED_ERROR,
+            reason=REASON_DEV_ANCHOR_NOT_TRUSTED,
         )
 
     tier = payload.get("tier", "community")

@@ -16,6 +16,8 @@ from modulo.core.license import (
     DEV_ANCHOR_NOT_TRUSTED_ERROR,
     DEV_ANCHOR_STARTUP_ERROR,
     LICENCE_GRACE_DAYS,
+    REASON_ANCHOR_MISMATCH,
+    REASON_DEV_ANCHOR_NOT_TRUSTED,
     LicenseData,
     LicenseError,
     _check_expired,
@@ -141,12 +143,13 @@ class TestSetPublicKeyValidates:
 
 class TestSignThenVerifyWithDefaultKey:
     def test_default_key_refuses_to_verify_outside_debug(self) -> None:
-        """FAR-2061: the dev anchor is refused before the signature is checked."""
+        """FAR-2091: a key signed by another keypair is an ANCHOR mismatch, not malformed."""
         kp = generate_keypair()
         payload = {"tier": "community", "org_id": "test"}
         result = parse_and_verify(_build_signed_key(payload, kp["private_key"]))
         assert result.valid is False
-        assert "MODULO_LICENSE_PUBLIC_KEY" in (result.error or "")
+        assert result.reason == REASON_ANCHOR_MISMATCH
+        assert "MODULO_LICENSE_PUBLIC_KEY" in (result.hint or "")
 
     def test_in_debug_a_bad_signature_still_reports_signature_failure(self) -> None:
         """With debug's opt-in the anchor verifies, so bad signatures surface normally."""
@@ -169,6 +172,12 @@ class TestDevAnchorIsNotATrustAnchorOutsideDebug:
         result = parse_and_verify(_team_licence(dev_anchor))
         assert result.valid is False
         assert result.license_data is None
+        assert result.error == DEV_ANCHOR_NOT_TRUSTED_ERROR
+
+    def test_refusal_is_classified_not_malformed(self, dev_anchor: dict) -> None:
+        """The refusal is its own reason, never the ``malformed`` fallback."""
+        result = parse_and_verify(_team_licence(dev_anchor))
+        assert result.reason == REASON_DEV_ANCHOR_NOT_TRUSTED
         assert result.error == DEV_ANCHOR_NOT_TRUSTED_ERROR
 
     def test_verify_license_key_also_rejects_it(self, dev_anchor: dict) -> None:
