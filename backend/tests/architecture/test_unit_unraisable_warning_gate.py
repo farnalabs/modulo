@@ -1,14 +1,14 @@
-"""Architecture guard: the unit suite's PytestUnraisableExceptionWarning gate.
+"""Architecture guard: the audited suites' PytestUnraisableExceptionWarning gate.
 
 A leaked never-awaited coroutine (a bare ``AsyncMock`` whose async children are
-read synchronously) only surfaces at garbage collection as
-``PytestUnraisableExceptionWarning``. At the ``default`` action the resulting
-multi-line warnings summary can grow large enough to wedge pytest's terminal
-writer (``BlockingIOError: [Errno 11] write could not complete without
-blocking``) and fail a CI step with no test named - the 2026-10-21
-merge-queue outage. The unit suite now escalates the class to an ERROR from
-``tests/unit/conftest.py::pytest_runtest_setup``, and the CI unit command
-carries the matching ``-W`` flag for defence in depth.
+read synchronously) or an unclosed connection/socket only surfaces at garbage
+collection as ``PytestUnraisableExceptionWarning``. At the ``default`` action
+the resulting multi-line warnings summary can grow large enough to wedge
+pytest's terminal writer (``BlockingIOError: [Errno 11] write could not
+complete without blocking``) and fail a CI step with no test named - the
+2026-10-21 merge-queue outage. The audited suites now escalate the class to an
+ERROR from ``tests/conftest.py::pytest_runtest_setup``, and every CI command
+that runs one of them carries the matching ``-W`` flag for defence in depth.
 
 The hook is per-ITEM (``pytest_runtest_setup``), not ``pytest_configure``: the
 warnings plugin re-applies the ini/cmdline ``filterwarnings`` around every
@@ -16,41 +16,72 @@ item, after configure time, so a configure-time filter is overridden by the
 project-wide ``default::pytest.PytestUnraisableExceptionWarning`` entry. That
 defect was observed - the class was merely printed, the run exited 0.
 
+The hook lives in the ROOT conftest rather than a suite conftest because pytest
+only loads a directory's conftest when that directory is on the collection
+path: ``tests/unit/conftest.py`` is never imported by a ``pytest
+tests/integration`` or ``pytest tests/bdd`` run, so a hook there cannot gate
+those suites.
+
 A gate that can be deleted silently is not a gate. These tests pin:
 
-- the effective behaviour: for an item under ``tests/unit`` the hook lands an
-  ``error`` filter ahead of the ini ``default`` and a warned
-  ``PytestUnraisableExceptionWarning`` actually raises;
-- the deliberate SCOPE: an item outside ``tests/unit`` (integration, BDD, a
-  mixed collection) must not install the filter - those suites have not been
-  audited for this class;
-- the CI unit command in ``.github/scripts/coverage-thresholds.sh`` still
-  carries the byte-identical escalation, and the ``backend-test`` job in
-  ``.github/workflows/ci.yml`` still invokes that script.
+- the effective behaviour: for an item in a gated suite (``unit``,
+  ``integration``, ``bdd``) the hook lands an ``error`` filter ahead of the ini
+  ``default`` and a warned ``PytestUnraisableExceptionWarning`` actually raises;
+- the deliberate SCOPE: an item in an UNAUDITED suite (``architecture``,
+  ``conformance``, ``connectors``, ``determination``, ``load``, ``docker``)
+  must not install the filter;
+- the exact audited set in ``GATED_SUITE_ROOTS``;
+- every CI command that runs a gated suite still carries the byte-identical
+  escalation (unit coverage script, BDD workflow, main-integration workflow,
+  deploy-gate integration step, CI touched-files integration step).
 
 Prove-it-fails: deleting the ``warnings.filterwarnings(...)`` line from
-``tests/unit/conftest.py`` makes the escalation tests fail; deleting the ``-W``
-flag from the coverage script makes the last test fail.
+``tests/conftest.py`` makes the escalation tests fail; deleting a suite from
+``GATED_SUITE_ROOTS`` makes its parametrised case fail; dropping the ``-W`` flag
+from any of the four CI commands makes the corresponding command test fail.
 """
 
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yaml
 
-import tests.unit.conftest as _unit_conftest
+import tests.conftest as _root_conftest
 
 BACKEND = Path(__file__).resolve().parent.parent.parent
 REPO = BACKEND.parent
+TESTS = BACKEND / "tests"
 CI_WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
+BDD_WORKFLOW = REPO / ".github" / "workflows" / "bdd.yml"
+MAIN_INTEGRATION_WORKFLOW = REPO / ".github" / "workflows" / "main-integration.yml"
+DEPLOY_WORKFLOW = REPO / ".github" / "workflows" / "deploy.yml"
 COVERAGE_SCRIPT = REPO / ".github" / "scripts" / "coverage-thresholds.sh"
-UNIT_ROOT = BACKEND / "tests" / "unit"
 
 _CATEGORY = pytest.PytestUnraisableExceptionWarning
+_ESCALATION = "error::pytest.PytestUnraisableExceptionWarning"
+
+#: One representative item per gated suite (the path need not exist - the hook
+#: only resolves the path string).
+_GATED_SAMPLES = {
+    "unit": ("api", "test_audit.py"),
+    "integration": ("test_run_crud.py",),
+    "bdd": ("steps", "test_auth.py"),
+}
+
+#: One representative item per UNAUDITED suite.
+_UNGATED_SAMPLES = {
+    "architecture": ("test_workflow_structure.py",),
+    "conformance": ("test_pipeline_conformance.py",),
+    "connectors": ("test_connector_contract.py",),
+    "determination": ("test_determination.py",),
+    "load": ("test_load_profile.py",),
+    "docker": ("test_docker_compose.py",),
+}
 
 
 def _item_at(path: Path) -> SimpleNamespace:
@@ -63,7 +94,7 @@ def _item_at(path: Path) -> SimpleNamespace:
 
 
 def _apply_hook(item: SimpleNamespace) -> None:
-    _unit_conftest.pytest_runtest_setup(item)  # type: ignore[arg-type]
+    _root_conftest.pytest_runtest_setup(item)  # type: ignore[arg-type]
 
 
 def _has_error_filter() -> bool:
@@ -73,11 +104,12 @@ def _has_error_filter() -> bool:
     )
 
 
-def test_unit_item_escalates_unraisable_warning() -> None:
-    """An item under ``tests/unit`` turns the warning class into an error."""
+@pytest.mark.parametrize("suite", sorted(_GATED_SAMPLES))
+def test_gated_suite_item_escalates_unraisable_warning(suite: str) -> None:
+    """An item in each audited suite turns the warning class into an error."""
     baseline = warnings.filters[:]
     try:
-        _apply_hook(_item_at(UNIT_ROOT / "api" / "test_audit.py"))
+        _apply_hook(_item_at(TESTS.joinpath(suite, *_GATED_SAMPLES[suite])))
         assert _has_error_filter()
         with pytest.raises(_CATEGORY):
             warnings.warn(_CATEGORY("probe: leaked coroutine"), stacklevel=1)
@@ -94,40 +126,84 @@ def test_escalation_wins_over_the_ini_default_entry() -> None:
     """
     with warnings.catch_warnings():
         warnings.simplefilter("default", _CATEGORY)
-        _apply_hook(_item_at(UNIT_ROOT / "conftest.py"))
+        _apply_hook(_item_at(TESTS / "unit" / "conftest.py"))
         assert warnings.filters[0][0] == "error"
         assert warnings.filters[0][2] is _CATEGORY
         with pytest.raises(_CATEGORY):
             warnings.warn(_CATEGORY("probe: leaked coroutine"), stacklevel=1)
 
 
-def test_root_level_unit_file_is_escalated() -> None:
-    """A file directly under ``tests/unit`` (not a package) is in scope too."""
+def test_root_level_gated_file_is_escalated() -> None:
+    """A file directly under a gated root (not a package) is in scope too."""
     baseline = warnings.filters[:]
     try:
-        _apply_hook(_item_at(UNIT_ROOT / "test_dispatch.py"))
+        _apply_hook(_item_at(TESTS / "unit" / "test_dispatch.py"))
+        assert _has_error_filter()
+        _apply_hook(_item_at(TESTS / "integration" / "test_run_crud.py"))
         assert _has_error_filter()
     finally:
         warnings.filters[:] = baseline
 
 
-def test_non_unit_item_does_not_install_the_filter() -> None:
-    """Integration/BDD are deliberately out of scope - the hook must decline."""
+@pytest.mark.parametrize("suite", sorted(_UNGATED_SAMPLES))
+def test_unaudited_suite_item_does_not_install_the_filter(suite: str) -> None:
+    """Every unaudited suite is deliberately out of scope - the hook declines."""
     baseline = warnings.filters[:]
     try:
-        _apply_hook(_item_at(BACKEND / "tests" / "integration" / "test_run_crud.py"))
-        assert warnings.filters == baseline
-        _apply_hook(_item_at(BACKEND / "tests" / "bdd" / "steps" / "test_auth.py"))
-        assert warnings.filters == baseline
-        _apply_hook(_item_at(BACKEND / "tests" / "architecture" / "test_workflow_structure.py"))
+        _apply_hook(_item_at(TESTS.joinpath(suite, *_UNGATED_SAMPLES[suite])))
         assert warnings.filters == baseline
     finally:
         warnings.filters[:] = baseline
 
 
+def test_gated_suite_roots_are_the_verified_set() -> None:
+    """The audited set is exactly unit + integration + BDD.
+
+    Widening the gate is a claim that a suite was audited under the escalation
+    and ran green; that must be a deliberate edit here, never a side effect.
+    """
+    assert tuple(_root_conftest.GATED_SUITE_ROOTS) == ("unit", "integration", "bdd")
+
+
 def test_escalation_constant_matches_the_pytest_filter_spelling() -> None:
-    """The shared constant is the exact ``-W`` string the CI command carries."""
-    assert _unit_conftest.UNRAISABLE_ESCALATION == "error::pytest.PytestUnraisableExceptionWarning"
+    """The shared constant is the exact ``-W`` string the CI commands carry."""
+    assert _root_conftest.UNRAISABLE_ESCALATION == _ESCALATION
+
+
+def _workflow_run_commands(path: Path) -> Iterator[str]:
+    """Every ``run:`` command in a workflow file, across all jobs/steps."""
+    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    for job in workflow.get("jobs", {}).values():
+        for step in job.get("steps", []):
+            if isinstance(step, dict) and isinstance(step.get("run"), str):
+                yield step["run"]
+
+
+@pytest.mark.parametrize(
+    ("workflow", "needle"),
+    [
+        (BDD_WORKFLOW, "pytest tests/bdd/"),
+        (MAIN_INTEGRATION_WORKFLOW, "pytest tests/integration/ -m integration"),
+        (DEPLOY_WORKFLOW, "pytest tests/integration/ -m integration"),
+        (CI_WORKFLOW, "pytest tests/integration/test_break_glass_gate.py"),
+    ],
+    ids=["bdd", "main-integration", "deploy-integration", "ci-integration-changed"],
+)
+def test_ci_command_for_a_gated_suite_carries_the_escalation(workflow: Path, needle: str) -> None:
+    """Every CI command that runs a gated suite carries the escalation."""
+    commands = [command for command in _workflow_run_commands(workflow) if needle in command]
+    assert commands, f"no `{needle}` command found in {workflow.name}"
+    for command in commands:
+        assert _ESCALATION in command, f"{workflow.name} command lost the escalation: {command}"
+
+
+def test_bdd_command_no_longer_disables_the_warnings_plugin() -> None:
+    """``-p no:warnings`` made this class invisible; the flag must stay gone."""
+    commands = [command for command in _workflow_run_commands(BDD_WORKFLOW) if "pytest tests/bdd/" in command]
+    assert commands
+    for command in commands:
+        assert "-p no:warnings" not in command
+        assert "--disable-warnings" in command
 
 
 def test_ci_unit_command_carries_the_escalation() -> None:
@@ -140,7 +216,7 @@ def test_ci_unit_command_carries_the_escalation() -> None:
     # The invocation is a backslash-continued command, so join the continuation
     # lines before looking for the flag.
     joined = script.replace("\\\n", " ")
-    assert _unit_conftest.UNRAISABLE_ESCALATION in joined
+    assert _ESCALATION in joined
 
 
 def test_ci_backend_test_job_runs_the_unit_coverage_script() -> None:

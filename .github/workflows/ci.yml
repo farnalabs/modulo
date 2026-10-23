@@ -1627,7 +1627,7 @@ jobs:
       - name: Break-glass boot allow-list + connectivity smoke
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
-        run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -p no:warnings
+        run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
 
   notify-pr-failure:
     name: Trigger Branch Fixer

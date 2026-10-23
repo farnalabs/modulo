@@ -50,11 +50,74 @@ os.environ.setdefault("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 # rollback block, so their import is deleted again. Guarded by
 # ``tests/unit/library_sync/test_coverage_source_import_guard.py``.
 import sys
+import warnings
+from pathlib import Path
 
 import pydantic.root_model  # noqa: F401
 import pytest
 
 import modulo.core.ssrf as _ssrf
+
+#: The warning class the audited suites must treat as a HARD ERROR. Kept as the
+#: pytest ``-W`` spelling so every CI command that runs a gated suite can carry
+#: the byte-identical string - the architecture guard compares them.
+UNRAISABLE_ESCALATION = "error::pytest.PytestUnraisableExceptionWarning"
+
+#: Test trees AUDITED for leaked never-awaited coroutines / unclosed resources
+#: and confirmed clean under the escalation. Only these are gated; every other
+#: tree (architecture, conformance, connectors, determination, load, docker) has
+#: NOT been audited, so a mixed ``pytest tests/`` run must not silently apply the
+#: escalation to it.
+#:
+#: The hook lives HERE (the root conftest) rather than in a suite conftest
+#: because pytest only loads a directory's conftest when that directory is on
+#: the collection path: ``tests/unit/conftest.py`` is never imported by a
+#: ``pytest tests/integration`` or ``pytest tests/bdd`` run, so a hook there
+#: cannot gate those suites.
+GATED_SUITE_ROOTS: tuple[str, ...] = ("unit", "integration", "bdd")
+
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+_TESTS_ROOT = _BACKEND_ROOT / "tests"
+
+
+def _gated_item(item: pytest.Item) -> bool:
+    """True when *item* belongs to one of the audited suites in ``GATED_SUITE_ROOTS``.
+
+    A leaked never-awaited coroutine only surfaces at garbage collection as
+    ``PytestUnraisableExceptionWarning``. Left at its default action it floods
+    the terminal with multi-line summaries, and a large enough summary can wedge
+    pytest's terminal writer with ``BlockingIOError: [Errno 11] write could not
+    complete without blocking`` - the 2026-10-21 merge-queue outage. Escalating
+    the class to ``error`` surfaces the leak on the test that emits it.
+    """
+    path = getattr(item, "path", None)
+    if path is None:  # pytest < 7 fallback
+        path = item.fspath
+    resolved = Path(str(path)).resolve()
+    return any(resolved.is_relative_to(_TESTS_ROOT / suite) for suite in GATED_SUITE_ROOTS)
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Make any leaked-resource warning fail the test that emits it.
+
+    This is a ``pytest_runtest_setup`` hook rather than ``pytest_configure``
+    deliberately. pytest's warnings plugin re-applies the ini/cmdline
+    ``filterwarnings`` list around EVERY item (``catch_warnings_for_item``),
+    AFTER ``pytest_configure`` has run - so a filter installed at configure
+    time is overridden by the project-wide
+    ``default::pytest.PytestUnraisableExceptionWarning`` entry and the class is
+    merely printed. This hook runs inside that per-item context, so the
+    ``error`` filter is the first match. pytest restores the filters at item
+    teardown, keeping the scope to gated suites in a mixed run.
+
+    Pinned by ``tests/architecture/test_unit_unraisable_warning_gate.py`` -
+    that architecture test fails if this hook is removed, if a suite is wrongly
+    added to or dropped from ``GATED_SUITE_ROOTS``, or if the matching ``-W``
+    flag is dropped from any CI command that runs a gated suite.
+    """
+    if _gated_item(item):
+        warnings.filterwarnings("error", category=pytest.PytestUnraisableExceptionWarning)
+
 
 #: The module whose ``_verify_identity`` the FAR-1631 leak guard protects.
 _AUTH_DEPS_MODULE = "modulo.auth.dependencies"
