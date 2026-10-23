@@ -74,9 +74,9 @@ from modulo.db.models.base import OrgScoped
 # ---------------------------------------------------------------------------
 # Closed vocabulary behind ``run_attempts.terminal_reason``.
 #
-# ``ck_run_attempts_terminal_reason`` (migration 0326) enforces the same set at
+# ``ck_run_attempts_terminal_reason`` (migration 0329) enforces the same set at
 # the DB. Adding a cause means adding the constant here, widening the CHECK via
-# a NEW migration (never editing 0326) and updating the write site — together,
+# a NEW migration (never editing 0329) and updating the write site — together,
 # never as a follow-up. ``NULL`` is not in the vocabulary: it is the OPEN state.
 # ---------------------------------------------------------------------------
 ATTEMPT_TERMINAL_REASON_DEADLINE: Final[str] = "deadline"
@@ -99,7 +99,7 @@ ATTEMPT_TERMINAL_REASON_VALUES: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The CHECK expression, single-sourced for the model. Migration 0326 carries
+#: The CHECK expression, single-sourced for the model. Migration 0329 carries
 #: its own frozen copy (a shipped migration must not depend on live code); the
 #: migration test asserts the two are identical, so widening the vocabulary
 #: without a migration fails CI rather than drifting silently.
