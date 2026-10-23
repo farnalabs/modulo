@@ -7,10 +7,19 @@ format::
 
 The payload is a JSON object with keys:
 
-    tier        — "community" | "team"
-    features    — list of feature flag names
-    expires_at  — ISO 8601 expiration timestamp
-    org_id      — organisation identifier
+    tier          — "community" | "team"
+    features      — list of feature flag names
+    expires_at    — ISO 8601 expiration timestamp
+    org_id        — organisation identifier
+    renewal_mode  — "auto" | "manual" (FAR-2075; absent on older keys)
+    term          — licence term in MONTHS (FAR-2075; absent on older keys)
+    licence_id    — opaque stable identifier for this licence (FAR-2075)
+    issued_at     — ISO 8601 mint timestamp (FAR-2075)
+
+The last four claims are ADDITIVE. A key minted before FAR-2075 carries only
+the first four and still verifies unchanged: ``renewal_mode`` defaults to
+``"manual"`` (never ``"auto"`` — auto promises a replacement key is on its
+way), and ``term`` / ``licence_id`` / ``issued_at`` resolve to ``None``.
 """
 
 from __future__ import annotations
@@ -37,6 +46,26 @@ from modulo.core.registry.crypto import verify_signature
 #: a database column: an operator must not be able to extend the paid
 #: capability window by configuration.
 LICENCE_GRACE_DAYS = 14
+
+#: How a licence renews, as carried by the signed ``renewal_mode`` claim.
+#:
+#: A self-hosted instance has no phone-home, so the signed key is the ONLY
+#: trustworthy statement of how the licence renews. ``"auto"`` means Farnalabs
+#: mints and delivers a replacement at the charge date; ``"manual"`` means the
+#: customer must buy/install a new key.
+RENEWAL_MODE_AUTO = "auto"
+RENEWAL_MODE_MANUAL = "manual"
+
+#: The vocabulary a signed ``renewal_mode`` claim may hold.
+RENEWAL_MODES: frozenset[str] = frozenset({RENEWAL_MODE_AUTO, RENEWAL_MODE_MANUAL})
+
+#: Value used when a key carries no (or an unrecognised) ``renewal_mode`` claim.
+#:
+#: Deliberately NEVER ``auto``: ``auto`` asserts that a replacement key is
+#: already on its way, and a key that does not say so must not promise a
+#: renewal the customer has not bought (offering a purchase path to someone
+#: already paying — or the reverse — is a double charge).
+DEFAULT_RENEWAL_MODE = RENEWAL_MODE_MANUAL
 
 #: The BUILT-IN DEVELOPMENT trust anchor (Ed25519 public key, hex-encoded, 64 chars).
 #:
@@ -164,6 +193,56 @@ class LicenseData:
     org_id: str
     raw_payload: dict[str, Any] = field(repr=False)
     raw_key: str = field(repr=False)
+    #: How this licence renews (``"auto"`` | ``"manual"``). A key minted before
+    #: FAR-2075 carries no claim and resolves to ``"manual"``.
+    renewal_mode: str = DEFAULT_RENEWAL_MODE
+    #: Licence term in MONTHS — the unit ``license_signing._add_months`` uses to
+    #: derive ``expires_at``, so a renewal can compute the next expiry from it.
+    #: ``None`` for a key minted before FAR-2075.
+    term: int | None = None
+    #: Opaque, stable identifier for this licence. A renewal is tied to the
+    #: licence it replaces by this value. ``None`` for a key minted before
+    #: FAR-2075.
+    licence_id: str | None = None
+    #: ISO 8601 mint timestamp (informational). ``None`` for a pre-FAR-2075 key.
+    issued_at: str | None = None
+
+
+def _parse_renewal_mode(payload: dict[str, Any]) -> str:
+    """Read the signed ``renewal_mode`` claim, defaulting to ``"manual"``.
+
+    A missing claim is the documented OLD-KEY case and is not an error. An
+    unknown value is a signing-side defect (or a tampered-but-signed payload),
+    so it is logged and treated as ``"manual"`` — the safe direction: it can
+    never claim an automatic renewal that has not been bought.
+    """
+    raw = payload.get("renewal_mode")
+    if isinstance(raw, str) and raw in RENEWAL_MODES:
+        return raw
+    if raw is not None:
+        _log.warning("license.unrecognised_renewal_mode value=%r", raw)
+    return DEFAULT_RENEWAL_MODE
+
+
+def _parse_term(payload: dict[str, Any]) -> int | None:
+    """Read the signed ``term`` claim (months), or ``None`` when absent/invalid."""
+    raw = payload.get("term")
+    # ``bool`` is an ``int`` subclass in Python; JSON ``true`` is not a term.
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        return raw
+    if raw is not None:
+        _log.warning("license.unrecognised_term value=%r", raw)
+    return None
+
+
+def _parse_optional_str(payload: dict[str, Any], claim: str) -> str | None:
+    """Read an optional non-empty string claim, or ``None`` when absent/invalid."""
+    raw = payload.get(claim)
+    if isinstance(raw, str) and raw:
+        return raw
+    if raw is not None:
+        _log.warning("license.unrecognised_claim claim=%s value=%r", claim, raw)
+    return None
 
 
 #: Machine-readable failure reasons carried on :class:`LicenseValidation`.
@@ -319,6 +398,10 @@ def parse_and_verify(key: str) -> LicenseValidation:
         org_id=org_id,
         raw_payload=payload,
         raw_key=key,
+        renewal_mode=_parse_renewal_mode(payload),
+        term=_parse_term(payload),
+        licence_id=_parse_optional_str(payload, "licence_id"),
+        issued_at=_parse_optional_str(payload, "issued_at"),
     )
 
     return LicenseValidation(valid=True, license_data=data)

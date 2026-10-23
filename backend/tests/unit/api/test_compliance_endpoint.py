@@ -12,18 +12,29 @@ Three things here are load-bearing:
 from __future__ import annotations
 
 import inspect
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
+from modulo.api.routes import compliance
 from modulo.api.routes.compliance import (
     _CODE_EVIDENCE_INDEX_READ,
+    _EVIDENCE_INDEX_STATEMENT_TIMEOUT_MS,
+    _LOG_PREFIX,
+    _MSG_TIMEOUT,
+    _bound_statement_timeout,
     get_evidence_index_endpoint,
 )
 from modulo.auth.dependencies import get_current_tenant_user
@@ -144,11 +155,11 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
     await engine.dispose()
 
 
-async def _seed_minimal_org(session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID]:
+async def _seed_minimal_org(session: AsyncSession, slug: str = "compliance") -> tuple[uuid.UUID, uuid.UUID]:
     org_id = uuid.uuid4()
     account_id = uuid.uuid4()
-    session.add(Organisation(id=org_id, name="Compliance Org", slug="compliance"))
-    session.add(Account(id=account_id, email="admin@compliance.example", display_name="Admin"))
+    session.add(Organisation(id=org_id, name=f"Compliance Org {slug}", slug=slug))
+    session.add(Account(id=account_id, email=f"admin-{slug}@compliance.example", display_name="Admin"))
     await session.flush()
     event = AuditEvent(
         id=uuid.uuid4(),
@@ -257,6 +268,34 @@ class TestEndpointBehaviour:
         assert tuple(entry.artifact_type for entry in restored.artifacts) == INDEXED_ARTIFACT_TYPES
 
 
+@pytest.fixture
+def client_for(session: AsyncSession):
+    """Build a real HTTP client with only the credential/session overridden.
+
+    Module-scoped so both the authorisation tests and the audit-period
+    parameter tests drive the real route (query-param aliases and FastAPI's
+    422 validation only exist there).
+    """
+
+    def _make(role: str, org_id: uuid.UUID, account_id: uuid.UUID) -> AsyncClient:
+        principal = TenantPrincipal(
+            username=f"{role}@compliance.example",
+            organisation_id=org_id,
+            account_id=account_id,
+            org_role=role,
+        )
+
+        async def _principal() -> TenantPrincipal:
+            return principal
+
+        app.dependency_overrides[get_current_tenant_user] = _principal
+        app.dependency_overrides[get_db_session] = lambda: session
+        return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+    yield _make
+    app.dependency_overrides.clear()
+
+
 class TestRequestLevelAuthorisation:
     """Drive the real HTTP route, not the handler.
 
@@ -265,26 +304,6 @@ class TestRequestLevelAuthorisation:
     if the permission gate were removed or downgraded. These go through the app
     with only the credential and session dependencies overridden.
     """
-
-    @pytest.fixture
-    def client_for(self, session: AsyncSession):
-        def _make(role: str, org_id: uuid.UUID, account_id: uuid.UUID) -> AsyncClient:
-            principal = TenantPrincipal(
-                username=f"{role}@compliance.example",
-                organisation_id=org_id,
-                account_id=account_id,
-                org_role=role,
-            )
-
-            async def _principal() -> TenantPrincipal:
-                return principal
-
-            app.dependency_overrides[get_current_tenant_user] = _principal
-            app.dependency_overrides[get_db_session] = lambda: session
-            return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
-
-        yield _make
-        app.dependency_overrides.clear()
 
     async def test_a_viewer_is_forbidden(self, client_for, session: AsyncSession) -> None:
         org_id, account_id = await _seed_minimal_org(session)
@@ -319,3 +338,304 @@ class TestRequestLevelAuthorisation:
         body = response.json()
         assert body["organisation_id"] == str(org_id)
         assert body["pack_version"] == load_mapping_pack().pack_version
+
+
+class TestAuditPeriodParameters:
+    """FAR-2055: ``from`` / ``to`` scope the index and are recorded in it.
+
+    Both the direct handler call (unit-level) and the real HTTP route are
+    exercised: the query-parameter aliases and their 422 validation only exist
+    at the HTTP boundary, so a handler-only test could not see them.
+    """
+
+    async def test_direct_call_records_the_period(self, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        principal = TenantPrincipal(
+            username="admin@compliance.example",
+            organisation_id=org_id,
+            account_id=account_id,
+            org_role="admin",
+        )
+        period_from = datetime(2026, 1, 15, 9, 0, 0, tzinfo=UTC)
+        period_to = datetime(2026, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        index = await get_evidence_index_endpoint(
+            session=session,
+            principal=principal,
+            period_from=period_from,
+            period_to=period_to,
+        )
+
+        assert index.period_from == period_from.isoformat()
+        assert index.period_to == period_to.isoformat()
+
+    async def test_direct_call_defaults_to_full_history(self, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        principal = TenantPrincipal(
+            username="admin@compliance.example",
+            organisation_id=org_id,
+            account_id=account_id,
+            org_role="admin",
+        )
+
+        index = await get_evidence_index_endpoint(session=session, principal=principal)
+
+        assert index.period_from is None
+        assert index.period_to is None
+
+    async def test_http_route_accepts_from_and_to(self, client_for, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        client = client_for("admin", org_id, account_id)
+
+        async with client:
+            response = await client.get(
+                _ROUTE_PATH,
+                params={
+                    "from": "2026-01-15T09:00:00Z",
+                    "to": "2026-01-15T10:00:00Z",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["period_from"] == "2026-01-15T09:00:00+00:00"
+        assert body["period_to"] == "2026-01-15T10:00:00+00:00"
+
+    async def test_http_route_rejects_an_inverted_period(self, client_for, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        client = client_for("admin", org_id, account_id)
+
+        async with client:
+            response = await client.get(
+                _ROUTE_PATH,
+                params={
+                    "from": "2026-01-16T00:00:00Z",
+                    "to": "2026-01-15T00:00:00Z",
+                },
+            )
+
+        assert response.status_code == 422
+        assert "audit period" in response.text
+
+    async def test_http_route_rejects_an_unparseable_datetime(self, client_for, session: AsyncSession) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+        client = client_for("admin", org_id, account_id)
+
+        async with client:
+            response = await client.get(_ROUTE_PATH, params={"from": "not-a-date"})
+
+        assert response.status_code == 422
+
+    async def test_the_period_never_moves_the_tenant_boundary(self, client_for, session: AsyncSession) -> None:
+        """A period parameter must not become an organisation selector."""
+        mine_org, mine_account = await _seed_minimal_org(session, slug="period-mine")
+        other_org, _other_account = await _seed_minimal_org(session, slug="period-other")
+        client = client_for("admin", mine_org, mine_account)
+
+        async with client:
+            response = await client.get(
+                _ROUTE_PATH,
+                params={
+                    "from": "2026-01-15T09:00:00Z",
+                    "to": "2026-01-15T10:00:00Z",
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["organisation_id"] == str(mine_org)
+        assert response.json()["organisation_id"] != str(other_org)
+
+
+def _admin_principal(org_id: uuid.UUID, account_id: uuid.UUID) -> TenantPrincipal:
+    return TenantPrincipal(
+        username="admin@compliance.example",
+        organisation_id=org_id,
+        account_id=account_id,
+        org_role="admin",
+    )
+
+
+class _CancelledDriverError(Exception):
+    """A driver error carrying a SQLSTATE through the chain walk (no PG needed)."""
+
+    def __init__(self, sqlstate: str | None) -> None:
+        super().__init__(f"driver failure (sqlstate={sqlstate})")
+        if sqlstate is not None:
+            self.sqlstate = sqlstate
+
+
+def _dbapi_error(sqlstate: str | None) -> DBAPIError:
+    """A SQLAlchemy DBAPIError wrapping a driver error with *sqlstate*."""
+    return DBAPIError("SELECT 1", {}, _CancelledDriverError(sqlstate))
+
+
+class _DialectSession:
+    """Minimal stand-in for ``AsyncSession``: reports a dialect, records executes.
+
+    ``_bound_statement_timeout`` reads ONLY ``session.connection().dialect.name``
+    and then issues ``session.execute``, so this exercises the real function's
+    branch and SQL/params rather than a mocked return value.
+    """
+
+    def __init__(self, dialect_name: str) -> None:
+        self.dialect_name = dialect_name
+        self.executed: list[tuple[str, dict[str, object] | None]] = []
+
+    async def connection(self) -> SimpleNamespace:
+        return SimpleNamespace(dialect=SimpleNamespace(name=self.dialect_name))
+
+    async def execute(self, statement: object, params: dict[str, object] | None = None) -> None:
+        self.executed.append((str(statement), params))
+
+
+class TestStatementTimeoutBound:
+    """FAR-2055: the Postgres-only, transaction-local statement_timeout bound.
+
+    The bound is what stops an org-wide aggregate from pinning a pooled
+    connection, so its two halves - the emitted ``set_config`` on Postgres and
+    its ABSENCE elsewhere - are both pinned here.
+    """
+
+    async def test_postgres_issues_the_transaction_local_set_config(self) -> None:
+        fake = _DialectSession("postgresql")
+
+        await _bound_statement_timeout(cast("AsyncSession", fake))
+
+        assert len(fake.executed) == 1
+        statement, params = fake.executed[0]
+        assert statement == "SELECT set_config('statement_timeout', :ms, true)"
+        # ``true`` above is ``is_local``: a pooled connection must not carry the
+        # bound into the next request. The value is the documented 30s bound.
+        assert params == {"ms": "30000"}
+        assert _EVIDENCE_INDEX_STATEMENT_TIMEOUT_MS == 30_000
+
+    async def test_sqlite_issues_no_set_config(self) -> None:
+        fake = _DialectSession("sqlite")
+
+        await _bound_statement_timeout(cast("AsyncSession", fake))
+
+        assert not fake.executed
+
+    async def test_the_endpoint_applies_the_bound_inside_its_transaction(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Wiring, not just the helper: the endpoint must actually call it.
+
+        A helper-only test would still pass if the endpoint stopped calling it,
+        or called it outside ``session.begin()`` (where a transaction-local
+        ``set_config`` would silently have no effect).
+        """
+        org_id, account_id = await _seed_minimal_org(session)
+        observed_in_transaction: list[bool] = []
+        real_bound = compliance._bound_statement_timeout
+
+        async def _spy(bound_session: AsyncSession) -> None:
+            observed_in_transaction.append(bound_session.in_transaction())
+            await real_bound(bound_session)
+
+        monkeypatch.setattr(compliance, "_bound_statement_timeout", _spy)
+
+        await get_evidence_index_endpoint(session=session, principal=_admin_principal(org_id, account_id))
+
+        assert observed_in_transaction == [True]
+
+    async def test_the_sqlite_endpoint_emits_no_statement_timeout_statement(self, session: AsyncSession) -> None:
+        """Observed at the driver: the SQLite request carries no timeout DDL."""
+        org_id, account_id = await _seed_minimal_org(session)
+        engine = session.get_bind()
+        statements: list[str] = []
+
+        def _record_execute(_conn, _cursor, statement, _parameters, _context, _executemany) -> None:
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", _record_execute)
+        try:
+            index = await get_evidence_index_endpoint(session=session, principal=_admin_principal(org_id, account_id))
+        finally:
+            event.remove(engine, "before_cursor_execute", _record_execute)
+
+        assert index.organisation_id == str(org_id)
+        # The listener must have observed real statements, or the absence
+        # assertion below would pass vacuously.
+        assert statements
+        assert not any("statement_timeout" in statement for statement in statements)
+
+
+class TestStatementTimeoutFailureArm:
+    """FAR-2055: a SQLSTATE 57014 cancel degrades to an actionable 503.
+
+    The handler's own ``except DBAPIError`` arm is exercised (the real route
+    function, with the index build raising the failure) - not a mock's return
+    value - so deleting the arm fails these tests.
+    """
+
+    async def test_a_statement_timeout_cancel_is_an_actionable_503(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        org_id, account_id = await _seed_minimal_org(session)
+
+        async def _raise_timeout(*_args: object, **_kwargs: object) -> None:
+            raise _dbapi_error("57014")
+
+        monkeypatch.setattr(compliance, "build_evidence_index", _raise_timeout)
+        caplog.set_level(logging.ERROR, logger="modulo.api.db_error_reporting")
+
+        with pytest.raises(HTTPException) as raised:
+            await get_evidence_index_endpoint(session=session, principal=_admin_principal(org_id, account_id))
+
+        assert raised.value.status_code == 503
+        detail = str(raised.value.detail)
+        # The remedy must name the knobs that actually narrow the scan.
+        assert detail == _MSG_TIMEOUT
+        assert "'from'" in detail
+        assert "'to'" in detail
+
+        # Operationally visible: the timeout arm records its own structured
+        # failure at ERROR (the generic DB path's db_transient record does not
+        # run for this arm), tagged with a reason distinct from a real outage.
+        records = [record for record in caplog.records if getattr(record, "service_unavailable", None)]
+        assert len(records) == 1
+        structured = records[0].service_unavailable
+        assert structured["reason"] == "statement_timeout"
+        assert structured["route"] == _LOG_PREFIX
+        assert records[0].levelno == logging.ERROR
+
+    async def test_a_non_timeout_db_error_does_not_get_the_period_remedy(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A genuine outage keeps the generic path - the arm must discriminate."""
+        org_id, account_id = await _seed_minimal_org(session)
+
+        async def _raise_unavailable(*_args: object, **_kwargs: object) -> None:
+            raise _dbapi_error("08006")
+
+        monkeypatch.setattr(compliance, "build_evidence_index", _raise_unavailable)
+        caplog.set_level(logging.ERROR, logger="modulo.api.db_error_reporting")
+
+        with pytest.raises(HTTPException) as raised:
+            await get_evidence_index_endpoint(session=session, principal=_admin_principal(org_id, account_id))
+
+        assert raised.value.status_code == 503
+        assert str(raised.value.detail) != _MSG_TIMEOUT
+        assert str(raised.value.detail) == "Database temporarily unavailable."
+
+        records = [record for record in caplog.records if getattr(record, "service_unavailable", None)]
+        assert len(records) == 1
+        assert records[0].service_unavailable["reason"] == "db_transient"
+
+    async def test_a_cancel_without_a_sqlstate_is_not_treated_as_a_timeout(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No SQLSTATE means no evidence of a cancel - the generic path applies."""
+        org_id, account_id = await _seed_minimal_org(session)
+
+        async def _raise_opaque(*_args: object, **_kwargs: object) -> None:
+            raise _dbapi_error(None)
+
+        monkeypatch.setattr(compliance, "build_evidence_index", _raise_opaque)
+
+        with pytest.raises(HTTPException) as raised:
+            await get_evidence_index_endpoint(session=session, principal=_admin_principal(org_id, account_id))
+
+        assert str(raised.value.detail) != _MSG_TIMEOUT
+        assert str(raised.value.detail) == "Database temporarily unavailable."

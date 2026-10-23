@@ -2346,9 +2346,19 @@ async def _after_process_hook(ctx: dict[str, Any]) -> None:
 
 
 async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
-    """SAQ ``startup`` hook: install stall attribution + wire the event pipeline.
+    """SAQ ``startup`` hook: apply the licence anchor + wire the event pipeline.
 
-    0. (FAR-1771) ``install_event_loop_stall_attribution()`` — opt-in
+    0. (FAR-2093) ``configure_license_trust_anchor()`` — apply the SAME
+       process-global licence trust anchor the API applies at startup. Licence
+       verification reads module state (the configured Ed25519 public key and
+       whether the built-in development anchor may be trusted), which does not
+       cross a process boundary: without this step the worker verified every
+       production-signed licence against the DEVELOPMENT key, failed, and
+       silently resolved to Community while the API reported the real tier.
+       This is the hook's ONE fail-closed step (a misconfigured trust anchor
+       is a security failure, not a transient blip): it must run before any
+       job can resolve licence state.
+    1. (FAR-1771) ``install_event_loop_stall_attribution()`` — opt-in
        worker-side event-loop stall attribution, gated on
        ``MODULO_SLOW_CALLBACK_WARN_MS`` (0/off = a pure no-op): when enabled
        it arms asyncio's slow-callback warning and starts the stack sampler
@@ -2357,23 +2367,30 @@ async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
        path shared by both worker flavours (``run_system_web`` and the plain
        ``python -m saq ...runs_settings`` CLI) and runs on the worker's
        event loop — the exact thread the sampler must watch.
-    1. ``register_listeners()`` so worker-side ORM inserts publish locally
+    2. ``register_listeners()`` so worker-side ORM inserts publish locally
        and (for non-notification resources) to Redis.
-    2. ``configure_event_bus(RedisEventBroker(settings.redis_url))`` so those
+    3. ``configure_event_bus(RedisEventBroker(settings.redis_url))`` so those
        publishes reach other processes.
-    3. Spawn the connect+subscribe loop as a background task with backoff —
+    4. Spawn the connect+subscribe loop as a background task with backoff —
        workers subscribe but NEVER relay (the web process owns the pump).
-    4. (FAR-1992) install the provider/platform DB-capacity probe so
+    5. (FAR-1992) install the provider/platform DB-capacity probe so
        WORKER-created runs (cron/polling triggers run in this process) can
        auto-detect capacity exactly as the API process does. Installed BEFORE
        the Redis steps below, which can ``return`` early when Redis is absent.
 
-    LAZY and FAIL-OPEN end to end: every step is try/except log-and-continue.
-    A Redis blip at boot must NEVER crash the worker (``policy="always"``
-    crash-loop risk) — the worker keeps serving jobs and the background task
-    re-attempts connect+subscribe until it succeeds.
+    Every step EXCEPT the licence anchor (step 0) is LAZY and FAIL-OPEN:
+    try/except log-and-continue. A Redis blip at boot must NEVER crash the
+    worker (``policy="always"`` crash-loop risk) — the worker keeps serving
+    jobs and the background task re-attempts connect+subscribe until it
+    succeeds. Step 0 is fail-closed instead: a misset trust anchor refuses to
+    boot the worker rather than silently resolving every licence to Community.
     """
     from modulo.core.events import configure_event_bus, register_listeners
+    from modulo.core.license_bootstrap import configure_license_trust_anchor
+
+    # FAR-2093: fail-closed, and FIRST — the anchor must exist before any job
+    # (or any of the fail-open steps' own licence reads) can resolve a tier.
+    configure_license_trust_anchor(get_settings())
 
     try:
         from modulo.core.health_alerts import install_event_loop_stall_attribution
