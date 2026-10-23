@@ -79,7 +79,7 @@ _LOCK_KWARG = "with_for_update"
 # category-C total (20 SQLAlchemy sites). A count drift is a sweep failure:
 # either a new lock needs a bound (and an inventory row) or a lock was removed.
 _C_SITE_LOCK_COUNTS: dict[str, int] = {
-    "api/routes/model_backends.py": 1,  # C4 create_model_backend_endpoint
+    "api/routes/model_backends.py": 1,  # C4 _create_backend_in_transaction
     "db/crud/organisation.py": 2,  # C5 get_organisation(for_update) + C6 generic fallback
     "db/crud/parameter_set.py": 1,  # C7 update_set
     "db/crud/account.py": 1,  # C8 _get_account_locked
@@ -153,7 +153,7 @@ _ROW_LOCK_FILES: frozenset[str] = frozenset(
 # distinct sites in one bounded transaction; the multi-lock functions are
 # listed once).
 _BOUND_SITES: tuple[tuple[str, str], ...] = (
-    ("api/routes/model_backends.py", "create_model_backend_endpoint"),
+    ("api/routes/model_backends.py", "_create_backend_in_transaction"),
     ("db/crud/parameter_set.py", "update_set"),
     ("db/crud/account.py", "_get_account_locked"),
     ("db/crud/node_observation.py", "observe_node"),

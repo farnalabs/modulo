@@ -210,6 +210,30 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.text()).toContain('never')
   })
 
+  it('verifyKey surfaces the server error detail instead of [object Object]', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.POST as any).mockResolvedValue({
+      data: null,
+      error: {
+        type: 'urn:problem:modulo:bad_request',
+        title: 'Bad Request',
+        status: 400,
+        detail: 'Licence key is not signed by the configured trust anchor',
+      },
+    })
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    await wrapper.find('textarea').setValue('some-key')
+    await wrapper.find('[data-testid="license-verify-btn"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    expect(wrapper.text()).toContain('Licence key is not signed by the configured trust anchor')
+    expect(wrapper.text()).not.toContain('[object Object]')
+  })
+
   it('applyKey surfaces an error when the API returns an error', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)

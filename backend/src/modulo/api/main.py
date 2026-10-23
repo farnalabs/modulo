@@ -876,7 +876,12 @@ def _configure_license_and_otel(settings: Settings) -> None:
     set_dev_anchor_trusted(settings.debug)
 
     if settings.modulo_license_public_key:
-        set_public_key(settings.modulo_license_public_key)
+        try:
+            set_public_key(settings.modulo_license_public_key)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"MODULO_LICENSE_PUBLIC_KEY is not a valid Ed25519 public key (expected 64 hex characters): {exc}"
+            ) from exc
         logger.info("startup.license_public_key_configured")
     elif not settings.debug:
         logger.warning("startup.default_license_key_in_use")

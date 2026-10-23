@@ -18,6 +18,14 @@ def test_base_url_constant():
     assert MISTRAL_BASE_URL == "https://api.mistral.ai/v1"
 
 
+async def test_aclose_is_idempotent_without_a_pinned_client(backend):
+    """A backend built without a custom endpoint owns no HTTP client to close."""
+    assert backend._http_async_client is None
+    await backend.aclose()
+    await backend.aclose()
+    assert backend._http_async_client is None
+
+
 @pytest.mark.parametrize(
     "model_id",
     [

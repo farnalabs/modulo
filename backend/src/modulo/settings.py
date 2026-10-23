@@ -215,8 +215,14 @@ class Settings(BaseSettings):
     # CORS origins are for CORS, not for routing the browser after login.
     modulo_frontend_url: str = Field("")
     modulo_license_key: str = Field("")
-    # Ed25519 public key (hex) for license signature verification.
-    # Defaults to dev/test key — set MODULO_LICENSE_PUBLIC_KEY in production.
+    # Ed25519 public key (hex) for license signature verification — the
+    # PRODUCTION trust anchor, published by Farnalabs with each licence.
+    #
+    # Empty means "fall back to the built-in DEVELOPMENT anchor", which is a
+    # real development keypair's public half and CANNOT verify a production
+    # licence. Startup therefore fails closed when MODULO_LICENSE_KEY is set
+    # without this (FAR-2091); a Community instance with no licence boots, and
+    # an upload is rejected with an actionable anchor-mismatch error.
     modulo_license_public_key: str = Field("")
     # Ed25519 private key (hex) used to SIGN team license keys issued via
     # the admin license-issue endpoint and the Stripe purchase fulfilment

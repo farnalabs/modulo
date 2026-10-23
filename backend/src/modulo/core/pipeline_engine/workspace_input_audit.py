@@ -43,6 +43,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run_node_outputs import (
+    _row_changed_predicate,
     _sanitise_jsonb_for_store,
     dialect_insert,
     resolve_dialect,
@@ -205,6 +206,12 @@ async def record_resolved_inputs(
         stmt = stmt.on_conflict_do_update(
             index_elements=["run_id", "node_id", "attempt_key"],
             set_=set_,
+            # FAR-2083: the table-wide per-row rule — the DO UPDATE is skipped
+            # when this row's own value is unchanged, so an idempotent re-resolve
+            # never moves ``updated_at``. Shared with the crud writers (it is the
+            # same predicate, not a re-implementation) so every writer of this
+            # table obeys one rule.
+            where=_row_changed_predicate(stmt, ("outputs_json",)),
         )
         await session.execute(stmt, [values])
     except Exception:
@@ -304,6 +311,10 @@ async def record_drift(
         stmt = stmt.on_conflict_do_update(
             index_elements=["run_id", "node_id", "attempt_key"],
             set_=set_,
+            # FAR-2083: same per-row rule as record_resolved_inputs above. A
+            # drift pass that changes nothing (every final_sha already recorded)
+            # leaves the audit row's stamp alone.
+            where=_row_changed_predicate(stmt, ("outputs_json",)),
         )
         await session.execute(stmt, [values])
 

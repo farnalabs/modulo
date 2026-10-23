@@ -24,6 +24,7 @@ from langchain_core.messages import BaseMessage
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
 from modulo.model_backends.base import HealthResult, ModelBackendBase
+from modulo.util import sanitise_log_value
 
 logger = logging.getLogger(__name__)
 
@@ -498,6 +499,30 @@ _OPENAI_COMPATIBLE_BACKENDS: dict[str, str | None] = {
     "vllm": "http://localhost:8000/v1",
 }
 
+# FAR-2046: the single source of truth for which providers can consume an
+# operator-supplied custom endpoint (``creds.base_url``). The API rejects a
+# base_url for any provider outside this set, so a stored endpoint is never
+# silently ignored and a health check never probes the wrong host.
+#
+# Non-OpenAI-compatible adapters expose their endpoint under a provider-specific
+# constructor argument; the mapping below is the ONLY place that knows it, and
+# ``_build_backend`` feeds the same value into each adapter's health_check.
+_CUSTOM_ENDPOINT_KWARGS: dict[str, str] = {
+    "anthropic": "anthropic_api_url",
+    "cohere": "base_url",
+    "gemini": "base_url",
+    "mistral": "endpoint",
+}
+BASE_URL_CAPABLE_PROVIDERS: frozenset[str] = (
+    frozenset(_OPENAI_COMPATIBLE_BACKENDS) | frozenset(_CUSTOM_ENDPOINT_KWARGS) | {"openai"}
+)
+
+
+def supports_custom_base_url(provider: str) -> bool:
+    """Return True when ``provider`` honours an operator-supplied endpoint."""
+    return provider in BASE_URL_CAPABLE_PROVIDERS
+
+
 # FIX 3 (FAR-898): providers routed through OpenAICompatibleBackend that do
 # NOT support OpenAI-style ``response_format`` json_schema.  These providers
 # either 400 or silently strip the ``response_format`` field, so their
@@ -585,12 +610,47 @@ def _build_custom_stub_backend(fixture_map: dict[str, str]) -> ModelBackendBase:
     return _CustomStubBackend(fixture_map)
 
 
+def _credential_base_url(
+    creds: Mapping[str, Any],
+    default_params: Mapping[str, Any],
+) -> str | None:
+    """Return an operator-supplied custom endpoint, or ``None`` (FAR-2046).
+
+    Canonical location is the credential JSON (endpoint configuration belongs
+    beside ``api_key``, never in a model parameter). ``default_params`` is the
+    legacy pre-FAR-2046 UI location and is still honoured for existing rows.
+    """
+    for source in (creds, default_params):
+        raw = source.get("base_url")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return None
+
+
 def _build_backend(
     provider: str,
     model_id: str,
     creds: dict[str, Any],
     default_params: dict[str, Any],
 ) -> ModelBackendBase:
+    # FAR-2046: a custom endpoint is honoured by the OpenAI-compatible path and
+    # by the adapter-specific argument map below. For a provider with its own
+    # endpoint semantics (azure_endpoint, watsonx url, bedrock/vertexai) the
+    # stored value cannot be applied — make that loud rather than silently
+    # ignoring it. The provider comes from the request, so sanitise it before
+    # it reaches a log line (python:S5145).
+    custom_base_url = _credential_base_url(creds, default_params)
+    if custom_base_url is not None and not supports_custom_base_url(provider):
+        logger.warning(
+            "Ignoring custom base_url for provider %r: its endpoint is not configurable this way",
+            sanitise_log_value(provider),
+        )
+    # FAR-2046: base_url is endpoint configuration, never a model parameter.
+    # Drop it from the splat for EVERY branch — a leftover copy collided with
+    # Cohere's explicit base_url (TypeError) and was silently ignored by the
+    # other adapters.
+    params = dict(default_params)
+    params.pop("base_url", None)
     # Builders are tried in the historical precedence order; each returns None
     # when it does not handle this provider.
     for builder in (
@@ -603,7 +663,7 @@ def _build_backend(
         _build_watsonx_backend,
         _build_plugin_backend,
     ):
-        backend = builder(provider, model_id, creds, default_params)
+        backend = builder(provider, model_id, creds, params, custom_base_url)
         if backend is not None:
             return backend
     raise ValueError(f"Unknown model backend provider: {provider!r}")
@@ -619,7 +679,8 @@ def _build_bedrock_backend(
     provider: str,
     model_id: str,
     creds: dict[str, Any],
-    default_params: dict[str, Any],
+    params: dict[str, Any],
+    custom_base_url: str | None,
 ) -> ModelBackendBase | None:
     if provider != "bedrock":
         return None
@@ -632,7 +693,7 @@ def _build_bedrock_backend(
         aws_secret_access_key=creds["aws_secret_access_key"],
         model_id=model_id,
         region=creds.get("region", "us-east-1"),
-        **default_params,
+        **params,
     )
 
 
@@ -640,7 +701,8 @@ def _build_vertexai_backend(
     provider: str,
     model_id: str,
     creds: dict[str, Any],
-    default_params: dict[str, Any],
+    params: dict[str, Any],
+    custom_base_url: str | None,
 ) -> ModelBackendBase | None:
     if provider != "vertexai":
         return None
@@ -650,7 +712,7 @@ def _build_vertexai_backend(
         project=creds["project"],
         model_id=model_id,
         location=creds.get("location", "us-central-1"),
-        **default_params,
+        **params,
     )
 
 
@@ -658,37 +720,66 @@ def _build_custom_backend(
     provider: str,
     model_id: str,
     creds: dict[str, Any],
-    default_params: dict[str, Any],
+    params: dict[str, Any],
+    custom_base_url: str | None,
 ) -> ModelBackendBase | None:
     if provider != "custom":
         return None
-    return _build_custom_stub_backend(_extract_fixture_map(creds, default_params))
+    return _build_custom_stub_backend(_extract_fixture_map(creds, params))
 
 
 def _build_non_openai_compatible_backend(
     provider: str,
     model_id: str,
     creds: dict[str, Any],
-    default_params: dict[str, Any],
+    params: dict[str, Any],
+    custom_base_url: str | None,
 ) -> ModelBackendBase | None:
     class_name = _NON_OPENAI_COMPATIBLE.get(provider)
     if class_name is None:
         return None
     _require_api_key(provider, creds)
-    return _backend_class(provider, class_name)(api_key=creds["api_key"], model_id=model_id, **default_params)
+    _apply_custom_endpoint(provider, params, custom_base_url)
+    return _backend_class(provider, class_name)(api_key=creds["api_key"], model_id=model_id, **params)
+
+
+def _apply_custom_endpoint(
+    provider: str,
+    params: dict[str, Any],
+    custom_base_url: str | None,
+) -> None:
+    """Feed the resolved endpoint into the adapter-specific constructor kwarg.
+
+    The endpoint argument is provider-specific (anthropic_api_url, endpoint,
+    base_url). ``_CUSTOM_ENDPOINT_KWARGS`` must cover every non-OpenAI adapter;
+    a missing entry fails loudly with ``KeyError`` rather than silently
+    dropping the operator's endpoint.
+    """
+    endpoint_kwarg = _CUSTOM_ENDPOINT_KWARGS[provider]
+    # A stale default_params copy must never collide with the explicit endpoint.
+    params.pop(endpoint_kwarg, None)
+    if custom_base_url is not None:
+        params[endpoint_kwarg] = custom_base_url
 
 
 def _build_openai_compatible_backend(
     provider: str,
     model_id: str,
     creds: dict[str, Any],
-    default_params: dict[str, Any],
+    params: dict[str, Any],
+    custom_base_url: str | None,
 ) -> ModelBackendBase | None:
     default_base_url = _OPENAI_COMPATIBLE_BACKENDS.get(provider)
     if default_base_url is None and provider != "openai":
         return None
     _require_api_key(provider, creds)
-    base_url = creds.get("base_url", default_base_url) if default_base_url is not None else None
+    # FAR-2046: a custom endpoint supplied by the operator overrides the
+    # provider's built-in default — including ``openai``, which has no default
+    # of its own. This is what makes a self-hosted OpenAI-compatible gateway on
+    # a custom host/port usable. A ``base_url`` left in ``default_params`` by
+    # the pre-FAR-2046 UI is honoured through ``custom_base_url`` (popped
+    # above), never splatted.
+    base_url = custom_base_url if custom_base_url is not None else default_base_url
 
     # FAR-1139: the opencode provider needs custom headers (session ID +
     # User-Agent) that only OpenCodeBackend sends. All other OpenAI-
@@ -696,10 +787,12 @@ def _build_openai_compatible_backend(
     if provider == "opencode":
         from modulo.model_backends.opencode import OpenCodeBackend
 
+        if custom_base_url is not None:
+            params["base_url"] = custom_base_url
         backend: ModelBackendBase = OpenCodeBackend(
             api_key=creds.get("api_key") or "",
             model_id=model_id,
-            **default_params,
+            **params,
         )
     else:
         from modulo.model_backends.module import OpenAICompatibleBackend
@@ -709,7 +802,7 @@ def _build_openai_compatible_backend(
             model_id=model_id,
             base_url=base_url,
             provider=provider,
-            **default_params,
+            **params,
         )
     # FIX 3 (FAR-898): disable native structured output for providers
     # that do not support OpenAI-style response_format json_schema.
@@ -722,7 +815,8 @@ def _build_azure_openai_backend(
     provider: str,
     model_id: str,
     creds: dict[str, Any],
-    default_params: dict[str, Any],
+    params: dict[str, Any],
+    custom_base_url: str | None,
 ) -> ModelBackendBase | None:
     if provider != "azure_openai":
         return None
@@ -736,7 +830,7 @@ def _build_azure_openai_backend(
         model_id=model_id,
         azure_endpoint=azure_endpoint,
         api_version=api_version,
-        **default_params,
+        **params,
     )
 
 
@@ -744,7 +838,8 @@ def _build_watsonx_backend(
     provider: str,
     model_id: str,
     creds: dict[str, Any],
-    default_params: dict[str, Any],
+    params: dict[str, Any],
+    custom_base_url: str | None,
 ) -> ModelBackendBase | None:
     if provider != "watsonx":
         return None
@@ -756,7 +851,7 @@ def _build_watsonx_backend(
         model_id=model_id,
         project_id=creds["project_id"],
         url=creds.get("url", "https://us-south.ml.cloud.ibm.com"),
-        **default_params,
+        **params,
     )
 
 
@@ -764,7 +859,8 @@ def _build_plugin_backend(
     provider: str,
     model_id: str,
     creds: dict[str, Any],
-    default_params: dict[str, Any],
+    params: dict[str, Any],
+    custom_base_url: str | None,
 ) -> ModelBackendBase | None:
     registry = get_plugin_registry()
     if not registry.has_model_backend(provider):
@@ -773,7 +869,7 @@ def _build_plugin_backend(
     if not api_key:
         raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
     try:
-        return registry.build_model_backend(provider, model_id, api_key, **default_params)
+        return registry.build_model_backend(provider, model_id, api_key, **params)
     except asyncio.CancelledError:
         raise
     except Exception as exc:

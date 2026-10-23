@@ -10,7 +10,11 @@ import httpx
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from modulo.core.ssrf import pinned_async_client_sync
+from modulo.core.ssrf import (
+    pinned_async_client_sync,
+    pinned_async_transport_sync,
+    validate_outbound_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +110,84 @@ async def openai_compatible_health_check(
     except httpx.HTTPError as exc:
         logger.warning("Health check failed for %s: %s", url, exc)
         return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
+
+
+# ---------------------------------------------------------------------------
+# FAR-2046 / FAR-512: the SSRF gate for an adapter-supplied custom endpoint.
+#
+# The OpenAI-compatible path validates AND pins (``pinned_async_client_sync``),
+# which is the only shape that closes the DNS-rebinding window. The legacy
+# provider adapters (anthropic / cohere / gemini / mistral) each need the same
+# guarantee, but their LangChain classes differ in what they can accept:
+#
+#   * ``ChatMistralAI`` accepts an ``async_client`` — pass a pinned client.
+#   * ``ChatGoogleGenerativeAI`` accepts ``client_args`` that are forwarded to
+#     its httpx clients — pass a pinned transport there.
+#   * ``ChatAnthropic`` and ``ChatCohere`` build their own HTTP clients
+#     internally and expose no injection point. For those two the endpoint is
+#     resolved and validated at construction (:func:`validate_custom_endpoint`)
+#     and the residual DNS-rebinding window is documented on that helper — a
+#     fail-closed limitation, never a silent pass.
+# ---------------------------------------------------------------------------
+
+_ENDPOINT_CLIENT_TIMEOUT_SECONDS = 30.0
+
+
+def pinned_endpoint_client(url: str, *, headers: dict[str, str] | None = None) -> httpx.AsyncClient:
+    """Build a pinned, validated async client for an adapter's custom endpoint.
+
+    Validates and resolves ``url`` through the SSRF gate (blocked ranges,
+    metadata floor, and the ``SSRF_ALLOW_PRIVATE_RANGES`` opt-in) and pins the
+    validated address set onto the connection, so the completion call cannot
+    re-resolve the host at connect time. Raises ``ValueError`` for a
+    private/internal target without the deployer opt-in.
+
+    For adapters whose LangChain class accepts a client (``ChatMistralAI``'s
+    ``async_client``) — the caller owns the returned client and must close it.
+    ``base_url`` is set to the endpoint because those adapters issue requests on
+    relative paths (``/chat/completions``); the transport's host pin is what
+    keeps the connection on the validated address.
+    """
+    return pinned_async_client_sync(
+        url,
+        trust_env=False,
+        timeout=_ENDPOINT_CLIENT_TIMEOUT_SECONDS,
+        limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        loudness_guard=True,
+        base_url=url,
+        headers=headers,
+    )
+
+
+def pinned_endpoint_transport(url: str) -> httpx.AsyncHTTPTransport:
+    """Build a pinned, validated async transport for an adapter's custom endpoint.
+
+    For adapters that pass HTTP-client kwargs rather than a ready-made client
+    (``ChatGoogleGenerativeAI``'s ``client_args["transport"]``). Validates and
+    pins exactly like :func:`pinned_endpoint_client`, and raises ``ValueError``
+    for a private/internal target without the deployer opt-in.
+    """
+    return pinned_async_transport_sync(url, trust_env=False, loudness_guard=True)
+
+
+def validate_custom_endpoint(url: str) -> None:
+    """SSRF-gate an adapter endpoint whose client cannot carry a pinned transport.
+
+    Used by the adapters whose LangChain class offers no injection point for an
+    HTTP client (``ChatAnthropic``, ``ChatCohere``): the endpoint is resolved
+    and validated at construction and a private/internal target without the
+    ``SSRF_ALLOW_PRIVATE_RANGES`` opt-in raises ``ValueError`` (fail closed).
+
+    RESIDUAL RISK — DNS rebinding: validation resolves the hostname, verifies
+    every resolved address is non-internal, then returns; the provider SDK
+    re-resolves the hostname when it connects. A hostname under DNS control can
+    therefore resolve to a public address here and to an internal/metadata
+    address at request time. This is a documented limitation of those two
+    SDKs, whose HTTP clients cannot be replaced — not a silent bypass. Every
+    adapter that CAN accept a pinned client/transport does (gemini, mistral,
+    and the whole OpenAI-compatible family).
+    """
+    validate_outbound_url(url)
 
 
 class ModelBackendBase(ABC):
