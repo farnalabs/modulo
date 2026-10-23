@@ -86,6 +86,11 @@ describe('formatCompactDuration', () => {
     expect(formatCompactDuration(45)).toBe('45s')
     expect(formatCompactDuration(7200)).toBe('2h')
   })
+
+  it('keeps the seconds tail when an hour duration has one', () => {
+    expect(formatCompactDuration(9930)).toBe('2h45m30s')
+    expect(formatCompactDuration(7230)).toBe('2h30s')
+  })
 })
 
 describe('attemptElapsedRows', () => {
@@ -130,6 +135,27 @@ describe('attemptElapsedRows', () => {
     const rows = attemptElapsedRows({ attempts: 1, startedAt: start, now })
     expect(rows).toEqual([{ attempt: 1, seconds: 3900 }])
   })
+
+  it('accepts epoch-millisecond instants as well as ISO strings', () => {
+    const startedAt = Date.parse(start)
+    const completedAt = startedAt + 90_000
+    const rows = attemptElapsedRows({ attempts: 1, startedAt, completedAt })
+    expect(rows).toEqual([{ attempt: 1, seconds: 90 }])
+  })
+
+  it('leaves an unparseable instant unrecorded rather than rendering NaN', () => {
+    const rows = attemptElapsedRows({
+      attempts: 1,
+      startedAt: 'not-a-date',
+      completedAt: completed,
+    })
+    expect(rows).toEqual([{ attempt: 1, seconds: null }])
+  })
+
+  it('coerces a missing or zero attempt count to a single attempt', () => {
+    const rows = attemptElapsedRows({ attempts: 0, startedAt: start, completedAt: completed })
+    expect(rows).toEqual([{ attempt: 1, seconds: 6600 }])
+  })
 })
 
 describe('parseAttemptNumber', () => {
@@ -140,5 +166,9 @@ describe('parseAttemptNumber', () => {
   it('returns null for a key without a numeric suffix', () => {
     expect(parseAttemptNumber('__final__')).toBeNull()
     expect(parseAttemptNumber(undefined)).toBeNull()
+  })
+
+  it('returns null for a non-positive numeric suffix', () => {
+    expect(parseAttemptNumber('run:abc:node:node-a:0')).toBeNull()
   })
 })
