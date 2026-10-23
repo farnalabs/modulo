@@ -74,7 +74,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 
-#: The three indexes FAR-2055 adds. Their names match the models and 0325.
+#: The three indexes FAR-2055 adds. Their names match the models and 0326.
 _NEW_INDEXES: tuple[tuple[str, str], ...] = (
     ("ix_hitl_claims_org_decision_at", "hitl_claims"),
     ("ix_runs_org_snapshot_id", "runs"),
