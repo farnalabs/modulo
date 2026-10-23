@@ -4945,6 +4945,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Run Attempts
+         * @description Return the durable per-attempt execution history of a run (FAR-2078).
+         *
+         *     Attempts are ordered by ``attempt_index`` ascending (0-based, per run,
+         *     contiguous — see ``modulo.db.models.run_attempt``). ``items`` is capped at
+         *     100 rows; ``total`` carries the run's true attempt count.
+         *
+         *     Org-scoped like every other run child read: the run is loaded through
+         *     ``get_run(..., organisation_id=principal.organisation_id)`` behind
+         *     ``set_rls_org``, so a run belonging to another organisation is
+         *     indistinguishable from a missing one and answers 404 — never an empty
+         *     list, which would turn a typo or a cross-tenant probe into a
+         *     success-shaped response that leaks existence semantics.
+         *
+         *     The gate is the SAME viewer-level ``run.status`` permission the run detail
+         *     endpoint uses (``require_permission_any_credential`` so JWT and org API-key
+         *     callers both work). Deliberately not a new key: a fresh key that happened
+         *     to resolve to a different role would silently widen or narrow the gate.
+         */
+        get: operations["list_run_attempts_api_v1_runs__run_id__attempts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/events": {
         parameters: {
             query?: never;
@@ -19729,6 +19765,41 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /**
+         * RunAttemptItem
+         * @description One attempt of a run, as exposed on the read surface (FAR-2078).
+         */
+        RunAttemptItem: {
+            /** Attempt Index */
+            attempt_index: number;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Ended At */
+            ended_at?: string | null;
+            /** Terminal Reason */
+            terminal_reason?: string | null;
+            /** Model Used */
+            model_used?: string | null;
+            /** Error Code */
+            error_code?: string | null;
+        };
+        /**
+         * RunAttemptsResponse
+         * @description Attempt history for one run, ordered by ``attempt_index`` ascending.
+         *
+         *     ``items`` is capped at :data:`_MAX_ATTEMPTS_PER_RUN`; ``total`` is the
+         *     run's full attempt count, so a truncated page is visible rather than
+         *     silently reported as complete.
+         */
+        RunAttemptsResponse: {
+            /** Items */
+            items?: components["schemas"]["RunAttemptItem"][];
+            /** Total */
+            total: number;
+        };
         /** RunConcurrencyResponse */
         RunConcurrencyResponse: {
             /** Run Concurrency Limit */
@@ -33646,6 +33717,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeOutputResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_run_attempts_api_v1_runs__run_id__attempts_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunAttemptsResponse"];
                 };
             };
             /** @description Validation Error */

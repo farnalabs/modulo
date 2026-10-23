@@ -114,6 +114,7 @@ from modulo.db.crud.run import (
 from modulo.db.crud.run import (
     list_runs as db_list_runs,
 )
+from modulo.db.crud.run_attempts import list_attempts as db_list_attempts
 from modulo.db.crud.run_node_outputs import (
     RunBlobs,
     marker_attempt_suffix,
@@ -156,6 +157,7 @@ _CODE_RUNS_GET_RUN_LOGS = "runs.get_run_logs"
 _CODE_RUNS_GET_RUN_NODE_OUTPUT = "runs.get_run_node_output"
 _CODE_RUNS_RECOVER_RUN_NODE = "runs.recover_run_node"
 _CODE_RUNS_DIFF_NODE_OUTPUT = "runs.diff_node_output"
+_CODE_RUNS_LIST_RUN_ATTEMPTS = "runs.list_run_attempts"
 _CODE_RUN_STATUS = "run.status"
 
 
@@ -3055,6 +3057,119 @@ async def get_run_node_output(
         stdout_artifact=stdout_artifact,
         stderr_artifact=stderr_artifact,
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-attempt execution history (FAR-2078, read slice)
+# ---------------------------------------------------------------------------
+
+#: Hard cap on the number of attempt rows returned in one response. The row
+#: count is bounded TODAY by ``1 + max_retries`` (at most 6 retries), but the
+#: API does not rely on that executor-side bound: the response contract caps
+#: the page at 100 items and reports the run's true attempt count in ``total``.
+_MAX_ATTEMPTS_PER_RUN = 100
+
+
+class RunAttemptItem(BaseModel):
+    """One attempt of a run, as exposed on the read surface (FAR-2078)."""
+
+    attempt_index: int
+    started_at: datetime
+    ended_at: datetime | None = None
+    terminal_reason: str | None = None
+    model_used: str | None = None
+    error_code: str | None = None
+
+
+class RunAttemptsResponse(BaseModel):
+    """Attempt history for one run, ordered by ``attempt_index`` ascending.
+
+    ``items`` is capped at :data:`_MAX_ATTEMPTS_PER_RUN`; ``total`` is the
+    run's full attempt count, so a truncated page is visible rather than
+    silently reported as complete.
+    """
+
+    items: list[RunAttemptItem] = Field(default_factory=list)
+    total: int
+
+
+@router.get("/{run_id}/attempts")
+@handle_db_errors(_CODE_RUNS_LIST_RUN_ATTEMPTS)
+async def list_run_attempts(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
+) -> RunAttemptsResponse:
+    """Return the durable per-attempt execution history of a run (FAR-2078).
+
+    Attempts are ordered by ``attempt_index`` ascending (0-based, per run,
+    contiguous — see ``modulo.db.models.run_attempt``). ``items`` is capped at
+    100 rows; ``total`` carries the run's true attempt count.
+
+    Org-scoped like every other run child read: the run is loaded through
+    ``get_run(..., organisation_id=principal.organisation_id)`` behind
+    ``set_rls_org``, so a run belonging to another organisation is
+    indistinguishable from a missing one and answers 404 — never an empty
+    list, which would turn a typo or a cross-tenant probe into a
+    success-shaped response that leaks existence semantics.
+
+    The gate is the SAME viewer-level ``run.status`` permission the run detail
+    endpoint uses (``require_permission_any_credential`` so JWT and org API-key
+    callers both work). Deliberately not a new key: a fresh key that happened
+    to resolve to a different role would silently widen or narrow the gate.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+            if run is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+            attempts = await db_list_attempts(session, run_id)
+    except IntegrityError:
+        _log.exception(_CODE_RUNS_LIST_RUN_ATTEMPTS)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=MSG_RESOURCE_ALREADY_EXISTS,
+        ) from None
+    except ProgrammingError:
+        _log.exception(_CODE_RUNS_LIST_RUN_ATTEMPTS)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, _CODE_RUNS_LIST_RUN_ATTEMPTS)
+        _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception(_CODE_PIPELINE_EXECUTION_UNEXPECTED_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR,
+        ) from None
+
+    # The CRUD read already orders by attempt_index and the pair is unique, so
+    # this sort is a response-boundary guarantee (the contract, not the
+    # helper, is what the client consumes) and the slice is the stated cap.
+    ordered = sorted(attempts, key=lambda attempt: attempt.attempt_index)
+    items = [
+        RunAttemptItem(
+            attempt_index=attempt.attempt_index,
+            started_at=attempt.started_at,
+            ended_at=attempt.ended_at,
+            terminal_reason=attempt.terminal_reason,
+            model_used=attempt.model_used,
+            error_code=attempt.error_code,
+        )
+        for attempt in ordered[:_MAX_ATTEMPTS_PER_RUN]
+    ]
+    return RunAttemptsResponse(items=items, total=len(ordered))
 
 
 # ---------------------------------------------------------------------------
