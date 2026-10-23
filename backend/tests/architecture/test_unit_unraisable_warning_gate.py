@@ -29,17 +29,18 @@ those suites.
 A gate that can be deleted silently is not a gate. These tests pin:
 
 - the effective behaviour: for an item in a gated suite (``unit``,
-  ``integration``, ``bdd``) the hook lands an ``error`` filter ahead of the ini
-  ``default`` and a warned ``PytestUnraisableExceptionWarning`` actually raises;
-- the deliberate SCOPE: an item in an UNAUDITED suite (``architecture``,
-  ``conformance``, ``connectors``, ``determination``, ``load``, ``docker``)
-  must not install the filter;
+  ``integration``, ``bdd``, ``architecture``, ``connectors``) the hook lands an
+  ``error`` filter ahead of the ini ``default`` and a warned
+  ``PytestUnraisableExceptionWarning`` actually raises;
+- the deliberate SCOPE: an item in an UNAUDITED suite (``conformance``,
+  ``determination``, ``load``, ``docker``) must not install the filter;
 - the exact audited set in ``GATED_SUITE_ROOTS``;
 - every workflow command that names a gated-suite path still carries the
   byte-identical escalation and no longer disables the warnings plugin (BDD
   workflow, main-integration workflow, deploy pre-deploy unit and integration
   steps, CI email-settings/step-rot BDD steps, CI integration-changed, CI
-  tier1b-light, merge-queue unit run, schemathesis and Tier 1b nightly runs);
+  tier1b-light, CI architecture and connector-contract steps, merge-queue unit
+  run, schemathesis and Tier 1b nightly runs);
 - EVERY pytest invocation in ``.github/scripts/coverage-thresholds.sh`` still
   carries the byte-identical escalation. The unit suite is run as shards, so
   the script passes an enumerated file list rather than a literal
@@ -66,6 +67,7 @@ import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import yaml
@@ -94,13 +96,15 @@ _GATED_SAMPLES = {
     "unit": ("api", "test_audit.py"),
     "integration": ("test_run_crud.py",),
     "bdd": ("steps", "test_auth.py"),
+    "architecture": ("test_workflow_structure.py",),
+    "connectors": ("test_connector_contract.py",),
 }
 
-#: One representative item per UNAUDITED suite.
+#: One representative item per UNAUDITED suite. ``load`` and ``determination``
+#: hold no test modules at all (only support files and fixture data) but are
+#: named so a future test module cannot enter either tree ungated.
 _UNGATED_SAMPLES = {
-    "architecture": ("test_workflow_structure.py",),
     "conformance": ("test_pipeline_conformance.py",),
-    "connectors": ("test_connector_contract.py",),
     "determination": ("test_determination.py",),
     "load": ("test_load_profile.py",),
     "docker": ("test_docker_compose.py",),
@@ -131,17 +135,32 @@ def _has_error_filter() -> bool:
     )
 
 
+def _baseline_without_the_escalation() -> list[Any]:
+    """The ini filter state with any hook-installed escalation removed.
+
+    This guard lives in ``tests/architecture``, itself a gated tree, so the
+    root conftest's ``pytest_runtest_setup`` has ALREADY installed the
+    escalation for this very item before the test body runs. Capturing
+    ``warnings.filters`` as-is would make the behavioural assertions vacuous
+    (the filter is present no matter which path is passed). Strip any matching
+    ``error`` filter to model the un-gated starting state.
+    """
+    return [
+        entry
+        for entry in warnings.filters
+        if not (entry[0] == "error" and entry[2] is not None and issubclass(_CATEGORY, entry[2]))
+    ]
+
+
 @pytest.mark.parametrize("suite", sorted(_GATED_SAMPLES))
 def test_gated_suite_item_escalates_unraisable_warning(suite: str) -> None:
     """An item in each audited suite turns the warning class into an error."""
-    baseline = warnings.filters[:]
-    try:
+    with warnings.catch_warnings():
+        warnings.filters[:] = _baseline_without_the_escalation()
         _apply_hook(_item_at(TESTS.joinpath(suite, *_GATED_SAMPLES[suite])))
         assert _has_error_filter()
         with pytest.raises(_CATEGORY):
             warnings.warn(_CATEGORY("probe: leaked coroutine"), stacklevel=1)
-    finally:
-        warnings.filters[:] = baseline
 
 
 def test_escalation_wins_over_the_ini_default_entry() -> None:
@@ -162,34 +181,40 @@ def test_escalation_wins_over_the_ini_default_entry() -> None:
 
 def test_root_level_gated_file_is_escalated() -> None:
     """A file directly under a gated root (not a package) is in scope too."""
-    baseline = warnings.filters[:]
-    try:
+    with warnings.catch_warnings():
+        warnings.filters[:] = _baseline_without_the_escalation()
         _apply_hook(_item_at(TESTS / "unit" / "test_dispatch.py"))
         assert _has_error_filter()
+        warnings.filters[:] = _baseline_without_the_escalation()
         _apply_hook(_item_at(TESTS / "integration" / "test_run_crud.py"))
         assert _has_error_filter()
-    finally:
-        warnings.filters[:] = baseline
 
 
 @pytest.mark.parametrize("suite", sorted(_UNGATED_SAMPLES))
 def test_unaudited_suite_item_does_not_install_the_filter(suite: str) -> None:
     """Every unaudited suite is deliberately out of scope - the hook declines."""
-    baseline = warnings.filters[:]
-    try:
+    with warnings.catch_warnings():
+        warnings.filters[:] = _baseline_without_the_escalation()
+        baseline = warnings.filters[:]
         _apply_hook(_item_at(TESTS.joinpath(suite, *_UNGATED_SAMPLES[suite])))
         assert warnings.filters == baseline
-    finally:
-        warnings.filters[:] = baseline
 
 
 def test_gated_suite_roots_are_the_verified_set() -> None:
-    """The audited set is exactly unit + integration + BDD.
+    """The audited set is exactly unit + integration + BDD + architecture + connectors.
 
     Widening the gate is a claim that a suite was audited under the escalation
     and ran green; that must be a deliberate edit here, never a side effect.
+    ``conformance`` (needs a live cluster) and ``docker`` (two pre-existing
+    failures on main) were NOT able to reach green and stay excluded.
     """
-    assert tuple(_root_conftest.GATED_SUITE_ROOTS) == ("unit", "integration", "bdd")
+    assert tuple(_root_conftest.GATED_SUITE_ROOTS) == (
+        "unit",
+        "integration",
+        "bdd",
+        "architecture",
+        "connectors",
+    )
 
 
 def test_escalation_constant_matches_the_pytest_filter_spelling() -> None:
@@ -217,6 +242,9 @@ def _workflow_run_commands(path: Path) -> Iterator[str]:
         (CI_WORKFLOW, "pytest tests/bdd/steps/test_email_settings.py"),
         (CI_WORKFLOW, "pytest tests/bdd/steps/test_auth.py"),
         (CI_WORKFLOW, "tests/integration/test_tier1b_connectors_light.py"),
+        (CI_WORKFLOW, "pytest tests/architecture/test_product_map_consistency.py"),
+        (CI_WORKFLOW, "pytest tests/architecture/ -q"),
+        (CI_WORKFLOW, "pytest tests/connectors/"),
         # integration-changed expands a computed file list, so it names no
         # gated path - pin it by the expansion itself.
         (CI_WORKFLOW, 'pytest "${TEST_FILES[@]}"'),
@@ -233,6 +261,9 @@ def _workflow_run_commands(path: Path) -> Iterator[str]:
         "ci-bdd-email-settings",
         "ci-bdd-step-rot",
         "ci-tier1b-light",
+        "ci-product-map-consistency",
+        "ci-architecture",
+        "ci-connectors",
         "ci-integration-changed",
         "merge-queue-unit",
         "schemathesis-nightly",
