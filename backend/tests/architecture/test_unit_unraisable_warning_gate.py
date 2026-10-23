@@ -24,17 +24,24 @@ A gate that can be deleted silently is not a gate. These tests pin:
 - the deliberate SCOPE: an item outside ``tests/unit`` (integration, BDD, a
   mixed collection) must not install the filter - those suites have not been
   audited for this class;
-- the CI unit command in ``.github/scripts/coverage-thresholds.sh`` still
-  carries the byte-identical escalation, and the ``backend-test`` job in
-  ``.github/workflows/ci.yml`` still invokes that script.
+- EVERY pytest invocation in ``.github/scripts/coverage-thresholds.sh`` still
+  carries the byte-identical escalation. The unit suite is run as shards, so
+  the script passes an enumerated file list rather than a literal
+  ``tests/unit/`` path - the guard therefore locates the invocation(s) by the
+  ``pytest`` command itself and checks the flag per invocation, so a future
+  split that drops the flag on one shard fails too.
+- the ``backend-test`` job in ``.github/workflows/ci.yml`` still invokes that
+  script.
 
 Prove-it-fails: deleting the ``warnings.filterwarnings(...)`` line from
 ``tests/unit/conftest.py`` makes the escalation tests fail; deleting the ``-W``
-flag from the coverage script makes the last test fail.
+flag from any pytest invocation in the coverage script makes
+``test_ci_unit_command_carries_the_escalation`` fail.
 """
 
 from __future__ import annotations
 
+import re
 import warnings
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,6 +58,10 @@ COVERAGE_SCRIPT = REPO / ".github" / "scripts" / "coverage-thresholds.sh"
 UNIT_ROOT = BACKEND / "tests" / "unit"
 
 _CATEGORY = pytest.PytestUnraisableExceptionWarning
+
+# A pytest COMMAND (not ``pytest-cov``, ``pytest.PytestUnraisableExceptionWarning``
+# or a prose mention): the word followed by whitespace.
+_PYTEST_COMMAND = re.compile(r"(?<![\w./-])pytest\s")
 
 
 def _item_at(path: Path) -> SimpleNamespace:
@@ -130,17 +141,37 @@ def test_escalation_constant_matches_the_pytest_filter_spelling() -> None:
     assert _unit_conftest.UNRAISABLE_ESCALATION == "error::pytest.PytestUnraisableExceptionWarning"
 
 
+def _pytest_invocations(script: str) -> list[str]:
+    """Every pytest command in ``script``, as one joined logical line each.
+
+    Continuation lines are joined first: the escalation flag sits on the
+    backslash-continued line after the command, so a physical-line scan would
+    see the invocation and its flag as separate lines. Comment lines are
+    excluded - the script's explanatory comments mention ``pytest``.
+
+    The invocation is located by the ``pytest`` command itself, never by a
+    literal ``tests/unit/`` path: the unit suite is passed as an enumerated
+    file list, so that literal no longer appears.
+    """
+    invocations = []
+    for line in script.replace("\\\n", " ").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if _PYTEST_COMMAND.search(line):
+            invocations.append(line.strip())
+    return invocations
+
+
 def test_ci_unit_command_carries_the_escalation() -> None:
-    """The CI unit pytest invocation carries the same escalation as the hook."""
+    """Every CI unit pytest invocation carries the same escalation as the hook."""
     script = COVERAGE_SCRIPT.read_text(encoding="utf-8")
-    unit_invocations = [
-        line for line in script.splitlines() if "pytest tests/unit/" in line and not line.lstrip().startswith("#")
-    ]
-    assert unit_invocations, "no `pytest tests/unit/` invocation found in the coverage script"
-    # The invocation is a backslash-continued command, so join the continuation
-    # lines before looking for the flag.
-    joined = script.replace("\\\n", " ")
-    assert _unit_conftest.UNRAISABLE_ESCALATION in joined
+    invocations = _pytest_invocations(script)
+    assert invocations, "no pytest invocation found in .github/scripts/coverage-thresholds.sh"
+    offenders = [line for line in invocations if _unit_conftest.UNRAISABLE_ESCALATION not in line]
+    assert all(_unit_conftest.UNRAISABLE_ESCALATION in line for line in invocations), (
+        f"every pytest invocation must carry {_unit_conftest.UNRAISABLE_ESCALATION!r}; "
+        "missing on:\n" + "\n".join(offenders)
+    )
 
 
 def test_ci_backend_test_job_runs_the_unit_coverage_script() -> None:
