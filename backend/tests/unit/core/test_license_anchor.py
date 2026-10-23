@@ -10,7 +10,9 @@ customer licences with (its public half is published to customers as
 - a configured anchor verifies the matching key and reports a plain signature
   mismatch for a different signer;
 - startup fails closed when a licence is configured without an anchor, while a
-  Community instance with no licence still boots.
+  Community instance with no licence still boots;
+- the ONE shared bootstrap helper (FAR-2093) carries that policy for BOTH the
+  API and the SAQ worker.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from modulo.core.license import (
     set_public_key,
     using_builtin_dev_anchor,
 )
+from modulo.core.license_bootstrap import configure_license_trust_anchor
 from modulo.core.license_signing import encode_license_key
 from modulo.core.registry.crypto import generate_keypair
 
@@ -51,8 +54,14 @@ def _payload(**overrides: Any) -> dict[str, Any]:
 
 @pytest.fixture(autouse=True)
 def _isolate_anchor(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Start every test with no configured override (the built-in anchor)."""
+    """Start every test with no configured override (the built-in anchor).
+
+    ``_dev_anchor_trusted`` and the in-memory licence are process globals too;
+    a test that configures them must not leak into the next one.
+    """
     monkeypatch.setattr(license_mod, "_configured_public_key_hex", None)
+    monkeypatch.setattr(license_mod, "_dev_anchor_trusted", False)
+    monkeypatch.setattr(license_mod, "_current_license", None)
 
 
 # ── Anchor selection ─────────────────────────────────────────────────────
@@ -194,3 +203,44 @@ class TestStartupAnchorPolicy:
 
         with pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"):
             api_main._configure_license_and_otel(settings)
+
+
+# ── Shared bootstrap (FAR-2093) ──────────────────────────────────────────
+
+
+class TestSharedLicenseBootstrap:
+    """The ONE definition both the API and the SAQ worker call.
+
+    Extracted so the worker cannot drift from the API: before FAR-2093 the
+    API applied the anchor and the worker did not, so the same licence
+    resolved to two different tiers on one instance.
+    """
+
+    _settings = staticmethod(TestStartupAnchorPolicy._settings)
+
+    def test_applies_the_configured_anchor(self) -> None:
+        kp = generate_keypair()
+
+        configure_license_trust_anchor(self._settings(modulo_license_public_key=kp["public_key"]))
+
+        assert using_builtin_dev_anchor() is False
+        assert license_mod._configured_public_key_hex == kp["public_key"]
+
+    def test_dev_anchor_trust_follows_debug(self) -> None:
+        configure_license_trust_anchor(self._settings(debug=True))
+
+        assert license_mod._dev_anchor_trusted is True
+
+    def test_community_boot_without_a_licence_is_allowed(self) -> None:
+        # The ordinary self-hosted Community deployment: no key, no anchor.
+        configure_license_trust_anchor(self._settings())
+
+        assert using_builtin_dev_anchor() is True
+
+    def test_licence_without_anchor_fails_closed(self) -> None:
+        with pytest.raises(RuntimeError, match="MODULO_LICENSE_PUBLIC_KEY"):
+            configure_license_trust_anchor(self._settings(modulo_license_key="a.b"))
+
+    def test_malformed_anchor_fails_closed(self) -> None:
+        with pytest.raises(RuntimeError, match="valid Ed25519 public key"):
+            configure_license_trust_anchor(self._settings(modulo_license_public_key="not-hex"))
