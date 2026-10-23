@@ -20,6 +20,8 @@ const INDEX: EvidenceIndex = {
   pack_content_hash: 'sha256:pack',
   pack_published_at: '2026-01-01T00:00:00Z',
   generated_at: '2026-01-02T00:00:00Z',
+  period_from: null,
+  period_to: null,
   product_version: '0.3.323',
   organisation_id: 'org-1',
   framework_ids: ['soc2'],

@@ -6772,6 +6772,13 @@ export interface paths {
          * Get Evidence Index Endpoint
          * @description Return this organisation's compliance evidence index.
          *
+         *     ``from`` / ``to`` optionally scope every artefact aggregate to an audit
+         *     period recorded in the response. With neither supplied the index covers the
+         *     organisation's FULL HISTORY - the response then carries
+         *     ``period_from``/``period_to`` of null, so a reader can always tell a scoped
+         *     index from a full-history one. The organisation itself still comes from the
+         *     authenticated principal, never from a parameter.
+         *
          *     The response lists one entry per artefact TYPE THE INSTANCE PRODUCES - the
          *     audit chain, run snapshots, HITL decisions, eval results, autonomy changes,
          *     the release SBOM and the build identity. It does not list every artefact the
@@ -14563,6 +14570,10 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** Period From */
+            period_from: string | null;
+            /** Period To */
+            period_to: string | null;
             /** Product Version */
             product_version: string;
             /** Organisation Id */
@@ -37035,6 +37046,10 @@ export interface operations {
     get_evidence_index_endpoint_api_v1_compliance_evidence_index_get: {
         parameters: {
             query?: {
+                /** @description Audit period start (inclusive, ISO 8601). Omit for the organisation's full history. The period is half-open: [from, to). */
+                from?: string | null;
+                /** @description Audit period end (EXCLUSIVE, ISO 8601). Omit for the organisation's full history. The period is half-open: [from, to). */
+                to?: string | null;
                 _fresh?: boolean;
             };
             header?: never;
