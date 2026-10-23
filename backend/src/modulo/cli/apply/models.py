@@ -273,6 +273,11 @@ class ApplyGraphConnectorBinding(BaseModel):
         "get_run_logs",
         "list_runs",
     ] = "trigger_run"
+    # FAR-2089: mirror the API model's resource, filters, data fields so the
+    # declarative apply path round-trips them identically to the REST/MCP path.
+    resource: str | None = None
+    filters: dict[str, Any] | None = None
+    data: dict[str, Any] | None = None
 
 
 class ApplyGraphSchemaPin(BaseModel):

@@ -1306,6 +1306,13 @@ class ConnectorBinding(BaseModel):
         "get_run_logs",
         "list_runs",
     ] = "trigger_run"
+    # FAR-2089: connector resource (e.g. "pull", "pr_files", "issues"),
+    # query filters, and mutation payload for write operations.
+    # Previously dropped by extra="ignore" — now explicitly declared so they
+    # round-trip through REST, MCP, and the run snapshot.
+    resource: str | None = None
+    filters: dict[str, Any] | None = None
+    data: dict[str, Any] | None = None
 
 
 class SchemaPin(BaseModel):

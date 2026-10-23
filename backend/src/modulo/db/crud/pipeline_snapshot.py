@@ -766,6 +766,13 @@ def _build_connector_bindings(
                 "connector_instance_id": str(connector_id),
                 "connector_type": (connector.connector_type_id if connector is not None else binding.get("type")),
                 "instance_name": connector.name if connector is not None else None,
+                # FAR-2089: persist operation, dispatch_action, resource, filters, data
+                # so they survive the run snapshot and are available at execution time.
+                "operation": binding.get("operation"),
+                "dispatch_action": binding.get("dispatch_action"),
+                "resource": binding.get("resource"),
+                "filters": binding.get("filters"),
+                "data": binding.get("data"),
             }
         )
     return connector_bindings

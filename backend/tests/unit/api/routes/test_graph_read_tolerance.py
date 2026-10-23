@@ -379,6 +379,88 @@ class TestGraphNodeTypesTolerantRead:
             PipelineGraphNode.model_validate(node)
 
 
+class TestConnectorBindingResourceFiltersDataRoundTrip:
+    """FAR-2089: ConnectorBinding resource, filters, data fields round-trip.
+
+    These fields were previously dropped by extra="ignore" in the API model
+    and extra="forbid" in the apply model. They must now survive the full
+    write → read → snapshot cycle so non-shell connectors (e.g. GitHub)
+    can specify resource="pull", filters={"state": "open"}, etc.
+    """
+
+    def test_connector_binding_resource_filters_data_round_trip(self) -> None:
+        """A dispatch node with resource, filters, data must read them back."""
+        nid = uuid.uuid4()
+        node = _minimal_node(nid, "dispatch")
+        # Add the new FAR-2089 fields
+        node["connector_binding"]["resource"] = "pull"
+        node["connector_binding"]["filters"] = {"state": "open", "author": "testuser"}
+        node["connector_binding"]["data"] = {"title": "New PR", "body": "Please review"}
+
+        resp = _graph_response([node], [])
+        assert len(resp.nodes) == 1
+        assert not resp.validation_issues
+        binding = resp.nodes[0].connector_binding
+        assert binding is not None
+        assert binding.resource == "pull"
+        assert binding.filters == {"state": "open", "author": "testuser"}
+        assert binding.data == {"title": "New PR", "body": "Please review"}
+
+    def test_connector_binding_partial_fields_round_trip(self) -> None:
+        """Only resource provided — filters and data must be None."""
+        nid = uuid.uuid4()
+        node = _minimal_node(nid, "dispatch")
+        node["connector_binding"]["resource"] = "issues"
+
+        resp = _graph_response([node], [])
+        binding = resp.nodes[0].connector_binding
+        assert binding is not None
+        assert binding.resource == "issues"
+        assert binding.filters is None
+        assert binding.data is None
+
+    def test_connector_binding_empty_dicts_round_trip(self) -> None:
+        """Empty dicts for filters/data must round-trip as empty dicts, not None."""
+        nid = uuid.uuid4()
+        node = _minimal_node(nid, "dispatch")
+        node["connector_binding"]["filters"] = {}
+        node["connector_binding"]["data"] = {}
+
+        resp = _graph_response([node], [])
+        binding = resp.nodes[0].connector_binding
+        assert binding is not None
+        # Empty dicts are falsy; use 'not' to avoid empty-container literal comparison
+        assert not binding.filters
+        assert not binding.data
+        # Also verify they are dicts (not None)
+        assert isinstance(binding.filters, dict)
+        assert isinstance(binding.data, dict)
+
+    def test_connector_binding_fields_survive_endpoint_read(self, client: TestClient) -> None:
+        """Same round-trip through the GET /graph endpoint."""
+        nid = uuid.uuid4()
+        node = _minimal_node(nid, "dispatch")
+        node["connector_binding"]["resource"] = "pr_files"
+        node["connector_binding"]["filters"] = {"per_page": 100}
+        node["connector_binding"]["data"] = {"sha": "abc123"}
+        pipeline = _make_mock_pipeline([node])
+
+        with (
+            patch("modulo.api.routes.pipelines.get_pipeline_graph", new_callable=AsyncMock, return_value=([node], [])),
+            patch("modulo.api.routes.pipelines.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch("modulo.api.routes.pipelines.set_rls_org"),
+            patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        ):
+            resp = client.get(f"/api/v1/pipelines/{_PIPELINE_ID}/graph")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["nodes"]) == 1
+        binding = body["nodes"][0]["connector_binding"]
+        assert binding["resource"] == "pr_files"
+        assert binding["filters"] == {"per_page": 100}
+        assert binding["data"] == {"sha": "abc123"}
+
+
 class TestGraphEdgeTypesTolerantRead:
     """Every valid edge_type shape passes reads without issues."""
 

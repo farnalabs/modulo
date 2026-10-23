@@ -4600,6 +4600,9 @@ def _apply_node_connector_binding(
     connector_instance_id: str,
     operation: str | None = None,
     dispatch_action: str | None = None,
+    resource: str | None = None,
+    filters: dict[str, Any] | None = None,
+    data: dict[str, Any] | None = None,
     *,
     connector_supports_dispatch: bool | None = None,
 ) -> dict[str, Any] | None:
@@ -4612,6 +4615,9 @@ def _apply_node_connector_binding(
     ``trigger_run`` job-firer (or lose its configured action) without anyone
     asking. Keys the caller does not mention keep their stored value; the
     caller's values win only for the keys it names.
+
+    FAR-2089: extended to patch ``resource``, ``filters``, ``data`` with the
+    same semantics — caller's keys win, existing keys preserved.
 
     Dispatch invariants are applied with the SAME single helpers the REST path
     and the engine use (``graph_validator.connector_binding_operation`` /
@@ -4661,6 +4667,12 @@ def _apply_node_connector_binding(
         binding["operation"] = operation
     if dispatch_action is not None:
         binding["dispatch_action"] = dispatch_action
+    if resource is not None:
+        binding["resource"] = resource
+    if filters is not None:
+        binding["filters"] = filters
+    if data is not None:
+        binding["data"] = data
     probe = {**target, "connector_binding": binding}
 
     # FAR-1141 FIX 2: a DECLARED ``dispatch`` verb on a node the engine does
