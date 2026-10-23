@@ -725,6 +725,11 @@ dev = [
 # could present valid-looking certificates. certifi is transitive (requests /
 # httpx / urllib3), so it is pinned via a constraint rather than a direct dep.
 #
-# PYSEC-2026-4322: brotli < 1.2.1 vulnerable. brotli is transitive (via
-# geventhttpclient -> locust), so it is constrained rather than a direct dep.
-constraint-dependencies = ["pip>=26.2", "certifi>=2026.10.19", "brotli>=1.2.1"]
+# PYSEC-2026-4322: brotli 1.2.0 vulnerable, fixed in 1.2.1. brotli is transitive
+# (locust -> geventhttpclient), so it is pinned via a constraint rather than a
+# direct dep.
+constraint-dependencies = [
+    "pip>=26.2",
+    "certifi>=2026.10.19",
+    "brotli>=1.2.1",
+]
