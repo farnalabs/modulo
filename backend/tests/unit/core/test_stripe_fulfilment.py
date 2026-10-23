@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from modulo.core.email_service import EmailSendingError
-from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, parse_and_verify, set_public_key
+from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, REASON_SIGNATURE_MISMATCH, parse_and_verify, set_public_key
 from modulo.core.license_signing import LicenseSigningError
 from modulo.core.registry.crypto import generate_keypair
 from modulo.core.stripe_fulfilment import (
@@ -170,7 +170,10 @@ class TestFulfilTeamPurchase:
         # Event NOT claimed — a Stripe retry can still fulfil it later.
         assert "evt_3" not in _processed_event_ids
 
-    async def test_unverifiable_generated_key_is_not_emailed_or_claimed(self) -> None:
+    async def test_unverifiable_generated_key_is_not_emailed_or_claimed(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         """A generated key that fails verification against our own public key
         must NOT be emailed, and must leave the event unclaimed.
 
@@ -186,10 +189,13 @@ class TestFulfilTeamPurchase:
         other = generate_keypair()
         set_public_key(other["public_key"])
         try:
-            with patch(
-                "modulo.core.stripe_fulfilment.send_email",
-                new=MagicMock(return_value=True),
-            ) as mock_send:
+            with (
+                patch(
+                    "modulo.core.stripe_fulfilment.send_email",
+                    new=MagicMock(return_value=True),
+                ) as mock_send,
+                caplog.at_level("ERROR", logger="modulo.core.stripe_fulfilment"),
+            ):
                 result = await fulfil_team_purchase(
                     settings,
                     event_id="evt_unverifiable",
@@ -201,6 +207,11 @@ class TestFulfilTeamPurchase:
         assert result is None
         mock_send.assert_not_called()
         assert "evt_unverifiable" not in _processed_event_ids
+        # FAR-2099: the misconfigured-keypair warning carries the SAME
+        # structured classification the install surfaces return, so the
+        # operator can tell a signature/anchor mismatch from a corrupt key.
+        assert f"reason={REASON_SIGNATURE_MISMATCH}" in caplog.text
+        assert "MODULO_LICENSE_PUBLIC_KEY" in caplog.text
 
     async def test_fulfilment_without_email(self) -> None:
         settings = _make_settings()

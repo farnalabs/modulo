@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -595,3 +596,123 @@ async def test_on_task_done_successful_task_is_silent(caplog: pytest.LogCaptureF
 
     assert task not in ws._held_tasks
     assert "worker_event_subscription.task_failed" not in caplog.text
+
+
+class TestRunSystemWebStartupFailure:
+    """FAR-2099: a system worker that cannot start must terminate non-zero.
+
+    ``run_system_web`` serves the SAQ web UI in the same process as the system
+    crons. If the worker fails to start (a fail-closed startup hook — the
+    licence trust-anchor bootstrap — is the case that matters), the process must
+    EXIT: an HTTP endpoint that answers while ``fire_due_triggers`` never runs
+    is a degraded state an orchestrator reads as healthy.
+    """
+
+    #: Bounds the fake serving loop so a regression fails instead of hanging.
+    _WATCHDOG_SECONDS = 5.0
+
+    @classmethod
+    def _fake_run_app(cls, app: Any, *, host: str, port: int, loop: asyncio.AbstractEventLoop) -> None:  # noqa: ARG003
+        """Stand-in for ``aiohttp.web.run_app``, mirroring its loop contract.
+
+        ``run_app`` drives the loop through ``run_until_complete`` on its own
+        serving task, so a loop stopped before that task completes surfaces as
+        ``RuntimeError`` — the production behaviour the caller handles.
+        """
+        timed_out: list[bool] = []
+
+        async def _serve_forever() -> None:
+            await asyncio.Event().wait()
+
+        def _watchdog() -> None:
+            timed_out.append(True)
+            loop.stop()
+
+        handle = loop.call_later(cls._WATCHDOG_SECONDS, _watchdog)
+        try:
+            loop.run_until_complete(_serve_forever())
+        except RuntimeError:
+            if timed_out:
+                raise AssertionError(
+                    "run_system_web left the web app serving after the worker failed to start"
+                ) from None
+            raise
+        else:
+            if timed_out:
+                raise AssertionError("run_system_web left the web app serving after the worker failed to start")
+        finally:
+            handle.cancel()
+            loop.close()
+
+    @classmethod
+    def _wire_startup_failure(
+        cls,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        disconnect_error: Exception | None = None,
+    ) -> MagicMock:
+        """Wire ``run_system_web`` to a worker whose start raises (fail-closed)."""
+        queue = MagicMock()
+        queue.connect = AsyncMock()
+        queue.disconnect = AsyncMock(side_effect=disconnect_error) if disconnect_error else AsyncMock()
+
+        worker = MagicMock()
+        worker.queue = queue
+        worker.cron_jobs = []
+        # What a fail-closed licence anchor RuntimeError looks like when it
+        # escapes ``Worker.start()``'s startup hooks.
+        worker.start = AsyncMock(side_effect=RuntimeError("MODULO_LICENSE_PUBLIC_KEY is not configured"))
+        worker.stop = AsyncMock()
+
+        monkeypatch.setattr(sw, "_assert_system_auth_configured", MagicMock())
+        monkeypatch.setattr(sw, "get_settings", MagicMock(return_value=_settings()))
+        monkeypatch.setattr(sw, "_probe_database", MagicMock())
+        monkeypatch.setattr(sw, "Worker", MagicMock(return_value=worker))
+        monkeypatch.setattr(sw, "system_settings", MagicMock(return_value={"queue": queue}))
+        monkeypatch.setattr(sw, "reconcile_cron_registrations", AsyncMock())
+        monkeypatch.setattr(sw, "_make_session_factory", MagicMock())
+        monkeypatch.setattr(
+            "modulo.core.cost_controller.probe.set_duplicate_terminal_cooldown",
+            AsyncMock(),
+        )
+        monkeypatch.setattr("aiohttp.web.run_app", cls._fake_run_app)
+        monkeypatch.setattr("saq.web.aiohttp.create_app", MagicMock(return_value=MagicMock()))
+        return worker
+
+    def test_startup_failure_exits_nonzero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        worker = self._wire_startup_failure(monkeypatch)
+
+        with pytest.raises(SystemExit) as excinfo:
+            sw.run_system_web()
+
+        assert excinfo.value.code == 1
+        worker.start.assert_awaited_once()
+        worker.queue.disconnect.assert_awaited_once()
+
+    def test_startup_failure_exits_nonzero_even_when_disconnect_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A disconnect failure on the half-started worker must not mask the exit.
+
+        This is the FAR-2099 regression: the old ``sys.exit(1)`` lived inside
+        the task, so an exception from the ``finally`` disconnect replaced it,
+        the done-callback retrieved the replacement, and the web app kept
+        serving.
+        """
+        worker = self._wire_startup_failure(
+            monkeypatch,
+            disconnect_error=ConnectionError("redis gone during disconnect"),
+        )
+
+        with (
+            caplog.at_level("ERROR", logger="modulo.core.saq_worker"),
+            pytest.raises(SystemExit) as excinfo,
+        ):
+            sw.run_system_web()
+
+        assert excinfo.value.code == 1
+        worker.queue.disconnect.assert_awaited_once()
+        assert "saq_worker.system_worker_disconnect_failed" in caplog.text
+        assert "saq_worker.system_worker_exiting_nonzero" in caplog.text

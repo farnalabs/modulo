@@ -3087,6 +3087,10 @@ def run_system_web() -> None:
     ``fly ssh`` (plan F8). SAQ's web reads ``AUTH_PASSWORD`` / ``AUTH_USER``
     from the environment (``saq/web/aiohttp.py``) — map the settings values
     there. Auth is fail-closed: boot raises if either value is unset.
+
+    A worker that cannot START (including a fail-closed startup hook such as
+    the licence trust-anchor bootstrap) stops the web app and exits non-zero
+    rather than serving a healthy-looking process with a dead scheduler.
     """
     from aiohttp import web
     from saq.web.aiohttp import create_app
@@ -3100,6 +3104,12 @@ def run_system_web() -> None:
 
     worker = Worker(**system_settings())
     loop = asyncio.new_event_loop()
+    #: Populated when the worker cannot start (a fail-closed startup hook such
+    #: as the licence trust-anchor bootstrap is the important case). The
+    #: serving loop is stopped and this process exits non-zero on it: a
+    #: web-only process whose scheduler is dead is a degraded state that looks
+    #: HEALTHY to an orchestrator, so it must never be left running (FAR-2099).
+    startup_failure: list[Exception] = []
 
     async def _set_duplicate_terminal_cooldown() -> None:
         """Set the flood cooldown on worker start so the probe (same process)
@@ -3124,11 +3134,30 @@ def run_system_web() -> None:
             await worker.start()
         except asyncio.CancelledError:
             raise
-        except Exception:
-            _log.exception("SAQ system worker failed to start — exiting gracefully")
-            sys.exit(1)
+        except Exception as exc:
+            # Record the failure and stop the loop; the caller exits non-zero
+            # once ``web.run_app`` returns.
+            #
+            # Deliberately NOT ``sys.exit(1)`` from inside this task: a
+            # ``SystemExit`` raised in a task only becomes a process exit
+            # because asyncio re-raises ``BaseException`` out of the loop, and
+            # any exception raised in the ``finally`` below (a queue disconnect
+            # failure on a half-started worker is normal) replaces it. The task
+            # then completes with the disconnect error, the done-callback
+            # retrieves it, and the web app serves forever with a dead
+            # scheduler — the exact degraded state FAR-2099 removes.
+            _log.exception("SAQ system worker failed to start — stopping the web app and exiting non-zero")
+            startup_failure.append(exc)
+            loop.stop()
         finally:
-            await worker.queue.disconnect()
+            # A disconnect failure must never mask the startup failure the
+            # caller exits on, but it is still worth a log line.
+            try:
+                await worker.queue.disconnect()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("saq_worker.system_worker_disconnect_failed")
 
     async def _shutdown(_app: Any) -> None:
         await worker.stop()
@@ -3137,8 +3166,22 @@ def run_system_web() -> None:
     app = create_app([queue])
     app.on_shutdown.append(_shutdown)
 
-    loop.create_task(_worker_start()).add_done_callback(lambda fut: None if fut.cancelled() else fut.exception())
-    web.run_app(app, host=_SYSTEM_WEB_HOST, port=_SYSTEM_WEB_PORT, loop=loop)
+    startup_task = loop.create_task(_worker_start())
+    startup_task.add_done_callback(lambda fut: None if fut.cancelled() else fut.exception())
+    try:
+        web.run_app(app, host=_SYSTEM_WEB_HOST, port=_SYSTEM_WEB_PORT, loop=loop)
+    except RuntimeError:
+        # ``aiohttp.web.run_app`` drives the loop through ``run_until_complete``,
+        # so a loop stopped by the startup failure above surfaces as
+        # "Event loop stopped before Future completed". That is the expected
+        # consequence of the deliberate stop (run_app's own cleanup already
+        # ran); anything else is a genuine serving failure.
+        if not startup_failure:
+            raise
+
+    if startup_failure:
+        _log.error("saq_worker.system_worker_exiting_nonzero")
+        sys.exit(1)
 
 
 def main() -> None:

@@ -210,10 +210,14 @@ async def fulfil_team_purchase(
         # fulfil the purchase. Mirrors ``admin_license.issue_license``, which
         # answers 500 for the same condition instead of returning a bad key.
         _log.error(
-            "stripe.fulfilment.generated_license_failed_verification event_id=%s error=%s — "
-            "unverifiable key not emailed; event left unclaimed so Stripe's retries re-attempt",
+            "stripe.fulfilment.generated_license_failed_verification event_id=%s error=%s "
+            "reason=%s hint=%s — unverifiable key not emailed; event left unclaimed so Stripe's "
+            "retries re-attempt. The signing key (MODULO_LICENSE_PRIVATE_KEY) and the trust "
+            "anchor (MODULO_LICENSE_PUBLIC_KEY) must be the two halves of one Ed25519 keypair.",
             event_id,
             validation.error,
+            validation.reason,
+            validation.hint,
         )
         return None
     expires_at = validation.license_data.expires_at
