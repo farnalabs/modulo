@@ -826,23 +826,64 @@ class AdmissionLockTimeoutError(Exception):
     Raised after the bounded retry in :meth:`PipelineExecutor._check_capacity`
     is exhausted (two consecutive SQLSTATE 55P03 waits). The admission+bump
     transaction rolled back BOTH times, so the run consumed **zero** executions
-    and nothing was uncounted. By the time this is raised the executor has
-    already performed the fenced pending-reset, so the run is ``pending`` and
-    recovered by ``dispatcher_reconcile``'s re-enqueue leg — a transient lock
-    wait must never terminal-fail a run that never executed.
+    and nothing was uncounted. A transient lock wait must never terminal-fail a
+    run that never executed.
 
-    ``pipeline_execution._handle_executor_failure`` maps THIS type to the
-    non-terminal ``{"status": "deferred"}`` outcome (the same deferral contract
-    ``dispatch_run`` returns for a non-dispatched run). Any OTHER executor
-    exception still terminal-fails as before.
+    The run's resting state depends on the fenced pending-reset that follows
+    (``_fenced_pending_reset`` returns ``int | None``):
+
+    * ``reset_confirmed=True`` — the reset landed; the run is ``pending`` and
+      recovered by ``dispatcher_reconcile``'s re-enqueue leg;
+    * ``reset_confirmed=False`` — the bounded reset itself timed out, so the
+      run is still ``running`` under this executor's claim token and is left
+      for the nodeless/age backstop. ``pipeline_execution`` must not claim it
+      is pending on this branch (FAR-2076).
+
+    Either way ``pipeline_execution._handle_executor_failure`` maps THIS type
+    to the non-terminal ``{"status": "deferred"}`` outcome (the same deferral
+    contract ``dispatch_run`` returns for a non-dispatched run) and never
+    terminal-fails it. Any OTHER executor exception still terminal-fails as
+    before.
     """
 
-    def __init__(self, run_id: uuid.UUID, attempts: int) -> None:
+    def __init__(self, run_id: uuid.UUID, attempts: int, *, reset_confirmed: bool) -> None:
         self.run_id = run_id
         self.attempts = attempts
+        self.reset_confirmed = reset_confirmed
+        if reset_confirmed:
+            resting_state = "the run was left pending for dispatcher_reconcile (no execution consumed)"
+        else:
+            resting_state = (
+                "the fenced pending-reset also timed out, so the run is left running for the "
+                "nodeless/age backstop (no execution consumed)"
+            )
         super().__init__(
-            f"Admission for run {run_id} still hit a row-lock timeout after {attempts} attempts; "
-            "the run was left pending for dispatcher_reconcile (no execution consumed)"
+            f"Admission for run {run_id} still hit a row-lock timeout after {attempts} attempts; {resting_state}"
+        )
+
+
+class RetryBudgetGateRefusedError(Exception):
+    """FAR-2076: the retry-ceiling gate refused admission and its terminal write lost the fence.
+
+    Raised by ``_claim_under_capacity`` when the run is at its policy ceiling,
+    the fenced ``failed`` write was rejected, and the re-read row is still
+    ``running`` — either under a SUPERSEDED claim token or with a pending
+    cancellation. Handing that row back to ``execute()`` would let it stream:
+    the caller only refuses to execute on ``status != "running"``, and such a
+    row IS running, so the graph would execute past the ceiling the gate
+    exists to enforce. Raising keeps the attempt strictly non-executing (no
+    graph/``execute_fn`` call follows) and
+    ``pipeline_execution._handle_executor_failure`` maps it to the non-terminal
+    ``deferred`` outcome: the row is owned by its successor or by the
+    cancellation machinery, never by this attempt.
+    """
+
+    def __init__(self, run_id: uuid.UUID, *, reason: str) -> None:
+        self.run_id = run_id
+        self.reason = reason
+        super().__init__(
+            f"Admission refused for run {run_id}: the retry-budget gate's terminal write lost the fence "
+            f"and the row is still running ({reason}); the graph was not executed"
         )
 
 
@@ -2492,12 +2533,14 @@ class PipelineExecutor:
         FAR-2076: a 55P03 row-lock timeout on the admission transaction is
         retried ONCE. That transaction also spends one execution attempt, so a
         silent recovery would let the graph run uncounted. A second consecutive
-        timeout does NOT terminalise: the executor performs the fenced
+        timeout does NOT terminalise: the executor attempts the fenced
         pending-reset and raises :class:`AdmissionLockTimeoutError`, which
         ``run_executor_with_watchdog`` maps to the non-terminal ``deferred``
         outcome. The run consumed zero executions (both admissions rolled
-        back), so ``dispatcher_reconcile`` re-dispatches it and the next
-        admission counts the attempt.
+        back). The run's resting state depends on the reset: a CONFIRMED reset
+        leaves it ``pending`` for ``dispatcher_reconcile``; a reset that itself
+        timed out (``None``) leaves it ``running`` under our claim token for the
+        nodeless/age backstop. Either way the next admission counts the attempt.
         """
         org_sandbox_cap, org_sandbox_host_only, org_sandbox_population = await self._read_org_sandbox_cap_full(
             org_id, graph_json, snapshot_id
@@ -2547,7 +2590,11 @@ class PipelineExecutor:
                     # reset is logged, never allowed to terminalise the run: it
                     # stays ``running`` and the age/stale-run sweep is the
                     # backstop.
-                    reset = 0
+                    # ``None`` = the reset itself timed out (outcome unknown;
+                    # the row is most likely still running under our token), so
+                    # the deferral is NON-terminal either way and must never
+                    # claim the run is pending.
+                    reset: int | None = None
                     try:
                         reset = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
                     except asyncio.CancelledError:
@@ -2556,7 +2603,7 @@ class PipelineExecutor:
                         _log.warning(
                             "pipeline.capacity_check_lock_timeout run=%s — fenced pending-reset "
                             "failed after the second admission timeout; the run is left as-is "
-                            "for the stale-run sweep",
+                            "for the nodeless/age backstop",
                             run_id,
                             exc_info=True,
                         )
@@ -2570,7 +2617,10 @@ class PipelineExecutor:
                         reset,
                         exc_info=True,
                     )
-                    raise AdmissionLockTimeoutError(run_id, attempts=2) from exc
+                    # The deferral's observable contract differs with the reset:
+                    # a confirmed reset leaves the run ``pending`` (reconciled),
+                    # a timed-out one leaves it ``running`` (backstop).
+                    raise AdmissionLockTimeoutError(run_id, attempts=2, reset_confirmed=bool(reset)) from exc
                 _log.warning(
                     "pipeline.capacity_check_lock_timeout run=%s — bounded "
                     "mutation_row_lock_timeout_ms wait expired on the claim-time "
@@ -2681,10 +2731,7 @@ class PipelineExecutor:
                     if terminal_run is None:
                         # The fenced write lost the row (cancellation raised, or
                         # a superseded claim, in the same instant). Do NOT invent
-                        # a terminal row: re-read and return whatever the row now
-                        # is. A cancelled row cannot execute; a superseded one is
-                        # owned by its successor, and every later write this
-                        # executor makes stays token-fenced.
+                        # a terminal row: re-read whatever the row now is.
                         terminal_run = await get_run(session, run_id)
                         if terminal_run is None:
                             raise RunNotFoundError(run_id)
@@ -2696,6 +2743,20 @@ class PipelineExecutor:
                             org_id,
                             terminal_run.status,
                         )
+                        if terminal_run.status == "running":
+                            # A superseded token or a cancellation-pending row is
+                            # STILL ``running``, so ``execute()``'s
+                            # ``status != "running"`` bail would let it stream —
+                            # exactly the execution past the ceiling this gate
+                            # exists to refuse. Keep the attempt non-executing:
+                            # raise, and let the wrapper map it to a non-terminal
+                            # outcome. Only a genuinely non-running row (a
+                            # terminal or held state) may be returned untouched.
+                            if terminal_run.claim_token != self._claim_token:
+                                raise RetryBudgetGateRefusedError(run_id, reason="superseded claim token")
+                            if terminal_run.cancellation_requested:
+                                raise RetryBudgetGateRefusedError(run_id, reason="cancellation pending")
+                            raise RetryBudgetGateRefusedError(run_id, reason="fence lost")
                         return terminal_run
                     _log.warning(
                         "pipeline.retry_budget_exhausted_at_admission run=%s org=%s "
@@ -6165,7 +6226,19 @@ class PipelineExecutor:
             # original cannot demote the successor's running row, a stalled
             # (watchdog-cancelled) executor cannot resurrect a run the
             # watchdog just failed, and a cancellation cannot be reversed.
-            await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
+            reset_rowcount = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
+            if reset_rowcount is None:
+                # FAR-2076: the reset TIMED OUT, so the run was NOT handed back
+                # to ``pending`` — it is left ``running`` for the age backstop.
+                # Re-raising still cannot re-execute it: the SAQ retry's claim
+                # only accepts ``pending`` or a STALE running row, and this row
+                # was just heartbeating under our token. Never terminalise it.
+                _log.warning(
+                    "pipeline.transient_requeue_reset_timed_out run=%s — the fenced pending-reset "
+                    "timed out; the row is left running for the nodeless/age backstop (the "
+                    "re-raised retry cannot claim a fresh running row)",
+                    run_id,
+                )
             # The caller's re-raise propagates out of execute() BEFORE the
             # post-stream try/finally, so run its cleanup here: clear the
             # cancellation check + hubs and close the run's broker so the
@@ -6764,7 +6837,7 @@ class PipelineExecutor:
                 )
         return script_lease_ok
 
-    async def _fenced_pending_reset(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> int:
+    async def _fenced_pending_reset(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> int | None:
         """Fenced pending-reset: a conditional UPDATE guarded by OUR captured
         claim token + status='running' so a superseded original cannot demote
         the successor's running row, a stalled (watchdog-cancelled) executor
@@ -6791,10 +6864,22 @@ class PipelineExecutor:
         producer (``worker_handoff._handback_decision``), terminal-failing a
         non-idempotent node-started run in place instead of resetting it.
 
-        Returns the UPDATE rowcount (1 = the fence held / reset confirmed,
-        0 = fence lost OR the bounded write timed out) so callers can
-        distinguish a confirmed reset from a lost race (FAR-525: the retry
-        counter only fires on a CONFIRMED reset).
+        Returns one of THREE unambiguous outcomes (FAR-2076 — ``0`` previously
+        meant both "fence lost" and "the write timed out", and the watchdog
+        read both as "a successor owns the run", so its untokened
+        ``fail_run_terminal`` killed a run that still held our claim token):
+
+        * ``1`` — the reset landed; the run is ``pending`` and re-dispatchable.
+        * ``0`` — FENCE LOST: the row no longer matches
+          (``claim_token``/``status``/cancellation), so a successor owns it or
+          it already reached a terminal state. Callers stand down to their
+          existing no-op/terminal path.
+        * ``None`` — the bounded write TIMED OUT (SQLSTATE 55P03). The outcome
+          is UNKNOWN and the row is most likely still ``running`` under OUR
+          claim token. A caller must treat this as a DEFERRAL: never
+          terminalise (an untokened terminal write would kill a run with
+          budget remaining), never execute; leave the row for the nodeless/age
+          backstop.
 
         FAR-2076: the reset takes the hot ``runs`` row lock and is
         transaction-scoped BOUNDED (``set_mutation_row_lock_timeout``) before
@@ -6803,9 +6888,8 @@ class PipelineExecutor:
         row that produced the admission timeout it is recovering from — the
         worker then sits until its setup grace expires and the watchdog
         terminalises the never-executed run the deferral exists to save. A
-        bounded 55P03 is logged and reported as rowcount 0 (fence lost), which
-        every call site already handles as "no confirmed reset"; it never
-        propagates and never stalls the worker.
+        bounded 55P03 is logged and reported as ``None``; it never propagates
+        and never stalls the worker.
         """
         try:
             async with self._session_factory() as session, session.begin():
@@ -6836,7 +6920,10 @@ class PipelineExecutor:
                 org_id,
                 exc_info=True,
             )
-            return 0
+            # ``None`` (NOT 0): the row is likely still ``running`` under our
+            # claim token, so a caller must DEFER — never treat this as a
+            # fence loss and terminalise.
+            return None
 
     async def _cleanup_run_resources(
         self,
@@ -7103,6 +7190,19 @@ class PipelineExecutor:
             },
         )
         reset_rowcount = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
+        if reset_rowcount is None:
+            # FAR-2076: the reset TIMED OUT — the run was NOT handed back to
+            # ``pending``; it stays ``running`` under our claim token and is
+            # left for the age backstop. The re-raise below still cannot
+            # re-execute it (the SAQ retry's claim only takes ``pending`` or a
+            # STALE running row), and it is never terminalised here.
+            _log.warning(
+                "pipeline.retry_policy_reset_timed_out run=%s status=%s — the fenced "
+                "pending-reset timed out; the row is left running for the nodeless/age "
+                "backstop (no confirmed reset, no counter)",
+                run_id,
+                final_status,
+            )
         await self._cleanup_run_resources(
             model_backend_hub=model_backend_hub, connector_hub=connector_hub, run_id=run_id
         )
@@ -7118,7 +7218,8 @@ class PipelineExecutor:
         # (resolved EARLY above; fail-open to the hardcoded default).
         if reset_rowcount:
             # FAR-525 observability: count only CONFIRMED resets — a fence
-            # loss (rowcount 0) means a successor already owns the run.
+            # loss (rowcount 0) means a successor already owns the run, and
+            # ``None`` means the reset timed out (unconfirmed).
             _record_retry_redispatch(reason=final_status, schedule_state=schedule_state, delay_seconds=effective_sleep)
         await asyncio.sleep(effective_sleep)
         raise RunRetryPolicyError(final_status, retry_budget)

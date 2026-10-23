@@ -256,12 +256,13 @@ async def test_check_capacity_second_lock_timeout_defers_instead_of_terminalisin
     assert update.await_count == 2
     # The run is handed back to pending, so dispatcher_reconcile re-dispatches it.
     reset.assert_awaited_once_with(run_id=run.id, org_id=org_id)
+    assert excinfo.value.reset_confirmed is True
     # The deferral keeps the lock timeout as its cause for the logs.
     assert isinstance(excinfo.value.__cause__, OperationalError)
     assert any("capacity_check_lock_timeout" in message for message in caplog.messages)
 
 
-async def test_fenced_pending_reset_bounds_its_write_and_returns_zero_on_lock_timeout(
+async def test_fenced_pending_reset_bounds_its_write_and_returns_none_on_lock_timeout(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """FAR-2076: the deferral path's reset must be BOUNDED.
@@ -270,8 +271,13 @@ async def test_fenced_pending_reset_bounds_its_write_and_returns_zero_on_lock_ti
     ``set_mutation_row_lock_timeout`` Postgres' default (0 = wait forever)
     applies, so it blocks on the very contended row that produced the
     admission timeout. The bound is issued BEFORE its first lock, and a
-    resulting 55P03 is logged and reported as rowcount 0 (no confirmed reset)
-    instead of propagating/stalling.
+    resulting 55P03 is logged and reported as ``None`` (TIMED OUT, outcome
+    unknown) instead of propagating/stalling.
+
+    ``None`` — not ``0`` — is the contract: ``0`` means the fence was LOST (a
+    successor owns the row), while a timeout leaves the row most likely still
+    ``running`` under OUR token. Overloading ``0`` made the watchdog read a
+    timeout as "successor owns it" and terminalise a run with budget left.
     """
     order: list[str] = []
     session = _begin_session()
@@ -295,7 +301,7 @@ async def test_fenced_pending_reset_bounds_its_write_and_returns_zero_on_lock_ti
     ):
         reset = await executor._fenced_pending_reset(run_id=uuid.uuid4(), org_id=uuid.uuid4())
 
-    assert reset == 0
+    assert reset is None
     assert order == ["bound", "update"]
     assert any("fenced_pending_reset_lock_timeout" in message for message in caplog.messages)
 
@@ -303,15 +309,16 @@ async def test_fenced_pending_reset_bounds_its_write_and_returns_zero_on_lock_ti
 async def test_check_capacity_second_lock_timeout_defers_even_when_the_reset_also_times_out() -> None:
     """The deferral survives a reset that could not confirm the handback.
 
-    ``_fenced_pending_reset`` returns 0 when its own bounded write times out
-    (FAR-2076). The admission path must still raise
+    ``_fenced_pending_reset`` returns ``None`` when its own bounded write times
+    out (FAR-2076). The admission path must still raise
     ``AdmissionLockTimeoutError`` so the run falls to the nodeless/age
-    backstop — never sit on the worker until the setup grace expires.
+    backstop — never sit on the worker until the setup grace expires — and the
+    error must say the row is still ``running``, not ``pending``.
     """
     run = _capacity_run()
     executor = _capacity_executor(_begin_session())
     update = AsyncMock(side_effect=_lock_timeout_error())
-    reset = AsyncMock(return_value=0)
+    reset = AsyncMock(return_value=None)
     executor._fenced_pending_reset = reset  # type: ignore[method-assign]
 
     with (
@@ -321,7 +328,7 @@ async def test_check_capacity_second_lock_timeout_defers_even_when_the_reset_als
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
         patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
-        pytest.raises(AdmissionLockTimeoutError),
+        pytest.raises(AdmissionLockTimeoutError) as excinfo,
     ):
         await executor._check_capacity(
             run_id=run.id,
@@ -332,6 +339,11 @@ async def test_check_capacity_second_lock_timeout_defers_even_when_the_reset_als
         )
 
     reset.assert_awaited_once()
+    # The deferral must NOT claim the run is pending: a timed-out reset leaves
+    # it running under our claim token for the backstop.
+    assert excinfo.value.reset_confirmed is False
+    assert "left running" in str(excinfo.value)
+    assert "left pending" not in str(excinfo.value)
 
 
 async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome() -> None:
@@ -348,7 +360,7 @@ async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome(
             str(uuid.uuid4()),
             str(uuid.uuid4()),
             claim_token="tok",
-            exec_exc=AdmissionLockTimeoutError(uuid.uuid4(), attempts=2),
+            exec_exc=AdmissionLockTimeoutError(uuid.uuid4(), attempts=2, reset_confirmed=True),
             hitl_decision_resume=False,
         )
     assert deferred == {"status": "deferred"}

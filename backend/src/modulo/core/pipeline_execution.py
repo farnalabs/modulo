@@ -1789,14 +1789,17 @@ async def _maybe_watchdog_retry(
     error_code: str,
     zero_node: bool = False,
     veto_if_delivered: bool = False,
-) -> bool:
+) -> bool | None:
     """Consult the shared watchdog-retry hook (FAR-690 / FAR-693); fail closed.
 
     Returns ``True`` ONLY when the hook re-dispatched the run (fenced
     pending-reset performed; the caller must NOT terminal-fail — the wrapper
-    re-raises ``RunRetryPolicyError`` so SAQ re-dispatches the job). Any hook
-    failure stands down to today's terminal fail: a retry decision must never
-    prevent a run from reaching a terminal state.
+    re-raises ``RunRetryPolicyError`` so SAQ re-dispatches the job). Returns
+    ``None`` when the fenced reset TIMED OUT (FAR-2076): the row is most likely
+    still running under our claim token, so the caller must neither
+    terminal-fail nor re-dispatch — it defers to the nodeless/age backstop.
+    Any hook failure stands down to today's terminal fail: a retry decision
+    must never prevent a run from reaching a terminal state.
 
     ``zero_node`` (FAR-1088) opts the caller into the zero-node failure
     carve-out; passed ONLY by the zombie watchdog (zero nodes by construction —
@@ -1821,12 +1824,16 @@ async def _maybe_watchdog_retry(
     if veto_if_delivered:
         forwarding["veto_if_delivered"] = True
     try:
-        return bool(await retry_hook(final_status, error_code, **forwarding))
+        result = await retry_hook(final_status, error_code, **forwarding)
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.warning("pipeline_execution.watchdog_retry_hook_failed run=%s", run_id, exc_info=True)
         return False
+    # ``None`` is the FAR-2076 DEFERRAL (the fenced reset timed out) — it must
+    # survive as ``None``; coercing it with ``bool()`` would turn it into a
+    # terminal fail of a run that still holds its claim token.
+    return None if result is None else bool(result)
 
 
 async def zombie_watchdog(
@@ -1942,7 +1949,7 @@ async def zombie_watchdog(
     # the dispatcher_reconcile cron path's carve-out would. The FAR-369
     # node-deadline watchdog's kill (``_fail_overdue_node``) does NOT pass the
     # flag — nodes may have executed there.
-    if await _maybe_watchdog_retry(
+    retry_state = await _maybe_watchdog_retry(
         retry_hook,
         run_id,
         final_status="stalled",
@@ -1954,7 +1961,19 @@ async def zombie_watchdog(
         # visible here, on a renewed pre-node stall, so this is the path that
         # has to read it.
         veto_if_delivered=True,
-    ):
+    )
+    if retry_state is None:
+        # FAR-2076: the fenced pending-reset timed out. The row is most likely
+        # still ``running`` under OUR claim token, so this untokened terminal
+        # write would LAND and kill a run with budget remaining. Defer: leave
+        # the row for the nodeless/age backstop.
+        _log.warning(
+            "pipeline_execution.zombie_watchdog_deferred run=%s — fenced reset timed out; "
+            "run left running for the nodeless/age backstop (no terminal fail)",
+            run_id,
+        )
+        return
+    if retry_state:
         return
     await fail_run_terminal(
         aeng,
@@ -2386,7 +2405,7 @@ async def _fail_overdue_node(
     # fingerprint survives) and on the terminal-fail branch below. Committed
     # before either outcome runs, so the fact writer always sees it.
     await _record_node_deadline_watchdog_firing(aeng, run_id, org_id)
-    if await _maybe_watchdog_retry(
+    retry_state = await _maybe_watchdog_retry(
         retry_hook,
         run_id,
         final_status="failed",
@@ -2399,7 +2418,20 @@ async def _fail_overdue_node(
         # veto only REFUSES a re-dispatch — the run then terminal-fails with
         # ``node_deadline_exceeded`` exactly as it does without policy coverage.
         veto_if_delivered=True,
-    ):
+    )
+    if retry_state is None:
+        # FAR-2076: the fenced reset timed out, so the row is most likely still
+        # running under OUR claim token and the terminal write below would
+        # LAND. Defer instead — leave the row for the nodeless/age backstop.
+        # No ``redispatched=True`` triage note: nothing was re-dispatched.
+        _log.warning(
+            "pipeline_execution.node_deadline_deferred run=%s node=%s — fenced reset timed "
+            "out; run left running for the nodeless/age backstop (no terminal fail)",
+            run_id,
+            node_id,
+        )
+        return
+    if retry_state:
         # The retry hook's fenced pending-reset nulls ``error_code`` and the run
         # is now owned by a successor attempt, so the run page has no trace of
         # this kill. Persist the re-dispatch note BEFORE returning (best-effort:
@@ -2675,8 +2707,13 @@ async def run_executor_with_watchdog(
     ``{"status": "failed"}``; a HITL-decision resume capacity denial returns
     ``{"status": "capacity_deferred"}``; a claim-time admission that could not
     acquire its row lock after the bounded retry returns
-    ``{"status": "deferred"}`` (FAR-2076 — the run is pending, not terminal, and
-    ``dispatcher_reconcile`` re-dispatches it); an ``awaiting_human`` pause
+    ``{"status": "deferred"}`` (FAR-2076 — not terminal: the run is ``pending``
+    and re-dispatched by ``dispatcher_reconcile`` when the fenced pending-reset
+    was confirmed, or left ``running`` for the nodeless/age backstop when that
+    reset also timed out; an at-ceiling refusal whose terminal write lost the
+    fence is deferred too, because it executed nothing; and a watchdog kill
+    whose fenced reset timed out is deferred instead of terminal-failed); an
+    ``awaiting_human`` pause
     returns ``{"status": "awaiting_human"}``; a HITL rejection that ended the
     run (FAR-1487) returns ``{"status": "rejected"}``. The caller only runs
     ``mark_complete`` on a genuine ``complete``.
@@ -2836,6 +2873,13 @@ async def run_executor_with_watchdog(
             hitl_decision_resume=hitl_decision_resume,
         )
 
+    # FAR-2076: a watchdog kill whose fenced pending-reset timed out left the
+    # row running for the nodeless/age backstop. That is a DEFERRAL, not a
+    # failure: report it as such rather than resolving the still-running row
+    # into the generic "failed" response.
+    if watchdog_retry_outcome is not None and watchdog_retry_outcome.deferred:
+        return {"status": "deferred"}
+
     # Derive the outcome from the executor task result (the returned Run row)
     # and the run row status. A watchdog/supersession/heartbeat cancellation
     # leaves exec_result None — fall back to the run row.
@@ -2930,11 +2974,17 @@ async def _handle_executor_failure(
 
     FAR-2076: an ``AdmissionLockTimeoutError`` is a DEFERRAL, not a failure —
     the claim-time admission retried and still hit a row lock, so the run
-    consumed zero executions and the executor has already fenced it back to
-    ``pending``. Report the non-terminal ``deferred`` outcome (the same
-    vocabulary ``dispatch_run`` uses for a run that was not dispatched and is
-    recovered by ``dispatcher_reconcile``) instead of terminal-failing a run
-    that never ran.
+    consumed zero executions. Report the non-terminal ``deferred`` outcome (the
+    same vocabulary ``dispatch_run`` uses for a run that was not dispatched and
+    is recovered by ``dispatcher_reconcile``) instead of terminal-failing a run
+    that never ran. The run rests ``pending`` when the fenced pending-reset was
+    confirmed, and ``running`` (for the nodeless/age backstop) when that reset
+    also timed out; the log distinguishes the two.
+
+    A ``RetryBudgetGateRefusedError`` is also DEFERRED: the run was at its
+    retry ceiling and the gate's terminal write lost the fence while the row
+    stayed ``running`` (a superseded token or a pending cancellation). This
+    attempt executed nothing and owns nothing, so it never terminalises.
 
     FAR-1831: a sandbox-capacity denial on a resume carrying a COMMITTED HITL
     decision must NOT terminal-fail the run — the decision would be lost. Reset
@@ -2956,19 +3006,49 @@ async def _handle_executor_failure(
         AdmissionLockTimeoutError as _AdmissionLockTimeoutError,
     )
     from modulo.core.pipeline_engine.executor import (
+        RetryBudgetGateRefusedError as _RetryBudgetGateRefusedError,
+    )
+    from modulo.core.pipeline_engine.executor import (
         SandboxCapacityExceededError as _SandboxCapacityExceededError,
     )
 
     if isinstance(exec_exc, _AdmissionLockTimeoutError):
-        # The executor already performed the fenced pending-reset; the run is
-        # pending and dispatcher_reconcile re-dispatches it. The next admission
-        # counts its execution attempt. NOT terminal.
+        # The run consumed zero executions. Where it rests depends on the
+        # fenced pending-reset: CONFIRMED → pending (dispatcher_reconcile
+        # re-dispatches it); TIMED OUT → still running under this executor's
+        # claim token, left for the nodeless/age backstop. Never claim the run
+        # is pending when the reset timed out — and never terminalise either.
+        if exec_exc.reset_confirmed:
+            _log.warning(
+                "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
+                "admission kept hitting row-lock timeouts; fenced pending-reset confirmed, "
+                "so the run is pending and NOT terminal-failed; dispatcher_reconcile will "
+                "re-dispatch it",
+                run_id,
+                exec_exc.attempts,
+            )
+        else:
+            _log.warning(
+                "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
+                "admission kept hitting row-lock timeouts and the fenced pending-reset ALSO "
+                "timed out; the run is left RUNNING (not pending) for the nodeless/age "
+                "backstop and is NOT terminal-failed",
+                run_id,
+                exec_exc.attempts,
+            )
+        return {"status": "deferred"}
+    if isinstance(exec_exc, _RetryBudgetGateRefusedError):
+        # An at-ceiling admission whose terminal write lost the fence. The row
+        # is still running under a superseded token or with a cancellation
+        # pending, so this attempt must not stream and must not terminalise:
+        # it owns nothing. Deferred (non-terminal) — the successor's own
+        # admission (or the cancellation machinery) owns the row's outcome.
         _log.warning(
-            "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
-            "admission kept hitting row-lock timeouts; run left pending and NOT "
-            "terminal-failed; dispatcher_reconcile will re-dispatch it",
+            "pipeline_execution.admission_refused_deferred run=%s reason=%s — the "
+            "retry-budget gate refused the execution and its terminal write lost the "
+            "fence; nothing was executed and the run is NOT terminal-failed",
             run_id,
-            exec_exc.attempts,
+            exec_exc.reason,
         )
         return {"status": "deferred"}
     if hitl_decision_resume and isinstance(exec_exc, _SandboxCapacityExceededError):

@@ -49,7 +49,11 @@ from modulo.core.pipeline_execution import (
 
 
 def _make_executor_mock(
-    *, claim_token: str = "tok-watch-1", attempt_count: int = 1, probe_ok: bool = True, reset_rowcount: int = 1
+    *,
+    claim_token: str = "tok-watch-1",
+    attempt_count: int = 1,
+    probe_ok: bool = True,
+    reset_rowcount: int | None = 1,
 ) -> MagicMock:
     """Executor double exposing exactly the seams the shared hook reuses."""
     executor = MagicMock()
@@ -137,11 +141,11 @@ async def _consult_hook(
     attempt_count: int = 1,
     trigger_type: str = "manual",
     graph_json: dict[str, Any] | None = None,
-    reset_rowcount: int = 1,
+    reset_rowcount: int | None = 1,
     zero_node: bool = False,
     attempt_started_at: datetime | None = None,
     node_timeouts: dict[str, int] | None = None,
-) -> tuple[bool, WatchdogRetryOutcome, AsyncMock]:
+) -> tuple[bool | None, WatchdogRetryOutcome, AsyncMock]:
     """Run the REAL shared hook once with only DB seams mocked."""
     executor._read_retry_attempt_state = AsyncMock(
         return_value=(attempt_count, executor._claim_token, attempt_started_at)
@@ -652,6 +656,53 @@ async def test_deadline_kill_lost_fence_stands_down_without_redispatch():
     )
     assert dispatched is False
     assert box.requested is False
+
+
+async def test_deadline_kill_reset_timeout_defers_without_terminal_fail():
+    """FAR-2076: a fenced reset that TIMES OUT must never terminalise the run.
+
+    ``_fenced_pending_reset`` returns ``None`` (not ``0``) when its bounded
+    write hits a lock timeout. Unlike a fence loss, the row is then still
+    ``running`` under OUR claim token, so the watchdog's untokened
+    ``fail_run_terminal`` would LAND and permanently kill a run with retry
+    budget remaining. The hook must DEFER: no terminal fail, no re-dispatch,
+    no triage-as-redispatched — the row is left for the nodeless/age backstop.
+
+    Prove-the-fix: before ``None`` was distinguished from ``0``, this branch
+    returned ``False`` (fence lost) and ``_fail_overdue_node`` called
+    ``fail_run_terminal`` — the assertion on ``fail`` fails.
+    """
+    executor = _make_executor_mock(attempt_count=1, reset_rowcount=None)
+    fail = AsyncMock(return_value=True)
+    record = AsyncMock()
+    triage = AsyncMock()
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["timeout"], "max_retries": 2})
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        sleep_mock = stack.enter_context(
+            patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
+        )
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("modulo.core.pipeline_execution._persist_node_deadline_triage", triage))
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    # The reset was attempted (a reset and its timeout are not a stand-down)…
+    executor._fenced_pending_reset.assert_awaited_once()
+    # …but NOTHING terminalised or re-dispatched: the row is left running.
+    fail.assert_not_awaited()
+    triage.assert_not_awaited()
+    sleep_mock.assert_not_awaited()
+    assert box.requested is False
+    assert box.deferred is True
 
 
 async def test_deadline_kill_never_resets_non_idempotent_graph():
