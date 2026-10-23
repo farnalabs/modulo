@@ -483,6 +483,20 @@ class TestIssueLicense:
         assert validation.license_data is not None
         assert validation.license_data.org_id == data["org_id"]
 
+    def test_issued_key_carries_the_renewal_claims(self, issue_client: TestClient) -> None:
+        """FAR-2075: the mint path emits renewal_mode/term/licence_id/issued_at."""
+        resp = issue_client.post(self.URL, json={"org_name": "Acme", "term_months": 24})
+
+        assert resp.status_code == 201
+        validation = parse_and_verify(resp.json()["license_key"])
+        assert validation.valid is True
+        assert validation.license_data is not None
+        data = validation.license_data
+        assert data.renewal_mode == "manual"
+        assert data.term == 24
+        assert data.licence_id
+        assert data.issued_at
+
     def test_issues_with_custom_features(self, issue_client: TestClient) -> None:
         resp = issue_client.post(self.URL, json={"org_name": "Acme", "features": ["sso"]})
         assert resp.status_code == 201
