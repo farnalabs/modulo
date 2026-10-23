@@ -12,6 +12,7 @@ NULL) are re-dispatched when capacity frees.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from typing import Any
 
@@ -19,6 +20,14 @@ import pytest
 from sqlalchemy import text
 
 from modulo.core import cron_helpers as ch
+from modulo.db.soft_delete import register_soft_delete_filter
+
+# FAR-2076 / soft-delete semantics: the global filter is installed by an IMPORT
+# SIDE EFFECT (``modulo.db.session``). Assert the precondition in the module that
+# depends on it — otherwise the soft-deleted-pipeline test below runs in a
+# process where the filter was never registered and asserts the OPPOSITE of
+# production behaviour (a false pass).
+register_soft_delete_filter()
 
 pytestmark = [
     pytest.mark.integration,
@@ -36,6 +45,10 @@ async def _seed_saq_run(
     dispatched: bool = True,
     dispatcher: str | None = "saq",
     claim_token: str | None = "token-a",
+    retry_policy: dict[str, Any] | None = None,
+    execution_attempt_count: int = 0,
+    dispatch_phase: str | None = None,
+    soft_deleted_pipeline: bool = False,
 ) -> tuple[uuid.UUID, uuid.UUID]:
     pipeline_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
@@ -59,10 +72,18 @@ async def _seed_saq_run(
             await conn.execute(
                 text(
                     "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, "
-                    "run_context_defaults, visibility, max_concurrent_runs) "
-                    "VALUES (:id, :oid, :uid, :pname, '[]'::json, '{}'::json, 'org', 5)"
+                    "run_context_defaults, visibility, max_concurrent_runs, retry_policy, deleted_at) "
+                    "VALUES (:id, :oid, :uid, :pname, '[]'::json, '{}'::json, 'org', 5, "
+                    "CAST(:policy AS jsonb), CASE WHEN :deleted THEN now() ELSE NULL END)"
                 ),
-                {"id": str(pipeline_id), "oid": str(org_id), "uid": str(account_id), "pname": pipeline_name},
+                {
+                    "id": str(pipeline_id),
+                    "oid": str(org_id),
+                    "uid": str(account_id),
+                    "pname": pipeline_name,
+                    "policy": "null" if retry_policy is None else json.dumps(retry_policy),
+                    "deleted": soft_deleted_pipeline,
+                },
             )
             await conn.execute(
                 text(
@@ -78,11 +99,12 @@ async def _seed_saq_run(
                 text(
                     "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, account_id, trigger_type, "
                     "status, input_hash, langgraph_thread_id, run_number, dispatcher, claim_count, "
-                    "heartbeat_at, dispatched_at, saq_job_id, claim_token) "
+                    "heartbeat_at, dispatched_at, saq_job_id, claim_token, execution_attempt_count, "
+                    "dispatch_phase) "
                     "VALUES (:id, :oid, :pid, :sid, :uid, 'manual', :status, 'hash', :thread, :rn, :disp, 1, "
                     "CASE WHEN :stale THEN now() - interval '30 minutes' ELSE now() END, "
                     "CASE WHEN :dispatched THEN now() - interval '30 minutes' ELSE NULL END, "
-                    ":job_id, :tok)"
+                    ":job_id, :tok, :exec_count, :phase)"
                 ),
                 {
                     "id": str(run_id),
@@ -98,6 +120,8 @@ async def _seed_saq_run(
                     "disp": dispatcher,
                     "job_id": f"saq:job:runs:run:{run_id}",
                     "tok": claim_token,
+                    "exec_count": execution_attempt_count,
+                    "phase": dispatch_phase,
                 },
             )
         return run_id, pipeline_id
@@ -378,3 +402,192 @@ async def test_two_connections_no_double_redispatch(
     token_1 = await pe.claim_run_async(db_engine, str(run_id), str(test_org))
     token_2 = await pe.claim_run_async(db_engine, str(run_id), str(test_org))
     assert len([t for t in (token_1, token_2) if t is not None]) == 1
+
+
+# ---------------------------------------------------------------------------
+# FAR-2076 — the retry-budget gate on the re-enqueue backstop (real Postgres)
+# ---------------------------------------------------------------------------
+
+
+async def _read_run(db_engine: Any, run_id: uuid.UUID) -> Any:
+    """Read the run's (status, error_code) through a fresh NullPool connection."""
+    from sqlalchemy import NullPool
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
+    try:
+        async with eng.connect() as conn:
+            return (
+                await conn.execute(
+                    text("SELECT status, error_code FROM runs WHERE id=:rid"),
+                    {"rid": str(run_id)},
+                )
+            ).first()
+    finally:
+        await eng.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pending_run_beyond_retry_budget_is_terminal_failed(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """A pending run already at its policy ceiling is terminal-failed with the
+    distinct code — never re-dispatched (which executed past the policy) and
+    never left pending (which hid the cause until the age backstop).
+
+    The guarded UPDATE's predicate (``status='pending'`` AND the durable
+    ``execution_attempt_count`` >= ceiling) is exercised against real Postgres
+    here; a substring assertion against a fake session would not test it.
+    """
+    run_id, _ = await _seed_saq_run(
+        db_engine,
+        test_org,
+        test_user,
+        status="pending",
+        dispatched=False,
+        dispatcher=None,
+        claim_token="seed-token",
+        # max_retries 0 => ceiling 1 execution; this run already spent it.
+        retry_policy={"on": ["failure"], "max_retries": 0},
+        execution_attempt_count=1,
+    )
+
+    summary = await ch.dispatcher_reconcile()
+
+    row = await _read_run(db_engine, run_id)
+    assert row[0] == "failed"
+    assert row[1] == "harness.retry_budget_exhausted"
+    assert not await _job_exists(saq_settings_env, f"run:{run_id}")
+    assert summary["retry_budget_exhausted"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_pending_run_within_retry_budget_is_still_redispatched(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """Durability preserved: a within-budget pending row keeps the recovery."""
+    run_id, _ = await _seed_saq_run(
+        db_engine,
+        test_org,
+        test_user,
+        status="pending",
+        dispatched=False,
+        dispatcher=None,
+        claim_token="seed-token",
+        retry_policy={"on": ["failure"], "max_retries": 2},
+        execution_attempt_count=1,
+    )
+
+    await ch.dispatcher_reconcile()
+
+    row = await _read_run(db_engine, run_id)
+    assert row[0] == "pending"
+    assert await _job_exists(saq_settings_env, f"run:{run_id}")
+
+
+@pytest.mark.asyncio
+async def test_running_run_beyond_retry_budget_is_untouched(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """The gate is PENDING-only: a running row (node started, executor gone) is
+    held back by the existing belts, never terminal-failed by the budget gate —
+    re-execution of a started node is unsafe.
+
+    ``node_token_usage`` is seeded so the row has node PROGRESS: without it the
+    unrelated FAR-1999 node-deadline reaper legitimately collects the row
+    (zero-progress, node started) and the test would assert on the wrong
+    terminaliser.
+    """
+    from sqlalchemy import NullPool
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    run_id, _ = await _seed_saq_run(
+        db_engine,
+        test_org,
+        test_user,
+        status="running",
+        heartbeat_stale=True,
+        dispatcher="saq",
+        retry_policy={"on": ["failure"], "max_retries": 0},
+        execution_attempt_count=3,
+        dispatch_phase="first_node_dispatched",
+    )
+    eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
+    try:
+        async with eng.connect() as conn, conn.begin():
+            await conn.execute(
+                text("UPDATE runs SET node_token_usage = '{}'::jsonb WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+    finally:
+        await eng.dispose()
+
+    await ch.dispatcher_reconcile()
+
+    row = await _read_run(db_engine, run_id)
+    assert row[0] == "running"
+    assert row[1] != "harness.retry_budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_running_pre_node_row_beyond_retry_budget_is_not_redispatched(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """FAR-2076: the gate covers EVERY non-terminal ``execute_run`` row.
+
+    A ``running`` row whose last execution died PRE-NODE (phase ``claimed``,
+    stale heartbeat, no live job, ``started_at`` NULL so the nodeless repair
+    refuses it) is selected by the generic stale-heartbeat leg. The old
+    ``status == "pending"`` gate skipped it, so it reached the final enqueue as
+    ``execute_run`` with ``retries=0`` — SAQ still granted one attempt and the
+    graph executed past ``max_retries``. At the ceiling it must not be
+    re-dispatched: the guarded terminal UPDATE only matches ``pending``, so the
+    row is left ``running`` for the nodeless/age backstop.
+    """
+    run_id, _ = await _seed_saq_run(
+        db_engine,
+        test_org,
+        test_user,
+        status="running",
+        heartbeat_stale=True,
+        dispatcher="saq",
+        # max_retries 0 => ceiling 1 execution; this run already spent it.
+        retry_policy={"on": ["failure"], "max_retries": 0},
+        execution_attempt_count=1,
+        dispatch_phase="claimed",
+    )
+
+    await ch.dispatcher_reconcile()
+
+    row = await _read_run(db_engine, run_id)
+    assert row[0] == "running"
+    assert row[1] != "harness.retry_budget_exhausted"
+    assert not await _job_exists(saq_settings_env, f"run:{run_id}")
+
+
+@pytest.mark.asyncio
+async def test_soft_deleted_pipeline_still_applies_the_budget(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """FAR-1025 parity: an in-flight run whose pipeline was soft-deleted must
+    still resolve its retry policy. Without the row select's
+    ``include_soft_deleted`` opt-out the LEFT JOIN yields NULL, the gate
+    silently skips, and the run is re-dispatched past its policy."""
+    run_id, _ = await _seed_saq_run(
+        db_engine,
+        test_org,
+        test_user,
+        status="pending",
+        dispatched=False,
+        dispatcher=None,
+        claim_token="seed-token",
+        retry_policy={"on": ["failure"], "max_retries": 0},
+        execution_attempt_count=1,
+        soft_deleted_pipeline=True,
+    )
+
+    await ch.dispatcher_reconcile()
+
+    row = await _read_run(db_engine, run_id)
+    assert row[0] == "failed"
+    assert row[1] == "harness.retry_budget_exhausted"

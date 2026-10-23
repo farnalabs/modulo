@@ -49,7 +49,11 @@ from modulo.core.pipeline_execution import (
 
 
 def _make_executor_mock(
-    *, claim_token: str = "tok-watch-1", attempt_count: int = 1, probe_ok: bool = True, reset_rowcount: int = 1
+    *,
+    claim_token: str = "tok-watch-1",
+    attempt_count: int = 1,
+    probe_ok: bool = True,
+    reset_rowcount: int | None = 1,
 ) -> MagicMock:
     """Executor double exposing exactly the seams the shared hook reuses."""
     executor = MagicMock()
@@ -89,20 +93,18 @@ def _db_seams(
     *,
     trigger_type: str = "manual",
     graph_json: dict[str, Any] | None = None,
-    claim_count: int = 1,
 ):
     """Patch the DB seams the shared hook's context loader resolves lazily.
 
-    ``claim_count`` is the run row's total claim count — the pre-node hang
-    budget bound (FAR-693 fix) reads it from the already-loaded row. Default
-    1 = a single claim, so the effective attempt count IS
-    ``node_attempt_count`` and the in-execute behaviour is unchanged.
+    FAR-2076: the loader no longer reads a counter — the retry decision reads
+    the durable ``runs.execution_attempt_count`` through
+    ``executor._read_retry_attempt_state`` (mocked per test), so there is one
+    read and one measure.
     """
     run = MagicMock()
     run.trigger_type = trigger_type
     run.pipeline_id = uuid.uuid4()
     run.snapshot_id = uuid.uuid4()
-    run.claim_count = claim_count
     pipeline = MagicMock()
     pipeline.retry_policy = retry_policy if retry_policy is not None else {}
 
@@ -139,12 +141,11 @@ async def _consult_hook(
     attempt_count: int = 1,
     trigger_type: str = "manual",
     graph_json: dict[str, Any] | None = None,
-    reset_rowcount: int = 1,
-    claim_count: int = 1,
+    reset_rowcount: int | None = 1,
     zero_node: bool = False,
     attempt_started_at: datetime | None = None,
     node_timeouts: dict[str, int] | None = None,
-) -> tuple[bool, WatchdogRetryOutcome, AsyncMock]:
+) -> tuple[bool | None, WatchdogRetryOutcome, AsyncMock]:
     """Run the REAL shared hook once with only DB seams mocked."""
     executor._read_retry_attempt_state = AsyncMock(
         return_value=(attempt_count, executor._claim_token, attempt_started_at)
@@ -154,7 +155,7 @@ async def _consult_hook(
     executor._fenced_pending_reset = AsyncMock(return_value=reset_rowcount)
     exec_task = asyncio.create_task(asyncio.sleep(999))
     box = WatchdogRetryOutcome()
-    seams = _db_seams(retry_policy, trigger_type=trigger_type, graph_json=graph_json, claim_count=claim_count)
+    seams = _db_seams(retry_policy, trigger_type=trigger_type, graph_json=graph_json)
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
@@ -655,6 +656,118 @@ async def test_deadline_kill_lost_fence_stands_down_without_redispatch():
     )
     assert dispatched is False
     assert box.requested is False
+
+
+async def test_deadline_kill_reset_timeout_defers_without_terminal_fail():
+    """FAR-2076: a fenced reset that TIMES OUT must never terminalise the run.
+
+    ``_fenced_pending_reset`` returns ``None`` (not ``0``) when its bounded
+    write hits a lock timeout. Unlike a fence loss, the row is then still
+    ``running`` under OUR claim token, so the watchdog's untokened
+    ``fail_run_terminal`` would LAND and permanently kill a run with retry
+    budget remaining. The hook must DEFER: no terminal fail, no re-dispatch,
+    no triage-as-redispatched — the row is left for the nodeless/age backstop.
+
+    Prove-the-fix: before ``None`` was distinguished from ``0``, this branch
+    returned ``False`` (fence lost) and ``_fail_overdue_node`` called
+    ``fail_run_terminal`` — the assertion on ``fail`` fails.
+    """
+    executor = _make_executor_mock(attempt_count=1, reset_rowcount=None)
+    fail = AsyncMock(return_value=True)
+    record = AsyncMock()
+    triage = AsyncMock()
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["timeout"], "max_retries": 2})
+    with contextlib.ExitStack() as stack:
+        for seam in seams:
+            stack.enter_context(seam)
+        sleep_mock = stack.enter_context(
+            patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
+        )
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
+        stack.enter_context(patch("modulo.core.pipeline_execution._persist_node_deadline_triage", triage))
+        await _fail_overdue_node(MagicMock(), "run-1", "org-1", deadlines, exec_task, done, stall, retry_hook=hook)
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+    # The reset was attempted (a reset and its timeout are not a stand-down)…
+    executor._fenced_pending_reset.assert_awaited_once()
+    # …but NOTHING terminalised or re-dispatched: the row is left running.
+    fail.assert_not_awaited()
+    triage.assert_not_awaited()
+    sleep_mock.assert_not_awaited()
+    assert box.requested is False
+    assert box.deferred is True
+
+
+async def test_zombie_watchdog_reset_timeout_defers_without_terminal_fail():
+    """FAR-2076: the ZOMBIE watchdog's deferral branch, driven end-to-end.
+
+    A fenced reset that TIMES OUT (``None``) leaves the row most likely still
+    ``running`` under OUR claim token, so this watchdog's untokened
+    ``fail_run_terminal`` would LAND and kill a run with budget remaining. The
+    watchdog must defer: no terminal fail, no re-dispatch, no backoff sleep.
+
+    This drives the REAL ``zombie_watchdog`` (the existing coverage only called
+    ``_fail_overdue_node``, so this branch could be reverted with the suite
+    green). Prove-the-fix: remove the ``retry_state is None`` branch and the
+    untokened terminal fail runs — the ``fail`` assertion fails.
+    """
+    executor = _make_executor_mock(attempt_count=1, reset_rowcount=None)
+    fail = AsyncMock(return_value=True)
+    hang = asyncio.Event()
+
+    async def _hang() -> None:
+        await hang.wait()
+
+    exec_task = asyncio.create_task(_hang())
+    first_progress = asyncio.Event()  # never set — the grace expires
+    stall = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    seams = _db_seams({"on": ["stall"], "max_retries": 2})
+    try:
+        with contextlib.ExitStack() as stack:
+            for seam in seams:
+                stack.enter_context(seam)
+            sleep_mock = stack.enter_context(
+                patch("modulo.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
+            )
+            # The zombie call site opts into the FAR-2053 delivery veto, which
+            # reads the run's marker rows; an empty record is "not delivered".
+            stack.enter_context(
+                patch(
+                    "modulo.core.pipeline_engine.watchdog_retry._read_run_markers",
+                    AsyncMock(return_value={}),
+                )
+            )
+            stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+            await zombie_watchdog(
+                MagicMock(),
+                "run-1",
+                "org-1",
+                first_progress,
+                exec_task=exec_task,
+                stall_requested=stall,
+                grace_seconds=0.01,
+                retry_hook=hook,
+            )
+    finally:
+        exec_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await exec_task
+
+    # The reset was attempted (a timeout is not a stand-down)…
+    executor._fenced_pending_reset.assert_awaited_once()
+    # …but NOTHING terminalised or re-dispatched, and no backoff was slept.
+    fail.assert_not_awaited()
+    sleep_mock.assert_not_awaited()
+    assert box.requested is False
+    assert box.deferred is True
 
 
 async def test_deadline_kill_never_resets_non_idempotent_graph():
@@ -1337,6 +1450,59 @@ async def test_watchdog_no_coverage_still_terminal_fails_and_returns_failed():
     executor._fenced_pending_reset.assert_not_awaited()
 
 
+async def test_watchdog_reset_timeout_returns_deferred_without_terminal_fail():
+    """FAR-2076: the WRAPPER's deferred outcome for a timed-out watchdog reset.
+
+    The zombie watchdog sets ``box.deferred`` and stands down; the wrapper must
+    then report the non-terminal ``deferred`` outcome instead of resolving the
+    still-running row into an honest-looking ``failed``. Nothing terminalises
+    and the run is not completed — the row is left for the nodeless/age
+    backstop.
+
+    Prove-the-fix: remove the wrapper's ``deferred`` branch and the mocked
+    ``_read_run_status`` ("failed") yields ``{"status": "failed"}``.
+    """
+    executor = _make_executor_mock(attempt_count=1, reset_rowcount=None)
+    hang = asyncio.Event()
+
+    async def _hang() -> None:
+        await hang.wait()
+
+    fail = AsyncMock(return_value=True)
+    complete = AsyncMock()
+    with contextlib.ExitStack() as stack:
+        for seam in _watchdog_wrapper_seams({"on": ["stall"], "max_retries": 1}):
+            stack.enter_context(seam)
+        stack.enter_context(
+            patch(
+                "modulo.core.pipeline_engine.watchdog_retry._read_run_markers",
+                AsyncMock(return_value={}),
+            )
+        )
+        stack.enter_context(patch("modulo.core.pipeline_execution.fail_run_terminal", fail))
+        stack.enter_context(patch("modulo.core.pipeline_execution.mark_complete", complete))
+        stack.enter_context(patch("modulo.core.pipeline_execution.heartbeat_loop", AsyncMock()))
+        stack.enter_context(patch("modulo.core.pipeline_execution._read_run_status", AsyncMock(return_value="failed")))
+        stack.enter_context(
+            patch(
+                "modulo.core.pipeline_execution.get_settings",
+                lambda: MagicMock(saq_setup_grace_seconds=0.01, saq_node_default_timeout_seconds=1200),
+            )
+        )
+        result = await run_executor_with_watchdog(
+            MagicMock(),
+            run_id=str(uuid.uuid4()),
+            org_id=str(uuid.uuid4()),
+            executor=executor,
+            job=MagicMock(function="execute_run"),
+            execute_fn=_hang,
+        )
+    assert result == {"status": "deferred"}
+    fail.assert_not_awaited()
+    complete.assert_not_awaited()
+    executor._fenced_pending_reset.assert_awaited_once()
+
+
 async def test_resume_job_disables_watchdog_retry():
     """Resume jobs keep today's unconditional terminal fail: their claim
     cannot re-claim a pending run, so the hook is never built. Runtime SAQ
@@ -1414,28 +1580,27 @@ async def test_script_mode_graph_requires_lease_probe_before_redispatch():
     assert box.requested is False
 
 
-async def test_pre_node_hang_budget_bounded_by_claim_count():
-    """FAR-693 fix: a PRE-node hang (hub init / graph compile — the exact hang
-    sites the zombie watchdog exists for, which happen BEFORE the attempt
-    increment in _prepare_and_stream) exhausts the budget too.
+async def test_pre_node_hang_budget_bounded_by_execution_attempt_count():
+    """A PRE-node hang (hub init / graph compile — the exact hang sites the
+    zombie watchdog exists for) consumes the run-level budget too.
 
-    node_attempt_count stays 0 on every kill, but each watchdog retry consumes
-    a SAQ claim (the re-raised RunRetryPolicyError retries the job, whose
-    re-claim grows claim_count), so the effective attempt count
-    max(node_attempt_count, claim_count - 1) grows per retry cycle and the
-    run terminal-fails once it exceeds max_retries instead of churning pending
-    under the SAQ claim cap. Sequence pinned for max_retries=1: claim 1
-    (effective 0) re-dispatches, claim 2 (effective 1) re-dispatches — the
-    bounded slack of the prescribed counter — and claim 3 (effective 2)
-    terminal-fails."""
-    executor = _make_executor_mock(attempt_count=0)
+    FAR-2076: the durable ``execution_attempt_count`` is stamped when the
+    attempt is ADMITTED — before those hang sites — so it grows once per
+    execution and the run terminal-fails on the execution AFTER the ceiling
+    instead of churning pending under the SAQ claim cap.
+
+    Sequence pinned for ``max_retries=1`` (ceiling 2 executions): after the
+    first admitted attempt (count 1) the watchdog re-dispatches (execution 2);
+    after the second (count 2) it terminal-fails — exactly the invariant, no
+    extra execution. ``claim_count`` is irrelevant and is not passed at all.
+    """
+    executor = _make_executor_mock(attempt_count=1)
     dispatched1, box1, _sleep1 = await _consult_hook(
         executor,
         retry_policy={"on": ["stall"], "max_retries": 1},
         final_status="stalled",
         error_code="executor_stalled",
-        attempt_count=0,
-        claim_count=1,
+        attempt_count=1,
     )
     assert dispatched1 is True
     assert box1.requested is True
@@ -1445,29 +1610,16 @@ async def test_pre_node_hang_budget_bounded_by_claim_count():
         retry_policy={"on": ["stall"], "max_retries": 1},
         final_status="stalled",
         error_code="executor_stalled",
-        attempt_count=0,
-        claim_count=2,
+        attempt_count=2,
     )
-    assert dispatched2 is True
-    assert box2.requested is True
-
-    dispatched3, box3, _sleep3 = await _consult_hook(
-        executor,
-        retry_policy={"on": ["stall"], "max_retries": 1},
-        final_status="stalled",
-        error_code="executor_stalled",
-        attempt_count=0,
-        claim_count=3,
-    )
-    assert dispatched3 is False
-    assert box3.requested is False
+    assert dispatched2 is False
+    assert box2.requested is False
     executor._fenced_pending_reset.assert_not_awaited()
 
 
-async def test_in_execute_budget_unchanged_by_claim_count():
-    """The claim-derived budget term must stay surgical: a run that reached a
-    node (claim_count 1 — a single claim) keeps the in-execute behaviour —
-    the effective attempt count IS node_attempt_count."""
+async def test_in_execute_budget_unchanged_by_the_durable_counter():
+    """A run that reached a node keeps the in-execute behaviour: the effective
+    attempt count IS the durable execution-attempt count."""
     executor = _make_executor_mock(attempt_count=2)
     dispatched, box, _sleep = await _consult_hook(
         executor,
@@ -1475,7 +1627,6 @@ async def test_in_execute_budget_unchanged_by_claim_count():
         final_status="failed",
         error_code="node_deadline_exceeded",
         attempt_count=2,
-        claim_count=1,
     )
     assert dispatched is False
     assert box.requested is False
@@ -1494,7 +1645,6 @@ async def test_context_load_sets_rls_org_and_execution_context():
     run.trigger_type = "manual"
     run.pipeline_id = uuid.uuid4()
     run.snapshot_id = uuid.uuid4()
-    run.claim_count = 2
     pipeline = MagicMock()
     pipeline.retry_policy = {"on": ["timeout"], "max_retries": 1}
     with (
@@ -1511,9 +1661,10 @@ async def test_context_load_sets_rls_org_and_execution_context():
     assert context is not None
     set_rls_org_mock.assert_awaited_once_with(ANY, org_id)
     set_rls_ctx_mock.assert_awaited_once_with(ANY)
-    # The claim count is read from the same row (the pre-node hang budget
-    # bound consumes it) and surfaces in the loaded context.
-    assert context[3] == 2
+    # FAR-2076: no counter is read here — the retry decision reads the durable
+    # ``execution_attempt_count`` from its own row snapshot, so the context is
+    # the policy / trigger / graph triple only.
+    assert len(context) == 3
 
 
 async def test_retry_context_loader_reraises_cancellation() -> None:

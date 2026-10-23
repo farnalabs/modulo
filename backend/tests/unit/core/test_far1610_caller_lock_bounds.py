@@ -34,7 +34,8 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from modulo.core.hitl_manager import GateNotFoundError, HITLManager
-from modulo.core.pipeline_engine.executor import PipelineExecutor, RunNotFoundError
+from modulo.core.pipeline_engine.executor import AdmissionLockTimeoutError, PipelineExecutor, RunNotFoundError
+from modulo.core.pipeline_execution import _handle_executor_failure
 
 
 def _lock_timeout_error(statement: str = "UPDATE runs") -> OperationalError:
@@ -52,8 +53,18 @@ async def _acm(obj: Any):
 
 
 def _begin_session() -> AsyncMock:
-    """Session double whose ``begin()`` is a proper async context manager."""
+    """Session double whose ``begin()`` is a proper async context manager.
+
+    ``execute`` is async but yields a SYNC SQLAlchemy ``Result``: callers that
+    reach the admission retry-budget gate call ``.scalar_one_or_none()`` on it.
+    Leaving ``execute`` a bare AsyncMock makes that call return a coroutine
+    object that is never awaited, surfacing as a teardown-time
+    ``PytestUnraisableExceptionWarning`` (and a red Test (Backend) shard).
+    """
     session = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=None)
+    session.execute = AsyncMock(return_value=result)
     begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -214,14 +225,24 @@ async def test_check_capacity_bounds_before_the_claim_time_write() -> None:
     assert result is run
 
 
-async def test_check_capacity_lock_timeout_skips_and_warns(
+async def test_check_capacity_second_lock_timeout_defers_instead_of_terminalising(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A 55P03 on the claim-time write is a RECOVERY-path contention: the
-    transaction rolled back whole, no status change applied, the run is left
-    exactly as it was and the caller proceeds. WARNING, never silent."""
+    """FAR-2076: two consecutive 55P03s must NOT kill a run that never executed.
+
+    Both admission+bump attempts roll back, so the run consumed ZERO
+    executions. A re-raise here propagates to ``_handle_executor_failure``,
+    which terminal-fails the run as ``executor_failed`` — a transient lock wait
+    permanently killing a run that never ran. Instead the executor performs the
+    fenced pending-reset (the established non-terminal deferral) and raises
+    ``AdmissionLockTimeoutError``, which the watchdog maps to ``deferred``.
+    """
     run = _capacity_run()
+    org_id = uuid.uuid4()
     executor = _capacity_executor(_begin_session())
+    update = AsyncMock(side_effect=_lock_timeout_error())
+    reset = AsyncMock(return_value=1)
+    executor._fenced_pending_reset = reset  # type: ignore[method-assign]
 
     with (
         patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
@@ -229,11 +250,297 @@ async def test_check_capacity_lock_timeout_skips_and_warns(
         patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
         patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
-        patch(
-            "modulo.core.pipeline_engine.executor.update_run_status",
-            new=AsyncMock(side_effect=_lock_timeout_error()),
-        ),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
         caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+        pytest.raises(AdmissionLockTimeoutError) as excinfo,
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=org_id,
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+    # Exactly two admission attempts: one retry, then a DEFERRAL.
+    assert update.await_count == 2
+    # The run is handed back to pending, so dispatcher_reconcile re-dispatches it.
+    reset.assert_awaited_once_with(run_id=run.id, org_id=org_id)
+    assert excinfo.value.reset_state == "confirmed"
+    # The deferral keeps the lock timeout as its cause for the logs.
+    assert isinstance(excinfo.value.__cause__, OperationalError)
+    assert any("capacity_check_lock_timeout" in message for message in caplog.messages)
+
+
+async def test_fenced_pending_reset_bounds_its_write_and_returns_none_on_lock_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-2076: the deferral path's reset must be BOUNDED.
+
+    ``_fenced_pending_reset`` opens a fresh session; without its own
+    ``set_mutation_row_lock_timeout`` Postgres' default (0 = wait forever)
+    applies, so it blocks on the very contended row that produced the
+    admission timeout. The bound is issued BEFORE its first lock, and a
+    resulting 55P03 is logged and reported as ``None`` (TIMED OUT, outcome
+    unknown) instead of propagating/stalling.
+
+    ``None`` — not ``0`` — is the contract: ``0`` means the fence was LOST (a
+    successor owns the row), while a timeout leaves the row most likely still
+    ``running`` under OUR token. Overloading ``0`` made the watchdog read a
+    timeout as "successor owns it" and terminalise a run with budget left.
+    """
+    order: list[str] = []
+    session = _begin_session()
+    executor = _capacity_executor(session)
+    executor._claim_token = "tok"
+
+    async def _bound(_session: Any) -> None:
+        order.append("bound")
+
+    async def _execute(*_a: Any, **_k: Any) -> Any:
+        order.append("update")
+        raise _lock_timeout_error()
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=_bound),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+    ):
+        reset = await executor._fenced_pending_reset(run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+    assert reset is None
+    assert order == ["bound", "update"]
+    assert any("fenced_pending_reset_lock_timeout" in message for message in caplog.messages)
+
+
+async def test_fenced_pending_reset_cancellation_propagates() -> None:
+    """``CancelledError`` is never swallowed by the reset's 55P03 recovery arm."""
+    session = _begin_session()
+    executor = _capacity_executor(session)
+    executor._claim_token = "tok"
+    session.execute = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await executor._fenced_pending_reset(run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+
+async def test_fenced_pending_reset_non_lock_failure_propagates() -> None:
+    """Only 55P03 is absorbed; any other failure stays visible to the caller."""
+    session = _begin_session()
+    executor = _capacity_executor(session)
+    executor._claim_token = "tok"
+    session.execute = AsyncMock(side_effect=RuntimeError("connection reset"))
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        pytest.raises(RuntimeError, match="connection reset"),
+    ):
+        await executor._fenced_pending_reset(run_id=uuid.uuid4(), org_id=uuid.uuid4())
+
+
+async def test_check_capacity_reset_cancellation_propagates() -> None:
+    """A ``CancelledError`` raised by the deferral's reset must propagate.
+
+    The deferral's ``except Exception`` arm treats a reset failure as "outcome
+    unknown", but cancellation is not a failure — swallowing it would keep the
+    worker alive after its task was cancelled.
+    """
+    run = _capacity_run()
+    executor = _capacity_executor(_begin_session())
+    update = AsyncMock(side_effect=_lock_timeout_error())
+    executor._fenced_pending_reset = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("reset_rowcount", "expected_state", "expected_fragment"),
+    [
+        # The bounded reset itself timed out: NOT reset, likely still running.
+        (None, "timeout", "ALSO timed out"),
+        # A genuine fence loss: a successor owns the row or it already left
+        # running. The deferral must not claim it timed out (the old bool
+        # collapse did) and must not claim a resting state it cannot know.
+        (0, "fence_lost", "matched no row"),
+    ],
+)
+async def test_check_capacity_second_lock_timeout_defers_with_the_reset_outcome(
+    reset_rowcount: int | None, expected_state: str, expected_fragment: str
+) -> None:
+    """The deferral survives a reset that could not confirm the handback, and
+    carries the OUTCOME rather than a bool.
+
+    ``_fenced_pending_reset`` returns ``None`` when its own bounded write times
+    out and ``0`` when the fence was lost; the old ``bool(reset)`` collapsed
+    both to ``False``, so the fence-lost arm falsely reported "the reset ALSO
+    timed out". Each arm must still raise ``AdmissionLockTimeoutError`` (so the
+    run falls to the nodeless/age backstop instead of sitting on the worker
+    until the setup grace expires) and must not claim the run is ``pending``.
+    """
+    run = _capacity_run()
+    executor = _capacity_executor(_begin_session())
+    update = AsyncMock(side_effect=_lock_timeout_error())
+    reset = AsyncMock(return_value=reset_rowcount)
+    executor._fenced_pending_reset = reset  # type: ignore[method-assign]
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
+        pytest.raises(AdmissionLockTimeoutError) as excinfo,
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+    reset.assert_awaited_once()
+    assert excinfo.value.reset_state == expected_state
+    assert expected_fragment in str(excinfo.value)
+    # Neither arm may describe an unconfirmed handback as pending.
+    assert "left pending" not in str(excinfo.value)
+
+
+async def test_check_capacity_raised_reset_stays_unknown_and_names_both_possibilities(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-2076: a reset that RAISES leaves its outcome genuinely unknown.
+
+    There is deliberately no re-read — the deferral cannot know whether the
+    reset landed, so it must NAME both possible resting states and assert
+    neither. A landed reset leaves the row ``pending`` (recovered by
+    ``dispatcher_reconcile``); a reset that did not land leaves it ``running``
+    (the nodeless/age backstop). Those are different sweeps, so claiming one
+    would misdirect on-call.
+    """
+    run = _capacity_run()
+    executor = _capacity_executor(_begin_session())
+    update = AsyncMock(side_effect=_lock_timeout_error())
+    executor._fenced_pending_reset = AsyncMock(side_effect=RuntimeError("reset blew up"))  # type: ignore[method-assign]
+    get_run_mock = AsyncMock(return_value=run)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=get_run_mock),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=update),
+        caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.executor"),
+        pytest.raises(AdmissionLockTimeoutError) as excinfo,
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+    # No re-read: only the two admission attempts touch the row.
+    assert get_run_mock.await_count == 2
+    assert excinfo.value.reset_state == "unknown"
+    message = str(excinfo.value)
+    # BOTH possible resting states are named...
+    assert "row is pending and dispatcher_reconcile will re-dispatch it" in message
+    assert "row is still running and falls to the nodeless/age backstop" in message
+    # ...and neither is asserted as the run's actual state.
+    assert "was left pending" not in message
+    assert "was left as-is" not in message
+    assert any("whether it landed is unknown" in recorded for recorded in caplog.messages)
+
+
+@pytest.mark.parametrize(
+    "reset_state",
+    ["confirmed", "fence_lost", "timeout", "unknown"],
+)
+async def test_admission_lock_timeout_maps_to_the_non_terminal_deferred_outcome(
+    reset_state: Any,
+) -> None:
+    """FAR-2076: the deferral contract is observable to the watchdog caller.
+
+    EVERY reset outcome maps to ``{"status": "deferred"}`` and does NOT
+    terminal-fail the run — the outcome tri-state only changes the wording,
+    never the outcome. Any other executor exception still terminal-fails
+    (asserted here so the new branch cannot widen).
+    """
+    fail_run = AsyncMock()
+    with patch("modulo.core.pipeline_execution.fail_run_terminal", fail_run):
+        deferred = await _handle_executor_failure(
+            MagicMock(),
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
+            claim_token="tok",
+            exec_exc=AdmissionLockTimeoutError(uuid.uuid4(), attempts=2, reset_state=reset_state),
+            hitl_decision_resume=False,
+        )
+    assert deferred == {"status": "deferred"}
+    fail_run.assert_not_awaited()
+
+    with patch("modulo.core.pipeline_execution.fail_run_terminal", fail_run):
+        failed = await _handle_executor_failure(
+            MagicMock(),
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
+            claim_token="tok",
+            exec_exc=RuntimeError("boom"),
+            hitl_decision_resume=False,
+        )
+    assert failed == {"status": "failed"}
+    fail_run.assert_awaited_once()
+
+
+async def test_check_capacity_lock_timeout_retry_succeeds_and_spends_once() -> None:
+    """The retry is what makes the fix safe: a transient lock timeout on the
+    first ADMISSION attempt does not lose the execution-budget bump — the second
+    attempt commits admission and runs the bump exactly once, so the attempt is
+    counted."""
+    run = _capacity_run()
+    executor = _capacity_executor(_begin_session())
+    admit = AsyncMock(side_effect=[_lock_timeout_error(), run])
+    bump = AsyncMock(return_value=True)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
+        # Admission branch: no active run -> the slot is free.
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=0)),
+        patch.object(executor, "_claim_run_and_audit", admit),
+        # Imported lazily inside ``_claim_under_capacity`` from this module.
+        patch("modulo.core.pipeline_execution.bump_execution_attempt_count", new=bump),
     ):
         result = await executor._check_capacity(
             run_id=run.id,
@@ -244,7 +551,9 @@ async def test_check_capacity_lock_timeout_skips_and_warns(
         )
 
     assert result is run
-    assert any("capacity_check_lock_timeout" in message for message in caplog.messages)
+    # Two admission attempts (one retry) and ONE execution-budget spend.
+    assert admit.await_count == 2
+    bump.assert_awaited_once()
 
 
 async def test_check_capacity_non_lock_failure_still_propagates() -> None:

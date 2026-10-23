@@ -20,11 +20,13 @@ in-execute retry path uses:
    SAQ retries the job and ``claim_run_async`` re-claims the pending run —
    with the same jittered capped backoff (``_retry_backoff_seconds`` + the
    run's ``backoff_schedule``) slept BEFORE the re-raise, mirroring
-   ``_redispatch_after_policy``. The budget counter is
-   ``max(node_attempt_count, claim_count - 1)``: node attempts alone cannot
-   bound a PRE-node hang (hub init / graph compile happen BEFORE the attempt
-   increment), but each watchdog retry consumes a SAQ claim, so the
-   claim-derived term grows one per retry cycle and bounds every hang site.
+   ``_redispatch_after_policy``. FAR-2076: the budget counter is the durable
+   ``runs.execution_attempt_count`` — the number of EXECUTION attempts of the
+   graph, incremented once when an attempt is admitted (before hub init /
+   graph compile). It therefore bounds a PRE-node hang, which
+   ``node_attempt_count`` (incremented later, inside ``_prepare_and_stream``)
+   could not, without ``claim_count``'s over-counting of capacity-demoted and
+   resume claims.
 
 There is exactly ONE mechanism: the watchdogs call the hook this module
 builds, which reuses the live executor instance's own helpers; the wrapper
@@ -60,6 +62,15 @@ claim token) returns ``False`` and the watchdog terminal-fails the run
 exactly as before — a retry decision must never prevent a run from reaching
 a terminal state. An UNREADABLE delivery record is treated as "delivered"
 (the veto engages): an unreadable fact must never license a re-dispatch.
+
+The ONE exception to "fail closed to a terminal fail" is the fenced reset
+itself timing out (FAR-2076). ``_fenced_pending_reset`` returns ``None`` on its
+bounded 55P03, which means the row is most likely still ``running`` under OUR
+claim token — so the watchdog's untokened ``fail_run_terminal`` would LAND and
+permanently kill a run with budget remaining. That path returns ``None``
+(defer): neither terminal-fail nor re-dispatch, leaving the row to the
+nodeless/age backstop. A ``0`` rowcount still means a genuine fence loss and
+keeps the terminal fail.
 
 Known residual race (bounded): between the hook's ``exec_task.done()``
 re-check and the fenced pending-reset the executor task could complete
@@ -122,7 +133,7 @@ _log = logging.getLogger(__name__)
 #
 # ``Callable[..., ...]`` because the kwargs are optional and call sites without
 # them must keep working.
-WatchdogRetryHook = Callable[..., Awaitable[bool]]
+WatchdogRetryHook = Callable[..., Awaitable[bool | None]]
 
 # Runtime SAQ job function names are FULLY-QUALIFIED ("modulo.core.saq_worker.execute_run"
 # / "...resume_run" — see dispatch.py SAQ_*_RUN_FUNCTION and the registered
@@ -139,11 +150,15 @@ class WatchdogRetryOutcome:
 
     ``requested=True`` means the hook performed the fenced pending-reset and
     the wrapper must raise ``RunRetryPolicyError`` (so SAQ re-dispatches the
-    job) instead of standing down. The wrapper awaits the watchdogs to
-    completion before reading this box, so the flags are always settled.
+    job) instead of standing down. ``deferred=True`` (FAR-2076) means the reset
+    TIMED OUT: the row is left running for the nodeless/age backstop and the
+    wrapper reports the non-terminal ``deferred`` outcome. The wrapper awaits
+    the watchdogs to completion before reading this box, so the flags are
+    always settled.
     """
 
     requested: bool = False
+    deferred: bool = False
     final_status: str = ""
     retry_budget: int = 0
 
@@ -171,10 +186,12 @@ def create_watchdog_retry_hook(
     """Build the watchdog retry hook + its outcome box for one run.
 
     The hook signature is ``(final_status, error_code, *, zero_node=False,
-    veto_if_delivered=False) -> bool``: ``True`` when the run was re-dispatched
-    (the watchdog must NOT terminal-fail), ``False`` when it must terminal-fail
-    exactly as before. ``zero_node`` opts the caller into the FAR-1088 zero-node
-    failure carve-out; ``veto_if_delivered`` opts it into the FAR-2053 delivery
+    veto_if_delivered=False) -> bool | None``: ``True`` when the run was
+    re-dispatched (the watchdog must NOT terminal-fail), ``False`` when it must
+    terminal-fail exactly as before, ``None`` when the fenced reset timed out
+    (FAR-2076 — DEFER: neither terminal-fail nor re-dispatch; the row is left
+    running for the nodeless/age backstop). ``zero_node`` opts the caller into
+    the FAR-1088 zero-node failure carve-out; ``veto_if_delivered`` opts it into the FAR-2053 delivery
     veto. Both default off, so every existing caller's behaviour is unchanged.
     """
     box = WatchdogRetryOutcome()
@@ -185,7 +202,7 @@ def create_watchdog_retry_hook(
         *,
         zero_node: bool = False,
         veto_if_delivered: bool = False,
-    ) -> bool:
+    ) -> bool | None:
         return await watchdog_retry_after_policy(
             aeng=aeng,
             run_id=run_id,
@@ -207,7 +224,7 @@ async def _load_retry_context_or_none(
     *,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
-) -> tuple[dict[str, Any], str, dict[str, Any] | None, int] | None:
+) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
     """Load the retry-decision inputs, degrading a failure to ``None``.
 
     ``CancelledError`` propagates (the watchdog's own cancellation must never be
@@ -262,7 +279,6 @@ async def _attempt_count_if_retryable(
     trigger_type: str,
     graph_json: dict[str, Any] | None,
     claim_token: Any,
-    claim_count: int,
     retry_budget: int,
     final_status: str,
     error_code: str,
@@ -273,24 +289,29 @@ async def _attempt_count_if_retryable(
     FAR-210 correction run, FAR-295 non-idempotent graph, exhausted budget,
     superseded claim, or (FAR-296) a failed script-mode stale-lease probe.
 
-    The budget also bounds PRE-node hangs (hub init / graph compile — the exact
-    hang sites the zombie watchdog exists for): ``node_attempt_count`` only
-    increments in ``executor._prepare_and_stream``, AFTER those sites, so a run
-    hung there reads 0 on every kill. Each watchdog retry consumes a claim (the
-    re-raised ``RunRetryPolicyError`` makes SAQ retry the job, whose re-claim
-    grows ``claim_count``), so ``claim_count - 1`` — the number of PRIOR
-    re-claims — grows one per retry cycle and bounds hangs that never reached a
-    node. For a run that reached a node, ``claim_count`` is 1 and the effective
-    count IS ``node_attempt_count``, so the in-execute path is unchanged.
+    FAR-2076: the budget is measured against the durable
+    ``runs.execution_attempt_count`` (via
+    ``modulo.core.retry_budget.retry_executions_consumed``) — the count of
+    EXECUTION attempts of the graph, stamped when the attempt is admitted. It
+    therefore bounds PRE-node hangs (hub init / graph compile — the exact hang
+    sites the zombie watchdog exists for), which neither the old
+    ``node_attempt_count`` (incremented later, in ``_prepare_and_stream``) nor a
+    claim-derived count could measure correctly: ``claim_count`` also grows on
+    capacity-demoted and resume claims, so it over-counted non-executions.
     """
     is_correction_run = (trigger_type or "") == "correction"
     graph_idempotent = _graph_is_idempotent(graph_json)
     if is_correction_run or not graph_idempotent:
         return None
-    node_attempt_count, current_claim_token, attempt_started_at = await executor._read_retry_attempt_state(
+    execution_attempt_count, current_claim_token, attempt_started_at = await executor._read_retry_attempt_state(
         org_id, run_id
     )
-    attempt_count: int = max(node_attempt_count, claim_count - 1)
+    # FAR-2076: the ONE shared measure of executions already consumed — reused,
+    # never re-derived, so every path that can grant an execution compares
+    # against the same count.
+    from modulo.core.retry_budget import retry_executions_consumed
+
+    attempt_count = retry_executions_consumed(execution_attempt_count=execution_attempt_count)
     superseded = claim_token is not None and current_claim_token is not None and current_claim_token != claim_token
     script_retry_probe_ok = True
     if _graph_has_script_mode(graph_json):
@@ -422,7 +443,7 @@ async def watchdog_retry_after_policy(
     zero_node: bool = False,
     veto_if_delivered: bool = False,
     outcome: WatchdogRetryOutcome | None = None,
-) -> bool:
+) -> bool | None:
     """Consult the run's retry_policy for a watchdog kill; re-dispatch if allowed.
 
     Returns ``True`` when the re-dispatch was performed: the fenced
@@ -433,6 +454,15 @@ async def watchdog_retry_after_policy(
     policy coverage, exhausted budget, correction run, non-idempotent graph,
     superseded claim, stale script lease, lost fence, or any load failure —
     fail closed).
+
+    Returns ``None`` when the retry was covered but the fenced pending-reset
+    TIMED OUT (FAR-2076). The outcome is then unknown and the row is most
+    likely still ``running`` under OUR claim token — not a successor's — so the
+    caller's untokened ``fail_run_terminal`` would succeed and permanently kill
+    a run with budget remaining. ``None`` is therefore a DEFERRAL: the caller
+    must neither terminal-fail nor re-dispatch; the row is left running for the
+    nodeless/age backstop. ``outcome.deferred`` is set so the wrapper reports a
+    non-terminal outcome.
 
     FAR-1088 zero-node failure carve-out — ``zero_node=True`` ONLY (the
     in-process zombie watchdog passes it; its kill fires pre-first-progress,
@@ -482,7 +512,7 @@ async def watchdog_retry_after_policy(
     context = await _load_retry_context_or_none(aeng, run_id=run_id, org_id=org_id)
     if context is None:
         return False
-    policy, trigger_type, graph_json, claim_count = context
+    policy, trigger_type, graph_json = context
 
     # THE shared decision (matcher + FAR-1088 zero-node carve-out).
     retry_budget = _resolve_retry_budget(
@@ -519,7 +549,6 @@ async def watchdog_retry_after_policy(
         trigger_type=trigger_type,
         graph_json=graph_json,
         claim_token=claim_token,
-        claim_count=claim_count,
         retry_budget=retry_budget,
         final_status=final_status,
         error_code=error_code,
@@ -529,10 +558,28 @@ async def watchdog_retry_after_policy(
 
     schedule_state, effective_sleep = _resolve_schedule_state(policy, attempt_count, run_id)
     reset_rowcount = await executor._fenced_pending_reset(run_id=run_id, org_id=org_id)
+    if reset_rowcount is None:
+        # FAR-2076: the bounded reset TIMED OUT. Unlike a fence loss below, the
+        # row is probably STILL ``running`` under OUR claim token, so the
+        # caller's untokened ``fail_run_terminal`` would succeed and kill a run
+        # that still has retry budget. Defer instead: no terminal fail, no
+        # re-dispatch — the row is left for the nodeless/age backstop.
+        box.deferred = True
+        _log.warning(
+            "pipeline.watchdog_retry_deferred_reset_timeout run=%s status=%s error_code=%s "
+            "attempt=%s budget=%s — the fenced pending-reset timed out; the row is left "
+            "running for the nodeless/age backstop (no terminal fail, no re-dispatch)",
+            run_id,
+            final_status,
+            error_code,
+            attempt_count,
+            retry_budget,
+        )
+        return None
     if not reset_rowcount:
-        # Fence lost — a successor owns the run (or it just reached a terminal
-        # state). Stand down: the watchdog's token/status-guarded
-        # fail_run_terminal is a no-op either way.
+        # Fence lost (rowcount 0) — a successor owns the run, or it just
+        # reached a terminal state. Stand down: the watchdog's
+        # token/status-guarded fail_run_terminal is a no-op either way.
         return False
     # FAR-525 observability: count only CONFIRMED resets (same seam as the
     # in-execute path — same counter, same reason vocabulary).
@@ -563,14 +610,18 @@ async def _load_watchdog_retry_context(
     *,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
-) -> tuple[dict[str, Any], str, dict[str, Any] | None, int] | None:
+) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
     """Load the retry-decision inputs for one run (RLS-scoped, one session).
 
-    Returns ``(retry_policy, trigger_type, graph_json, claim_count)`` or
-    ``None`` when the run or its pipeline is missing. Mirrors
-    ``_capture_execution_scalars``: the policy defaults to ``{}`` (no retry)
-    when absent/malformed, and ``claim_count`` defaults to 0 when absent or
-    not an int (the pre-node hang budget bound reads it from this row).
+    Returns ``(retry_policy, trigger_type, graph_json)`` or ``None`` when the
+    run or its pipeline is missing. Mirrors ``_capture_execution_scalars``: the
+    policy defaults to ``{}`` (no retry) when absent/malformed.
+
+    FAR-2076: the run's attempt count is no longer read here — the retry
+    decision reads the durable ``runs.execution_attempt_count`` from the same
+    row snapshot via ``executor._read_retry_attempt_state`` (which also carries
+    the claim token and this attempt's start), so there is one read and one
+    measure.
     """
     from modulo.db.crud.pipeline import get_pipeline
     from modulo.db.crud.run import get_run
@@ -594,6 +645,4 @@ async def _load_watchdog_retry_context(
     raw_policy = getattr(pipeline, "retry_policy", None)
     policy: dict[str, Any] = raw_policy if isinstance(raw_policy, dict) else {}
     trigger_type = str(getattr(run, "trigger_type", "") or "")
-    raw_claim_count = getattr(run, "claim_count", None)
-    claim_count = raw_claim_count if isinstance(raw_claim_count, int) else 0
-    return policy, trigger_type, graph_json if isinstance(graph_json, dict) else None, claim_count
+    return policy, trigger_type, graph_json if isinstance(graph_json, dict) else None

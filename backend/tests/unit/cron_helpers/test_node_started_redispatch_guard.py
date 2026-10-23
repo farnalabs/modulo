@@ -506,23 +506,26 @@ class TestFencedResetIsIdempotencyGated:
     """
 
     def test_every_fenced_reset_call_site_is_behind_an_idempotency_gate(self) -> None:
-        """Pin the three production call sites AND their gates.
+        """Pin the production call sites AND their safety premise.
 
-        ``_fenced_pending_reset`` is awaited exactly three times: twice in
-        the executor (the in-execute transient requeue behind
-        ``_can_fenced_requeue``; the retry_policy re-dispatch behind
-        ``_retry_policy_applies``) and once in ``watchdog_retry`` behind its
-        ``not graph_idempotent`` stand-down. A fourth, ungated call site — or
-        a removed gate — breaks the count / snippet assertions, and the
-        functional watchdog test below breaks when its own gate stops
-        working.
+        ``_fenced_pending_reset`` is awaited exactly four times: three in the
+        executor and once in ``watchdog_retry``. Three are node-started-capable
+        and are gated on graph idempotency — the in-execute transient requeue
+        behind ``_can_fenced_requeue``, the retry_policy re-dispatch behind
+        ``_retry_policy_applies``, and ``watchdog_retry`` behind its
+        ``not graph_idempotent`` stand-down. The fourth (FAR-2076) is the
+        admission-time deferral: it runs BEFORE the graph streams (zero nodes
+        have executed), so a re-dispatch cannot repeat a side effect and no
+        idempotency gate is required. A new ungated call site that CAN follow
+        node execution — or a removed gate — breaks these assertions, and the
+        functional watchdog test below breaks when its own gate stops working.
         """
         from modulo.core.pipeline_engine import executor, watchdog_retry
 
         exec_src = Path(executor.__file__).read_text(encoding="utf-8")
         wr_src = Path(watchdog_retry.__file__).read_text(encoding="utf-8")
 
-        assert exec_src.count("await self._fenced_pending_reset(") == 2
+        assert exec_src.count("await self._fenced_pending_reset(") == 3
         assert wr_src.count("await executor._fenced_pending_reset(") == 1
         # Gate 1 — in-execute transient requeue (the call sits inside this if).
         assert "if _can_fenced_requeue(" in exec_src
@@ -530,6 +533,10 @@ class TestFencedResetIsIdempotencyGated:
         assert "if not _retry_policy_applies(" in exec_src
         # Gate 3 — the watchdog hook's stand-down.
         assert "if is_correction_run or not graph_idempotent:" in wr_src
+        # Premise 4 — the admission-time deferral is PRE-NODE: it lives in the
+        # `capacity_check_lock_timeout` branch, which runs before streaming.
+        assert "reset = await self._fenced_pending_reset(" in exec_src
+        assert "pipeline.capacity_check_lock_timeout" in exec_src
 
 
 class TestF6aGatedRecoveryResumesNodeStartedNeverReexecutes:

@@ -61,6 +61,16 @@ _CODE_HARNESS_HEARTBEAT_STALE = "harness.heartbeat_stale"
 # dotted registry key directly so it never resolves through that alias and
 # never resurrects the misattribution this ticket removes.
 _CODE_HARNESS_WORKER_LOST = "harness.worker_lost"
+# FAR-2076: the ``dispatcher_reconcile`` re-enqueue backstop is the LAST gate
+# before the enqueue, so it bounds every producer that can hand back a pending
+# run. A row it finds ALREADY beyond its pipeline's retry budget is
+# terminal-failed with THIS code rather than re-dispatched (which executed past
+# the policy) or silently skipped (which stranded the row until the age
+# backstop and misreported it as ``no_progress``). Registered (and aliased in
+# LEGACY_ALIASES as the raw ``retry_budget_exhausted`` spelling) so the one
+# fact that explains the terminalization is visible at the read boundary
+# instead of collapsing to ``harness.unknown`` / "Unknown error".
+_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED = "harness.retry_budget_exhausted"
 _CODE_NODE_TIMEOUT = "node.timeout"
 _CODE_NODE_RUNAWAY = "node.runaway"
 # FAR-1141: a ``dispatch`` node's ``await_completion`` window expired before the
@@ -382,6 +392,22 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         guidance=(
             "Worker executing the run was shut down (deploy or restart); "
             "claim released and run handed back for re-dispatch."
+        ),
+    ),
+    # FAR-2076: the reconcile re-enqueue backstop found a pending run whose
+    # retry budget was already consumed, so it terminal-failed the row instead
+    # of granting another execution. Terminal by construction (no execution is
+    # left to grant — retrying would just re-hit this backstop), warning-level
+    # because a run reaching this gate means an upstream granting path
+    # over-counted, which is worth watching.
+    _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED: ErrorCodeSpec(
+        error_class="harness",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "Run was not re-dispatched: its retry budget was already consumed, so "
+            "reconciliation terminal-failed it instead of granting another execution. "
+            "Raise the pipeline's retry_policy max_retries if more attempts are expected."
         ),
     ),
     "harness.worker_failed": ErrorCodeSpec(
@@ -1031,6 +1057,11 @@ LEGACY_ALIASES: dict[str, str] = {
     # entry beside its sibling terminalizer alias above (never
     # ``harness.unknown``).
     "hitl_review_missing": "hitl.review_missing",
+    # FAR-2076: the reconcile re-enqueue backstop's terminal code. Rows written
+    # before it emitted the dotted spelling carry the bare form, so the alias
+    # keeps them resolving to the registry entry rather than collapsing to
+    # ``harness.unknown``.
+    "retry_budget_exhausted": _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
     "pipeline_capacity": "capacity.pipeline",
     "org_capacity_limited": _CODE_CAPACITY_ORG,
     "capacity_timeout": "capacity.timeout",

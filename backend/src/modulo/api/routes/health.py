@@ -1118,6 +1118,11 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     detail ended at ``rows_deferred``, so the exact class of bounded failure
     was invisible to the alert.
 
+    FAR-2076: ``retry_budget_exhausted`` renders the pending runs the re-enqueue
+    backstop terminal-failed because their durable execution count had already
+    reached the pipeline's ``1 + max_retries`` ceiling — the visible signal for
+    the class (mirrors the Error Dashboard group the same path ingests).
+
     FAR-1643: ``row_loop_time_deferred`` (rows not STARTED because the org's
     slice was about to cut the row loop) is DISTINCT from ``rows_deferred``
     (orgs / row-budget cap markers) - a time-deferred org commits its
@@ -1150,6 +1155,11 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"enqueue_failed_ttl_terminalized={stats.get('enqueue_failed_ttl_terminalized', 0)}, "
         f"enqueue_failed_redispatched={stats.get('enqueue_failed_redispatched', 0)}, "
         f"enqueue_failed_capped={stats.get('enqueue_failed_capped', 0)}, "
+        # FAR-2076: pending runs the re-enqueue backstop found beyond their
+        # retry_policy execution budget and terminal-failed instead of
+        # re-dispatching. Rendered unconditionally so a mass terminalisation is
+        # visible in the readiness detail, not only in the Error Dashboard.
+        f"retry_budget_exhausted={stats.get('retry_budget_exhausted', 0)}, "
         f"capacity_deferred={stats.get('capacity_deferred', 0)}, "
         f"terminalize_capped={stats.get('terminalize_capped', 0)}, "
         f"facts_deferred={stats.get('facts_deferred', 0)}, "
