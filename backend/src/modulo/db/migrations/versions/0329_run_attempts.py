@@ -1,13 +1,16 @@
 """Create run_attempts — durable per-attempt execution history (FAR-2078 slice 1).
 
 Revision ID: 0329_run_attempts
-Revises: 0327_runs_execution_attempt_count
+Revises: 0328_evidence_index_aggregate_indexes
 Create Date: 2026-10-23
 
 Renumbered from ``0326_run_attempts`` and re-pointed from
 ``0325_run_seam_coverage`` when main advanced to
 ``0327_runs_execution_attempt_count`` and the merge queue reported a
-multi-head collision with PR #2165 (``0328_eval_verdict_contract``). The
+multi-head collision with PR #2165 (``0328_eval_verdict_contract``). Re-pointed
+again from ``0327_runs_execution_attempt_count`` to
+``0328_evidence_index_aggregate_indexes`` when main advanced to 0328, which
+would otherwise branch the graph into two heads (0328 and this revision). The
 migration is unchanged; only its position in the chain moved.
 
 A new org-scoped child table of ``runs`` holding one row per execution attempt
@@ -68,7 +71,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0329_run_attempts"
-down_revision: str | None = "0327_runs_execution_attempt_count"
+down_revision: str | None = "0328_evidence_index_aggregate_indexes"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -46,7 +46,7 @@ from tests.unit.db._migration_graph import assert_single_linear_head, script_dir
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0329_run_attempts"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0327_runs_execution_attempt_count"
+_DOWN_REVISION = "0328_evidence_index_aggregate_indexes"
 
 _TABLE = "run_attempts"
 _ORG_INDEX = "ix_run_attempts_organisation_id"
@@ -165,7 +165,7 @@ class TestChain:
     def test_single_linear_head(self) -> None:
         assert_single_linear_head(script_directory())
 
-    def test_down_revision_is_0327_runs_execution_attempt_count(self) -> None:
+    def test_down_revision_is_0328_evidence_index_aggregate_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
