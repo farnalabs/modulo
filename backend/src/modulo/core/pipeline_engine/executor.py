@@ -1427,8 +1427,20 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     return reason
 
 
-def _node_output_connector_failure(node_output: Any) -> str | None:
-    if not isinstance(node_output, dict) or node_output.get("connector_failure") is not True:
+def _node_output_connector_failure(node_output: Any, node_type: str | None = None) -> str | None:
+    """Return a connector/dispatch failure reason from a captured envelope.
+
+    Connector nodes return failed artifacts as their normal error contract; they
+    do not need to cooperate with a second marker just to make terminalisation
+    observe the failure.  The node type is the trust boundary: without it, a
+    sandbox failure artifact must not be reclassified as a connector failure.
+    The legacy ``connector_failure`` marker remains accepted for stored/live
+    envelopes that predate the shape-based recognition.
+    """
+    if not isinstance(node_output, dict):
+        return None
+    marked = node_output.get("connector_failure") is True
+    if not marked and node_type not in {"connector", "dispatch"}:
         return None
     artifacts = node_output.get("artifacts")
     if isinstance(artifacts, list):
@@ -1437,7 +1449,8 @@ def _node_output_connector_failure(node_output: Any) -> str | None:
                 error = artifact.get("error")
                 if isinstance(error, str) and error:
                     return error
-    return "Connector reported failure"
+                return "Connector reported failure"
+    return "Connector reported failure" if marked else None
 
 
 def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
@@ -5435,13 +5448,14 @@ class PipelineExecutor:
         node_ids = set(completed_node_outputs) | set(stored_outputs) | set(stored_telemetry)
         details: list[str] = []
         for node_id in node_ids:
-            if node_type_map.get(node_id) not in {"connector", "dispatch"}:
+            node_type = node_type_map.get(node_id)
+            if node_type not in {"connector", "dispatch"}:
                 continue
             views = self._sandbox_failure_scan_views(completed_node_outputs.get(node_id))
             views.extend(self._sandbox_failure_scan_views(stored_outputs.get(node_id)))
             views.extend(self._sandbox_failure_scan_views(node_telemetry(stored_telemetry, stored_outputs, node_id)))
             for view in views:
-                reason = _node_output_connector_failure(view)
+                reason = _node_output_connector_failure(view, node_type)
                 if reason is not None:
                     details.append(reason)
                     break
@@ -8423,7 +8437,8 @@ class PipelineExecutor:
             state.stall_reason = stall_reason
         if agent_failure:
             state.agent_failure_reason = agent_failure
-        connector_failure = _node_output_connector_failure(output)
+        node_type = ctx.node_type_map.get(name) if ctx.node_type_map else None
+        connector_failure = _node_output_connector_failure(output, node_type)
         if connector_failure:
             state.connector_failure_reason = connector_failure
         if session_lost:

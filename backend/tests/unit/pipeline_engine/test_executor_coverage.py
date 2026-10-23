@@ -49,6 +49,7 @@ from modulo.core.pipeline_engine.executor import (
     _interrupt_subject_parent,
     _map_lg_event,
     _node_output_agent_failure,
+    _node_output_connector_failure,
     _node_output_has_idempotency_gate,
     _node_output_sandbox_session_lost,
     _node_output_sandbox_session_lost_text,
@@ -68,6 +69,7 @@ from modulo.core.pipeline_engine.executor import (
     _seed_state,
     _should_skip_retry,
     _stream_terminal_reason,
+    _StreamContext,
     _streamed_interrupts,
     _StreamState,
     _terminal_failure,
@@ -688,6 +690,13 @@ def test_agent_failure_empty_string_error():
     assert result == "agent self-reported failure"
 
 
+def test_connector_failure_envelope_is_recognized_by_node_type():
+    envelope = {"artifacts": [{"node_id": "connector-1", "status": "failed", "error": "scope denied"}]}
+
+    assert _node_output_connector_failure(envelope, "connector") == "scope denied"
+    assert _node_output_connector_failure(envelope, "sandbox_agent") is None
+
+
 # ---------------------------------------------------------------------------
 # _node_output_sandbox_session_lost
 # ---------------------------------------------------------------------------
@@ -724,6 +733,35 @@ def test_session_lost_non_string_error():
 # ---------------------------------------------------------------------------
 # _node_output_sandbox_session_lost_text
 # ---------------------------------------------------------------------------
+
+
+async def test_chain_end_latches_connector_failure_from_real_envelope():
+    executor = PipelineExecutor(MagicMock())
+    state = _StreamState()
+    completed: dict[str, Any] = {}
+    ctx = _StreamContext(
+        node_ids={"node-conn"},
+        guard=None,
+        completed_node_outputs=completed,
+        run_trace_id=None,
+        broker=MagicMock(),
+        run_id=uuid.uuid4(),
+        pipeline_id=None,
+        org_id=None,
+        node_token_budgets=None,
+        eval_definitions_by_node=None,
+        node_type_map={"node-conn": "connector"},
+    )
+    event = {
+        "name": "node-conn",
+        "run_id": str(uuid.uuid4()),
+        "data": {"output": {"artifacts": [{"node_id": "node-conn", "status": "failed", "error": "scope denied"}]}},
+    }
+
+    await executor._handle_chain_end_event(state=state, ctx=ctx, lg_event=event)
+
+    assert state.connector_failure_reason == "scope denied"
+    assert completed["node-conn"]["artifacts"][0]["status"] == "failed"
 
 
 async def test_chain_end_returns_early_without_envelope():

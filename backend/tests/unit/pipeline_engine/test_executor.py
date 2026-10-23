@@ -23,6 +23,7 @@ from modulo.core.pipeline_engine.executor import (
     _accumulate_llm_tokens,
     _failure_event_matches,
     _graph_contains_sandbox_agent,
+    _node_output_connector_failure,
     _node_output_stall_reason,
     _record_node_markers,
     _retry_after_policy,
@@ -4470,6 +4471,13 @@ def _split_stored_columns(envelope: dict[str, Any], node_id: str = "node-x") -> 
     return split_node_output(envelope, "sandbox_agent", None)
 
 
+def test_connector_failure_envelope_is_recognized_at_stream_seam():
+    envelope = {"artifacts": [{"node_id": "node-conn", "status": "failed", "error": "upstream timeout"}]}
+
+    assert _node_output_connector_failure(envelope, "connector") == "upstream timeout"
+    assert _node_output_connector_failure(envelope, "sandbox_agent") is None
+
+
 def test_connector_failure_marker_produces_typed_terminal_failure():
     from modulo.core.pipeline_engine.event_broker import RunEventBroker
     from modulo.core.pipeline_engine.executor import _stream_terminal_reason, _StreamState
@@ -4494,7 +4502,6 @@ async def test_finalize_downgrades_connector_failure():
     args["completed_node_outputs"] = {
         "node-conn": {
             "artifacts": [{"node_id": "node-conn", "status": "failed", "error": "upstream timeout"}],
-            "connector_failure": True,
         }
     }
 
