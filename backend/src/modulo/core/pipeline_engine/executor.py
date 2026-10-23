@@ -36,7 +36,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NamedTuple, NoReturn
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt, NodeCancelledError
@@ -825,7 +825,20 @@ class SandboxCapacityExceededError(Exception):
 # and ``timeout`` (``None``) were previously collapsed to ``False``, so the
 # deferral log claimed the reset had timed out on a fence loss too — a claim it
 # could not know.
-AdmissionResetState = Literal["confirmed", "fence_lost", "timeout", "unknown"]
+#
+# ``unknown`` covers the case the return value cannot describe: the reset
+# RAISED, so whether it landed is not knowable here. The wording names BOTH
+# possible resting states (``pending``, recovered by ``dispatcher_reconcile``;
+# ``running``, left for the nodeless/age backstop) and claims neither. There is
+# deliberately no re-read: opening a session just to look at the row is more
+# surface than the ambiguity warrants, and every attempt to add one introduced
+# its own defect.
+AdmissionResetState = Literal[
+    "confirmed",
+    "fence_lost",
+    "timeout",
+    "unknown",
+]
 
 
 class AdmissionLockTimeoutError(Exception):
@@ -850,8 +863,10 @@ class AdmissionLockTimeoutError(Exception):
     * ``"timeout"`` — the bounded reset itself timed out; the row was NOT reset
       and is most likely still ``running`` under this executor's claim token,
       left for the nodeless/age backstop;
-    * ``"unknown"`` — the reset raised (not a lock timeout); whether it landed
-      is unknown. Left as-is for the nodeless/age backstop.
+    * ``"unknown"`` — the reset RAISED, so whether it landed could not be
+      determined. The run may be ``pending`` (recovered by
+      ``dispatcher_reconcile``'s re-enqueue leg) or still ``running`` (left for
+      the nodeless/age backstop); the deferral names BOTH and claims neither.
 
     Every arm maps to the SAME non-terminal outcome
     (``pipeline_execution._handle_executor_failure`` returns
@@ -875,8 +890,9 @@ class AdmissionLockTimeoutError(Exception):
                 "nodeless/age backstop"
             ),
             "unknown": (
-                "the fenced pending-reset failed, so whether it landed is unknown and the run was left as-is "
-                "for the nodeless/age backstop"
+                "the fenced pending-reset raised, so whether it landed could not be determined: if it did, the "
+                "row is pending and dispatcher_reconcile will re-dispatch it; if it did not, the row is still "
+                "running and falls to the nodeless/age backstop"
             ),
         }[reset_state]
         super().__init__(
@@ -2026,6 +2042,17 @@ def _stream_terminal_reason(
     return None
 
 
+class _CapacitySnapshot(NamedTuple):
+    """Counts and admit/reject verdicts from ONE claim-time capacity read."""
+
+    pipeline_ok: bool
+    active_count: int
+    sandbox_ok: bool
+    sandbox_count: int
+    run_ok: bool
+    run_count: int
+
+
 def _all_capacities_ok(pipeline_ok: bool, sandbox_ok: bool, run_ok: bool) -> bool:
     """All three capacity gates (pipeline / sandbox / org-run) admit the run."""
     return pipeline_ok and sandbox_ok and run_ok
@@ -2562,7 +2589,9 @@ class PipelineExecutor:
         back). The run's resting state depends on the reset: a CONFIRMED reset
         leaves it ``pending`` for ``dispatcher_reconcile``; a reset that itself
         timed out (``None``) leaves it ``running`` under our claim token for the
-        nodeless/age backstop. Either way the next admission counts the attempt.
+        nodeless/age backstop; a reset that RAISED leaves its outcome
+        ``unknown``, worded as both possibilities. Either way the next
+        admission counts the attempt.
         """
         org_sandbox_cap, org_sandbox_host_only, org_sandbox_population = await self._read_org_sandbox_cap_full(
             org_id, graph_json, snapshot_id
@@ -2586,79 +2615,115 @@ class PipelineExecutor:
         # ``_fenced_pending_reset``'s idempotency rule: ZERO nodes have
         # executed here (admission precedes streaming), so a re-dispatch cannot
         # repeat a side effect.
-        last_lock_timeout: Exception | None = None
-        for attempt in (0, 1):
-            try:
-                return await self._claim_under_capacity(
-                    run_id=run_id,
-                    org_id=org_id,
-                    pipeline_id=pipeline_id,
-                    max_concurrent=max_concurrent,
-                    org_sandbox_cap=org_sandbox_cap,
-                    org_sandbox_host_only=org_sandbox_host_only,
-                    org_sandbox_population=org_sandbox_population,
-                    org_run_limit=org_run_limit,
-                )
-            except asyncio.CancelledError:
+        run, first_timeout = await self._claim_or_lock_timeout(
+            run_id=run_id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            max_concurrent=max_concurrent,
+            org_sandbox_cap=org_sandbox_cap,
+            org_sandbox_host_only=org_sandbox_host_only,
+            org_sandbox_population=org_sandbox_population,
+            org_run_limit=org_run_limit,
+        )
+        if run is not None:
+            return run
+        _log.warning(
+            "pipeline.capacity_check_lock_timeout run=%s — bounded "
+            "mutation_row_lock_timeout_ms wait expired on the claim-time "
+            "write; retrying the admission+bump transaction once",
+            run_id,
+            exc_info=first_timeout,
+        )
+        run, second_timeout = await self._claim_or_lock_timeout(
+            run_id=run_id,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            max_concurrent=max_concurrent,
+            org_sandbox_cap=org_sandbox_cap,
+            org_sandbox_host_only=org_sandbox_host_only,
+            org_sandbox_population=org_sandbox_population,
+            org_run_limit=org_run_limit,
+        )
+        if run is not None:
+            return run
+        return await self._defer_after_admission_lock_timeout(run_id=run_id, org_id=org_id, lock_timeout=second_timeout)
+
+    async def _claim_or_lock_timeout(self, **kwargs: Any) -> tuple[Run | None, Exception | None]:
+        """Attempt ONE admission, translating a 55P03 row-lock timeout into data.
+
+        The admission transaction also spends one execution against the retry
+        budget, so a lock timeout rolls the bump back WHOLE. Returning the
+        timeout (instead of raising) lets the caller retry exactly once and then
+        defer; every non-55P03 failure and cancellation propagates unchanged.
+        """
+        try:
+            return await self._claim_under_capacity(**kwargs), None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
                 raise
-            except Exception as exc:
-                if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
-                    raise
-                last_lock_timeout = exc
-                if attempt == 1:
-                    # Second consecutive timeout: hand the claimed run back to
-                    # ``pending`` (fenced on our claim token + status='running')
-                    # so ``dispatcher_reconcile`` re-dispatches it. The reset's
-                    # OUTCOME is carried as a tri-state (plus "unknown" for an
-                    # unexpected reset failure) — never a bool, because a fence
-                    # loss (rowcount 0) and a timeout (``None``) are different
-                    # facts and the deferral log must describe each truthfully.
-                    reset_state: AdmissionResetState = "unknown"
-                    try:
-                        reset = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        # Whether the reset landed is unknown; leave the row
-                        # as-is for the nodeless/age backstop.
-                        _log.warning(
-                            "pipeline.capacity_check_lock_timeout run=%s — fenced pending-reset "
-                            "failed after the second admission timeout; whether it landed is "
-                            "unknown and the run is left as-is for the nodeless/age backstop",
-                            run_id,
-                            exc_info=True,
-                        )
-                    else:
-                        if reset is None:
-                            reset_state = "timeout"
-                        elif reset:
-                            reset_state = "confirmed"
-                        else:
-                            reset_state = "fence_lost"
-                    _log.warning(
-                        "pipeline.capacity_check_lock_timeout run=%s — second bounded "
-                        "mutation_row_lock_timeout_ms wait expired; the admission and its "
-                        "execution-budget bump rolled back, so the attempt is NOT executed "
-                        "uncounted. Deferring (fenced pending-reset=%s) instead of "
-                        "terminal-failing a run that consumed zero executions",
-                        run_id,
-                        reset_state,
-                        exc_info=True,
-                    )
-                    # The deferral's observable contract differs with the reset:
-                    # a confirmed reset leaves the run ``pending`` (reconciled);
-                    # a fence loss is owned by a successor / already non-running;
-                    # a timeout leaves the row most likely running (backstop).
-                    raise AdmissionLockTimeoutError(run_id, attempts=2, reset_state=reset_state) from exc
-                _log.warning(
-                    "pipeline.capacity_check_lock_timeout run=%s — bounded "
-                    "mutation_row_lock_timeout_ms wait expired on the claim-time "
-                    "write; retrying the admission+bump transaction once",
-                    run_id,
-                    exc_info=True,
-                )
-        assert last_lock_timeout is not None  # the loop returns or raises
-        raise last_lock_timeout
+            return None, exc
+
+    async def _defer_after_admission_lock_timeout(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        lock_timeout: Exception | None,
+    ) -> NoReturn:
+        """Hand a zero-execution run back to ``pending`` after a second 55P03.
+
+        The reset's OUTCOME is carried as a tri-state (plus "unknown" for an
+        unexpected reset failure) — never a bool, because a fence loss (rowcount
+        0) and a timeout (``None``) are different facts and the deferral log
+        must describe each truthfully. The raised error maps to the non-terminal
+        ``deferred`` outcome, so the run is never terminal-failed after consuming
+        zero executions.
+        """
+        reset_state: AdmissionResetState = "unknown"
+        try:
+            reset = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # The reset RAISED, so its outcome cannot be determined here.
+            # ``unknown`` names BOTH possible resting states and claims neither
+            # — a landed reset leaves the row ``pending`` (recovered by
+            # dispatcher_reconcile's re-enqueue leg), a reset that did not land
+            # leaves it ``running`` (the nodeless/age backstop). Deliberately no
+            # re-read: opening a session just to look at the row is more surface
+            # than this ambiguity warrants.
+            _log.warning(
+                "pipeline.capacity_check_lock_timeout run=%s — fenced pending-reset "
+                "raised after the second admission timeout, so whether it landed is "
+                "unknown; the deferral names both possible sweeps",
+                run_id,
+                exc_info=True,
+            )
+        else:
+            if reset is None:
+                reset_state = "timeout"
+            elif reset:
+                reset_state = "confirmed"
+            else:
+                reset_state = "fence_lost"
+        _log.warning(
+            "pipeline.capacity_check_lock_timeout run=%s — second bounded "
+            "mutation_row_lock_timeout_ms wait expired; the admission and its "
+            "execution-budget bump rolled back, so the attempt is NOT executed "
+            "uncounted. Deferring (fenced pending-reset=%s) instead of "
+            "terminal-failing a run that consumed zero executions",
+            run_id,
+            reset_state,
+            exc_info=True,
+        )
+        # The deferral's observable contract differs with the reset: a confirmed
+        # reset leaves the run ``pending`` (reconciled); a fence loss is owned by
+        # a successor / already non-running; a timeout leaves the row most likely
+        # running (backstop); a raised reset leaves the outcome ``unknown`` and
+        # both possible resting states are named.
+        raise AdmissionLockTimeoutError(run_id, attempts=2, reset_state=reset_state) from lock_timeout
 
     async def _claim_under_capacity(
         self,
@@ -2696,199 +2761,272 @@ class PipelineExecutor:
                     raise RunNotFoundError(run_id)
                 return cancelled_run
 
-            pipeline_capacity_ok = True
-            active_count = 0
-            if max_concurrent > 0:
-                active_count = await count_active_runs_for_pipeline(
-                    session, pipeline_id, include_pending=False, exclude_run_id=run_id
-                )
-                pipeline_capacity_ok = active_count < max_concurrent
-
-            org_sandbox_count = 0
-            if org_sandbox_cap is not None:
-                org_sandbox_count = await self._org_sandbox_active_count(
-                    session,
-                    org_id,
-                    run_id,
-                    population=org_sandbox_population,
-                    host_resource_only=org_sandbox_host_only,
-                )
-            org_sandbox_cap_ok = org_sandbox_cap is None or org_sandbox_count < org_sandbox_cap
-
-            org_run_count = 0
-            if org_run_limit is not None:
-                org_run_count = await self._org_run_active_count(session, org_id, run_id)
-            org_run_cap_ok = org_run_limit is None or org_run_count < org_run_limit
-
-            if _all_capacities_ok(pipeline_capacity_ok, org_sandbox_cap_ok, org_run_cap_ok):
-                if run.status not in _ADMISSIBLE_STATUSES:
-                    # The run went terminal (or hold) while a retry was backing
-                    # off — never resurrect it. Return it untouched so the
-                    # caller does not resume execution.
-                    return run
-                # FAR-2076 defence in depth: THIS is the single point every
-                # graph execution is granted through (the capacity check above
-                # has passed; the bump below spends one execution). Refuse the
-                # admission when the run has already spent its policy ceiling
-                # (`1 + max_retries`), so no present or future enqueue path can
-                # execute past it. The policy is read here (soft-delete
-                # opt-out, FAR-1025 parity) rather than threaded from a caller,
-                # so no call site can omit the gate. `None`/`{}` imposes no
-                # ceiling and is unaffected.
-                from modulo.db.soft_delete import include_soft_deleted
-
-                pipeline_row = (
-                    await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id)))
-                ).scalar_one_or_none()
-                retry_policy = getattr(pipeline_row, "retry_policy", None)
-                ceiling = retry_max_executions(retry_policy)
-                consumed = retry_executions_consumed(execution_attempt_count=getattr(run, "execution_attempt_count", 0))
-                if ceiling is not None and retry_budget_exhausted(retry_policy, execution_attempt_count=consumed):
-                    terminal_run = await update_run_status(
-                        session,
-                        run_id,
-                        "failed",
-                        error_code=_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
-                        error_detail=(
-                            "Run not admitted: its retry_policy budget is exhausted "
-                            f"(execution_attempt_count={consumed} >= ceiling {ceiling}); "
-                            "the graph was not executed."
-                        ),
-                        claim_token=self._claim_token,
-                        from_status="running",
-                    )
-                    if terminal_run is None:
-                        # The fenced write lost the row (cancellation raised, or
-                        # a superseded claim, in the same instant). Do NOT invent
-                        # a terminal row: re-read whatever the row now is.
-                        #
-                        # This MUST be a genuine re-read: the fenced write above
-                        # is a raw UPDATE that bypasses the ORM identity map, so
-                        # a plain ``get_run`` in THIS session returns the STALE
-                        # object loaded at the top of the transaction — its
-                        # ``claim_token``/``cancellation_requested``/``status``
-                        # are the pre-write values, making the reason split
-                        # below unreachable and masking a row that already left
-                        # ``running``. ``populate_existing`` forces the row read.
-                        terminal_run = await session.get(Run, run_id, populate_existing=True)
-                        if terminal_run is None:
-                            raise RunNotFoundError(run_id)
-                        _log.warning(
-                            "pipeline.retry_budget_gate_fence_lost run=%s org=%s status=%s — "
-                            "the terminal write was rejected; re-read the row instead of "
-                            "admitting the execution",
-                            run_id,
-                            org_id,
-                            terminal_run.status,
-                        )
-                        if terminal_run.status == "running":
-                            # A superseded token or a cancellation-pending row is
-                            # STILL ``running``, so ``execute()``'s
-                            # ``status != "running"`` bail would let it stream —
-                            # exactly the execution past the ceiling this gate
-                            # exists to refuse. Keep the attempt non-executing:
-                            # raise, and let the wrapper map it to a non-terminal
-                            # outcome. Only a genuinely non-running row (a
-                            # terminal or held state) may be returned untouched.
-                            if terminal_run.claim_token != self._claim_token:
-                                raise RetryBudgetGateRefusedError(run_id, reason="superseded claim token")
-                            if terminal_run.cancellation_requested:
-                                raise RetryBudgetGateRefusedError(run_id, reason="cancellation pending")
-                            raise RetryBudgetGateRefusedError(run_id, reason="fence lost")
-                        return terminal_run
-                    _log.warning(
-                        "pipeline.retry_budget_exhausted_at_admission run=%s org=%s "
-                        "execution_attempts=%s ceiling=%s — refused to execute past the "
-                        "retry_policy budget",
-                        run_id,
-                        org_id,
-                        consumed,
-                        ceiling,
-                    )
-                    return terminal_run
-                admitted = await self._claim_run_and_audit(
-                    session=session,
-                    run_id=run_id,
-                    org_id=org_id,
-                    pipeline_id=pipeline_id,
-                )
-                # FAR-2076: this attempt is EXECUTING — spend ONE execution
-                # against the pipeline's retry budget. Placement is the
-                # invariant: the capacity check above has passed (a demotion
-                # returns below and never reaches this line), so the counter
-                # grows if and only if the execution attempt actually begins.
-                # Stamped in the SAME transaction as the admission decision, so
-                # a crash immediately after this commit still leaves the
-                # attempt counted; every pre-node death that follows
-                # (checkpointer setup, graph compile, hub init) therefore
-                # consumes budget, because the attempt was made. It is NEVER
-                # stamped by the SAQ claim (``claim_run_async``) — that runs
-                # before capacity and would charge a demoted claim — and never
-                # by the resume claim (a checkpoint continuation, not a graph
-                # execution).
-                from modulo.core.pipeline_execution import bump_execution_attempt_count
-
-                counted = await bump_execution_attempt_count(
-                    session,
-                    run_id,
-                    org_id,
-                    claim_token=self._claim_token,
-                )
-                if not counted:
-                    # The token/status fence rejected the bump. The admission
-                    # branch above proved the row was admissible, so this is a
-                    # concurrent transition (a successor rotated the token, or
-                    # the row left ``running`` in the same instant). Never let
-                    # that be indistinguishable from a successful spend: WARN,
-                    # and proceed only because every later write the attempt
-                    # makes is itself token-fenced (a successor that took the
-                    # run spent its own attempt in its own admission).
-                    _log.warning(
-                        "pipeline.execution_attempt_not_counted run=%s org=%s — the "
-                        "claim-token/status fence rejected the execution-budget bump; "
-                        "the attempt proceeds against a superseded or no-longer-running "
-                        "row (its writes remain fenced)",
-                        run_id,
-                        org_id,
-                    )
-                return admitted
-
-            decline_code, decline_detail = self._capacity_decline(
+            capacity = await self._capacity_snapshot(
+                session,
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
                 max_concurrent=max_concurrent,
-                active_count=active_count,
-                _pipeline_capacity_ok=pipeline_capacity_ok,
                 org_sandbox_cap=org_sandbox_cap,
-                org_count=org_sandbox_count,
-                org_capacity_ok=org_sandbox_cap_ok,
+                org_sandbox_host_only=org_sandbox_host_only,
+                org_sandbox_population=org_sandbox_population,
                 org_run_limit=org_run_limit,
-                org_run_count=org_run_count,
-                org_run_capacity_ok=org_run_cap_ok,
             )
-            # Demote to pending + reason marker so the recovery sweeps
-            # (dispatcher_reconcile / stale-run) pick it up. FENCED to this
-            # executor's claim token and only from ``running`` (A1): a
-            # superseded original (token rotated by a successor) cannot demote
-            # the successor's running row back to pending.
-            #
-            # D8 (FAR-594): this claim-time demotion is explicitly ADVISORY —
-            # a best-effort, lock-free, population-only read (its own-row
-            # lock exists only at this fenced demote write) that must NEVER
-            # take the per-org advisory lock (a count-then-row shape would
-            # invert the uniform row→advisory ordering). The runner-marker
-            # reconciliation sweep is its named backstop.
-            await update_run_status(
+            if not _all_capacities_ok(capacity.pipeline_ok, capacity.sandbox_ok, capacity.run_ok):
+                return await self._demote_for_capacity(
+                    session,
+                    run_id=run_id,
+                    max_concurrent=max_concurrent,
+                    capacity=capacity,
+                    org_sandbox_cap=org_sandbox_cap,
+                    org_run_limit=org_run_limit,
+                )
+
+            if run.status not in _ADMISSIBLE_STATUSES:
+                # The run went terminal (or hold) while a retry was backing
+                # off — never resurrect it. Return it untouched so the
+                # caller does not resume execution.
+                return run
+            refused = await self._retry_budget_gate(
+                session,
+                run=run,
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+            )
+            if refused is not None:
+                return refused
+            admitted = await self._claim_run_and_audit(
+                session=session,
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+            )
+            # FAR-2076: this attempt is EXECUTING — spend ONE execution
+            # against the pipeline's retry budget. Placement is the
+            # invariant: the capacity check above has passed (a demotion
+            # returns above and never reaches this line), so the counter
+            # grows if and only if the execution attempt actually begins.
+            # Stamped in the SAME transaction as the admission decision, so
+            # a crash immediately after this commit still leaves the
+            # attempt counted; every pre-node death that follows
+            # (checkpointer setup, graph compile, hub init) therefore
+            # consumes budget, because the attempt was made. It is NEVER
+            # stamped by the SAQ claim (``claim_run_async``) — that runs
+            # before capacity and would charge a demoted claim — and never
+            # by the resume claim (a checkpoint continuation, not a graph
+            # execution).
+            from modulo.core.pipeline_execution import bump_execution_attempt_count
+
+            counted = await bump_execution_attempt_count(
                 session,
                 run_id,
-                "pending",
-                error_code=decline_code,
-                error_detail=decline_detail,
+                org_id,
                 claim_token=self._claim_token,
-                from_status="running",
             )
-            pending_run = await get_run(session, run_id)
-            if pending_run is None:
+            if not counted:
+                # The token/status fence rejected the bump. The admission
+                # branch above proved the row was admissible, so this is a
+                # concurrent transition (a successor rotated the token, or
+                # the row left ``running`` in the same instant). Never let
+                # that be indistinguishable from a successful spend: WARN,
+                # and proceed only because every later write the attempt
+                # makes is itself token-fenced (a successor that took the
+                # run spent its own attempt in its own admission).
+                _log.warning(
+                    "pipeline.execution_attempt_not_counted run=%s org=%s — the "
+                    "claim-token/status fence rejected the execution-budget bump; "
+                    "the attempt proceeds against a superseded or no-longer-running "
+                    "row (its writes remain fenced)",
+                    run_id,
+                    org_id,
+                )
+            return admitted
+
+    async def _capacity_snapshot(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        max_concurrent: int,
+        org_sandbox_cap: int | None,
+        org_sandbox_host_only: bool,
+        org_sandbox_population: str,
+        org_run_limit: int | None,
+    ) -> _CapacitySnapshot:
+        """Read the three capacity gates once, in the admission transaction."""
+        pipeline_ok = True
+        active_count = 0
+        if max_concurrent > 0:
+            active_count = await count_active_runs_for_pipeline(
+                session, pipeline_id, include_pending=False, exclude_run_id=run_id
+            )
+            pipeline_ok = active_count < max_concurrent
+
+        sandbox_count = 0
+        if org_sandbox_cap is not None:
+            sandbox_count = await self._org_sandbox_active_count(
+                session,
+                org_id,
+                run_id,
+                population=org_sandbox_population,
+                host_resource_only=org_sandbox_host_only,
+            )
+        sandbox_ok = org_sandbox_cap is None or sandbox_count < org_sandbox_cap
+
+        run_count = 0
+        if org_run_limit is not None:
+            run_count = await self._org_run_active_count(session, org_id, run_id)
+        run_ok = org_run_limit is None or run_count < org_run_limit
+        return _CapacitySnapshot(
+            pipeline_ok=pipeline_ok,
+            active_count=active_count,
+            sandbox_ok=sandbox_ok,
+            sandbox_count=sandbox_count,
+            run_ok=run_ok,
+            run_count=run_count,
+        )
+
+    async def _retry_budget_gate(
+        self,
+        session: AsyncSession,
+        *,
+        run: Run,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+    ) -> Run | None:
+        """Refuse an admission that would exceed the pipeline's retry budget.
+
+        FAR-2076 defence in depth: THIS is the single point every graph
+        execution is granted through (the capacity check has passed; the caller
+        spends one execution after this gate). Returns the terminal row when the
+        attempt is refused and ``None`` when the caller may admit. The policy is
+        read here (soft-delete opt-out, FAR-1025 parity) rather than threaded
+        from a caller, so no call site can omit the gate. ``None``/``{}``
+        imposes no ceiling and is unaffected.
+        """
+        from modulo.db.soft_delete import include_soft_deleted
+
+        pipeline_row = (
+            await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == pipeline_id)))
+        ).scalar_one_or_none()
+        retry_policy = getattr(pipeline_row, "retry_policy", None)
+        ceiling = retry_max_executions(retry_policy)
+        consumed = retry_executions_consumed(execution_attempt_count=getattr(run, "execution_attempt_count", 0))
+        if ceiling is None or not retry_budget_exhausted(retry_policy, execution_attempt_count=consumed):
+            return None
+        terminal_run = await update_run_status(
+            session,
+            run_id,
+            "failed",
+            error_code=_CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
+            error_detail=(
+                "Run not admitted: its retry_policy budget is exhausted "
+                f"(execution_attempt_count={consumed} >= ceiling {ceiling}); "
+                "the graph was not executed."
+            ),
+            claim_token=self._claim_token,
+            from_status="running",
+        )
+        if terminal_run is None:
+            # The fenced write lost the row (cancellation raised, or a
+            # superseded claim, in the same instant). Do NOT invent a terminal
+            # row: re-read whatever the row now is.
+            #
+            # This MUST be a genuine re-read: the fenced write above is a raw
+            # UPDATE that bypasses the ORM identity map, so a plain ``get_run``
+            # in THIS session returns the STALE object loaded at the top of the
+            # transaction — its ``claim_token``/``cancellation_requested``/
+            # ``status`` are the pre-write values, making the reason split
+            # below unreachable and masking a row that already left
+            # ``running``. ``populate_existing`` forces the row read.
+            terminal_run = await session.get(Run, run_id, populate_existing=True)
+            if terminal_run is None:
                 raise RunNotFoundError(run_id)
-            return pending_run
+            _log.warning(
+                "pipeline.retry_budget_gate_fence_lost run=%s org=%s status=%s — "
+                "the terminal write was rejected; re-read the row instead of "
+                "admitting the execution",
+                run_id,
+                org_id,
+                terminal_run.status,
+            )
+            if terminal_run.status == "running":
+                # A superseded token or a cancellation-pending row is STILL
+                # ``running``, so ``execute()``'s ``status != "running"`` bail
+                # would let it stream — exactly the execution past the ceiling
+                # this gate exists to refuse. Keep the attempt non-executing:
+                # raise, and let the wrapper map it to a non-terminal outcome.
+                # Only a genuinely non-running row (a terminal or held state)
+                # may be returned untouched.
+                if terminal_run.claim_token != self._claim_token:
+                    raise RetryBudgetGateRefusedError(run_id, reason="superseded claim token")
+                if terminal_run.cancellation_requested:
+                    raise RetryBudgetGateRefusedError(run_id, reason="cancellation pending")
+                raise RetryBudgetGateRefusedError(run_id, reason="fence lost")
+            return terminal_run
+        _log.warning(
+            "pipeline.retry_budget_exhausted_at_admission run=%s org=%s "
+            "execution_attempts=%s ceiling=%s — refused to execute past the "
+            "retry_policy budget",
+            run_id,
+            org_id,
+            consumed,
+            ceiling,
+        )
+        return terminal_run
+
+    async def _demote_for_capacity(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: uuid.UUID,
+        max_concurrent: int,
+        capacity: _CapacitySnapshot,
+        org_sandbox_cap: int | None,
+        org_run_limit: int | None,
+    ) -> Run:
+        """Demote an over-capacity claim back to ``pending`` with a reason marker.
+
+        The recovery sweeps (dispatcher_reconcile / stale-run) pick it up. FENCED
+        to this executor's claim token and only from ``running`` (A1): a
+        superseded original (token rotated by a successor) cannot demote the
+        successor's running row back to pending.
+
+        D8 (FAR-594): this claim-time demotion is explicitly ADVISORY — a
+        best-effort, lock-free, population-only read (its own-row lock exists
+        only at this fenced demote write) that must NEVER take the per-org
+        advisory lock (a count-then-row shape would invert the uniform
+        row→advisory ordering). The runner-marker reconciliation sweep is its
+        named backstop.
+        """
+        decline_code, decline_detail = self._capacity_decline(
+            max_concurrent=max_concurrent,
+            active_count=capacity.active_count,
+            _pipeline_capacity_ok=capacity.pipeline_ok,
+            org_sandbox_cap=org_sandbox_cap,
+            org_count=capacity.sandbox_count,
+            org_capacity_ok=capacity.sandbox_ok,
+            org_run_limit=org_run_limit,
+            org_run_count=capacity.run_count,
+            org_run_capacity_ok=capacity.run_ok,
+        )
+        await update_run_status(
+            session,
+            run_id,
+            "pending",
+            error_code=decline_code,
+            error_detail=decline_detail,
+            claim_token=self._claim_token,
+            from_status="running",
+        )
+        pending_run = await get_run(session, run_id)
+        if pending_run is None:
+            raise RunNotFoundError(run_id)
+        return pending_run
 
     async def _check_spend_ceiling_gate(
         self,

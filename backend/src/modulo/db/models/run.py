@@ -462,7 +462,7 @@ class Run(OrgScoped):
     #
     # Distinct from ``node_attempt_count`` (per-NODE attempts, so a pre-node
     # death has no node to record) and from ``claim_count`` (every SAQ claim).
-    # Migration 0325 backfilled it from ``node_attempt_count`` (non-terminal
+    # Migration 0327 backfilled it from ``node_attempt_count`` (non-terminal
     # rows only) as a deliberate LOWER bound: under-counting grants a retry,
     # over-counting kills a healthy run.
     execution_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

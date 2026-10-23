@@ -1,6 +1,6 @@
 """Add ``runs.execution_attempt_count`` - a dedicated durable execution counter (FAR-2076).
 
-Revision ID: 0326_runs_execution_attempt_count
+Revision ID: 0327_runs_execution_attempt_count
 Revises: 0325_run_seam_coverage
 Create Date: 2026-10-22
 
@@ -69,7 +69,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0326_runs_execution_attempt_count"
+revision: str = "0327_runs_execution_attempt_count"
 down_revision: str | None = "0325_run_seam_coverage"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None

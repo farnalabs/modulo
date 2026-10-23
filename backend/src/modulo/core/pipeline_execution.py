@@ -2984,8 +2984,9 @@ async def _handle_executor_failure(
     ``fence_lost`` (reset matched no row; owned by a successor or already
     non-running — resting state unknowable here), ``timeout`` (not reset; most
     likely still running, left to the nodeless/age backstop) or ``unknown``
-    (the reset raised; left as-is). No arm asserts a resting state it cannot
-    know.
+    (the reset raised, so whether it landed could not be determined; both
+    possible resting states are named and neither is claimed). No arm asserts a
+    resting state it cannot know.
 
     A ``RetryBudgetGateRefusedError`` is also DEFERRED: the run was at its
     retry ceiling and the gate's terminal write lost the fence while the row
@@ -3055,8 +3056,9 @@ async def _handle_executor_failure(
             _log.warning(
                 "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
                 "admission kept hitting row-lock timeouts and the fenced pending-reset "
-                "FAILED; whether it landed is unknown, so the run is left as-is for the "
-                "nodeless/age backstop; NOT terminal-failed",
+                "RAISED, so whether it landed could not be determined: if it did, the row is "
+                "pending and dispatcher_reconcile will re-dispatch it; if it did not, the row "
+                "is still running and falls to the nodeless/age backstop; NOT terminal-failed",
                 run_id,
                 exec_exc.attempts,
             )
