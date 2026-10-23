@@ -2983,14 +2983,10 @@ async def _handle_executor_failure(
     reset OUTCOME — ``confirmed`` (reset landed, run pending),
     ``fence_lost`` (reset matched no row; owned by a successor or already
     non-running — resting state unknowable here), ``timeout`` (not reset; most
-    likely still running, left to the nodeless/age backstop),
-    ``observed_pending`` (the reset raised but a fresh re-read found the row
-    pending, so it landed and ``dispatcher_reconcile`` recovers it),
-    ``observed_running`` (the reset raised and a fresh re-read found the row
-    running, so it did not land and the nodeless/age backstop owns it) or
-    ``unknown`` (the reset raised AND the re-read failed; both possibilities are
-    named and neither is claimed). No arm asserts a resting state it cannot
-    know.
+    likely still running, left to the nodeless/age backstop) or ``unknown``
+    (the reset raised, so whether it landed could not be determined; both
+    possible resting states are named and neither is claimed). No arm asserts a
+    resting state it cannot know.
 
     A ``RetryBudgetGateRefusedError`` is also DEFERRED: the run was at its
     retry ceiling and the gate's terminal write lost the fence while the row
@@ -3056,32 +3052,13 @@ async def _handle_executor_failure(
                 run_id,
                 exec_exc.attempts,
             )
-        elif exec_exc.reset_state == "observed_pending":
-            _log.warning(
-                "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
-                "admission kept hitting row-lock timeouts; the fenced pending-reset RAISED, "
-                "but a fresh re-read observed the row pending, so the reset landed and "
-                "dispatcher_reconcile will re-dispatch it; NOT terminal-failed",
-                run_id,
-                exec_exc.attempts,
-            )
-        elif exec_exc.reset_state == "observed_running":
-            _log.warning(
-                "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
-                "admission kept hitting row-lock timeouts; the fenced pending-reset RAISED "
-                "and a fresh re-read observed the row still running, so it was NOT reset "
-                "and is left for the nodeless/age backstop; NOT terminal-failed",
-                run_id,
-                exec_exc.attempts,
-            )
         else:
             _log.warning(
                 "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
                 "admission kept hitting row-lock timeouts and the fenced pending-reset "
-                "RAISED; a fresh re-read could not confirm its outcome, so the run may be "
-                "pending (reset landed — dispatcher_reconcile will re-dispatch it) or still "
-                "running (reset did not land — left for the nodeless/age backstop); "
-                "NOT terminal-failed",
+                "RAISED, so whether it landed could not be determined: if it did, the row is "
+                "pending and dispatcher_reconcile will re-dispatch it; if it did not, the row "
+                "is still running and falls to the nodeless/age backstop; NOT terminal-failed",
                 run_id,
                 exec_exc.attempts,
             )

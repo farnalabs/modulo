@@ -826,19 +826,17 @@ class SandboxCapacityExceededError(Exception):
 # deferral log claimed the reset had timed out on a fence loss too — a claim it
 # could not know.
 #
-# The two ``observed_*`` arms resolve the one case the return value cannot
-# describe: the reset RAISED, so the handler re-reads the row in a fresh
-# session. ``observed_pending`` means it landed (recovered by
-# ``dispatcher_reconcile``'s re-enqueue leg); ``observed_running`` means it did
-# not (left for the nodeless/age backstop). Only when that re-read ALSO fails is
-# the outcome genuinely ``unknown`` — and then the wording names both possible
-# sweeps instead of picking one.
+# ``unknown`` covers the case the return value cannot describe: the reset
+# RAISED, so whether it landed is not knowable here. The wording names BOTH
+# possible resting states (``pending``, recovered by ``dispatcher_reconcile``;
+# ``running``, left for the nodeless/age backstop) and claims neither. There is
+# deliberately no re-read: opening a session just to look at the row is more
+# surface than the ambiguity warrants, and every attempt to add one introduced
+# its own defect.
 AdmissionResetState = Literal[
     "confirmed",
     "fence_lost",
     "timeout",
-    "observed_pending",
-    "observed_running",
     "unknown",
 ]
 
@@ -865,16 +863,10 @@ class AdmissionLockTimeoutError(Exception):
     * ``"timeout"`` — the bounded reset itself timed out; the row was NOT reset
       and is most likely still ``running`` under this executor's claim token,
       left for the nodeless/age backstop;
-    * ``"observed_pending"`` — the reset RAISED, and a fresh re-read observed
-      the row ``pending``; the reset landed and the run is recovered by
-      ``dispatcher_reconcile``'s re-enqueue leg;
-    * ``"observed_running"`` — the reset RAISED, and a fresh re-read observed
-      the row still ``running``; it was NOT reset and is left for the
-      nodeless/age backstop;
-    * ``"unknown"`` — the reset RAISED and the follow-up re-read ALSO failed (or
-      found no row), so whether it landed is unknown. The run may be ``pending``
-      (recovered by ``dispatcher_reconcile``) or still ``running`` (left for the
-      nodeless/age backstop); the deferral names BOTH and claims neither.
+    * ``"unknown"`` — the reset RAISED, so whether it landed could not be
+      determined. The run may be ``pending`` (recovered by
+      ``dispatcher_reconcile``'s re-enqueue leg) or still ``running`` (left for
+      the nodeless/age backstop); the deferral names BOTH and claims neither.
 
     Every arm maps to the SAME non-terminal outcome
     (``pipeline_execution._handle_executor_failure`` returns
@@ -897,18 +889,10 @@ class AdmissionLockTimeoutError(Exception):
                 "the fenced pending-reset ALSO timed out, so the run was NOT reset and is left for the "
                 "nodeless/age backstop"
             ),
-            "observed_pending": (
-                "the fenced pending-reset raised, but a fresh re-read observed the row pending, so the reset "
-                "landed and the run is recovered by dispatcher_reconcile's re-enqueue leg"
-            ),
-            "observed_running": (
-                "the fenced pending-reset raised and a fresh re-read observed the row still running, so the run "
-                "was NOT reset and is left for the nodeless/age backstop"
-            ),
             "unknown": (
-                "the fenced pending-reset raised and its outcome could not be confirmed by a fresh re-read, so it "
-                "may have landed (the row would be pending, recovered by dispatcher_reconcile) or not (the row "
-                "would still be running, left for the nodeless/age backstop)"
+                "the fenced pending-reset raised, so whether it landed could not be determined: if it did, the "
+                "row is pending and dispatcher_reconcile will re-dispatch it; if it did not, the row is still "
+                "running and falls to the nodeless/age backstop"
             ),
         }[reset_state]
         super().__init__(
@@ -2594,10 +2578,9 @@ class PipelineExecutor:
         back). The run's resting state depends on the reset: a CONFIRMED reset
         leaves it ``pending`` for ``dispatcher_reconcile``; a reset that itself
         timed out (``None``) leaves it ``running`` under our claim token for the
-        nodeless/age backstop; a reset that RAISED is resolved by re-reading the
-        row (``observed_pending`` / ``observed_running``), and only when that
-        re-read also fails is the outcome ``unknown`` — worded as both
-        possibilities. Either way the next admission counts the attempt.
+        nodeless/age backstop; a reset that RAISED leaves its outcome
+        ``unknown``, worded as both possibilities. Either way the next
+        admission counts the attempt.
         """
         org_sandbox_cap, org_sandbox_host_only, org_sandbox_population = await self._read_org_sandbox_cap_full(
             org_id, graph_json, snapshot_id
@@ -2654,28 +2637,19 @@ class PipelineExecutor:
                     except asyncio.CancelledError:
                         raise
                     except Exception:
-                        # The reset RAISED, so its outcome is not carried by the
-                        # return value. Resolve it from the ROW before naming a
-                        # resting state: a landed reset leaves the row
+                        # The reset RAISED, so its outcome cannot be determined
+                        # here. ``unknown`` names BOTH possible resting states
+                        # and claims neither — a landed reset leaves the row
                         # ``pending`` (recovered by dispatcher_reconcile's
-                        # re-enqueue leg), a reset that did NOT land leaves it
-                        # ``running`` (the nodeless/age backstop). Those are
-                        # DIFFERENT sweeps — guessing one misdirects on-call.
-                        observed_status = await self._read_status_after_reset_failure(run_id=run_id, org_id=org_id)
-                        if observed_status == "pending":
-                            reset_state = "observed_pending"
-                        elif observed_status == "running":
-                            reset_state = "observed_running"
-                        # else: stays "unknown" — the re-read could not observe
-                        # a status, so BOTH possibilities remain and the wording
-                        # must claim neither.
+                        # re-enqueue leg), a reset that did not land leaves it
+                        # ``running`` (the nodeless/age backstop). Deliberately
+                        # no re-read: opening a session just to look at the row
+                        # is more surface than this ambiguity warrants.
                         _log.warning(
                             "pipeline.capacity_check_lock_timeout run=%s — fenced pending-reset "
-                            "failed after the second admission timeout; a fresh re-read observed "
-                            "status=%s, so the reset outcome is %s",
+                            "raised after the second admission timeout, so whether it landed is "
+                            "unknown; the deferral names both possible sweeps",
                             run_id,
-                            observed_status,
-                            reset_state,
                             exc_info=True,
                         )
                     else:
@@ -2699,9 +2673,8 @@ class PipelineExecutor:
                     # a confirmed reset leaves the run ``pending`` (reconciled);
                     # a fence loss is owned by a successor / already non-running;
                     # a timeout leaves the row most likely running (backstop);
-                    # a raised reset is resolved by a fresh re-read of the row,
-                    # and only an unreadable row stays ``unknown`` (both
-                    # possibilities named).
+                    # a raised reset leaves the outcome ``unknown`` and both
+                    # possible resting states are named.
                     raise AdmissionLockTimeoutError(run_id, attempts=2, reset_state=reset_state) from exc
                 _log.warning(
                     "pipeline.capacity_check_lock_timeout run=%s — bounded "
@@ -7014,56 +6987,6 @@ class PipelineExecutor:
             # ``None`` (NOT 0): the row is likely still ``running`` under our
             # claim token, so a caller must DEFER — never treat this as a
             # fence loss and terminalise.
-            return None
-
-    async def _read_status_after_reset_failure(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> str | None:
-        """Read the run's CURRENT status in a FRESH session after the reset RAISED.
-
-        FAR-2076: ``_fenced_pending_reset`` raises for any non-55P03 failure, so
-        its return value cannot say whether the reset landed — yet the two
-        outcomes recover through DIFFERENT sweeps. This read resolves the
-        ambiguity from the row itself:
-
-        * ``"pending"`` — the reset landed; recovered by ``dispatcher_reconcile``'s
-          pending re-enqueue leg;
-        * ``"running"`` — the reset did not land; left for the nodeless/age
-          backstop (the nodeless repair is running-only, so it CANNOT see a
-          landed ``pending`` row — which is exactly why the caller must not
-          assume one).
-
-        Returns ``None`` when no status could be observed — the read itself
-        failed (logged), or the row no longer exists. The caller then keeps the
-        outcome ``"unknown"`` and words BOTH possibilities; it must never fall
-        back to the nodeless-only claim, which is the bug this method exists to
-        remove.
-
-        Uses a FRESH session (a new identity map), so the read cannot return a
-        stale row cached by the failed reset's transaction.
-        """
-        try:
-            async with self._session_factory() as session:
-                await set_rls_org(session, org_id)
-                await set_rls_execution_context(session)
-                run = await get_run(session, run_id)
-                if run is None:
-                    _log.warning(
-                        "pipeline.pending_reset_outcome_reread run=%s org=%s — the run no longer "
-                        "exists, so the reset outcome cannot be resolved",
-                        run_id,
-                        org_id,
-                    )
-                    return None
-                return getattr(run, "status", None)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning(
-                "pipeline.pending_reset_outcome_reread run=%s org=%s — the fresh re-read after the "
-                "failed fenced pending-reset ALSO failed, so its outcome stays unknown",
-                run_id,
-                org_id,
-                exc_info=True,
-            )
             return None
 
     async def _cleanup_run_resources(
