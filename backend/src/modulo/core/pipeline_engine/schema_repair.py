@@ -18,7 +18,6 @@ separate, explicit, already-authorised operator action.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from enum import StrEnum
@@ -63,13 +62,14 @@ _VALIDATOR_CACHE_MAX_SIZE = 256
 
 
 @lru_cache(maxsize=_VALIDATOR_CACHE_MAX_SIZE)
-def _get_compiled_validator(schema_key: str, schema_json: str) -> Draft202012Validator:
-    """Return a compiled Draft202012Validator, cached by schema content hash.
+def _get_compiled_validator(schema_json: str) -> Draft202012Validator:
+    """Return a compiled Draft202012Validator, cached by the serialized schema.
 
-    The cache key is a hash of the JSON-serialized schema. The actual schema
-    dict is re-parsed from the stored JSON string on cache hits (lru_cache
-    requires hashable args). This avoids recompilation on repeated calls
-    with the same schema while keeping memory bounded.
+    The cache key is the canonical JSON-serialized schema (``sort_keys=True``),
+    so structurally identical schemas share one compiled validator. The actual
+    schema dict is re-parsed from the stored JSON string on cache hits
+    (lru_cache requires hashable args). This avoids recompilation on repeated
+    calls with the same schema while keeping memory bounded.
     """
     schema = json.loads(schema_json)
     return Draft202012Validator(schema)
@@ -78,8 +78,7 @@ def _get_compiled_validator(schema_key: str, schema_json: str) -> Draft202012Val
 def _compile_validator(schema: dict[str, Any]) -> Draft202012Validator:
     """Get or compile a validator for the given schema, using the LRU cache."""
     schema_json = json.dumps(schema, sort_keys=True, ensure_ascii=True)
-    schema_key = hashlib.sha256(schema_json.encode("utf-8")).hexdigest()[:16]
-    return _get_compiled_validator(schema_key, schema_json)
+    return _get_compiled_validator(schema_json)
 
 
 def _clear_validator_cache() -> None:
