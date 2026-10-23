@@ -1750,7 +1750,10 @@ jobs:
       # the next attempt touches them.
       - name: Capture app machine logs (staging)
         if: failure()
-        continue-on-error: true
+        # No `continue-on-error` (banned - .semgrep/continue-on-error-in-ci.yaml):
+        # this step only runs after the job has ALREADY failed, so a capture
+        # failure can mask nothing. Every command inside is individually
+        # best-effort (`|| true`); a genuine failure here is worth surfacing.
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -1759,7 +1762,7 @@ jobs:
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
           LOG_DIR="/tmp/app-machine-logs"
-          mkdir -p "$LOG_DIR"
+          mkdir -p "$LOG_DIR" 2>/dev/null || true
           fly machine list --app staging-modulo --json > "$LOG_DIR/machines.json" 2>&1 || true
           python3 - "$LOG_DIR" <<'PY' > "$LOG_DIR/machines.tsv" 2>/dev/null || true
           import json
@@ -1791,7 +1794,7 @@ jobs:
             echo "----- ${GROUP} machine ${MID} (${STATE}) log (tail) -----"
             tail -n 80 "$OUT" || true
             echo "----- end ${GROUP} machine ${MID} -----"
-          done < "$LOG_DIR/machines.tsv"
+          done < "$LOG_DIR/machines.tsv" || true
 
       - name: Upload app machine logs (staging)
         if: always()
@@ -2999,7 +3002,10 @@ jobs:
       # bounded, best-effort, credential-redacted capture.
       - name: Capture app machine logs (prod)
         if: failure()
-        continue-on-error: true
+        # No `continue-on-error` (banned - .semgrep/continue-on-error-in-ci.yaml):
+        # this step only runs after the job has ALREADY failed, so a capture
+        # failure can mask nothing. Every command inside is individually
+        # best-effort (`|| true`); a genuine failure here is worth surfacing.
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -3008,7 +3014,7 @@ jobs:
           export FLYCTL_INSTALL="/home/runner/.fly"
           export PATH="$FLYCTL_INSTALL/bin:$PATH"
           LOG_DIR="/tmp/app-machine-logs"
-          mkdir -p "$LOG_DIR"
+          mkdir -p "$LOG_DIR" 2>/dev/null || true
           fly machine list --app app-modulo --json > "$LOG_DIR/machines.json" 2>&1 || true
           python3 - "$LOG_DIR" <<'PY' > "$LOG_DIR/machines.tsv" 2>/dev/null || true
           import json
@@ -3040,7 +3046,7 @@ jobs:
             echo "----- ${GROUP} machine ${MID} (${STATE}) log (tail) -----"
             tail -n 80 "$OUT" || true
             echo "----- end ${GROUP} machine ${MID} -----"
-          done < "$LOG_DIR/machines.tsv"
+          done < "$LOG_DIR/machines.tsv" || true
 
       - name: Upload app machine logs (prod)
         if: always()
