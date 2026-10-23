@@ -628,6 +628,7 @@ async def test_engine_kill_mid_exec_is_retryable_never_success() -> None:
                     await asyncio.sleep(1.0)
             assert ready, "dind engine never became ready"
             inner_client = aiodocker.Docker(url=dind_url)
+            provider: DockerRuntimeProvider | None = None
             try:
                 with contextlib.suppress(Exception):
                     await inner_client.images.pull("alpine:3.20")  # best-effort pre-pull into the nested store
@@ -676,6 +677,14 @@ async def test_engine_kill_mid_exec_is_retryable_never_success() -> None:
                 with pytest.raises((aiodocker.exceptions.DockerError, OSError, RuntimeError, TimeoutError)):
                     await provider.exec_command(ref, ["echo", "after-death"], cmd_timeout=5)
             finally:
+                # The provider's aiodocker client owns an aiohttp session;
+                # leaving it unclosed leaks a ``ClientSession`` that surfaces
+                # at a later test's setup as a PytestUnraisableExceptionWarning
+                # (an error under the docker gate). Safe with a killed engine:
+                # teardown is bounded and best-effort.
+                if provider is not None:
+                    with contextlib.suppress(Exception):
+                        await provider.close()
                 with contextlib.suppress(Exception):
                     await inner_client.close()
         finally:
