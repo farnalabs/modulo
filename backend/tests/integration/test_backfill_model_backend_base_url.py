@@ -94,10 +94,11 @@ async def _create_backend(
     seed_secret: dict[str, Any] | None = None,
     visibility: str = "org",
     owner_team_id: uuid.UUID | None = None,
+    ciphertext: bytes | None = None,
 ) -> uuid.UUID:
     """Insert a legacy-shaped backend (ciphertext-only credential by default)."""
     backend_id = uuid.uuid4()
-    ciphertext = _fernet().encrypt(api_key.encode())
+    stored_ciphertext = ciphertext if ciphertext is not None else _fernet().encrypt(api_key.encode())
     async with engine.begin() as conn:
         await conn.execute(
             text(
@@ -112,7 +113,7 @@ async def _create_backend(
                 "oid": str(org_id),
                 "name": f"backend-{backend_id.hex[:10]}",
                 "provider": provider,
-                "ciphertext": ciphertext,
+                "ciphertext": stored_ciphertext,
                 "aid": str(account_id),
                 "params": json.dumps(default_params or {}),
                 "visibility": visibility,
@@ -165,6 +166,15 @@ async def _secret(engine: AsyncEngine, org_id: uuid.UUID, backend_id: uuid.UUID)
         )
         encrypted = result.scalar_one()
     return json.loads(_fernet().decrypt(encrypted).decode())
+
+
+async def _secret_count(engine: AsyncEngine, org_id: uuid.UUID, backend_id: uuid.UUID) -> int:
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT count(*) FROM secrets WHERE organisation_id = :oid AND key = :key"),
+            {"oid": str(org_id), "key": str(backend_id)},
+        )
+        return int(result.scalar_one())
 
 
 async def _audit_payloads(engine: AsyncEngine, org_id: uuid.UUID, event_type: str) -> list[dict[str, Any]]:
@@ -535,3 +545,37 @@ async def test_unscoped_run_processes_every_org_and_stays_isolated(
     # An audit record per changed row, each under its own organisation.
     assert len(await _audit_payloads(db_engine, org_a, AUDIT_EVENT_TYPE)) == 1
     assert len(await _audit_payloads(db_engine, org_b, AUDIT_EVENT_TYPE)) == 1
+
+
+async def test_an_unrecoverable_credential_is_left_completely_untouched(
+    db_engine: AsyncEngine,
+    app_engine: AsyncEngine,
+) -> None:
+    """The safety guarantee: never narrow a credential we cannot fully read.
+
+    Writing a ``base_url``-only credential would discard the API key, so the row
+    AND the legacy value must be left exactly as they are. A bare non-token byte
+    string would be accepted as legacy plaintext by the shared decoder, so the
+    fixture is a structurally-complete token no configured key can decrypt.
+    """
+    org_id = await _create_org(db_engine)
+    account_id = await _create_account(db_engine)
+    backend_id = await _create_backend(
+        db_engine,
+        org_id,
+        account_id,
+        default_params={"base_url": _HTTPS_LEGACY, "temperature": 0.2},
+        seed_secret=None,
+        ciphertext=b"gAAAAA-not-a-valid-token",
+    )
+
+    result = await _run(app_engine, apply=True, org_id=org_id)
+
+    assert [row.outcome for row in result.rows] == ["reject-invalid"]
+    assert "credential unavailable" in (result.rows[0].detail or "")
+    # The row and the legacy endpoint are untouched; no secrets row was written.
+    assert await _default_params(db_engine, backend_id) == {"base_url": _HTTPS_LEGACY, "temperature": 0.2}
+    assert await _legacy_count(db_engine, org_id) == 1
+    assert await _secret_count(db_engine, org_id, backend_id) == 0
+    # Needs attention, so a deploy gate notices rather than silently "succeeding".
+    assert result.requires_attention

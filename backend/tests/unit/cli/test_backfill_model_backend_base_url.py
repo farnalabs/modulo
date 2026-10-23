@@ -528,6 +528,10 @@ async def test_plan_row_leaves_the_row_untouched_when_the_credential_is_unrecove
     assert planned.strip_legacy is False
     assert not planned.payload
     assert backend.default_params == {"base_url": "https://legacy.example/v1", "temperature": 0.2}
+    # Applying the plan is a true no-op: no secrets row, no legacy-key removal.
+    assert await _apply_row(secrets, planned) is False
+    assert not secrets.writes
+    assert backend.default_params == {"base_url": "https://legacy.example/v1", "temperature": 0.2}
 
 
 async def test_plan_row_migrates_a_usable_endpoint_into_the_credential() -> None:
