@@ -1299,6 +1299,22 @@ def test_connector_inputs_merges_run_input_and_defaults_provider_ref():
     assert filters["provider_ref"] == "/"
 
 
+def test_connector_inputs_tolerates_persisted_null_optional_fields():
+    """FAR-2089: an explicit ``null`` for the optional inputs uses the defaults.
+
+    Older graph writes could persist the new optional keys as ``None`` (rather
+    than omitting them). ``dict(None)`` raises TypeError and ``resource=None``
+    bypasses the documented ``"command"`` default, so the engine must fall back.
+    """
+    resource, filters, data = nr._connector_inputs(
+        {"resource": None, "filters": None, "data": None},
+        {"run_context": {"input": {"q": "abc"}}},
+    )
+    assert resource == "command"
+    assert filters == {"q": "abc", "provider_ref": "/"}
+    assert data == {}
+
+
 def test_connector_inputs_non_dict_input_leaves_binding_values():
     state = {"run_context": {"input": "raw-string"}}
     resource, filters, _data = nr._connector_inputs(

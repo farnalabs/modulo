@@ -4354,7 +4354,7 @@ async def _update_pipeline_graph_impl(
 
     from pydantic import ValidationError as _PydanticValidationError
 
-    from modulo.api.routes.pipelines import PipelineGraphUpdate
+    from modulo.api.routes.pipelines import PipelineGraphUpdate, strip_unset_connector_binding_inputs
 
     try:
         graph_update = PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
@@ -4375,7 +4375,7 @@ async def _update_pipeline_graph_impl(
     # effects applied), undeclared keys are dropped on both paths rather than
     # surviving on one (a field only one writer persists is plan drift, not
     # configuration).
-    nodes = [node.model_dump(mode="json") for node in graph_update.nodes]
+    nodes = [strip_unset_connector_binding_inputs(node.model_dump(mode="json")) for node in graph_update.nodes]
 
     try:
         # The validated ``nodes`` above (FAR-1141) are what the transaction

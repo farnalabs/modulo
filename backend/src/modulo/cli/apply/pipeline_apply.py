@@ -46,9 +46,9 @@ _EMPTY_GRAPH: dict[str, list[dict[str, Any]]] = {"nodes": [], "edges": []}
 
 def _normalized_node(node_data: dict[str, Any]) -> dict[str, Any]:
     """Config node dict -> server-shape dump (real API node model validators)."""
-    from modulo.api.routes.pipelines import PipelineGraphNode
+    from modulo.api.routes.pipelines import PipelineGraphNode, strip_unset_connector_binding_inputs
 
-    return PipelineGraphNode.model_validate(node_data).model_dump(mode="json")
+    return strip_unset_connector_binding_inputs(PipelineGraphNode.model_validate(node_data).model_dump(mode="json"))
 
 
 def _normalized_edge(edge_data: dict[str, Any]) -> dict[str, Any]:
@@ -68,11 +68,18 @@ def normalize_current_graph(payload: dict[str, Any]) -> dict[str, Any]:
     The hash-parity guarantee holds because the desired side is normalised
     through the same models (write context).
     """
-    from modulo.api.routes.pipelines import LEGACY_READ_CONTEXT, PipelineGraphEdge, PipelineGraphNode
+    from modulo.api.routes.pipelines import (
+        LEGACY_READ_CONTEXT,
+        PipelineGraphEdge,
+        PipelineGraphNode,
+        strip_unset_connector_binding_inputs,
+    )
 
     return {
         "nodes": [
-            PipelineGraphNode.model_validate(node, context=LEGACY_READ_CONTEXT).model_dump(mode="json")
+            strip_unset_connector_binding_inputs(
+                PipelineGraphNode.model_validate(node, context=LEGACY_READ_CONTEXT).model_dump(mode="json")
+            )
             for node in payload.get("nodes") or []
         ],
         "edges": [

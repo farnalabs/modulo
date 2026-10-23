@@ -1312,6 +1312,39 @@ class ConnectorBinding(BaseModel):
     data: dict[str, Any] | None = Field(default=None)
 
 
+# The optional binding inputs whose absence must stay ABSENT, not become an
+# explicit ``null`` in the persisted graph (see the helper below).
+_CONNECTOR_BINDING_OPTIONAL_INPUT_FIELDS = ("resource", "filters", "data")
+
+
+def strip_unset_connector_binding_inputs(node: dict[str, Any]) -> dict[str, Any]:
+    """Drop explicit ``None`` for a binding's optional query/write inputs.
+
+    FAR-2089 review: graph writes persist ``node.model_dump(mode="json")`` —
+    REST ``_prepare_graph_write``, MCP ``update_pipeline_graph`` and the CLI
+    apply normaliser all do. A binding that never set ``resource``/``filters``/
+    ``data`` dumps them as ``None``, so a graph re-save turns previously ABSENT
+    keys into explicit nulls. The engine's ``_connector_inputs`` then reads
+    ``filters: None`` and raises ``TypeError`` inside ``dict(...)``, while
+    ``resource: None`` bypasses its ``"command"`` default — every existing
+    query/dispatch binding would crash on its next run.
+
+    Removing only those unset keys keeps the persisted shape identical to the
+    pre-FAR-2089 graph; a binding that sets them is untouched.
+    """
+    binding = node.get("connector_binding")
+    if not isinstance(binding, dict):
+        return node
+    cleaned = {
+        key: value
+        for key, value in binding.items()
+        if not (key in _CONNECTOR_BINDING_OPTIONAL_INPUT_FIELDS and value is None)
+    }
+    if len(cleaned) == len(binding):
+        return node
+    return {**node, "connector_binding": cleaned}
+
+
 class SchemaPin(BaseModel):
     """A pinned schema version reference for a pipeline node."""
 
@@ -3246,7 +3279,7 @@ def _prepare_graph_write(
     req: PipelineGraphUpdate,
 ) -> tuple[list[dict[str, Any]], list[GraphEdgeData], dict[str, Any], list[dict[str, Any]]]:
     """Serialise a graph update into its write + validator representations."""
-    node_data = [node.model_dump(mode="json") for node in req.nodes]
+    node_data = [strip_unset_connector_binding_inputs(node.model_dump(mode="json")) for node in req.nodes]
     edge_data = [_edge_to_data(edge) for edge in req.edges]
     validator_graph = {
         "nodes": node_data,

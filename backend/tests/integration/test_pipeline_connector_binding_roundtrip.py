@@ -157,3 +157,72 @@ async def test_binding_resource_filters_data_survive_a_graph_round_trip(
         assert stored["data"] == {"title": "t"}
     finally:
         await _cleanup(db_engine, test_org, pipeline_id, agent_id, connector_id)
+
+
+async def test_binding_without_new_inputs_resaves_without_persisting_nulls(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """A fieldless binding keeps the keys ABSENT across a graph re-save.
+
+    FAR-2089 review regression: the new optional fields must not turn into
+    ``None`` when an existing graph (one that never set them) is edited and
+    saved. Persisted ``filters: None`` raises ``TypeError`` inside the engine's
+    ``_connector_inputs`` and ``resource: None`` bypasses its ``"command"``
+    default, so every existing query/dispatch binding would crash on its next
+    run — the newly added field-populated round trip cannot catch that.
+    """
+    from modulo.core.pipeline_engine.node_runner import _connector_inputs
+
+    headers = _auth_headers(test_org, test_user)
+    agent_id = await _seed_agent(db_engine, test_org, test_user)
+    connector_id = await _seed_connector(db_engine, test_org, test_user)
+
+    create = await integration_client.post(
+        "/api/v1/pipelines",
+        headers=headers,
+        json={"name": f"binding-null-roundtrip-{uuid.uuid4().hex[:8]}"},
+    )
+    assert create.status_code == 201, create.text
+    pipeline_id = uuid.UUID(create.json()["id"])
+
+    node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "agent",
+        "agent_id": str(agent_id),
+        "position": {"x": 0, "y": 0},
+        "connector_binding": {
+            "type": _GITHUB,
+            "instance_id": str(connector_id),
+            "operation": "query",
+        },
+    }
+
+    try:
+        put = await integration_client.put(
+            f"/api/v1/pipelines/{pipeline_id}/graph",
+            json={"nodes": [node], "edges": []},
+            headers=headers,
+            timeout=30.0,
+        )
+        assert put.status_code == 200, put.text
+
+        got = await integration_client.get(
+            f"/api/v1/pipelines/{pipeline_id}/graph",
+            headers=headers,
+            timeout=30.0,
+        )
+        assert got.status_code == 200, got.text
+        stored = got.json()["nodes"][0]["connector_binding"]
+        assert "resource" not in stored
+        assert "filters" not in stored
+        assert "data" not in stored
+
+        resource, filters, data = _connector_inputs(stored, {"run_context": {"input": {}}})
+        assert resource == "command"
+        assert filters == {"provider_ref": "/"}
+        assert data == {}
+    finally:
+        await _cleanup(db_engine, test_org, pipeline_id, agent_id, connector_id)
