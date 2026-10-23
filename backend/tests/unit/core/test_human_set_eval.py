@@ -99,6 +99,11 @@ class TestHumanEvalSetRegistry:
     def test_duplicate_registration_raises(self) -> None:
         from dataclasses import replace
 
+        # Registration is process-local and deferred to first use, so this test
+        # must register the built-in itself rather than rely on the sibling
+        # test having run first in the SAME process (pytest-xdist distributes
+        # individual tests, so the sibling may run on another worker).
+        get_human_eval_set("demo_classification")
         with pytest.raises(ValueError, match="already registered"):
             register_human_eval_set(replace(DEMO_CLASSIFICATION_V1, version="v2"))
 
