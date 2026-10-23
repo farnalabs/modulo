@@ -371,10 +371,22 @@ def _deadline_triage_from_markers(
     """Project cancellation/deadline-kill triage markers for the run detail (FAR-704).
 
     Only markers carrying the ``deadline_triage is True`` signature are
-    surfaced; every other raw-output marker (delivery-done, no-parseable
+    surfaced; every other raw-output marker (delivery-done, no-parseable-
     output, stall) is ignored here. String fields are truncated to bounded
     display slices (the retained marker stays authoritative in the store).
-    Sorted by attempt_key for a deterministic response order.
+    Entries are returned in marker-storage-key order, for a deterministic
+    response.
+
+    ``attempt_key`` is the marker's OWN payload value when it carries one, and
+    only falls back to the storage key otherwise. The two are not
+    interchangeable: a cancellation-triage marker is stored under a reserved
+    ``cancel-triage:<run>:<node>:<suffix>`` row key (FAR-2082) while its payload
+    keeps the attempt that really ran, and ``node_id`` is always read from the
+    payload. Preferring the payload keeps this projection's identifiers
+    mutually consistent and matches
+    :func:`modulo.core.run_log_correlation.marker_tail_entries`; reporting the
+    storage key here would render a synthetic attempt key beside a real node id
+    (``RunDetailView`` shows the value verbatim).
 
     ``raw_output`` is projected as BOTH a bounded head and a bounded tail:
     the tail is how the attempt died, the head is the agent command's
@@ -406,10 +418,14 @@ def _deadline_triage_from_markers(
             continue
         raw_output = str(marker.get("raw_output") or "")
         log_tail = str(marker.get("sandbox_log_tail") or "")
+        payload_attempt_key = marker.get("attempt_key")
         entries.append(
             {
                 "node_id": marker.get("node_id"),
-                "attempt_key": attempt_key,
+                # The payload's value wins (see the docstring): the row key is
+                # storage identity, and for a cancellation-triage marker it is
+                # deliberately not the attempt key.
+                "attempt_key": payload_attempt_key if isinstance(payload_attempt_key, str) else attempt_key,
                 "no_output_reason": marker.get("no_output_reason"),
                 "sandbox_log_tail": log_tail[-_TRIAGE_LOG_TAIL_CHARS:] if log_tail else "",
                 "raw_output_head": raw_output[:_TRIAGE_RAW_OUTPUT_HEAD_CHARS] if raw_output else "",
