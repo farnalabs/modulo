@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from modulo.core.pipeline_engine.idempotency import stable_idempotency_key
+from modulo.core.retry_budget import RETRY_POLICY_MAX_RETRIES, retry_policy_max_retries
 
 __all__ = [
     "RETRY_BACKOFF_CAP_SECONDS",
@@ -76,9 +77,10 @@ __all__ = [
 # within-run re-execution trigger.
 RETRY_EVENTS: frozenset[str] = frozenset({"timeout", "error", "stall"})
 
-# Hard bound on per-node / per-edge ``max_attempts`` (mirrors the run-level
-# ``_RETRY_POLICY_MAX_RETRIES`` bound of 5).
-RETRY_MAX_ATTEMPTS_BOUND = 5
+# Hard bound on per-node / per-edge ``max_attempts``. Derived from the ONE
+# run-level retry bound in ``modulo.core.retry_budget`` (not a second literal):
+# the node ceiling and the run ceiling must not drift apart.
+RETRY_MAX_ATTEMPTS_BOUND = RETRY_POLICY_MAX_RETRIES
 
 # Maximum sane backoff (seconds) for a node / edge retry. Kept conservative so a
 # malformed ``backoff`` (e.g. ``1e9``) cannot pin a worker in a sleep loop.
@@ -215,15 +217,6 @@ def resolve_node_retry(node: dict[str, Any] | None, pipeline_retry_policy: Any) 
     return _policy_from_pipeline_default(pipeline_retry_policy)
 
 
-def _is_valid_retry_budget(max_retries: Any) -> bool:
-    """A run-level ``max_retries`` budget is valid: a non-bool int within the executor's 1-5 bounds."""
-    return (
-        isinstance(max_retries, int)
-        and not isinstance(max_retries, bool)
-        and 1 <= max_retries <= RETRY_MAX_ATTEMPTS_BOUND
-    )
-
-
 def _map_run_level_events(events_raw: list[Any]) -> set[str]:
     """Map run-level event names to node-level ones (``failure``/``error`` → ``error``; others pass through)."""
     node_events: set[str] = set()
@@ -254,18 +247,23 @@ def _policy_from_pipeline_default(pipeline_retry_policy: Any) -> NodeRetryPolicy
     ``max_retries + 1``.
 
     FAR-649: an ABSENT ``on`` key (key missing, or explicitly ``null``) with a
-    valid ``max_retries`` (int, non-bool, 1-5 — the executor's bounds) inherits
+    valid ``max_retries`` (a genuine int within the shared bound, > 0) inherits
     at the NODE level with ALL node retry events (``RETRY_EVENTS``) —
     coverage-equivalent to the explicit four-event run-level list, which maps
     to that same node set. An explicit non-empty ``on`` list stays granular; an
     explicit empty list (``on: []``), a malformed non-list non-null ``on``
     (e.g. a string), and a malformed / out-of-bounds budget all fail-closed to
-    no node retry (unchanged).
+    no node retry (unchanged). The budget itself is read through the shared
+    :func:`modulo.core.retry_budget.retry_policy_max_retries`, whose bound is
+    the same :data:`RETRY_MAX_ATTEMPTS_BOUND` this module exposes.
     """
     if not isinstance(pipeline_retry_policy, dict):
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
-    max_retries = pipeline_retry_policy.get("max_retries", 0)
-    if not _is_valid_retry_budget(max_retries):
+    max_retries = retry_policy_max_retries(pipeline_retry_policy)
+    # ``None`` (no policy) and 0 (explicit zero / absent / malformed budget)
+    # both mean no node retry: a 0 budget authorises ONE execution of the run,
+    # so there is no retry left for a node to inherit.
+    if max_retries is None or max_retries <= 0:
         return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
     events_raw = pipeline_retry_policy.get("on")
     if events_raw is None:

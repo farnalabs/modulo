@@ -38,8 +38,14 @@ def _settings() -> MagicMock:
     return MagicMock(saq_nodeless_redispatch_budget=4)
 
 
-def _nodeless_snapshot(*, phase: Any, claim_count: int) -> SimpleNamespace:
-    """The reconcile SELECT row: a running SAQ row that LOOKS claimed-but-nodeless."""
+def _nodeless_snapshot(*, phase: Any, claim_count: int, execution_attempt_count: int | None = None) -> SimpleNamespace:
+    """The reconcile SELECT row: a running SAQ row that LOOKS claimed-but-nodeless.
+
+    FAR-2076: the re-dispatch budget reads the durable
+    ``execution_attempt_count``, not ``claim_count``. For a nodeless zombie
+    every claim it took was an admitted execution that died before its first
+    node, so the two agree on the real row — default to that shape.
+    """
     return SimpleNamespace(
         id=uuid.uuid4(),
         status="running",
@@ -52,6 +58,7 @@ def _nodeless_snapshot(*, phase: Any, claim_count: int) -> SimpleNamespace:
         sandbox_dispatch_state=None,
         dispatch_phase=phase,
         claim_count=claim_count,
+        execution_attempt_count=claim_count if execution_attempt_count is None else execution_attempt_count,
         retry_policy=None,
     )
 
@@ -197,9 +204,17 @@ async def test_fresh_node_started_row_is_not_terminalized() -> None:
 
 @pytest.mark.asyncio
 async def test_control_fresh_still_nodeless_row_is_terminalized() -> None:
-    """Control: the fresh row is still pre-node, so the terminal-fail proceeds.
+    """Control: the fresh row is still pre-node AND at the retry-budget
+    boundary, so the terminal-fail proceeds.
 
-    Proves the guard discriminates on the FRESH phase, not on the call shape."""
+    FAR-2076: the budget is measured on the durable
+    ``execution_attempt_count``, not ``claim_count``. ``claim_count=5`` here is
+    five executed nodeless attempts, so ``execution_attempt_count`` defaults to
+    5 — past the default ``SAQ_NODELESS_REDISPATCH_BUDGET`` (4). Below that
+    boundary the row is re-dispatched instead (see
+    ``test_control_fresh_still_nodeless_row_with_budget_is_redispatched``);
+    this test proves the guard discriminates on the FRESH phase and that the
+    fresh, budget-exhausted row still terminalises."""
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(ch, "get_settings", _settings)
     try:
@@ -217,6 +232,36 @@ async def test_control_fresh_still_nodeless_row_is_terminalized() -> None:
     assert handled is not None
     fail.assert_awaited_once()
     assert summary["nodeless_fresh_premise_deferred"] == 0
+
+
+@pytest.mark.asyncio
+async def test_control_fresh_still_nodeless_row_with_budget_is_redispatched() -> None:
+    """Companion to the terminal control: the SAME fresh, still-pre-node row is
+    re-dispatched while the durable execution counter is below the default
+    budget.
+
+    FAR-2076: this is why the terminal control pins ``execution_attempt_count``
+    at 5 — a row with only ONE executed attempt (2 <= default budget 4) is
+    healthy and must be re-dispatched, not terminalised."""
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(ch, "get_settings", _settings)
+    try:
+        snapshot = _nodeless_snapshot(phase="claimed", claim_count=30, execution_attempt_count=1)
+        fresh = SimpleNamespace(status="running", dispatch_phase="claimed", node_token_usage=None)
+        summary = _summary()
+        fail = AsyncMock()
+        redispatch = AsyncMock()
+        with patch.object(ch, "_fail_nodeless_run", fail), patch.object(ch, "_redispatch_nodeless", redispatch):
+            handled = await ch._reconcile_nodeless_repair(
+                _FreshSession(fresh), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, []
+            )
+    finally:
+        monkeypatch.undo()
+
+    assert handled is not None
+    redispatch.assert_awaited_once()
+    fail.assert_not_awaited()
+    assert summary["nodeless_failed"] == 0
 
 
 @pytest.mark.asyncio

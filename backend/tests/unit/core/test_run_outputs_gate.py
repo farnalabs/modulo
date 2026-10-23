@@ -460,6 +460,16 @@ _UNGUARDED_SITES: set[tuple[str, str]] = {
     # the method body into ``_claim_under_capacity`` (``_check_capacity`` now
     # delegates to it); the source-scan pin is keyed by the enclosing function.
     ("core/pipeline_engine/executor.py", "_claim_under_capacity"),
+    # FAR-2076: the capacity demotion was split back out of
+    # ``_claim_under_capacity`` into its own ``_demote_for_capacity`` helper.
+    # Like the claim-path write it sends only status + the decline
+    # error_code/error_detail + the claim fence (from_status/claim_token) and
+    # NEVER outputs_json/node_telemetry_json — a no-blobs site, so no guard.
+    ("core/pipeline_engine/executor.py", "_demote_for_capacity"),
+    # FAR-2076: the retry-budget refusal terminalizes with status "failed" +
+    # error_code/error_detail + the claim fence only — no outputs/telemetry
+    # kwargs, so it cannot raise DualWriteError and needs no guard.
+    ("core/pipeline_engine/executor.py", "_retry_budget_gate"),
     ("core/pipeline_engine/executor.py", "_check_policy_gate_pin"),
     ("core/pipeline_engine/executor.py", "_check_spend_ceiling_gate"),
     ("core/pipeline_engine/executor.py", "_claim_run_and_audit"),
