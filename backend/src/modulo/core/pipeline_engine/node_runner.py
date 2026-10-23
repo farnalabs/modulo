@@ -6599,7 +6599,10 @@ def _connector_inputs(binding: dict[str, Any], state: dict[str, Any]) -> tuple[s
     before the model defaulted them, or a hand-written/legacy graph), and
     ``dict(None)`` raises ``TypeError`` on the only run path — so every read is
     coerced with ``or`` rather than a ``.get(key, default)`` that only covers an
-    ABSENT key.
+    ABSENT key. One consequence worth knowing: the same ``or`` guard also
+    treats an explicitly EMPTY ``resource`` string as unset and falls back to
+    ``"command"``, which differs from the pre-FAR-2089 behaviour that preserved
+    ``""``.
     """
     run_context = state.get("run_context") or {}
     raw_input = run_context.get("input", {})

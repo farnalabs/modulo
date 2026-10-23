@@ -36,6 +36,7 @@ from pydantic import (
     ValidationError,
     ValidationInfo,
     WithJsonSchema,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -2504,12 +2505,45 @@ class PipelineGraphUpdate(BaseModel):
         return self
 
 
+def _graph_response_nodes(nodes):  # type: (list[PipelineGraphNode]) -> list[dict[str, Any]]
+    """Serialise response nodes with the binding shape the WRITE path persisted (FAR-2089 review).
+
+    The graph write persists a binding with its unset optional inputs ABSENT
+    (``_prepare_graph_write`` → ``strip_unset_connector_binding_inputs``). A
+    read re-validates the stored node into ``PipelineGraphNode``, which
+    re-materialises the model defaults, so serialising the model verbatim would
+    emit ``resource: null`` / ``filters: {}`` / ``data: {}`` for keys the
+    persisted graph does not carry. The read contract must match the write
+    contract: the frontend flow is GET → edit → PUT, and ``modulo apply`` hashes
+    fetched graphs against declared state, so an asymmetric wire shape is drift
+    on both.
+
+    Stripping goes through the SAME helper as the write so the two can never
+    diverge; only ``connector_binding`` on top-level nodes is touched, and a
+    genuinely-supplied value is never removed.
+
+    Two deliberate shapes here, both explained by the OpenAPI contract:
+
+    * the return type is a PEP 484 type COMMENT rather than an annotation —
+      Pydantic uses a serializer function's return annotation as the field's
+      serialisation schema, so annotating the dicts would publish
+      ``nodes`` as ``{[key: string]: unknown}[]`` instead of
+      ``PipelineGraphNode[]`` even though the wire contract is unchanged;
+    * it is a module-level function assigned inside the class body (see
+      ``PipelineGraphResponse``) rather than a decorated method, so the
+      dead-code gate sees a real reference to it.
+    """
+    return [strip_unset_connector_binding_inputs(node.model_dump(mode="json")) for node in nodes]
+
+
 class PipelineGraphResponse(PipelineGraphUpdate):
     validation_issues: list[GraphValidationIssue] = Field(default_factory=list)
     # FAR-900: per-node schema translation warnings emitted at design time.
     # Each entry: {node_id, keyword, path, message} — only populated for nodes
     # with a schema_profile that would strip keywords.
     schema_translation_report: list[dict[str, Any]] = Field(default_factory=list)
+
+    _serialise_nodes = field_serializer("nodes")(_graph_response_nodes)
 
 
 async def _resolve_node_providers(
@@ -2839,6 +2873,11 @@ def _graph_response(
     per-edge validation failures are collected into ``validation_issues`` so the
     consumer (frontend, MCP, agents) can surface them without the HTTP response
     failing with an opaque 422.  (FAR-874)
+
+    FAR-2089 review: the response's ``nodes`` serializer strips the connector
+    binding inputs the write path persists as ABSENT, so a read reports the
+    same shape a write stored (see ``PipelineGraphResponse``), rather than the
+    model defaults re-materialised by per-node validation.
     """
     issues: list[GraphValidationIssue] = list(validation_issues or [])
 

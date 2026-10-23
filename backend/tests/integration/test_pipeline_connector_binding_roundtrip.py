@@ -93,11 +93,9 @@ async def _persisted_binding(
 ) -> dict:
     """The connector binding exactly as it is stored in ``pipelines.graph_nodes_json``.
 
-    The graph READ endpoint re-validates each stored node through
-    ``PipelineGraphNode``, so the HTTP response always re-materialises the model
-    defaults (``resource: None``, ``filters: {}``, ``data: {}``) whether or not
-    the keys were persisted. Assertions about which keys were WRITTEN must
-    therefore read the row, not the response.
+    The graph read strips the same unset inputs the write persists, so the
+    HTTP response and this row agree; the row is still read directly because it
+    is the shape the engine consumes at run start.
     """
     from modulo.db.models.pipeline import Pipeline
 
@@ -241,13 +239,21 @@ async def test_binding_without_new_inputs_resaves_without_persisting_nulls(
         )
         assert got.status_code == 200, got.text
 
+        # The READ contract is symmetric with the written/persisted shape:
+        # a binding saved without the optional inputs reports them ABSENT, not
+        # as ``null`` / ``{}``. Without the read-path strip the response
+        # re-materialises the model defaults and this assertion fails.
+        first_read = got.json()
+        read_binding = first_read["nodes"][0]["connector_binding"]
+        assert "resource" not in read_binding
+        assert "filters" not in read_binding
+        assert "data" not in read_binding
+
         # The regression is about what a RE-SAVE persists, so drive the actual
         # flow the editor takes: read the graph back and PUT that same payload
-        # again. The read model default-fills the absent optional fields as
-        # ``null`` (a schema-consistent, nullable response), and only the write
-        # path strips them — so a response-key-absence assertion here would test
-        # the read contract, not the persistence contract that broke the engine.
-        first_read = got.json()
+        # again. The read response now carries the same ABSENT keys the write
+        # persisted, so the round trip stays clean end to end instead of
+        # depending on the write path to re-strip read-side nulls.
         re_save = await integration_client.put(
             f"/api/v1/pipelines/{pipeline_id}/graph",
             json={"nodes": first_read["nodes"], "edges": first_read["edges"]},
@@ -258,9 +264,9 @@ async def test_binding_without_new_inputs_resaves_without_persisting_nulls(
 
         # Read the PERSISTED graph (what the engine consumes at run start) and
         # pin that the unset inputs stayed ABSENT across the round trip. The
-        # READ re-validates through PipelineGraphNode, so the response
-        # re-materialises the model defaults even when the keys were never
-        # persisted. Which keys were WRITTEN is a property of the stored row.
+        # read response is now symmetric with this row (asserted above), so the
+        # two agree; the row is asserted directly because it is the shape the
+        # engine reads at run start.
         stored = await _persisted_binding(db_engine, test_org, pipeline_id)
         assert "resource" not in stored
         assert "filters" not in stored
