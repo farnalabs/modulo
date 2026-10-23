@@ -77,14 +77,49 @@ def initial_loop_coverage(*, configured: bool) -> LoopCoverage:
 
 
 _OPENCODE_EXECUTABLE = re.compile(r"(?i)(?:^|[\\/])opencode(?:\.exe)?$")
+_ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+_SHELL_SEPARATORS = ("&&", "||", ";", "\n")
 
 
-def _command_tokens(command: str) -> list[str]:
-    """Tokenize POSIX, Windows, and wrapper command spellings conservatively."""
+def _shell_segments(command: str) -> list[str]:
+    """Split a shell command line on top-level ``&&`` / ``||`` / ``;`` / newlines."""
+    segments: list[str] = []
+    start = 0
+    index = 0
+    quote = ""
+    while index < len(command):
+        char = command[index]
+        if quote:
+            if char == "\\" and quote == '"':
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in "\"'":
+            quote = char
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        separator = next((item for item in _SHELL_SEPARATORS if command.startswith(item, index)), None)
+        if separator is not None:
+            segments.append(command[start:index])
+            index += len(separator)
+            start = index
+            continue
+        index += 1
+    segments.append(command[start:])
+    return [segment for segment in segments if segment.strip()]
+
+
+def _segment_tokens(segment: str) -> list[str]:
     try:
-        tokens = shlex.split(command, posix=True)
+        tokens = shlex.split(segment, posix=True)
     except ValueError:
-        tokens = command.split()
+        return []
     return [token.strip("\\\"'") for token in tokens]
 
 
@@ -93,26 +128,32 @@ def _is_opencode_executable(token: str) -> bool:
     return bool(_OPENCODE_EXECUTABLE.search(normalized)) or normalized.casefold() in {"opencode", "opencode.exe"}
 
 
-def runtime_supports_tool_events(command: str) -> bool:
-    """Return whether a supported opencode executable appears in a command.
+def _executed_command(tokens: list[str]) -> list[str]:
+    """Strip the supported wrappers so the first remaining token is the command."""
+    index = 0
+    while index < len(tokens) and _ENV_ASSIGNMENT.fullmatch(tokens[index]):
+        index += 1
+    if index < len(tokens) and tokens[index].casefold() == "timeout":
+        index += 1
+        while index < len(tokens) and tokens[index].startswith("-"):
+            index += 1
+        index += 1  # the timeout duration
+    return tokens[index:]
 
-    The bridge is not a generic stdout parser: production enforcement depends on
-    the runtime's tool-hook contract. Commands for another runtime therefore
-    remain explicitly degraded instead of being wrapped and falsely certified.
-    Wrapper launchers are allowed because the actual executable may be the second
-    or later command token; the executable must be followed by the ``run``
-    subcommand so an incidental argument named ``opencode`` is not enough.
+
+def runtime_supports_tool_events(command: str) -> bool:
+    """Return whether a shell command in the dispatch directly invokes OpenCode.
+
+    Production dispatch joins ``agent_commands`` with ``&&`` and renders
+    environment assignments before the runtime binary, so each shell command is
+    inspected on its own. A token appearing in another program's arguments is
+    never treated as the runtime: only the executed command counts.
     """
-    tokens = _command_tokens(command)
-    if not tokens:
-        return False
-    ignored_command_names = {"echo", "printf", "python", "python3", "node", "sh", "bash", "cmd", "powershell"}
-    if tokens[0].casefold() in ignored_command_names:
-        return False
-    return any(
-        _is_opencode_executable(token) and index + 1 < len(tokens) and tokens[index + 1] == "run"
-        for index, token in enumerate(tokens)
-    )
+    for segment in _shell_segments(command):
+        tokens = _executed_command(_segment_tokens(segment))
+        if len(tokens) >= 2 and _is_opencode_executable(tokens[0]) and tokens[1].casefold() == "run":
+            return True
+    return False
 
 
 def bridge_plugin_source() -> str:

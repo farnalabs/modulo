@@ -168,18 +168,62 @@ def test_config_error_validation_helper():
 @pytest.mark.parametrize(
     "command",
     [
+        "opencode run --auto",
         "/usr/local/bin/opencode run --auto",
         '"/opt/opencode/bin/opencode" run --auto',
         r'"C:\\Program Files\\OpenCode\\opencode.exe" run --auto',
-        r'wrapper "C:\\Program Files\\OpenCode\\opencode.exe" run --auto',
+        "OPENCODE_API_KEY=secret opencode run --auto --format json < /home/user/prompt.md",
+        "cd /tmp/devtools && git pull && opencode run --auto < /home/user/prompt.md",
+        "timeout 900 opencode run --auto < /home/user/prompt.md",
+        'OPENCODE_API_KEY="$KEY" opencode run --model "$(python3 resolve.py || echo fallback)" --auto',
+    ],
+    ids=[
+        "bare",
+        "absolute",
+        "quoted-posix",
+        "quoted-windows",
+        "production-env-prefix",
+        "joined-command-list",
+        "timeout-wrapper",
+        "command-substitution",
     ],
 )
-def test_runtime_supports_absolute_and_wrapped_opencode_commands(command: str):
+def test_runtime_supports_direct_opencode_dispatch_commands(command: str):
     assert runtime_supports_tool_events(command)
 
 
-@pytest.mark.parametrize("command", ["echo opencode run", "notopencode run", "python script.py"])
-def test_runtime_supports_tool_events_rejects_unrelated_commands(command: str):
+@pytest.mark.parametrize(
+    "command",
+    [
+        "custom-wrapper --runtime opencode run",
+        "echo opencode run",
+        "printf 'opencode run'",
+        "python -c 'opencode run'",
+        "bash -lc 'opencode run'",
+        "sh -c 'opencode run --auto'",
+        "timeout 5 echo opencode run",
+        "wrapper /opt/opencode/bin/opencode run --auto",
+        "notopencode run",
+        "opencode status",
+        "python script.py",
+        "echo 'opencode run' && git status",
+    ],
+    ids=[
+        "wrapper-argument",
+        "echo-argument",
+        "printf-argument",
+        "python-argument",
+        "bash-argument",
+        "shell-argument",
+        "timeout-echo-argument",
+        "wrapper-path-argument",
+        "similar-name",
+        "wrong-subcommand",
+        "other-runtime",
+        "quoted-echo-argument",
+    ],
+)
+def test_runtime_supports_tool_events_rejects_argument_position_commands(command: str):
     assert not runtime_supports_tool_events(command)
 
 
@@ -628,61 +672,61 @@ def test_runtime_plugin_source_emits_authenticated_tool_events():
     assert "fetch(`${base}/intercept`" in source
 
 
-async def test_runtime_plugin_source_uses_loader_contract_harness(tmp_path: Path):
-    """Exercise the production OpenCode plugin factory and hook contract.
-
-    The installed OpenCode binary is a long-lived server process and does not
-    expose a bounded plugin-loader command. This harness mirrors the loader's
-    supported contract: import the default export, invoke it as a factory with
-    the loader input, validate both hook callables, and invoke hooks through the
-    loader-shaped input/output path. It is intentionally separate from the
-    direct hook test below so an export/factory/return-shape regression fails.
-    """
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node runtime is required for the loader contract harness")
+async def test_runtime_plugin_source_loads_in_installed_opencode(tmp_path: Path):
+    """Prove the generated plugin is accepted by the installed OpenCode loader."""
+    opencode = shutil.which("opencode")
+    if opencode is None:
+        pytest.skip("installed opencode executable is required for loader compatibility")
     plugin = tmp_path / "bridge-plugin.mjs"
     plugin.write_text(bridge_plugin_source(), encoding="utf-8")
-    harness = tmp_path / "loader-contract.mjs"
-    harness.write_text(
-        """import plugin from './bridge-plugin.mjs';
-
-// This is the supported external-plugin loader contract used by OpenCode:
-// accept a function export (or {server}), invoke it with PluginInput/options,
-// then require the returned hooks object to expose callable hook bindings.
-function asServer(value) {
-  if (typeof value === 'function') return value;
-  if (value && typeof value === 'object' && typeof value.server === 'function') return value.server;
-  throw new TypeError('Plugin export is not a function');
-}
-async function loadExternalPlugin(module) {
-  const servers = Object.values(module).map(asServer);
-  const input = { client: {}, project: {}, worktree: '.', directory: '.', $: undefined };
-  const loaded = [];
-  for (const server of servers) loaded.push(await server(input, {}));
-  return loaded;
-}
-const [hooks] = await loadExternalPlugin(await import('./bridge-plugin.mjs'));
-if (!hooks || typeof hooks !== 'object') throw new Error('plugin factory must return an object');
-for (const name of ['tool.execute.before', 'tool.execute.after']) {
-  if (typeof hooks[name] !== 'function') throw new Error(`${name} must be callable`);
-}
-await hooks['tool.execute.before']({ tool: 'git push', args: { ref: 'main' } });
-await hooks['tool.execute.after']({ tool: 'git push', args: { ref: 'main' } }, { ok: true });
-process.stdout.write('loader-contract-complete');
+    marker = tmp_path / "loader-marker.json"
+    probe = tmp_path / "loader-probe.mjs"
+    probe.write_text(
+        """import { writeFileSync } from 'node:fs';
+import plugin from './bridge-plugin.mjs';
+const original = plugin;
+const wrapped = async (input, options) => {
+  const hooks = await original(input, options);
+  const hookNames = ['config', 'event', 'tool.execute.before', 'tool.execute.after'];
+  writeFileSync(process.env.MARKER, JSON.stringify({
+    secondUndefined: options === undefined,
+    inputKeys: Object.keys(input).sort(),
+    hookTypes: Object.fromEntries(hookNames.map((key) => [key, typeof hooks[key]])),
+  }));
+  return hooks;
+};
+export default wrapped;
 """,
         encoding="utf-8",
     )
+    config = json.dumps({"plugin": [str(probe)]})
     result = await asyncio.to_thread(
         subprocess.run,
-        [node, str(harness)],
+        [opencode, "--print-logs", "run", "--model", "invalid/provider", "probe"],
         capture_output=True,
         text=True,
-        check=True,
-        env={**os.environ, "MODULO_BRIDGE_ENDPOINT": ""},
+        check=False,
+        env={**os.environ, "OPENCODE_CONFIG_CONTENT": config, "MARKER": str(marker)},
+        stdin=subprocess.DEVNULL,
         timeout=30,
     )
-    assert result.stdout == "loader-contract-complete"
+    assert marker.exists(), result.stderr
+    observation = json.loads(marker.read_text(encoding="utf-8"))
+    assert observation["secondUndefined"] is True
+    assert observation["inputKeys"] == [
+        "$",
+        "client",
+        "directory",
+        "experimental_workspace",
+        "project",
+        "serverUrl",
+        "worktree",
+    ]
+    hook_types = observation["hookTypes"]
+    for hook_name in ("config", "event"):
+        assert hook_types[hook_name] in {"undefined", "function"}, hook_name
+    for hook_name in ("tool.execute.before", "tool.execute.after"):
+        assert hook_types[hook_name] == "function", hook_name
 
 
 async def test_runtime_plugin_fails_closed_on_coverage_persistence_failure(tmp_path: Path):
