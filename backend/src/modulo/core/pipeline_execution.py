@@ -2707,12 +2707,14 @@ async def run_executor_with_watchdog(
     ``{"status": "failed"}``; a HITL-decision resume capacity denial returns
     ``{"status": "capacity_deferred"}``; a claim-time admission that could not
     acquire its row lock after the bounded retry returns
-    ``{"status": "deferred"}`` (FAR-2076 — not terminal: the run is ``pending``
-    and re-dispatched by ``dispatcher_reconcile`` when the fenced pending-reset
-    was confirmed, or left ``running`` for the nodeless/age backstop when that
-    reset also timed out; an at-ceiling refusal whose terminal write lost the
-    fence is deferred too, because it executed nothing; and a watchdog kill
-    whose fenced reset timed out is deferred instead of terminal-failed); an
+    ``{"status": "deferred"}`` (FAR-2076 — not terminal; the resting state
+    follows the fenced pending-reset's reported outcome: ``confirmed`` leaves
+    the run ``pending`` for ``dispatcher_reconcile``; ``fence_lost`` means a
+    successor owns it or it already left ``running``; ``timeout``/``unknown``
+    leave it for the nodeless/age backstop. An at-ceiling refusal whose
+    terminal write lost the fence is deferred too, because it executed nothing;
+    and a watchdog kill whose fenced reset timed out is deferred instead of
+    terminal-failed); an
     ``awaiting_human`` pause
     returns ``{"status": "awaiting_human"}``; a HITL rejection that ended the
     run (FAR-1487) returns ``{"status": "rejected"}``. The caller only runs
@@ -2977,9 +2979,13 @@ async def _handle_executor_failure(
     consumed zero executions. Report the non-terminal ``deferred`` outcome (the
     same vocabulary ``dispatch_run`` uses for a run that was not dispatched and
     is recovered by ``dispatcher_reconcile``) instead of terminal-failing a run
-    that never ran. The run rests ``pending`` when the fenced pending-reset was
-    confirmed, and ``running`` (for the nodeless/age backstop) when that reset
-    also timed out; the log distinguishes the two.
+    that never ran. The log follows the carried ``reset_state``, which is the
+    reset OUTCOME — ``confirmed`` (reset landed, run pending),
+    ``fence_lost`` (reset matched no row; owned by a successor or already
+    non-running — resting state unknowable here), ``timeout`` (not reset; most
+    likely still running, left to the nodeless/age backstop) or ``unknown``
+    (the reset raised; left as-is). No arm asserts a resting state it cannot
+    know.
 
     A ``RetryBudgetGateRefusedError`` is also DEFERRED: the run was at its
     retry ceiling and the gate's terminal write lost the fence while the row
@@ -3013,26 +3019,44 @@ async def _handle_executor_failure(
     )
 
     if isinstance(exec_exc, _AdmissionLockTimeoutError):
-        # The run consumed zero executions. Where it rests depends on the
-        # fenced pending-reset: CONFIRMED → pending (dispatcher_reconcile
-        # re-dispatches it); TIMED OUT → still running under this executor's
-        # claim token, left for the nodeless/age backstop. Never claim the run
-        # is pending when the reset timed out — and never terminalise either.
-        if exec_exc.reset_confirmed:
+        # The run consumed zero executions. The reset OUTCOME is a tri-state
+        # (plus "unknown"): each arm gets wording it can actually know, and no
+        # arm asserts a resting state it cannot. Every arm is deferred and
+        # NON-terminal.
+        if exec_exc.reset_state == "confirmed":
             _log.warning(
                 "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
-                "admission kept hitting row-lock timeouts; fenced pending-reset confirmed, "
-                "so the run is pending and NOT terminal-failed; dispatcher_reconcile will "
-                "re-dispatch it",
+                "admission kept hitting row-lock timeouts; the fenced pending-reset was "
+                "CONFIRMED, so the run is pending and NOT terminal-failed; "
+                "dispatcher_reconcile will re-dispatch it",
+                run_id,
+                exec_exc.attempts,
+            )
+        elif exec_exc.reset_state == "fence_lost":
+            _log.warning(
+                "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
+                "admission kept hitting row-lock timeouts; the fenced pending-reset matched "
+                "NO row (fence lost), so the run is owned by a successor or has already left "
+                "running and was left untouched; NOT terminal-failed",
+                run_id,
+                exec_exc.attempts,
+            )
+        elif exec_exc.reset_state == "timeout":
+            _log.warning(
+                "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
+                "admission kept hitting row-lock timeouts and the fenced pending-reset ALSO "
+                "timed out; the run was NOT reset (most likely still running under this "
+                "executor's claim token) and is left for the nodeless/age backstop; "
+                "NOT terminal-failed",
                 run_id,
                 exec_exc.attempts,
             )
         else:
             _log.warning(
                 "pipeline_execution.admission_deferred run=%s attempts=%s — claim-time "
-                "admission kept hitting row-lock timeouts and the fenced pending-reset ALSO "
-                "timed out; the run is left RUNNING (not pending) for the nodeless/age "
-                "backstop and is NOT terminal-failed",
+                "admission kept hitting row-lock timeouts and the fenced pending-reset "
+                "FAILED; whether it landed is unknown, so the run is left as-is for the "
+                "nodeless/age backstop; NOT terminal-failed",
                 run_id,
                 exec_exc.attempts,
             )

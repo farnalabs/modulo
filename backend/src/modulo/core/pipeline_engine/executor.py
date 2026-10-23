@@ -36,7 +36,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt, NodeCancelledError
@@ -820,6 +820,14 @@ class SandboxCapacityExceededError(Exception):
         )
 
 
+# The outcome of the fenced pending-reset that follows a two-timeout admission
+# deferral. Carried as the OUTCOME, never a bool: ``fence_lost`` (rowcount 0)
+# and ``timeout`` (``None``) were previously collapsed to ``False``, so the
+# deferral log claimed the reset had timed out on a fence loss too — a claim it
+# could not know.
+AdmissionResetState = Literal["confirmed", "fence_lost", "timeout", "unknown"]
+
+
 class AdmissionLockTimeoutError(Exception):
     """FAR-2076: the claim-time admission transaction kept hitting a row lock.
 
@@ -830,33 +838,47 @@ class AdmissionLockTimeoutError(Exception):
     run that never executed.
 
     The run's resting state depends on the fenced pending-reset that follows
-    (``_fenced_pending_reset`` returns ``int | None``):
+    (``_fenced_pending_reset`` returns ``int | None``), carried as
+    ``reset_state`` — the OUTCOME, not a boolean, because a fence loss and a
+    timeout are different facts:
 
-    * ``reset_confirmed=True`` — the reset landed; the run is ``pending`` and
-      recovered by ``dispatcher_reconcile``'s re-enqueue leg;
-    * ``reset_confirmed=False`` — the bounded reset itself timed out, so the
-      run is still ``running`` under this executor's claim token and is left
-      for the nodeless/age backstop. ``pipeline_execution`` must not claim it
-      is pending on this branch (FAR-2076).
+    * ``"confirmed"`` — the reset landed; the run is ``pending`` and recovered
+      by ``dispatcher_reconcile``'s re-enqueue leg;
+    * ``"fence_lost"`` — the reset matched no row: a successor owns the run or
+      it has already left ``running``. Its resting state is NOT knowable here,
+      so the deferral must not describe it;
+    * ``"timeout"`` — the bounded reset itself timed out; the row was NOT reset
+      and is most likely still ``running`` under this executor's claim token,
+      left for the nodeless/age backstop;
+    * ``"unknown"`` — the reset raised (not a lock timeout); whether it landed
+      is unknown. Left as-is for the nodeless/age backstop.
 
-    Either way ``pipeline_execution._handle_executor_failure`` maps THIS type
-    to the non-terminal ``{"status": "deferred"}`` outcome (the same deferral
-    contract ``dispatch_run`` returns for a non-dispatched run) and never
-    terminal-fails it. Any OTHER executor exception still terminal-fails as
-    before.
+    Every arm maps to the SAME non-terminal outcome
+    (``pipeline_execution._handle_executor_failure`` returns
+    ``{"status": "deferred"}`` and never terminal-fails the run) — only the
+    log wording differs, and no arm asserts a resting state it cannot know.
+    Any OTHER executor exception still terminal-fails as before.
     """
 
-    def __init__(self, run_id: uuid.UUID, attempts: int, *, reset_confirmed: bool) -> None:
+    def __init__(self, run_id: uuid.UUID, attempts: int, *, reset_state: AdmissionResetState) -> None:
         self.run_id = run_id
         self.attempts = attempts
-        self.reset_confirmed = reset_confirmed
-        if reset_confirmed:
-            resting_state = "the run was left pending for dispatcher_reconcile (no execution consumed)"
-        else:
-            resting_state = (
-                "the fenced pending-reset also timed out, so the run is left running for the "
-                "nodeless/age backstop (no execution consumed)"
-            )
+        self.reset_state = reset_state
+        resting_state = {
+            "confirmed": "the fenced pending-reset was CONFIRMED, so the run was left pending for dispatcher_reconcile",
+            "fence_lost": (
+                "the fenced pending-reset matched no row (fence lost), so the run is owned by a successor or has "
+                "already left running and was left untouched"
+            ),
+            "timeout": (
+                "the fenced pending-reset ALSO timed out, so the run was NOT reset and is left for the "
+                "nodeless/age backstop"
+            ),
+            "unknown": (
+                "the fenced pending-reset failed, so whether it landed is unknown and the run was left as-is "
+                "for the nodeless/age backstop"
+            ),
+        }[reset_state]
         super().__init__(
             f"Admission for run {run_id} still hit a row-lock timeout after {attempts} attempts; {resting_state}"
         )
@@ -2586,27 +2608,33 @@ class PipelineExecutor:
                 if attempt == 1:
                     # Second consecutive timeout: hand the claimed run back to
                     # ``pending`` (fenced on our claim token + status='running')
-                    # so ``dispatcher_reconcile`` re-dispatches it. A failed
-                    # reset is logged, never allowed to terminalise the run: it
-                    # stays ``running`` and the age/stale-run sweep is the
-                    # backstop.
-                    # ``None`` = the reset itself timed out (outcome unknown;
-                    # the row is most likely still running under our token), so
-                    # the deferral is NON-terminal either way and must never
-                    # claim the run is pending.
-                    reset: int | None = None
+                    # so ``dispatcher_reconcile`` re-dispatches it. The reset's
+                    # OUTCOME is carried as a tri-state (plus "unknown" for an
+                    # unexpected reset failure) — never a bool, because a fence
+                    # loss (rowcount 0) and a timeout (``None``) are different
+                    # facts and the deferral log must describe each truthfully.
+                    reset_state: AdmissionResetState = "unknown"
                     try:
                         reset = await self._fenced_pending_reset(run_id=run_id, org_id=org_id)
                     except asyncio.CancelledError:
                         raise
                     except Exception:
+                        # Whether the reset landed is unknown; leave the row
+                        # as-is for the nodeless/age backstop.
                         _log.warning(
                             "pipeline.capacity_check_lock_timeout run=%s — fenced pending-reset "
-                            "failed after the second admission timeout; the run is left as-is "
-                            "for the nodeless/age backstop",
+                            "failed after the second admission timeout; whether it landed is "
+                            "unknown and the run is left as-is for the nodeless/age backstop",
                             run_id,
                             exc_info=True,
                         )
+                    else:
+                        if reset is None:
+                            reset_state = "timeout"
+                        elif reset:
+                            reset_state = "confirmed"
+                        else:
+                            reset_state = "fence_lost"
                     _log.warning(
                         "pipeline.capacity_check_lock_timeout run=%s — second bounded "
                         "mutation_row_lock_timeout_ms wait expired; the admission and its "
@@ -2614,13 +2642,14 @@ class PipelineExecutor:
                         "uncounted. Deferring (fenced pending-reset=%s) instead of "
                         "terminal-failing a run that consumed zero executions",
                         run_id,
-                        reset,
+                        reset_state,
                         exc_info=True,
                     )
                     # The deferral's observable contract differs with the reset:
-                    # a confirmed reset leaves the run ``pending`` (reconciled),
-                    # a timed-out one leaves it ``running`` (backstop).
-                    raise AdmissionLockTimeoutError(run_id, attempts=2, reset_confirmed=bool(reset)) from exc
+                    # a confirmed reset leaves the run ``pending`` (reconciled);
+                    # a fence loss is owned by a successor / already non-running;
+                    # a timeout leaves the row most likely running (backstop).
+                    raise AdmissionLockTimeoutError(run_id, attempts=2, reset_state=reset_state) from exc
                 _log.warning(
                     "pipeline.capacity_check_lock_timeout run=%s — bounded "
                     "mutation_row_lock_timeout_ms wait expired on the claim-time "
@@ -2732,7 +2761,16 @@ class PipelineExecutor:
                         # The fenced write lost the row (cancellation raised, or
                         # a superseded claim, in the same instant). Do NOT invent
                         # a terminal row: re-read whatever the row now is.
-                        terminal_run = await get_run(session, run_id)
+                        #
+                        # This MUST be a genuine re-read: the fenced write above
+                        # is a raw UPDATE that bypasses the ORM identity map, so
+                        # a plain ``get_run`` in THIS session returns the STALE
+                        # object loaded at the top of the transaction — its
+                        # ``claim_token``/``cancellation_requested``/``status``
+                        # are the pre-write values, making the reason split
+                        # below unreachable and masking a row that already left
+                        # ``running``. ``populate_existing`` forces the row read.
+                        terminal_run = await session.get(Run, run_id, populate_existing=True)
                         if terminal_run is None:
                             raise RunNotFoundError(run_id)
                         _log.warning(

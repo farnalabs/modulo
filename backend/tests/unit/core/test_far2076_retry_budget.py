@@ -32,7 +32,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from langgraph.errors import NodeCancelledError
@@ -938,10 +938,19 @@ async def test_a_capacity_demoted_attempt_spends_nothing() -> None:
 
 
 class _AdmissionSession:
-    """AsyncSession double for the policy read in ``_claim_under_capacity``."""
+    """AsyncSession double for ``_claim_under_capacity``.
 
-    def __init__(self, retry_policy: Any) -> None:
+    ``execute`` serves the retry-policy read. ``get`` is the GENUINE re-read
+    seam: the fenced terminal write is raw SQL, so production must not re-use
+    the identity-map object loaded at the top of the transaction — the
+    assertion that ``populate_existing=True`` is requested is what pins that
+    (a plain ``get_run`` in this session returns the stale instance).
+    """
+
+    def __init__(self, retry_policy: Any, *, refreshed_run: Any = None) -> None:
         self.retry_policy = retry_policy
+        self.refreshed_run = refreshed_run
+        self.get_calls: list[dict[str, Any]] = []
         self.info: dict[str, Any] = {}
         self._bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
 
@@ -956,6 +965,10 @@ class _AdmissionSession:
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
         return SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(retry_policy=self.retry_policy))
+
+    async def get(self, entity: Any, ident: Any, **kwargs: Any) -> Any:
+        self.get_calls.append({"entity": entity, "ident": ident, **kwargs})
+        return self.refreshed_run
 
     async def __aenter__(self) -> Self:
         return self
@@ -976,12 +989,14 @@ async def _admit(
     execution_attempt_count: int,
     terminal_write: Any = _TERMINAL_LANDED,
     rerun_row: Any = None,
-) -> tuple[Any, AsyncMock, AsyncMock, AsyncMock]:
+    session_sink: list[_AdmissionSession] | None = None,
+) -> tuple[Any, AsyncMock, AsyncMock, AsyncMock, _AdmissionSession]:
     """Drive the REAL ``_claim_under_capacity`` with a slot free; return the
-    result plus the claim / bump / terminal-write mocks.
+    result plus the claim / bump / terminal-write mocks and the session.
 
     ``terminal_write`` defaults to a landed terminal row; pass ``None`` to model
-    a terminal write REJECTED by the fence (``rerun_row`` is then the re-read).
+    a terminal write REJECTED by the fence. The row the code then sees comes
+    from the session's ``get`` (a genuine re-read); ``rerun_row`` is that row.
     """
     run = SimpleNamespace(
         status="running",
@@ -994,18 +1009,20 @@ async def _admit(
         if terminal_write is _TERMINAL_LANDED
         else terminal_write
     )
+    session = _AdmissionSession(retry_policy, refreshed_run=rerun_row)
+    if session_sink is not None:
+        session_sink.append(session)
     executor = PipelineExecutor(MagicMock())
     executor._claim_token = "tok"
-    executor._session_factory = MagicMock(return_value=_AdmissionSession(retry_policy))
+    executor._session_factory = MagicMock(return_value=session)
     claim = AsyncMock(return_value=run)
     bump = AsyncMock(return_value=True)
     update = AsyncMock(return_value=terminal)
-    get_run = AsyncMock(return_value=run) if rerun_row is None else AsyncMock(side_effect=[run, rerun_row])
     with (
         patch.object(ex, "set_rls_org", AsyncMock()),
         patch.object(ex, "set_rls_execution_context", AsyncMock()),
         patch.object(ex, "set_mutation_row_lock_timeout", AsyncMock()),
-        patch.object(ex, "get_run", get_run),
+        patch.object(ex, "get_run", AsyncMock(return_value=run)),
         patch.object(ex, "count_active_runs_for_pipeline", AsyncMock(return_value=0)),
         patch.object(executor, "_claim_run_and_audit", claim),
         patch.object(ex, "update_run_status", update),
@@ -1021,14 +1038,14 @@ async def _admit(
             org_sandbox_population="all",
             org_run_limit=None,
         )
-    return result, claim, bump, update
+    return result, claim, bump, update, session
 
 
 async def test_admission_at_the_ceiling_terminalises_with_the_budget_code_and_does_not_execute() -> None:
     """No enqueue path can exceed the ceiling: the ONE admission point refuses
     the execution and terminalises with the SAME error code the reconcile
     backstop uses."""
-    result, claim, bump, update = await _admit(retry_policy=_POLICY, execution_attempt_count=_CEILING)
+    result, claim, bump, update, _session = await _admit(retry_policy=_POLICY, execution_attempt_count=_CEILING)
 
     update.assert_awaited_once()
     assert update.await_args is not None
@@ -1051,7 +1068,7 @@ async def test_admission_at_the_ceiling_terminalises_with_the_budget_code_and_do
 async def test_admission_below_the_ceiling_or_without_a_policy_still_executes(
     retry_policy: Any, execution_attempt_count: int
 ) -> None:
-    result, claim, bump, update = await _admit(
+    result, claim, bump, update, _session = await _admit(
         retry_policy=retry_policy, execution_attempt_count=execution_attempt_count
     )
 
@@ -1083,6 +1100,34 @@ async def test_at_ceiling_fence_rejection_never_hands_back_a_running_row() -> No
     assert excinfo.value.reason == "superseded claim token"
 
 
+async def test_at_ceiling_fence_rejection_re_reads_the_row_with_populate_existing() -> None:
+    """The rejection's diagnosis must come from a REAL re-read.
+
+    The fenced terminal write is raw SQL, so ``get_run`` in the same session
+    returns the STALE identity-map instance (same object, pre-write values) —
+    every reason would then report "fence lost" and a row that already left
+    ``running`` would be misread as still running. The re-read must request
+    ``populate_existing=True`` (the same pattern ``_update_run_status_fenced``
+    uses). The session double's ``get`` is that seam.
+    """
+    superseded = SimpleNamespace(status="running", claim_token="successor", cancellation_requested=False)
+    sessions: list[_AdmissionSession] = []
+
+    with pytest.raises(ex.RetryBudgetGateRefusedError):
+        await _admit(
+            retry_policy=_POLICY,
+            execution_attempt_count=_CEILING,
+            terminal_write=None,
+            rerun_row=superseded,
+            session_sink=sessions,
+        )
+
+    assert len(sessions) == 1
+    assert sessions[0].get_calls == [
+        {"entity": ex.Run, "ident": ANY, "populate_existing": True},
+    ]
+
+
 async def test_at_ceiling_fence_rejection_on_a_cancelling_row_is_non_executing() -> None:
     """A cancellation-pending row is ALSO still ``running`` (the cancel-wins
     guard rejected the ``failed`` write), so it cannot be handed to
@@ -1098,6 +1143,29 @@ async def test_at_ceiling_fence_rejection_on_a_cancelling_row_is_non_executing()
         )
 
     assert excinfo.value.reason == "cancellation pending"
+
+
+async def test_at_ceiling_fence_rejection_returns_a_genuinely_non_running_row() -> None:
+    """A rejected terminal write does NOT imply the row is still running.
+
+    The row may have reached a terminal/held state between the fenced write and
+    the re-read. Only a REAL re-read sees that; reusing the stale identity-map
+    instance reports ``running`` and raises instead of returning the row
+    ``execute()`` can safely bail on.
+    """
+    already_cancelled = SimpleNamespace(status="cancelled", claim_token="tok", cancellation_requested=True)
+
+    result, claim, bump, _update, session = await _admit(
+        retry_policy=_POLICY,
+        execution_attempt_count=_CEILING,
+        terminal_write=None,
+        rerun_row=already_cancelled,
+    )
+
+    assert result is already_cancelled
+    claim.assert_not_awaited()
+    bump.assert_not_awaited()
+    assert session.get_calls == [{"entity": ex.Run, "ident": ANY, "populate_existing": True}]
 
 
 async def test_at_ceiling_fence_rejection_does_not_stream_in_execute() -> None:
@@ -1120,7 +1188,7 @@ async def test_at_ceiling_fence_rejection_does_not_stream_in_execute() -> None:
     executor = object.__new__(PipelineExecutor)
     executor._claim_token = "tok"
     executor._dispatch_phase_tracker = None
-    executor._session_factory = MagicMock(return_value=_AdmissionSession(_POLICY))
+    executor._session_factory = MagicMock(return_value=_AdmissionSession(_POLICY, refreshed_run=superseded))
     executor._check_policy_gate_pin = AsyncMock(return_value=None)
     stream = AsyncMock(side_effect=AssertionError("the graph must not stream past the ceiling"))
 
@@ -1151,7 +1219,8 @@ async def test_at_ceiling_fence_rejection_does_not_stream_in_execute() -> None:
         patch.object(executor, "_read_org_sandbox_cap_full", AsyncMock(return_value=(None, False, "all"))),
         patch.object(executor, "_read_org_run_concurrency_limit", AsyncMock(return_value=None)),
         patch.object(ex, "count_active_runs_for_pipeline", AsyncMock(return_value=0)),
-        patch.object(ex, "get_run", AsyncMock(side_effect=[run, superseded])),
+        # ONE read only: the fence-lost re-read is the session's ``get``.
+        patch.object(ex, "get_run", AsyncMock(return_value=run)),
         patch.object(ex, "update_run_status", AsyncMock(return_value=None)),
         patch.object(executor, "_claim_run_and_audit", AsyncMock(return_value=run)),
         patch.object(executor, "_init_run_environment", stream),
