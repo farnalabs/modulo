@@ -497,6 +497,61 @@
         </p>
       </div>
 
+      <!-- FAR-2072: worst-case wall clock for a running/failed node. The
+           timeout is per attempt, so a retried timeout can consume it more
+           than once. Static content — deliberately NOT a live region even
+           though the elapsed rows tick while the run is in flight. -->
+      <section
+        v-if="worstCaseRows.length > 0"
+        data-testid="run-detail-worst-case"
+        class="mb-6 rounded-lg border bg-card p-6"
+      >
+        <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.worst_case_title') }}</h2>
+        <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.RunDetailView.worst_case_help') }}</p>
+        <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.RunDetailView.worst_case_queue_note') }}</p>
+        <div class="mt-3 space-y-2">
+          <div
+            v-for="row in worstCaseRows"
+            :key="row.name"
+            data-testid="run-detail-worst-case-node"
+            class="rounded border bg-muted/30 p-3"
+          >
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-sm font-medium" :title="row.name">{{ row.label }}</span>
+              <span class="text-xs text-muted-foreground">
+                {{ $t('views.RunDetailView.worst_case_attempts_so_far', { count: row.attempts }) }}
+              </span>
+            </div>
+            <p
+              v-if="row.worstCase"
+              data-testid="run-detail-worst-case-ceiling"
+              class="mt-1 text-xs text-foreground"
+            >
+              {{ $t('views.RunDetailView.worst_case_ceiling', {
+                count: row.worstCase.attempts,
+                timeout: formatCompactDuration(row.worstCase.timeoutSeconds),
+                total: formatCompactDuration(row.worstCase.totalSeconds),
+              }) }}
+            </p>
+            <p
+              v-else
+              data-testid="run-detail-worst-case-unavailable"
+              class="mt-1 text-xs text-muted-foreground"
+            >
+              {{ $t('views.RunDetailView.worst_case_unavailable') }}
+            </p>
+            <ul class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <li v-for="attempt in row.elapsed" :key="attempt.attempt" data-testid="run-detail-worst-case-attempt">
+                {{ $t('views.RunDetailView.worst_case_attempt_row', {
+                  attempt: attempt.attempt,
+                  elapsed: attemptElapsedText(attempt),
+                }) }}
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <!-- Per-Node Execution Trace -->
       <section class="space-y-4 rounded-lg border bg-card p-6">
         <div class="flex items-baseline justify-between gap-4">
@@ -1000,6 +1055,14 @@ import { triggerTypeLabel, heartbeatAgeSeconds, heartbeatDisplayText, isHeartbea
 import { shortId, formatRun } from '../utils/format'
 import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
 import { formatMoney } from '../lib/money'
+import {
+  attemptElapsedRows,
+  formatCompactDuration,
+  parseAttemptNumber,
+  worstCaseForEvent,
+  type AttemptElapsed,
+  type WorstCase,
+} from '../lib/worstCase'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 import { Check, X, AlertTriangle, RotateCcw, Download, ChevronRight, CircleStop, Copy, ExternalLink, LoaderCircle } from '@lucide/vue'
 
@@ -1146,6 +1209,14 @@ const rerunning = ref(false)
 const rerunError = ref<string | null>(null)
 const rerunConfirming = ref(false)
 const pipelineIdempotent = ref<boolean | null>(null)
+// FAR-2072: worst-case ceiling metadata. The retry policy is pipeline-level and
+// the per-node timeout overrides live in the snapshot the run executed, so both
+// are loaded once per (pipeline, snapshot) pair — never on each poll.
+// `null` policy = unknown (the pipeline/read failed); `{}` = a known empty
+// policy (no retries).
+const pipelineRetryPolicy = ref<Record<string, unknown> | null>(null)
+const pipelineDefaultNodeTimeout = ref<number | null>(null)
+const nodeTimeoutOverrides = ref<Record<string, number>>({})
 const pendingReviews = ref<components['schemas']['ReviewResponse'][]>([])
 const hitlLoading = ref(false)
 const hitlMessage = ref<{ type: string; text: string } | null>(null)
@@ -2255,6 +2326,159 @@ function nodeProgressState(name: string): NodeProgressState {
   if (live === 'completed') return 'completed'
   if (nodeHasUsageOrOutput(name)) return 'completed'
   return 'pending'
+}
+
+// ── FAR-2072: worst-case node time ──────────────────────────────────
+//
+// A node's timeout is per attempt. When the run's retry policy retries a
+// timeout, the same node can consume that budget more than once, plus queue
+// time (which is outside the arithmetic). These helpers derive the ceiling
+// from the pipeline's ACTUAL policy and the timeout frozen in the snapshot the
+// run executed — never a hard-coded multiplier.
+function positiveNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function graphNodes(graph: unknown): unknown[] {
+  const nodes = (graph as { nodes?: unknown } | null)?.nodes
+  return Array.isArray(nodes) ? nodes : []
+}
+
+function nodeTimeoutsFromGraph(graph: unknown): Record<string, number> {
+  const timeouts: Record<string, number> = {}
+  for (const node of graphNodes(graph)) {
+    if (!node || typeof node !== 'object') continue
+    const id = (node as { id?: unknown }).id
+    const timeout = positiveNumber((node as { timeout_seconds?: unknown }).timeout_seconds)
+    if (typeof id === 'string' && timeout !== null) timeouts[id] = timeout
+  }
+  return timeouts
+}
+
+async function loadWorstCaseMeta(pipelineId: string, snapshotId: string | null): Promise<void> {
+  pipelineRetryPolicy.value = null
+  pipelineDefaultNodeTimeout.value = null
+  nodeTimeoutOverrides.value = {}
+
+  try {
+    const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+    })
+    if (data) {
+      const policy = (data as { retry_policy?: unknown }).retry_policy
+      // `{}` is a KNOWN empty policy (no retries); a failed read stays null so
+      // the ceiling renders as unavailable rather than falsely "1 attempt".
+      pipelineRetryPolicy.value =
+        policy && typeof policy === 'object' && !Array.isArray(policy)
+          ? (policy as Record<string, unknown>)
+          : {}
+      pipelineDefaultNodeTimeout.value = positiveNumber(
+        (data as { node_timeout_seconds?: unknown }).node_timeout_seconds,
+      )
+    }
+  } catch (e) {
+    console.warn('Failed to load the pipeline retry policy for the worst-case ceiling', e)
+  }
+
+  let graph: unknown = null
+  if (snapshotId) {
+    try {
+      const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/snapshots/{snapshot_id}', {
+        params: { path: { pipeline_id: pipelineId, snapshot_id: snapshotId } },
+      })
+      graph = (data as { graph_json?: unknown } | null)?.graph_json ?? null
+    } catch (e) {
+      console.warn('Failed to load the run snapshot for node timeout overrides', e)
+    }
+  }
+  if (graphNodes(graph).length === 0) {
+    try {
+      const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
+        params: { path: { pipeline_id: pipelineId } },
+      })
+      graph = data ?? null
+    } catch (e) {
+      console.warn('Failed to load the pipeline graph for node timeout overrides', e)
+    }
+  }
+  nodeTimeoutOverrides.value = nodeTimeoutsFromGraph(graph)
+}
+
+interface NodeWorstCaseRow {
+  name: string
+  label: string
+  attempts: number
+  elapsed: AttemptElapsed[]
+  worstCase: WorstCase | null
+}
+
+const showWorstCasePanel = computed(() => {
+  const status = run.value?.status
+  return status === 'running' || status === 'failed'
+})
+
+// Re-evaluated on each poll so a running attempt's elapsed row keeps ticking,
+// but never announced: this is static content, not a live region.
+const worstCaseRows = computed<NodeWorstCaseRow[]>(() => {
+  const current = run.value
+  if (!current || !showWorstCasePanel.value) return []
+  const now = heartbeatNow.value
+
+  return nodeEntries.value.map((node) => {
+    const telemetry = node.telemetry as Record<string, unknown> | null
+    const telemetryAttempt = parseAttemptNumber(telemetry?.attempt_key)
+    // claim_count is the only attempt counter the run API exposes; an executed
+    // sandbox node also stamps its own attempt number in telemetry. Prefer the
+    // node's own number and fall back to the run-level claims.
+    const claims = Number(current.claim_count)
+    const attempts = Math.max(
+      1,
+      telemetryAttempt ?? (Number.isFinite(claims) && claims >= 1 ? Math.floor(claims) : 1),
+    )
+    const timeout = nodeTimeoutOverrides.value[node.name] ?? pipelineDefaultNodeTimeout.value
+
+    return {
+      name: node.name,
+      label: nodeLabel(node.name),
+      attempts,
+      elapsed: attemptElapsedRows({
+        attempts,
+        startedAt: current.started_at,
+        dispatchedAt: current.dispatched_at,
+        completedAt: current.completed_at,
+        now,
+      }),
+      // A null policy means the read failed — do not invent a multiplier.
+      worstCase:
+        pipelineRetryPolicy.value === null
+          ? null
+          : worstCaseForEvent(pipelineRetryPolicy.value, timeout, 'timeout'),
+    }
+  })
+})
+
+const worstCaseMetaKey = computed(() => {
+  const current = run.value
+  if (!current) return ''
+  if (current.status !== 'running' && current.status !== 'failed') return ''
+  return `${current.pipeline_id}:${current.snapshot_id ?? ''}`
+})
+
+watch(
+  worstCaseMetaKey,
+  (key) => {
+    const current = run.value
+    if (!key || !current) return
+    void loadWorstCaseMeta(current.pipeline_id, current.snapshot_id ?? null)
+  },
+  { immediate: true },
+)
+
+function attemptElapsedText(row: AttemptElapsed): string {
+  return row.seconds === null
+    ? t('views.RunDetailView.worst_case_attempt_missing')
+    : formatCompactDuration(row.seconds)
 }
 
 const nodeProgressChips = computed(() => {
