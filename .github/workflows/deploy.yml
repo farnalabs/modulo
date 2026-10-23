@@ -1669,6 +1669,10 @@ jobs:
             else
               EXIT_CODE=$?
               if [ "$attempt" -lt "$MAX_RETRIES" ]; then
+                # A machine can be `started` but wedged (app_liveness critical):
+                # the retry waits on the SAME machine's health check and times
+                # out identically (2026-10-23 staging outage). Recover it first.
+                bash .github/scripts/restart-wedged-app-machines.sh staging-modulo
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
                 echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
@@ -2855,6 +2859,10 @@ jobs:
             else
               EXIT_CODE=$?
               if [ "$attempt" -lt "$MAX_RETRIES" ]; then
+                # A machine can be `started` but wedged (app_liveness critical):
+                # the retry waits on the SAME machine's health check and times
+                # out identically (2026-10-23 staging outage). Recover it first.
+                bash .github/scripts/restart-wedged-app-machines.sh app-modulo
                 DELAY=$((RETRY_DELAY * 2 ** (attempt - 1)))
                 echo "Deploy failed (exit $EXIT_CODE) -- retrying in ${DELAY}s..."
                 sleep $DELAY
