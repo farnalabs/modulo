@@ -78,6 +78,7 @@ RUN = uuid.uuid4()
         ("failed", "provider.billing", ATTEMPT_TERMINAL_REASON_PROVIDER_ERROR),
         ("failed", "executor_failed", ATTEMPT_TERMINAL_REASON_PROVIDER_ERROR),
     ],
+    ids=lambda value: str(value),
 )
 def test_terminal_reason_mapping(status: str, error_code: str | None, expected: str) -> None:
     assert pe.attempt_terminal_reason(status, error_code) == expected
@@ -206,7 +207,7 @@ async def test_a_demoted_claim_opens_no_attempt_row() -> None:
     _result, start, session = await _admit(active_runs=1, max_concurrent=1)
 
     start.assert_not_awaited()
-    assert session.savepoints == []
+    assert not session.savepoints
 
 
 async def test_a_fence_rejected_budget_bump_opens_no_attempt_row() -> None:
@@ -216,7 +217,7 @@ async def test_a_fence_rejected_budget_bump_opens_no_attempt_row() -> None:
 
     assert result.status == "running"
     start.assert_not_awaited()
-    assert session.savepoints == []
+    assert not session.savepoints
 
 
 async def test_attempt_row_write_failure_never_fails_the_admission() -> None:
@@ -349,8 +350,11 @@ async def test_a_failing_close_never_breaks_the_reset_path(
 ) -> None:
     """The reset already committed; instrumentation may not raise into it."""
     executor = _reset_executor(sqlite_maker)
-    with patch.object(attempt_crud, "close_attempt", AsyncMock(side_effect=RuntimeError("db down"))):
+    closer = AsyncMock(side_effect=RuntimeError("db down"))
+    with patch.object(attempt_crud, "close_attempt", closer):
         await executor._record_attempt_reset(run_id=RUN, org_id=ORG, error_code="executor_stalled")
+
+    closer.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -692,4 +696,4 @@ async def test_a_fenced_out_handback_closes_no_attempt() -> None:
     assert result["handed_back"] == 0
     closer.assert_awaited_once()
     assert closer.await_args is not None
-    assert closer.await_args.args[1] == []
+    assert not closer.await_args.args[1]
