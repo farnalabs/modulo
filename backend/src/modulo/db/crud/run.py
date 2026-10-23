@@ -1094,6 +1094,9 @@ class _GuardrailInterception:
     blocking_eval_name: str
     observed_by_eval: dict[uuid.UUID, bool]
     summary_json: dict[str, int] | None
+    # FAR-2054: how many output-point guardrails are bound for this run (the
+    # node-output seam's coverage input). Zero on every early-return path.
+    output_guardrail_count: int = 0
 
 
 @dataclass
@@ -1348,6 +1351,25 @@ def _verify_policy_gate_pin_fingerprint(
     return True, block_message
 
 
+def _select_all_guardrail_definitions(
+    guardrail_rows: list[Any],
+    pinned_defs: list[Any],
+    snap_pins: list[dict[str, Any]] | None,
+    saved_fingerprint: str | None,
+) -> list[Any]:
+    """The guardrail defs bound for this run, BEFORE interception-point filtering.
+
+    Shared by the ingestion pass (which then excludes output-point defs) and the
+    FAR-2054 seam-coverage derivation (which counts them), so the two can never
+    disagree about what is bound.
+    """
+    from modulo.core.guardrails import to_engine_definition
+
+    if _has_pinned_guardrail_set(snap_pins, saved_fingerprint):
+        return list(pinned_defs)
+    return [to_engine_definition(row) for row in guardrail_rows]
+
+
 def _select_guardrail_definitions(
     guardrail_rows: list[Any],
     pinned_defs: list[Any],
@@ -1365,12 +1387,11 @@ def _select_guardrail_definitions(
     ``interception_point`` values are KEPT here (they still run this pass and
     its strict validation fails closed on them).
     """
-    from modulo.core.guardrails import to_engine_definition
     from modulo.core.guardrails.output_intercept import exclude_output_interception_definitions
 
-    if _has_pinned_guardrail_set(snap_pins, saved_fingerprint):
-        return exclude_output_interception_definitions(pinned_defs)
-    return exclude_output_interception_definitions([to_engine_definition(row) for row in guardrail_rows])
+    return exclude_output_interception_definitions(
+        _select_all_guardrail_definitions(guardrail_rows, pinned_defs, snap_pins, saved_fingerprint)
+    )
 
 
 def _downgrade_guardrails_to_observe(guardrail_defs: list[Any]) -> list[Any]:
@@ -1788,6 +1809,22 @@ async def _intercept_guardrails(
     )
     pinned = await _resolve_pinned_guardrail_state(session, request, guardrail_rows)
 
+    # FAR-2054: the node-output seam's coverage input — output-point guardrails
+    # bound to this run. Derived from the SAME bound set the ingestion pass
+    # selects from (before its output-point exclusion), so the two never drift.
+    from modulo.core.guardrails.output_intercept import filter_output_interception_definitions
+
+    output_guardrail_count = len(
+        filter_output_interception_definitions(
+            _select_all_guardrail_definitions(
+                guardrail_rows,
+                pinned.pinned_defs,
+                pinned.snap_pins,
+                pinned.saved_fingerprint,
+            )
+        )
+    )
+
     # ── FAR-967 chunk 10: policy-gate pin fingerprint verification ────────
     # Spec §3.4 / criteria 4 + 16: verified at RUN START — whenever the run
     # carries a snapshot_id, not only on replay.  A fresh snapshot's
@@ -1830,10 +1867,13 @@ async def _intercept_guardrails(
             blocking_eval_name="",
             observed_by_eval={},
             summary_json=None,
+            output_guardrail_count=output_guardrail_count,
         )
 
     if _has_guardrail_work(guardrail_rows, pinned.pinned_defs, pinned.skipped_guardrails, pinned.blocked):
-        return await _run_guardrail_gate(session, request, guardrail_rows=guardrail_rows, pinned=pinned)
+        interception = await _run_guardrail_gate(session, request, guardrail_rows=guardrail_rows, pinned=pinned)
+        interception.output_guardrail_count = output_guardrail_count
+        return interception
     return _GuardrailInterception(
         payload=request.payload,
         results=[],
@@ -1843,6 +1883,7 @@ async def _intercept_guardrails(
         blocking_eval_name="",
         observed_by_eval={},
         summary_json=None,
+        output_guardrail_count=output_guardrail_count,
     )
 
 
@@ -2309,6 +2350,28 @@ async def create_run(
     guardrail_blocking_eval_name = interception.blocking_eval_name
     guardrail_observed_by_eval = interception.observed_by_eval
     guardrail_summary_dict = interception.summary_json
+    # FAR-2054: exhaustive per-seam guardrail coverage, from what Modulo
+    # actually did at this seam. ``enforced`` is only reachable for a seam
+    # Modulo itself acted on (attested); a runtime-sourced fact never is.
+    # Enforcement suppression (kill-switch observe mode / detection-only replay)
+    # downgrades a controlled seam to ``degraded`` — evaluating without acting
+    # is not enforcement. A run blocked before dispatch (ingestion guardrail or
+    # policy-gate pin fingerprint) never reaches the runtime, so every seam is
+    # not_applicable (the policy-gate block path carries the same semantics:
+    # both surface as ``interception.blocked``).
+    from modulo.core.guardrails.coverage import derive_seam_coverage
+
+    suppression_reason: str | None = None
+    if is_replay:
+        suppression_reason = "replay run; guardrails are detection-only"
+    elif guardrails_kill_switch:
+        suppression_reason = "org guardrails kill-switch is on; guardrails are observe-only"
+    seam_coverage = derive_seam_coverage(
+        blocked_before_runtime=guardrail_blocked,
+        ingestion_summary=guardrail_summary_dict,
+        output_guardrail_count=interception.output_guardrail_count,
+        enforcement_suppressed_reason=suppression_reason,
+    )
 
     stored_payload = _inject_engine_payload_keys(
         stored_payload,
@@ -2425,6 +2488,7 @@ async def create_run(
         batch_id=batch_id,
         variant_config_snapshot=variant_config_snapshot,
         guardrail_summary_json=guardrail_summary_dict,
+        seam_coverage_json=[statement.model_dump(mode="json") for statement in seam_coverage],
     )
     if guardrail_blocked:
         _stamp_guardrail_blocked_run(run, guardrail_block_message)

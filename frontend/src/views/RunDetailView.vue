@@ -450,6 +450,32 @@
         </div>
       </section>
 
+      <!-- FAR-2054: Guardrail Coverage by Seam -->
+      <section v-if="seamCoverage.length > 0" class="rounded-lg border bg-card p-6 mb-6" data-testid="run-detail-seam-coverage" aria-live="polite">
+        <h2 class="mb-3 text-base font-semibold tracking-tight">{{ $t('views.RunDetailGuardrailSummary.seam_coverage_title') }}</h2>
+        <div class="space-y-3">
+          <div
+            v-for="statement in seamCoverage"
+            :key="statement.seam"
+            data-testid="run-detail-seam-coverage-row"
+            class="rounded-lg border bg-muted/30 px-4 py-3 text-sm"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <span class="font-medium">{{ $t(`views.RunDetailGuardrailSummary.seam_${statement.seam}`) }}</span>
+                <span :class="stateClass(statement.state)" class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium">
+                  {{ $t(`views.RunDetailGuardrailSummary.state_${statement.state}`) }}
+                </span>
+                <span :class="provenanceClass(statement.provenance)" class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium">
+                  {{ $t(`views.RunDetailGuardrailSummary.provenance_${statement.provenance}`) }}
+                </span>
+              </div>
+              <p class="text-xs text-muted-foreground">{{ statement.reason }}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Guardrail-blocked override (terminal eval_failed / eval_blocked) -->
       <div
         v-if="isGuardrailBlocked"
@@ -1164,6 +1190,27 @@ const guardrailBuckets = computed(() => {
       label: t(`views.RunDetailGuardrailSummary.${key}`),
     }))
 })
+
+const seamCoverage = computed(() => run.value?.seam_coverage ?? [])
+
+function stateClass(state: string): string {
+  const classes: Record<string, string> = {
+    enforced: 'bg-success/10 text-success-text',
+    degraded: 'bg-warning/10 text-warning-text',
+    not_applicable: 'bg-muted text-muted-foreground',
+  }
+  return classes[state] || 'bg-muted text-muted-foreground'
+}
+
+function provenanceClass(provenance: string): string {
+  const classes: Record<string, string> = {
+    attested: 'bg-success/10 text-success-text',
+    observed: 'bg-info/10 text-info-text',
+    derived: 'bg-muted text-muted-foreground',
+    reported: 'bg-warning/10 text-warning-text',
+  }
+  return classes[provenance] || 'bg-muted text-muted-foreground'
+}
 
 function bucketClass(key: string): string {
   const classes: Record<string, string> = {
