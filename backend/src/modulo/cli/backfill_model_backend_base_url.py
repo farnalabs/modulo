@@ -26,7 +26,9 @@ BEHAVIOUR
 ---------
 Dry run by default; ``--apply`` writes. Each row carrying a legacy
 ``default_params.base_url`` is classified, and only the host is ever reported
-(a URL path segment can itself carry a secret):
+(a URL path segment can itself carry a secret). A ``migrate`` row stores the
+validator's NORMALISED return (the same value the REST write path stores), so a
+backfilled credential can never differ from what the API would have written:
 
 * ``migrate`` — valid ``https``. Merge it into the credential JSON (preserving
   any existing ``api_key``), then strip the legacy key. When the credential
@@ -43,6 +45,27 @@ Dry run by default; ``--apply`` writes. Each row carrying a legacy
 Exit code 0 when there was nothing to do or every row was migrated/skipped;
 non-zero when any row was stripped or rejected, so a deploy gate notices.
 
+TENANCY
+-------
+Every organisation is processed in its own session/transaction under its own
+RLS scope, and the transaction is marked as INTERNAL EXECUTION
+(``set_rls_execution_context``) alongside the org GUC. ``model_backends`` is
+governed by ``rls_team_isolation`` alone, whose widening clauses need a user,
+role, team membership or that execution-context hatch — with only the org GUC
+bound every ``visibility='team'`` row is silently invisible, and an org whose
+only legacy rows are team-visible would report "nothing to do" while its
+``http://`` endpoint kept sending the stored key in cleartext.
+
+AUDIT
+-----
+Every CHANGED row emits one ``model_backend.base_url_backfilled`` event, inside
+that organisation's transaction, under the SYSTEM actor with an honest
+``actor_source`` — the same principal-less convention ``cli/users.py`` and
+``db/seed.py`` use. The payload carries the outcome and the host only, never the
+URL or the credential payload. The append is failure-isolated (a broken chain
+must not discard a half-written row) and a failure is reported on stderr and
+turns the exit code non-zero, so it is never silent.
+
 IMPORT HYGIENE: module scope is stdlib + click only. The console-script import
 graph loads this module before any command runs, so settings / DB / secrets
 imports happen lazily inside the command.
@@ -52,6 +75,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -64,10 +88,17 @@ if TYPE_CHECKING:
 
     from modulo.settings import Settings
 
+logger = logging.getLogger(__name__)
+
 Outcome = Literal["migrate", "strip-insecure", "reject-invalid", "drop-incapable", "skip"]
 
 EXIT_OK = 0
 EXIT_NEEDS_ATTENTION = 1
+
+#: Chained-audit event emitted once per changed row (see ``AUDIT`` above).
+AUDIT_EVENT_TYPE = "model_backend.base_url_backfilled"
+#: The honest ``actor_source`` for a principal-less CLI write.
+AUDIT_ACTOR_SOURCE = "cli_backfill_model_backend_base_url"
 
 _OUTCOMES: tuple[Outcome, ...] = ("migrate", "strip-insecure", "reject-invalid", "drop-incapable", "skip")
 _ATTENTION_OUTCOMES = frozenset({"strip-insecure", "reject-invalid", "drop-incapable"})
@@ -157,20 +188,26 @@ def classify_legacy_endpoint(provider: str, raw: object) -> Classification:
     # ``legacy_base_url`` is the single definition of "a usable legacy value"
     # (non-blank string); a JSON null / blank / non-string is a dead key.
     usable = legacy_base_url({"base_url": raw}) if isinstance(raw, str) else None
-    host = redact_base_url(usable)
     if usable is None:
         return Classification("skip", None, "no usable legacy value")
+    # Report (and validate) the trimmed value: a padded legacy value would
+    # otherwise report no host and store the padding verbatim.
+    candidate = usable.strip()
+    host = redact_base_url(candidate)
 
     if not supports_custom_base_url(provider):
         return Classification("drop-incapable", host, "provider does not support a custom endpoint")
 
     try:
-        validate_base_url(usable)
+        normalised = validate_base_url(candidate)
     except BaseUrlValidationError as exc:
         if exc.code == INSECURE_HTTP_NOT_ALLOWED:
             return Classification("strip-insecure", host, "plain http is never auto-blessed")
         return Classification("reject-invalid", host, str(exc))
-    return Classification("migrate", host, value=usable)
+    # The validator RETURNS the canonical value the REST write path stores
+    # (it trims). Storing the raw input here would write a value the API would
+    # never write, which is the drift this command exists to remove.
+    return Classification("migrate", host, value=normalised)
 
 
 def _stored_secret_payload(raw: str | None) -> dict[str, Any]:
@@ -303,17 +340,56 @@ async def _plan_row(
 async def _apply_row(
     secrets_backend: Any,
     planned: _PlannedRow,
-) -> None:
-    """Persist one planned row's credential and/or legacy-key removal."""
+) -> bool:
+    """Persist one planned row's credential and/or legacy-key removal.
+
+    Returns ``True`` when anything was actually persisted, so the caller only
+    emits an audit record for a row that really changed.
+    """
     from modulo.core.model_backend_endpoints import strip_legacy_base_url
 
     backend = planned.backend
+    changed = False
     if planned.write_secret:
         await secrets_backend.set_secret(str(backend.id), json.dumps(planned.payload))
+        changed = True
     if planned.strip_legacy:
         stripped = strip_legacy_base_url(backend.default_params)
         if stripped != dict(backend.default_params or {}):
             backend.default_params = stripped
+            changed = True
+    return changed
+
+
+async def _audit_applied_row(session: AsyncSession, planned: _PlannedRow) -> None:
+    """Append the SYSTEM-actor audit record for one changed row.
+
+    Mirrors the principal-less convention ``cli/users.py`` and ``db/seed.py``
+    use: the event is appended in the CALLER's transaction (the change and its
+    record commit together) with a SYSTEM actor and an honest ``actor_source``,
+    because the CLI has no HTTP principal. Only the outcome and the host are
+    carried — never the URL or the credential payload.
+    """
+    from modulo.core.audit_logger import append_audit_event
+    from modulo.core.audit_logger.labels import SYSTEM_ACTOR
+
+    report = planned.report
+    await append_audit_event(
+        session,
+        org_id=report.organisation_id,
+        event_type=AUDIT_EVENT_TYPE,
+        actor_user_id=None,
+        resource_type="model_backend",
+        resource_id=report.backend_id,
+        payload_json={
+            "actor": SYSTEM_ACTOR,
+            "actor_source": AUDIT_ACTOR_SOURCE,
+            "backend_id": str(report.backend_id),
+            "provider": report.provider,
+            "outcome": report.outcome,
+            "host": report.host,
+        },
+    )
 
 
 async def _process_org(
@@ -333,13 +409,20 @@ async def _process_org(
 
     from modulo.core.secrets_backend import create_secrets_backend
     from modulo.db.models.model_backend import ModelBackend
-    from modulo.db.rls import set_rls_org
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     planned_rows: list[_PlannedRow] = []
+    audit_failures: list[str] = []
     async with session_factory() as session:
         try:
             async with session.begin():
                 await set_rls_org(session, organisation.id)
+                # Internal execution: ``model_backends`` carries ONLY the
+                # ``rls_team_isolation`` policy, so with just the org GUC bound
+                # a ``visibility='team'`` row is filtered out and this command
+                # would report "nothing to do" while a legacy ``http://``
+                # endpoint kept sending the stored key in cleartext.
+                await set_rls_execution_context(session)
                 secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
                 backends = (
                     (
@@ -365,11 +448,28 @@ async def _process_org(
                         secrets_backend,
                     )
                     planned_rows.append(planned)
-                    if apply:
-                        await _apply_row(secrets_backend, planned)
+                    if apply and await _apply_row(secrets_backend, planned):
+                        try:
+                            await _audit_applied_row(session, planned)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            # Failure-isolated (the row write already happened):
+                            # the append is savepoint-isolated, so a broken
+                            # chain must not roll back a correct credential
+                            # rewrite. Loud, and it fails the run's exit code.
+                            logger.exception(
+                                "model_backend.base_url_backfill_audit_failed backend_id=%s org_id=%s",
+                                planned.report.backend_id,
+                                organisation.id,
+                            )
+                            audit_failures.append(
+                                f"audit append failed for backend {planned.report.backend_id} "
+                                f"in org {organisation.slug} ({organisation.id})"
+                            )
         except Exception as exc:  # reported per org, never swallowed
             return [], [f"org {organisation.slug} ({organisation.id}): {type(exc).__name__}: {exc}"]
-    return [planned.report for planned in planned_rows], []
+    return [planned.report for planned in planned_rows], audit_failures
 
 
 async def run_backfill(

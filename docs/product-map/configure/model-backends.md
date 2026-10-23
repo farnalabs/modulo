@@ -70,8 +70,12 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
       `modulo backfill-model-backend-base-url` command, which migrates a legacy
       `default_params.base_url` (valid https) into the credential JSON, strips plain
       http / invalid / incapable values instead of auto-blessing them, preserves the
-      stored API key, reports host only, is dry-run by default, and is idempotent
-      (`test_model_backend_base_url_helpers.py`,
+      stored API key, stores the validator's normalised value (never the raw input),
+      reports host only, is dry-run by default, and is idempotent. Each organisation
+      runs under its own RLS scope marked as internal execution, so `visibility='team'`
+      rows are reached rather than silently skipped, and every changed row appends a
+      SYSTEM-actor `model_backend.base_url_backfilled` audit event carrying only the
+      outcome and host (`test_model_backend_base_url_helpers.py`,
       `test_backfill_model_backend_base_url.py`)
 - [x] A backend referenced as another's fallback cannot be deleted (409)
       (`backend_crud.feature`)
