@@ -22,9 +22,9 @@ overrides:
   # openapi-typescript upgrades to @redocly/openapi-core 2.x (js-yaml ^5.2.2).
   "@redocly/openapi-core>js-yaml": "4.3.2"
   "postcss>nanoid": "^6.0.0"
-  rollup: "4.64.10"
-  "@tanstack/query-core": "5.104.4"
-  "@tanstack/vue-query": "5.104.4"
+  rollup: "4.65.0"
+  "@tanstack/query-core": "5.104.5"
+  "@tanstack/vue-query": "5.104.5"
 minimumReleaseAgeExclude:
   - '@rollup/rollup-android-arm-eabi@4.63.0'
   - '@rollup/rollup-android-arm64@4.63.0'
