@@ -652,6 +652,10 @@ def test_lock_refuses_anonymous_flock_without_holder_record(tmp_path: Path) -> N
     finally:
         proc.terminate()
         proc.wait(timeout=10)
+        # An unclosed stderr pipe is an unraisable ResourceWarning at GC, which
+        # the unit suite escalates (and attributes to the NEXT test).
+        if proc.stderr:
+            proc.stderr.close()
 
 
 @requires_posix

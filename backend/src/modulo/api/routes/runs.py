@@ -62,6 +62,7 @@ from modulo.core.exceptions import (
     SnapshotLockNotAvailableError,
 )
 from modulo.core.guardrails import GuardrailSummary
+from modulo.core.guardrails.coverage import SeamCoverageStatement, parse_seam_coverage
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_stderr_artifact, node_stdout_artifact, node_telemetry
 from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
@@ -370,10 +371,22 @@ def _deadline_triage_from_markers(
     """Project cancellation/deadline-kill triage markers for the run detail (FAR-704).
 
     Only markers carrying the ``deadline_triage is True`` signature are
-    surfaced; every other raw-output marker (delivery-done, no-parseable
+    surfaced; every other raw-output marker (delivery-done, no-parseable-
     output, stall) is ignored here. String fields are truncated to bounded
     display slices (the retained marker stays authoritative in the store).
-    Sorted by attempt_key for a deterministic response order.
+    Entries are returned in marker-storage-key order, for a deterministic
+    response.
+
+    ``attempt_key`` is the marker's OWN payload value when it carries one, and
+    only falls back to the storage key otherwise. The two are not
+    interchangeable: a cancellation-triage marker is stored under a reserved
+    ``cancel-triage:<run>:<node>:<suffix>`` row key (FAR-2082) while its payload
+    keeps the attempt that really ran, and ``node_id`` is always read from the
+    payload. Preferring the payload keeps this projection's identifiers
+    mutually consistent and matches
+    :func:`modulo.core.run_log_correlation.marker_tail_entries`; reporting the
+    storage key here would render a synthetic attempt key beside a real node id
+    (``RunDetailView`` shows the value verbatim).
 
     ``raw_output`` is projected as BOTH a bounded head and a bounded tail:
     the tail is how the attempt died, the head is the agent command's
@@ -405,10 +418,14 @@ def _deadline_triage_from_markers(
             continue
         raw_output = str(marker.get("raw_output") or "")
         log_tail = str(marker.get("sandbox_log_tail") or "")
+        payload_attempt_key = marker.get("attempt_key")
         entries.append(
             {
                 "node_id": marker.get("node_id"),
-                "attempt_key": attempt_key,
+                # The payload's value wins (see the docstring): the row key is
+                # storage identity, and for a cancellation-triage marker it is
+                # deliberately not the attempt key.
+                "attempt_key": payload_attempt_key if isinstance(payload_attempt_key, str) else attempt_key,
                 "no_output_reason": marker.get("no_output_reason"),
                 "sandbox_log_tail": log_tail[-_TRIAGE_LOG_TAIL_CHARS:] if log_tail else "",
                 "raw_output_head": raw_output[:_TRIAGE_RAW_OUTPUT_HEAD_CHARS] if raw_output else "",
@@ -1091,6 +1108,12 @@ class RunResponse(BaseModel):
     # expected_skips / unexpected_skips). NULL when the run had no guardrails
     # bound, or on pre-migration runs.
     guardrail_summary: dict[str, int] | None = None
+    # FAR-2054: exhaustive per-seam guardrail coverage, typed and provenance-
+    # aware. ``enforced`` is only ever published with ADR-042 ``attested``
+    # provenance (Modulo acted); ``runtime_loop`` always reads
+    # ``not_applicable`` because Alpha does not consume a runtime tool-event
+    # stream. NULL only for runs created before the column shipped.
+    seam_coverage: list[SeamCoverageStatement] | None = None
     # Active-run observability (FAR-307). `trigger_actor`, `heartbeat_at`, and
     # `capacity` are populated on every list item and on detail for active
     # runs; `work_item_refs` and `child_runs` are populated only on detail.
@@ -1205,6 +1228,20 @@ def _guardrail_summary_from_run(run: Any) -> dict[str, int] | None:
     except (TypeError, ValueError):
         _log.warning("runs.guardrail_summary_invalid", extra={"run_id": str(getattr(run, "id", ""))})
         return None
+
+
+def _seam_coverage_from_run(run: Any) -> list[SeamCoverageStatement] | None:
+    """Parse the persisted FAR-2054 ``seam_coverage_json`` for run detail.
+
+    The JSON column could hold any value (or a MagicMock in a test fake), so the
+    read goes through the typed contract: malformed data degrades to explicit
+    ``degraded``/``not_applicable`` statements, never arbitrary strings and
+    never a 500. ``None`` means the run predates the column (no claim made).
+    """
+    raw = getattr(run, "seam_coverage_json", None)
+    if raw is not None and not isinstance(raw, list):
+        _log.warning("runs.seam_coverage_invalid", extra={"run_id": str(getattr(run, "id", ""))})
+    return parse_seam_coverage(raw)
 
 
 @dataclass(frozen=True)
@@ -1371,6 +1408,7 @@ def _build_run_response(
         gate_fired=gate_fired,
         blocked_partial_summary=blocked_partial_summary,
         guardrail_summary=_guardrail_summary_from_run(run),
+        seam_coverage=_seam_coverage_from_run(run),
         trigger_actor=ctx.trigger_actor,
         trigger_type=getattr(run, "trigger_type", None),
         # FAR-1141 / ADR-042: run execution provenance, composed from the ONE

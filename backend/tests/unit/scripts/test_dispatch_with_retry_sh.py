@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -30,15 +29,13 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = REPO_ROOT / "scripts" / "dispatch_with_retry.sh"
 
-#: The suite executes the shipped shell script with a stubbed ``curl`` placed
-#: first on PATH, so it needs a POSIX shell that honours executable bits and a
-#: ``jq`` binary. A Windows host satisfies neither faithfully (MSYS bash ignores
-#: the mode bits on the stub, WSL bash cannot see Windows-style PATH entries), so
-#: the suite runs on Linux CI - not skipped coverage locally on POSIX hosts.
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="requires a POSIX shell with executable-bit semantics and jq; runs on Linux CI",
-)
+#: This module executes the shipped script for real, under a POSIX shell, with
+#: stubbed binaries placed first on PATH - so it needs executable-bit semantics,
+#: a PATH the shell can read, and ``jq``. The platform requirement is declared
+#: once, as a marker; the gate that skips it on Windows lives in
+#: ``backend/tests/conftest.py`` (``POSIX_ONLY_MARKER``) and Linux CI executes
+#: this suite for real.
+pytestmark = pytest.mark.posix_only
 
 CURL_STUB = """\
 #!/usr/bin/env bash

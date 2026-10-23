@@ -3375,6 +3375,85 @@ async def test_sandbox_cancellation_triage_marker_stamps_delivery_done_for_senti
     assert marker["delivery_done"] is True
 
 
+async def test_sandbox_cancellation_triage_marker_lands_outside_the_attempt_key():
+    """FAR-2082: the kill's retention marker rides its OWN key.
+
+    Stored under the node's normal attempt key, a kill that produced nothing was
+    indistinguishable from work by row existence (and the triage write merged
+    into — so overwrote — the attempt's real marker). The key it is persisted
+    under must therefore be the cancellation-triage key, which is
+    DELIBERATELY UNPARSEABLE by the ``run:<uuid>:node:<id>:<suffix>`` grammar so
+    the row lands on the ``__unknown__`` bookkeeping sentinel id — the namespace
+    every existing zero-progress reader already excludes.
+
+    The marker PAYLOAD keeps the real ``node_id`` / ``attempt_key``: those are
+    the evidence-attribution fields the content-driven readers use
+    (``_marker_delivery_done_for_node`` matches ``:node:<node_id>:`` in
+    ``marker["attempt_key"]``; the triage projection and the log-correlation
+    reader read ``marker["node_id"]``).
+    """
+    fn = make_sandbox_agent_fn(_sandbox_node_def())
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=1))
+    sandbox.files.read = AsyncMock(return_value="")
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    async def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "_sandbox_cancel_retention_persist", new=AsyncMock(side_effect=_capture)),
+        patch.object(nr, "_read_log_tail_via_provider", new=AsyncMock(return_value="")),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+
+    triage_key = captured["attempt_key"]
+    from modulo.db.crud.run_node_outputs import UNKNOWN_NODE_ID, parse_marker_node_id
+
+    assert triage_key.startswith(f"cancel-triage:{_RUN_ID}:n1:")
+    # Unparseable by the marker grammar -> the __unknown__ sentinel node id.
+    assert parse_marker_node_id(triage_key) == UNKNOWN_NODE_ID
+
+    marker = captured["marker"]
+    assert marker["node_id"] == "n1"
+    assert marker["deadline_triage"] is True
+    assert marker["attempt_key"] != triage_key
+
+
+def test_cancel_triage_attempt_key_is_unique_per_node_and_attempt():
+    """FAR-2082: two nodes cancelled on the same claim count must not collide.
+
+    ``write_run_markers`` keys the merged marker dict by this string, so a
+    collision would silently drop one node's retained evidence.
+    """
+    key_a = nr._cancel_triage_attempt_key("run-1", "node-a", "run:run-1:node:node-a:3")
+    key_b = nr._cancel_triage_attempt_key("run-1", "node-b", "run:run-1:node:node-b:3")
+    same_node_next_attempt = nr._cancel_triage_attempt_key("run-1", "node-a", "run:run-1:node:node-a:4")
+
+    assert key_a != key_b
+    assert key_a != same_node_next_attempt
+    assert key_a == "cancel-triage:run-1:node-a:3"
+
+
+def test_cancel_triage_attempt_key_falls_back_when_caller_has_no_key():
+    """FAR-2082: a caller without an attempt key still gets a stable row key.
+
+    The fallback suffix mirrors the one ``_write_raw_output_marker`` uses, so a
+    kill observed before any attempt key exists is retained under a
+    deterministic, per-node bookkeeping key rather than colliding with another
+    node (or being written under an empty suffix).
+    """
+    assert nr._cancel_triage_attempt_key("run-1", "node-a", None) == "cancel-triage:run-1:node-a:fallback"
+    assert nr._cancel_triage_attempt_key("run-1", "node-a", "") == "cancel-triage:run-1:node-a:fallback"
+
+
 async def test_sandbox_cancellation_log_tail_fetch_failure_does_not_block_marker(caplog):
     """FAR-704: a failing log-tail probe degrades to an empty tail — the triage
     marker is still persisted, then the original cancellation re-raises."""

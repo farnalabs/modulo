@@ -139,6 +139,8 @@ def _make_run(
     r.snapshot_id = None
     # Masked input payload on the detail response (no sentinel MagicMock)
     r.input_payload = None
+    # FAR-2054 seam-coverage is nullable; pre-migration rows expose None.
+    r.seam_coverage_json = None
     return r
 
 
@@ -1125,6 +1127,121 @@ def test_run_response_guardrail_summary_malformed_is_none(client: TestClient) ->
 
     assert resp.status_code == 200
     assert resp.json()["guardrail_summary"] is None
+
+
+# FAR-2054 seam-coverage on the run-detail endpoint
+
+
+def test_run_response_populates_seam_coverage(client: TestClient) -> None:
+    """FAR-2054: the exhaustive per-seam list is surfaced on run detail."""
+    run = _make_run(status="complete")
+    run.seam_coverage_json = [
+        {
+            "seam": "ingestion_edge",
+            "state": "enforced",
+            "provenance": "attested",
+            "reason": "2 ingestion-edge guardrail(s) evaluated at run creation",
+        },
+        {
+            "seam": "node_output_edge",
+            "state": "enforced",
+            "provenance": "attested",
+            "reason": "1 node-output guardrail(s) bound at the node-output seam",
+        },
+        {
+            "seam": "runtime_loop",
+            "state": "not_applicable",
+            "provenance": "derived",
+            "reason": "runtime does not expose a tool-event contract Modulo can verify",
+        },
+    ]
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    coverage = body["seam_coverage"]
+    assert coverage is not None
+    assert [statement["seam"] for statement in coverage] == [
+        "ingestion_edge",
+        "node_output_edge",
+        "runtime_loop",
+    ]
+    assert coverage[0]["state"] == "enforced"
+    assert coverage[0]["provenance"] == "attested"
+    assert coverage[1]["state"] == "enforced"
+    assert coverage[1]["provenance"] == "attested"
+    assert coverage[2]["state"] == "not_applicable"
+    assert coverage[2]["provenance"] == "derived"
+    assert coverage[2]["reason"] == "runtime does not expose a tool-event contract Modulo can verify"
+
+
+def test_run_response_seam_coverage_none_when_absent(client: TestClient) -> None:
+    """Runs created before the column shipped expose None (no claim)."""
+    run = _make_run(status="complete")
+    run.seam_coverage_json = None
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["seam_coverage"] is None
+
+
+def test_run_response_seam_coverage_malformed_degrades_safely(client: TestClient) -> None:
+    """A corrupt persisted value degrades to explicit degraded/not_applicable
+    statements — never a crash, never an arbitrary string."""
+    run = _make_run(status="complete")
+    run.seam_coverage_json = {"not": "a list"}
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    coverage = resp.json()["seam_coverage"]
+    assert coverage is not None
+    assert [statement["seam"] for statement in coverage] == [
+        "ingestion_edge",
+        "node_output_edge",
+        "runtime_loop",
+    ]
+    assert all(statement["state"] != "enforced" for statement in coverage)
+    assert all(statement["reason"] for statement in coverage)
+
+
+def test_run_response_seam_coverage_runtime_loop_cannot_be_enforced(client: TestClient) -> None:
+    """Even if a persisted (or runtime-sourced) value claims the runtime loop
+    is enforced, the read path clamps it — no runtime event can attest a
+    Modulo-owned in-loop control in Alpha."""
+    run = _make_run(status="complete")
+    run.seam_coverage_json = [
+        {
+            "seam": "runtime_loop",
+            "state": "enforced",
+            "provenance": "attested",
+            "reason": "plugin claims enforcement",
+        }
+    ]
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    coverage = resp.json()["seam_coverage"]
+    assert coverage is not None
+    runtime_loop = next(statement for statement in coverage if statement["seam"] == "runtime_loop")
+    assert runtime_loop["state"] == "not_applicable"
+    assert runtime_loop["provenance"] == "derived"
+    assert runtime_loop["reason"] == "runtime does not expose a tool-event contract Modulo can verify"
 
 
 def test_run_response_gate_fired_true_on_idempotency_gate_code(client: TestClient) -> None:
@@ -3342,6 +3459,27 @@ def test_deadline_triage_from_markers_projects_signed_markers_only() -> None:
     assert entry["raw_output_tail"] == "partial output"
     assert entry["stdout_length"] == 14
     assert entry["delivery_done"] is False
+
+
+def test_deadline_triage_from_markers_prefers_payload_attempt_key() -> None:
+    """FAR-2082/2083: a cancellation-triage row's storage key is NOT the attempt key.
+
+    The triage marker is stored under ``cancel-triage:<run>:<node>:<suffix>`` so
+    it cannot be mistaken for the attempt's own progress row, while the payload
+    keeps the attempt that really ran. The projection renders these fields
+    verbatim (``RunDetailView`` shows ``attempt_key`` beside ``node_id``), so it
+    must report the REAL attempt key — otherwise a synthetic storage key sits
+    next to a genuine node id in the operator's triage panel.
+    """
+    real_key = "run:r1:node:n1:3"
+    storage_key = f"cancel-triage:r1:n1:{real_key.rsplit(':', 1)[-1]}"
+    markers = {storage_key: {"deadline_triage": True, "node_id": "n1", "attempt_key": real_key}}
+
+    entries = runs_module._deadline_triage_from_markers(markers)
+
+    assert len(entries) == 1
+    assert entries[0]["attempt_key"] == real_key
+    assert entries[0]["node_id"] == "n1"
 
 
 def test_deadline_triage_from_markers_truncates_long_tails() -> None:

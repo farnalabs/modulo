@@ -15,6 +15,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import harden_session_double
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/admin/email-settings.feature")
 
@@ -51,6 +53,7 @@ def _seed_session(ctx: dict[str, Any]) -> AsyncMock:
     from sqlalchemy.exc import ProgrammingError
 
     session = AsyncMock()
+    harden_session_double(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__.return_value = session
     begin_cm.__aexit__.return_value = None

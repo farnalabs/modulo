@@ -408,6 +408,31 @@ def test_map_lg_event_unknown_kind():
 
 
 # ---------------------------------------------------------------------------
+# _publish_mapped_stream_event
+# ---------------------------------------------------------------------------
+
+
+def test_publish_mapped_stream_event_fires_node_lifecycle_callbacks():
+    """Mapped node events invoke the wired start/completion callbacks and are
+    published on the broker (FAR-369 absolute node-deadline watchdog)."""
+    executor = PipelineExecutor(MagicMock())
+    started: list[str] = []
+    completed: list[str] = []
+    executor.on_node_started = started.append
+    executor.on_node_completed = completed.append
+    broker = MagicMock()
+    ctx = SimpleNamespace(broker=broker)
+
+    executor._publish_mapped_stream_event(("node_started", {"node_id": "node-a"}), _StreamState(), ctx)
+    executor._publish_mapped_stream_event(("node_completed", {"node_id": "node-a"}), _StreamState(), ctx)
+
+    assert started == ["node-a"]
+    assert completed == ["node-a"]
+    broker.publish.assert_any_call("node_started", {"node_id": "node-a"})
+    broker.publish.assert_any_call("node_completed", {"node_id": "node-a"})
+
+
+# ---------------------------------------------------------------------------
 # _streamed_interrupts
 # ---------------------------------------------------------------------------
 

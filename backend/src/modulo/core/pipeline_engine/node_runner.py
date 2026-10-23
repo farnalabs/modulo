@@ -7642,6 +7642,86 @@ async def _connector_invoke_phase(
         return False, failure
 
 
+async def _run_connector_node(
+    state: dict[str, Any],
+    *,
+    binding: dict[str, Any],
+    node_id: str,
+    connector_type: str,
+    allowed_connectors: list[str] | None,
+    op: str,
+    dispatch_action: str,
+    await_completion: bool,
+    dispatch_wait_seconds: float | None,
+    session_factory: Callable[..., Any] | None,
+) -> dict[str, Any]:
+    instance_id = _parse_uuid_opt(binding.get("instance_id"))
+    await _run_conformance_gate(
+        state,
+        node_id=node_id,
+        connector_instance_ids=_conformance_instance_ids(instance_id),
+    )
+
+    connector, error_artifact = _connector_resolve_or_error(binding, node_id, connector_type, allowed_connectors)
+    if error_artifact is not None:
+        return error_artifact
+
+    resource, filters, data = _connector_inputs(binding, state)
+    suppress_envelope: dict[str, Any] | None = None
+    intent_active = False
+    if op == "write":
+        suppress_envelope, intent_active = await _connector_write_gate_phase(
+            state, session_factory, node_id, connector, resource, filters, data
+        )
+    if suppress_envelope is not None:
+        return suppress_envelope
+
+    ok, result = await _connector_invoke_phase(
+        connector,
+        op,
+        resource,
+        filters,
+        data,
+        dispatch_action=dispatch_action,
+        await_completion=await_completion,
+        dispatch_wait_seconds=dispatch_wait_seconds,
+        session_factory=session_factory,
+        state=state,
+        node_id=node_id,
+        intent_active=intent_active,
+    )
+    if not ok:
+        return cast(dict[str, Any], result)
+
+    if op == "dispatch":
+        result = _stamp_dispatch_provenance(result, str(instance_id) if instance_id is not None else "")
+
+    success_block = await _connector_success_phase(
+        session_factory,
+        connector,
+        state,
+        node_id,
+        op,
+        resource,
+        filters,
+        data,
+        intent_active,
+        result,
+    )
+    if success_block is not None:
+        return success_block
+
+    if op == "dispatch" and dispatch_action == "trigger_run":
+        failed_envelope = _dispatch_trigger_failure_envelope(node_id, result)
+        if failed_envelope is not None:
+            return failed_envelope
+
+    return {
+        "artifacts": [{"node_id": node_id, "status": "completed", "output": result}],
+        "output": result,
+    }
+
+
 def make_connector_fn(
     node_def: dict[str, Any],
     *,
@@ -7744,82 +7824,18 @@ def make_connector_fn(
 
     @cancellable_node(timeout=timeout)
     async def _connector_node(state: dict[str, Any]) -> dict[str, Any]:
-        # FAR-215: mid-run capability re-check at node start (block -> HITL).
-        # The gate raises a LangGraph interrupt on block; control only reaches
-        # the node body when the node may proceed.
-        instance_id = _parse_uuid_opt(binding.get("instance_id"))
-        await _run_conformance_gate(
+        return await _run_connector_node(
             state,
+            binding=binding,
             node_id=node_id,
-            connector_instance_ids=_conformance_instance_ids(instance_id),
-        )
-
-        connector, error_artifact = _connector_resolve_or_error(binding, node_id, connector_type, allowed_connectors)
-        if error_artifact is not None:
-            return error_artifact
-
-        resource, filters, data = _connector_inputs(binding, state)
-
-        # FAR-458 connector-write UNKNOWN-recovery: the read-before-write dedupe
-        # decision point (gate + FAR-531 intent marker), extracted to
-        # ``_connector_write_gate_phase``. Only a WRITE is side-effecting.
-        suppress_envelope: dict[str, Any] | None = None
-        intent_active = False
-        if op == "write":
-            suppress_envelope, intent_active = await _connector_write_gate_phase(
-                state, session_factory, node_id, connector, resource, filters, data
-            )
-        if suppress_envelope is not None:
-            return suppress_envelope
-
-        ok, result = await _connector_invoke_phase(
-            connector,
-            op,
-            resource,
-            filters,
-            data,
+            connector_type=connector_type,
+            allowed_connectors=allowed_connectors,
+            op=op,
             dispatch_action=dispatch_action,
             await_completion=await_completion,
             dispatch_wait_seconds=dispatch_wait_seconds,
             session_factory=session_factory,
-            state=state,
-            node_id=node_id,
-            intent_active=intent_active,
         )
-        if not ok:
-            # ``_connector_invoke_phase`` returns the failure envelope here.
-            return cast(dict[str, Any], result)
-
-        if op == "dispatch":
-            # FAR-1141: every successful dispatch result is stamped as WITNESSED
-            # external state (not an executed node) BEFORE the secret guard, so
-            # the guard inspects exactly what enters run state.
-            result = _stamp_dispatch_provenance(result, str(instance_id) if instance_id is not None else "")
-
-        success_block = await _connector_success_phase(
-            session_factory,
-            connector,
-            state,
-            node_id,
-            op,
-            resource,
-            filters,
-            data,
-            intent_active,
-            result,
-        )
-        if success_block is not None:
-            return success_block
-
-        if op == "dispatch" and dispatch_action == "trigger_run":
-            failed_envelope = _dispatch_trigger_failure_envelope(node_id, result)
-            if failed_envelope is not None:
-                return failed_envelope
-
-        return {
-            "artifacts": [{"node_id": node_id, "status": "completed", "output": result}],
-            "output": result,
-        }
 
     _connector_node.__name__ = f"connector_{node_id}"
     return _connector_node
@@ -12964,7 +12980,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     run_id=run_id,
                     org_id=org_id,
                     node_id=node_id,
-                    attempt_key=attempt_key,
+                    # FAR-2082: the kill's evidence is stored under its OWN key,
+                    # never the node's normal attempt key — a kill that produced
+                    # nothing must not look like work by row existence, and it
+                    # must not overwrite the attempt's real marker. The marker
+                    # payload keeps the real attempt_key/node_id (evidence
+                    # attribution); only the ROW identity moves.
+                    attempt_key=_cancel_triage_attempt_key(run_id, node_id, attempt_key),
                     marker=_cancel_marker,
                 )
             # Nested cancellation here is deliberate — idempotency-gate cleanup
@@ -13304,6 +13326,56 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         # the caller still sees a cancelled task rather than a swallowed one.
         if _gh_settle_cancelled is not None:
             raise _gh_settle_cancelled
+
+
+# FAR-2082: the cancellation-retention marker gets its OWN attempt-key identity.
+#
+# A node-deadline kill writes the FAR-704 triage marker from inside the
+# CancelledError handler. Storing it under the node's NORMAL attempt key
+# (``run:<run>:node:<node>:<claim_count>``) made "this attempt wrote a marker
+# row" and "this attempt produced something" the same observation: a kill that
+# produced nothing was indistinguishable from work by row existence, and the
+# triage write also merged into (and so overwrote) the attempt's real marker.
+#
+# The key is DELIBERATELY UNPARSEABLE by the ``run:<uuid>:node:<id>:<suffix>``
+# grammar, exactly like the run-level ``terminal-triage:`` / ``redispatch-triage:``
+# keys in ``cron_helpers``. That is load-bearing, not cosmetic:
+#   * it derives the ``__unknown__`` sentinel node id (an ALLOWED ``__``
+#     bookkeeping row — FAR-188 preserves the full key as evidence), so every
+#     existing reader that already excludes the reserved
+#     ``SENTINEL_NODE_ID_PREFIX`` namespace treats the row as bookkeeping rather
+#     than node progress, with NO new exclusion rule anywhere;
+#   * a PARSEABLE key deriving a new ``__cancel_triage__`` node id would be
+#     REJECTED by ``run_node_outputs._validate_sentinel_keys`` (qa M19b:
+#     sentinel squatting via the grammar), so the unparseable shape is also the
+#     only sentinel-namespace attribution the write path permits.
+#
+# The NODE ID and the attempt's own suffix both ride in the key, so it stays
+# unique per (node, attempt): two nodes in one run cancelled on the same claim
+# count must not collide (``write_run_markers`` keys the merged dict by this
+# string, so a collision would silently drop one node's evidence). The marker
+# PAYLOAD keeps the REAL ``node_id`` / ``attempt_key`` fields — the evidence
+# attribution every content-driven reader uses (``_marker_delivery_done_for_node``
+# matches ``:node:<node_id>:`` in ``marker["attempt_key"]``; the FAR-704 triage
+# projection and the log-correlation reader both read ``marker["node_id"]``),
+# so moving the ROW's identity does not move the delivery/triage attribution.
+_CANCEL_TRIAGE_ATTEMPT_KEY_PREFIX = "cancel-triage:"
+# Used when the caller had no attempt key (the same ``fallback`` suffix
+# ``_write_raw_output_marker`` falls back to).
+_CANCEL_TRIAGE_SUFFIX_FALLBACK = "fallback"
+
+
+def _cancel_triage_attempt_key(run_id: str, node_id: str, attempt_key: str | None) -> str:
+    """The dedicated retention-store key for a cancellation-triage marker.
+
+    See the block comment above: unparseable by the marker grammar (so the row
+    lands on the ``__unknown__`` bookkeeping sentinel) and unique per
+    ``(node, attempt)`` so two cancelled nodes never share a key.
+    """
+    suffix = attempt_key.rsplit(":", 1)[-1] if attempt_key else ""
+    if not suffix:
+        suffix = _CANCEL_TRIAGE_SUFFIX_FALLBACK
+    return f"{_CANCEL_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}:{node_id}:{suffix}"
 
 
 async def _sandbox_cancel_retention_persist(

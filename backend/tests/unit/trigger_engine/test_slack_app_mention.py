@@ -36,6 +36,7 @@ from modulo.core.trigger_engine.slack_app_mention import (
     verify_slack_signature,
     verify_slack_timestamp,
 )
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _SNAP = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -274,7 +275,7 @@ def _make_session(
     pipeline_rate_limit: dict[str, Any] | None = None,
     recent_run_count: int = 0,
 ) -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     lock_result = MagicMock()
     lock_result.scalar_one.return_value = True
     trigger_result = MagicMock()
@@ -627,7 +628,7 @@ async def test_handle_app_mention_busy_lock_raises() -> None:
 
 
 def _plain_session_mock() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.in_transaction = MagicMock(return_value=True)
     session.info = {}
     return session

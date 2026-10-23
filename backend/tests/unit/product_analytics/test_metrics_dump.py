@@ -41,6 +41,7 @@ from modulo.core.product_analytics.vendor_client import (
     VendorClient,
     sign_outbound_batch,
 )
+from tests.unit.api.mock_session import configure_mock_session
 
 
 @pytest.fixture(autouse=True)
@@ -146,7 +147,7 @@ class TestGetConsentingOrgs:
 
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         result = await _get_consenting_orgs(mock_session, enforcement_active=False)
@@ -158,7 +159,7 @@ class TestGetConsentingOrgs:
     async def test_empty_when_no_orgs(self) -> None:
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter([]))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         result = await _get_consenting_orgs(mock_session, enforcement_active=False)
@@ -174,7 +175,7 @@ class TestGetConsentingOrgs:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         result = await _get_consenting_orgs(mock_session, enforcement_active=False)
@@ -200,7 +201,7 @@ class TestGetConsentingOrgs:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         result = await _get_consenting_orgs(mock_session, enforcement_active=False)
@@ -216,7 +217,7 @@ class TestGetConsentingOrgs:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         result = await _get_consenting_orgs(mock_session, enforcement_active=False)
@@ -233,7 +234,7 @@ class TestGetConsentingOrgs:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         result = await _get_consenting_orgs(mock_session, enforcement_active=False)
@@ -260,7 +261,7 @@ class TestGetConsentingOrgsLicenseEnforcement:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         with patch(
@@ -280,7 +281,7 @@ class TestGetConsentingOrgsLicenseEnforcement:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         with patch(
@@ -301,7 +302,7 @@ class TestGetConsentingOrgsLicenseEnforcement:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         with patch(
@@ -977,7 +978,7 @@ class TestResolveStartDate:
         )
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter([row]))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
         orgs = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert orgs[0]["level_changed_at"] == date(2026, 8, 1)
@@ -1290,7 +1291,6 @@ class TestBuildPayload:
             ),
             patch(
                 "modulo.core.product_analytics.metrics_dump._build_instance_metadata",
-                new_callable=AsyncMock,
                 return_value={"version": "1.0.0"},
             ),
         ):
@@ -1786,7 +1786,7 @@ class TestGetConsentingOrgsExtended:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
         result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert result == []
@@ -1803,7 +1803,7 @@ class TestGetConsentingOrgsExtended:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
         result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert len(result) == 1
@@ -1816,7 +1816,7 @@ class TestGetConsentingOrgsExtended:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
         result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert result == []
@@ -1831,7 +1831,7 @@ class TestGetConsentingOrgsExtended:
         ]
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
         result = await _get_consenting_orgs(mock_session, enforcement_active=False)
         assert len(result) == 1
@@ -1858,7 +1858,7 @@ class TestCountEntities:
             r.scalar_one.return_value = count_val
             return r
 
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
 
         async def _execute(stmt, *args, **kwargs):
             idx = call_idx["n"]
@@ -1891,7 +1891,7 @@ class TestAggregateRunStats:
         from modulo.core.product_analytics.metrics_dump import _aggregate_run_stats
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         row = MagicMock()
         row.total_runs = 10
         row.complete = 7
@@ -1920,7 +1920,7 @@ class TestAggregateRunStats:
         from modulo.core.product_analytics.metrics_dump import _aggregate_run_stats
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         row = MagicMock()
         row.total_runs = None
         row.complete = None
@@ -1950,7 +1950,7 @@ class TestAggregateErrorStats:
         from modulo.core.product_analytics.metrics_dump import _aggregate_error_stats
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
 
         row1 = MagicMock()
         row1.level_peak = "error"
@@ -1975,7 +1975,7 @@ class TestAggregateErrorStats:
         from modulo.core.product_analytics.metrics_dump import _aggregate_error_stats
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
 
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter([]))
@@ -1997,7 +1997,7 @@ class TestBuildIntegrationInventory:
         from modulo.core.product_analytics.metrics_dump import _build_integration_inventory
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
 
         call_count = {"n": 0}
 
@@ -2039,7 +2039,7 @@ class TestBuildIntegrationInventory:
         from modulo.core.product_analytics.metrics_dump import _build_integration_inventory
 
         org_ids = [uuid.UUID("11111111-1111-1111-1111-111111111111")]
-        mock_session = AsyncMock()
+        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
 
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter([]))

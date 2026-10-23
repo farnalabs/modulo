@@ -81,7 +81,7 @@
             </Button>
           </div>
         </div>
-        <div v-if="inferError" class="mt-3 text-sm text-destructive">{{ inferError }}</div>
+        <ErrorAlert v-if="inferError" compact class="mt-3" :message="inferError" :on-retry="inferSchema" />
       </section>
 
       <section v-if="draftSchema" class="rounded-lg border bg-card p-6 shadow-sm">
@@ -130,7 +130,7 @@
         <div class="mb-4">
           <button type="button"
             data-testid="schema-inference-toggle-raw-json"
-            class="flex items-center gap-1 text-sm text-primary-text hover:underline"
+            class="flex items-center gap-1 rounded-sm text-sm text-primary-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             :aria-expanded="showRawJson"
             aria-controls="schema-inference-raw-json"
             @click="showRawJson = !showRawJson"
@@ -153,13 +153,13 @@
           </Button>
           <button type="button"
             data-testid="schema-inference-discard"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @click="resetForm"
           >
             {{ $t('views.SchemaInferenceView.discard') }}
           </button>
         </div>
-        <div v-if="publishError" class="mt-3 text-sm text-destructive">{{ publishError }}</div>
+        <ErrorAlert v-if="publishError" compact class="mt-3" :message="publishError" />
         <div v-if="publishSuccess" class="mt-3 text-sm text-success-text">{{ publishSuccess }}</div>
       </section>
     </template>

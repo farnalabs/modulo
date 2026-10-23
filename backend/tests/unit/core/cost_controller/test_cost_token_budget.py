@@ -20,6 +20,7 @@ from modulo.core.cost_controller.finalize import (
     _enforce_agent_token_budgets,
     derive_node_agent_map,
 )
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -100,7 +101,7 @@ def _mock_run() -> MagicMock:
 
 
 def _mock_session(graph_json: dict[str, Any], agent_rows: list[tuple[Any, int | None]]) -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     graph_result = MagicMock()
     graph_result.scalar_one_or_none.return_value = graph_json
     agent_result = MagicMock()
@@ -173,7 +174,7 @@ async def test_enforce_no_agent_nodes_returns_none() -> None:
 async def test_enforce_check_failure_is_fail_open() -> None:
     """A budget-check DB failure degrades to NO override (never-fail envelope)."""
     run = _mock_run()
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(side_effect=RuntimeError("db down"))
     override = await _enforce_agent_token_budgets(
         session,
@@ -285,7 +286,7 @@ async def test_finalize_cost_budget_exceeded_overrides_terminal_write() -> None:
     run.ledger_refused_at = None
     run.cancellation_requested = False
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
 
     with (

@@ -32,6 +32,7 @@ from modulo.api.mcp_server import (
     list_housekeeping,
     perform_housekeeping,
 )
+from tests.unit.api.mock_session import make_session_scope
 from tests.unit.mcp.helpers import AuthContext, make_session_context
 
 _SYS_ADMIN_DETAIL = "{tool} requires system admin role"
@@ -89,7 +90,7 @@ class TestGetOrgConfigSystemAdminParity(_ParityAuthContext):
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         with (
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(AsyncMock())),
+            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
             patch("modulo.db.crud.system_config.list_config", new=AsyncMock(return_value=[])),
         ):
             result = await get_org_config()
@@ -153,7 +154,7 @@ class TestListFeatureFlagsSystemAdminParity(_ParityAuthContext):
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         with (
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(AsyncMock())),
+            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
             patch("modulo.db.crud.organisation.get_organisation", new=AsyncMock(return_value=org)),
             patch("modulo.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan_ctx)),
             patch(
@@ -203,7 +204,7 @@ class TestListHousekeepingSystemAdminParity(_ParityAuthContext):
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
         with (
-            patch("modulo.api.mcp_server._session", return_value=make_session_context(AsyncMock())),
+            patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())),
             patch("modulo.core.housekeeping.scan_all", new=AsyncMock(return_value=[])),
         ):
             result = await list_housekeeping()
@@ -244,7 +245,7 @@ class TestPerformHousekeepingSystemAdminParity(_ParityAuthContext):
 
         _ctx_role.set("admin")
         _ctx_is_system_admin.set(True)
-        with patch("modulo.api.mcp_server._session", return_value=make_session_context(AsyncMock())):
+        with patch("modulo.api.mcp_server._session", return_value=make_session_context(make_session_scope())):
             result = await perform_housekeeping(items=[])
 
         assert result == {"deleted_count": 0, "errors": []}

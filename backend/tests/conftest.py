@@ -50,11 +50,81 @@ os.environ.setdefault("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 # rollback block, so their import is deleted again. Guarded by
 # ``tests/unit/library_sync/test_coverage_source_import_guard.py``.
 import sys
+import warnings
+from pathlib import Path
 
 import pydantic.root_model  # noqa: F401
 import pytest
 
 import modulo.core.ssrf as _ssrf
+
+#: The warning class the audited suites must treat as a HARD ERROR. Kept as the
+#: pytest ``-W`` spelling so every CI command that runs a gated suite can carry
+#: the byte-identical string - the architecture guard compares them.
+UNRAISABLE_ESCALATION = "error::pytest.PytestUnraisableExceptionWarning"
+
+#: Test trees AUDITED for leaked never-awaited coroutines / unclosed resources
+#: and confirmed clean under the escalation. Only these are gated; every other
+#: tree has NOT been audited to green, so a mixed ``pytest tests/`` run must not
+#: silently apply the escalation to it. Still excluded:
+#:
+#: - ``conformance`` - the runtime-provider suite needs a live Kubernetes
+#:   cluster (deselected by default; nothing to run here);
+#: - ``docker`` - two pre-existing failures on main (a stop-vs-remove
+#:   expectation and a ``select(distinct(...))`` SAWarning escalated by the
+#:   ``error::RuntimeWarning`` ini rule), so the tree cannot reach green;
+#: - ``load`` / ``determination`` - no test modules exist (``load`` holds only
+#:   locust/support files; ``determination`` holds only fixture data).
+#:
+#: The hook lives HERE (the root conftest) rather than in a suite conftest
+#: because pytest only loads a directory's conftest when that directory is on
+#: the collection path: ``tests/unit/conftest.py`` is never imported by a
+#: ``pytest tests/integration`` or ``pytest tests/bdd`` run, so a hook there
+#: cannot gate those suites.
+GATED_SUITE_ROOTS: tuple[str, ...] = ("unit", "integration", "bdd", "architecture", "connectors")
+
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+_TESTS_ROOT = _BACKEND_ROOT / "tests"
+
+
+def _gated_item(item: pytest.Item) -> bool:
+    """True when *item* belongs to one of the audited suites in ``GATED_SUITE_ROOTS``.
+
+    A leaked never-awaited coroutine only surfaces at garbage collection as
+    ``PytestUnraisableExceptionWarning``. Left at its default action it floods
+    the terminal with multi-line summaries, and a large enough summary can wedge
+    pytest's terminal writer with ``BlockingIOError: [Errno 11] write could not
+    complete without blocking`` - the 2026-10-21 merge-queue outage. Escalating
+    the class to ``error`` surfaces the leak on the test that emits it.
+    """
+    path = getattr(item, "path", None)
+    if path is None:  # pytest < 7 fallback
+        path = item.fspath
+    resolved = Path(str(path)).resolve()
+    return any(resolved.is_relative_to(_TESTS_ROOT / suite) for suite in GATED_SUITE_ROOTS)
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Make any leaked-resource warning fail the test that emits it.
+
+    This is a ``pytest_runtest_setup`` hook rather than ``pytest_configure``
+    deliberately. pytest's warnings plugin re-applies the ini/cmdline
+    ``filterwarnings`` list around EVERY item (``catch_warnings_for_item``),
+    AFTER ``pytest_configure`` has run - so a filter installed at configure
+    time is overridden by the project-wide
+    ``default::pytest.PytestUnraisableExceptionWarning`` entry and the class is
+    merely printed. This hook runs inside that per-item context, so the
+    ``error`` filter is the first match. pytest restores the filters at item
+    teardown, keeping the scope to gated suites in a mixed run.
+
+    Pinned by ``tests/architecture/test_unit_unraisable_warning_gate.py`` -
+    that architecture test fails if this hook is removed, if a suite is wrongly
+    added to or dropped from ``GATED_SUITE_ROOTS``, or if the matching ``-W``
+    flag is dropped from any CI command that runs a gated suite.
+    """
+    if _gated_item(item):
+        warnings.filterwarnings("error", category=pytest.PytestUnraisableExceptionWarning)
+
 
 #: The module whose ``_verify_identity`` the FAR-1631 leak guard protects.
 _AUTH_DEPS_MODULE = "modulo.auth.dependencies"
@@ -292,3 +362,73 @@ def _allow_test_hostnames(request: pytest.FixtureRequest, monkeypatch: pytest.Mo
 
 
 pytest_plugins = ["tests.quarantine_plugin"]
+
+
+# ---------------------------------------------------------------------------
+# POSIX-only suites: the SINGLE platform gate (FAR-2070)
+# ---------------------------------------------------------------------------
+#
+# A few modules execute a SHIPPED shell artefact (``scripts/dispatch_with_retry.sh``,
+# and a CI workflow step's real ``run:`` block) in a subprocess with stubbed
+# ``curl`` / ``gh`` / ``sleep`` binaries placed first on ``PATH``. Those modules
+# need a genuinely POSIX execution environment:
+#
+# * **Executable-bit semantics.** The stubs are shell scripts made runnable with
+#   ``Path.chmod(0o755)`` and resolved through their ``#!/usr/bin/env bash``
+#   shebang. A POSIX filesystem honours the mode bits; MSYS/Git-Bash on Windows
+#   does not, so a stub that is not really executable resolves to a different
+#   binary (or nothing) and the test stops exercising the script under test -
+#   a pass for the wrong reason.
+# * **A ``PATH`` the shell can read.** The modules build ``PATH`` as
+#   ``f"{stub_dir}{os.pathsep}{existing}"`` from a Windows ``tmp_path`` such as
+#   ``C:\Users\...\stubs``. Under MSYS bash the colon inside ``C:`` splits the
+#   entry; under WSL bash - which is what ``bash`` on ``PATH`` actually resolves
+#   to on this project's Windows hosts (``C:\Windows\System32\bash.exe``) - a
+#   Windows path does not exist at all. Either way the stubs are never found.
+# * **``jq``.** ``dispatch_with_retry.sh`` parses the webhook response with
+#   ``jq``. Supplying a fake ``jq`` stub to make the suite "run" on Windows
+#   would fake a real production dependency and weaken the assertions, so it is
+#   deliberately not done.
+#
+# Mark such a module ``pytest.mark.posix_only`` (module-level
+# ``pytestmark = pytest.mark.posix_only``). This hook - the ONE definition of
+# the gate - skips it on Windows and does nothing on any other platform, so
+# Linux CI and POSIX dev machines still execute it for real. Declaring the
+# requirement once here, instead of repeating a
+# ``pytest.mark.skipif(sys.platform == "win32", ...)`` in every affected
+# module, keeps it discoverable (``pytest --markers`` lists ``posix_only``,
+# registered in ``backend/pyproject.toml``) and keeps the modules free of
+# ad-hoc test disables.
+#
+# The pre-commit "run tests for changed test files" hook
+# (``scripts/run_changed_tests.py``) needs no special-casing: a skipped test is
+# not a failure, so committing a change to a ``posix_only`` module on Windows
+# passes the hook while Linux CI still runs the real assertions.
+#
+# Running these suites on Windows: use a POSIX host - Linux CI, the dev-1
+# Linux box, or WSL with ``jq`` installed (invoke pytest from inside the WSL
+# filesystem so ``tmp_path`` is a POSIX path). There is no Windows override,
+# because none of the three requirements above can be satisfied there.
+
+POSIX_ONLY_MARKER = "posix_only"
+
+POSIX_ONLY_SKIP_REASON = (
+    f"{POSIX_ONLY_MARKER}: requires a POSIX shell (executable-bit semantics and a POSIX PATH) and jq; "
+    "skipped on Windows - runs for real on Linux CI"
+)
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip ``posix_only`` suites on Windows - the single platform gate.
+
+    Additive to the other ``pytest_collection_modifyitems`` implementations (the
+    quarantine plugin registers its own); pytest calls every registered hook.
+    See the block comment above for why the platform requirement is real and why
+    it is declared exactly once, here, rather than per module.
+    """
+    if sys.platform != "win32":
+        return
+    skip = pytest.mark.skip(reason=POSIX_ONLY_SKIP_REASON)
+    for item in items:
+        if item.get_closest_marker(POSIX_ONLY_MARKER) is not None:
+            item.add_marker(skip)

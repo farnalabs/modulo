@@ -36,9 +36,13 @@ Deliberate deviations from the ``RunEvidence`` precedent:
   ``nodes`` — legacy dict keys are arbitrary strings (they may contain
   colons, unicode, or predate the nodes table), so an FK is impossible.
 * ``created_at``/``updated_at`` (``TimestampMixin``) are added: marker rows
-  arrive mid-run (distinct write instants) and the marker write path
-  stamps ``updated_at`` on every merge (seed_demo + the retention purge also
-  inspect the write instants). ``RunEvidence`` has
+  arrive mid-run at distinct write instants, so a row records both when it was
+  inserted and when its own value last changed. ``updated_at`` is PER-ROW
+  (FAR-2083): a write moves it only for a row whose own value actually changed,
+  never for a sibling row re-sent unchanged. No reader currently consumes
+  ``updated_at`` on this table — it is the row's own provenance, not an input
+  to any query (``seed_demo`` and the retention purge read the payloads, never
+  the write instants). ``RunEvidence`` has
   a single ``evidence_written_at`` because it is written once, post-commit.
 * ``raw_output_markers`` is typed loosely (``Any``): marker payloads are
   JSON-serialisable values (dicts today, strings historically).

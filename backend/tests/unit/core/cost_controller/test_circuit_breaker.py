@@ -17,6 +17,7 @@ from modulo.core.cost_controller import (
     sum_pipeline_monthly_spend,
     trip_pipeline_circuit_breaker,
 )
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE_ID = uuid.UUID("20000000-0000-0000-0000-000000000001")
@@ -25,7 +26,7 @@ _RUN_ID = uuid.UUID("30000000-0000-0000-0000-000000000001")
 
 @pytest.fixture
 def mock_session() -> AsyncMock:
-    s = AsyncMock()
+    s = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     s.add = MagicMock()
     return s
 

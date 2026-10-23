@@ -6,7 +6,17 @@ module. It provides:
 * dialect-guarded upserts (Postgres/SQLite ``ON CONFLICT``; MariaDB explicitly
   guarded out — no ``on_conflict`` support and deprecated) with an explicit
   ``updated_at = current_timestamp()`` in ``set_`` (the ``system_config``
-  precedent: ``TimestampMixin.onupdate`` does not fire for Core upserts);
+  precedent: ``TimestampMixin.onupdate`` does not fire for Core upserts). The
+  stamp is PER-ROW (FAR-2083): the ``DO UPDATE`` carries a ``WHERE`` that
+  restricts it to a row whose own written value actually changed, so a write
+  that re-sends an unchanged value never refreshes a sibling row's
+  ``updated_at`` — one attempt's write no longer re-dates every earlier
+  attempt's marker row. The guard sits on all five writers of the table (the
+  three in this module plus the two direct ``__mwi_audit__`` writers in
+  ``core/pipeline_engine/workspace_input_audit.py``) and compares every JSON
+  side as TEXT: ``schema_enforcement_json`` is plain ``json`` on Postgres,
+  which defines no ``=`` operator, so an uncast ``IS DISTINCT FROM`` is a
+  parse-time error there (see ``_row_changed_predicate``);
 * the PRIMARY-write helpers the store chokepoints call
   (``replace_run_node_outputs`` / ``write_run_markers``) — upsert + delete-
   absent, delete-absent ordered AFTER upserts, metadata flags re-derived from
@@ -77,12 +87,15 @@ from sqlalchemy import (
     DateTime,
     MetaData,
     Table,
+    Text,
     Uuid,
     and_,
     cast,
     delete,
+    false,
     func,
     null,
+    or_,
     select,
     update,
 )
@@ -502,6 +515,83 @@ def _row_update_payload(row: NodeOutputWrite, *, run_id: uuid.UUID) -> dict[str,
     return item
 
 
+def _row_changed_predicate(stmt: Any, columns: Sequence[Any]) -> Any:
+    """``ON CONFLICT ... DO UPDATE WHERE``: rewrite ONLY a row whose value changed.
+
+    FAR-2083 — per-row provenance. ``run_node_outputs.updated_at`` records when
+    THIS row's value last changed, never when any sibling row in the same run
+    was written. Without this guard every upsert re-stamps ``updated_at`` on
+    every conflicting row, so one write by the current attempt refreshed every
+    earlier attempt's marker row (``write_run_markers`` always upserts the whole
+    merged marker dict) — an attempt-1 row aged to 2020 was rewritten to "now"
+    by a single later call.
+
+    No production reader consumes ``RunNodeOutput.updated_at`` (verified across
+    ``src/``: the column is written here and read nowhere — the
+    ``COALESCE(completed_at, updated_at)`` in migration 0192 is the ``runs``
+    alias ``r``, a different table), so there is nothing that depends on the
+    old run-wide "everything restamped" behaviour. Per-row provenance is
+    therefore the intended semantics: the row's own change is the only event
+    that moves its stamp.
+
+    ``IS DISTINCT FROM`` is the null-safe comparison (a NULL side vs a written
+    value is a change, and NULL vs NULL is not). Every compared column is cast
+    to TEXT on BOTH sides, which is load bearing, not cosmetic: ``IS DISTINCT
+    FROM`` resolves through the type's ``=`` operator and Postgres defines no
+    ``=`` for ``json`` (only for ``jsonb``). This table carries BOTH flavours —
+    ``outputs_json`` / ``node_telemetry_json`` / ``raw_output_markers`` /
+    ``artifacts_json`` are ``jsonb`` on Postgres (0192/0220), but
+    ``schema_enforcement_json`` is plain ``json`` (0251) — so an uncast
+    comparison raises ``operator does not exist: json = json`` at PARSE time on
+    Postgres. That failure is not confined to a conflicting row: EVERY upsert
+    of a row carrying that column fails, and the callers treat the write as
+    best-effort, so the telemetry would silently stop. ``CAST(... AS TEXT)`` is
+    valid on Postgres (``json::text`` / ``jsonb::text``) and on SQLite, so both
+    dialects compare identically.
+
+    Casting a ``jsonb`` side loses nothing: jsonb is a normalised storage
+    format, so ``jsonb::text`` is canonical (object keys sorted, whitespace
+    fixed) and two structurally equal jsonb values always render the same text.
+    A ``json`` side renders the bytes as stored, so two semantically equal
+    documents differing only in whitespace/key order read as changed — the
+    conservative direction: it re-stamps a row (harmless) and never skips a
+    write that would have changed data.
+
+    Returns the predicate to pass as ``where=``; *columns* is the set of
+    written columns, so a writer only compares what it is actually setting.
+    """
+    comparisons = [
+        cast(getattr(stmt.excluded, column), Text).is_distinct_from(cast(getattr(RunNodeOutput, column), Text))
+        for column in columns
+    ]
+    if not comparisons:
+        # No payload column is being written: nothing can have changed, so the
+        # conflict is a no-op (the row keeps its value AND its stamp).
+        return false()
+    if len(comparisons) == 1:
+        return comparisons[0]
+    return or_(*comparisons)
+
+
+def _targeted_upsert_stmt(insert_factory: Any, values: dict[str, Any], column: str) -> Any:
+    """INSERT ... ON CONFLICT DO UPDATE for ONE payload column.
+
+    Shared by :func:`persist_artifact_pointers` (``artifacts_json``) and
+    :func:`persist_schema_enforcement_record` (``schema_enforcement_json``),
+    which differ only in the column they write. Hoisted so the Postgres-dialect
+    compile test exercises the statement the writers actually execute rather
+    than a hand-built twin — the ``schema_enforcement_json`` column is plain
+    ``json`` on Postgres, where an uncast ``IS DISTINCT FROM`` is a parse-time
+    error that no SQLite-backed test can see (:func:`_row_changed_predicate`).
+    """
+    stmt = insert_factory(RunNodeOutput).values(**values)
+    return stmt.on_conflict_do_update(
+        index_elements=["run_id", "node_id", "attempt_key"],
+        set_={"updated_at": func.current_timestamp(), column: getattr(stmt.excluded, column)},
+        where=_row_changed_predicate(stmt, (column,)),
+    )
+
+
 def _upsert_group_stmt(
     insert_factory: Any,
     *,
@@ -516,6 +606,13 @@ def _upsert_group_stmt(
     them per row) and — unless *ignore_conflicts* — overwritten from
     ``excluded`` on conflict with ``updated_at`` stamped explicitly
     (TimestampMixin.onupdate never fires for Core upserts).
+
+    FAR-2083: the ``DO UPDATE`` carries a ``WHERE`` restricting it to rows whose
+    OWN written side actually changed (:func:`_row_changed_predicate`), so a
+    writer that re-sends an unchanged value (``write_run_markers`` always
+    re-sends the whole merged marker dict) leaves every other row's
+    ``updated_at`` alone. An unchanged row is skipped, never deleted: the
+    INSERT still happens for a new row.
     """
     values: dict[str, Any] = {"run_id": run_id, "organisation_id": organisation_id}
     for present, column in zip(signature, _SIDE_COLUMNS, strict=True):
@@ -525,10 +622,16 @@ def _upsert_group_stmt(
     if ignore_conflicts:
         return stmt.on_conflict_do_nothing(index_elements=["run_id", "node_id", "attempt_key"])
     set_: dict[str, Any] = {"updated_at": func.current_timestamp()}
+    written: list[str] = []
     for present, column in zip(signature, _SIDE_COLUMNS, strict=True):
         if present:
             set_[column] = getattr(stmt.excluded, column)
-    return stmt.on_conflict_do_update(index_elements=["run_id", "node_id", "attempt_key"], set_=set_)
+            written.append(column)
+    return stmt.on_conflict_do_update(
+        index_elements=["run_id", "node_id", "attempt_key"],
+        set_=set_,
+        where=_row_changed_predicate(stmt, written),
+    )
 
 
 async def upsert_rows(
@@ -545,7 +648,9 @@ async def upsert_rows(
     single uniform column set (executemany requires homogeneous params). On
     conflict the present sides are overwritten from ``excluded`` and
     ``updated_at`` is stamped explicitly (TimestampMixin.onupdate never fires
-    for Core upserts).
+    for Core upserts) — but ONLY for a row whose own value changed (FAR-2083,
+    :func:`_row_changed_predicate`): an unchanged row keeps its value and its
+    stamp, so re-sending a whole merged dict never re-dates earlier rows.
 
     FAR-1654: every JSONB side is sanitised through
     :func:`_sanitise_jsonb_for_store` HERE, at the shared upsert choke point,
@@ -1216,6 +1321,10 @@ async def persist_artifact_pointers(
     When *pointers* is empty the column is set to NULL (signal that the node
     ran but produced no meaningful artifact data).
 
+    FAR-2083: the same per-row provenance rule as :func:`upsert_rows` — the
+    ``DO UPDATE`` is skipped when the stored pointer list already equals the one
+    being written, so an idempotent re-persist never moves ``updated_at``.
+
     FAR-1654: this targeted upsert does NOT pass through :func:`upsert_rows`,
     so the pointer payload is sanitised here via
     :func:`_sanitise_jsonb_for_store` — a NUL / lone surrogate in a pointer
@@ -1229,16 +1338,7 @@ async def persist_artifact_pointers(
         "attempt_key": attempt_key,
         "artifacts_json": _sanitise_jsonb_for_store(pointers or None, run_id=run_id, label="artifacts"),
     }
-    stmt = insert_factory(RunNodeOutput).values(**values)
-    set_: dict[str, Any] = {
-        "updated_at": func.current_timestamp(),
-        "artifacts_json": stmt.excluded.artifacts_json,
-    }
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["run_id", "node_id", "attempt_key"],
-        set_=set_,
-    )
-    await session.execute(stmt, [values])
+    await session.execute(_targeted_upsert_stmt(insert_factory, values, "artifacts_json"), [values])
 
 
 async def persist_schema_enforcement_record(
@@ -1256,6 +1356,10 @@ async def persist_schema_enforcement_record(
     touches the blob columns (outputs, telemetry, markers, artifacts).
     Called by the node runner AFTER schema validation and BEFORE
     ``update_run_status`` / terminalization (D3 ordering guarantee).
+
+    FAR-2083: the same per-row provenance rule as :func:`upsert_rows` — the
+    ``DO UPDATE`` is skipped when the stored record already equals the one being
+    written, so an idempotent re-persist never moves ``updated_at``.
 
     The ``attempt_key`` MUST NOT be ``__final__`` — the CHECK constraint
     ``attempt_key <> '__final__' OR schema_enforcement_json IS NULL`` rejects
@@ -1276,13 +1380,4 @@ async def persist_schema_enforcement_record(
             enforcement_record, run_id=run_id, label="schema enforcement"
         ),
     }
-    stmt = insert_factory(RunNodeOutput).values(**values)
-    set_: dict[str, Any] = {
-        "updated_at": func.current_timestamp(),
-        "schema_enforcement_json": stmt.excluded.schema_enforcement_json,
-    }
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["run_id", "node_id", "attempt_key"],
-        set_=set_,
-    )
-    await session.execute(stmt, [values])
+    await session.execute(_targeted_upsert_stmt(insert_factory, values, "schema_enforcement_json"), [values])

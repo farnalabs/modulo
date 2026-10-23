@@ -374,7 +374,7 @@ jobs:
         # leaving it ONLY there meant a PR that adds a static data-testid
         # without declaring it in the manifest went red after ~45 minutes and
         # the Branch Fixer patched the manifest.
-        run: uv run --no-build --no-sync python -m pytest tests/architecture/test_product_map_consistency.py -q --tb=short
+        run: uv run --no-build --no-sync python -m pytest tests/architecture/test_product_map_consistency.py -q --tb=short -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Trivy filesystem scan (dependency CVEs + misconfigs)
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
         # Pin the vulnerability DB to the canonical GHCR repository instead of
@@ -442,7 +442,11 @@ jobs:
         # through on main (PR #690). Wire the whole package into CI so the
         # enforcement actually gates merges.
         shell: bash
-        run: uv run --no-build --no-sync pytest tests/architecture/ -q --tb=short --timeout=120 -p no:warnings -n auto
+        # `-p no:warnings` would disable the warnings plugin entirely, making an
+        # escalated run structurally blind; the escalation plus
+        # --disable-warnings keeps the gate firing while suppressing the
+        # benign summary.
+        run: uv run --no-build --no-sync pytest tests/architecture/ -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings -n auto
       - name: Run connector contract tests
         # The connector contract suite drives each connector (filesystem,
         # REST, shell, npm, pypi) against a real in-process HTTP server or
@@ -452,7 +456,11 @@ jobs:
         # regress silently. Run it here alongside the other non-Docker
         # suites.
         shell: bash
-        run: uv run --no-build --no-sync pytest tests/connectors/ -q --tb=short --timeout=180 -p no:warnings
+        # `-p no:warnings` would disable the warnings plugin entirely, making an
+        # escalated run structurally blind; the escalation plus
+        # --disable-warnings keeps the gate firing while suppressing the
+        # benign summary.
+        run: uv run --no-build --no-sync pytest tests/connectors/ -q --tb=short --timeout=180 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Run email settings BDD scenarios
         # The admin email-settings BDD feature file is self-contained (no
         # browser/live app), so it runs here rather than only in the unit
@@ -462,7 +470,7 @@ jobs:
         run: >
           uv run --no-build --no-sync pytest tests/bdd/steps/test_email_settings.py
           tests/bdd/features/infra/test_health_steps.py
-          -q --tb=short --timeout=120 -p no:warnings
+          -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Run repaired step-rot BDD modules
         # The step-definition repairs for auth/eval/hitl (FAR-246) live in
         # test_auth, test_eval, test_eval_block_steps and test_hitl. These are
@@ -475,7 +483,7 @@ jobs:
           uv run --no-build --no-sync pytest tests/bdd/steps/test_auth.py tests/bdd/steps/test_eval.py \
             tests/bdd/steps/test_eval_block_steps.py tests/bdd/steps/test_hitl.py \
             tests/bdd/steps/test_eval_scorer_gates.py \
-            -q --tb=short --timeout=120 -p no:warnings
+            -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -630,7 +638,7 @@ jobs:
           # file by the Detect step.
           mapfile -t TEST_FILES < /tmp/integration-changed.txt
           echo "Running: pytest ${TEST_FILES[*]}"
-          uv run --no-build --no-sync pytest "${TEST_FILES[@]}" -q --tb=short --timeout=300 -p no:warnings
+          uv run --no-build --no-sync pytest "${TEST_FILES[@]}" -q --tb=short --timeout=300 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
@@ -698,7 +706,7 @@ jobs:
             tests/integration/test_tier1b_models_light.py \
             tests/integration/auth/test_keycloak_oidc_real_http_flow.py \
             tests/integration/auth/test_keycloak_saml_real_http_flow.py \
-            -q --tb=short --timeout=900 -p no:warnings
+            -q --tb=short --timeout=900 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
           # Tier 1b fixtures deliberately loud-skip (with a recorded reason)
@@ -1627,7 +1635,7 @@ jobs:
       - name: Break-glass boot allow-list + connectivity smoke
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
-        run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -p no:warnings
+        run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
 
   notify-pr-failure:
     name: Trigger Branch Fixer

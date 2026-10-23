@@ -22,10 +22,11 @@ from modulo.db.crud.invitations import (
 )
 from modulo.db.crud.org_membership import reactivate_membership
 from modulo.db.models.invitation import Invitation
+from tests.unit.api.mock_session import configure_mock_session
 
 
 def _mock_session() -> AsyncMock:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)

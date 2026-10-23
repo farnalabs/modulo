@@ -45,6 +45,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.core import cron_helpers as ch
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+from tests.unit.api.mock_session import make_redis_client
 
 ORG = uuid.uuid4()
 
@@ -222,7 +223,7 @@ async def _run_reconcile(
     _patch_env(monkeypatch)
     session = _MockSession([_org_result([ORG]), _rows_result(rows)])
     factory = MagicMock(return_value=session)
-    redis_client = AsyncMock()
+    redis_client = make_redis_client()
     q = MagicMock()
     q.name = "runs"
     q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"

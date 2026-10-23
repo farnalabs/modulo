@@ -197,6 +197,11 @@ ignore_imports =
     # only invokes it (same cross-boundary wiring category as the classify.py /
     # audit_logger exceptions above).
     modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.pipeline_impact
+    # FAR-2054: the exhaustive per-seam guardrail coverage derivation lives in
+    # core.guardrails.coverage (pure decision function). create_run (the single
+    # run-creation chokepoint) only invokes it. Same narrow cross-boundary
+    # category as the FAR-208 guardrail seam above.
+    modulo.db.crud.run -> modulo.core.guardrails.coverage
     # FAR-220: the prompt-rollback restore write re-uses the shared Agent save
     # gate (validate_agent_git_content_values) so a legacy history entry
     # carrying an unpinned git content ref cannot re-poison a clean Agent row.

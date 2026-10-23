@@ -61,6 +61,7 @@ from modulo.core.trigger_engine import (
     verify_timestamp,
 )
 from modulo.db.models.trigger import Trigger
+from tests.unit.api.mock_session import configure_mock_session
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
@@ -147,7 +148,7 @@ def _make_session(
     pipeline_found: bool = True,
 ) -> AsyncMock:
     """Build a mocked session that returns the given trigger and run count."""
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
 
     lock_result = MagicMock()
     lock_result.scalar_one.return_value = True
@@ -323,7 +324,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
     snapshot_mock = MagicMock()
     snapshot_mock.id = uuid.uuid4()
 
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.in_transaction = MagicMock(return_value=True)
@@ -589,7 +590,7 @@ class TestComputeRateLimitKey:
 class TestTryInsertDedup:
     def _session(self, flush_side_effect: Any = None) -> AsyncMock:
         """Session where the dedup SELECT finds nothing and the flush raises as configured."""
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         existing = MagicMock()
         existing.scalar_one_or_none.return_value = None
         delete_result = MagicMock()
@@ -621,7 +622,7 @@ class TestTryInsertDedup:
 
     async def test_duplicate_hash_returns_false(self) -> None:
         engine = TriggerEngine()
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         existing = MagicMock()
         existing.scalar_one_or_none.return_value = MagicMock()
         session.execute = AsyncMock(return_value=existing)
@@ -723,7 +724,7 @@ class TestTriggerEngineEvaluateCondition:
             # (FAR-1564) + org visibility.
             instance.allowed_operations = None
             instance.visibility = "org"
-        session = AsyncMock()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         conn_result = MagicMock()
         conn_result.scalar_one_or_none.return_value = instance
         session.execute = AsyncMock(return_value=conn_result)
@@ -1859,7 +1860,7 @@ def _make_replay_session(
     4=WebhookPayload lookup, 5=guardrail rows (FAR-214, detection-only),
     6=active-run count, 7=pipeline lookup, 8=recent rate-limited count, 9+=other.
     """
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
 
     event_result = MagicMock()
     event_result.scalar_one_or_none.return_value = event
@@ -2271,7 +2272,7 @@ async def test_replay_event_paused_org_raises() -> None:
 
 async def test_schedule_polling_trigger_default_interval() -> None:
     trigger = _make_trigger()
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.flush = AsyncMock()
 
     before = datetime.datetime.now(datetime.UTC)
@@ -2286,7 +2287,7 @@ async def test_schedule_polling_trigger_default_interval() -> None:
 
 async def test_schedule_polling_trigger_custom_interval() -> None:
     trigger = _make_trigger(extra_config={"poll_interval_seconds": 120})
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.flush = AsyncMock()
 
     before = datetime.datetime.now(datetime.UTC)
@@ -2307,7 +2308,7 @@ async def test_schedule_polling_trigger_invalid_interval(bad_interval: Any) -> N
 
 async def test_schedule_polling_trigger_none_interval_defaults() -> None:
     trigger = _make_trigger(extra_config={"poll_interval_seconds": None})
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     session.flush = AsyncMock()
 
     await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, _org_id=_ORG)
@@ -2322,7 +2323,7 @@ async def test_schedule_polling_trigger_none_interval_defaults() -> None:
 
 
 async def test_cleanup_expired_payloads_deletes_expired() -> None:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     expired_result = MagicMock()
     expired_result.scalars.return_value.all.return_value = [uuid.uuid4(), uuid.uuid4()]
     session.execute = AsyncMock(return_value=expired_result)
@@ -2333,7 +2334,7 @@ async def test_cleanup_expired_payloads_deletes_expired() -> None:
 
 
 async def test_cleanup_expired_payloads_none_expired() -> None:
-    session = AsyncMock()
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     empty_result = MagicMock()
     empty_result.scalars.return_value.all.return_value = []
     session.execute = AsyncMock(return_value=empty_result)

@@ -23,8 +23,7 @@ def test_chat_cohere_uses_cohere_base_url():
         CohereBackend(api_key="test-key", model_id="command-r")
         mock_chat_cohere.assert_called_once_with(
             model="command-r",
-            api_key="test-key",
-            base_url=COHERE_BASE_URL,
+            cohere_api_key="test-key",
         )
 
 

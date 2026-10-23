@@ -32,22 +32,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import harden_session_double
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/licensing/feature_flag_inspection.feature")
 
 
 def _make_mock_session() -> Any:
     session = AsyncMock()
-    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
-    # AsyncSession methods — bare-AsyncMock children type them as async, so
-    # production code reaching set_rls_* (db/rls.py) passes the guard
-    # vacuously (an unawaited coroutine is truthy).
-    session.in_transaction = MagicMock(return_value=True)
-    session.add = MagicMock()
-    # A real AsyncSession exposes ``info`` as a plain dict; ``set_rls_org`` on a
-    # generic backend writes the org id there and the FAR-1830 settings-patch
-    # tenant guard reads it back.
-    session.info = {}
+    harden_session_double(session)
 
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = []
