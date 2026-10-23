@@ -978,6 +978,133 @@ def _validate_provider(provider: str) -> None:
     )
 
 
+def _resolve_create_base_url(req: ModelBackendCreate) -> str | None:
+    """Validate an optional custom endpoint on a create request (FAR-2046)."""
+    requested_base_url = _requested_base_url(req.base_url, req.default_params)
+    base_url = (
+        _validate_base_url(requested_base_url, allow_insecure_http=bool(req.allow_insecure_http))
+        if requested_base_url
+        else None
+    )
+    if base_url is not None and not supports_custom_base_url(req.provider):
+        raise _base_url_error(
+            f"Provider {req.provider!r} does not support a custom base_url",
+            code="base_url_not_supported_for_provider",
+            loc="provider",
+        )
+    if base_url is not None and _is_vault_reference(req.api_key):
+        raise _base_url_literal_credential_error()
+    return base_url
+
+
+def _requested_fallback_ids(req: ModelBackendCreate) -> list[str] | None:
+    """Stringify the fallback ids for the JSON column, or None when unset."""
+    if not req.fallback_backend_ids:
+        return None
+    return [str(fid) for fid in req.fallback_backend_ids]
+
+
+async def _find_same_name_backend(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    name: str,
+) -> None:
+    """Reject a duplicate name while holding the uniqueness row lock."""
+    existing = (
+        await session.execute(
+            select(ModelBackend)
+            .where(
+                ModelBackend.organisation_id == principal.organisation_id,
+                ModelBackend.name == name,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A model backend with name {name!r} already exists in this organisation",
+        )
+
+
+async def _create_backend_in_transaction(
+    session: AsyncSession,
+    req: ModelBackendCreate,
+    principal: TenantPrincipal,
+    settings: Settings,
+    default_params: dict[str, Any],
+    base_url: str | None,
+) -> tuple[ModelBackend, str]:
+    """Write the row and its credential in one transaction (FAR-1825/1640)."""
+    async with session.begin():
+        # FAR-1825: bound the creation-name uniqueness lock below (the
+        # transaction's first row lock). A contended same-name row must
+        # surface 55P03 -> 409, never an unbounded request wait.
+        await set_mutation_row_lock_timeout(session)
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+        # FAR-1640: resolve a ``secretref://<key>`` vault reference under
+        # the caller's org RLS context BEFORE anything is written — a
+        # missing/foreign key is a typed 422.
+        resolved_api_key, secrets_backend = await _resolve_credential_or_422(session, settings, value=req.api_key)
+        ciphertext = _encrypt(resolved_api_key, settings.fernet_key)
+
+        if req.fallback_backend_ids:
+            await _validate_fallback_ids(session, principal.organisation_id, req.fallback_backend_ids)
+
+        await _find_same_name_backend(session, principal, req.name)
+
+        mb = await create_model_backend(
+            session,
+            org_id=principal.organisation_id,
+            name=req.name,
+            display_name=req.display_name,
+            provider=req.provider,
+            model_id=req.model_id,
+            credentials_ciphertext=ciphertext,
+            account_id=principal.account_id,
+            default_params=default_params,
+            visibility=req.visibility,
+            owner_team_id=req.owner_team_id,
+            fallback_backend_ids=_requested_fallback_ids(req),
+            tier=req.tier,
+        )
+
+        secret_value = json.dumps({"api_key": resolved_api_key, **({"base_url": base_url} if base_url else {})})
+        await secrets_backend.set_secret(str(mb.id), secret_value)
+        return mb, resolved_api_key
+
+
+async def _audit_created_backend(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    mb: ModelBackend,
+    req: ModelBackendCreate,
+    base_url: str | None,
+) -> None:
+    """Append the PRD §8.12 registration audit event (failure-isolated)."""
+    await append_audit_event_isolated(
+        session,
+        principal,
+        resource_type="model_backend",
+        event_type="model_backend.created",
+        resource_id=mb.id,
+        payload={
+            "name": mb.name,
+            "provider": mb.provider,
+            "model_id": mb.model_id,
+            "tier": mb.tier,
+            "fallback_backend_ids": [str(fid) for fid in (mb.fallback_backend_ids or [])],
+            "has_credentials": bool(mb.credentials_ciphertext),
+            "has_custom_base_url": base_url is not None,
+            "allow_insecure_http": bool(base_url and base_url.lower().startswith("http://")),
+            "credential_kind": "vault_reference" if _is_vault_reference(req.api_key) else "literal",
+        },
+        log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
+    )
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
@@ -995,77 +1122,18 @@ async def create_model_backend_endpoint(
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     _validate_provider(req.provider)
-    requested_base_url = _requested_base_url(req.base_url, req.default_params)
-    base_url = (
-        _validate_base_url(requested_base_url, allow_insecure_http=bool(req.allow_insecure_http))
-        if requested_base_url
-        else None
-    )
-    if base_url is not None and not supports_custom_base_url(req.provider):
-        raise _base_url_error(
-            f"Provider {req.provider!r} does not support a custom base_url",
-            code="base_url_not_supported_for_provider",
-            loc="provider",
-        )
-    if base_url is not None and _is_vault_reference(req.api_key):
-        raise _base_url_literal_credential_error()
+    base_url = _resolve_create_base_url(req)
     default_params = _strip_legacy_base_url(req.default_params)
     try:
-        async with session.begin():
-            # FAR-1825: bound the creation-name uniqueness lock below (the
-            # transaction's first row lock). A contended same-name row must
-            # surface 55P03 -> 409, never an unbounded request wait.
-            await set_mutation_row_lock_timeout(session)
-            await set_rls_org(session, principal.organisation_id)
-            await set_rls_user_context(session, principal.account_id, principal.org_role)
-
-            # FAR-1640: resolve a ``secretref://<key>`` vault reference under
-            # the caller's org RLS context BEFORE anything is written — a
-            # missing/foreign key is a typed 422.
-            resolved_api_key, secrets_backend = await _resolve_credential_or_422(session, settings, value=req.api_key)
-            ciphertext = _encrypt(resolved_api_key, settings.fernet_key)
-
-            if req.fallback_backend_ids:
-                await _validate_fallback_ids(session, principal.organisation_id, req.fallback_backend_ids)
-
-            existing = (
-                await session.execute(
-                    select(ModelBackend)
-                    .where(
-                        ModelBackend.organisation_id == principal.organisation_id,
-                        ModelBackend.name == req.name,
-                    )
-                    .with_for_update()
-                )
-            ).scalar_one_or_none()
-            if existing is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"A model backend with name {req.name!r} already exists in this organisation",
-                )
-
-            fallback_ids: list[str] | None = None
-            if req.fallback_backend_ids:
-                fallback_ids = [str(fid) for fid in req.fallback_backend_ids]
-            mb = await create_model_backend(
-                session,
-                org_id=principal.organisation_id,
-                name=req.name,
-                display_name=req.display_name,
-                provider=req.provider,
-                model_id=req.model_id,
-                credentials_ciphertext=ciphertext,
-                account_id=principal.account_id,
-                default_params=default_params,
-                visibility=req.visibility,
-                owner_team_id=req.owner_team_id,
-                fallback_backend_ids=fallback_ids,
-                tier=req.tier,
-            )
-
-            secret_value = json.dumps({"api_key": resolved_api_key, **({"base_url": base_url} if base_url else {})})
-            await secrets_backend.set_secret(str(mb.id), secret_value)
-            response = _to_response(mb, base_url=base_url, can_manage=True)
+        mb, resolved_api_key = await _create_backend_in_transaction(
+            session,
+            req,
+            principal,
+            settings,
+            default_params,
+            base_url,
+        )
+        response = _to_response(mb, base_url=base_url, can_manage=True)
         # The entity write has COMMITTED above. The PRD 8.1 health check runs
         # OUTSIDE the write transaction so the provider network call (up to
         # HEALTH_CHECK_TIMEOUT=10s) never holds the DB connection or a row
@@ -1082,29 +1150,10 @@ async def create_model_backend_endpoint(
             org_role=principal.org_role,
             base_url=base_url,
         )
-
         # PRD §8.12 audit trail: backend registration was previously invisible.
         # Written in a fresh transaction (the create above already committed)
         # and failure-isolated so a broken append never fails a completed create.
-        await append_audit_event_isolated(
-            session,
-            principal,
-            resource_type="model_backend",
-            event_type="model_backend.created",
-            resource_id=mb.id,
-            payload={
-                "name": mb.name,
-                "provider": mb.provider,
-                "model_id": mb.model_id,
-                "tier": mb.tier,
-                "fallback_backend_ids": [str(fid) for fid in (mb.fallback_backend_ids or [])],
-                "has_credentials": bool(mb.credentials_ciphertext),
-                "has_custom_base_url": base_url is not None,
-                "allow_insecure_http": bool(base_url and base_url.lower().startswith("http://")),
-                "credential_kind": "vault_reference" if _is_vault_reference(req.api_key) else "literal",
-            },
-            log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
-        )
+        await _audit_created_backend(session, principal, mb, req, base_url)
     except IntegrityError:
         logger.exception(_CODE_MODEL_BACKENDS_CREATE_MODEL)
         raise HTTPException(
