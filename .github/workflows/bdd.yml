@@ -278,7 +278,7 @@ jobs:
         if: steps.detect.outputs.bdd == 'true'
         working-directory: backend
         timeout-minutes: 50
-        run: uv run --no-build --no-sync pytest tests/bdd/ -q --base-url http://localhost:4173 --timeout=120 -p no:warnings
+        run: uv run --no-build --no-sync pytest tests/bdd/ -q --base-url http://localhost:4173 --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
 
       - name: Cleanup containers
         if: always() && steps.detect.outputs.bdd == 'true'

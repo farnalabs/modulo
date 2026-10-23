@@ -9,6 +9,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.db.models.model_backend import ModelBackend
+from tests.bdd.conftest import harden_session_double
 
 # ---------------------------------------------------------------------------
 # Active features
@@ -450,6 +451,7 @@ def _drive_model_backend_crud(
         return MagicMock()
 
     mock_session = AsyncMock()
+    harden_session_double(mock_session)
     configure_mock_session(mock_session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
@@ -1003,6 +1005,7 @@ def _submit_model_backend_save(ctx: dict, *, method: str, body: dict) -> None:
     mb.last_health_check_error = None
 
     mock_session = AsyncMock()
+    harden_session_double(mock_session)
     configure_mock_session(mock_session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)

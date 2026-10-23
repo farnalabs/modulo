@@ -64,8 +64,8 @@ run_shard() {
   local files=("$@")
 
   echo "::group::Running unit tests - shard ${label} (${#files[@]} files)"
-  # Defence in depth for the unit-suite gate installed by
-  # tests/unit/conftest.py::pytest_runtest_setup. A leaked never-awaited
+  # Defence in depth for the gated-suite warning gate installed by
+  # tests/conftest.py::pytest_runtest_setup. A leaked never-awaited
   # coroutine only surfaces at GC as PytestUnraisableExceptionWarning; left as a
   # warning, a large enough flood of them wedged pytest's terminal writer
   # (BlockingIOError: [Errno 11]) and took the 2026-10-21 merge queue down.

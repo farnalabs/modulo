@@ -462,7 +462,7 @@ jobs:
         run: >
           uv run --no-build --no-sync pytest tests/bdd/steps/test_email_settings.py
           tests/bdd/features/infra/test_health_steps.py
-          -q --tb=short --timeout=120 -p no:warnings
+          -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Run repaired step-rot BDD modules
         # The step-definition repairs for auth/eval/hitl (FAR-246) live in
         # test_auth, test_eval, test_eval_block_steps and test_hitl. These are
@@ -475,7 +475,7 @@ jobs:
           uv run --no-build --no-sync pytest tests/bdd/steps/test_auth.py tests/bdd/steps/test_eval.py \
             tests/bdd/steps/test_eval_block_steps.py tests/bdd/steps/test_hitl.py \
             tests/bdd/steps/test_eval_scorer_gates.py \
-            -q --tb=short --timeout=120 -p no:warnings
+            -q --tb=short --timeout=120 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -630,7 +630,7 @@ jobs:
           # file by the Detect step.
           mapfile -t TEST_FILES < /tmp/integration-changed.txt
           echo "Running: pytest ${TEST_FILES[*]}"
-          uv run --no-build --no-sync pytest "${TEST_FILES[@]}" -q --tb=short --timeout=300 -p no:warnings
+          uv run --no-build --no-sync pytest "${TEST_FILES[@]}" -q --tb=short --timeout=300 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
@@ -698,7 +698,7 @@ jobs:
             tests/integration/test_tier1b_models_light.py \
             tests/integration/auth/test_keycloak_oidc_real_http_flow.py \
             tests/integration/auth/test_keycloak_saml_real_http_flow.py \
-            -q --tb=short --timeout=900 -p no:warnings
+            -q --tb=short --timeout=900 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
           # Tier 1b fixtures deliberately loud-skip (with a recorded reason)
@@ -1627,7 +1627,7 @@ jobs:
       - name: Break-glass boot allow-list + connectivity smoke
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
-        run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -p no:warnings
+        run: uv run --no-build --no-sync pytest tests/integration/test_break_glass_gate.py tests/integration/test_trigger_streak_engine_sql.py -q --tb=short --timeout=300 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
 
   notify-pr-failure:
     name: Trigger Branch Fixer

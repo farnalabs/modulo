@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
+from tests.bdd.conftest import harden_session_double
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -75,7 +76,7 @@ def _make_settings() -> Settings:
 def _make_daily_session(rows: list[_Row] | None = None) -> AsyncMock:
     """AsyncSession double returning ``(day, status, count)`` grouping rows."""
     session = AsyncMock()
-    session.info = {}
+    harden_session_double(session)
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.get_bind = AsyncMock(return_value=bind)

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
+from tests.bdd.conftest import harden_session_double
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
@@ -47,6 +48,11 @@ def _sample_results() -> list[CategoryResult]:
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    # A SQLAlchemy result object is SYNC; an AsyncMock session's default
+    # execute return_value is another AsyncMock, so result readers
+    # (scalar_one_or_none/scalars/first) return never-awaited coroutines.
+    session.execute.return_value = MagicMock()
+    harden_session_double(session)
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
