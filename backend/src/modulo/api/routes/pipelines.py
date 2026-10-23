@@ -1303,6 +1303,13 @@ class ConnectorBinding(BaseModel):
         "get_run_logs",
         "list_runs",
     ] = "trigger_run"
+    # FAR-2089: resource/filters/data for connector query/write operations.
+    # Without these fields declared, Pydantic's extra="ignore" silently drops
+    # them on REST/MCP graph writes, making GitHub connector nodes unable to
+    # perform real queries (the binding reaches the engine empty).
+    resource: str | None = Field(default=None, max_length=200)
+    filters: dict[str, Any] | None = Field(default=None)
+    data: dict[str, Any] | None = Field(default=None)
 
 
 class SchemaPin(BaseModel):
