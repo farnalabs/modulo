@@ -22,6 +22,12 @@ def test_backend_id(backend):
     assert backend.backend_id == "gemini/gemini-2.0-flash"
 
 
+async def test_aclose_is_idempotent_without_a_pinned_transport(backend):
+    """A backend built without a custom endpoint owns no transport to close."""
+    await backend.aclose()
+    await backend.aclose()
+
+
 def test_chat_google_genai_uses_default_params():
     with patch("modulo.model_backends.gemini.ChatGoogleGenerativeAI") as mock_chat:
         GeminiBackend(api_key="test-key", model_id="gemini-2.0-flash", temperature=0.2)

@@ -13,6 +13,8 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from modulo.core.model_backend_hub import (
+    _CUSTOM_ENDPOINT_KWARGS,
+    _NON_OPENAI_COMPATIBLE,
     BASE_URL_CAPABLE_PROVIDERS,
     _backend_class,
     _build_backend,
@@ -417,6 +419,16 @@ def test_build_backend_warns_when_custom_base_url_cannot_be_applied(caplog) -> N
             {},
         )
     assert "Ignoring custom base_url" in caplog.text
+
+
+def test_every_non_openai_adapter_declares_an_endpoint_kwarg() -> None:
+    """Every non-OpenAI adapter must map a custom endpoint to a constructor arg.
+
+    ``_apply_custom_endpoint`` looks the kwarg up directly so a missing entry
+    fails loudly instead of silently dropping the operator's endpoint; that
+    contract only holds while the two maps cover the same providers.
+    """
+    assert set(_CUSTOM_ENDPOINT_KWARGS) == set(_NON_OPENAI_COMPATIBLE)
 
 
 def test_capability_map_is_the_single_source_of_truth() -> None:

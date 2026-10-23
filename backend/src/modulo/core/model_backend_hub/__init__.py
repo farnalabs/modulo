@@ -739,17 +739,27 @@ def _build_non_openai_compatible_backend(
     if class_name is None:
         return None
     _require_api_key(provider, creds)
-    # The endpoint argument is provider-specific (anthropic_api_url, endpoint,
-    # base_url). Feed it from the resolved endpoint (credential JSON first,
-    # legacy default_params second); the raw key never reaches a constructor.
-    endpoint_kwarg = _CUSTOM_ENDPOINT_KWARGS.get(provider)
-    if endpoint_kwarg is not None:
-        # A stale default_params copy must never collide with the explicit
-        # endpoint argument.
-        params.pop(endpoint_kwarg, None)
-        if custom_base_url is not None:
-            params[endpoint_kwarg] = custom_base_url
+    _apply_custom_endpoint(provider, params, custom_base_url)
     return _backend_class(provider, class_name)(api_key=creds["api_key"], model_id=model_id, **params)
+
+
+def _apply_custom_endpoint(
+    provider: str,
+    params: dict[str, Any],
+    custom_base_url: str | None,
+) -> None:
+    """Feed the resolved endpoint into the adapter-specific constructor kwarg.
+
+    The endpoint argument is provider-specific (anthropic_api_url, endpoint,
+    base_url). ``_CUSTOM_ENDPOINT_KWARGS`` must cover every non-OpenAI adapter;
+    a missing entry fails loudly with ``KeyError`` rather than silently
+    dropping the operator's endpoint.
+    """
+    endpoint_kwarg = _CUSTOM_ENDPOINT_KWARGS[provider]
+    # A stale default_params copy must never collide with the explicit endpoint.
+    params.pop(endpoint_kwarg, None)
+    if custom_base_url is not None:
+        params[endpoint_kwarg] = custom_base_url
 
 
 def _build_openai_compatible_backend(
