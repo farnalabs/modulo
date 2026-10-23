@@ -1081,6 +1081,62 @@ class TestAuditPeriodScoping:
         # The bound itself is named, so a reader sees WHICH window was empty.
         assert self.LATE_FROM.isoformat() in reason
 
+    async def test_an_open_start_window_bounds_only_the_end(self, session: AsyncSession) -> None:
+        """``period_to`` alone is a supported open-start window, not a dead arm.
+
+        Only the upper bound is set, so every row from the beginning of history
+        up to (but not including) it must still be counted. The absence reason
+        must name only the bound that was actually requested: adding an
+        "on or after" leg that was never supplied would misdescribe the window
+        an auditor is reading.
+        """
+        seeded = await _seed_full_org(session)
+        await session.commit()
+        upper = _BASE_TIME + timedelta(hours=7)
+
+        index = await build_evidence_index(session, seeded["org_id"], period_to=upper)
+        entries = _by_type(index)
+
+        assert index.period_from is None
+        assert index.period_to == upper.isoformat()
+        # Rows before the bound are still counted, so the window really is open
+        # on the left (all four HITL decisions sit at +1h..+4h).
+        assert entries[ARTIFACT_HITL_DECISION].record_count == 4
+        # Both autonomy events sit after the bound (+8h, +9h), so they are the
+        # artefact type this one-sided window excludes entirely.
+        autonomy = entries[ARTIFACT_AUTONOMY_CHANGE]
+        assert autonomy.status == STATUS_ABSENT
+        reason = autonomy.absence_reason or ""
+        assert reason.endswith(f" in the requested audit period (before {upper.isoformat()})")
+        assert "on or after" not in reason
+
+    async def test_an_open_ended_window_bounds_only_the_start(self, session: AsyncSession) -> None:
+        """``period_from`` alone is a supported open-ended window, not a dead arm.
+
+        Only the lower bound is set, so rows at or after it are counted and
+        everything earlier is excluded. The absence reason must name only the
+        start: a "before" leg that was never requested would misstate which
+        half of the interval was empty.
+        """
+        seeded = await _seed_full_org(session)
+        await session.commit()
+        lower = _BASE_TIME + timedelta(hours=8)
+
+        index = await build_evidence_index(session, seeded["org_id"], period_from=lower)
+        entries = _by_type(index)
+
+        assert index.period_from == lower.isoformat()
+        assert index.period_to is None
+        # Every HITL decision was made before the bound (+1h..+4h), so this
+        # artefact is excluded; the audit trail at +8h/+9h is still counted,
+        # proving the window stays open above the bound.
+        hitl = entries[ARTIFACT_HITL_DECISION]
+        assert hitl.status == STATUS_ABSENT
+        assert entries[ARTIFACT_AUDIT_CHAIN].record_count == 2
+        reason = hitl.absence_reason or ""
+        assert reason.endswith(f" in the requested audit period (on or after {lower.isoformat()})")
+        assert "before" not in reason
+
     async def test_the_half_open_end_bound_is_exclusive(self, session: AsyncSession) -> None:
         seeded = await _seed_full_org(session)
         await session.commit()
