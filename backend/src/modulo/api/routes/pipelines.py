@@ -1307,9 +1307,16 @@ class ConnectorBinding(BaseModel):
     # Without these fields declared, Pydantic's extra="ignore" silently drops
     # them on REST/MCP graph writes, making GitHub connector nodes unable to
     # perform real queries (the binding reaches the engine empty).
+    #
+    # ``filters`` / ``data`` default to an EMPTY DICT, not ``None``: the graph
+    # write serialises with ``model_dump(mode="json")`` (no ``exclude_none``),
+    # so a ``None`` default would persist ``"filters": null`` for every binding
+    # that only supplies a ``resource`` — and the engine's ``dict(...)`` over
+    # ``null`` raises at run time. An empty dict is the same "no filters" value
+    # in a shape every reader can iterate.
     resource: str | None = Field(default=None, max_length=200)
-    filters: dict[str, Any] | None = Field(default=None)
-    data: dict[str, Any] | None = Field(default=None)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class SchemaPin(BaseModel):
@@ -1843,9 +1850,9 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         if self.node_type == "dispatch":
             return
         if self.await_completion:
-            raise ValueError("Only dispatch nodes can set await_completion=True")
+            raise ValueError("Only a dispatch node can set await_completion=True")
         if self.wait_timeout is not None:
-            raise ValueError("Only dispatch nodes can set wait_timeout")
+            raise ValueError("Only a dispatch node can set wait_timeout")
 
     def _validate_stdout_retention(self) -> None:
         """FAR-792: per-node stdout/stderr retention is a sandbox_agent-only surface.
@@ -2114,10 +2121,19 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
           agent. ``dispatch`` already fails loud on this shape at graph build;
           rejecting it at save time gives the author the error instead of a
           run-time surprise.
-        * **agent_id (forbidden).** An ``agent`` node carrying an ``agent_id``
-          is the one shape whose binding the engine explicitly does NOT route
-          (it builds the LLM node function first), so a connector node with an
-          agent would silently execute the agent and never the connector.
+        * **agent_id (forbidden).** A ``connector`` node with an ``agent_id``
+          still routes its binding (``node_routes_binding_to_connector``
+          exempts only ``node_type == "agent"``), so the binding would fire —
+          but the node type has no LLM step, so the agent reference is dead
+          configuration that reads as if the agent were involved. Rejected so
+          the author removes it instead of believing it is used.
+        * **resource (required for query/write).** A ``query`` / ``write``
+          binding with no ``resource`` reaches the connector with an empty
+          resource and fails at run time; the binding model allows absence (a
+          ``dispatch`` binding has no resource), so the node-level rule
+          requires it for every non-dispatch operation. Safe for existing data:
+          ``connector`` was never authorable before FAR-2089, so no stored graph
+          can regress.
 
         Output schema id / pins are deliberately NOT forbidden: a connector's
         result is an artifact like any other node's, so pinning its shape stays
@@ -2132,8 +2148,16 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             )
         if self.agent_id is not None:
             raise ValueError(
-                "Connector nodes cannot reference an agent - an agent-bound node never "
-                "routes its connector_binding, so the binding would be dead configuration",
+                "Connector nodes cannot reference an agent - a connector node has no LLM step, "
+                "so the agent_id would be dead configuration (the binding still routes, the agent "
+                "never runs); remove the agent_id",
+            )
+        binding = self.connector_binding
+        if binding.operation != "dispatch" and not (binding.resource or "").strip():
+            raise ValueError(
+                f"Connector nodes require a non-empty connector_binding.resource for a "
+                f"{binding.operation!r} operation - without one the connector is called with an "
+                "empty resource at run time",
             )
 
     def _validate_dispatch_binding_routing(self) -> None:

@@ -273,6 +273,13 @@ class ApplyGraphConnectorBinding(BaseModel):
         "get_run_logs",
         "list_runs",
     ] = "trigger_run"
+    # FAR-2089: resource/filters/data for connector query/write operations —
+    # the API ``ConnectorBinding`` twins. ``extra="forbid"`` makes an absent
+    # declaration a load-time rejection of a config the API accepts, so the two
+    # surfaces would disagree on the same graph contract.
+    resource: str | None = Field(default=None, max_length=200)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApplyGraphSchemaPin(BaseModel):
@@ -342,7 +349,19 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join", "dispatch"] = "agent"
+    node_type: Literal[
+        "agent",
+        "manual",
+        "composite",
+        "sandbox_agent",
+        "router",
+        "hitl",
+        "join",
+        "dispatch",
+        # FAR-2089: a query/write node whose whole job is its connector_binding
+        # (the API node model accepts it; the declarative front-end must agree).
+        "connector",
+    ] = "agent"
     agent: str | None = None
     position: ApplyGraphPosition
     connector_binding: ApplyGraphConnectorBinding | None = None

@@ -759,6 +759,19 @@ def test_connector_node_routes_its_binding_to_the_connector_fn():
     assert data["note"] == "round-trip"
 
 
+def test_connector_node_without_binding_fails_at_graph_build():
+    """FAR-2089: a binding-less ``connector`` node fails loud, like ``dispatch``.
+
+    The fall-through below the routing predicate is the general LLM factory, so
+    without this guard a connector node with no binding silently ran as an agent
+    node with no agent — no connector call, no error.
+    """
+    graph: dict[str, Any] = {"nodes": [{"id": "conn", "node_type": "connector"}], "edges": []}
+
+    with pytest.raises(ValueError, match="no connector_binding"):
+        build_graph_from_json(graph)
+
+
 def test_dispatch_node_compiles():
     """FAR-1141: a dispatch node with a binding compiles; bogus types still raise."""
     graph: dict[str, Any] = {

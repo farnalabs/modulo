@@ -17,6 +17,7 @@ import pytest
 
 from modulo.connectors.base import connector_binding_required_acl_operations
 from modulo.core.graph_validator import GraphValidator, ValidationResult
+from modulo.core.team_visibility import extract_connector_bindings
 from tests.unit.graph_validator._helpers import (
     session_returning as _session_returning,
 )
@@ -344,11 +345,17 @@ async def test_a_connector_node_binding_is_acl_governed_at_save_time():
     must derive the routed verb from it exactly as it does for an ``agent`` node
     with a query binding. A connector node whose bound instance is not allowed
     to ``read`` is refused rather than saved and failed at run time.
+
+    The binding row is DERIVED from the node by ``extract_connector_bindings``
+    (the same call the graph-write path makes) rather than hand-built: a node
+    the extractor skipped would leave the ACL check with nothing to inspect, and
+    a hand-built row would hide that.
     """
     cid = uuid.uuid4()
     instance = _connector_instance(cid, allowed_operations=["write"])
     node = {"id": "a", "node_type": "connector", "connector_binding": {"instance_id": str(cid), "operation": "query"}}
-    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=[_binding(cid)])
+    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=extract_connector_bindings([node]))
+    assert snap.connector_bindings_json
 
     result = await GraphValidator().validate(snap, _session_returning([instance]))
 
@@ -362,8 +369,33 @@ async def test_a_connector_node_binding_to_a_read_capable_instance_is_accepted()
     cid = uuid.uuid4()
     instance = _connector_instance(cid, allowed_operations=["read"])
     node = {"id": "a", "node_type": "connector", "connector_binding": {"instance_id": str(cid), "operation": "query"}}
-    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=[_binding(cid)])
+    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=extract_connector_bindings([node]))
 
     result = await GraphValidator().validate(snap, _session_returning([instance]))
 
     assert not any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
+
+
+async def test_a_connector_node_dispatch_binding_to_a_non_ci_type_is_refused():
+    """FAR-2089: a ``connector`` node's dispatch binding gets the CI-runner check.
+
+    The routing predicate is not node-type-specific, so a ``connector`` node can
+    carry ``operation="dispatch"`` too; binding it to a type that does not
+    implement the four CI-runner operations must be a save-time
+    ``CONNECTOR_DISPATCH_UNSUPPORTED``, not a run-time ``AttributeError``.
+    """
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, connector_type_id="github", allowed_operations=["read", "write"])
+    node = {
+        "id": "a",
+        "node_type": "connector",
+        "connector_binding": {"instance_id": str(cid), "operation": "dispatch", "dispatch_action": "trigger_run"},
+    }
+    snap = _snapshot(graph_json=_node_graph(node), connector_bindings=extract_connector_bindings([node]))
+
+    result = await GraphValidator().validate(snap, _session_returning([instance]))
+
+    assert not result.is_valid
+    issue = next(i for i in result.issues if i.code == "CONNECTOR_DISPATCH_UNSUPPORTED")
+    assert issue.node_id == "a"
+    assert "github" in issue.message

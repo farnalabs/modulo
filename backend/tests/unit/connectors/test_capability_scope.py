@@ -698,6 +698,51 @@ def test_mixed_union_dedupes_across_nodes():
     assert set(scope) == {shared, "github", "slack"}
 
 
+def test_unscoped_connector_node_narrows_the_fetch_to_its_bound_instance():
+    """FAR-2089: an unscoped connector node contributes its bound instance id.
+
+    A ``connector`` node has no ``agent_id`` (forbidden) and usually no
+    ``capability_scope``, so it used to contribute NOTHING: the union came out
+    empty, ``compute_run_fetch_scope`` returned ``None`` and the hub decrypted
+    EVERY active org connector for a run that needs exactly one. The routed
+    binding's instance id is that node's contribution.
+    """
+    inst = str(uuid.uuid4())
+    graph = {
+        "nodes": [
+            {
+                "id": "conn",
+                "node_type": "connector",
+                "connector_binding": {"type": "github", "instance_id": inst, "operation": "query"},
+            },
+            # An unrestricted node with no binding still contributes nothing, so
+            # the union stays exactly the connector the run names.
+            {"id": "other", "node_type": "transform"},
+        ]
+    }
+    assert compute_run_fetch_scope(graph) == [inst]
+
+
+def test_unscoped_dispatch_node_narrows_the_fetch_too():
+    """The same routed-binding arm covers a ``dispatch`` node (no agent, no scope)."""
+    inst = str(uuid.uuid4())
+    graph = {
+        "nodes": [
+            {
+                "id": "disp",
+                "node_type": "dispatch",
+                "connector_binding": {
+                    "type": "github_actions_ci",
+                    "instance_id": inst,
+                    "operation": "dispatch",
+                    "dispatch_action": "trigger_run",
+                },
+            }
+        ]
+    }
+    assert compute_run_fetch_scope(graph) == [inst]
+
+
 # ---------------------------------------------------------------------------
 # Executor wiring — prove the run environment passes the computed fetch scope
 # through to ConnectorHub.initialise (FAR-418 prove-the-fix).

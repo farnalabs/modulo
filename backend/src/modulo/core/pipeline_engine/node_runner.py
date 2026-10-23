@@ -6593,12 +6593,19 @@ def _connector_inputs(binding: dict[str, Any], state: dict[str, Any]) -> tuple[s
     Run input keys slot into ``filters`` by default and into ``data`` only
     when the binding already carries them; a shell connector without a
     ``provider_ref`` defaults to ``"/"``.
+
+    An explicit ``null`` is treated exactly like an absent key. A stored graph
+    can carry ``"resource": null`` / ``"filters": null`` (a binding written
+    before the model defaulted them, or a hand-written/legacy graph), and
+    ``dict(None)`` raises ``TypeError`` on the only run path — so every read is
+    coerced with ``or`` rather than a ``.get(key, default)`` that only covers an
+    ABSENT key.
     """
     run_context = state.get("run_context") or {}
     raw_input = run_context.get("input", {})
-    resource: str = binding.get("resource", "command")
-    filters = dict(binding.get("filters", {}))
-    data = dict(binding.get("data", {}))
+    resource: str = binding.get("resource") or "command"
+    filters = dict(binding.get("filters") or {})
+    data = dict(binding.get("data") or {})
     if isinstance(raw_input, dict):
         filters.update({k: v for k, v in raw_input.items() if k not in data})
         data.update({k: v for k, v in raw_input.items() if k not in filters})

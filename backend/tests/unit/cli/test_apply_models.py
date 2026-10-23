@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, get_args
 
 import pytest
 from pydantic import ValidationError
@@ -12,6 +12,7 @@ from modulo.cli.apply.models import (
     SECRET_REF_PATTERN,
     ApplyConfig,
     ApplyConfigError,
+    ApplyGraphConnectorBinding,
     ApplyGraphNode,
     ModelBackendEntity,
     PipelineEntity,
@@ -688,6 +689,68 @@ class TestPipelineEntityContracts:
         apply_fields = set(ApplyGraphNode.model_fields) - {"agent"}
         api_fields = set(PipelineGraphNode.model_fields) - {"agent_id"}
         assert apply_fields == api_fields
+
+    def test_node_type_vocabulary_mirrors_api_model(self) -> None:
+        """Drift alarm: the apply ``node_type`` Literal must list exactly the
+        API's members.
+
+        The field-NAME comparison above cannot see this: ``node_type`` exists on
+        both sides, so a member added to the API model and not to the CLI (as
+        ``connector`` was in FAR-2089) was silently rejected by the declarative
+        front-end while the API accepted the same graph.
+        """
+        from modulo.api.routes.pipelines import PipelineGraphNode
+
+        apply_types = set(get_args(ApplyGraphNode.model_fields["node_type"].annotation))
+        api_types = set(get_args(PipelineGraphNode.model_fields["node_type"].annotation))
+        assert apply_types == api_types
+
+    def test_connector_binding_fields_mirror_api_model(self) -> None:
+        """Drift alarm: the nested connector-binding mirror must cover the API's fields.
+
+        ``extra="forbid"`` turns a missing declaration into a load-time rejection
+        of a config the API accepts — the two surfaces would disagree on the same
+        graph contract.
+        """
+        from modulo.api.routes.pipelines import ConnectorBinding
+
+        assert set(ApplyGraphConnectorBinding.model_fields) == set(ConnectorBinding.model_fields)
+
+    def test_connector_node_with_query_binding_round_trips(self) -> None:
+        """A ``connector`` node and its resource/filters/data reach the API payload."""
+        tx = {
+            "api_version": "modulo.dev/v1",
+            "entities": {
+                "pipelines": [
+                    {
+                        "name": "sample",
+                        "graph": {
+                            "nodes": [
+                                {
+                                    "id": "00000000-0000-0000-0000-0000000000a1",
+                                    "node_type": "connector",
+                                    "position": {"x": 0, "y": 0},
+                                    "connector_binding": {
+                                        "type": "github",
+                                        "instance_id": "00000000-0000-0000-0000-0000000000ff",
+                                        "resource": "pull",
+                                        "filters": {"state": "open"},
+                                        "data": {"note": "round-trip"},
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+        }
+        node = _config(tx).entities.pipelines[0].graph.nodes[0]
+        payload = node.api_node_payload()
+
+        assert payload["node_type"] == "connector"
+        assert payload["connector_binding"]["resource"] == "pull"
+        assert payload["connector_binding"]["filters"] == {"state": "open"}
+        assert payload["connector_binding"]["data"] == {"note": "round-trip"}
 
     def test_node_single_pr_per_run_accepted(self) -> None:
         """FAR-1273: the declarative CLI model carries the explicit

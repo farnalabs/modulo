@@ -558,6 +558,13 @@ class TestUpdatePipelineGraphConnectorNode:
         assert binding["resource"] == "pull"
         assert binding["filters"] == {"state": "open", "labels": ["agent", "backend"], "limit": 25}
         assert binding["data"] == {"note": "round-trip"}
+        # FAR-2089: the gate must be asked about THIS node's instance. Patching
+        # the mismatch check to ``[]`` alone passed even if a ``connector``
+        # node's binding were silently dropped before the gate.
+        mock_find_mismatches.assert_awaited_once()
+        assert mock_find_mismatches.await_args.kwargs["connector_bindings"] == [
+            {"node_id": node["id"], "connector_instance_id": node["connector_binding"]["instance_id"]}
+        ]
 
     async def test_a_connector_node_without_a_binding_is_rejected(self) -> None:
         """A binding-less connector node is refused before any DB work.
