@@ -13117,6 +13117,16 @@ export interface components {
              * Format: uuid
              */
             instance_id: string;
+            /** Resource */
+            resource?: string | null;
+            /** Filters */
+            filters?: {
+                [key: string]: unknown;
+            };
+            /** Data */
+            data?: {
+                [key: string]: unknown;
+            };
             /**
              * Operation
              * @default query
@@ -17803,7 +17813,7 @@ export interface components {
              * @default agent
              * @enum {string}
              */
-            node_type: "agent" | "manual" | "composite" | "sandbox_agent" | "router" | "hitl" | "join" | "dispatch";
+            node_type: "agent" | "manual" | "composite" | "connector" | "sandbox_agent" | "router" | "hitl" | "join" | "dispatch";
             /** Agent Id */
             agent_id?: string | null;
             position: components["schemas"]["GraphPosition"];
