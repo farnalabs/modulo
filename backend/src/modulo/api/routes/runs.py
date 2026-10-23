@@ -62,6 +62,7 @@ from modulo.core.exceptions import (
     SnapshotLockNotAvailableError,
 )
 from modulo.core.guardrails import GuardrailSummary
+from modulo.core.guardrails.coverage import SeamCoverageStatement, parse_seam_coverage
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_stderr_artifact, node_stdout_artifact, node_telemetry
 from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL, _any_marker_delivery_done
@@ -1091,6 +1092,12 @@ class RunResponse(BaseModel):
     # expected_skips / unexpected_skips). NULL when the run had no guardrails
     # bound, or on pre-migration runs.
     guardrail_summary: dict[str, int] | None = None
+    # FAR-2054: exhaustive per-seam guardrail coverage, typed and provenance-
+    # aware. ``enforced`` is only ever published with ADR-042 ``attested``
+    # provenance (Modulo acted); ``runtime_loop`` always reads
+    # ``not_applicable`` because Alpha does not consume a runtime tool-event
+    # stream. NULL only for runs created before the column shipped.
+    seam_coverage: list[SeamCoverageStatement] | None = None
     # Active-run observability (FAR-307). `trigger_actor`, `heartbeat_at`, and
     # `capacity` are populated on every list item and on detail for active
     # runs; `work_item_refs` and `child_runs` are populated only on detail.
@@ -1205,6 +1212,21 @@ def _guardrail_summary_from_run(run: Any) -> dict[str, int] | None:
     except (TypeError, ValueError):
         _log.warning("runs.guardrail_summary_invalid", extra={"run_id": str(getattr(run, "id", ""))})
         return None
+
+
+def _seam_coverage_from_run(run: Any) -> list[SeamCoverageStatement] | None:
+    """Parse the persisted FAR-2054 ``seam_coverage_json`` for run detail.
+
+    The JSON column could hold any value (or a MagicMock in a test fake), so the
+    read goes through the typed contract: malformed data degrades to explicit
+    ``degraded``/``not_applicable`` statements, never arbitrary strings and
+    never a 500. ``None`` means the run predates the column (no claim made).
+    """
+    raw = getattr(run, "seam_coverage_json", None)
+    parsed = parse_seam_coverage(raw)
+    if raw is not None and parsed is None:
+        _log.warning("runs.seam_coverage_invalid", extra={"run_id": str(getattr(run, "id", ""))})
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -1371,6 +1393,7 @@ def _build_run_response(
         gate_fired=gate_fired,
         blocked_partial_summary=blocked_partial_summary,
         guardrail_summary=_guardrail_summary_from_run(run),
+        seam_coverage=_seam_coverage_from_run(run),
         trigger_actor=ctx.trigger_actor,
         trigger_type=getattr(run, "trigger_type", None),
         # FAR-1141 / ADR-042: run execution provenance, composed from the ONE

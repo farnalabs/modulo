@@ -4673,6 +4673,12 @@ elements:
       - testid: run-detail-guardrail-override-panel
         type: element
         dynamic_testid: false
+      - testid: run-detail-seam-coverage
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-seam-coverage-row
+        type: element
+        dynamic_testid: false
       - testid: run-detail-override-guardrail
         type: button
         dynamic_testid: false
