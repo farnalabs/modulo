@@ -2065,6 +2065,7 @@ function nodeTypeBadgeClass(nodeType: string): string {
   if (nodeType === 'router') return 'badge bg-indigo-500/10 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300'
   if (nodeType === 'hitl') return 'badge bg-rose-500/10 text-rose-600 dark:bg-rose-900 dark:text-rose-300'
   if (nodeType === 'dispatch') return 'badge bg-cyan-500/10 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300'
+  if (nodeType === 'connector') return 'badge bg-teal-500/10 text-teal-700 dark:bg-teal-900 dark:text-teal-300'
   return 'badge badge-status-primary'
 }
 
@@ -2076,6 +2077,9 @@ function nodeTypeLabel(nodeType: string): string {
   // FAR-1141: a dispatch node must never fall through to the agent label —
   // its work ran outside Modulo, and mislabelling it hides that provenance.
   if (nodeType === 'dispatch') return t('views.PipelineEditorView.node_dispatch_label')
+  // FAR-2089: a connector node's work is done by the bound connector, not by an
+  // LLM, so it must never fall through to the agent label.
+  if (nodeType === 'connector') return t('views.PipelineEditorView.node_connector_label')
   return t('views.PipelineEditorView.node_type_agent')
 }
 const planStore = usePlanStore()

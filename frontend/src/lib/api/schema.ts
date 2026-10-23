@@ -17813,7 +17813,7 @@ export interface components {
              * @default agent
              * @enum {string}
              */
-            node_type: "agent" | "manual" | "composite" | "sandbox_agent" | "router" | "hitl" | "join" | "dispatch";
+            node_type: "agent" | "manual" | "composite" | "sandbox_agent" | "router" | "hitl" | "join" | "dispatch" | "connector";
             /** Agent Id */
             agent_id?: string | null;
             position: components["schemas"]["GraphPosition"];

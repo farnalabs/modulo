@@ -123,12 +123,17 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     expect(vm.nodeTypeBadgeClass('hitl')).toContain('rose')
     expect(vm.nodeTypeBadgeClass('agent')).toContain('primary')
     expect(vm.nodeTypeBadgeClass('sandbox_agent')).toContain('primary')
+    expect(vm.nodeTypeBadgeClass('connector')).toContain('teal')
 
     expect(vm.nodeTypeLabel('manual')).toBeTruthy()
     expect(vm.nodeTypeLabel('sandbox_agent')).toBeTruthy()
     expect(vm.nodeTypeLabel('router')).toBeTruthy()
     expect(vm.nodeTypeLabel('hitl')).toBeTruthy()
     expect(vm.nodeTypeLabel('agent')).toBeTruthy()
+    // FAR-2089: a connector node must be labelled by its own key, not fall
+    // through to the agent label.
+    expect(vm.nodeTypeLabel('connector')).not.toBe(vm.nodeTypeLabel('agent'))
+    expect(vm.nodeTypeLabel('connector')).toBeTruthy()
 
     wrapper.unmount()
   })
