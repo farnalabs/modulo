@@ -497,6 +497,17 @@
                     data-testid="pipeline-editor-retry-policy-max"
                   />
                 </div>
+                <!-- FAR-2072: recomputes from the DRAFT policy while the panel
+                     is open, so changing the retry budget or coverage updates
+                     the arithmetic live. Static content, not a live region. -->
+                <div
+                  v-if="retryPanelWorstCase"
+                  class="mt-2 rounded border border-border bg-muted/40 px-2 py-1.5 text-[10px] leading-snug text-muted-foreground"
+                  data-testid="pipeline-editor-retry-policy-worst-case"
+                >
+                  <span class="block font-medium text-foreground">{{ worstCaseText(retryPanelWorstCase) }}</span>
+                  <span class="block">{{ $t('views.PipelineEditorView.worst_case_queue_note') }}</span>
+                </div>
                 <div class="mt-2 flex items-center gap-2">
                   <label for="retry-policy-delay" class="whitespace-nowrap text-[10px] text-muted-foreground">
                     {{ $t('views.PipelineEditorView.backoff_delay_seconds') }}
@@ -1306,6 +1317,17 @@
             <div v-if="selectedNodeData.timeout_seconds">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.timeout') }}</dt>
               <dd>{{ selectedNodeData.timeout_seconds }}s</dd>
+              <!-- FAR-2072: the timeout is per attempt, so show the ceiling a
+                   retried timeout can consume. Static content — deliberately
+                   not a live region. -->
+              <dd
+                v-if="selectedNodeWorstCase"
+                class="mt-1 text-[10px] leading-snug text-muted-foreground"
+                data-testid="pipeline-editor-node-worst-case"
+              >
+                {{ worstCaseText(selectedNodeWorstCase) }}
+                <span class="block">{{ $t('views.PipelineEditorView.worst_case_queue_note') }}</span>
+              </dd>
             </div>
             <div v-if="selectedNodeData.stall_timeout_seconds">
               <dt class="text-muted-foreground text-xs uppercase tracking-wider" data-testid="pipeline-editor-stall-timeout-label">{{ $t('views.PipelineEditorView.stall_timeout') }}</dt>
@@ -2035,6 +2057,7 @@ import {
   type SnapshotDiffPayload,
 } from '../lib/pipelineSnapshotDiff'
 import { formatDateShort } from '../lib/formatDate'
+import { formatCompactDuration, worstCaseForEvent, type WorstCase } from '../lib/worstCase'
 import { withTimeout } from '../lib/requestTimeout'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
@@ -2528,6 +2551,62 @@ const retryPolicyNoRetriesWarning = computed(() => {
 const retryPolicySaveBlocked = computed(
   () => retryPolicyMode.value === 'specific' && retryPolicyEvents.value.length === 0,
 )
+
+// FAR-2072: the worst-case wall clock for a node timeout.
+//
+// A timeout can be retried by the run-level policy, so the node's display can
+// read "55m" while the run can consume several 55m attempts. The multiplier is
+// derived from the ACTUAL policy (all-events default, a granular `on` list, or
+// no retry at all) — never hard-coded. Queue/dispatch time is outside it.
+const storedPipelineRetryPolicy = computed<Record<string, unknown> | null>(() => {
+  const policy = (pipeline.value as PipelineRetryPolicySource | null)?.retry_policy
+  return policy && typeof policy === 'object' && !Array.isArray(policy)
+    ? (policy as Record<string, unknown>)
+    : null
+})
+
+// While the panel is open its unsaved controls are the policy the user is
+// looking at, so the arithmetic must follow the draft as they edit it.
+const draftRetryPolicy = computed<Record<string, unknown>>(() => {
+  const draft: Record<string, unknown> = {
+    max_retries: Number(retryPolicyMaxRetries.value) || 0,
+  }
+  if (retryPolicyMode.value === 'specific') draft.on = [...retryPolicyEvents.value]
+  return draft
+})
+
+const effectiveRetryPolicyForWorstCase = computed<Record<string, unknown> | null>(() =>
+  retryPolicyOpen.value ? draftRetryPolicy.value : storedPipelineRetryPolicy.value,
+)
+
+const worstCaseTimeoutSeconds = computed<number | null>(() => {
+  const nodeTimeout = Number(selectedNodeData.value?.timeout_seconds)
+  if (Number.isFinite(nodeTimeout) && nodeTimeout > 0) return nodeTimeout
+  const defaultTimeout = Number((pipeline.value as { node_timeout_seconds?: number | null } | null)?.node_timeout_seconds)
+  return Number.isFinite(defaultTimeout) && defaultTimeout > 0 ? defaultTimeout : null
+})
+
+const retryPanelWorstCase = computed<WorstCase | null>(() =>
+  worstCaseForEvent(effectiveRetryPolicyForWorstCase.value, worstCaseTimeoutSeconds.value, 'timeout'),
+)
+
+const selectedNodeWorstCase = computed<WorstCase | null>(() =>
+  worstCaseForEvent(
+    effectiveRetryPolicyForWorstCase.value,
+    Number(selectedNodeData.value?.timeout_seconds) > 0
+      ? Number(selectedNodeData.value?.timeout_seconds)
+      : worstCaseTimeoutSeconds.value,
+    'timeout',
+  ),
+)
+
+function worstCaseText(worstCase: WorstCase): string {
+  return t('views.PipelineEditorView.worst_case', {
+    count: worstCase.attempts,
+    timeout: formatCompactDuration(worstCase.timeoutSeconds),
+    total: formatCompactDuration(worstCase.totalSeconds),
+  })
+}
 
 // FAR-649: coverage mode from the stored shape. An ABSENT `on` (key
 // missing or null) renders as All-errors — the runtime resolves it to all

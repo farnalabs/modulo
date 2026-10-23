@@ -980,3 +980,250 @@ class TestTimestampRendering:
         aware = datetime(2026, 1, 15, 9, 0, 0, tzinfo=timezone(timedelta(hours=2)))
 
         assert evidence_index_module._iso(aware) == "2026-01-15T09:00:00+02:00"
+
+
+class TestAuditPeriodScoping:
+    """FAR-2055: ``period_from`` / ``period_to`` scope every artefact aggregate.
+
+    ``_seed_full_org`` spreads its rows across hours so one window can include
+    some artefact types and exclude others - a scoping bug that only filtered
+    one collector is visible here.
+    """
+
+    #: Everything seeded strictly before +7h: the audit event at +0, the run at
+    #: +0, all four HITL decisions (+1..+4) and the first two eval results
+    #: (+5, +6). The autonomy events (+8, +9) are outside it.
+    EARLY_FROM = _BASE_TIME
+    EARLY_TO = _BASE_TIME + timedelta(hours=7)
+    #: The tail of the seed: audit events at +8/+9, one eval result at +7, and
+    #: both autonomy changes. Nothing else.
+    LATE_FROM = _BASE_TIME + timedelta(hours=7)
+    LATE_TO = _BASE_TIME + timedelta(hours=10)
+
+    async def test_unscoped_default_covers_full_history_and_records_no_period(self, session: AsyncSession) -> None:
+        seeded = await _seed_full_org(session)
+        await session.commit()
+
+        index = await build_evidence_index(session, seeded["org_id"])
+
+        assert index.period_from is None
+        assert index.period_to is None
+        entries = _by_type(index)
+        assert entries[ARTIFACT_AUDIT_CHAIN].record_count == 3
+        assert entries[ARTIFACT_HITL_DECISION].record_count == 4
+        assert entries[ARTIFACT_EVAL_RESULT].record_count == 3
+        assert entries[ARTIFACT_AUTONOMY_CHANGE].record_count == 2
+
+    async def test_a_scoped_index_records_the_period_it_covers(self, session: AsyncSession) -> None:
+        seeded = await _seed_full_org(session)
+        await session.commit()
+
+        index = await build_evidence_index(
+            session,
+            seeded["org_id"],
+            period_from=self.EARLY_FROM,
+            period_to=self.EARLY_TO,
+        )
+
+        assert index.period_from == self.EARLY_FROM.isoformat()
+        assert index.period_to == self.EARLY_TO.isoformat()
+
+    async def test_the_early_window_counts_only_rows_inside_it(self, session: AsyncSession) -> None:
+        seeded = await _seed_full_org(session)
+        await session.commit()
+
+        index = await build_evidence_index(
+            session,
+            seeded["org_id"],
+            period_from=self.EARLY_FROM,
+            period_to=self.EARLY_TO,
+        )
+        entries = _by_type(index)
+
+        assert entries[ARTIFACT_AUDIT_CHAIN].record_count == 1
+        assert entries[ARTIFACT_RUN_SNAPSHOT].record_count == 1
+        assert entries[ARTIFACT_HITL_DECISION].record_count == 4
+        assert entries[ARTIFACT_EVAL_RESULT].record_count == 2
+        assert entries[ARTIFACT_AUTONOMY_CHANGE].status == STATUS_ABSENT
+
+    async def test_the_late_window_counts_the_tail_and_nothing_else(self, session: AsyncSession) -> None:
+        seeded = await _seed_full_org(session)
+        await session.commit()
+
+        index = await build_evidence_index(
+            session,
+            seeded["org_id"],
+            period_from=self.LATE_FROM,
+            period_to=self.LATE_TO,
+        )
+        entries = _by_type(index)
+
+        assert entries[ARTIFACT_AUDIT_CHAIN].record_count == 2
+        assert entries[ARTIFACT_RUN_SNAPSHOT].status == STATUS_ABSENT
+        assert entries[ARTIFACT_HITL_DECISION].status == STATUS_ABSENT
+        assert entries[ARTIFACT_EVAL_RESULT].record_count == 1
+        assert entries[ARTIFACT_AUTONOMY_CHANGE].record_count == 2
+
+    async def test_a_scoped_absence_reason_names_the_period(self, session: AsyncSession) -> None:
+        """A scoped absence must never read as "this org has no rows at all"."""
+        seeded = await _seed_full_org(session)
+        await session.commit()
+
+        index = await build_evidence_index(
+            session,
+            seeded["org_id"],
+            period_from=self.LATE_FROM,
+            period_to=self.LATE_TO,
+        )
+
+        reason = _by_type(index)[ARTIFACT_HITL_DECISION].absence_reason or ""
+        assert "requested audit period" in reason
+        # The bound itself is named, so a reader sees WHICH window was empty.
+        assert self.LATE_FROM.isoformat() in reason
+
+    async def test_an_open_start_window_bounds_only_the_end(self, session: AsyncSession) -> None:
+        """``period_to`` alone is a supported open-start window, not a dead arm.
+
+        Only the upper bound is set, so every row from the beginning of history
+        up to (but not including) it must still be counted. The absence reason
+        must name only the bound that was actually requested: adding an
+        "on or after" leg that was never supplied would misdescribe the window
+        an auditor is reading.
+        """
+        seeded = await _seed_full_org(session)
+        await session.commit()
+        upper = _BASE_TIME + timedelta(hours=7)
+
+        index = await build_evidence_index(session, seeded["org_id"], period_to=upper)
+        entries = _by_type(index)
+
+        assert index.period_from is None
+        assert index.period_to == upper.isoformat()
+        # Rows before the bound are still counted, so the window really is open
+        # on the left (all four HITL decisions sit at +1h..+4h).
+        assert entries[ARTIFACT_HITL_DECISION].record_count == 4
+        # Both autonomy events sit after the bound (+8h, +9h), so they are the
+        # artefact type this one-sided window excludes entirely.
+        autonomy = entries[ARTIFACT_AUTONOMY_CHANGE]
+        assert autonomy.status == STATUS_ABSENT
+        reason = autonomy.absence_reason or ""
+        assert reason.endswith(f" in the requested audit period (before {upper.isoformat()})")
+        assert "on or after" not in reason
+
+    async def test_an_open_ended_window_bounds_only_the_start(self, session: AsyncSession) -> None:
+        """``period_from`` alone is a supported open-ended window, not a dead arm.
+
+        Only the lower bound is set, so rows at or after it are counted and
+        everything earlier is excluded. The absence reason must name only the
+        start: a "before" leg that was never requested would misstate which
+        half of the interval was empty.
+        """
+        seeded = await _seed_full_org(session)
+        await session.commit()
+        lower = _BASE_TIME + timedelta(hours=8)
+
+        index = await build_evidence_index(session, seeded["org_id"], period_from=lower)
+        entries = _by_type(index)
+
+        assert index.period_from == lower.isoformat()
+        assert index.period_to is None
+        # Every HITL decision was made before the bound (+1h..+4h), so this
+        # artefact is excluded; the audit trail at +8h/+9h is still counted,
+        # proving the window stays open above the bound.
+        hitl = entries[ARTIFACT_HITL_DECISION]
+        assert hitl.status == STATUS_ABSENT
+        assert entries[ARTIFACT_AUDIT_CHAIN].record_count == 2
+        reason = hitl.absence_reason or ""
+        assert reason.endswith(f" in the requested audit period (on or after {lower.isoformat()})")
+        assert "before" not in reason
+
+    async def test_the_half_open_end_bound_is_exclusive(self, session: AsyncSession) -> None:
+        seeded = await _seed_full_org(session)
+        await session.commit()
+        # The eval result at exactly +5h is the only row at this instant.
+        boundary = _BASE_TIME + timedelta(hours=5)
+
+        index = await build_evidence_index(
+            session,
+            seeded["org_id"],
+            period_from=boundary,
+            period_to=boundary,
+        )
+
+        # Empty window: the +5h row is NOT included (to is exclusive).
+        assert _by_type(index)[ARTIFACT_EVAL_RESULT].status == STATUS_ABSENT
+
+    async def test_a_start_after_the_end_is_rejected(self, session: AsyncSession) -> None:
+        seeded = await _seed_full_org(session)
+        await session.commit()
+
+        with pytest.raises(ValueError, match="must not be after its end"):
+            await build_evidence_index(
+                session,
+                seeded["org_id"],
+                period_from=self.LATE_FROM,
+                period_to=self.EARLY_FROM,
+            )
+
+    async def test_naive_bounds_are_read_as_utc(self, session: AsyncSession) -> None:
+        seeded = await _seed_full_org(session)
+        await session.commit()
+
+        naively_scoped = await build_evidence_index(
+            session,
+            seeded["org_id"],
+            period_from=self.EARLY_FROM.replace(tzinfo=None),
+            period_to=self.EARLY_TO.replace(tzinfo=None),
+        )
+        aware_scoped = await build_evidence_index(
+            session,
+            seeded["org_id"],
+            period_from=self.EARLY_FROM,
+            period_to=self.EARLY_TO,
+        )
+
+        assert naively_scoped.period_from == aware_scoped.period_from
+        assert [entry.record_count for entry in naively_scoped.artifacts] == [
+            entry.record_count for entry in aware_scoped.artifacts
+        ]
+
+    async def test_a_scoped_index_keeps_the_tenant_boundary(self, session: AsyncSession) -> None:
+        mine = await _seed_full_org(session, slug="window-mine")
+        await _seed_full_org(session, slug="window-other")
+        await session.commit()
+
+        index = await build_evidence_index(
+            session,
+            mine["org_id"],
+            period_from=self.EARLY_FROM,
+            period_to=self.EARLY_TO,
+        )
+
+        assert index.organisation_id == str(mine["org_id"])
+        assert _by_type(index)[ARTIFACT_RUN_SNAPSHOT].identifiers == (f"pipeline-snapshot:{mine['snapshot_id']}@v1",)
+
+
+class TestNormaliseAuditPeriod:
+    def test_both_none_stay_none(self) -> None:
+        assert evidence_index_module.normalise_audit_period(None, None) == (None, None)
+
+    def test_a_naive_bound_gains_utc(self) -> None:
+        start, end = evidence_index_module.normalise_audit_period(
+            datetime(2026, 1, 15, 9, 0, 0),
+            datetime(2026, 1, 16, 9, 0, 0),
+        )
+
+        assert start == datetime(2026, 1, 15, 9, 0, 0, tzinfo=UTC)
+        assert end == datetime(2026, 1, 16, 9, 0, 0, tzinfo=UTC)
+
+    def test_an_aware_bound_keeps_its_offset(self) -> None:
+        aware = datetime(2026, 1, 15, 9, 0, 0, tzinfo=timezone(timedelta(hours=2)))
+
+        assert evidence_index_module.normalise_audit_period(aware, None)[0] is aware
+
+    def test_an_inverted_period_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="must not be after its end"):
+            evidence_index_module.normalise_audit_period(
+                datetime(2026, 1, 16, tzinfo=UTC),
+                datetime(2026, 1, 15, tzinfo=UTC),
+            )

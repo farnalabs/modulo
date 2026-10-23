@@ -8,6 +8,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Uuid,
@@ -37,6 +38,13 @@ class EvalResult(OrgScoped):
             ondelete="CASCADE",
             name="fk_eval_results_eval_org",
         ),
+        # FAR-2055: the compliance evidence index counts
+        # ``count(DISTINCT eval_id)`` over an org
+        # (compliance/evidence_index.py). The single-column eval_id index and
+        # the (organisation_id, evaluated_at) index (migration 0218) cannot
+        # answer it without a heap fetch per row; this composite makes the
+        # aggregate index-only and org-bounded. Mirrors migration 0328.
+        Index("ix_eval_results_org_eval_id", "organisation_id", "eval_id"),
     )
 
     # ``run_id`` is nullable since FAR-376: a SuiteRun-produced per-case outcome

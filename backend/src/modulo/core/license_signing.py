@@ -22,6 +22,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from modulo.core.license import DEFAULT_RENEWAL_MODE, RENEWAL_MODES
 from modulo.core.registry.crypto import sign_primitive
 from modulo.settings import get_settings
 
@@ -90,19 +91,45 @@ def build_team_payload(
     *,
     org_id: str | None = None,
     features: list[str] | None = None,
+    renewal_mode: str = DEFAULT_RENEWAL_MODE,
+    licence_id: str | None = None,
+    issued_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Build the signed license payload for a team customer.
 
     ``org_id`` defaults to a stable UUID v5 derived from ``org_name`` so the
     same customer always maps to the same org identifier.
+
+    FAR-2075 renewal claims, emitted on every newly-minted key:
+
+    - ``renewal_mode`` — ``"auto"`` or ``"manual"`` (default ``"manual"``).
+    - ``term`` — the term in MONTHS, the same unit ``expires_at`` is derived
+      from, so a renewal can compute the next expiry.
+    - ``licence_id`` — opaque stable identifier for THIS licence; defaults to
+      a fresh UUID v4 so a renewal can be tied to the licence it replaces.
+    - ``issued_at`` — ISO 8601 mint timestamp.
+
+    ``expires_at`` is derived from ``issued_at`` (default: now), so minting a
+    renewal with a later issue date shifts its expiry accordingly.
+
+    An explicit ``renewal_mode`` outside the vocabulary raises
+    :class:`LicenseSigningError` rather than silently minting the default: a
+    typo must not quietly downgrade an auto-renewal licence to manual.
     """
+    if not isinstance(renewal_mode, str) or renewal_mode not in RENEWAL_MODES:
+        raise LicenseSigningError(f"renewal_mode must be one of {sorted(RENEWAL_MODES)}, got {renewal_mode!r}")
     resolved_org_id = org_id or str(uuid.uuid5(uuid.NAMESPACE_DNS, f"modulo:{org_name}"))
-    expires_at = _add_months(datetime.now(UTC), term_months).isoformat()
+    issued = issued_at or datetime.now(UTC)
+    expires_at = _add_months(issued, term_months).isoformat()
     return {
         "tier": LICENSE_TIER,
         "features": list(features if features is not None else TEAM_FEATURES),
         "expires_at": expires_at,
         "org_id": resolved_org_id,
+        "renewal_mode": renewal_mode,
+        "term": term_months,
+        "licence_id": licence_id or str(uuid.uuid4()),
+        "issued_at": issued.isoformat(),
     }
 
 
@@ -113,13 +140,28 @@ def generate_team_license(
     private_key_hex: str | None = None,
     org_id: str | None = None,
     features: list[str] | None = None,
+    renewal_mode: str = DEFAULT_RENEWAL_MODE,
+    licence_id: str | None = None,
+    issued_at: datetime | None = None,
 ) -> str:
     """Generate an Ed25519-signed team license key for *org_name*.
 
     The signing key is ``private_key_hex`` when provided, otherwise resolved
     from ``MODULO_LICENSE_PRIVATE_KEY``. Raises :class:`LicenseSigningError`
     when no key is available or the key is malformed.
+
+    The FAR-2075 renewal claims are emitted on every key; existing call sites
+    keep working because every new parameter has a safe default (see
+    :func:`build_team_payload`).
     """
     key = _resolve_private_key(private_key_hex)
-    payload = build_team_payload(org_name, term_months, org_id=org_id, features=features)
+    payload = build_team_payload(
+        org_name,
+        term_months,
+        org_id=org_id,
+        features=features,
+        renewal_mode=renewal_mode,
+        licence_id=licence_id,
+        issued_at=issued_at,
+    )
     return encode_license_key(payload, key)

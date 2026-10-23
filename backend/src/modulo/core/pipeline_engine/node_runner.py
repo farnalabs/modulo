@@ -13371,8 +13371,19 @@ def _cancel_triage_attempt_key(run_id: str, node_id: str, attempt_key: str | Non
     See the block comment above: unparseable by the marker grammar (so the row
     lands on the ``__unknown__`` bookkeeping sentinel) and unique per
     ``(node, attempt)`` so two cancelled nodes never share a key.
+
+    FAR-2084: the attempt suffix is read through the ONE shared parser
+    (``run_node_outputs.marker_attempt_suffix``), never an inline ``rsplit``, so
+    every attempt-identity shape the writer produces (numeric claim count, the
+    fail-open hex / ``claim-unknown`` suffixes, ``fallback``, the ``agent`` /
+    ``connector`` slots) carries through unchanged. A caller key that is not
+    attempt-scoped at all (empty or missing the ``:node:`` segment) is NOT this
+    attempt's identity and falls back to the same deterministic suffix the
+    raw-output retention writer uses.
     """
-    suffix = attempt_key.rsplit(":", 1)[-1] if attempt_key else ""
+    from modulo.db.crud.run_node_outputs import marker_attempt_suffix
+
+    suffix = marker_attempt_suffix(attempt_key) if attempt_key else None
     if not suffix:
         suffix = _CANCEL_TRIAGE_SUFFIX_FALLBACK
     return f"{_CANCEL_TRIAGE_ATTEMPT_KEY_PREFIX}{run_id}:{node_id}:{suffix}"

@@ -45,6 +45,7 @@ from modulo.db.crud.run_node_outputs import (
     _targeted_upsert_stmt,
     _upsert_group_stmt,
     dialect_insert,
+    marker_attempt_suffix,
     parse_marker_node_id,
     persist_artifact_pointers,
     persist_schema_enforcement_record,
@@ -53,6 +54,7 @@ from modulo.db.crud.run_node_outputs import (
     read_run_markers_fenced,
     read_run_node_outputs_raw,
     replace_run_node_outputs,
+    split_attempt_key,
     upsert_rows,
     write_run_markers,
 )
@@ -69,6 +71,18 @@ _ORG_B = uuid.UUID("00000000-0000-0000-0000-00000000000b")
 _RUN_NUMBER = itertools.count(1)
 
 _RUN_ID = "01234567-89ab-cdef-0123-456789abcdef"
+
+#: Every attempt-identity suffix shape the writers actually produce
+#: (FAR-2084). One test case per shape, so dropping a shape from the shared
+#: helper fails a test instead of silently narrowing the convention again.
+_ATTEMPT_SUFFIX_SHAPES = [
+    pytest.param("3", id="numeric-claim-count"),
+    pytest.param("agent", id="agent-slot"),
+    pytest.param("connector", id="connector-slot"),
+    pytest.param("fallback", id="fallback"),
+    pytest.param("claim-unknown", id="claim-unknown"),
+    pytest.param("0123456789abcdef", id="fail-open-hex"),
+]
 
 
 @pytest.fixture
@@ -230,6 +244,59 @@ class TestTwinParser:
 
     def test_sentinel_named_ids_parse(self) -> None:
         assert parse_marker_node_id(f"run:{_RUN_ID}:node:__run_meta__:1") == "__run_meta__"
+
+
+class TestAttemptKeyRule:
+    """FAR-2084: ONE rule — any non-empty suffix after ``:node:`` is the attempt.
+
+    One case per shape the writers actually produce, so deleting a shape from
+    the shared helper fails a test instead of silently narrowing the
+    convention again.
+    """
+
+    #: Every suffix shape node_runner/runner_capacity write (FAR-2084).
+    _SHAPES = _ATTEMPT_SUFFIX_SHAPES
+
+    @pytest.mark.parametrize("suffix", _SHAPES)
+    def test_every_writer_shape_is_an_attempt_identity(self, suffix: str) -> None:
+        attempt_key = f"run:{_RUN_ID}:node:n1:{suffix}"
+        assert split_attempt_key(attempt_key) == ("n1", suffix)
+        assert marker_attempt_suffix(attempt_key) == suffix
+
+    @pytest.mark.parametrize("suffix", _SHAPES)
+    def test_marker_node_id_reader_accepts_every_shape(self, suffix: str) -> None:
+        assert parse_marker_node_id(f"run:{_RUN_ID}:node:n1:{suffix}") == "n1"
+
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            pytest.param(f"run:{_RUN_ID}:node:n1:", id="empty-suffix"),
+            pytest.param(f"run:{_RUN_ID}:node::3", id="empty-node-id"),
+            pytest.param(f"run:{_RUN_ID}:n1:3", id="no-node-segment"),
+            pytest.param(f"terminal-triage:{_RUN_ID}", id="synthetic-run-level-key"),
+            pytest.param("", id="empty-key"),
+        ],
+    )
+    def test_malformed_keys_are_not_this_attempt(self, malformed: str) -> None:
+        assert split_attempt_key(malformed) is None
+        assert marker_attempt_suffix(malformed) is None
+
+    def test_node_ids_may_contain_colons(self) -> None:
+        assert split_attempt_key(f"run:{_RUN_ID}:node:my:weird:node:claim-unknown") == (
+            "my:weird:node",
+            "claim-unknown",
+        )
+
+    def test_run_id_need_not_be_a_uuid(self) -> None:
+        """The ATTEMPT rule is structural; UUID anchoring is a storage rule.
+
+        ``parse_marker_node_id`` additionally requires the migration-0192 UUID
+        anchor so synthetic row keys land on ``__unknown__``; readers that
+        consume a caller-supplied attempt key (e.g. cancel-triage) must still
+        recognise a structurally valid key with a synthetic run id.
+        """
+        assert split_attempt_key("run:run-1:node:node-a:3") == ("node-a", "3")
+        assert parse_marker_node_id("run:run-1:node:node-a:3") == UNKNOWN_NODE_ID
 
 
 class TestDialectGuard:
