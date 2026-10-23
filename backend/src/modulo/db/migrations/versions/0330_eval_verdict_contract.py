@@ -67,6 +67,13 @@ Locking / online safety (FAR-403 class, and a deadlock found in review):
   connection: every ``ALTER`` commits immediately (so its ACCESS EXCLUSIVE is
   held for that statement only, never across the following ``VALIDATE`` scan,
   which runs under SHARE UPDATE EXCLUSIVE and does not block DML).
+* The same rule as ``evals`` applies when this transaction ALREADY locks
+  ``eval_results``: ``0328_evidence_index_aggregate_indexes`` (an earlier
+  revision, so the same transaction) creates an index on the table and holds
+  SHARE until the transaction ends, so an upgrade that applies ``0328`` and
+  ``0330`` together falls back to the migration connection - a side
+  connection's ACCESS EXCLUSIVE ``ALTER``/``UPDATE`` would wait on a lock this
+  transaction itself holds. A chain already at ``0328`` never hits this.
 * Both connections set an explicit ``lock_timeout`` so a future conflict fails
   loudly instead of hanging.
 * The backfill is a PRIMARY-KEY KEYSET loop over ``id`` (not
@@ -147,6 +154,15 @@ _BACKFILL_OUTCOME = (
     "RETURNING e.id"
 )
 _ZERO_UUID = uuid.UUID(int=0)
+
+#: Locks the migration transaction itself already holds on ``eval_results``.
+#: ``0328_evidence_index_aggregate_indexes`` (an earlier revision, so the SAME
+#: Alembic transaction) creates an index on this table and keeps its SHARE lock
+#: until the transaction ends, so an ACCESS EXCLUSIVE from a side connection
+#: would wait on a lock our own transaction holds.
+_EVAL_RESULTS_LOCKS_HELD_BY_THIS_TRANSACTION = (
+    "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND relation = to_regclass('public.eval_results')"
+)
 
 # --- evals vocabulary (TRANSITIONAL: both stored names are accepted) --------
 _RENAME_EVAL_TYPES = "UPDATE evals SET eval_type = 'model_judge' WHERE eval_type = 'llm_judge'"
@@ -259,6 +275,32 @@ def _relation_visible(conn: Any) -> bool:
     return conn.execute(sa.text("SELECT to_regclass('public.eval_results')")).scalar() is not None
 
 
+def _migration_transaction_locks_eval_results() -> bool:
+    """True when Alembic's own transaction already locks ``eval_results``.
+
+    An earlier revision in the SAME transaction can take a lock the side
+    connection cannot get past: ``0328_evidence_index_aggregate_indexes``
+    creates an index on ``eval_results``, holding SHARE until the transaction
+    ends, so the side connection's ACCESS EXCLUSIVE ``ALTER`` would wait on a
+    lock this very transaction holds - a self-deadlock bounded by
+    ``lock_timeout``. A chain from ``0328`` alone does not hit it; an upgrade
+    that applies ``0328`` and ``0330`` together does.
+    """
+    count = op.get_bind().execute(sa.text(_EVAL_RESULTS_LOCKS_HELD_BY_THIS_TRANSACTION)).scalar()
+    return bool(count)
+
+
+def _side_connection_can_write_eval_results(conn: Any) -> bool:
+    """True when the side connection can run ``eval_results`` DDL/DML.
+
+    False on a FRESH chain (the table is still uncommitted, so invisible to
+    another session) and when this transaction already locks the table (the
+    ``0328`` index). Both cases fall back to the migration connection, which
+    can upgrade its own lock.
+    """
+    return _relation_visible(conn) and not _migration_transaction_locks_eval_results()
+
+
 def _execute_migration(statements: tuple[str, ...]) -> None:
     """Run DDL/DML on the migration connection (``evals`` always goes here)."""
     for statement in statements:
@@ -270,10 +312,11 @@ def _execute_side(statements: tuple[str, ...]) -> None:
 
     Each statement commits on its own, so an ACCESS EXCLUSIVE is released before
     the next statement's ``VALIDATE`` scan. On a fresh chain (table not visible)
-    the statements run on the migration connection instead.
+    or when this transaction already locks the table, the statements run on the
+    migration connection instead.
     """
     with _autocommit_connection() as conn:
-        if not _relation_visible(conn):
+        if not _side_connection_can_write_eval_results(conn):
             for statement in statements:
                 op.execute(sa.text(statement))
             return
@@ -286,10 +329,14 @@ def _backfill_outcome() -> int:
     total = 0
     batches = 0
     last: Any = _ZERO_UUID
-    with _autocommit_connection() as conn:
-        if not _relation_visible(conn):
+    with _autocommit_connection() as side:
+        if not _relation_visible(side):
             logger.info("0330_eval_verdict_contract: fresh chain, no rows to backfill")
             return 0
+        # When this transaction already locks ``eval_results`` (the 0328 index),
+        # the side connection's UPDATE would wait on our own lock; the migration
+        # connection can upgrade it, so the keyset loop runs there instead.
+        conn = op.get_bind() if _migration_transaction_locks_eval_results() else side
         logger.info(
             "0330_eval_verdict_contract: starting online outcome backfill "
             "(batch_size=%d, primary-key keyset, resumable via WHERE outcome IS NULL; "

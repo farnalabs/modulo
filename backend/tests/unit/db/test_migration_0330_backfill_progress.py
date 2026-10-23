@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -56,6 +57,7 @@ def fake_backfill(monkeypatch: pytest.MonkeyPatch) -> _FakeConnection:
     connection = _FakeConnection(batches)
     monkeypatch.setattr(_MIGRATION, "_autocommit_connection", lambda: _FakeConnectionContext(connection))
     monkeypatch.setattr(_MIGRATION, "_relation_visible", lambda _conn: True)
+    monkeypatch.setattr(_MIGRATION, "_migration_transaction_locks_eval_results", lambda: False)
     monkeypatch.setattr(_MIGRATION, "_PROGRESS_EVERY_BATCHES", 10)
     monkeypatch.setattr(_MIGRATION, "_PROGRESS_EVERY_SECONDS", 10_000.0)
     return connection
@@ -97,3 +99,34 @@ def test_the_loop_still_keysets_from_the_last_id(fake_backfill: _FakeConnection)
     assert cursors[1] == 1
     assert cursors[2] == 2
     assert all(params.get("batch_size") == _MIGRATION._BATCH_SIZE for params in fake_backfill.params)
+
+
+def test_the_side_connection_is_skipped_when_this_transaction_locks_the_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``0328``'s CREATE INDEX holds SHARE, so a side ALTER self-deadlocks."""
+    monkeypatch.setattr(_MIGRATION, "_relation_visible", lambda _conn: True)
+    monkeypatch.setattr(_MIGRATION, "_migration_transaction_locks_eval_results", lambda: True)
+    assert _MIGRATION._side_connection_can_write_eval_results(object()) is False
+
+    monkeypatch.setattr(_MIGRATION, "_migration_transaction_locks_eval_results", lambda: False)
+    assert _MIGRATION._side_connection_can_write_eval_results(object()) is True
+
+    monkeypatch.setattr(_MIGRATION, "_relation_visible", lambda _conn: False)
+    assert _MIGRATION._side_connection_can_write_eval_results(object()) is False
+
+
+def test_the_backfill_runs_on_the_migration_connection_when_it_already_locks_the_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The keyset loop must not wait on the lock this transaction itself holds."""
+    side = _FakeConnection([[(0,)]])
+    migration = _FakeConnection([[(1,)], []])
+    monkeypatch.setattr(_MIGRATION, "_autocommit_connection", lambda: _FakeConnectionContext(side))
+    monkeypatch.setattr(_MIGRATION, "_relation_visible", lambda _conn: True)
+    monkeypatch.setattr(_MIGRATION, "_migration_transaction_locks_eval_results", lambda: True)
+    monkeypatch.setattr(_MIGRATION, "op", SimpleNamespace(get_bind=lambda: migration))
+
+    assert _MIGRATION._backfill_outcome() == 1
+    assert side.params == []
+    assert len(migration.params) == 2
