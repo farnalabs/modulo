@@ -923,6 +923,13 @@
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
                   </div></template>
+          <!-- FAR-2089: connector nodes render with their own badge/colour so
+               they never fall back to the `agent` node rendering. Display
+               only — no config panel or palette entry in this slice. -->
+          <template #node-connector="nodeProps"><div class="rounded-lg border-2 border-teal-500/60 bg-teal-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-teal-700 dark:text-teal-300">{{ $t('views.PipelineEditorView.node_connector_badge') }}</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_connector_label') }}</div>
+                  </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
               <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
@@ -2108,7 +2115,7 @@ const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
-const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch' }
+const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch', connector: 'connector' }
 const { fitView, onPaneReady } = useVueFlow()
 
 // Docked-toolbar styling: one height/radius/spacing per action class so the

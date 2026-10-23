@@ -1254,6 +1254,7 @@ export default {
       "node_hitl_label": "Human-in-the-loop",
       "node_dispatch_badge": "DISPATCH",
       "node_dispatch_label": "Dispatch",
+      "node_connector_badge": "CONNECTOR",
       "node_connector_label": "Connector",
       "label_field": "Label",
       "output_schema": "Output Schema",

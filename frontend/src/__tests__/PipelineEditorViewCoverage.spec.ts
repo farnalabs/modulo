@@ -135,6 +135,10 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     expect(vm.nodeTypeLabel('connector')).not.toBe(vm.nodeTypeLabel('agent'))
     expect(vm.nodeTypeLabel('connector')).toBeTruthy()
 
+    // FAR-2089: registered on the canvas alongside the other node types, so it
+    // renders its own card instead of VueFlow's unstyled default box.
+    expect(vm.nodeTypes.connector).toBe('connector')
+
     wrapper.unmount()
   })
 
