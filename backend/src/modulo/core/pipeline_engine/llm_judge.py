@@ -227,8 +227,21 @@ def _malformed_backend_id_judge(backend_id_str: str, detail: str) -> ModelJudgeC
 def _judge_content(output: dict[str, Any], config: dict[str, Any]) -> Any:
     """Return the content to judge.
 
-    The engine's guarded-input helper exposes the delimited content here; fall
-    back to the legacy flat field for a direct caller.
+    ``config["_judge_content"]`` is a private, engine-owned key with exactly
+    one writer: :meth:`modulo.core.eval_engine.EvalEngine._build_safe_judge_input`
+    (``core/eval_engine/__init__.py``), which sets the delimited, length-bounded
+    content on a COPY of the definition's config. It is reached for both
+    ``EvalEngine.evaluate`` and ``EvalEngine.evaluate_result``, i.e. every
+    production path into this module: the pipeline executor, the eval suite
+    runner, the feedback-loop re-evaluation, and guardrail revalidation.
+
+    The only reader is :func:`_run_judge` below. So in production this returns
+    the guarded string and the ``field`` branch is never taken. The fallback
+    exists for a caller that invokes the judge callable with its own
+    ``EvalDefinition`` without going through the engine's guarded-input builder
+    (a direct/test caller): that config has no ``_judge_content`` and its own
+    ``field`` names the output key to judge. ``_judge_content`` wins whenever
+    both are present, so a guarded call can never silently fall back.
     """
     content = config.get("_judge_content")
     if content is not None:
