@@ -25,6 +25,11 @@ _DEFAULT_IMAGE = "python:3.13-slim"
 _WORKSPACE_PREFIX = "modulo-workspace-"
 _UUID_TRUNC_LEN = 12
 _CLOSE_DESTROY_TIMEOUT_S = 30
+# Bound for confirming an already-initiated container removal (AutoRemove
+# removes asynchronously once the container stops, so an explicit delete can
+# race it with a 409 "removal already in progress").
+_REMOVE_CONFIRM_TIMEOUT_S = 10
+_REMOVE_CONFIRM_POLL_S = 0.1
 
 # --- Workspace hardening defaults (FAR-590 D4 / ADR 029 config table) ------
 # Per-workspace resources: 1.0 CPU / 1 GiB (fixed per ADR 029's committed
@@ -621,6 +626,13 @@ class DockerRuntimeProvider(RuntimeProvider):
     async def destroy_workspace(self, provider_ref: str) -> None:
         """Stop and remove the workspace container.
 
+        ``AutoRemove`` only removes the container asynchronously once it has
+        stopped, so a bare ``stop()`` can leave a stopped container behind
+        (name churn, disk, and a later ``create_workspace`` racing the
+        leftover name). The explicit forced delete makes the removal
+        synchronous and also catches containers the daemon did not
+        auto-remove.
+
         Best-effort: if the container is already gone (e.g. due to
         ``AutoRemove``) the error is logged and swallowed.
         """
@@ -630,13 +642,82 @@ class DockerRuntimeProvider(RuntimeProvider):
         try:
             client = await self._get_client()
             container = await client.containers.get(container_id)
-            await container.stop()
-        except aiodocker.exceptions.DockerError:
-            _log.warning("Container %s already removed", container_id)
+        except aiodocker.exceptions.DockerError as exc:
+            status = getattr(exc, "status", None)
+            if status == 404:
+                _log.warning("Container %s already removed", container_id)
+            else:
+                _log.warning("Failed to resolve container %s (status %s)", container_id, status)
+            return
         except asyncio.CancelledError:
             raise
         except Exception:
             _log.exception("Failed to destroy container %s", container_id)
+            return
+
+        try:
+            await container.stop()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Stopping is best-effort (already stopped, or gone between get()
+            # and stop()); the forced delete below is what removes it.
+            _log.warning("Failed to stop container %s; deleting it anyway", container_id, exc_info=True)
+
+        try:
+            await container.delete(force=True)
+            return
+        except asyncio.CancelledError:
+            raise
+        except aiodocker.exceptions.DockerError as exc:
+            # ``AutoRemove`` removes the container asynchronously as soon as
+            # it stops, so the explicit delete can lose the race: the daemon
+            # answers 409 "removal ... already in progress" (or 404 when the
+            # removal already finished). Confirm the removal instead of
+            # reporting success while the container is still on disk.
+            status = getattr(exc, "status", None)
+            if status in (404, 409):
+                _log.warning(
+                    "Container %s removal already handled by the daemon (status %s)",
+                    container_id,
+                    status,
+                )
+            else:
+                _log.warning(
+                    "Failed to delete container %s (status %s); confirming removal",
+                    container_id,
+                    status,
+                )
+        except Exception:
+            _log.exception("Failed to remove container %s", container_id)
+
+        if not await self._await_container_removed(client, container_id):
+            _log.warning("Container %s still present after destroy", container_id)
+
+    async def _await_container_removed(self, client: aiodocker.Docker, container_id: str) -> bool:
+        """Poll until *container_id* is gone (bounded). Returns ``True`` when gone."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _REMOVE_CONFIRM_TIMEOUT_S
+        while True:
+            try:
+                await client.containers.get(container_id)
+            except asyncio.CancelledError:
+                raise
+            except aiodocker.exceptions.DockerError as exc:
+                if getattr(exc, "status", None) == 404:
+                    return True
+                _log.warning(
+                    "Failed to confirm removal of container %s (status %s)",
+                    container_id,
+                    getattr(exc, "status", "?"),
+                )
+                return False
+            except Exception:
+                _log.exception("Failed to confirm removal of container %s", container_id)
+                return False
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(_REMOVE_CONFIRM_POLL_S)
 
     async def get_workspace_status(self, provider_ref: str) -> str:
         """Return the current container status."""

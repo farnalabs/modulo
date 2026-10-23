@@ -412,6 +412,7 @@ async def test_destroy_workspace(
     await provider.destroy_workspace(ref)
 
     mock_container.stop.assert_awaited_once()
+    mock_container.delete.assert_awaited_once_with(force=True)
     assert ref not in provider._workspaces
 
 
@@ -420,6 +421,35 @@ async def test_destroy_workspace_unknown(
 ) -> None:
     result = await provider.destroy_workspace("nonexistent")
     assert result is None
+
+
+async def test_destroy_workspace_swallows_delete_error(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    delete_error = _FakeDockerError("removal already in progress")
+    delete_error.status = 409
+    gone_error = _FakeDockerError("gone")
+    gone_error.status = 404
+    mock_container.delete.side_effect = delete_error
+    # First get() resolves the container handle; the removal-confirmation poll
+    # then sees it already gone.
+    mock_docker_client.containers.get.side_effect = [mock_container, gone_error]
+
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        await provider.destroy_workspace(ref)
+
+    assert ref not in provider._workspaces
 
 
 async def test_destroy_workspace_swallows_docker_error(
