@@ -38,12 +38,32 @@ from modulo.core.registry.crypto import verify_signature
 #: capability window by configuration.
 LICENCE_GRACE_DAYS = 14
 
-# Ed25519 public key (hex-encoded, 64 hex chars).
-# In production this would be set via environment or mounted secret.
-# This is the dev/test key — replace for production deployments.
-_LICENSE_PUBLIC_KEY_HEX: str = "a101dd3f34a806455d25ca247fb84a0a61decff4cf1a467b9456175634b0fc51"
+#: The BUILT-IN DEVELOPMENT trust anchor (Ed25519 public key, hex-encoded, 64 chars).
+#:
+#: This is the real public half of the DEVELOPMENT signing keypair held in the
+#: Farnalabs vault. It is NOT the anchor Farnalabs signs production licences
+#: with: production keys are signed by a separate keypair whose public half is
+#: published to customers and must be supplied via ``MODULO_LICENSE_PUBLIC_KEY``
+#: (``Settings.modulo_license_public_key``). A production licence therefore
+#: CANNOT verify against this key.
+#:
+#: It stays as the no-configuration default so a developer running the app
+#: locally can exercise licensing without an env override. Outside debug, a
+#: deployment that configures a licence MUST also configure the production
+#: anchor: startup fails closed when a licence key is present without one
+#: (FAR-2091), and the install path returns an actionable anchor-mismatch error.
+_BUILTIN_DEV_PUBLIC_KEY_HEX: str = "a101dd3f34a806455d25ca247fb84a0a61decff4cf1a467b9456175634b0fc51"
+
+#: Backwards-compatible alias for the historical constant name.
+#:
+#: Several call sites (and the unit tests) import ``_LICENSE_PUBLIC_KEY_HEX``;
+#: keep it pointing at the built-in development anchor so renaming the constant
+#: does not silently change what those imports mean.
+_LICENSE_PUBLIC_KEY_HEX: str = _BUILTIN_DEV_PUBLIC_KEY_HEX
 
 # Optional override for the public key (set via env var or set_public_key).
+#: ``None`` means "no override configured" — the built-in development anchor
+#: is in use (and :func:`using_builtin_dev_anchor` reports True).
 _configured_public_key_hex: str | None = None
 
 #: Whether the BUILT-IN development key may be used to ACCEPT a licence.
@@ -91,12 +111,23 @@ def _validate_public_key_hex(hex_key: str) -> None:
 
 
 # Validate key format at module load time.
-_validate_public_key_hex(_LICENSE_PUBLIC_KEY_HEX)
+_validate_public_key_hex(_BUILTIN_DEV_PUBLIC_KEY_HEX)
 
 
 def _get_effective_public_key() -> str:
     """Return the configured key if set, otherwise fall back to the built-in key."""
     return _configured_public_key_hex if _configured_public_key_hex is not None else _LICENSE_PUBLIC_KEY_HEX
+
+
+def using_builtin_dev_anchor() -> bool:
+    """Whether verification is effectively using the built-in DEVELOPMENT anchor.
+
+    ``True`` when no production anchor is configured, or when the configured
+    key IS the development key. A production (Farnalabs-signed) licence cannot
+    verify against that anchor, so a signature failure is an ANCHOR mismatch
+    rather than a malformed/corrupt key.
+    """
+    return _get_effective_public_key() == _LICENSE_PUBLIC_KEY_HEX
 
 
 def set_public_key(hex_key: str) -> None:
@@ -135,11 +166,36 @@ class LicenseData:
     raw_key: str = field(repr=False)
 
 
+#: Machine-readable failure reasons carried on :class:`LicenseValidation`.
+#:
+#: They are a STABLE API for the install path and the admin UI: the human
+#: ``error``/``hint`` prose may change, the ``reason`` must not.
+REASON_MALFORMED = "malformed"
+REASON_SIGNATURE_MISMATCH = "signature_mismatch"
+REASON_ANCHOR_MISMATCH = "anchor_mismatch"
+REASON_DEV_ANCHOR_NOT_TRUSTED = "dev_anchor_not_trusted"
+REASON_EXPIRED = "expired"
+
+_ANCHOR_MISMATCH_HINT = (
+    "This deployment is verifying licences with the built-in development anchor, which cannot "
+    "verify a production licence. Set MODULO_LICENSE_PUBLIC_KEY to the Ed25519 public key "
+    "Farnalabs issued with your licence (anchor mismatch)."
+)
+_SIGNATURE_MISMATCH_HINT = (
+    "The key was not signed by the authority this deployment trusts. If Farnalabs issued it, "
+    "MODULO_LICENSE_PUBLIC_KEY does not match the signing keypair (anchor mismatch)."
+)
+
+
 @dataclass
 class LicenseValidation:
     valid: bool
     license_data: LicenseData | None = None
     error: str | None = None
+    #: Machine-readable reason (one of the ``REASON_*`` constants) when invalid.
+    reason: str | None = None
+    #: Actionable operator guidance for an invalid key.
+    hint: str | None = None
 
 
 class LicenseError(ValueError): ...
@@ -163,8 +219,8 @@ def _decode_license_key(key: str) -> tuple[bytes, bytes]:
     return payload_bytes, sig_bytes
 
 
-def _check_expired(expires_at: str) -> str | None:
-    """Return an error when the licence's CAPABILITY has lapsed.
+def _expiry_failure(expires_at: str) -> tuple[str, str] | None:
+    """Return ``(error, reason)`` when the licence's CAPABILITY has lapsed.
 
     Capability expiry is ``expires_at + LICENCE_GRACE_DAYS``, not
     ``expires_at``: the fixed delivery grace exists so a renewal key can arrive
@@ -174,38 +230,76 @@ def _check_expired(expires_at: str) -> str | None:
     try:
         exp = datetime.fromisoformat(expires_at)
         if exp + timedelta(days=LICENCE_GRACE_DAYS) < datetime.now(exp.tzinfo):
-            return "License has expired"
+            return ("License has expired", REASON_EXPIRED)
     except ValueError:
-        return f"Invalid expires_at format: {expires_at}"
+        return (f"Invalid expires_at format: {expires_at}", REASON_MALFORMED)
     return None
+
+
+def _check_expired(expires_at: str) -> str | None:
+    """Return an error when the licence's CAPABILITY has lapsed (see :func:`_expiry_failure`)."""
+    failure = _expiry_failure(expires_at)
+    return failure[0] if failure is not None else None
 
 
 def parse_and_verify(key: str) -> LicenseValidation:
     try:
         payload_bytes, sig_bytes = _decode_license_key(key)
     except LicenseError as exc:
-        return LicenseValidation(valid=False, error=str(exc))
+        return LicenseValidation(valid=False, error=str(exc), reason=REASON_MALFORMED)
 
     try:
         payload = json.loads(payload_bytes)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        return LicenseValidation(valid=False, error=f"Invalid JSON payload: {exc}")
+        return LicenseValidation(
+            valid=False,
+            error=f"Invalid JSON payload: {exc}",
+            reason=REASON_MALFORMED,
+        )
 
     if not isinstance(payload, dict):
-        return LicenseValidation(valid=False, error="Payload must be a JSON object")
-
-    # The built-in development key is not a trust anchor outside debug: a key
-    # whose private half ships with the product must never activate a licence
-    # on a real deployment. Refused before the signature check so the operator
-    # sees the misconfiguration, not an unhelpful "bad signature".
-    if is_dev_anchor_in_use() and not _dev_anchor_trusted:
-        _log.error("license.dev_anchor_verification_refused")
-        return LicenseValidation(valid=False, error=DEV_ANCHOR_NOT_TRUSTED_ERROR)
+        return LicenseValidation(
+            valid=False,
+            error="Payload must be a JSON object",
+            reason=REASON_MALFORMED,
+        )
 
     sig_hex = sig_bytes.hex()
 
+    # Verify the signature BEFORE applying the built-in-dev-anchor refusal, so
+    # the two distinct failures stay distinguishable outside debug:
+    #
+    # - a key signed by some OTHER keypair (a production key with no anchor
+    #   configured) fails verification, and the cause is the ANCHOR, not the
+    #   key: reported as an anchor mismatch with the fix (FAR-2091);
+    # - a key that VERIFIES against the built-in development anchor was signed
+    #   with a private half that ships with the product, and must never
+    #   activate a licence on a real deployment: refused (FAR-2061).
+    #
+    # Refusing before the signature check conflated the two and reported every
+    # production key as a generic configuration refusal with no classification.
     if not verify_signature(payload, sig_hex, _get_effective_public_key()):
-        return LicenseValidation(valid=False, error="Signature verification failed")
+        if using_builtin_dev_anchor():
+            return LicenseValidation(
+                valid=False,
+                error="Signature verification failed",
+                reason=REASON_ANCHOR_MISMATCH,
+                hint=_ANCHOR_MISMATCH_HINT,
+            )
+        return LicenseValidation(
+            valid=False,
+            error="Signature verification failed",
+            reason=REASON_SIGNATURE_MISMATCH,
+            hint=_SIGNATURE_MISMATCH_HINT,
+        )
+
+    if is_dev_anchor_in_use() and not _dev_anchor_trusted:
+        _log.error("license.dev_anchor_verification_refused")
+        return LicenseValidation(
+            valid=False,
+            error=DEV_ANCHOR_NOT_TRUSTED_ERROR,
+            reason=REASON_DEV_ANCHOR_NOT_TRUSTED,
+        )
 
     tier = payload.get("tier", "community")
     features = payload.get("features", [])
@@ -213,9 +307,10 @@ def parse_and_verify(key: str) -> LicenseValidation:
     org_id = payload.get("org_id", "")
 
     if expires_at:
-        error = _check_expired(expires_at)
-        if error:
-            return LicenseValidation(valid=False, error=error)
+        failure = _expiry_failure(expires_at)
+        if failure is not None:
+            error, reason = failure
+            return LicenseValidation(valid=False, error=error, reason=reason)
 
     data = LicenseData(
         tier=tier,
@@ -283,16 +378,21 @@ def verify_license_key(key: str) -> LicenseData | None:
 
 
 def check_production_public_key(settings: Any) -> None:
-    """Log a CRITICAL warning if the app is using the dev key outside debug mode.
+    """Log a CRITICAL warning when the built-in DEVELOPMENT anchor is used outside debug.
+
+    The built-in key is a real development keypair's public half, NOT the
+    production anchor, so a Farnalabs-issued licence cannot verify against it.
+    Startup refuses to boot when a licence is configured without an anchor
+    (see ``api.main._configure_license_and_otel``); this check is the backstop
+    for a Community instance that later receives a licence at runtime.
 
     Advisory only: the enforcing gate is ``parse_and_verify``, which refuses any
     licence that would only verify against this anchor unless a process has
     opted in through ``set_dev_anchor_trusted``.
     """
-    effective_key = _get_effective_public_key()
-    if effective_key == _LICENSE_PUBLIC_KEY_HEX and not getattr(settings, "debug", False):
+    if using_builtin_dev_anchor() and not getattr(settings, "debug", False):
         _log.critical(
-            "LICENSE_CRITICAL: Using dev/test license public key in production. "
-            "Set MODULO_LICENSE_PUBLIC_KEY env var to a production key. "
-            "Licences are refused until a production key is configured.",
+            "LICENSE_CRITICAL: the built-in DEVELOPMENT licence anchor is in use outside debug. "
+            "Production licences are signed by a different keypair and will FAIL verification. "
+            "Set MODULO_LICENSE_PUBLIC_KEY to the public key Farnalabs issued with your licence.",
         )

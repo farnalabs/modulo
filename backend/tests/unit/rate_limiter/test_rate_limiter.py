@@ -15,8 +15,13 @@ from modulo.core.rate_limiter import (
 
 
 @pytest.fixture
-def mock_redis():
-    """Sliding-window flavoured Redis mock (module-level shadows the conftest one)."""
+def sliding_redis():
+    """Sliding-window flavoured Redis mock.
+
+    Deliberately NOT named ``mock_redis``: the conftest fixture of that name is
+    auth-flavoured (2-tuple pipeline result), and a module-level override would
+    silently swap the shape for any future module that reused the name.
+    """
     return make_redis_client()
 
 
@@ -26,15 +31,15 @@ class TestRedisSlidingWindowRateLimiter:
         [(0, True), (1, True), (5, True), (6, False)],
         ids=["empty", "single", "at-limit", "over-limit"],
     )
-    async def test_check_limit(self, mock_redis, zcard_value, expected):
-        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, zcard_value, True))
-        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+    async def test_check_limit(self, sliding_redis, zcard_value, expected):
+        sliding_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, zcard_value, True))
+        limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         assert await limiter.check("test-key", max_requests=5) is expected
 
-    async def test_uses_correct_redis_key(self, mock_redis):
-        limiter = RedisSlidingWindowRateLimiter(mock_redis, prefix="rl:")
+    async def test_uses_correct_redis_key(self, sliding_redis):
+        limiter = RedisSlidingWindowRateLimiter(sliding_redis, prefix="rl:")
         await limiter.check("mykey", max_requests=10, window_s=30)
-        pipe = mock_redis.pipeline.return_value
+        pipe = sliding_redis.pipeline.return_value
         call_args = pipe.zadd.call_args
         assert call_args is not None
         redis_key = call_args[0][0]
@@ -46,42 +51,42 @@ class TestRedisSlidingWindowRateLimiter:
         pipe.expire.assert_called_once()
         assert pipe.expire.call_args[0][0] == "rl:mykey"
 
-    async def test_pipeline_created_transactional(self, mock_redis):
-        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+    async def test_pipeline_created_transactional(self, sliding_redis):
+        limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5)
-        mock_redis.pipeline.assert_called_once_with(transaction=True)
+        sliding_redis.pipeline.assert_called_once_with(transaction=True)
 
-    async def test_prunes_entries_older_than_window(self, mock_redis):
-        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+    async def test_prunes_entries_older_than_window(self, sliding_redis):
+        limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5, window_s=120)
-        pipe = mock_redis.pipeline.return_value
+        pipe = sliding_redis.pipeline.return_value
         pipe.zremrangebyscore.assert_called_once()
         _, lower_bound, cutoff = pipe.zremrangebyscore.call_args[0]
         assert lower_bound == 0
         now = time.time()
         assert abs(cutoff - (now - 120)) < 2
 
-    async def test_uses_default_window(self, mock_redis):
-        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+    async def test_uses_default_window(self, sliding_redis):
+        limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5)
-        pipe = mock_redis.pipeline.return_value
+        pipe = sliding_redis.pipeline.return_value
         _, _, cutoff = pipe.zremrangebyscore.call_args[0]
         now = time.time()
         assert abs(cutoff - (now - WINDOW_SECONDS)) < 2
 
     @pytest.mark.parametrize("window_s", [120, WINDOW_SECONDS], ids=["explicit-window", "default-window"])
-    async def test_expires_key_at_double_window(self, mock_redis, window_s):
-        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+    async def test_expires_key_at_double_window(self, sliding_redis, window_s):
+        limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5, window_s=window_s)
-        pipe = mock_redis.pipeline.return_value
+        pipe = sliding_redis.pipeline.return_value
         pipe.expire.assert_called_once()
         assert pipe.expire.call_args[0][0] == "ratelimit:k"
         assert pipe.expire.call_args[0][1] == window_s * 2
 
-    async def test_records_timestamp_member(self, mock_redis):
-        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+    async def test_records_timestamp_member(self, sliding_redis):
+        limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         await limiter.check("k", max_requests=5)
-        pipe = mock_redis.pipeline.return_value
+        pipe = sliding_redis.pipeline.return_value
         pipe.zadd.assert_called_once()
         _, member = pipe.zadd.call_args[0]
         ((ts, score),) = member.items()
@@ -92,18 +97,18 @@ class TestRedisSlidingWindowRateLimiter:
         assert ts_str == str(score)
         assert len(suffix) == 32
 
-    async def test_blocks_every_request_when_max_requests_zero(self, mock_redis):
+    async def test_blocks_every_request_when_max_requests_zero(self, sliding_redis):
         """max_requests=0 must block: the current request is recorded before the check."""
-        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 1, True))
-        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+        sliding_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 1, True))
+        limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         assert await limiter.check("k", max_requests=0) is False
 
-    async def test_window_zero_sets_cutoff_to_now(self, mock_redis):
+    async def test_window_zero_sets_cutoff_to_now(self, sliding_redis):
         """window_s=0 prunes everything strictly before now but still allows the current request."""
-        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 1, True))
-        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+        sliding_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 1, True))
+        limiter = RedisSlidingWindowRateLimiter(sliding_redis)
         assert await limiter.check("k", max_requests=1, window_s=0) is True
-        pipe = mock_redis.pipeline.return_value
+        pipe = sliding_redis.pipeline.return_value
         _, _, cutoff = pipe.zremrangebyscore.call_args[0]
         now = time.time()
         assert abs(cutoff - now) < 2
@@ -139,15 +144,15 @@ class TestRateLimiterRegistry:
         ids=["under-limit", "over-limit"],
     )
     async def test_registry_allows_or_blocks_based_on_count(self, redis_result, expected):
-        mock_redis = MagicMock()
-        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=redis_result)
-        registry = RateLimiterRegistry(redis_client=mock_redis)
+        sliding_redis = MagicMock()
+        sliding_redis.pipeline.return_value.execute = AsyncMock(return_value=redis_result)
+        registry = RateLimiterRegistry(redis_client=sliding_redis)
         assert await registry.check("k", max_requests=5) is expected
 
-    async def test_registry_forwards_window(self, mock_redis):
-        registry = RateLimiterRegistry(redis_client=mock_redis)
+    async def test_registry_forwards_window(self, sliding_redis):
+        registry = RateLimiterRegistry(redis_client=sliding_redis)
         await registry.check("k", max_requests=5, window_s=90)
-        pipe = mock_redis.pipeline.return_value
+        pipe = sliding_redis.pipeline.return_value
         _, _, cutoff = pipe.zremrangebyscore.call_args[0]
         now = time.time()
         assert abs(cutoff - (now - 90)) < 2
