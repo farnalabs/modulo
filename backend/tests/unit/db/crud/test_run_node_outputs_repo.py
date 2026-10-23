@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import event, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.db.crud.run_node_outputs import (
@@ -52,7 +52,7 @@ from modulo.db.crud.run_node_outputs import (
 )
 from modulo.db.models.base import Base
 from modulo.db.models.run import Run
-from modulo.db.models.run_node_outputs import RunNodeOutput
+from modulo.db.models.run_node_outputs import SENTINEL_NODE_ID_PREFIX, RunNodeOutput
 from modulo.db.rls import OutputsRlsMismatch, set_rls_org
 
 _TABLE_NAMES = {"organisations", "runs", "run_node_outputs"}
@@ -895,6 +895,158 @@ class TestUpsertRowsIgnoreConflicts:
             )
         row = await _read_row(session, run, node_id="n1", attempt_key=attempt_key)
         assert row.outputs_json == {"v": 1}
+
+
+#: A stamp far enough in the past that any "moved to now" write is unambiguous
+#: (``func.current_timestamp()`` has second granularity on SQLite).
+_AGED_STAMP = datetime(2020, 1, 1, 12, 0, 0)
+
+
+async def _read_stamp(session: AsyncSession, run: Run, *, attempt_key: str) -> datetime:
+    """Read one row's ``updated_at`` as a bare COLUMN select.
+
+    A plain ``select(RunNodeOutput)`` would return the identity-mapped instance,
+    whose attributes are NOT refreshed after a commit (``expire_on_commit=False``
+    in the test sessionmaker) — so it can serve a stale stamp.
+    """
+    async with session.begin():
+        value = (
+            await session.execute(
+                select(RunNodeOutput.updated_at).where(
+                    RunNodeOutput.run_id == run.id,
+                    RunNodeOutput.attempt_key == attempt_key,
+                )
+            )
+        ).scalar_one()
+    return value.replace(tzinfo=None)
+
+
+async def _age_row(session: AsyncSession, run: Run, *, attempt_key: str) -> None:
+    async with session.begin():
+        await session.execute(
+            update(RunNodeOutput)
+            .where(RunNodeOutput.run_id == run.id, RunNodeOutput.attempt_key == attempt_key)
+            .values(updated_at=_AGED_STAMP)
+        )
+
+
+class TestMarkerUpdatedAtProvenance:
+    """FAR-2083: marker rows carry PER-ROW ``updated_at`` provenance.
+
+    ``write_run_markers`` always upserts the WHOLE merged marker dict, so before
+    this fix one write by the current attempt re-stamped ``updated_at`` on
+    every earlier attempt's marker row in the run (reproduced: an attempt-1 row
+    aged to 2020 was rewritten to "now" by a single later call). The intended
+    semantics are per-row: only a row whose own value changed moves its stamp.
+    Flipping either fix (removing the ``DO UPDATE ... WHERE``, or stamping the
+    whole dict unconditionally) fails these.
+    """
+
+    async def test_write_touching_one_key_leaves_another_rows_stamp_alone(self, session: AsyncSession) -> None:
+        run = await _seed_run(session)
+        aged_key = f"run:{run.id}:node:n1:0"
+        new_key = f"run:{run.id}:node:n1:1"
+        await _write_markers(session, run, {aged_key: {"raw": "attempt-1"}})
+        await _age_row(session, run, attempt_key=aged_key)
+
+        # The canonical write shape: the caller hands write_run_markers the whole
+        # merged dict, so the unchanged attempt-1 entry is re-sent verbatim.
+        await _write_markers(session, run, {aged_key: {"raw": "attempt-1"}, new_key: {"raw": "attempt-2"}})
+
+        assert await _read_stamp(session, run, attempt_key=aged_key) == _AGED_STAMP
+        assert await _read_stamp(session, run, attempt_key=new_key) > datetime(2024, 1, 1)
+
+    async def test_rewriting_an_unchanged_value_does_not_move_its_stamp(self, session: AsyncSession) -> None:
+        run = await _seed_run(session)
+        key = f"run:{run.id}:node:n1:0"
+        await _write_markers(session, run, {key: {"raw": "same", "pr_url": "https://x/1"}})
+        await _age_row(session, run, attempt_key=key)
+
+        await _write_markers(session, run, {key: {"raw": "same", "pr_url": "https://x/1"}})
+
+        assert await _read_stamp(session, run, attempt_key=key) == _AGED_STAMP
+
+    async def test_rewriting_a_changed_value_does_move_its_stamp(self, session: AsyncSession) -> None:
+        """The guard must not freeze the stamp: a real change still re-dates."""
+        run = await _seed_run(session)
+        key = f"run:{run.id}:node:n1:0"
+        await _write_markers(session, run, {key: {"raw": "before"}})
+        await _age_row(session, run, attempt_key=key)
+
+        await _write_markers(session, run, {key: {"raw": "after"}})
+
+        assert await _read_stamp(session, run, attempt_key=key) > datetime(2024, 1, 1)
+
+
+def _is_node_progress_row(node_id: str) -> bool:
+    """The rule every zero-progress predicate already applies (FAR-2052).
+
+    A row in the reserved ``__`` sentinel namespace is bookkeeping, never node
+    progress — exactly the ``substr(node_id, 1, 2) <> '__'`` leg that
+    ``cron_helpers._final_row_absent_expr`` and ``_ZERO_PROGRESS_SHAPE_SQL``
+    implement.
+    """
+    return not node_id.startswith(SENTINEL_NODE_ID_PREFIX)
+
+
+class TestCancelTriageMarkerAttribution:
+    """FAR-2082: a deadline-kill's marker is bookkeeping, not node progress.
+
+    The cancellation path used to persist the FAR-704 triage marker under the
+    node's NORMAL attempt key, so a kill that produced nothing was
+    indistinguishable from work by row existence. Both arms below fail if the
+    attribution is reverted.
+    """
+
+    async def test_cancelled_node_marker_is_rejected_by_the_progress_rule(self, session: AsyncSession) -> None:
+        from modulo.core.pipeline_engine.node_runner import _cancel_triage_attempt_key
+
+        run = await _seed_run(session)
+        real_key = f"run:{run.id}:node:n1:3"
+        triage_key = _cancel_triage_attempt_key(str(run.id), "n1", real_key)
+
+        await _write_markers(
+            session,
+            run,
+            {triage_key: {"deadline_triage": True, "node_id": "n1", "attempt_key": real_key}},
+        )
+
+        # The evidence IS retained (the diagnostic value is the point) ...
+        row = await _read_row(session, run, node_id=UNKNOWN_NODE_ID, attempt_key=triage_key)
+        # ... but it is attributed to the bookkeeping namespace, so it can never
+        # be read as this node's work.
+        assert _is_node_progress_row(row.node_id) is False
+        # The node's OWN attempt key carries no row at all — a kill that
+        # produced nothing leaves no progress-shaped evidence behind.
+        async with session.begin():
+            own_rows = (
+                await session.execute(
+                    select(RunNodeOutput.run_id).where(
+                        RunNodeOutput.run_id == run.id,
+                        RunNodeOutput.attempt_key == real_key,
+                    )
+                )
+            ).first()
+        assert own_rows is None
+        # The payload keeps the REAL attribution the content-driven readers use
+        # (delivery_done node matching, the FAR-704 triage projection and the
+        # log-correlation reader all read these fields, not the row identity).
+        assert row.raw_output_markers["node_id"] == "n1"
+        assert row.raw_output_markers["attempt_key"] == real_key
+        # And the evidence is still served by the public markers reader, so the
+        # deadline-triage projection (which selects on the marker's own
+        # ``deadline_triage`` flag, never on the key) still finds it.
+        markers = (await _read_blobs(session, run)).markers or {}
+        assert markers[triage_key]["deadline_triage"] is True
+
+    async def test_real_work_marker_is_accepted_by_the_progress_rule(self, session: AsyncSession) -> None:
+        run = await _seed_run(session)
+        real_key = f"run:{run.id}:node:n1:3"
+
+        await _write_markers(session, run, {real_key: {"raw": "produced something"}})
+
+        row = await _read_row(session, run, node_id="n1", attempt_key=real_key)
+        assert _is_node_progress_row(row.node_id) is True
 
 
 class TestBytesAccounting:
