@@ -463,6 +463,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          VERSION_NUM="${VERSION}"
 
           # Log in to GHCR for Helm
           echo "${GH_TOKEN}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
