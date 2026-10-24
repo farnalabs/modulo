@@ -5,9 +5,9 @@
 Source of truth: ``backend/pyproject.toml`` ``[project].version``. The script
 reads the current version from there and writes it to every mirror:
 
-* ``backend/pyproject.toml``        ``version = "X.Y.Z"``
-* ``frontend/package.json``         ``"version": "X.Y.Z"``
-* ``deploy/helm/modulo/Chart.yaml`` ``version: X.Y.Z`` AND ``appVersion: "X.Y.Z"``
+* ``backend/pyproject.toml``            ``version = "X.Y.Z"``
+* ``frontend/package.json``             ``"version": "X.Y.Z"``
+* ``deploy/helm/modulo/Chart.yaml``     ``version: X.Y.Z`` AND ``appVersion: "X.Y.Z"``
 
 Every version file carries a plain numeric ``X.Y.Z`` only. A pre-release
 suffix (``-rc1``) lives in GIT TAGS ONLY (e.g. ``v0.4.0-rc1``) and is never
