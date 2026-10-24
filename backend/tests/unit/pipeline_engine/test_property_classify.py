@@ -13,7 +13,7 @@ module is explicitly documented as pure and unit-testable.
 from __future__ import annotations
 
 import hypothesis.strategies as st
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 
 from modulo.core.pipeline_engine.classify import (
     _COUNTABLE_NO_DELIVERY_STATUSES,
@@ -166,14 +166,19 @@ class TestClassifyRunProperties:
     """Properties for the pure classification decision table."""
 
     @given(status=st.sampled_from(sorted(_EXCLUDED_STATUSES)))
-    @settings(max_examples=20)
+    # ``too_slow`` is a wall-clock health check: under ``pytest -n auto`` an
+    # xdist worker can be descheduled mid-draw (observed: a single 1.109 s
+    # stall produced "only generated 5 valid inputs after 1.12 seconds"), so
+    # the check measures machine load rather than strategy quality. All other
+    # health checks remain enabled.
+    @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
     def test_excluded_statuses_classify_as_excluded(self, status: str) -> None:
         """Every status in _EXCLUDED_STATUSES classifies as 'excluded'."""
         result = classify_run(status, None)
         assert result.value == RunClassificationValue.excluded
 
     @given(status=st.sampled_from(sorted(_COUNTABLE_NO_DELIVERY_STATUSES)))
-    @settings(max_examples=20)
+    @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
     def test_countable_statuses_classify_as_no_delivery(self, status: str) -> None:
         """Every countable status classifies as 'no_delivery'."""
         result = classify_run(status, None)
@@ -184,21 +189,21 @@ class TestClassifyRunProperties:
             sorted(TERMINAL - _EXCLUDED_STATUSES - _COUNTABLE_NO_DELIVERY_STATUSES - _DELIVERABLE_STATUSES)
         )
     )
-    @settings(max_examples=20)
+    @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
     def test_unknown_terminal_classifies_as_excluded(self, status: str) -> None:
         """Terminal statuses outside known buckets hit fail-safe excluded."""
         result = classify_run(status, None)
         assert result.value == RunClassificationValue.excluded
 
     @given(status=st.text(min_size=1, max_size=50).filter(lambda s: s not in TERMINAL))
-    @settings(max_examples=30)
+    @settings(max_examples=30, suppress_health_check=[HealthCheck.too_slow])
     def test_non_terminal_status_classifies_as_excluded(self, status: str) -> None:
         """Non-terminal statuses are caught by the guard."""
         result = classify_run(status, None)
         assert result.value == RunClassificationValue.excluded
 
     @given(status=st.sampled_from(sorted(_EXCLUDED_STATUSES)))
-    @settings(max_examples=10)
+    @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
     def test_classification_is_deterministic(self, status: str) -> None:
         """Same inputs produce same value and reason."""
         first = classify_run(status, None)
@@ -210,14 +215,14 @@ class TestClassifyRunProperties:
         status=st.sampled_from(sorted(_COUNTABLE_NO_DELIVERY_STATUSES)),
         error_code=st.text(min_size=0, max_size=50),
     )
-    @settings(max_examples=30)
+    @settings(max_examples=30, suppress_health_check=[HealthCheck.too_slow])
     def test_countable_never_delivers(self, status: str, error_code: str) -> None:
         """A countable status NEVER classifies as 'delivered'."""
         result = classify_run(status, error_code or None)
         assert result.value != RunClassificationValue.delivered
 
     @given(status=st.sampled_from(sorted(_EXCLUDED_STATUSES)))
-    @settings(max_examples=10)
+    @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
     def test_excluded_never_delivers(self, status: str) -> None:
         """An excluded status NEVER classifies as 'delivered'."""
         result = classify_run(status, "any_error_code")
@@ -227,7 +232,7 @@ class TestClassifyRunProperties:
         status=st.sampled_from(sorted(_COUNTABLE_NO_DELIVERY_STATUSES)),
         work_intact=st.booleans() | st.none(),
     )
-    @settings(max_examples=15)
+    @settings(max_examples=15, suppress_health_check=[HealthCheck.too_slow])
     def test_work_intact_preserved_on_countable(self, status: str, work_intact: bool | None) -> None:
         """work_intact metadata is carried through."""
         result = classify_run(status, None, work_intact=work_intact)
@@ -237,7 +242,7 @@ class TestClassifyRunProperties:
         status=st.sampled_from(sorted(TERMINAL)),
         error_code=st.text(min_size=0, max_size=100),
     )
-    @settings(max_examples=50)
+    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
     def test_result_is_always_valid_enum(self, status: str, error_code: str) -> None:
         """The result value is always a valid RunClassificationValue."""
         result = classify_run(status, error_code or None)
@@ -246,7 +251,7 @@ class TestClassifyRunProperties:
     @given(
         error_code=st.sampled_from(["hitl.required", "human_review_needed", "harness.gate_creation_failed"]),
     )
-    @settings(max_examples=10)
+    @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
     def test_needs_human_codes_produce_needs_human_reason(self, error_code: str) -> None:
         """Error codes with 'hitl'/'human' or in _NEEDS_HUMAN_CODES."""
         from modulo.core.pipeline_engine.classify import REASON_NEEDS_HUMAN
@@ -258,7 +263,7 @@ class TestClassifyRunProperties:
     @given(
         error_code=st.sampled_from(["sandbox.timeout", "node.cancelled", "connector.auth_failed"]),
     )
-    @settings(max_examples=10)
+    @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
     def test_source_error_codes_produce_source_error_reason(self, error_code: str) -> None:
         """Source/infra error codes produce source_error reason."""
         from modulo.core.pipeline_engine.classify import REASON_SOURCE_ERROR
@@ -268,7 +273,7 @@ class TestClassifyRunProperties:
         assert result.reason == REASON_SOURCE_ERROR
 
     @given(status=st.sampled_from(sorted(TERMINAL)))
-    @settings(max_examples=15)
+    @settings(max_examples=15, suppress_health_check=[HealthCheck.too_slow])
     def test_delivered_pr_urls_is_always_tuple(self, status: str) -> None:
         """delivered_pr_urls is always a tuple."""
         result = classify_run(status, None)
@@ -277,7 +282,7 @@ class TestClassifyRunProperties:
     @given(
         markers=st.just({"attempt_0": {"delivery_done": True}}),
     )
-    @settings(max_examples=10)
+    @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
     def test_delivery_done_marker_yields_delivered(self, markers: dict) -> None:
         """A 'complete' run with delivery_done marker -> delivered."""
         from modulo.core.pipeline_engine.classify import REASON_DELIVERED_EMAIL
@@ -295,7 +300,7 @@ class TestClassifyRunProperties:
             max_size=3,
         ),
     )
-    @settings(max_examples=20)
+    @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
     def test_parse_error_marker_yields_parse_error_reason(self, status: str, markers: dict) -> None:
         """A marker with parse_error -> parse_error reason."""
         from modulo.core.pipeline_engine.classify import REASON_PARSE_ERROR
