@@ -30,7 +30,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.eval_engine.policy_gate import (
     validate_binding,
 )
-from modulo.core.eval_engine.typed_judge import JudgeConfigWriteError, reject_legacy_judge_write
+from modulo.core.eval_engine.typed_judge import (
+    CODE_BACKEND_NOT_ACTIVE,
+    CODE_BACKEND_NOT_FOUND,
+    CODE_BACKEND_NOT_ORG_OWNED,
+    JudgeConfigWriteError,
+    is_typed_judge_config,
+    reject_legacy_judge_write,
+)
 
 if TYPE_CHECKING:
     from modulo.db.models.eval import Eval
@@ -158,6 +165,76 @@ def validate_guardrail_request(
 # ---------------------------------------------------------------------------
 
 
+def _typed_backend_refs(config_json: dict[str, Any]) -> list[Any]:
+    """Every model-backend id a typed config references (backing + cascade).
+
+    Both are resolved at WRITE time (ADR 066 D4): a definition that names a
+    missing / inactive / another org's backend must be rejected with a typed
+    422 rather than discovered as an execution error later.
+    """
+    refs: list[Any] = []
+    backing = config_json.get("backing")
+    if isinstance(backing, dict) and backing.get("kind") == "model_backend":
+        refs.append(backing.get("model_backend_id"))
+    cascade = config_json.get("cascade")
+    if isinstance(cascade, dict):
+        escalate_to = cascade.get("escalate_to")
+        if isinstance(escalate_to, dict) and escalate_to.get("kind") == "model_backend":
+            refs.append(escalate_to.get("model_backend_id"))
+    return [ref for ref in refs if ref]
+
+
+def _backend_not_found(backend_id: Any) -> JudgeConfigWriteError:
+    return JudgeConfigWriteError(
+        CODE_BACKEND_NOT_FOUND,
+        f"model backend {backend_id!r} does not exist in this organisation",
+        hint="Pick an existing active model backend for the judge backing.",
+    )
+
+
+def _backend_not_org_owned(backend_id: Any) -> JudgeConfigWriteError:
+    return JudgeConfigWriteError(
+        CODE_BACKEND_NOT_ORG_OWNED,
+        f"model backend {backend_id!r} belongs to another organisation",
+        hint="A judge may only use this organisation's model backends (ADR 066 D16).",
+    )
+
+
+def _backend_not_active(backend_id: Any) -> JudgeConfigWriteError:
+    return JudgeConfigWriteError(
+        CODE_BACKEND_NOT_ACTIVE,
+        f"model backend {backend_id!r} is not active",
+        hint="Activate the model backend (or pick another) before using it as a judge.",
+    )
+
+
+async def _resolve_typed_backings(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    config_json: dict[str, Any],
+) -> None:
+    """Verify every referenced judge backend exists, is org-owned and active."""
+    from modulo.db.models.model_backend import ModelBackend
+
+    for raw_id in _typed_backend_refs(config_json):
+        try:
+            backend_id = uuid.UUID(str(raw_id))
+        except (ValueError, TypeError):
+            raise JudgeConfigWriteError(
+                "judge_config_invalid",
+                f"model_backend_id {raw_id!r} is not a valid UUID",
+                hint="Fix config_json and retry.",
+            ) from None
+        row = await session.get(ModelBackend, backend_id)
+        if row is None:
+            raise _backend_not_found(raw_id)
+        if row.organisation_id != org_id:
+            raise _backend_not_org_owned(raw_id)
+        if row.status != "active":
+            raise _backend_not_active(raw_id)
+
+
 async def _enforce_judge_config_write(
     session: AsyncSession,
     *,
@@ -209,19 +286,35 @@ async def _enforce_judge_config_write(
             new_eval_type=eval_type,
         )
     except JudgeConfigWriteError as exc:
-        # The repo's error contract surfaces ``detail["error"]`` as the RFC 9457
-        # ``code`` extension member (api/models/problem.py). Keep the hint in
-        # the human detail so REST callers see the remediation, and keep it as
-        # its own key for the MCP mapper (which does not go through RFC 9457).
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "error": exc.code,
-                "detail": f"{exc.message} {exc.hint}",
-                "hint": exc.hint,
-            },
-        ) from None
+        raise _judge_config_422(exc) from None
+
+    # Resolution checks run only for a config that will actually execute: a
+    # resend of a frozen legacy config is not re-validated (it is read-only and
+    # may reference a backend that has since been removed).
+    if eval_type == "model_judge" and is_typed_judge_config(config_json):
+        try:
+            await _resolve_typed_backings(session, org_id=org_id, config_json=config_json)
+        except JudgeConfigWriteError as exc:
+            raise _judge_config_422(exc) from None
     return existing_row
+
+
+def _judge_config_422(exc: JudgeConfigWriteError) -> HTTPException:
+    """Translate a write rejection into the repo's typed 422 contract.
+
+    The repo's error contract surfaces ``detail["error"]`` as the RFC 9457
+    ``code`` extension member (api/models/problem.py). The hint is kept in the
+    human detail so REST callers see the remediation, and as its own key for the
+    MCP mapper (which does not go through RFC 9457).
+    """
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail={
+            "error": exc.code,
+            "detail": f"{exc.message} {exc.hint}",
+            "hint": exc.hint,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

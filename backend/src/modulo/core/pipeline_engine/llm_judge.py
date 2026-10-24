@@ -44,7 +44,7 @@ import json
 import logging
 import uuid
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import HumanMessage
 
@@ -55,9 +55,9 @@ from modulo.core.eval_engine.typed_judge import (
     JudgeErrorCode,
     JudgeExecutionError,
     JudgeIdentity,
-    build_typed_judge_prompt,
-    verdict_from_typed_response,
 )
+from modulo.core.eval_engine.typed_judge.config import timeout_seconds as judge_timeout_seconds
+from modulo.core.eval_engine.typed_judge.transport import JudgeBackendHandle, judge_questions
 from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
 _log = logging.getLogger(__name__)
@@ -169,24 +169,33 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
 
     The wait is bounded by :data:`SYNC_BRIDGE_TIMEOUT_SECONDS` (FAR-1652): the
     bridge runs on the pipeline event loop, so an unbounded ``future.result()``
-    would block the loop and - with ``max_workers=1`` - serialize every later
-    judge call behind one hung request. On timeout the queued future is
-    cancelled (and its coroutine closed); a running one is left to the inner
-    :func:`invoke_backend` bound, which cancels it inside the worker thread.
+    would block the loop. On timeout the queued future is cancelled (and its
+    coroutine closed); a running one is cancelled on the persistent judge loop,
+    and an uncancellable one retires that loop so later calls cannot queue
+    behind it (ADR 066 D10).
     """
     global _JUDGE_EXECUTOR
     if _JUDGE_EXECUTOR is None:
+        # Bounded concurrency ABOVE ONE (ADR 066 D10): several sync judge calls
+        # may run concurrently even though each is a blocking bridge call.
         _JUDGE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
+            max_workers=4,
             thread_name_prefix="model-judge",
         )
 
     def _run() -> Any:
-        return asyncio.run(coro)
+        # A persistent loop thread, NOT ``asyncio.run`` per call: a client is
+        # bound to the loop that created it, and one hung call must never wedge
+        # this pool. On an uncancellable timeout the loop is retired and the
+        # next call gets a fresh one (typed_judge.bridge).
+        from modulo.core.eval_engine.typed_judge.bridge import run_coroutine_on_loop
+
+        return run_coroutine_on_loop(coro, SYNC_BRIDGE_TIMEOUT_SECONDS)
 
     future: concurrent.futures.Future[Any] = _JUDGE_EXECUTOR.submit(_run)
     try:
-        return future.result(timeout=SYNC_BRIDGE_TIMEOUT_SECONDS)
+        # Outer backstop only: the loop-side bound above is the normal timeout.
+        return future.result(timeout=SYNC_BRIDGE_TIMEOUT_SECONDS + 5.0)
     except TimeoutError:
         if future.done():
             # The TimeoutError came FROM the coroutine (the inner invoke bound
@@ -224,32 +233,6 @@ def _malformed_backend_id_judge(backend_id_str: str, detail: str) -> ModelJudgeC
     return _config_error_judge
 
 
-def _judge_content(output: dict[str, Any], config: dict[str, Any]) -> Any:
-    """Return the content to judge.
-
-    ``config["_judge_content"]`` is a private, engine-owned key with exactly
-    one writer: :meth:`modulo.core.eval_engine.EvalEngine._build_safe_judge_input`
-    (``core/eval_engine/__init__.py``), which sets the delimited, length-bounded
-    content on a COPY of the definition's config. It is reached for both
-    ``EvalEngine.evaluate`` and ``EvalEngine.evaluate_result``, i.e. every
-    production path into this module: the pipeline executor, the eval suite
-    runner, the feedback-loop re-evaluation, and guardrail revalidation.
-
-    The only reader is :func:`_run_judge` below. So in production this returns
-    the guarded string and the ``field`` branch is never taken. The fallback
-    exists for a caller that invokes the judge callable with its own
-    ``EvalDefinition`` without going through the engine's guarded-input builder
-    (a direct/test caller): that config has no ``_judge_content`` and its own
-    ``field`` names the output key to judge. ``_judge_content`` wins whenever
-    both are present, so a guarded call can never silently fall back.
-    """
-    content = config.get("_judge_content")
-    if content is not None:
-        return content
-    field = config.get("field", "")
-    return output.get(field, "")
-
-
 def _legacy_guidance(config: dict[str, Any]) -> str:
     """Render a legacy config's authored ``rubric``/``instructions`` for the prompt.
 
@@ -270,9 +253,7 @@ def _legacy_guidance(config: dict[str, Any]) -> str:
 
 
 def _build_judge_prompt(config: dict[str, Any], content: Any) -> str:
-    if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
-        questions = config.get("questions") or []
-        return build_typed_judge_prompt(questions, config.get("pass_rule"), str(content))
+    """The legacy prompt (typed definitions use the transport's per-question prompt)."""
     guidance = _legacy_guidance(config)
     guidance_block = f"{guidance}\n\n" if guidance else ""
     return (
@@ -362,21 +343,6 @@ def _response_text(response: Any) -> str:
     return response.content if hasattr(response, "content") else str(response)
 
 
-def _parse_typed_judge_response(
-    text: str,
-    config: dict[str, Any],
-    identity: JudgeIdentity,
-) -> dict[str, Any]:
-    verdict = verdict_from_typed_response(
-        text,
-        questions=config.get("questions") or [],
-        pass_rule=config.get("pass_rule"),
-        judge=identity,
-        confidence_kind=JudgeConfidenceKind.MODEL_SELF_REPORTED,
-    )
-    return verdict.to_json()
-
-
 def _parse_legacy_judge_response(text: str, identity: JudgeIdentity) -> dict[str, Any]:
     try:
         parsed = json.loads(text, parse_constant=_reject_json_constant)
@@ -408,6 +374,111 @@ def _parse_legacy_judge_response(text: str, identity: JudgeIdentity) -> dict[str
     }
 
 
+def _judge_content(output: dict[str, Any], config: dict[str, Any]) -> Any:
+    """Return the already-guarded content for this judge call.
+
+    The engine sets ``config["_judge_content"]`` on the guarded copy
+    (:meth:`EvalEngine._build_safe_judge_input`), so in production this is the
+    delimited union of every referenced field. The ``field`` fallback exists
+    only for a direct/test caller that bypasses the engine, and it resolves a
+    dotted path exactly like the engine does.
+    """
+    content = config.get("_judge_content")
+    if content is not None:
+        return content
+    field = config.get("field", "")
+    if not field:
+        # Direct/test caller bypassing the engine: judge the whole output rather
+        # than an empty string. The ENGINE still rejects a fieldless config
+        # (an empty judged payload can never validate anything).
+        return json.dumps(output, sort_keys=True, default=str)
+    from modulo.core.eval_engine import EvalEngine
+
+    found, value = EvalEngine._resolve_output_field(output, field)
+    if not found:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            f"judge field {field!r} does not resolve in the output; no verdict was produced",
+        )
+    return value
+
+
+def _typed_questions(config: dict[str, Any]) -> list[dict[str, Any]]:
+    questions = config.get("questions")
+    if not isinstance(questions, list):
+        return []
+    return [dict(question) for question in questions if isinstance(question, dict)]
+
+
+def _typed_identity(backend_id: uuid.UUID) -> JudgeIdentity:
+    return JudgeIdentity(mechanism="model_backend", judge_backend_id=str(backend_id))
+
+
+async def _resolve_judge_backend(hub: Any, backend_id: uuid.UUID) -> Any:
+    """Resolve the backend under the existing resolve bound (FAR-1652)."""
+    return await asyncio.wait_for(hub.get(backend_id), timeout=BACKEND_INVOKE_TIMEOUT_SECONDS)
+
+
+def _backend_handle(backend: Any, backend_id: uuid.UUID) -> JudgeBackendHandle:
+    """Build the transport handle, probing the structured-output capability."""
+
+    async def _invoke(messages: list[Any], output_schema: dict[str, Any] | None) -> Any:
+        if output_schema is None:
+            return await backend.invoke(messages)
+        return await backend.invoke(messages, output_schema=output_schema)
+
+    return JudgeBackendHandle(
+        key=str(backend_id),
+        invoke=_invoke,
+        supports_native_structured_output=bool(getattr(backend, "supports_native_structured_output", False)),
+    )
+
+
+async def _ajudge_typed(
+    hub: Any,
+    backend_id: uuid.UUID,
+    output: dict[str, Any],
+    eval_def: EvalDefinition,
+) -> dict[str, Any]:
+    """The typed async path: no bridge, no thread — the caller's own loop."""
+    config = dict(eval_def.config or {})
+    content = _judge_content(output, config)
+    try:
+        backend = await _resolve_judge_backend(hub, backend_id)
+    except TimeoutError as exc:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_TIMEOUT,
+            _timeout_detail(),
+            judge=_typed_identity(backend_id),
+        ) from exc
+    handle = _backend_handle(backend, backend_id)
+    per_question, per_definition = judge_timeout_seconds(config)
+    try:
+        verdict = await judge_questions(
+            handle,
+            _typed_questions(config),
+            str(content),
+            pass_rule=config.get("pass_rule") if isinstance(config.get("pass_rule"), dict) else None,
+            identity=_typed_identity(backend_id),
+            per_question_seconds=per_question,
+            per_definition_seconds=per_definition,
+            confidence_kind=JudgeConfidenceKind.MODEL_SELF_REPORTED,
+        )
+    except JudgeExecutionError:
+        raise
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        raise
+    except TimeoutError as exc:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_TIMEOUT,
+            _timeout_detail(),
+            judge=_typed_identity(backend_id),
+        ) from exc
+    except Exception as exc:
+        raise _backend_failure(backend_id, _typed_identity(backend_id), exc) from exc
+    return verdict.to_json()
+
+
 def _run_judge(
     output: dict[str, Any],
     eval_def: EvalDefinition,
@@ -415,38 +486,76 @@ def _run_judge(
     backend_id: uuid.UUID,
     identity: JudgeIdentity,
 ) -> dict[str, Any]:
+    """Synchronous compatibility path (feedback manager, guardrail correction)."""
     config = eval_def.config
+    if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
+        return cast(dict[str, Any], run_coroutine_sync(_ajudge_typed(hub, backend_id, output, eval_def)))
+
     content = _judge_content(output, config)
     prompt = _build_judge_prompt(config, content)
     response = _invoke_judge(hub, backend_id, [HumanMessage(content=prompt)], identity)
     text = _response_text(response)
-    if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
-        return _parse_typed_judge_response(text, config, identity)
     return _parse_legacy_judge_response(text, identity)
+
+
+class _ModelJudgeCallable:
+    """A model judge that can be called sync (bridge) or awaited (native loop).
+
+    ``ajudge`` is the preferred path for the two high-volume call sites: it
+    awaits on the caller's own event loop, so no thread or foreign loop is
+    involved and a hung provider is cancelled by the per-question deadline.
+    A frozen legacy definition still runs its historical sync prompt, but off
+    the loop (``asyncio.to_thread``) so it cannot block the pipeline.
+    """
+
+    def __init__(self, hub: Any, backend_id: uuid.UUID, identity: JudgeIdentity) -> None:
+        self._hub = hub
+        self._backend_id = backend_id
+        self._identity = identity
+
+    def __call__(self, output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]:
+        try:
+            return _run_judge(output, eval_def, self._hub, self._backend_id, self._identity)
+        except JudgeExecutionError:
+            raise
+        except TimeoutError as exc:
+            detail = _timeout_detail()
+            _log.error(
+                "model_judge.timeout",
+                extra={"model_backend_id": str(self._backend_id), "detail": detail},
+            )
+            raise JudgeExecutionError(JudgeErrorCode.JUDGE_TIMEOUT, detail, judge=self._identity) from exc
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            raise
+        except Exception as exc:
+            raise _backend_failure(self._backend_id, self._identity, exc) from exc
+
+    async def ajudge(self, output: dict[str, Any], eval_def: EvalDefinition) -> dict[str, Any]:
+        config = eval_def.config or {}
+        if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
+            return await _ajudge_typed(self._hub, self._backend_id, output, eval_def)
+        return await asyncio.to_thread(self, output, eval_def)
 
 
 def build_model_judge_callable(
     hub: Any,
     backend_id_str: str,
 ) -> ModelJudgeCallable:
-    """Build a synchronous Model judge callable backed by a model backend.
+    """Build a model judge backed by a model backend.
 
-    The ``ModelJudgeCallable`` protocol is synchronous, but ``make_hitl_review_fn``
-    runs inside an already-running asyncio event loop. We bridge sync -> async
-    by running the async backend invoke on a dedicated event loop in a worker
-    thread via :func:`run_coroutine_sync`.
+    The returned object is synchronously callable (the historical contract, used
+    by the feedback manager and guardrail revalidation) AND exposes ``ajudge``
+    for the async call sites. The sync call runs through the persistent-loop
+    bridge (bounded, retire-on-wedge); the async call owns the caller's loop.
 
-    ``backend_id_str`` comes from ``eval_def.config["model_backend_id"]`` -
-    unvalidated free-form JSON, so a typo or stale manual edit can put any
-    string here. A malformed id does NOT raise: raising ``ValueError`` out of
+    ``backend_id_str`` comes from ``eval_def.config["backing"]["model_backend_id"]``
+    (typed) or ``config["model_backend_id"]`` (legacy) - unvalidated free-form
+    JSON, so a typo or stale manual edit can put any string here. A malformed id
+    does NOT raise: raising ``ValueError`` out of
     ``run_evals_persist_before_decide``'s per-eval loop would abort every
-    sibling eval and terminalise the run via the generic error path. Instead
-    the returned judge fails THIS eval closed with a clear configuration
-    message (``passed=False``), so the block/warn decision still fires and
-    the remaining evals in the loop still run.
-
-    A timeout (either bound above) is handled the same way: fail THIS eval
-    closed with a clear detail instead of raising or blocking unbounded.
+    sibling eval and terminalise the run via the generic error path. Instead the
+    returned judge fails THIS eval closed with a clear configuration message, so
+    the block/warn decision still fires and the remaining evals still run.
     """
     try:
         backend_id = uuid.UUID(backend_id_str)
@@ -462,15 +571,8 @@ def build_model_judge_callable(
         )
         return _malformed_backend_id_judge(backend_id_str, detail)
 
-    identity = JudgeIdentity(mechanism="model_backend", judge_backend_id=str(backend_id))
-
-    def _judge(
-        output: dict[str, Any],
-        eval_def: EvalDefinition,
-    ) -> dict[str, Any]:
-        return _run_judge(output, eval_def, hub, backend_id, identity)
-
-    return _judge
+    identity = _typed_identity(backend_id)
+    return _ModelJudgeCallable(hub, backend_id, identity)
 
 
 def _judge_backend_id(config: dict[str, Any]) -> Any:

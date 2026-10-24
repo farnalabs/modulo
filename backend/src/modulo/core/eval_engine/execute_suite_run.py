@@ -337,6 +337,43 @@ def build_suite_run_tuple(
 # --------------------------------------------------------------------------- #
 # Per-case evaluation                                                         #
 # --------------------------------------------------------------------------- #
+def _case_result_row(
+    run: SuiteRun,
+    definition: EvalDefinition,
+    result: Any,
+    *,
+    eval_definition_version: int,
+) -> EvalResult:
+    """Build the persisted row for one (definition, case) outcome."""
+    verdict = result.judge_verdict
+    is_error = result.outcome is JudgeOutcome.ERROR
+    return EvalResult(
+        organisation_id=run.organisation_id,
+        suite_run_id=run.id,
+        eval_id=definition.id,
+        outcome=result.outcome.value,
+        passed=bool(result.passed),
+        score=result.score,
+        judge_result_json=verdict.to_json() if verdict is not None else None,
+        judge_confidence_kind=(verdict.confidence_kind.value if verdict is not None and not is_error else None),
+        error_code=(verdict.error_code.value if verdict is not None and verdict.error_code is not None else None),
+        detail=(result.detail or "")[:2000],
+        observed=True,
+        eval_definition_version=eval_definition_version,
+    )
+
+
+def _error_case_result(definition: EvalDefinition, run: SuiteRun, exc: BaseException) -> Any:
+    """An unexpected engine failure still produces its error row."""
+    _log.warning("suite_run case eval errored case=%s definition=%s: %s", run.id, definition.id, exc)
+    return EvalEngine.error_result(
+        definition,
+        run.id,
+        JudgeErrorCode.JUDGE_UNAVAILABLE,
+        f"eval execution failed ({type(exc).__name__}); no verdict was produced",
+    )
+
+
 def _case_results(
     run: SuiteRun,
     case: EvalCase,
@@ -370,33 +407,55 @@ def _case_results(
                 model_judge_callable=model_judge_callable,
             )
         except Exception as exc:
-            # An unexpected engine failure still produces its row, as an error.
-            _log.warning("suite_run case eval errored case=%s definition=%s: %s", case.id, definition.id, exc)
-            result = EvalEngine.error_result(
-                definition,
-                run.id,
-                JudgeErrorCode.JUDGE_UNAVAILABLE,
-                f"eval execution failed ({type(exc).__name__}); no verdict was produced",
-            )
-        verdict = result.judge_verdict
-        is_error = result.outcome is JudgeOutcome.ERROR
-        if is_error:
+            result = _error_case_result(definition, run, exc)
+        if result.outcome is JudgeOutcome.ERROR:
             errored += 1
         results.append(
-            EvalResult(
-                organisation_id=run.organisation_id,
-                suite_run_id=run.id,
-                eval_id=definition.id,
-                outcome=result.outcome.value,
-                passed=bool(result.passed),
-                score=result.score,
-                judge_result_json=verdict.to_json() if verdict is not None else None,
-                judge_confidence_kind=(verdict.confidence_kind.value if verdict is not None and not is_error else None),
-                error_code=(
-                    verdict.error_code.value if verdict is not None and verdict.error_code is not None else None
-                ),
-                detail=(result.detail or "")[:2000],
-                observed=True,
+            _case_result_row(
+                run,
+                definition,
+                result,
+                eval_definition_version=eval_definition_version,
+            )
+        )
+    return results, errored
+
+
+async def _case_results_async(
+    run: SuiteRun,
+    case: EvalCase,
+    definitions: Sequence[EvalDefinition],
+    engine: EvalEngine,
+    model_judge_callable: Any,
+    scenario_inputs: dict[str, Any] | None,
+    *,
+    eval_definition_version: int,
+) -> tuple[list[EvalResult], int]:
+    """Async twin of :func:`_case_results` (the SAQ suite job is async).
+
+    A judge with ``ajudge`` is awaited on the job's own loop, so the suite path
+    never enters the sync bridge (ADR 066 D10).
+    """
+    output = _synthesise_output(case, scenario_inputs)
+    results: list[EvalResult] = []
+    errored = 0
+    for definition in definitions:
+        try:
+            result = await engine.evaluate_result_async(
+                output,
+                definition,
+                run_id=run.id,
+                model_judge_callable=model_judge_callable,
+            )
+        except Exception as exc:
+            result = _error_case_result(definition, run, exc)
+        if result.outcome is JudgeOutcome.ERROR:
+            errored += 1
+        results.append(
+            _case_result_row(
+                run,
+                definition,
+                result,
                 eval_definition_version=eval_definition_version,
             )
         )
@@ -476,15 +535,26 @@ async def _run_suite_cases(
         elif run.claimed_cost is None:
             run.claimed_cost = Decimal(0)
 
-        results, errored = _case_results(
-            run,
-            case,
-            suite_defs,
-            engine,
-            model_judge_callable,
-            scenario_inputs,
-            eval_definition_version=eval_definition_version,
-        )
+        if hasattr(model_judge_callable, "ajudge"):
+            results, errored = await _case_results_async(
+                run,
+                case,
+                suite_defs,
+                engine,
+                model_judge_callable,
+                scenario_inputs,
+                eval_definition_version=eval_definition_version,
+            )
+        else:
+            results, errored = _case_results(
+                run,
+                case,
+                suite_defs,
+                engine,
+                model_judge_callable,
+                scenario_inputs,
+                eval_definition_version=eval_definition_version,
+            )
         for result in results:
             session.add(result)
 
