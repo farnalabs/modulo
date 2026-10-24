@@ -1,7 +1,9 @@
 """Unit tests for the registry protocol v2 crypto module."""
 
+import base64
 import copy
 import hashlib
+import json
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -13,6 +15,28 @@ from modulo.core.registry.crypto import (
     sign_primitive,
     verify_signature,
 )
+from modulo.registry import crypto as pem_crypto
+
+
+def _rsa_keypair_pems() -> tuple[str, str]:
+    """Return an RSA private/public PEM pair (non-Ed25519 key material)."""
+    from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
+
+    private_key = generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    public_pem = (
+        private_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+    return private_pem, public_pem
 
 
 class TestCryptoV2:
@@ -31,9 +55,24 @@ class TestCryptoV2:
         assert kp1["private_key"] != kp2["private_key"]
         assert kp1["public_key"] != kp2["public_key"]
 
-    def test_sign_and_verify_roundtrip(self):
+    @pytest.mark.parametrize(
+        "data",
+        [
+            {"name": "test", "version": "1.0", "tags": ["a", "b"]},
+            {
+                "author": "test-author",
+                "name": "v2-primitive",
+                "version": "1.0",
+                "primitive_type": "schema",
+                "description": "Created via v2 crypto",
+                "tags": ["v2"],
+                "content_json": {"fields": []},
+            },
+        ],
+        ids=["flat-payload", "nested-registry-entry"],
+    )
+    def test_sign_and_verify_roundtrip(self, data):
         kp = generate_keypair()
-        data = {"name": "test", "version": "1.0", "tags": ["a", "b"]}
 
         sig = sign_primitive(data, kp["private_key"])
         assert isinstance(sig, str)
@@ -123,26 +162,6 @@ class TestCryptoV2:
             _canonical_json({"payload": object()})
 
 
-class TestCryptoV2WithRegistry:
-    """Verify that crypto.py can sign entries compatible with the existing registry."""
-
-    def test_sign_and_verify_through_registry(self):
-        kp = generate_keypair()
-        data = {
-            "author": "test-author",
-            "name": "v2-primitive",
-            "version": "1.0",
-            "primitive_type": "schema",
-            "description": "Created via v2 crypto",
-            "tags": ["v2"],
-            "content_json": {"fields": []},
-        }
-
-        sig = sign_primitive(data, kp["private_key"])
-
-        assert verify_signature(data, sig, kp["public_key"]) is True
-
-
 class _PreserveRegistry:
     @pytest.fixture(autouse=True)
     def _preserve_registry(self):
@@ -159,18 +178,6 @@ class TestPublishPullVerifyFlow(_PreserveRegistry):
         from modulo.core.registry import get_registry_primitive, publish_primitive
 
         kp = generate_keypair()
-        data = {
-            "author": "e2e-author",
-            "name": "e2e-primitive",
-            "version": "1.0",
-            "primitive_type": "workflow",
-            "description": "E2E test primitive",
-            "tags": ["e2e"],
-            "content_json": {"nodes": [], "edges": [], "entry": "start"},
-        }
-
-        sig = sign_primitive(data, kp["private_key"])
-        assert verify_signature(data, sig, kp["public_key"]) is True
 
         entry = publish_primitive(
             author="e2e-author",
@@ -199,219 +206,118 @@ class TestPEMCryptoV2:
     """Tests for the PEM/base64 Ed25519 crypto module."""
 
     def test_generate_keypair_returns_pem_strings(self):
-        from modulo.registry.crypto import generate_keypair
-
-        priv_pem, pub_pem = generate_keypair()
+        priv_pem, pub_pem = pem_crypto.generate_keypair()
         assert priv_pem.startswith("-----BEGIN PRIVATE KEY-----")
         assert pub_pem.startswith("-----BEGIN PUBLIC KEY-----")
 
     def test_generate_keypair_different_each_call(self):
-        from modulo.registry.crypto import generate_keypair
-
-        kp1 = generate_keypair()
-        kp2 = generate_keypair()
-        assert kp1 != kp2
+        assert pem_crypto.generate_keypair() != pem_crypto.generate_keypair()
 
     def test_sign_and_verify_roundtrip(self):
-        from modulo.registry.crypto import generate_keypair, sign, verify
-
-        priv_pem, pub_pem = generate_keypair()
+        priv_pem, pub_pem = pem_crypto.generate_keypair()
         data = b"hello world"
-        sig = sign(priv_pem, data)
+        sig = pem_crypto.sign(priv_pem, data)
         assert isinstance(sig, str)
         assert len(sig) > 0
-        assert verify(pub_pem, data, sig) is True
+        assert pem_crypto.verify(pub_pem, data, sig) is True
 
     def test_verify_rejects_tampered_data(self):
-        from modulo.registry.crypto import generate_keypair, sign, verify
-
-        priv_pem, pub_pem = generate_keypair()
-        data = b"original data"
-        sig = sign(priv_pem, data)
-        assert verify(pub_pem, b"tampered data", sig) is False
+        priv_pem, pub_pem = pem_crypto.generate_keypair()
+        sig = pem_crypto.sign(priv_pem, b"original data")
+        assert pem_crypto.verify(pub_pem, b"tampered data", sig) is False
 
     def test_verify_rejects_wrong_key(self):
-        from modulo.registry.crypto import generate_keypair, sign, verify
-
-        priv1, _ = generate_keypair()
-        _, pub2 = generate_keypair()
+        priv_pem, _ = pem_crypto.generate_keypair()
+        _, other_pub_pem = pem_crypto.generate_keypair()
         data = b"shared secret"
-        sig = sign(priv1, data)
-        assert verify(pub2, data, sig) is False
+        sig = pem_crypto.sign(priv_pem, data)
+        assert pem_crypto.verify(other_pub_pem, data, sig) is False
 
-    def test_verify_rejects_wrong_signature(self):
-        from modulo.registry.crypto import generate_keypair, sign, verify
-
-        priv_pem, pub_pem = generate_keypair()
-        data = b"test"
-        sign(priv_pem, data)
-        import base64
-
-        mangled = base64.b64encode(b"\x00" * 64).decode()
-        assert verify(pub_pem, data, mangled) is False
-
-    def test_verify_rejects_invalid_base64_signature(self):
-        from modulo.registry.crypto import generate_keypair, verify
-
-        _, pub_pem = generate_keypair()
-        assert verify(pub_pem, b"data", "!!!not-base64!!!") is False
-
-    def test_verify_rejects_garbage_signature_string(self):
-        from modulo.registry.crypto import generate_keypair, verify
-
-        _, pub_pem = generate_keypair()
-        assert verify(pub_pem, b"data", "\x00\x01\x02\xff") is False
+    @pytest.mark.parametrize(
+        "signature",
+        [
+            base64.b64encode(b"\x00" * 64).decode(),
+            "!!!not-base64!!!",
+            "\x00\x01\x02\xff",
+            "AAAA",
+        ],
+        ids=["zeroed-64-bytes", "invalid-base64", "binary-garbage", "wrong-length-signature"],
+    )
+    def test_verify_rejects_malformed_signature(self, signature):
+        _, pub_pem = pem_crypto.generate_keypair()
+        assert pem_crypto.verify(pub_pem, b"data", signature) is False
 
     def test_sign_rejects_non_ed25519_private_key(self):
-        from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
-
-        from modulo.registry.crypto import sign
-
-        rsa_priv = generate_private_key(public_exponent=65537, key_size=2048)
-        priv_pem = rsa_priv.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        ).decode()
+        rsa_priv_pem, _ = _rsa_keypair_pems()
         with pytest.raises(TypeError, match="not an Ed25519 private key"):
-            sign(priv_pem, b"data")
+            pem_crypto.sign(rsa_priv_pem, b"data")
 
     def test_sign_rejects_malformed_pem(self):
-        from modulo.registry.crypto import sign
-
         with pytest.raises(ValueError, match=r"(Could not deserialize key data|Unable to load PEM file)"):
-            sign("-----BEGIN PRIVATE KEY-----\ngarbage\n-----END PRIVATE KEY-----", b"data")
+            pem_crypto.sign("-----BEGIN PRIVATE KEY-----\ngarbage\n-----END PRIVATE KEY-----", b"data")
 
     def test_verify_rejects_non_ed25519_public_key(self):
-        from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
-
-        from modulo.registry.crypto import generate_keypair, sign, verify
-
-        rsa_priv = generate_private_key(public_exponent=65537, key_size=2048)
-        pub_pem = (
-            rsa_priv.public_key()
-            .public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo,
-            )
-            .decode()
-        )
-
-        priv_pem, _ = generate_keypair()
-        sig = sign(priv_pem, b"data")
-        assert verify(pub_pem, b"data", sig) is False
+        _, rsa_pub_pem = _rsa_keypair_pems()
+        priv_pem, _ = pem_crypto.generate_keypair()
+        sig = pem_crypto.sign(priv_pem, b"data")
+        assert pem_crypto.verify(rsa_pub_pem, b"data", sig) is False
 
     def test_verify_rejects_malformed_public_key_pem(self):
-        from modulo.registry.crypto import generate_keypair, sign, verify
-
-        priv_pem, _ = generate_keypair()
-        sig = sign(priv_pem, b"data")
-        assert verify("-----BEGIN PUBLIC KEY-----\ngarbage\n-----END PUBLIC KEY-----", b"data", sig) is False
+        priv_pem, _ = pem_crypto.generate_keypair()
+        sig = pem_crypto.sign(priv_pem, b"data")
+        assert pem_crypto.verify("-----BEGIN PUBLIC KEY-----\ngarbage\n-----END PUBLIC KEY-----", b"data", sig) is False
 
     def test_sign_and_verify_json_payload(self):
-        import json
-
-        from modulo.registry.crypto import generate_keypair, sign, verify
-
-        priv_pem, pub_pem = generate_keypair()
+        priv_pem, pub_pem = pem_crypto.generate_keypair()
         payload = json.dumps({"author": "test", "version": "1.0"}, separators=(",", ":"), sort_keys=True).encode()
-        sig = sign(priv_pem, payload)
-        assert verify(pub_pem, payload, sig) is True
+        sig = pem_crypto.sign(priv_pem, payload)
+        assert pem_crypto.verify(pub_pem, payload, sig) is True
 
 
 class TestTrustAnchor:
     """Tests for trust anchor verification."""
 
     def test_trust_anchor_public_key_is_pem(self):
-        from modulo.registry.crypto import get_trust_anchor_public_key_pem
-
-        pub_pem = get_trust_anchor_public_key_pem()
-        assert pub_pem.startswith("-----BEGIN PUBLIC KEY-----")
+        assert pem_crypto.get_trust_anchor_public_key_pem().startswith("-----BEGIN PUBLIC KEY-----")
 
     def test_sign_public_key_and_verify_roundtrip(self):
-        from modulo.registry.crypto import (
-            generate_keypair,
-            sign_with_trust_anchor,
-            verify_trust_anchor,
-        )
-
-        _, pub_pem = generate_keypair()
-        ta_sig = sign_with_trust_anchor(pub_pem)
+        _, pub_pem = pem_crypto.generate_keypair()
+        ta_sig = pem_crypto.sign_with_trust_anchor(pub_pem)
         assert isinstance(ta_sig, str)
         assert len(ta_sig) > 0
-        assert verify_trust_anchor(pub_pem, ta_sig) is True
+        assert pem_crypto.verify_trust_anchor(pub_pem, ta_sig) is True
 
     def test_verify_trust_anchor_rejects_unsigned_key(self):
-        from modulo.registry.crypto import (
-            generate_keypair,
-            sign_with_trust_anchor,
-            verify_trust_anchor,
-        )
-
-        _, pub1 = generate_keypair()
-        _, pub2 = generate_keypair()
-        sig = sign_with_trust_anchor(pub1)
-        assert verify_trust_anchor(pub2, sig) is False
+        _, pub1 = pem_crypto.generate_keypair()
+        _, pub2 = pem_crypto.generate_keypair()
+        assert pem_crypto.verify_trust_anchor(pub2, pem_crypto.sign_with_trust_anchor(pub1)) is False
 
     def test_verify_trust_anchor_with_explicit_key(self):
-        from modulo.registry.crypto import (
-            generate_keypair,
-            get_trust_anchor_public_key_pem,
-            sign_with_trust_anchor,
-            verify_trust_anchor,
-        )
+        _, pub_pem = pem_crypto.generate_keypair()
+        ta_sig = pem_crypto.sign_with_trust_anchor(pub_pem)
+        assert pem_crypto.verify_trust_anchor(pub_pem, ta_sig, pem_crypto.get_trust_anchor_public_key_pem()) is True
 
-        _, pub_pem = generate_keypair()
-        ta_sig = sign_with_trust_anchor(pub_pem)
-        ta_pub = get_trust_anchor_public_key_pem()
-        assert verify_trust_anchor(pub_pem, ta_sig, ta_pub) is True
-
-    def test_verify_trust_anchor_rejects_tampered_sig(self):
-        import base64
-
-        from modulo.registry.crypto import (
-            generate_keypair,
-            verify_trust_anchor,
-        )
-
-        _, pub_pem = generate_keypair()
-        ta_sig = base64.b64encode(b"\x00" * 64).decode()
-        assert verify_trust_anchor(pub_pem, ta_sig) is False
-
-    def test_verify_trust_anchor_rejects_invalid_base64(self):
-        from modulo.registry.crypto import (
-            generate_keypair,
-            verify_trust_anchor,
-        )
-
-        _, pub_pem = generate_keypair()
-        assert verify_trust_anchor(pub_pem, "!!!not-base64!!!") is False
-
-    def test_verify_trust_anchor_rejects_garbage_sig(self):
-        from modulo.registry.crypto import (
-            generate_keypair,
-            verify_trust_anchor,
-        )
-
-        _, pub_pem = generate_keypair()
-        assert verify_trust_anchor(pub_pem, "\x00\x01\x02\xff") is False
+    @pytest.mark.parametrize(
+        "signature",
+        [
+            base64.b64encode(b"\x00" * 64).decode(),
+            "!!!not-base64!!!",
+            "\x00\x01\x02\xff",
+        ],
+        ids=["zeroed-64-bytes", "invalid-base64", "binary-garbage"],
+    )
+    def test_verify_trust_anchor_rejects_malformed_sig(self, signature):
+        _, pub_pem = pem_crypto.generate_keypair()
+        assert pem_crypto.verify_trust_anchor(pub_pem, signature) is False
 
     def test_verify_trust_anchor_empty_anchor_returns_false(self):
-        from modulo.registry.crypto import (
-            generate_keypair,
-            sign_with_trust_anchor,
-            verify_trust_anchor,
-        )
-
-        _, pub_pem = generate_keypair()
-        ta_sig = sign_with_trust_anchor(pub_pem)
-        assert verify_trust_anchor(pub_pem, ta_sig, "") is False
+        _, pub_pem = pem_crypto.generate_keypair()
+        ta_sig = pem_crypto.sign_with_trust_anchor(pub_pem)
+        assert pem_crypto.verify_trust_anchor(pub_pem, ta_sig, "") is False
 
 
 class TestModuleExports:
     def test_public_exports(self):
-        import modulo.registry.crypto
-
         expected = {
             "generate_keypair",
             "get_trust_anchor_public_key_pem",
@@ -420,11 +326,8 @@ class TestModuleExports:
             "verify",
             "verify_trust_anchor",
         }
-        actual = set(modulo.registry.crypto.__all__)
-        assert actual == expected
+        assert set(pem_crypto.__all__) == expected
 
     def test_private_functions_not_in_exports(self):
-        import modulo.registry.crypto
-
         privates = {"_load_private_key", "_load_public_key", "_get_trust_anchor"}
-        assert not privates & set(modulo.registry.crypto.__all__)
+        assert not privates & set(pem_crypto.__all__)
