@@ -427,6 +427,111 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.text()).toContain('Failed to remove')
   })
 
+  // ── Guards on the two licence scopes (FAR-2104) ─────────────────────
+
+  it('verifyKey does nothing when the system key field is empty', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    // The button is disabled while the field is empty; the guard is the last
+    // line of defence for a programmatic call.
+    await (wrapper.vm as any).verifyKey()
+    expect(api.POST).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('Valid license key')
+  })
+
+  it('applyKey does nothing when the org key field is empty', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    await (wrapper.vm as any).applyKey()
+    expect(api.PUT).not.toHaveBeenCalled()
+  })
+
+  it('applySystemKey does nothing when the system key field is empty', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    await (wrapper.vm as any).applySystemKey()
+    expect(api.POST).not.toHaveBeenCalled()
+  })
+
+  it('applySystemKey surfaces an error when the API returns an error', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+    ;(api.POST as any).mockResolvedValue({ data: null, error: 'boom' })
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    await wrapper.find('[data-testid="license-key-input-system"]').setValue('system-key')
+    await wrapper.find('[data-testid="license-apply-btn-system"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    expect(api.POST).toHaveBeenCalledWith('/api/v1/admin/license', {
+      body: { license_key: 'system-key' },
+    })
+    expect(wrapper.text()).toContain('Failed to apply')
+  })
+
+  it('applySystemKey surfaces an error when the API call throws', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+    ;(api.POST as any).mockRejectedValue(new Error('network-down'))
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    await wrapper.find('[data-testid="license-key-input-system"]').setValue('system-key')
+    await wrapper.find('[data-testid="license-apply-btn-system"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    expect(wrapper.text()).toContain('Failed to apply')
+  })
+
+  it('removeLicense does nothing when the caller has no org id', async () => {
+    const { api, getAccessToken } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    const withoutOrg = `x.${btoa(JSON.stringify({ sub: 'admin@modulo.run', org_role: 'admin' }))}.y`
+    vi.mocked(getAccessToken).mockReturnValue(withoutOrg)
+
+    try {
+      const wrapper = mount(SettingsLicenseView, {
+        global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+      })
+      await nextTick(); await nextTick(); await nextTick()
+
+      // Without an org there is no org-scoped endpoint to call.
+      await (wrapper.vm as any).removeLicense()
+      expect(api.DELETE).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(getAccessToken).mockReturnValue(
+        `x.${btoa(JSON.stringify({ sub: 'admin@modulo.run', org_id: 'org-1', org_role: 'admin' }))}.y`,
+      )
+    }
+  })
+
   // ── FAR-2075: shell-owned renewal surface ───────────────────────────
 
   it('does not render the renewal surface itself — the authenticated shell owns it', async () => {
