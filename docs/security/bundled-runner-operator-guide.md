@@ -193,7 +193,7 @@ A system cron sweeps labelled workspace containers every 5 min:
 3. Kill the engine (or `docker kill` the workspace) mid-exec: the node fails
    RETRYABLE – never as a completed run with a fabricated zero exit.
 4. Docker-marked acceptance suite (requires a live engine):
-   `uv run pytest tests/docker -m docker` from `backend/`
+   `uv run pytest tests/docker -m docker -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings` from `backend/`
    (`MODULO_RUNNER_DIND_TESTS=1` adds the dind engine-kill strip, ~560 MB).
 
 ## 8. Remote engine
