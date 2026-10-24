@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.evals import MutePolicyConfigRequest, update_mute_policy
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
@@ -704,6 +705,80 @@ def _from_run_payload(node_id: uuid.UUID | None = None) -> dict:
         "eval_type": "regex",
         "name": "from-run-eval",
     }
+
+
+@pytest.mark.asyncio
+async def test_update_mute_policy_preserves_omitted_field() -> None:
+    session = _make_session()
+    eval_def = _eval_def_row(_EVAL_ID)
+    eval_def.organisation_id = _ORG_ID
+    eval_def.mute_threshold = 0.2
+    eval_def.mute_min_outcomes = 10
+    eval_def.is_muted = True
+    eval_def.muted_at = None
+    eval_def.muted_by = None
+    eval_def.acceptance_rate = 0.8
+    session.get = AsyncMock(return_value=eval_def)
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    with (
+        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock),
+        patch("modulo.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock),
+    ):
+        response = await update_mute_policy(
+            _EVAL_ID,
+            MutePolicyConfigRequest(mute_threshold=0.3),
+            session,
+            principal,
+        )
+
+    assert response.mute_threshold == pytest.approx(0.3)
+    assert response.mute_min_outcomes == 10
+    assert eval_def.mute_min_outcomes == 10
+
+
+@pytest.mark.asyncio
+async def test_update_mute_policy_explicit_null_clears_field() -> None:
+    session = _make_session()
+    eval_def = _eval_def_row(_EVAL_ID)
+    eval_def.organisation_id = _ORG_ID
+    eval_def.mute_threshold = 0.2
+    eval_def.mute_min_outcomes = 10
+    eval_def.is_muted = True
+    eval_def.muted_at = None
+    eval_def.muted_by = None
+    eval_def.acceptance_rate = 0.8
+    session.get = AsyncMock(return_value=eval_def)
+    principal = TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+    with (
+        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock),
+        patch("modulo.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock),
+    ):
+        response = await update_mute_policy(
+            _EVAL_ID,
+            MutePolicyConfigRequest(mute_threshold=None),
+            session,
+            principal,
+        )
+
+    assert response.mute_threshold is None
+    assert response.mute_min_outcomes == 10
+    assert eval_def.is_muted is False
 
 
 def test_create_eval_from_run_returns_definition_with_sample(client: tuple[TestClient, AsyncMock]) -> None:

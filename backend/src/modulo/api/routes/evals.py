@@ -3357,12 +3357,20 @@ async def update_mute_policy(
         if eval_def is None or eval_def.organisation_id != principal.organisation_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
 
-        # Update mute policy config
-        eval_def.mute_threshold = req.mute_threshold
-        eval_def.mute_min_outcomes = req.mute_min_outcomes
+        # PATCH semantics: omitted fields retain their existing configuration.
+        # Explicit null remains the documented way to clear one field and disable
+        # auto-mute, so distinguish it from a field that was not sent.
+        if "mute_threshold" in req.model_fields_set:
+            eval_def.mute_threshold = req.mute_threshold
+        if "mute_min_outcomes" in req.model_fields_set:
+            eval_def.mute_min_outcomes = req.mute_min_outcomes
 
-        # If unmuting by setting threshold/min_outcomes to null, also clear mute status
-        if req.mute_threshold is None or req.mute_min_outcomes is None:
+        # If unmuting by explicitly setting threshold/min_outcomes to null, also
+        # clear mute status. An omitted field must not trigger this branch.
+        if any(
+            field in req.model_fields_set and getattr(req, field) is None
+            for field in ("mute_threshold", "mute_min_outcomes")
+        ):
             eval_def.is_muted = False
             eval_def.muted_at = None
             eval_def.muted_by = None
