@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from modulo.core.pipeline_execution import _fail_overdue_node, _write_node_completion
-from modulo.db.crud.run_node_outputs import has_completed_nodes_in_attempt
+from modulo.db.crud.run_node_outputs import attempt_key_for_node, has_completed_nodes_in_attempt
 from modulo.db.models.base import Base
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY, META_NODE_ID, RunNodeOutput
@@ -44,7 +44,12 @@ def sqlite_sessionmaker(sqlite_engine: AsyncEngine) -> async_sessionmaker[AsyncS
 
 
 async def _insert_output(
-    maker: async_sessionmaker[AsyncSession], *, run_id: uuid.UUID, node_id: str, completed: bool
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    run_id: uuid.UUID,
+    node_id: str,
+    completed: bool,
+    claim_token: str | None = None,
 ) -> None:
     async with maker() as session, session.begin():
         session.add(
@@ -52,7 +57,7 @@ async def _insert_output(
                 run_id=run_id,
                 organisation_id=_ORG,
                 node_id=node_id,
-                attempt_key=FINAL_ATTEMPT_KEY,
+                attempt_key=attempt_key_for_node(run_id=run_id, node_id=node_id, claim_token=claim_token),
                 outputs_json={"result": "ok"},
                 completed_at=datetime.now(UTC) if completed else None,
             )
@@ -64,12 +69,15 @@ async def test_completion_writer_persists_timestamp(
     sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     run_id = uuid.uuid4()
-    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=False)
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=False, claim_token="claim-a")
 
-    await _write_node_completion(sqlite_engine, str(run_id), str(_ORG), "agent")
+    await _write_node_completion(sqlite_engine, str(run_id), str(_ORG), "agent", "claim-a")
 
     async with sqlite_sessionmaker() as session, session.begin():
-        row = await session.get(RunNodeOutput, (run_id, "agent", FINAL_ATTEMPT_KEY))
+        row = await session.get(
+            RunNodeOutput,
+            (run_id, "agent", attempt_key_for_node(run_id=run_id, node_id="agent", claim_token="claim-a")),
+        )
         assert row is not None
         assert row.completed_at is not None
 
@@ -82,19 +90,49 @@ async def test_all_node_families_use_same_completion_writer(
     node_id: str,
 ) -> None:
     run_id = uuid.uuid4()
-    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id=node_id, completed=False)
-    await _write_node_completion(sqlite_engine, str(run_id), str(_ORG), node_id)
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id=node_id, completed=False, claim_token="claim-a")
+    await _write_node_completion(sqlite_engine, str(run_id), str(_ORG), node_id, "claim-a")
 
     async with sqlite_sessionmaker() as session, session.begin():
-        assert await has_completed_nodes_in_attempt(session, run_id=run_id, organisation_id=_ORG)
+        assert await has_completed_nodes_in_attempt(session, run_id=run_id, organisation_id=_ORG, claim_token="claim-a")
 
 
 @pytest.mark.asyncio
 async def test_completion_reader_requires_completed_at(sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     run_id = uuid.uuid4()
-    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="unfinished", completed=False)
+    await _insert_output(
+        sqlite_sessionmaker, run_id=run_id, node_id="unfinished", completed=False, claim_token="claim-a"
+    )
     async with sqlite_sessionmaker() as session, session.begin():
-        assert not await has_completed_nodes_in_attempt(session, run_id=run_id, organisation_id=_ORG)
+        assert not await has_completed_nodes_in_attempt(
+            session, run_id=run_id, organisation_id=_ORG, claim_token="claim-a"
+        )
+
+
+@pytest.mark.asyncio
+async def test_completion_reader_rejects_prior_attempt_completion(
+    sqlite_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    run_id = uuid.uuid4()
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True, claim_token="old-claim")
+    async with sqlite_sessionmaker() as session, session.begin():
+        assert not await has_completed_nodes_in_attempt(
+            session, run_id=run_id, organisation_id=_ORG, claim_token="new-claim"
+        )
+
+
+@pytest.mark.asyncio
+async def test_completion_reader_accepts_current_attempt_completion(
+    sqlite_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    run_id = uuid.uuid4()
+    await _insert_output(
+        sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True, claim_token="current-claim"
+    )
+    async with sqlite_sessionmaker() as session, session.begin():
+        assert await has_completed_nodes_in_attempt(
+            session, run_id=run_id, organisation_id=_ORG, claim_token="current-claim"
+        )
 
 
 @pytest.mark.asyncio
@@ -112,7 +150,9 @@ async def test_completion_reader_ignores_sentinel_rows(sqlite_sessionmaker: asyn
             )
         )
     async with sqlite_sessionmaker() as session, session.begin():
-        assert not await has_completed_nodes_in_attempt(session, run_id=run_id, organisation_id=_ORG)
+        assert not await has_completed_nodes_in_attempt(
+            session, run_id=run_id, organisation_id=_ORG, claim_token="claim-a"
+        )
 
 
 @pytest.mark.asyncio
@@ -120,7 +160,7 @@ async def test_deadline_gate_terminal_fails_without_completion(
     sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     run_id = uuid.uuid4()
-    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False)
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
     exec_task = asyncio.create_task(asyncio.sleep(10))
     try:
         with (
@@ -136,6 +176,7 @@ async def test_deadline_gate_terminal_fails_without_completion(
                 exec_task,
                 asyncio.Event(),
                 asyncio.Event(),
+                claim_token="claim-a",
             )
             fail.assert_awaited_once()
             assert "No node completed in this attempt" in fail.await_args.kwargs["error_detail"]
@@ -150,7 +191,7 @@ async def test_deadline_gate_allows_retry_after_completion(
     sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     run_id = uuid.uuid4()
-    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True)
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True, claim_token="claim-a")
     exec_task = asyncio.create_task(asyncio.sleep(10))
     try:
         with (
@@ -169,6 +210,7 @@ async def test_deadline_gate_allows_retry_after_completion(
                 asyncio.Event(),
                 asyncio.Event(),
                 retry_hook=AsyncMock(),
+                claim_token="claim-a",
             )
             retry.assert_awaited_once()
             assert retry.await_args.kwargs["veto_if_delivered"] is True

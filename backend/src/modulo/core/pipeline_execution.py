@@ -2398,6 +2398,7 @@ async def _fail_overdue_node(
     run_done_event: asyncio.Event,
     stall_requested: asyncio.Event | None,
     retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
+    claim_token: str | None = None,
 ) -> None:
     """Fail the most-overdue in-flight node that blew its deadline.
 
@@ -2471,10 +2472,23 @@ async def _fail_overdue_node(
 
     factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
     async with factory() as session, session.begin():
-        await set_rls_org(session, uuid.UUID(org_id))
-        has_completions = await has_completed_nodes_in_attempt(
-            session, run_id=uuid.UUID(run_id), organisation_id=uuid.UUID(org_id)
-        )
+        try:
+            await set_rls_org(session, uuid.UUID(org_id))
+        except ValueError:
+            _log.warning(
+                "pipeline_execution.node_completion_probe_invalid_org_id run=%s org=%s",
+                run_id,
+                org_id,
+                exc_info=True,
+            )
+            has_completions = False
+        else:
+            has_completions = await has_completed_nodes_in_attempt(
+                session,
+                run_id=uuid.UUID(run_id),
+                organisation_id=uuid.UUID(org_id),
+                claim_token=claim_token,
+            )
 
     if not has_completions:
         _log.warning(
@@ -2593,6 +2607,7 @@ async def node_deadline_watchdog(
     org_id: str,
     *,
     exec_task: asyncio.Task[Any],
+    claim_token: str | None = None,
     stall_requested: asyncio.Event | None = None,
     node_started_event: asyncio.Event,
     node_completed_event: asyncio.Event,
@@ -2857,6 +2872,7 @@ async def run_executor_with_watchdog(
             aeng=aeng,
             run_id=run_id,
             org_id=org_id,
+            claim_token=getattr(executor, "_claim_token", None),
         )
 
     async def _execute() -> Any:
@@ -2919,6 +2935,7 @@ async def run_executor_with_watchdog(
             run_done_event=run_done_event,
             node_deadlines=node_deadlines,
             retry_hook=watchdog_retry_hook,
+            claim_token=claim_token,
         ),
         name=f"saq-node-deadline-watchdog-{rid}",
     )
@@ -3017,11 +3034,18 @@ def _wire_executor_hooks(
     executor._superseded = superseded
 
 
+def _completion_attempt_key(run_id: str, node_id: str, claim_token: str | None) -> str:
+    from modulo.db.crud.run_node_outputs import attempt_key_for_node
+
+    return attempt_key_for_node(run_id=uuid.UUID(run_id), node_id=node_id, claim_token=claim_token)
+
+
 async def _write_node_completion(
     aeng: AsyncEngine,
     run_id: str,
     org_id: str,
     node_id: str,
+    claim_token: str | None = None,
 ) -> None:
     """Write the per-node completion timestamp (FAR-2050).
 
@@ -3034,7 +3058,7 @@ async def _write_node_completion(
     and the gate only checks for its presence.
     """
     try:
-        from sqlalchemy import update
+        from sqlalchemy import select
 
         from modulo.db.models.run_node_outputs import RunNodeOutput
         from modulo.db.rls import set_rls_org as _set_rls_org
@@ -3042,16 +3066,25 @@ async def _write_node_completion(
         factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
         async with factory() as session, session.begin():
             await _set_rls_org(session, uuid.UUID(org_id))
-            await session.execute(
-                update(RunNodeOutput)
-                .where(
-                    RunNodeOutput.run_id == uuid.UUID(run_id),
-                    RunNodeOutput.organisation_id == uuid.UUID(org_id),
-                    RunNodeOutput.node_id == node_id,
-                    RunNodeOutput.attempt_key == "__final__",
+            row = (
+                await session.execute(
+                    select(RunNodeOutput).where(
+                        RunNodeOutput.run_id == uuid.UUID(run_id),
+                        RunNodeOutput.organisation_id == uuid.UUID(org_id),
+                        RunNodeOutput.node_id == node_id,
+                        RunNodeOutput.attempt_key == _completion_attempt_key(run_id, node_id, claim_token),
+                    )
                 )
-                .values(completed_at=datetime.now(UTC))
-            )
+            ).scalar_one_or_none()
+            if row is None:
+                row = RunNodeOutput(
+                    run_id=uuid.UUID(run_id),
+                    organisation_id=uuid.UUID(org_id),
+                    node_id=node_id,
+                    attempt_key=_completion_attempt_key(run_id, node_id, claim_token),
+                )
+                session.add(row)
+            row.completed_at = datetime.now(UTC)
     except Exception:
         _log.warning(
             "pipeline_execution.node_completion_write_failed run=%s node=%s",
@@ -3072,6 +3105,7 @@ def _wire_node_deadline_hooks(
     aeng: AsyncEngine | None = None,
     run_id: str | None = None,
     org_id: str | None = None,
+    claim_token: str | None = None,
 ) -> None:
     """Wire the per-node callbacks that drive the absolute node-deadline watchdog.
 
@@ -3095,7 +3129,7 @@ def _wire_node_deadline_hooks(
         node_completed_event.set()
         # FAR-2050: write durable completion record
         if aeng is not None and run_id is not None and org_id is not None:
-            await _write_node_completion(aeng, run_id, org_id, nid)
+            await _write_node_completion(aeng, run_id, org_id, nid, claim_token)
 
     executor.on_node_started = _on_node_started
     executor.on_node_completed = _on_node_completed

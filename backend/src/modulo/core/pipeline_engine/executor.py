@@ -36,6 +36,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from inspect import isawaitable
 from typing import Any, Literal, NamedTuple, NoReturn
 
 from langchain_core.messages import BaseMessage
@@ -2500,7 +2501,7 @@ class PipelineExecutor:
         # defeats the idle-watchdog. Unlike ``on_first_progress`` (fires once),
         # these fire once per node.
         self.on_node_started: Callable[[str], None] | None = None
-        self.on_node_completed: Callable[[str], None] | None = None
+        self.on_node_completed: Callable[[str], Awaitable[Any] | None] | None = None
         # Per-node configured ``timeout_seconds`` (node_id -> seconds), populated
         # from the graph JSON before streaming so the watchdog can read it as a
         # shared dict reference. Empty until ``_prepare_and_stream`` runs.
@@ -8210,7 +8211,9 @@ class PipelineExecutor:
             return await self._handle_graph_interrupt(interrupts, state, ctx)
         mapped = _map_lg_event(lg_event, ctx.node_ids)
         if mapped is not None:
-            self._publish_mapped_stream_event(mapped, state, ctx)
+            completion = self._publish_mapped_stream_event(mapped, state, ctx)
+            if completion is not None:
+                await completion
         event_kind = lg_event.get("event", "")
         # Capture node output for agent_signal trigger firing.
         if event_kind == "on_chain_end":
@@ -8226,7 +8229,7 @@ class PipelineExecutor:
         mapped: tuple[str, dict[str, Any]],
         state: _StreamState,
         ctx: _StreamContext,
-    ) -> None:
+    ) -> Awaitable[Any] | None:
         event_type, payload = mapped
         if not state.first_node_signalled:
             state.first_node_signalled = True
@@ -8238,8 +8241,19 @@ class PipelineExecutor:
         if event_type == "node_started" and self.on_node_started is not None:
             self.on_node_started(str(payload.get("node_id", "")))
         elif event_type == "node_completed" and self.on_node_completed is not None:
-            self.on_node_completed(str(payload.get("node_id", "")))
+            completion = self.on_node_completed(str(payload.get("node_id", "")))
+            if isawaitable(completion):
+                # Lifecycle hooks historically accepted synchronous callbacks.
+                # Await only coroutine-returning hooks so durable completion
+                # writes finish before the node event is published, without
+                # creating un-awaited coroutine warnings for the async hook.
+                async def _finish_completion() -> None:
+                    await completion
+                    ctx.broker.publish(event_type, payload)
+
+                return _finish_completion()
         ctx.broker.publish(event_type, payload)
+        return None
 
     def _stream_policy_outcome(
         self,
