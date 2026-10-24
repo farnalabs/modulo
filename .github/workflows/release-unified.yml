@@ -427,9 +427,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TAG="${RC_TAG}"
-          VERSION_NUM="${VERSION}"
-          BUNDLE_TAG="${BUNDLE_TAG}"
 
           # Generate changelog and release notes
           NOTES_FILE="$(mktemp)"
@@ -466,14 +463,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION_NUM="${VERSION}"
 
           # Log in to GHCR for Helm
           echo "${GH_TOKEN}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
 
           # Package and push chart
           helm package deploy/helm/modulo --destination /tmp/helm-pkg --version "$VERSION_NUM" --app-version "$VERSION_NUM"
-          CHART_TGZ=$(ls /tmp/helm-pkg/modulo-${VERSION_NUM}.tgz)
+          CHART_TGZ="$(ls /tmp/helm-pkg/modulo-${VERSION_NUM}.tgz)"
           helm push "$CHART_TGZ" oci://ghcr.io/${{ github.repository }}/charts
 
       # -----------------------------------------------------------------------
@@ -503,8 +499,6 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          GA_TAG="${GA_TAG}"
-          VERSION_NUM="${VERSION}"
           rc=0
           NOTES_FILE="$(mktemp)"
 

@@ -234,7 +234,9 @@ jobs:
         run: |
           set -euo pipefail
           cd "build/${BUNDLE_ROOT}"
-          find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+          TMP_SUMS="$(mktemp)"
+          find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$TMP_SUMS"
+          mv "$TMP_SUMS" SHA256SUMS
           wc -l SHA256SUMS
 
       - name: Create tar.gz and its release checksum
