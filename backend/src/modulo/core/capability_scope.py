@@ -41,6 +41,12 @@ logger = logging.getLogger(__name__)
 # Stable dotted error-code taxonomy entry (see pipeline_engine.error_codes).
 SCOPE_VIOLATION_CODE = "scope.violation"
 
+# ``ScopeViolationError.kind`` for a blank / whitespace-only
+# ``allowed_connectors`` entry. Distinct from a widen (``connector``) because it
+# is not a scope violation at all — it is a meaningless entry, and the route
+# attaches the remedy it needs (remove it, or leave the list empty) to the 422.
+BLANK_CONNECTOR_KIND = "blank_connector"
+
 # OTel meter namespace shared with the pipeline engine.
 _METER_NAME = "modulo.pipeline_engine"
 
@@ -128,6 +134,20 @@ def _looks_like_instance_id(value: str) -> bool:
         return False
 
 
+def _is_malformed_connector_scope(allowed_connectors: Any) -> bool:
+    """True when a non-``None`` value cannot express a connector allowlist.
+
+    Every REST graph write coerces ``allowed_connectors`` to ``list[str] | None``
+    through the Pydantic node model, so this shape is reachable only through a
+    writer that stores raw graph dicts — MCP ``update_pipeline_graph``, the
+    workflow-bundle import, library/template install, clone and snapshot
+    rollback — none of which run the save-time checks. Such a value is
+    unintelligible, NOT "unrestricted": the readers fail CLOSED on it, because a
+    security gate must never read malformed input as permission.
+    """
+    return allowed_connectors is not None and not isinstance(allowed_connectors, (str, list, tuple))
+
+
 def _non_blank_connector_entries(allowed_connectors: Any) -> set[str]:
     """The STRIPPED, non-blank entries of an ``allowed_connectors`` value.
 
@@ -148,11 +168,28 @@ def _non_blank_connector_entries(allowed_connectors: Any) -> set[str]:
       never be contributed (or matched) verbatim as a scope string that matches
       no connector at all.
 
+    This is the ONE interpretation of an entry: both runtime readers and the
+    save-time widen check go through here, so save and run can never disagree
+    about what an entry means.
+
     A non-empty result stays AUTHORITATIVE — this helper never widens, so a node
     that genuinely narrows to specific connectors still contributes exactly
     those (the FAR-418 invariant).
     """
-    if not allowed_connectors or isinstance(allowed_connectors, str):
+    if not allowed_connectors:
+        return set()
+    # A BARE STRING is ONE entry, never a sequence of characters: iterating it
+    # would turn "github" into {"g", "i", "t", ...} — a scope naming no connector
+    # at all. A blank bare string names nothing, so it is unrestricted exactly
+    # like a blank list entry.
+    if isinstance(allowed_connectors, str):
+        text = allowed_connectors.strip()
+        return {text} if text else set()
+    if not isinstance(allowed_connectors, (list, tuple)):
+        # Malformed (a dict, a number, an arbitrary object): it cannot express an
+        # allowlist, so it contributes nothing here — each reader fails CLOSED on
+        # it through :func:`_is_malformed_connector_scope` rather than treating
+        # the empty contribution as unrestricted.
         return set()
     entries: set[str] = set()
     for entry in allowed_connectors:
@@ -174,10 +211,17 @@ def validate_allowed_connectors_not_blank(
     blanks-only list is truthy, so before this guard it stored a node that was
     "narrowed" to nothing — the run computed an empty scope and fetched every
     active org connector, while the node itself matched no connector at the hub.
-    The runtime treats blanks as unrestricted (see
-    :func:`_non_blank_connector_entries`) as a backstop for already-stored
-    graphs; refusing the write is the primary defence, so no new graph can carry
-    one.
+
+    This guard's coverage is deliberately NARROW: it fires only on the REST
+    graph-write paths that run ``_validate_capability_scopes`` (exactly one call
+    site, inside ``_resolve_graph_references``). Every other writer persists raw
+    graph dicts and never reaches it — MCP ``update_pipeline_graph``, the
+    workflow-bundle import, library/template install, pipeline clone and snapshot
+    rollback can all still store ``allowed_connectors: [""]``. The runtime
+    normalisation in :func:`_non_blank_connector_entries` is therefore the
+    BACKSTOP for every graph those writers store (and for every graph stored
+    before this guard existed); refusing the write covers the REST routes only,
+    so a runtime reader must never assume a persisted list is non-blank.
 
     Applies to EVERY scoped node (checked before the Agent reference is
     consulted): blankness is a property of the list, independent of what the
@@ -189,8 +233,13 @@ def validate_allowed_connectors_not_blank(
         if not str(entry).strip():
             # repr() so the offending entry is visible in the 422 detail: an
             # empty string and a whitespace-only string are otherwise
-            # indistinguishable from a missing value.
-            raise ScopeViolationError(node_id=node_id, target=repr(entry), kind="connector")
+            # indistinguishable from a missing value. The dedicated ``kind`` is
+            # what lets the route attach the remedy this entry needs.
+            raise ScopeViolationError(
+                node_id=node_id,
+                target=repr(entry),
+                kind=BLANK_CONNECTOR_KIND,
+            )
 
 
 def validate_allowed_connectors_subset(
@@ -211,13 +260,18 @@ def validate_allowed_connectors_subset(
     :func:`validate_allowed_connectors_not_blank`) — it is not a widen, it is a
     meaningless entry that must never be persisted.
 
+    Entries are classified AFTER the same strip both runtime readers apply (see
+    :func:`_non_blank_connector_entries`), so save and run interpret an entry
+    identically. Classifying the raw value made the two disagree: a padded
+    instance-id (``" <uuid> "``) was read as a connector TYPE and refused as a
+    widen, while the runtime stripped it into a legitimate instance-id and
+    honoured it.
+
     When ``allowed_connectors`` is ``None``/empty the node is unrestricted
     (default), so nothing is rejected.
     """
     validate_allowed_connectors_not_blank(node_id=node_id, allowed_connectors=allowed_connectors)
-    if not allowed_connectors:
-        return
-    for entry in allowed_connectors:
+    for entry in _non_blank_connector_entries(allowed_connectors):
         if _looks_like_instance_id(entry):
             continue
         if entry not in granted_types:
@@ -276,7 +330,14 @@ def is_connector_allowed(
     type. Blanks-only counts as unrestricted because a blank entry names no
     connector: treating it as a deny-everything scope would fail a node whose
     own binding the run fetch scope (correctly) included.
+
+    A bare string is ONE entry, never a character sequence. Any other
+    non-list/non-tuple value (a dict, a number, an object) is malformed and
+    fails CLOSED — it is reachable only through a raw-dict writer, and a
+    security gate must not read unintelligible input as permission.
     """
+    if _is_malformed_connector_scope(allowed_connectors):
+        return False
     entries = _non_blank_connector_entries(allowed_connectors)
     if not entries:
         return True
@@ -316,7 +377,11 @@ def _node_connector_contribution(
     list is not a narrowing (see :func:`_non_blank_connector_entries`). It
     falls through to the arms below instead of contributing the empty set,
     which previously drove the run scope to ``None`` (fetch-everything) while
-    omitting the very connector the node names.
+    omitting the very connector the node names. A MALFORMED value (not a string,
+    list or tuple — reachable only through a raw-dict writer) is not
+    unrestricted: it contributes nothing and never falls through to the arms
+    below, so it can never be widened with the Agent's grants (see
+    :func:`_is_malformed_connector_scope`).
 
     The routed-binding arm (FAR-2089) exists because a ``connector`` /
     ``dispatch`` node has no ``agent_id`` and usually no ``capability_scope`` —
@@ -336,6 +401,11 @@ def _node_connector_contribution(
     narrowed = _non_blank_connector_entries(allowed)
     if narrowed:
         return narrowed
+    if _is_malformed_connector_scope(allowed):
+        # Fail closed: a malformed scope contributes NOTHING and is never widened
+        # with the Agent's grants (FAR-418) — the runtime allow-check denies the
+        # node instead of the malformed value reading as unrestricted.
+        return set()
     agent_id = node.get("agent_id")
     if agent_id is not None and agent_connector_grants:
         granted = set(agent_connector_grants.get(str(agent_id)) or set())

@@ -12,7 +12,10 @@ Covers the four scoping surfaces plus the backcompat guarantee:
 * context_scope allowlist gates run_context reads
 * secret hygiene: connector/secret OBJECTS are rejected as port payloads
 * blank / whitespace-only ``allowed_connectors`` entries: treated as
-  UNRESTRICTED at run time (like an absent list) and REFUSED at save time
+  UNRESTRICTED at run time (like an absent list) and REFUSED by the REST
+  graph-write routes (raw-dict writers bypass that guard, so the runtime
+  normalisation is the backstop)
+* a bare string is ONE entry; any other malformed value fails CLOSED
 * backcompat: pipelines with no capability_scope run unchanged
 """
 
@@ -27,6 +30,7 @@ from cryptography.fernet import Fernet
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorResult
 from modulo.core.capability_scope import (
+    BLANK_CONNECTOR_KIND,
     ScopeViolationError,
     agent_granted_connector_types,
     assert_no_secret_objects,
@@ -111,16 +115,20 @@ def test_validate_allowed_connectors_subset_no_scope_is_unrestricted():
 # A blank entry names no connector. Because a blanks-only list is TRUTHY, it used
 # to persist as a node "narrowed" to nothing: the run computed an EMPTY fetch
 # scope (so the hub decrypted EVERY active org connector) while the node itself
-# matched no connector at the hub. The write is now refused, so no new graph can
-# carry one; the runtime treats blanks as unrestricted as the backstop for graphs
-# stored before this guard.
+# matched no connector at the hub. The REST graph-write paths now refuse the
+# write, and the runtime treats blanks as unrestricted for every graph any OTHER
+# writer stores (MCP update_pipeline_graph, bundle import, library/template
+# install, clone, snapshot rollback) — those never run the save-time guard, so a
+# persisted list must never be assumed non-blank.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("blank", ["", " ", "   ", "\t", "\n  "])
 def test_validate_allowed_connectors_subset_rejects_blank_entry(blank):
     """A blank / whitespace-only entry is refused, and the error NAMES the entry
-    (``repr``) so an empty string is distinguishable from a missing list."""
+    (``repr``) so an empty string is distinguishable from a missing list. Its
+    kind is ``blank_connector`` — not a widen — so the route can attach the
+    remedy the entry needs."""
     with pytest.raises(ScopeViolationError) as exc_info:
         validate_allowed_connectors_subset(
             node_id="n1",
@@ -128,8 +136,51 @@ def test_validate_allowed_connectors_subset_rejects_blank_entry(blank):
             granted_types={"github"},
         )
     assert exc_info.value.node_id == "n1"
-    assert exc_info.value.kind == "connector"
+    assert exc_info.value.kind == BLANK_CONNECTOR_KIND
     assert exc_info.value.target == repr(blank)
+
+
+def test_validate_allowed_connectors_subset_classifies_stripped_entries():
+    """Save and run must interpret an entry identically (the runtime strips it).
+
+    Classifying the RAW entry made a padded instance-id read as a connector TYPE
+    and refused as a widen at save time, while the runtime stripped it into a
+    legitimate instance-id and honoured it — so a padded UUID could never be
+    saved, and a padded type was refused even though the run would have honoured
+    it.
+    """
+    inst = uuid.uuid4()
+    # A padded instance-id is an instance-id at run time, so it must save.
+    assert (
+        validate_allowed_connectors_subset(
+            node_id="n1",
+            allowed_connectors=[f"  {inst}  "],
+            granted_types=set(),
+        )
+        is None
+    )
+    # A padded TYPE is that type at run time, so it must save when granted.
+    assert (
+        validate_allowed_connectors_subset(
+            node_id="n1",
+            allowed_connectors=[" github "],
+            granted_types={"github"},
+        )
+        is None
+    )
+
+
+def test_validate_allowed_connectors_subset_rejects_padded_ungranted_type():
+    """Stripping the entry must not weaken the widen check: a padded type the
+    Agent was NOT granted is still refused, and the error names the normalised
+    entry the runtime would have honoured."""
+    with pytest.raises(ScopeViolationError) as exc_info:
+        validate_allowed_connectors_subset(
+            node_id="n1",
+            allowed_connectors=["  linear  "],
+            granted_types={"github"},
+        )
+    assert exc_info.value.target == "linear"
 
 
 def test_validate_allowed_connectors_not_blank_accepts_unrestricted_and_valid_entries():
@@ -860,6 +911,83 @@ def test_whitespace_padded_entry_normalises_to_the_connector_it_names():
         connector_type="github",
         allowed_connectors=[padded],
     )
+
+
+def test_bare_string_allowed_connectors_is_one_entry_not_a_char_sequence():
+    """A bare string is ONE connector entry, never a sequence of characters.
+
+    Both readers iterate the value, so ``"github"`` used to be read as
+    ``{"g", "i", "t", ...}`` — a scope naming no connector at all (every real
+    connector denied). It is only reachable through a raw-dict writer, but the
+    value unambiguously means one entry, so honour it rather than misread it.
+    """
+    inst = uuid.uuid4()
+    assert is_connector_allowed(
+        connector_instance_id=inst,
+        connector_type="github",
+        allowed_connectors="github",
+    )
+    # A padded bare string is the same single entry the list form would normalise.
+    assert is_connector_allowed(
+        connector_instance_id=inst,
+        connector_type="github",
+        allowed_connectors="  github  ",
+    )
+    # It is still a NARROWING: an unrelated connector stays denied.
+    assert not is_connector_allowed(
+        connector_instance_id=inst,
+        connector_type="slack",
+        allowed_connectors="github",
+    )
+    # And the fetch scope contributes exactly that one entry, not its characters.
+    graph = {"nodes": [{"capability_scope": {"allowed_connectors": "github"}}]}
+    assert compute_run_fetch_scope(graph) == ["github"]
+    # A blank bare string names no connector, so it is unrestricted like a blank
+    # list entry (never a deny-everything scope).
+    assert is_connector_allowed(
+        connector_instance_id=inst,
+        connector_type="github",
+        allowed_connectors="   ",
+    )
+
+
+@pytest.mark.parametrize("malformed", [{"github": True}, 7, frozenset({"github"})])
+def test_malformed_allowed_connectors_fails_closed(malformed):
+    """A value that cannot express an allowlist is NOT unrestricted.
+
+    Reachable only through a writer that stores raw graph dicts (MCP
+    ``update_pipeline_graph``, bundle import, library/template install, clone,
+    snapshot rollback) — those bypass the Pydantic node model, so
+    ``allowed_connectors`` can arrive as a dict, a number or an object. On
+    ``main`` a bare string failed CLOSED; a security gate must not become MORE
+    permissive on malformed input, so both readers deny it.
+    """
+    inst = uuid.uuid4()
+    assert not is_connector_allowed(
+        connector_instance_id=inst,
+        connector_type="github",
+        allowed_connectors=malformed,
+    )
+
+
+def test_malformed_allowed_connectors_is_never_widened_by_agent_grants():
+    """The malformed case contributes NOTHING and never falls through to the
+    Agent-grant arm (FAR-418): falling through would WIDEN a node whose scope the
+    engine could not interpret. The run scope stays empty and the runtime
+    allow-check denies the node, so it fails closed at the node, not at the hub.
+    """
+    agent_id = str(uuid.uuid4())
+    graph = {
+        "nodes": [
+            {
+                "id": "agent",
+                "node_type": "agent",
+                "agent_id": agent_id,
+                "capability_scope": {"allowed_connectors": {"github": True}},
+            }
+        ]
+    }
+    assert compute_run_fetch_scope(graph, {agent_id: {"github", "slack"}}) is None
 
 
 def test_narrowed_node_is_never_widened_by_agent_grants():
