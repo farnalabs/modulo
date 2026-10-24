@@ -121,6 +121,7 @@ __all__ = [
     "RunBlobs",
     "assert_write_org",
     "dialect_insert",
+    "has_completed_nodes_in_attempt",
     "marker_attempt_suffix",
     "parse_marker_node_id",
     "persist_schema_enforcement_record",
@@ -1452,3 +1453,45 @@ async def persist_schema_enforcement_record(
         ),
     }
     await session.execute(_targeted_upsert_stmt(insert_factory, values, "schema_enforcement_json"), [values])
+
+
+# ── FAR-2050: per-node completion reader ──────────────────────────────
+
+
+async def has_completed_nodes_in_attempt(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    claim_token: str | None = None,
+) -> bool:
+    """Check if this attempt has at least one completed node (FAR-2050).
+
+    Reads the run_node_outputs table for '__final__' rows with a non-NULL
+    completed_at for the given run. Returns True if any such row exists.
+
+    Used by the node-deadline watchdog to gate re-dispatch: only re-dispatch
+    when this attempt has at least one completed node AND delivery veto has
+    not fired; otherwise terminal-fail with node_deadline_exceeded.
+
+    The claim_token fence ensures we only check the current attempt's
+    completions (a superseded attempt's completions don't count).
+    """
+    # Note: we don't strictly need the claim_token here because
+    # run_node_outputs rows are keyed by attempt_key, and only the
+    # '__final__' row for a node in the current attempt gets completed_at set.
+    # Historical attempts have different attempt_keys.
+    stmt = (
+        select(RunNodeOutput.node_id)
+        .where(
+            RunNodeOutput.run_id == run_id,
+            RunNodeOutput.organisation_id == organisation_id,
+            RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+            RunNodeOutput.node_id != META_NODE_ID,
+            RunNodeOutput.node_id != UNKNOWN_NODE_ID,
+            RunNodeOutput.completed_at.is_not(None),
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.first() is not None

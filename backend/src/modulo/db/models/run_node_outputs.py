@@ -63,9 +63,10 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, PrimaryKeyConstraint, Text, Uuid
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, PrimaryKeyConstraint, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import JSONB_COL, Base, TimestampMixin
@@ -170,3 +171,11 @@ class RunNodeOutput(Base, TimestampMixin):
     # NEVER written into outputs_json / node_telemetry_json (Agent Return
     # Contract columns).
     schema_enforcement_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    # FAR-2050: per-node completion timestamp. Written once when a node actually
+    # finishes work (the '__final__' row for that node). NULL means the node has
+    # not yet completed in this attempt. Used by the node-deadline watchdog to
+    # gate re-dispatch: only re-dispatch when this attempt has at least one
+    # completed node AND delivery veto has not fired; otherwise terminal-fail
+    # with node_deadline_exceeded.
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

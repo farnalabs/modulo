@@ -2460,6 +2460,53 @@ async def _fail_overdue_node(
     # fingerprint survives) and on the terminal-fail branch below. Committed
     # before either outcome runs, so the fact writer always sees it.
     await _record_node_deadline_watchdog_firing(aeng, run_id, org_id)
+
+    # FAR-2050: check if this attempt has any completed nodes before consulting
+    # the retry policy. If no node has completed in this attempt, skip re-dispatch
+    # and terminal-fail directly with node_deadline_exceeded.
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from modulo.db.crud.run_node_outputs import has_completed_nodes_in_attempt
+    from modulo.db.rls import set_rls_org
+
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, uuid.UUID(org_id))
+        has_completions = await has_completed_nodes_in_attempt(
+            session, run_id=uuid.UUID(run_id), organisation_id=uuid.UUID(org_id)
+        )
+
+    if not has_completions:
+        _log.warning(
+            "pipeline_execution.node_deadline_terminal_no_completions run=%s node=%s — "
+            "no completed nodes in this attempt, terminal-failing without re-dispatch",
+            run_id,
+            node_id,
+        )
+        # FAR-1914 B2: on the TERMINAL branch only, give the cancelled executor a
+        # SHORT BOUNDED window to run its cancellation cleanup before the run is
+        # terminalised — node_runner drains the sandbox tail one final time and
+        # persists the delivery/triage marker (including a ``pr_url`` opened
+        # seconds before the kill). ``asyncio.wait`` (never ``await exec_task``) so
+        # the expected CancelledError is not re-raised here; a cleanup failure or a
+        # timed-out cleanup must not stop the terminal write below.
+        await asyncio.wait({exec_task}, timeout=_EXECUTOR_CANCEL_SETTLE_SECONDS)
+        error_detail = (
+            f"Node '{node_id}' did not complete within its configured timeout_seconds "
+            f"({_timeout}s) — node-deadline watchdog ended the dispatch. No node "
+            "completed in this attempt; re-dispatch skipped per FAR-2050."
+        )
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+            error_detail=error_detail,
+        )
+        # Triage marker for terminal deadline kill with no completions
+        await _persist_node_deadline_triage(aeng, run_id, org_id, redispatched=False)
+        return
+
     retry_state = await _maybe_watchdog_retry(
         retry_hook,
         run_id,
@@ -2807,6 +2854,9 @@ async def run_executor_with_watchdog(
             node_completed_event,
             node_timeouts,
             default_timeout,
+            aeng=aeng,
+            run_id=run_id,
+            org_id=org_id,
         )
 
     async def _execute() -> Any:
@@ -2967,6 +3017,50 @@ def _wire_executor_hooks(
     executor._superseded = superseded
 
 
+async def _write_node_completion(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    node_id: str,
+) -> None:
+    """Write the per-node completion timestamp (FAR-2050).
+
+    Updates the '__final__' row for the given node with the current timestamp
+    in the 'completed_at' column. This is the durable signal that a node has
+    actually finished work in this attempt.
+
+    Best-effort: any failure is logged and swallowed — the completion record
+    must never delay or block the node's completion. The column is nullable
+    and the gate only checks for its presence.
+    """
+    try:
+        from sqlalchemy import update
+
+        from modulo.db.models.run_node_outputs import RunNodeOutput
+        from modulo.db.rls import set_rls_org as _set_rls_org
+
+        factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await _set_rls_org(session, uuid.UUID(org_id))
+            await session.execute(
+                update(RunNodeOutput)
+                .where(
+                    RunNodeOutput.run_id == uuid.UUID(run_id),
+                    RunNodeOutput.organisation_id == uuid.UUID(org_id),
+                    RunNodeOutput.node_id == node_id,
+                    RunNodeOutput.attempt_key == "__final__",
+                )
+                .values(completed_at=datetime.now(UTC))
+            )
+    except Exception:
+        _log.warning(
+            "pipeline_execution.node_completion_write_failed run=%s node=%s",
+            run_id,
+            node_id,
+            exc_info=True,
+        )
+
+
 def _wire_node_deadline_hooks(
     executor: Any,
     node_deadlines: dict[str, tuple[float, int]],
@@ -2974,12 +3068,21 @@ def _wire_node_deadline_hooks(
     node_completed_event: asyncio.Event,
     node_timeouts: dict[str, int],
     default_timeout: int,
+    *,
+    aeng: AsyncEngine | None = None,
+    run_id: str | None = None,
+    org_id: str | None = None,
 ) -> None:
     """Wire the per-node callbacks that drive the absolute node-deadline watchdog.
 
     FAR-369: each node gets its own deadline entry (set on start, removed on
     completion) so a stalled sibling in a parallel fan-out cannot hide behind a
     newer sibling's start.
+
+    FAR-2050: when aeng, run_id, org_id are provided, also write a durable
+    per-node completion record (completed_at on run_node_outputs.__final__ row)
+    so the node-deadline watchdog can gate re-dispatch on whether this attempt
+    has any completed nodes.
     """
 
     def _on_node_started(nid: str) -> None:
@@ -2987,9 +3090,12 @@ def _wire_node_deadline_hooks(
         node_deadlines[nid] = (time.monotonic() + to, to)
         node_started_event.set()
 
-    def _on_node_completed(nid: str) -> None:
+    async def _on_node_completed(nid: str) -> None:
         node_deadlines.pop(nid, None)
         node_completed_event.set()
+        # FAR-2050: write durable completion record
+        if aeng is not None and run_id is not None and org_id is not None:
+            await _write_node_completion(aeng, run_id, org_id, nid)
 
     executor.on_node_started = _on_node_started
     executor.on_node_completed = _on_node_completed
