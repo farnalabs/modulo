@@ -204,6 +204,10 @@ def _finite_float(
     """
     if raw is None:
         return None
+    if isinstance(raw, bool):
+        # ``float(True) == 1.0``: a boolean answer/probability must never clear
+        # a numeric threshold (the write schema already rejects bool numbers).
+        raise JudgeExecutionError(code, f"{field} must be a number, not a boolean")
     try:
         value = float(raw)
     except (TypeError, ValueError) as exc:
@@ -458,8 +462,28 @@ def _choice_option_score(
     return _binary_score(passed)
 
 
+def _choice_declared_keys(question: dict[str, Any], qid: str) -> frozenset[str]:
+    """Every declared option key of a ``choice`` question."""
+    options = question.get("options")
+    if not isinstance(options, list):
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            f"choice question {qid!r} has no list of options",
+        )
+    keys = {str(option.get("key")) for option in options if isinstance(option, dict) and option.get("key") is not None}
+    return frozenset(keys)
+
+
 def _choice_answer(question: dict[str, Any], qid: str, answer: Any) -> tuple[bool, float]:
     passing_keys = _choice_passing_keys(question, qid)
+    declared = _choice_declared_keys(question, qid)
+    if not isinstance(answer, str) or answer not in declared:
+        # D6: an answer outside the declared vocabulary is no verdict at all —
+        # it must be ``error``, never a silent ``fail``.
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"question {qid!r} answer {answer!r} is not one of its declared options",
+        )
     passed = answer in passing_keys
     return passed, _choice_option_score(question, qid, answer, passed)
 
@@ -602,17 +626,16 @@ def _answer_verdict(
     )
 
 
-def _normalised_probabilities(
-    probabilities: Any,
-    qid: str,
-) -> dict[str, float]:
-    """Normalise a declared answer distribution, rejecting a malformed one.
+#: The complete answer space for a ``noul`` question.
+_NOUL_PROBABILITY_KEYS = frozenset({"yes", "no"})
+#: A reported distribution must sum to 1 (or percentage scale, 100) within this
+#: tolerance. An omitted key or an arbitrary subset is rejected — renormalising
+#: a subset read a 5%-confident answer as certain.
+_PROBABILITY_SUM_TOLERANCE = 0.01
 
-    A distribution is a mapping of answer key to probability. Every value must
-    be finite and non-negative and the mass must be positive; the result is
-    normalised to sum to 1 so a model that returns percentages or a partial
-    distribution still yields a probability rather than a >1 veto.
-    """
+
+def _probability_values(probabilities: Any, qid: str) -> dict[str, float]:
+    """Read a distribution's raw values (finite, non-negative, non-bool)."""
     if not isinstance(probabilities, dict) or not probabilities:
         raise JudgeExecutionError(
             JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
@@ -627,52 +650,85 @@ def _normalised_probabilities(
                 f"question {qid!r} probability for {key!r} must be a non-negative number",
             )
         values[str(key)] = value
+    return values
+
+
+def _scaled_distribution(values: dict[str, float], qid: str) -> dict[str, float]:
+    """Scale a complete distribution to sum 1, or reject it as malformed.
+
+    Accepts a 0-1 distribution or a percentage distribution (sum 100); any
+    other total means keys are missing or the numbers are not a distribution.
+    """
     total = sum(values.values())
-    if total <= 0:
-        raise JudgeExecutionError(
-            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-            f"question {qid!r} probabilities sum to zero",
-        )
-    return {key: value / total for key, value in values.items()}
+    if abs(total - 1.0) <= _PROBABILITY_SUM_TOLERANCE:
+        return values
+    if abs(total - 100.0) <= _PROBABILITY_SUM_TOLERANCE * 100:
+        return {key: value / 100.0 for key, value in values.items()}
+    raise JudgeExecutionError(
+        JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+        f"question {qid!r} probabilities sum to {total:g}; a distribution must sum to 1",
+    )
 
 
-def _reject_unknown_probability_keys(qid: str, probabilities: dict[str, float], allowed: set[str]) -> None:
-    unknown = sorted(set(probabilities) - allowed)
+def _validated_distribution(
+    probabilities: Any,
+    qid: str,
+    declared: frozenset[str],
+) -> dict[str, float]:
+    """Validate a distribution covers the declared answer space exactly.
+
+    Every declared key must be present and no unknown key may appear. A
+    partial distribution is rejected rather than renormalised, because an
+    omitted key is not evidence that it has probability zero (a model that
+    reports only ``yes: 0.05`` is 5% confident, not certain).
+    """
+    values = _probability_values(probabilities, qid)
+    unknown = sorted(set(values) - declared)
     if unknown:
         raise JudgeExecutionError(
             JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
             f"question {qid!r} probabilities name unknown answer(s) {unknown}",
         )
+    missing = sorted(declared - set(values))
+    if missing:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"question {qid!r} probabilities omit declared answer(s) {missing}; "
+            "a partial distribution cannot be renormalised into a verdict",
+        )
+    return _scaled_distribution(values, qid)
 
 
 def _noul_pass_confidence(qid: str, passed: bool, probabilities: Any) -> float:
     """``noul`` derived pass-confidence is p(yes), never the max-level probability."""
     if probabilities is None:
         return _binary_score(passed)
-    normalised = _normalised_probabilities(probabilities, qid)
-    _reject_unknown_probability_keys(qid, normalised, {"yes", "no"})
-    return normalised.get("yes", 0.0)
+    normalised = _validated_distribution(probabilities, qid, _NOUL_PROBABILITY_KEYS)
+    return normalised["yes"]
 
 
 def _choice_pass_confidence(question: dict[str, Any], qid: str, passed: bool, probabilities: Any) -> float:
     """``choice`` derived pass-confidence is the summed mass of passing keys."""
     if probabilities is None:
         return _binary_score(passed)
-    normalised = _normalised_probabilities(probabilities, qid)
-    option_keys = {str(option.get("key")) for option in question.get("options") or [] if isinstance(option, dict)}
-    _reject_unknown_probability_keys(qid, normalised, option_keys)
+    normalised = _validated_distribution(probabilities, qid, _choice_declared_keys(question, qid))
     passing = {str(key) for key in _choice_passing_keys(question, qid)}
-    return min(1.0, sum(normalised.get(key, 0.0) for key in passing))
+    return min(1.0, sum(normalised[key] for key in passing))
 
 
-def _score_pass_confidence(question: dict[str, Any], qid: str, passed: bool, probabilities: Any) -> float:
-    """``score`` derived pass-confidence is the mass at or above ``pass_from``."""
-    if probabilities is None:
-        return _binary_score(passed)
-    normalised = _normalised_probabilities(probabilities, qid)
-    pass_from = _required_pass_from(question, qid)
-    mass = 0.0
-    for key, probability in normalised.items():
+def _canonical_score_probabilities(probabilities: Any, qid: str) -> dict[str, float]:
+    """Canonicalise score-distribution keys to their shortest numeric form.
+
+    A model may spell a level ``1``, ``1.0`` or ``01``; all name the same
+    declared level. A non-numeric key is a malformed answer, not a level.
+    """
+    if not isinstance(probabilities, dict) or not probabilities:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"question {qid!r} returned an empty or non-object 'probabilities'",
+        )
+    canonical: dict[str, float] = {}
+    for key, raw in probabilities.items():
         try:
             numeric = float(key)
         except (TypeError, ValueError) as exc:
@@ -680,8 +736,18 @@ def _score_pass_confidence(question: dict[str, Any], qid: str, passed: bool, pro
                 JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
                 f"question {qid!r} probability key {key!r} is not a level score",
             ) from exc
-        if numeric >= pass_from:
-            mass += probability
+        canonical[f"{numeric:g}"] = raw
+    return canonical
+
+
+def _score_pass_confidence(question: dict[str, Any], qid: str, passed: bool, probabilities: Any) -> float:
+    """``score`` derived pass-confidence is the mass at or above ``pass_from``."""
+    if probabilities is None:
+        return _binary_score(passed)
+    declared = frozenset(f"{score:g}" for score in _numeric_level_scores(question, qid))
+    normalised = _validated_distribution(_canonical_score_probabilities(probabilities, qid), qid, declared)
+    pass_from = _required_pass_from(question, qid)
+    mass = sum(probability for key, probability in normalised.items() if float(key) >= pass_from)
     return min(1.0, mass)
 
 
@@ -786,6 +852,13 @@ def aggregate_typed_answers(
     questions the verdict is the required set alone (pass iff none vetoed). A
     missing answer is a malformed response, never an empty judgment.
     """
+    if not questions:
+        # Never fail open: an empty question set has no evidence and no verdict,
+        # so it is a configuration error (not an automatic pass).
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            "typed judge definition has no questions; no verdict was produced",
+        )
     threshold = _pass_threshold(pass_rule)
     verdicts: list[QuestionVerdict] = []
     weighted_total = 0.0

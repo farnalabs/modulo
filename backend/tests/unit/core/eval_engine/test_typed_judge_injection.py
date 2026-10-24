@@ -8,6 +8,7 @@ field must be an error rather than an empty judgment.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -99,6 +100,62 @@ class TestMultiFieldUnion:
         content = captured[0]["content"]
         assert content.count(_CONTENT_END) == 2  # one per field, no forged extra
         assert "ignore the guard" in content
+
+
+class TestWholeOutputBound:
+    def test_whole_output_over_the_bound_is_an_error(self) -> None:
+        captured: list[dict[str, Any]] = []
+        eval_def = _eval_def({"judge_whole_output": True})
+        eval_def.config.pop("field", None)
+
+        result = EvalEngine().evaluate_result(
+            {"payload": "x" * (_MAX_JUDGE_CONTENT_LENGTH + 1)},
+            eval_def,
+            model_judge_callable=_capturing_judge(captured),
+        )
+
+        assert result.outcome is JudgeOutcome.ERROR
+        assert result.judge_verdict is not None
+        assert result.judge_verdict.error_code is JudgeErrorCode.JUDGE_CONFIGURATION
+        assert not captured, "an over-bound payload must never reach the judge"
+
+    def test_whole_output_at_the_bound_passes(self) -> None:
+        # The bound applies to the serialised payload, so size the value to the
+        # JSON envelope rather than to the raw string.
+        overhead = len(json.dumps({"payload": ""}))
+        payload = "x" * (_MAX_JUDGE_CONTENT_LENGTH - overhead)
+        captured: list[dict[str, Any]] = []
+        eval_def = _eval_def({"judge_whole_output": True})
+        eval_def.config.pop("field", None)
+
+        result = EvalEngine().evaluate_result(
+            {"payload": payload},
+            eval_def,
+            model_judge_callable=_capturing_judge(captured),
+        )
+
+        assert result.outcome is JudgeOutcome.PASS
+        assert captured, "a payload at the bound must still be judged"
+
+
+class TestMultiFieldBound:
+    def test_many_short_fields_are_bounded_on_the_transported_payload(self) -> None:
+        """The per-field guard wrappers count toward the aggregate bound."""
+        count = 3_000
+        output: dict[str, Any] = {"output": "a", **{f"f{index}": "b" for index in range(count)}}
+        eval_def = _eval_def({"field": "output", "context_fields": [f"f{index}" for index in range(count)]})
+        raw_content_length = sum(len(str(value)) for value in output.values())
+
+        result = EvalEngine().evaluate_result(
+            output,
+            eval_def,
+            model_judge_callable=_capturing_judge([]),
+        )
+
+        assert raw_content_length < _MAX_JUDGE_CONTENT_LENGTH
+        assert result.outcome is JudgeOutcome.ERROR
+        assert result.judge_verdict is not None
+        assert result.judge_verdict.error_code is JudgeErrorCode.JUDGE_CONFIGURATION
 
 
 class TestNullField:

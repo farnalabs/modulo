@@ -863,6 +863,12 @@ class EvalEngine:
         return str(value)
 
     @staticmethod
+    def _reject_if_over_bound(length: int) -> None:
+        """Raise the bounded-content error for a too-large judged payload."""
+        if length > _MAX_JUDGE_CONTENT_LENGTH:
+            raise ContentTooLongError(length)
+
+    @staticmethod
     def _guard_wrap(text: str) -> str:
         """Wrap one payload in the injection guard, stripping forged fences."""
         cleaned = _DELIMITER_STRIP_PATTERN.sub("", text)
@@ -916,7 +922,11 @@ class EvalEngine:
         whole_output = config.get("judge_whole_output") is True
         field = config.get("field", "")
         if whole_output:
-            safe_content = EvalEngine._guard_wrap(json.dumps(output, sort_keys=True, default=str))
+            raw_content = json.dumps(output, sort_keys=True, default=str)
+            # The whole-output branch is a live path (guardrail correction sets
+            # judge_whole_output), so it carries the same 100k bound as a field.
+            EvalEngine._reject_if_over_bound(len(raw_content))
+            safe_content = EvalEngine._guard_wrap(raw_content)
             paths: list[str] = []
         else:
             paths = EvalEngine._judged_field_paths(config)
@@ -936,18 +946,19 @@ class EvalEngine:
                         f"judge field {path!r} does not resolve in the output; no verdict was produced",
                     )
                 resolved.append((path, EvalEngine._render_judge_field(raw_value, structured_as_json=len(paths) > 1)))
-            # Bound the CONTENT before wrapping: the guard wrapper is fixed
-            # overhead, so a field of exactly the maximum still passes (the
-            # historical contract) while the union of many fields cannot.
-            total_content_length = sum(
-                len(text) + (len(f"FIELD: {path}\n") if len(resolved) > 1 else 0) for path, text in resolved
-            )
-            if total_content_length > _MAX_JUDGE_CONTENT_LENGTH:
-                raise ContentTooLongError(total_content_length)
             if len(resolved) == 1:
+                # A single field is bounded by its CONTENT, so a field of exactly
+                # the maximum still passes (the historical contract) despite the
+                # fixed wrapper.
+                EvalEngine._reject_if_over_bound(len(resolved[0][1]))
                 safe_content = EvalEngine._guard_wrap(resolved[0][1])
             else:
+                # Multi-field: each field carries its own label and ~400-char
+                # guard wrapper, so the bound must be measured on the assembled,
+                # transported payload — otherwise thousands of short paths push
+                # the request to megabytes while every field is tiny.
                 safe_content = "\n".join(EvalEngine._guard_wrap(f"FIELD: {path}\n{text}") for path, text in resolved)
+                EvalEngine._reject_if_over_bound(len(safe_content))
 
         safe_output = dict(output)
         if isinstance(field, str) and field:

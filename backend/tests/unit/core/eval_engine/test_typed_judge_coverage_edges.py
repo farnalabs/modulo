@@ -34,6 +34,7 @@ from modulo.core.eval_engine.typed_judge import (
     build_question_prompt,
     derived_pass_confidence,
     transport,
+    verdict_from_typed_response,
 )
 from modulo.core.eval_engine.typed_judge import bridge as judge_bridge
 from modulo.core.eval_engine.typed_judge.config import typed_config_questions
@@ -123,6 +124,126 @@ class TestProbabilityEdges:
         verdicts, _, _ = self._aggregate(question, {"answer": 3, "probabilities": {"1": 0.4, "3": 0.6}})
 
         assert verdicts[0].pass_confidence == pytest.approx(0.6)
+
+    def test_a_partial_noul_distribution_is_rejected_not_renormalised(self) -> None:
+        """A reported ``yes: 0.05`` is 5% confidence, not certainty (finding 3)."""
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(_noul(), {"answer": True, "probabilities": {"yes": 0.05}})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+        assert "omit declared" in exc_info.value.detail
+
+    def test_a_complete_low_confidence_distribution_still_vetoes(self) -> None:
+        verdicts, _, passed = aggregate_typed_answers(
+            [_noul(required=True, min_pass_confidence=0.6)],
+            {"q": {"answer": True, "probabilities": {"yes": 0.05, "no": 0.95}}},
+            _pass_rule(),
+        )
+
+        assert passed is False
+        assert verdicts[0].pass_confidence == pytest.approx(0.05)
+
+    def test_a_percentage_distribution_is_scaled_to_probabilities(self) -> None:
+        verdicts, _, _ = self._aggregate(_noul(), {"answer": True, "probabilities": {"yes": 5, "no": 95}})
+
+        assert verdicts[0].pass_confidence == pytest.approx(0.05)
+
+    def test_a_complete_but_unnormalised_distribution_is_rejected(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(_noul(), {"answer": True, "probabilities": {"yes": 0.5, "no": 0.2}})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+        assert "must sum to 1" in exc_info.value.detail
+
+    def test_a_partial_choice_distribution_is_rejected(self) -> None:
+        question = {
+            "id": "q",
+            "type": "choice",
+            "options": [{"key": "a"}, {"key": "b"}],
+            "passing_keys": ["a"],
+            "weight": 1.0,
+        }
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(question, {"answer": "a", "probabilities": {"a": 0.9}})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_a_partial_score_distribution_is_rejected(self) -> None:
+        question = {
+            "id": "q",
+            "type": "score",
+            "levels": [{"score": 1}, {"score": 3}, {"score": 5}],
+            "pass_from": 3,
+            "weight": 1.0,
+        }
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(question, {"answer": 3, "probabilities": {"3": 0.9, "5": 0.1}})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_score_distribution_key_spellings_are_canonicalised(self) -> None:
+        question = {
+            "id": "q",
+            "type": "score",
+            "levels": [{"score": 1}, {"score": 3}, {"score": 5}],
+            "pass_from": 3,
+            "weight": 1.0,
+        }
+
+        verdicts, _, _ = self._aggregate(
+            question,
+            {"answer": 3, "probabilities": {"1.0": 0.2, "3.0": 0.5, "5.0": 0.3}},
+        )
+
+        assert verdicts[0].pass_confidence == pytest.approx(0.8)
+
+    def test_a_boolean_probability_is_malformed(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(_noul(), {"answer": True, "probabilities": {"yes": True, "no": 0.0}})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_a_boolean_score_answer_is_malformed(self) -> None:
+        question = {
+            "id": "q",
+            "type": "score",
+            "levels": [{"score": 0}, {"score": 1}],
+            "pass_from": 0.5,
+            "weight": 1.0,
+        }
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(question, {"answer": True})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_an_out_of_vocabulary_choice_answer_is_malformed(self) -> None:
+        question = {
+            "id": "q",
+            "type": "choice",
+            "options": [{"key": "a"}, {"key": "b"}],
+            "passing_keys": ["a"],
+            "weight": 1.0,
+        }
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(question, {"answer": "c"})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_an_empty_question_set_can_never_aggregate_to_pass(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            aggregate_typed_answers([], {}, _pass_rule())
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+    def test_verdict_from_typed_response_rejects_an_empty_question_set(self) -> None:
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            verdict_from_typed_response('{"answers": {}}', questions=[], pass_rule=_pass_rule())
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
 
     def test_an_invalid_min_pass_confidence_is_configuration(self) -> None:
         with pytest.raises(JudgeExecutionError) as exc_info:
