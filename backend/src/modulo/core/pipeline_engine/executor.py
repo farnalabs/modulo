@@ -1999,6 +1999,37 @@ class _StreamContext:
     node_type_map: dict[str, str] | None
 
 
+def _try_agent_failure_elevation(
+    broker: RunEventBroker,
+    run_id: uuid.UUID,
+    agent_failure_reason: str,
+    usage: dict[str, Any] | None,
+) -> tuple[str, str | None, str | None, dict[str, Any] | None] | None:
+    """Attempt agent failure elevation (A1); return terminal tuple or None.
+
+    Fail-open: any error logs a warning and returns None so the caller
+    continues to the next terminalization check (stall).
+    """
+    try:
+        from modulo.settings import get_settings
+
+        if get_settings().modulo_agent_failure_elevation_enabled:
+            return _terminal_failure(
+                broker,
+                "failed",
+                _ERROR_CODE_AGENT_FAILED,
+                _sanitize_detail(agent_failure_reason, limit=5000),
+                usage,
+            )
+    except Exception:
+        _log.warning(
+            "agent_failure_elevation.failed_open",
+            extra={"run_id": str(run_id), "detail": agent_failure_reason},
+            exc_info=True,
+        )
+    return None
+
+
 def _stream_terminal_reason(
     state: _StreamState,
     broker: RunEventBroker,
@@ -2045,28 +2076,9 @@ def _stream_terminal_reason(
             usage,
         )
     if state.agent_failure_reason and not state.stall_reason:
-        # A1 elevation (agent-failure UX, phase 1, §15.4): a node that
-        # self-reported failure must NEVER land the run 'complete'.
-        # Fail-open — any elevation computation error logs a warning and falls
-        # back to today's path (§2.3.6). If the node also stalled, the stall
-        # terminalization below wins (existing behaviour).
-        try:
-            from modulo.settings import get_settings
-
-            if get_settings().modulo_agent_failure_elevation_enabled:
-                return _terminal_failure(
-                    broker,
-                    "failed",
-                    _ERROR_CODE_AGENT_FAILED,
-                    _sanitize_detail(state.agent_failure_reason, limit=5000),
-                    usage,
-                )
-        except Exception:
-            _log.warning(
-                "agent_failure_elevation.failed_open",
-                extra={"run_id": str(run_id), "detail": state.agent_failure_reason},
-                exc_info=True,
-            )
+        agent_failure_result = _try_agent_failure_elevation(broker, run_id, state.agent_failure_reason, usage)
+        if agent_failure_result is not None:
+            return agent_failure_result
     if state.stall_reason:
         return _terminal_failure(
             broker,
