@@ -509,19 +509,16 @@ async def test_handle_webhook_mechanism_error_fails_closed_for_block() -> None:
 async def test_handle_webhook_mechanism_error_preserves_muted_evidence_with_active_block() -> None:
     """FAR-2028: active fallback blocking still retains muted evidence."""
     trigger = _make_trigger()
-    session = _make_session(
-        trigger=trigger,
-        guardrail_rows=[
-            _make_guardrail_row(action="block", name="active"),
-            _make_guardrail_row(action="block", name="muted", is_muted=True),
-        ],
-    )
+    active = _make_guardrail_row(action="block", name="active")
+    muted = _make_guardrail_row(action="block", name="muted", is_muted=True)
+    session = _make_session(trigger=trigger, guardrail_rows=[active, muted])
 
     with (
         patch(
             "modulo.core.trigger_engine.pre_guardrail.run_interception_pass",
             side_effect=RuntimeError("eval backend unavailable"),
         ),
+        patch.object(TriggerEngine, "_persist_pre_trigger_guardrail_evidence", new_callable=AsyncMock) as persist,
         pytest.raises(GuardrailBlockedAtIntakeError),
     ):
         await TriggerEngine().handle_webhook(
@@ -534,6 +531,13 @@ async def test_handle_webhook_mechanism_error_preserves_muted_evidence_with_acti
             modulo_timestamp=str(int(time.time())),
             snapshot_id=_SNAP,
         )
+
+    persist.assert_awaited_once()
+    muted_results = persist.await_args.kwargs["guardrail_results"]
+    assert len(muted_results) == 1
+    assert muted_results[0].eval_id == muted.id
+    assert muted_results[0].passed is False
+    assert "mechanism error" in muted_results[0].detail
 
 
 async def test_handle_webhook_mechanism_error_does_not_block_muted_block() -> None:

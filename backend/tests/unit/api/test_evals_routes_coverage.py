@@ -781,6 +781,188 @@ async def test_update_mute_policy_explicit_null_clears_field() -> None:
     assert eval_def.is_muted is False
 
 
+def _finding_row() -> MagicMock:
+    finding = _eval_result_row(_EVAL_ID)
+    finding.id = uuid.UUID("00000000-0000-0000-0000-000000000009")
+    finding.resolution = "accepted"
+    finding.resolution_reason = "verified"
+    finding.resolved_at = datetime(2026, 1, 1, tzinfo=UTC)
+    finding.resolved_by = _USER_ID
+    finding.eval_id = _EVAL_ID
+    return finding
+
+
+def _configured_eval_row(*, muted: bool = False) -> MagicMock:
+    eval_def = _eval_def_row(_EVAL_ID)
+    eval_def.organisation_id = _ORG_ID
+    eval_def.is_muted = muted
+    eval_def.mute_threshold = 0.5
+    eval_def.mute_min_outcomes = 3
+    eval_def.acceptance_rate = 0.25
+    eval_def.muted_at = datetime(2026, 1, 1, tzinfo=UTC) if muted else None
+    eval_def.muted_by = _USER_ID if muted else None
+    return eval_def
+
+
+def test_resolve_finding_endpoint_uses_wire_contract_and_mute_wiring(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    finding = _finding_row()
+    session.begin = MagicMock(return_value=_make_session().begin.return_value)
+    with (
+        patch(
+            "modulo.core.eval.finding_resolver.resolve_finding",
+            new_callable=AsyncMock,
+            return_value=finding,
+        ) as resolve,
+        patch("modulo.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock) as apply_mute,
+    ):
+        response = http.post(
+            f"/api/v1/evals/findings/{finding.id}/resolve",
+            json={"resolution": "accepted", "reason": "verified"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "id": str(finding.id),
+        "resolution": "accepted",
+        "resolution_reason": "verified",
+        "resolved_at": finding.resolved_at.isoformat(),
+        "resolved_by": str(_USER_ID),
+    }
+    resolve.assert_awaited_once_with(
+        session,
+        str(finding.id),
+        "accepted",
+        "verified",
+        str(_USER_ID),
+        str(_ORG_ID),
+    )
+    apply_mute.assert_awaited_once_with(
+        session,
+        str(_EVAL_ID),
+        str(_ORG_ID),
+        muted_by=None,
+        automatic=True,
+    )
+
+
+def test_resolve_finding_endpoint_rejects_invalid_payload(client: tuple[TestClient, AsyncMock]) -> None:
+    http, _session = client
+    response = http.post(
+        f"/api/v1/evals/findings/{uuid.uuid4()}/resolve",
+        json={"resolution": "not-a-resolution", "unexpected": True},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]
+
+
+@pytest.mark.parametrize("org_role", ["runner", "viewer"])
+def test_finding_resolution_endpoint_requires_permission(org_role: str) -> None:
+    session = _make_session()
+    _install_overrides(session, org_role=org_role)
+    try:
+        response = TestClient(app).post(
+            f"/api/v1/evals/findings/{uuid.uuid4()}/resolve",
+            json={"resolution": "accepted"},
+        )
+        assert response.status_code == 403
+        assert "requires 'operator' role" in response.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_mute_policy_endpoint_returns_evaluation_contract(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    eval_def = _configured_eval_row()
+    session.get = AsyncMock(return_value=eval_def)
+    with patch(
+        "modulo.core.eval.finding_resolver.evaluate_mute_policy",
+        new_callable=AsyncMock,
+        return_value={
+            "should_mute": True,
+            "acceptance_rate": 0.25,
+            "total_outcomes": 4,
+            "threshold": 0.5,
+            "min_outcomes": 3,
+            "reason": "below threshold",
+        },
+    ):
+        response = http.get(f"/api/v1/evals/{_EVAL_ID}/mute-policy", params={"window_days": 30})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "eval_id": str(_EVAL_ID),
+        "should_mute": True,
+        "acceptance_rate": 0.25,
+        "total_outcomes": 4,
+        "threshold": 0.5,
+        "min_outcomes": 3,
+        "reason": "below threshold",
+        "is_muted": False,
+    }
+
+
+def test_mute_policy_endpoint_rejects_invalid_window(client: tuple[TestClient, AsyncMock]) -> None:
+    http, _session = client
+    response = http.get(f"/api/v1/evals/{_EVAL_ID}/mute-policy", params={"window_days": 0})
+    assert response.status_code == 422
+
+
+def test_update_mute_policy_endpoint_round_trips_patch_and_audit_wiring(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    http, session = client
+    eval_def = _configured_eval_row(muted=True)
+    session.get = AsyncMock(return_value=eval_def)
+    with (
+        patch("modulo.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock) as apply_mute,
+        patch("modulo.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock) as audit,
+    ):
+        response = http.patch(
+            f"/api/v1/evals/{_EVAL_ID}/mute-policy",
+            json={"mute_threshold": 0.7},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["eval_id"] == str(_EVAL_ID)
+    assert body["mute_threshold"] == pytest.approx(0.7)
+    assert body["mute_min_outcomes"] == 3
+    apply_mute.assert_awaited_once_with(
+        session,
+        str(_EVAL_ID),
+        str(_ORG_ID),
+        muted_by=None,
+        automatic=True,
+    )
+    audit.assert_awaited_once()
+
+
+def test_unmute_endpoint_returns_updated_state_and_audits(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    eval_def = _configured_eval_row(muted=True)
+    session.get = AsyncMock(return_value=eval_def)
+    with (
+        patch("modulo.core.eval.finding_resolver.unmute_definition", new_callable=AsyncMock) as unmute,
+        patch("modulo.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock) as audit,
+    ):
+        response = http.post(f"/api/v1/evals/{_EVAL_ID}/mute-policy/unmute")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["eval_id"] == str(_EVAL_ID)
+    unmute.assert_awaited_once_with(session, str(_EVAL_ID), str(_ORG_ID))
+    audit.assert_awaited_once()
+
+
+def test_update_mute_policy_endpoint_rejects_out_of_range_threshold(client: tuple[TestClient, AsyncMock]) -> None:
+    http, _session = client
+    response = http.patch(
+        f"/api/v1/evals/{_EVAL_ID}/mute-policy",
+        json={"mute_threshold": 1.1},
+    )
+    assert response.status_code == 422
+
+
 def test_create_eval_from_run_returns_definition_with_sample(client: tuple[TestClient, AsyncMock]) -> None:
     http, session = client
     node_id = uuid.uuid4()

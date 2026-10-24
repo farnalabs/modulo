@@ -1445,6 +1445,51 @@ class TriggerEngine:
         """
         return await count_trigger_slot_occupancy(session, trigger_id)
 
+    async def _persist_pre_trigger_guardrail_evidence(
+        self,
+        session: AsyncSession,
+        *,
+        org_id: uuid.UUID,
+        trigger_event_id: uuid.UUID,
+        guardrail_results: list[Any],
+    ) -> None:
+        """Persist muted pre-trigger results without creating a Run.
+
+        The normal guardrail evidence sink is attached to ``create_run`` and
+        therefore cannot observe an intake block.  Only the result DTOs are
+        persisted here; the payload never enters the result detail or evidence
+        value.  The event id is the durable subject for this runless delivery.
+        """
+        if not guardrail_results:
+            return
+        from modulo.core.eval_engine.evidence_layer import append_evidence
+        from modulo.db.models.eval_result import EvalResult as EvalResultModel
+
+        for result in guardrail_results:
+            session.add(
+                EvalResultModel(
+                    organisation_id=org_id,
+                    run_id=None,
+                    node_id=None,
+                    eval_id=result.eval_id,
+                    outcome="pass" if result.passed else "fail",
+                    passed=result.passed,
+                    score=result.score,
+                    detail=(result.detail or "")[:2000],
+                    observed=True,
+                )
+            )
+            append_evidence(
+                session,
+                organisation_id=org_id,
+                key=f"eval_guardrail_{result.eval_id}",
+                subject_type="trigger_event",
+                subject_id=str(trigger_event_id),
+                value=result.passed,
+                producer_type="eval",
+                producer_id=result.eval_id,
+            )
+
     async def _store_raw_payload(
         self,
         session: AsyncSession,
@@ -1659,6 +1704,12 @@ class TriggerEngine:
                 payload_hash=payload_hash,
                 result="guardrail_blocked",
                 error_detail=outcome.block_message[:2000],
+            )
+            await self._persist_pre_trigger_guardrail_evidence(
+                session,
+                org_id=delivery.org_id,
+                trigger_event_id=block_event.id,
+                guardrail_results=outcome.results,
             )
             # Store the raw payload for replay so the sender/provider can
             # retry after fixing — the delivery is reject-and-retry, NOT
