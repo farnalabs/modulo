@@ -102,6 +102,7 @@ def _make_guardrail_row(
     row.failure_behaviour = "warn"
     row.pass_threshold = None
     row.suite_id = None
+    row.is_muted = False
     return row
 
 
@@ -157,6 +158,10 @@ def _make_session(
 
     async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_count
+        if "SELECT archived_at, deleted_at, run_enabled FROM pipelines" in str(stmt):
+            state_result = MagicMock()
+            state_result.first.return_value = (None, None, True)
+            return state_result
         call_count += 1
         if call_count == 1:
             return lock_result

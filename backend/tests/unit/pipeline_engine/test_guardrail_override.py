@@ -98,6 +98,7 @@ def _guardrail_row() -> MagicMock:
     row.failure_behaviour = "block"
     row.pass_threshold = None
     row.suite_id = None
+    row.is_muted = False
     return row
 
 
