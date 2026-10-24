@@ -5488,6 +5488,30 @@ elements:
       - testid: license-apply-btn
         type: button
         dynamic_testid: false
+      - testid: licence-renewal-banner
+        type: element
+        dynamic_testid: false
+      - testid: licence-renewal-renew-link
+        type: link
+        dynamic_testid: false
+      - testid: licence-renewal-install-action
+        type: button
+        dynamic_testid: false
+      - testid: licence-grace-dialog
+        type: element
+        dynamic_testid: false
+      - testid: licence-grace-install-action
+        type: button
+        dynamic_testid: false
+      - testid: licence-grace-buy-action
+        type: link
+        dynamic_testid: false
+      - testid: licence-lapsed-banner
+        type: element
+        dynamic_testid: false
+      - testid: licence-lapsed-install-action
+        type: button
+        dynamic_testid: false
     /settings/mcp:
       - testid: feature-gate
         type: element
@@ -6701,6 +6725,7 @@ features:
             - "[x] Tier catalogue endpoints resolve plan tiers and feature entitlements"
             - "[x] Caller-scoped plan bootstrap: GET /api/v1/plan returns 200 to ANY authenticated org member with license.tier / expires_at / org_id, dev_mode, and the FULL known flag set with the org feature_overrides overlay applied (inactive flags present as currently_active: false), so a non-admin reads their org's real tier, dev mode and effective flags instead of the bootstrap defaults left by the instance-admin-only /api/v1/admin/feature-flags + /api/v1/admin/license reads; the frontend planStore bootstraps from it alongside the viewer-readable /api/v1/admin/tiers catalogue, and the admin endpoints keep their system-admin gates for the inspection/toggle UI (backend/src/modulo/api/routes/viewmodel.py plan_bootstrap, backend/tests/unit/api/test_viewmodel_plan.py, frontend/src/stores/planStore.ts, docs/product-map/licensing/license.md; FAR-1806 + FAR-1809)"
             - "[x] Plan/license-based gating is wired at the composition root (require_feature / get_plan_context): the Team-tier licensed surfaces (SSO administration, /api/v1/teams, audit export, admin spend limits) return 402 naming the gated feature without a valid Team license and pass with one; SSO AUTHENTICATION entry points are exempt from that 402 when NO license resolves at all, so a lapse never locks an administrator out of the licence screen (env-var SAML availability/config are configuration-only; FAR-2059/FAR-2060); the license resolves from the org settings with a system-license fallback (team_gates.feature, test_sso_licence_admin_invariant.py, docs/product-map/licensing/license.md)"
+            - "[x] The authenticated shell surfaces a backend-derived renewal state (FAR-2075): GET /api/v1/admin/license returns `licence_state` (none | active | renewal_due | grace | lapsed), `days_until_expiry` and `grace_ends_at`, derived once from `expires_at` + `LICENCE_GRACE_DAYS` in `derive_licence_state`; the shell reads that status once per session for org admins and renders the notice on EVERY authenticated route (not only the licence page) without comparing dates itself — `renewal_due` shows a countdown banner that offers a purchase path ONLY for a manual renewal (an auto-renewing licence is never invited to buy again), `grace` shows a dismissible dialog that returns on the next visit until the licence is renewed, with two equally-weighted actions (install a key the customer may never have received, or buy a new licence), and `lapsed` explains that Team capability is off and where to install a key; the licence page reuses the same query instead of issuing a second read (backend/src/modulo/api/routes/admin_license.py, frontend/src/components/AppLayout.vue, frontend/src/components/licence/LicenceRenewalNotice.vue, backend/tests/unit/api/test_admin_license.py, frontend/src/__tests__/LicenceRenewalNotice.spec.ts, frontend/src/__tests__/components/AppLayoutLicenceBanner.spec.ts)"
             - "[ ] License-driven gating is not applied to EVERY registered feat-* surface — gating targets the licensed Team-tier surfaces, not the whole feature registry"
         deferrals:
             - "Universal license gating of every registered feature is tracked under feat-license"

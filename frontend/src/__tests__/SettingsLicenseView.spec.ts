@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { nextTick as vueNextTick } from 'vue'
+import { computed, nextTick as vueNextTick, ref } from 'vue'
 
 async function nextTick() { await vueNextTick(); await flushPromises() }
 
@@ -11,6 +11,8 @@ const mockLicenseFree = {
   features: [],
   expires_at: null,
   org_id: null,
+  renewal_mode: 'manual',
+  licence_state: 'none',
 }
 
 const mockLicenseTeam = {
@@ -19,6 +21,8 @@ const mockLicenseTeam = {
   features: ['parallel_branches', 'eval_system'],
   expires_at: '2026-12-31T23:59:59Z',
   org_id: '11111111-2222-3333-4444-555555555555',
+  renewal_mode: 'manual',
+  licence_state: 'active',
 }
 
 const mockFlagsFree = {
@@ -60,6 +64,14 @@ const formDialogStub = {
   props: ['open', 'title', 'description', 'confirmText', 'loading'],
   emits: ['confirm'],
   template: `<button v-if="open" class="formdialog-confirm" @click="$emit('confirm')">{{ confirmText }}</button>`,
+}
+
+// Renders the renewal notice's dialog body + footer so the grace actions are
+// reachable (a bare `true` stub would swallow the slot content).
+const primeDialogStub = {
+  name: 'Dialog',
+  props: ['visible'],
+  template: '<div v-if="visible"><slot /><slot name="footer" /></div>',
 }
 
 // Object form of the stubs (name -> true) so we can also override FormDialog.
@@ -302,5 +314,114 @@ describe('SettingsLicenseView', () => {
     await wrapper.find('.formdialog-confirm').trigger('click')
     await nextTick(); await flushPromises(); await nextTick()
     expect(wrapper.text()).toContain('Failed to remove')
+  })
+
+  // ── FAR-2075: shell-owned renewal surface ───────────────────────────
+
+  it('does not render the renewal surface itself — the authenticated shell owns it', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(
+      api.GET,
+      { ...mockLicenseTeam, licence_state: 'renewal_due', renewal_mode: 'manual', days_until_expiry: 9 },
+      mockFlagsTeam,
+    )
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, Dialog: primeDialogStub } },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    // Mounting it here as well would show two banners (and, in grace, two
+    // dialogs) on this one page.
+    expect(wrapper.find('[data-testid="licence-renewal-banner"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="licence-grace-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="licence-lapsed-banner"]').exists()).toBe(false)
+  })
+
+  it('reloads its own licence status after a key is applied when mounted without the shell', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.POST as any).mockResolvedValue({ data: { tier: 'team', expires_at: '2027-01-01' }, error: undefined })
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    const licenceGets = () =>
+      (api.GET as any).mock.calls.filter(([path]: [string]) => path === '/api/v1/admin/license')
+    expect(licenceGets()).toHaveLength(1)
+
+    await wrapper.find('textarea').setValue('some-key')
+    await wrapper.find('[data-testid="license-apply-btn"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    expect(licenceGets()).toHaveLength(2)
+  })
+
+  it('reuses the shell-provided licence status instead of fetching it again', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+
+    const status = ref({ ...mockLicenseTeam, licence_state: 'renewal_due', days_until_expiry: 9 })
+    const source = {
+      data: status,
+      loading: computed(() => false),
+      error: computed(() => null),
+      load: vi.fn(async () => {}),
+    }
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: {
+        plugins: [createPinia()],
+        provide: { 'modulo:licence-status': source },
+        stubs: { ...dialogStubObj, Dialog: primeDialogStub },
+      },
+    })
+    await nextTick()
+    await nextTick()
+
+    // Rendered from the provided status…
+    expect(wrapper.text()).toContain('Team')
+    expect(wrapper.text()).toContain('#11111111')
+    // …and no second GET against the endpoint the shell already read.
+    const licenceGets = (api.GET as any).mock.calls.filter(
+      ([path]: [string]) => path === '/api/v1/admin/license',
+    )
+    expect(licenceGets).toHaveLength(0)
+  })
+
+  it('refreshes the shared status after a licence key is applied', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.POST as any).mockResolvedValue({ data: { tier: 'team', expires_at: '2027-01-01' }, error: undefined })
+
+    const source = {
+      data: ref({ ...mockLicenseTeam, licence_state: 'lapsed', has_license: false, tier: 'community' }),
+      loading: computed(() => false),
+      error: computed(() => null),
+      load: vi.fn(async () => {}),
+    }
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: {
+        plugins: [createPinia()],
+        provide: { 'modulo:licence-status': source },
+        stubs: { ...dialogStubObj, FormDialog: formDialogStub },
+      },
+    })
+    await nextTick()
+    await wrapper.find('textarea').setValue('some-key')
+    await wrapper.find('[data-testid="license-apply-btn"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    // The shell's banner clears only if the shared query is refreshed.
+    expect(source.load).toHaveBeenCalledTimes(1)
   })
 })

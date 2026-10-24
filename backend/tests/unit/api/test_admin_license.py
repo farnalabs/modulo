@@ -344,6 +344,298 @@ class TestGetLicense:
         assert resp.status_code == 500
 
 
+# ── FAR-2075: renewal state (backend is the single source of truth) ──────
+
+#: Pinned reference instant so every boundary case is deterministic.
+_STATE_NOW = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+
+
+def _expiry_from(offset: timedelta) -> str:
+    return (_STATE_NOW + offset).isoformat()
+
+
+class TestDeriveLicenceState:
+    """Both sides of every state transition — the off-by-one IS the feature."""
+
+    @pytest.mark.parametrize(
+        ("offset", "expected_days", "expected_state"),
+        [
+            # active ↔ renewal_due at expires_at - LICENCE_GRACE_DAYS.
+            pytest.param(
+                timedelta(days=LICENCE_GRACE_DAYS, hours=1),
+                14,
+                admin_license.LICENCE_STATE_ACTIVE,
+                id="active-14d-plus-1h",
+            ),
+            pytest.param(
+                timedelta(days=LICENCE_GRACE_DAYS, seconds=1),
+                14,
+                admin_license.LICENCE_STATE_ACTIVE,
+                id="active-14d-plus-1s",
+            ),
+            pytest.param(
+                timedelta(days=LICENCE_GRACE_DAYS),
+                14,
+                admin_license.LICENCE_STATE_RENEWAL_DUE,
+                id="renewal-due-at-14d",
+            ),
+            pytest.param(timedelta(days=13), 13, admin_license.LICENCE_STATE_RENEWAL_DUE, id="renewal-due-13d"),
+            pytest.param(timedelta(days=15), 15, admin_license.LICENCE_STATE_ACTIVE, id="active-15d"),
+            pytest.param(timedelta(days=1), 1, admin_license.LICENCE_STATE_RENEWAL_DUE, id="renewal-due-1d"),
+            pytest.param(timedelta(seconds=1), 0, admin_license.LICENCE_STATE_RENEWAL_DUE, id="renewal-due-1s"),
+            # renewal_due ↔ grace at expires_at itself.
+            pytest.param(timedelta(0), 0, admin_license.LICENCE_STATE_RENEWAL_DUE, id="renewal-due-at-expiry"),
+            pytest.param(-timedelta(seconds=1), -1, admin_license.LICENCE_STATE_GRACE, id="grace-1s-past"),
+            pytest.param(-timedelta(days=1), -1, admin_license.LICENCE_STATE_GRACE, id="grace-1d-past"),
+            pytest.param(-timedelta(days=13), -13, admin_license.LICENCE_STATE_GRACE, id="grace-13d-past"),
+            # grace ↔ lapsed at expires_at + LICENCE_GRACE_DAYS.
+            pytest.param(
+                -timedelta(days=LICENCE_GRACE_DAYS), -14, admin_license.LICENCE_STATE_GRACE, id="grace-at-14d-past"
+            ),
+            pytest.param(
+                -timedelta(days=LICENCE_GRACE_DAYS, seconds=1),
+                -15,
+                admin_license.LICENCE_STATE_LAPSED,
+                id="lapsed-14d-plus-1s-past",
+            ),
+            pytest.param(
+                -timedelta(days=LICENCE_GRACE_DAYS + 1),
+                -15,
+                admin_license.LICENCE_STATE_LAPSED,
+                id="lapsed-15d-past",
+            ),
+            pytest.param(-timedelta(days=20), -20, admin_license.LICENCE_STATE_LAPSED, id="lapsed-20d-past"),
+        ],
+    )
+    def test_boundaries(self, offset: timedelta, expected_days: int, expected_state: str) -> None:
+        days, state = admin_license.derive_licence_state(_expiry_from(offset), now=_STATE_NOW)
+        assert days == expected_days
+        assert state == expected_state
+
+    def test_days_round_down_so_the_countdown_never_overstates(self) -> None:
+        days, state = admin_license.derive_licence_state(
+            _expiry_from(timedelta(days=13, hours=23, minutes=59)), now=_STATE_NOW
+        )
+        assert days == 13
+        assert state == admin_license.LICENCE_STATE_RENEWAL_DUE
+
+    @pytest.mark.parametrize("expires_at", [None, ""])
+    def test_no_expiry_is_a_perpetual_active_licence(self, expires_at: str | None) -> None:
+        days, state = admin_license.derive_licence_state(expires_at, now=_STATE_NOW)
+        assert days is None
+        assert state == admin_license.LICENCE_STATE_ACTIVE
+
+    @pytest.mark.parametrize(
+        ("offset", "expected_days", "expected_state"),
+        [
+            pytest.param(
+                timedelta(days=LICENCE_GRACE_DAYS, minutes=1),
+                14,
+                admin_license.LICENCE_STATE_ACTIVE,
+                id="naive-active",
+            ),
+            pytest.param(
+                timedelta(days=LICENCE_GRACE_DAYS, minutes=-1),
+                13,
+                admin_license.LICENCE_STATE_RENEWAL_DUE,
+                id="naive-renewal-due-just-inside-14d",
+            ),
+            pytest.param(
+                timedelta(minutes=-1),
+                -1,
+                admin_license.LICENCE_STATE_GRACE,
+                id="naive-grace-1m-past",
+            ),
+            pytest.param(
+                -timedelta(days=LICENCE_GRACE_DAYS, minutes=-1),
+                -14,
+                admin_license.LICENCE_STATE_GRACE,
+                id="naive-grace-just-inside-14d-past",
+            ),
+            pytest.param(
+                -timedelta(days=LICENCE_GRACE_DAYS, minutes=1),
+                -15,
+                admin_license.LICENCE_STATE_LAPSED,
+                id="naive-lapsed-14d-plus-1m-past",
+            ),
+        ],
+    )
+    def test_naive_expiry_hits_the_same_boundaries(
+        self, offset: timedelta, expected_days: int, expected_state: str
+    ) -> None:
+        """An ``expires_at`` with no UTC offset must not shift any boundary.
+
+        This drives the PRODUCTION path (no ``now`` argument), where the naive
+        expiry used to be subtracted from ``datetime.now(UTC)`` and raised
+        ``TypeError`` — a 500 on ``GET /api/v1/admin/license``. The offsets hold
+        a one-minute margin so the clock advancing during the call cannot
+        straddle a boundary.
+        """
+        naive_now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+        days, state = admin_license.derive_licence_state((naive_now + offset).isoformat())
+        assert days == expected_days
+        assert state == expected_state
+
+    def test_unparseable_expiry_is_lapsed_and_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING", logger="modulo.api.routes.admin_license"):
+            days, state = admin_license.derive_licence_state("not-a-date", now=_STATE_NOW)
+        assert days is None
+        assert state == admin_license.LICENCE_STATE_LAPSED
+        assert any("license.expiry_unparseable" in record.message for record in caplog.records)
+
+    def test_every_derived_state_is_in_the_documented_vocabulary(self) -> None:
+        for offset in (
+            timedelta(days=30),
+            timedelta(days=1),
+            -timedelta(days=1),
+            -timedelta(days=30),
+        ):
+            _, state = admin_license.derive_licence_state(_expiry_from(offset), now=_STATE_NOW)
+            assert state in admin_license.LICENCE_STATES
+
+    def test_grace_end_is_expiry_plus_the_fixed_delivery_window(self) -> None:
+        expiry = _expiry_from(timedelta(days=5))
+        assert admin_license.licence_grace_ends_at(expiry) == _expiry_from(timedelta(days=5 + LICENCE_GRACE_DAYS))
+
+    @pytest.mark.parametrize("expires_at", [None, "", "not-a-date"])
+    def test_grace_end_is_absent_without_a_parseable_expiry(self, expires_at: str | None) -> None:
+        assert admin_license.licence_grace_ends_at(expires_at) is None
+
+
+class TestLicenseStatusRenewalShape:
+    @staticmethod
+    def _licence_data(**overrides: object) -> Any:
+        values: dict[str, object] = {
+            "tier": "team",
+            "features": ["sso"],
+            "expires_at": (datetime.now(UTC) + timedelta(days=200, seconds=60)).isoformat(),
+            "org_id": "test-org",
+            "raw_payload": {},
+            "raw_key": "",
+        }
+        values.update(overrides)
+        return admin_license.LicenseData(**values)  # type: ignore[arg-type]
+
+    def test_old_key_shape_is_manual_with_no_claims(self) -> None:
+        """A pre-FAR-2075 key carries no claims — the documented defaults stand."""
+        response = admin_license._license_status(self._licence_data())
+        assert response.renewal_mode == "manual"
+        assert response.term_months is None
+        assert response.licence_id is None
+        assert response.issued_at is None
+        assert response.days_until_expiry == 200
+        assert response.licence_state == admin_license.LICENCE_STATE_ACTIVE
+
+    def test_signed_renewal_claims_reach_the_response(self) -> None:
+        """The signed claims pass through unchanged (FAR-2075 payload slice)."""
+        payload = _make_valid_payload(
+            renewal_mode="auto",
+            term=24,
+            licence_id="lic-auto-1",
+            issued_at=(datetime.now(UTC) - timedelta(days=10)).isoformat(),
+        )
+        key = _sign_license_payload(payload)
+        validation = parse_and_verify(key)
+        assert validation.license_data is not None
+
+        response = admin_license._license_status(validation.license_data)
+        assert response.renewal_mode == "auto"
+        assert response.term_months == 24
+        assert response.licence_id == "lic-auto-1"
+        assert response.issued_at == payload["issued_at"]
+
+    def test_no_licence_is_state_none(self) -> None:
+        response = admin_license.LicenseStatusResponse(has_license=False, tier="community")
+        assert response.licence_state == admin_license.LICENCE_STATE_NONE
+
+
+class TestGetLicenseRenewalState:
+    URL = "/api/v1/admin/license"
+
+    def _get(self, client: TestClient, org: Any) -> dict[str, Any]:
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        return resp.json()
+
+    def test_reports_none_for_an_unlicensed_instance(self, client: TestClient) -> None:
+        data = self._get(client, _mock_org(settings_json=None))
+        assert data["licence_state"] == admin_license.LICENCE_STATE_NONE
+        assert data["days_until_expiry"] is None
+
+    def test_reports_active_and_manual_for_an_old_key(self, client: TestClient) -> None:
+        key = _sign_license_payload(_make_valid_payload())
+        result = parse_and_verify(key)
+        assert result.license_data is not None
+        store_license(key, result.license_data)
+
+        data = self._get(client, _mock_org(settings_json={}))
+        assert data["renewal_mode"] == "manual"
+        assert data["term_months"] is None
+        assert data["licence_id"] is None
+        assert data["issued_at"] is None
+        assert data["licence_state"] == admin_license.LICENCE_STATE_ACTIVE
+        assert data["days_until_expiry"] > 360
+        expires = datetime.fromisoformat(data["expires_at"])
+        assert datetime.fromisoformat(data["grace_ends_at"]) - expires == timedelta(days=LICENCE_GRACE_DAYS)
+
+    def test_reports_auto_renewal_on_the_wire(self, client: TestClient) -> None:
+        payload = _make_valid_payload(
+            renewal_mode="auto",
+            term=12,
+            licence_id="lic-auto-1",
+            issued_at=(datetime.now(UTC) - timedelta(days=10)).isoformat(),
+        )
+        key = _sign_license_payload(payload)
+        result = parse_and_verify(key)
+        assert result.license_data is not None
+        store_license(key, result.license_data)
+
+        data = self._get(client, _mock_org(settings_json={}))
+        assert data["renewal_mode"] == "auto"
+        assert data["term_months"] == 12
+        assert data["licence_id"] == "lic-auto-1"
+        assert data["issued_at"] == payload["issued_at"]
+
+    def test_reports_renewal_due_inside_the_countdown(self, client: TestClient) -> None:
+        expiry = datetime.now(UTC) + timedelta(days=10)
+        key = _sign_license_payload(_make_valid_payload(expires_at=expiry.isoformat()))
+        result = parse_and_verify(key)
+        assert result.license_data is not None
+        store_license(key, result.license_data)
+
+        data = self._get(client, _mock_org(settings_json={}))
+        assert data["licence_state"] == admin_license.LICENCE_STATE_RENEWAL_DUE
+        assert 9 <= data["days_until_expiry"] <= 10
+
+    def test_reports_grace_inside_the_delivery_window(self, client: TestClient) -> None:
+        expiry = datetime.now(UTC) - timedelta(days=3)
+        key = _sign_license_payload(_make_valid_payload(expires_at=expiry.isoformat()))
+        result = parse_and_verify(key)
+        assert result.license_data is not None
+        store_license(key, result.license_data)
+
+        data = self._get(client, _mock_org(settings_json={}))
+        assert data["has_license"] is True
+        assert data["licence_state"] == admin_license.LICENCE_STATE_GRACE
+        assert data["days_until_expiry"] < 0
+        assert data["grace_ends_at"] == (expiry + timedelta(days=LICENCE_GRACE_DAYS)).isoformat()
+
+    def test_reports_lapsed_rather_than_none_when_the_key_outlived_its_grace(self, client: TestClient) -> None:
+        """A lapsed key is invisible to the ladder, so "none" would hide the lapse."""
+        expiry = datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 5)
+        lapsed_key = _sign_license_payload(_make_valid_payload(expires_at=expiry.isoformat()))
+
+        data = self._get(client, _mock_org(settings_json={"license_key": lapsed_key}))
+        assert data["has_license"] is False
+        assert data["tier"] == "community"
+        assert data["licence_state"] == admin_license.LICENCE_STATE_LAPSED
+
+    def test_a_merely_invalid_key_does_not_claim_a_lapse(self, client: TestClient) -> None:
+        data = self._get(client, _mock_org(settings_json={"license_key": "not-a-license-key"}))
+        assert data["licence_state"] == admin_license.LICENCE_STATE_NONE
+
+
 class TestUploadLicense:
     URL = "/api/v1/admin/license"
 

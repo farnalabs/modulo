@@ -6,6 +6,13 @@
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadAll" />
 
     <template v-else>
+      <!--
+        The renewal countdown / grace dialog is NOT rendered here. It lives in
+        the authenticated shell (components/AppLayout.vue) so it is visible on
+        every route; rendering it here as well would show two banners and two
+        grace dialogs on this one page. This page only reads the same status.
+      -->
+
       <!-- Current Tier Card -->
       <div class="rounded-lg border bg-card p-6 shadow-sm">
         <div v-if="licenseInfo.tier === 'team'" class="flex items-start justify-between">
@@ -98,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, inject, onMounted, type ComputedRef, type WritableComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import Button from 'primevue/button'
@@ -113,17 +120,14 @@ import FormDialog from '../components/shared/FormDialog.vue'
 import { ExternalLink } from '@lucide/vue'
 import { format } from 'date-fns'
 import { shortId } from '../utils/format'
+import type { components } from '../lib/api/schema'
 
 const { t } = useI18n()
 const planStore = usePlanStore()
 
-interface LicenseStatus {
-  has_license: boolean
-  tier: string
-  features: string[]
-  expires_at: string | null
-  org_id: string | null
-}
+// The wire shape is the generated OpenAPI type, never a hand-maintained copy:
+// a renamed backend field fails `vue-tsc` here instead of rendering `undefined`.
+type LicenseStatus = components['schemas']['LicenseStatusResponse']
 
 const defaultLicense: LicenseStatus = {
   has_license: false,
@@ -131,12 +135,55 @@ const defaultLicense: LicenseStatus = {
   features: [],
   expires_at: null,
   org_id: null,
+  renewal_mode: 'manual',
+  licence_state: 'none',
 }
 
-const { loading, error: loadError, data: licenseInfo, load: loadAll } = useDataFetch<LicenseStatus>(
+/**
+ * FAR-2075: the authenticated shell (components/AppLayout.vue) owns the
+ * licence-status read because it also renders the renewal notice on every
+ * authenticated route. It provides that query under this key — the string is
+ * duplicated there because no module can be imported by both without pulling
+ * the whole shell into this page's chunk.
+ *
+ * Mounted under the shell (the real application) this page REUSES the shell's
+ * query: navigating here costs no second GET, and applying/removing a key
+ * refreshes the shell's banner too. Mounted standalone (unit tests, or any
+ * future embed without the shell) it falls back to its own read.
+ */
+const LICENCE_STATUS_INJECTION_KEY = 'modulo:licence-status'
+
+interface LicenceStatusSource {
+  data: WritableComputedRef<LicenseStatus>
+  loading: ComputedRef<boolean>
+  error: WritableComputedRef<string | null>
+  load: () => Promise<void>
+}
+
+const providedLicence = inject<LicenceStatusSource | null>(LICENCE_STATUS_INJECTION_KEY, null)
+
+const ownLicence = useDataFetch<LicenseStatus>(
   () => (api as any).GET('/api/v1/admin/license'),
-  { initialValue: defaultLicense }
+  { initialValue: defaultLicense, immediate: providedLicence === null }
 )
+
+const licenseInfo = computed(() =>
+  providedLicence ? providedLicence.data.value : ownLicence.data.value
+)
+const loading = computed(() =>
+  providedLicence ? providedLicence.loading.value : ownLicence.loading.value
+)
+const loadError = computed(() =>
+  providedLicence ? providedLicence.error.value : ownLicence.error.value
+)
+
+async function loadAll(): Promise<void> {
+  if (providedLicence) {
+    await providedLicence.load()
+    return
+  }
+  await ownLicence.load()
+}
 
 const newLicenseKey = ref('')
 

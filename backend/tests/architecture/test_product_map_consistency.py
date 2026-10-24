@@ -413,6 +413,16 @@ def test_mapped_route_elements_cover_owning_view_testids():
     ``components/product-analytics/ProductAnalyticsError.vue``
     (``/admin/org``), so those routes list the components and register
     ``error-alert-dismiss`` in their elements inventory.
+
+    SHELL-LEVEL COMPONENTS (design statement, not an exemption). A component
+    mounted by the authenticated shell (``components/AppLayout.vue``) rather
+    than by a route renders on every authenticated route. Its testids are
+    registered ONCE, on the route where the surface is actionable — the licence
+    renewal notice (``components/licence/LicenceRenewalNotice.vue``, FAR-2075)
+    on ``/settings/license``, the onboarding banner and spotlight overlay on
+    ``/`` — exactly as the shell itself is not listed as an owning view of
+    every route. The assertions below remain unchanged: a registered element
+    must still render on the route it is registered for.
     """
     elements = _load_elements()
     for route, view_rel in OWNED_PAGES.items():
@@ -658,7 +668,19 @@ OWNED_PAGES = {
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
-    "/settings/license": "frontend/src/views/SettingsLicenseView.vue",
+    # FAR-2075: LicenceRenewalNotice is mounted by the AUTHENTICATED SHELL
+    # (components/AppLayout.vue), so it renders on every authenticated route,
+    # not only here. It is registered once, on the licence route, because that
+    # is where the administrator acts on the warning and where Assistant's
+    # index should point — the same convention as `/` listing the
+    # shell-rendered OnboardingBanner and SpotlightOverlay above. Deliberately
+    # NOT repeated on every route: the element inventory describes what a route
+    # shows, and duplicating one shell surface across every route would
+    # misdescribe it as route-owned.
+    "/settings/license": (
+        "frontend/src/views/SettingsLicenseView.vue",
+        "frontend/src/components/licence/LicenceRenewalNotice.vue",
+    ),
     "/settings/assistant": "frontend/src/views/UserAssistantSkillsView.vue",
     "/admin/model-backends": (
         "frontend/src/views/AdminModelBackendsView.vue",
