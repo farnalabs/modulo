@@ -180,6 +180,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     guardrail_row.failure_behaviour = "warn"
     guardrail_row.pass_threshold = None
     guardrail_row.suite_id = None
+    guardrail_row.is_muted = False
 
     session = AsyncMock(spec=AsyncSession)
     session.execute.side_effect = [
