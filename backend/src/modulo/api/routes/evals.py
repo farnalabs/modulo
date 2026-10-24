@@ -3076,6 +3076,10 @@ class ResolveFindingResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
     id: uuid.UUID
+    finding_id: uuid.UUID
+    finding_source: str
+    trigger_event_id: uuid.UUID | None = None
+    eval_id: uuid.UUID
     resolution: str
     resolution_reason: str | None = None
     resolved_at: str | None = None
@@ -3180,29 +3184,20 @@ async def get_finding(
         if te_finding is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finding not found")
 
-        trigger_event_id, eval_id, passed, error_detail = te_finding
-        finding = (
-            await session.execute(
-                select(TriggerEventFinding).where(
-                    TriggerEventFinding.trigger_event_id == trigger_event_id,
-                    TriggerEventFinding.eval_id == eval_id,
-                    TriggerEventFinding.organisation_id == principal.organisation_id,
-                )
-            )
-        ).scalar_one_or_none()
-
+        finding = te_finding
         return {
-            "id": str(finding_id),
-            "finding_id": str(finding_id),
+            "id": str(finding.id),
+            "finding_id": str(finding.id),
             "finding_type": "trigger_event",
-            "eval_id": str(eval_id),
-            "resolution": finding.resolution if finding else "pending",
-            "resolution_reason": finding.resolution_reason if finding else None,
-            "resolved_at": finding.resolved_at.isoformat() if finding and finding.resolved_at else None,
-            "resolved_by": str(finding.resolved_by) if finding and finding.resolved_by else None,
-            "detail": error_detail,
-            "passed": passed,
-            "outcome": "pass" if passed else "fail",
+            "trigger_event_id": str(finding.trigger_event_id),
+            "eval_id": str(finding.eval_id),
+            "resolution": finding.resolution,
+            "resolution_reason": finding.resolution_reason,
+            "resolved_at": finding.resolved_at.isoformat() if finding.resolved_at else None,
+            "resolved_by": str(finding.resolved_by) if finding.resolved_by else None,
+            "detail": finding.detail,
+            "passed": finding.passed,
+            "outcome": finding.outcome,
         }
 
 
@@ -3267,42 +3262,21 @@ async def resolve_finding(
                 if te_finding is None:
                     raise FindingResolutionError("Finding not found") from None
 
-                trigger_event_id, eval_id, passed, _error_detail = te_finding
-                existing_runless = (
-                    await session.execute(
-                        select(TriggerEventFinding).where(
-                            TriggerEventFinding.trigger_event_id == trigger_event_id,
-                            TriggerEventFinding.eval_id == eval_id,
-                            TriggerEventFinding.organisation_id == principal.organisation_id,
-                        )
-                    )
-                ).scalar_one_or_none()
-
-                now = datetime.now(UTC)
-                if existing_runless is None:
-                    finding = TriggerEventFinding(
-                        organisation_id=principal.organisation_id,
-                        trigger_event_id=trigger_event_id,
-                        eval_id=eval_id,
-                        passed=passed,
-                        outcome="pass" if passed else "fail",
-                        score=1.0 if passed else 0.0,
-                        detail=f"intake_evidence:{trigger_event_id}_{eval_id}",
-                        resolution=req.resolution,
-                        resolution_reason=req.reason,
-                        resolved_at=now,
-                        resolved_by=principal.account_id,
-                    )
-                    session.add(finding)
-                    await session.flush()
+                finding = te_finding
+                eval_id = finding.eval_id
+                finding.resolution = req.resolution
+                finding.resolution_reason = req.reason
+                if req.resolution == "pending":
+                    finding.resolved_at = None
+                    finding.resolved_by = None
                 else:
-                    existing_runless.resolution = req.resolution
-                    existing_runless.resolution_reason = req.reason
-                    existing_runless.resolved_at = now
-                    existing_runless.resolved_by = principal.account_id
-                    await session.flush()
-                    finding = existing_runless
+                    finding.resolved_at = datetime.now(UTC)
+                    finding.resolved_by = principal.account_id
+                await session.flush()
 
+            is_te_finding = isinstance(finding, TriggerEventFinding)
+            finding_source = "trigger_event" if is_te_finding else "eval_result"
+            trigger_event_id_val = str(finding.trigger_event_id) if is_te_finding else None
             await append_audit_event(
                 session,
                 org_id=principal.organisation_id,
@@ -3312,6 +3286,8 @@ async def resolve_finding(
                 resource_id=finding_id,
                 payload_json={
                     "finding_id": str(finding_id),
+                    "finding_source": finding_source,
+                    "trigger_event_id": trigger_event_id_val,
                     "eval_id": str(eval_id),
                     "resolution": req.resolution,
                     "reason": req.reason,
@@ -3328,6 +3304,10 @@ async def resolve_finding(
 
         return ResolveFindingResponse(
             id=finding_id,
+            finding_id=finding_id,
+            finding_source="trigger_event" if isinstance(finding, TriggerEventFinding) else "eval_result",
+            trigger_event_id=finding.trigger_event_id if isinstance(finding, TriggerEventFinding) else None,
+            eval_id=eval_id,
             resolution=finding.resolution,
             resolution_reason=finding.resolution_reason,
             resolved_at=finding.resolved_at.isoformat() if finding.resolved_at else None,

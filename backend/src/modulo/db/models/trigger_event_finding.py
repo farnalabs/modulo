@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Text, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -16,6 +16,18 @@ class TriggerEventFinding(OrgScoped):
 
     __tablename__ = "trigger_event_findings"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["trigger_event_id", "organisation_id"],
+            ["trigger_events.id", "trigger_events.organisation_id"],
+            ondelete="CASCADE",
+            name="fk_trigger_event_findings_event_org",
+        ),
+        ForeignKeyConstraint(
+            ["eval_id", "organisation_id"],
+            ["evals.id", "evals.organisation_id"],
+            ondelete="CASCADE",
+            name="fk_trigger_event_findings_eval_org",
+        ),
         CheckConstraint(
             "resolution IN ('accepted', 'dismissed', 'superseded', 'pending')",
             name="ck_trigger_event_findings_resolution",
@@ -23,12 +35,8 @@ class TriggerEventFinding(OrgScoped):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
-    trigger_event_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("trigger_events.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    eval_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("evals.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    trigger_event_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
+    eval_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     passed: Mapped[bool] = mapped_column(nullable=False)
     outcome: Mapped[str] = mapped_column(Text(), nullable=False)
     score: Mapped[float | None] = mapped_column(nullable=True)

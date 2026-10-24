@@ -64,8 +64,12 @@ async def resolve_finding(
     # Update the finding
     finding.resolution = resolution
     finding.resolution_reason = reason
-    finding.resolved_at = datetime.now(UTC)
-    finding.resolved_by = uuid.UUID(resolved_by) if resolved_by else None
+    if resolution == "pending":
+        finding.resolved_at = None
+        finding.resolved_by = None
+    else:
+        finding.resolved_at = datetime.now(UTC)
+        finding.resolved_by = uuid.UUID(resolved_by) if resolved_by else None
 
     await session.flush()
     return finding
@@ -75,20 +79,16 @@ async def load_trigger_event_finding(
     session: AsyncSession,
     finding_id: str,
     org_id: str,
-) -> tuple[uuid.UUID, uuid.UUID, bool, str | None] | None:
-    """Resolve a runless trigger-event evidence row to its eval finding identity."""
-    trigger_event_id = uuid.UUID(finding_id)
-    row = (
+) -> TriggerEventFinding | None:
+    """Load one runless finding by its public UUID within the organisation."""
+    return (
         await session.execute(
             select(TriggerEventFinding).where(
-                TriggerEventFinding.trigger_event_id == trigger_event_id,
+                TriggerEventFinding.id == uuid.UUID(finding_id),
                 TriggerEventFinding.organisation_id == org_id,
             )
         )
     ).scalar_one_or_none()
-    if row is None:
-        return None
-    return trigger_event_id, row.eval_id, row.passed, row.detail
 
 
 async def compute_acceptance_rate(

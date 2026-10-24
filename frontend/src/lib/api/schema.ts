@@ -19772,6 +19772,20 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Finding Id
+             * Format: uuid
+             */
+            finding_id: string;
+            /** Finding Source */
+            finding_source: string;
+            /** Trigger Event Id */
+            trigger_event_id?: string | null;
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
             /** Resolution */
             resolution: string;
             /** Resolution Reason */

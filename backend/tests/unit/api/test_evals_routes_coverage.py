@@ -825,6 +825,10 @@ def test_resolve_finding_endpoint_uses_wire_contract_and_mute_wiring(client: tup
     assert response.status_code == 200, response.text
     assert response.json() == {
         "id": str(finding.id),
+        "finding_id": str(finding.id),
+        "finding_source": "eval_result",
+        "trigger_event_id": None,
+        "eval_id": str(_EVAL_ID),
         "resolution": "accepted",
         "resolution_reason": "verified",
         "resolved_at": finding.resolved_at.isoformat(),

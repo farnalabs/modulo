@@ -183,7 +183,11 @@ async def run_pre_trigger_guardrail_pass(
                 blocked=True,
                 block_message="guardrail mechanism error at webhook intake",
             )
-        return PreTriggerGuardrailOutcome(payload=dict(raw_payload))
+        return PreTriggerGuardrailOutcome(
+            payload=dict(raw_payload),
+            results=[_mechanism_fail_result(d, "guardrail interception mechanism error") for d in definitions],
+            evaluated_count=len(definitions),
+        )
 
     return PreTriggerGuardrailOutcome(
         payload=outcome.payload,

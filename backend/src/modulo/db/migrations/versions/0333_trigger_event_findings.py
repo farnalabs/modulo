@@ -18,6 +18,11 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     if not str(op.get_bind().dialect.name).startswith("postgres"):
         return
+    op.execute(
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_trigger_events_id_organisation_id') THEN "
+        "ALTER TABLE public.trigger_events ADD CONSTRAINT uq_trigger_events_id_organisation_id "
+        "UNIQUE (id, organisation_id); END IF; END $$;"
+    )
     op.create_table(
         "trigger_event_findings",
         sa.Column("id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False),
@@ -35,19 +40,31 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("id", "organisation_id", name="uq_trigger_event_findings_id_organisation_id"),
+        sa.UniqueConstraint(
+            "organisation_id",
+            "trigger_event_id",
+            "eval_id",
+            name="uq_trigger_event_findings_org_event_eval",
+        ),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["trigger_event_id"], ["trigger_events.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["eval_id"], ["evals.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["trigger_event_id", "organisation_id"],
+            ["trigger_events.id", "trigger_events.organisation_id"],
+            ondelete="CASCADE",
+            name="fk_trigger_event_findings_event_org",
+        ),
+        sa.ForeignKeyConstraint(
+            ["eval_id", "organisation_id"],
+            ["evals.id", "evals.organisation_id"],
+            ondelete="CASCADE",
+            name="fk_trigger_event_findings_eval_org",
+        ),
         sa.ForeignKeyConstraint(["resolved_by"], ["accounts.id"], ondelete="SET NULL"),
         sa.CheckConstraint(
             "resolution IN ('accepted', 'dismissed', 'superseded', 'pending')",
             name="ck_trigger_event_findings_resolution",
         ),
-    )
-    op.create_index(
-        "ix_trigger_event_findings_org_event_eval",
-        "trigger_event_findings",
-        ["organisation_id", "trigger_event_id", "eval_id"],
     )
     op.execute("ALTER TABLE public.trigger_event_findings ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE public.trigger_event_findings FORCE ROW LEVEL SECURITY")
@@ -61,5 +78,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     if not str(op.get_bind().dialect.name).startswith("postgres"):
         return
-    op.drop_index("ix_trigger_event_findings_org_event_eval", table_name="trigger_event_findings")
     op.drop_table("trigger_event_findings")
+    op.execute(
+        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_trigger_events_id_organisation_id') THEN "
+        "ALTER TABLE public.trigger_events DROP CONSTRAINT uq_trigger_events_id_organisation_id; END IF; END $$;"
+    )
