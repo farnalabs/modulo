@@ -1,0 +1,752 @@
+name: "Release: Unified Pipeline"
+
+# FAR-1869 Release slice 5 — the real cut.
+# This workflow consolidates the release logic with a `mode` input.
+# Modes:
+#   cut      - Push release-freeze, bump version in SoT files, commit on main,
+#              tag vX.Y.Z-rcN, publish 4 images to GHCR, build/sign/attest bundle,
+#              push bundle-v* tag, create GitHub Release, push Helm chart to OCI,
+#              dispatch Deploy + rc-validate
+#   recut    - Re-publish from existing RC tag (no version bump)
+#   promote  - Promote RC to GA (retag, update release, lift freeze)
+#   dry-run  - Build + verify everything, emit artefacts as CI artefacts, publish NOTHING
+#
+# The bundle is built by the reusable `.github/workflows/bundle-release.yml`
+# workflow (FAR-670/FAR-675), never by a second in-repo implementation: the
+# single source of truth for the tarball, SHA256SUMS and signed manifest is that
+# workflow, and this one only orchestrates it, pushes the bundle-v* tag and
+# creates the GitHub Release from the artefacts it uploads.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "cut | recut | promote | dry-run"
+        type: choice
+        required: true
+        options:
+          - cut
+          - recut
+          - promote
+          - dry-run
+      version:
+        description: "Release version in X.Y.Z form (e.g. 0.1.0). Required for recut/promote; for cut it's the target version."
+        type: string
+        required: false
+
+concurrency:
+  group: release-unified-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Dry-run rehearsal
+  # ---------------------------------------------------------------------------
+  dry-run:
+    name: Dry-run rehearsal (${{ inputs.version || 'auto' }})
+    if: inputs.mode == 'dry-run'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Validate version input
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -z "$VERSION" ]; then
+            echo "::error::version is required for dry-run"
+            exit 1
+          fi
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must be semver X.Y.Z (e.g. 0.1.0); got '$VERSION'"
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build all images (no push)
+        # Mapped through the step env block (S7630): GitHub expressions inside a
+        # run block are interpolated before the shell parses the script, so
+        # values are data, never code.
+        env:
+          VERSION: ${{ inputs.version }}
+          IMAGE_NAMESPACE: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for img in all-in-one backend frontend runner-opencode; do
+            case "$img" in
+              all-in-one)
+                context="."
+                dockerfile="deploy/docker/Dockerfile.all-in-one"
+                image_name="$IMAGE_NAMESPACE"
+                ;;
+              backend)
+                context="backend"
+                dockerfile="backend/Dockerfile"
+                image_name="$IMAGE_NAMESPACE/backend"
+                ;;
+              frontend)
+                context="frontend"
+                dockerfile="frontend/Dockerfile.prod"
+                image_name="$IMAGE_NAMESPACE/frontend"
+                ;;
+              runner-opencode)
+                context="."
+                dockerfile="deploy/docker/runner-opencode.Dockerfile"
+                image_name="$IMAGE_NAMESPACE/runner-opencode"
+                ;;
+            esac
+            echo "Building $img..."
+            docker buildx build \
+              --context "$context" \
+              --file "$dockerfile" \
+              --platform linux/amd64 \
+              --push=false \
+              --tag "ghcr.io/$image_name:dry-run-$VERSION" \
+              --cache-from type=gha,scope=$img \
+              --cache-to type=gha,mode=max,scope=$img
+          done
+
+      - name: Verify SBOM generation
+        run: |
+          # --no-sync/--no-build + an exact pin (S8541/S8544): no dependency
+          # build scripts run and the one dependency is a verified version.
+          uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 python backend/scripts/generate-sbom.py --output sbom.json
+          uv run --no-project --no-sync --no-build python - <<'PY'
+          import json, sys
+          with open("sbom.json", encoding="utf-8") as f:
+              bom = json.load(f)
+          if bom.get("bomFormat") != "CycloneDX":
+              sys.exit(f"sbom.json is not CycloneDX: {bom.get('bomFormat')!r}")
+          components = bom.get("components") or []
+          if not components:
+              sys.exit("sbom.json has no components")
+          print(f"Valid CycloneDX SBOM: specVersion={bom.get('specVersion')} components={len(components)}")
+          PY
+
+      - name: Upload SBOM as artefact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-cyclonedx
+          path: sbom.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Dry-run summary
+        run: |
+          {
+            echo "## Dry-run rehearsal - nothing was published"
+            echo ""
+            echo "| Step | Status |"
+            echo "|---|---|"
+            echo "| Container images (4) | Built locally, not pushed |"
+            echo "| Release bundle | Built and signed by the bundle rehearsal job, not published |"
+            echo "| GitHub Release | Not created |"
+            echo "| Helm chart | Not pushed to OCI |"
+            echo "| Deploy / rc-validate | Not dispatched |"
+            echo "| SBOM | Generated and uploaded as artefact |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  dry-run-bundle:
+    name: Rehearse bundle build (no publish)
+    if: inputs.mode == 'dry-run'
+    uses: ./.github/workflows/bundle-release.yml
+    with:
+      version: ${{ inputs.version }}
+      # A rehearsal tag that is never created or pushed. It only lands in the
+      # throwaway bundle's RC_TAG file; the checkout below uses main.
+      rc_tag: v${{ inputs.version }}-dry-run
+      ref: main
+    secrets:
+      BUNDLE_MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+      GH_TOKEN: ${{ github.token }}
+
+  # ---------------------------------------------------------------------------
+  # Cut / Recut / Promote: main release logic
+  # ---------------------------------------------------------------------------
+  release:
+    name: Release (${{ inputs.mode }})
+    if: inputs.mode != 'dry-run'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      actions: write
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      rc_tag: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Configure git
+        run: |
+          git config user.name "modulo-release-bot"
+          git config user.email "bot@modulo.run"
+
+      - name: Validate version input
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          if [ -z "$VERSION" ]; then
+            echo "::error::version is required for $MODE"
+            exit 1
+          fi
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must be semver X.Y.Z (e.g. 0.1.0); got '$VERSION'"
+            exit 1
+          fi
+
+      # -----------------------------------------------------------------------
+      # Version bump (cut only). Runs BEFORE the RC tag is created so the
+      # tagged commit is the bumped one. Committed and pushed to main by the
+      # workflow, matching the header contract.
+      # -----------------------------------------------------------------------
+      - name: Bump version in SoT files and commit to main (cut only)
+        if: inputs.mode == 'cut'
+        # Mapped through the step env block (S7630): GitHub expressions inside a
+        # run block are interpolated before the shell parses the script, so
+        # values are data, never code.
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          CURRENT="$(python3 -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$CURRENT" = "$VERSION" ]; then
+            echo "backend/pyproject.toml is already at ${VERSION}; no bump required."
+          else
+            python3 scripts/bump-version.py --set "$VERSION"
+            git add backend/pyproject.toml frontend/package.json deploy/helm/modulo/Chart.yaml
+            if git diff --cached --quiet; then
+              echo "::error::bump-version.py changed nothing - refusing to tag an unbumped tree."
+              exit 1
+            fi
+            git commit -m "chore(release): bump version to ${VERSION}"
+            git push origin main
+            echo "Committed version bump to ${VERSION} on main."
+          fi
+
+      # -----------------------------------------------------------------------
+      # CUT: new RC + freeze
+      # -----------------------------------------------------------------------
+      - name: Cut release candidate and freeze main
+        id: cut
+        if: inputs.mode == 'cut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="v${VERSION}"
+
+          # Next free RC number for this version.
+          N=1
+          while git rev-parse -q --verify "refs/tags/${BASE}-rc${N}" >/dev/null 2>&1; do
+            N=$((N+1))
+          done
+          RC_TAG="${BASE}-rc${N}"
+
+          echo "Tagging RC: $RC_TAG at $(git rev-parse --short HEAD)"
+          git tag -a "$RC_TAG" -m "Release candidate $RC_TAG"
+          git push origin "$RC_TAG"
+
+          # The freeze signal: merge-queue.yml's freeze-gate pauses while this
+          # tag exists. Force-move it on recut so the gate always tracks the
+          # latest freeze.
+          git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
+          git push origin release-freeze --force
+
+          # rc-validate.yml is dispatched once, by the consolidated
+          # "Dispatch Deploy and rc-validate" step after the artefacts publish.
+          echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # RECUT: re-publish from existing RC tag (no version bump)
+      # -----------------------------------------------------------------------
+      - name: Recut from existing RC
+        id: recut
+        if: inputs.mode == 'recut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="v${VERSION}"
+
+          # Find the latest RC tag for this version
+          LATEST_RC=$(git tag --list "${BASE}-rc*" --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_RC" ]; then
+            echo "::error::No ${BASE}-rc* tags found - nothing to recut."
+            exit 1
+          fi
+
+          # Force-move the freeze tag to the latest RC
+          git tag -f -a release-freeze -m "Release freeze active (for $LATEST_RC)"
+          git push origin release-freeze --force
+
+          echo "rc_tag=$LATEST_RC" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # PROMOTE: promote RC to GA + lift freeze
+      # -----------------------------------------------------------------------
+      - name: Promote to GA and lift freeze
+        id: promote
+        if: inputs.mode == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          GA_TAG="v${VERSION}"
+
+          # Safety 1: only promote OUT of an active freeze.
+          if ! git rev-parse -q --verify "refs/tags/release-freeze" >/dev/null 2>&1; then
+            echo "::error::No release freeze active ('release-freeze' tag missing) - refusing to promote. Run 'cut' first."
+            exit 1
+          fi
+
+          # Safety 2: never overwrite an existing GA tag.
+          if git rev-parse -q --verify "refs/tags/${GA_TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${GA_TAG} already exists - refusing to overwrite."
+            exit 1
+          fi
+
+          # Safety 3: promote exactly the validated RC commit.
+          LATEST_RC=$(git tag --list "${GA_TAG}-rc*" --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_RC" ]; then
+            echo "::error::No ${GA_TAG}-rc* tags found - nothing to promote."
+            exit 1
+          fi
+          RC_SHA=$(git rev-parse "${LATEST_RC}^{commit}")
+
+          # Safety 4: main must still be exactly the validated RC commit. Fetch
+          # live so a commit landing after checkout is caught - we promote the
+          # commit that was validated, never "whatever is on main now".
+          git fetch origin main
+          HEAD_SHA=$(git rev-parse origin/main)
+          if [ "$RC_SHA" != "$HEAD_SHA" ]; then
+            echo "::error::main HEAD (${HEAD_SHA}) is not the latest RC ${LATEST_RC} (${RC_SHA}). Re-cut or investigate before promoting."
+            exit 1
+          fi
+
+          # Safety 5: GA may only be promoted from a VALIDATED RC.
+          VALIDATED_TAG="validated/${LATEST_RC}"
+          if ! git rev-parse -q --verify "refs/tags/${VALIDATED_TAG}" >/dev/null 2>&1; then
+            echo "::error::No validation marker ${VALIDATED_TAG} - rc-validate.yml has not recorded a successful validation for ${LATEST_RC}. Wait for (or re-run) validation before promoting."
+            exit 1
+          fi
+          VAL_SHA=$(git rev-parse "${VALIDATED_TAG}^{commit}")
+          if [ "$VAL_SHA" != "$RC_SHA" ]; then
+            echo "::error::Validation marker ${VALIDATED_TAG} points at ${VAL_SHA}, not the RC commit ${RC_SHA}. Re-run validation."
+            exit 1
+          fi
+
+          echo "Promoting $LATEST_RC to GA as $GA_TAG"
+          git tag -a "$GA_TAG" -m "Release $GA_TAG (promoted from $LATEST_RC)"
+          git push origin "$GA_TAG"
+
+          # Lift the freeze: the merge queue resumes on its next tick.
+          git push origin --delete release-freeze
+          echo "Freeze lifted - merge queue resumes."
+
+          echo "ga_tag=$GA_TAG" >> "$GITHUB_OUTPUT"
+          echo "rc_tag=$LATEST_RC" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # RECUT: publish from the RC commit, not from main's current tip. A recut
+      # after main has moved must never tag main-HEAD artefacts with an older
+      # RC tag. (Cut already sits on the bumped commit the new tag points at.)
+      # -----------------------------------------------------------------------
+      - name: Check out the RC commit for publishing (recut only)
+        if: inputs.mode == 'recut'
+        env:
+          RC_TAG: ${{ steps.recut.outputs.rc_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$RC_TAG"
+          echo "Publishing from RC commit $(git rev-parse --short HEAD) tagged ${RC_TAG}"
+
+      # -----------------------------------------------------------------------
+      # Publish container images (cut and recut)
+      # -----------------------------------------------------------------------
+      - name: Publish container images to GHCR
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE_NAMESPACE: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${RC_TAG}"
+          VERSION_NUM="${VERSION}"
+
+          # Log in to GHCR
+          echo "${GH_TOKEN}" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+
+          for img in all-in-one backend frontend runner-opencode; do
+            case "$img" in
+              all-in-one)
+                context="."
+                dockerfile="deploy/docker/Dockerfile.all-in-one"
+                image_name="$IMAGE_NAMESPACE"
+                ;;
+              backend)
+                context="backend"
+                dockerfile="backend/Dockerfile"
+                image_name="$IMAGE_NAMESPACE/backend"
+                ;;
+              frontend)
+                context="frontend"
+                dockerfile="frontend/Dockerfile.prod"
+                image_name="$IMAGE_NAMESPACE/frontend"
+                ;;
+              runner-opencode)
+                context="."
+                dockerfile="deploy/docker/runner-opencode.Dockerfile"
+                image_name="$IMAGE_NAMESPACE/runner-opencode"
+                ;;
+            esac
+
+            echo "Building and pushing $img with tag $TAG..."
+
+            docker buildx build \
+              --context "$context" \
+              --file "$dockerfile" \
+              --platform linux/amd64 \
+              --push \
+              --tag "ghcr.io/$image_name:$TAG" \
+              --tag "ghcr.io/$image_name:$VERSION_NUM" \
+              --cache-from type=gha,scope=$img \
+              --cache-to type=gha,mode=max,scope=$img
+
+            # Smoke checks. Each image only runs the checks it can actually
+            # satisfy, and a failure FAILS the job - never `|| true`.
+            IMAGE="ghcr.io/$image_name:$TAG"
+            echo "Smoke check: $IMAGE"
+            case "$img" in
+              all-in-one)
+                docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+                docker run --rm --entrypoint nginx "$IMAGE" -t
+                ;;
+              backend)
+                docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+                ;;
+              frontend)
+                docker run --rm --entrypoint nginx "$IMAGE" -t
+                ;;
+              runner-opencode)
+                docker run --rm --entrypoint opencode "$IMAGE" --version
+                ;;
+            esac
+          done
+
+      # -----------------------------------------------------------------------
+      # Push Helm chart to OCI registry (cut and recut)
+      # -----------------------------------------------------------------------
+      - name: Push Helm chart to OCI registry
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE_NAMESPACE: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_NUM="${VERSION}"
+
+          # Log in to GHCR for Helm
+          echo "${GH_TOKEN}" | helm registry login ghcr.io -u "$REGISTRY_USER" --password-stdin
+
+          # Package and push chart
+          helm package deploy/helm/modulo --destination /tmp/helm-pkg --version "$VERSION_NUM" --app-version "$VERSION_NUM"
+          CHART_TGZ="/tmp/helm-pkg/modulo-${VERSION_NUM}.tgz"
+          helm push "$CHART_TGZ" "oci://ghcr.io/${IMAGE_NAMESPACE}/charts"
+
+      # -----------------------------------------------------------------------
+      # Dispatch Deploy + rc-validate (cut and recut)
+      # -----------------------------------------------------------------------
+      - name: Dispatch Deploy and rc-validate
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
+        shell: bash
+        run: |
+          gh workflow run "Deploy: Staging + Prod" --ref main -f force_deploy=true
+          gh workflow run rc-validate.yml --ref main -f rc_tag="${RC_TAG}"
+          echo "Dispatched Deploy (force) and rc-validate for ${RC_TAG}"
+
+      # -----------------------------------------------------------------------
+      # Update CHANGELOG.md and GitHub Release (promote only)
+      # -----------------------------------------------------------------------
+      - name: Update CHANGELOG.md and GitHub Release for GA
+        if: inputs.mode == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          GA_TAG: ${{ steps.promote.outputs.ga_tag }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          rc=0
+          NOTES_FILE="$(mktemp)"
+
+          # 1. Previous tag
+          git fetch origin --tags 2>/dev/null || true
+          PREV="$(git describe --tags --abbrev=0 "${GA_TAG}^" 2>/dev/null || true)"
+          if [ -z "$PREV" ]; then
+            PREV="$(git rev-list --max-parents=0 "$GA_TAG" | tail -n1)"
+          fi
+          echo "Changelog range: ${PREV}..${GA_TAG}"
+
+          # 2. Sync local main
+          if ! git fetch origin main || ! git checkout -B main origin/main; then
+            echo "::error::Could not sync local main to origin/main"
+            rc=1
+          fi
+
+          # 3. Generate CHANGELOG section + release notes
+          if [ "$rc" -eq 0 ]; then
+            if ! python3 scripts/generate_changelog.py \
+                --from "$PREV" --to "$GA_TAG" \
+                --version "$VERSION" --output CHANGELOG.md > "$NOTES_FILE"; then
+              echo "::warning::generate_changelog.py failed; falling back to minimal notes"
+              printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
+              rc=1
+            fi
+
+            # 4. Commit CHANGELOG.md
+            if [ "$rc" -eq 0 ]; then
+              git add CHANGELOG.md
+              if git diff --cached --quiet; then
+                echo "CHANGELOG.md already up to date for ${GA_TAG}"
+              elif git commit -m "changelog: ${GA_TAG}" && git push origin main; then
+                echo "CHANGELOG.md committed to main for ${GA_TAG}."
+              else
+                echo "::error::Failed to commit/push CHANGELOG.md"
+                rc=1
+              fi
+            fi
+          fi
+
+          if [ ! -s "$NOTES_FILE" ]; then
+            printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
+          fi
+
+          # 5. Update GitHub Release
+          if ! gh release edit "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
+            echo "::warning::GitHub Release update failed for ${GA_TAG}"
+          else
+            echo "GitHub Release updated for ${GA_TAG}."
+          fi
+
+          exit $rc
+
+  # ---------------------------------------------------------------------------
+  # Build and sign the release bundle (cut and recut).
+  #
+  # Delegated to the single implementation in bundle-release.yml (FAR-670 /
+  # FAR-675): it builds from the RC tag, writes the per-file SHA256SUMS and the
+  # per-file tarball checksum, and signs the manifest. It publishes nothing -
+  # the GitHub Release is created by publish-release below from its artefacts.
+  # ---------------------------------------------------------------------------
+  bundle:
+    name: Build and sign release bundle
+    needs: release
+    if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    uses: ./.github/workflows/bundle-release.yml
+    with:
+      version: ${{ inputs.version }}
+      rc_tag: ${{ needs.release.outputs.rc_tag }}
+      ref: ${{ needs.release.outputs.rc_tag }}
+    secrets:
+      BUNDLE_MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+      GH_TOKEN: ${{ github.token }}
+
+  # ---------------------------------------------------------------------------
+  # Create the GitHub Release from the bundle artefacts (cut and recut)
+  # ---------------------------------------------------------------------------
+  publish-release:
+    name: Create GitHub Release
+    needs: [release, bundle]
+    if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.rc_tag }}
+
+      - name: Download bundle artefacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bundle-artefacts-amd64
+          path: release-artefacts
+
+      - name: Create GitHub Release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          TAG: ${{ needs.release.outputs.rc_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Generate changelog and release notes
+          NOTES_FILE="$(mktemp)"
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          if [ -z "$PREV" ]; then
+            PREV="$(git rev-list --max-parents=0 "$TAG" | tail -n1)"
+          fi
+
+          python3 scripts/generate_changelog.py \
+            --from "$PREV" --to "$TAG" \
+            --version "$VERSION" \
+            --output CHANGELOG.md > "$NOTES_FILE"
+
+          ASSETS=(
+            "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz"
+            "release-artefacts/SHA256SUMS"
+            "release-artefacts/RELEASE_MANIFEST.json"
+            "release-artefacts/RELEASE_MANIFEST.json.sig"
+          )
+          for asset in "${ASSETS[@]}"; do
+            if [ ! -f "$asset" ]; then
+              echo "::error::Expected release asset ${asset} is missing - refusing to publish an incomplete release."
+              exit 1
+            fi
+          done
+
+          # NEVER --clobber an existing asset: a replaced release artifact
+          # invalidates every verify-against-the-manifest already downloaded.
+          # An existing release gets an upload (which fails loudly on an
+          # existing asset); a new one is created with its assets atomically.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::warning::release ${TAG} already exists - uploading assets without clobbering"
+            gh release upload "$TAG" "${ASSETS[@]}"
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file "$NOTES_FILE" \
+              "${ASSETS[@]}"
+          fi
+
+      - name: Push the bundle tag
+        # LAST: native-release-smoke.yml triggers on the bundle-v* tag push and
+        # downloads the GitHub Release assets, so the release must already exist.
+        env:
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_TAG="bundle-v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/${BUNDLE_TAG}" >/dev/null 2>&1; then
+            echo "::error::${BUNDLE_TAG} already exists - refusing to overwrite a published bundle tag."
+            exit 1
+          fi
+          git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
+          git push origin "$BUNDLE_TAG"
+          echo "Pushed $BUNDLE_TAG at $(git rev-parse --short HEAD)"
+
+  # ---------------------------------------------------------------------------
+  # SBOM production (runs for ALL modes)
+  # ---------------------------------------------------------------------------
+  produce-sbom:
+    name: Produce CycloneDX SBOM
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+
+      - name: Generate the CycloneDX SBOM
+        # --no-sync/--no-build + an exact pin (S8541/S8544): no dependency
+        # build scripts run and the one dependency is a verified version.
+        run: uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 python backend/scripts/generate-sbom.py --output sbom.json
+
+      - name: Verify the SBOM is valid CycloneDX
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-project --no-sync --no-build python - <<'PY'
+          import json, sys
+          with open("sbom.json", encoding="utf-8") as handle:
+              bom = json.load(handle)
+          if bom.get("bomFormat") != "CycloneDX":
+              sys.exit(f"sbom.json is not CycloneDX: bomFormat={bom.get('bomFormat')!r}")
+          components = bom.get("components") or []
+          if not components:
+              sys.exit("sbom.json has no components")
+          print(f"Valid CycloneDX SBOM: specVersion={bom.get('specVersion')} components={len(components)}")
+          PY
+
+      - name: Upload the SBOM artefact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-cyclonedx
+          path: sbom.json
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Build provenance attestations (non-dry-run only)
+  # ---------------------------------------------------------------------------
+  attest-artefacts:
+    name: Attest released artefacts
+    needs: produce-sbom
+    if: inputs.mode != 'dry-run'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the SBOM artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sbom-cyclonedx
+          path: release-artefacts
+
+      - name: Attest the file artefacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-artefacts/*

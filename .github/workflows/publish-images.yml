@@ -21,15 +21,11 @@ name: "Publish: Container images to GHCR"
 on:
   push:
     branches: [main]
-    tags:
-      - "v*"
   workflow_dispatch:
 
 concurrency:
   group: publish-images-${{ github.ref }}
-  # Cancel superseded branch builds, but never cancel a tag-driven release
-  # mid-push.
-  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -64,13 +60,10 @@ jobs:
           tags: |
             # Always tag with the short git SHA for traceability.
             type=sha,prefix=
-            # Tag :latest only on a stable version tag push (vX.Y.Z, not the
-            # vX.Y.Z-rcN release candidates), so :latest means the newest
-            # PUBLISHED RELEASE — never main's tip (which keeps type=sha).
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc') }}
-            # On tag pushes (v*), tag with the version (e.g. v1.2.3 → 1.2.3).
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            # Tag :latest on main branch pushes so :latest always means the
+            # newest main build. Versioned tags are published by
+            # release-unified.yml (cut/recut), not here.
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -133,15 +126,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}/backend
           tags: |
-            # Always tag with the short git SHA for traceability.
             type=sha,prefix=
-            # Tag :latest only on a stable version tag push (vX.Y.Z, not the
-            # vX.Y.Z-rcN release candidates), so :latest means the newest
-            # PUBLISHED RELEASE — never main's tip (which keeps type=sha).
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc') }}
-            # On tag pushes (v*), tag with the version (e.g. v1.2.3 → 1.2.3).
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -197,12 +183,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}/frontend
           tags: |
             type=sha,prefix=
-            # Tag :latest only on a stable version tag push (vX.Y.Z, not the
-            # vX.Y.Z-rcN release candidates), so :latest means the newest
-            # PUBLISHED RELEASE — never main's tip (which keeps type=sha).
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc') }}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
