@@ -4,7 +4,7 @@
 
     <div class="card p-6 space-y-6">
       <div class="flex items-center gap-4 pb-4 border-b border-border">
-        <div class="flex h-14 w-14 items-center justify-center rounded-full bg-primary text-xl font-bold text-primary-foreground">
+        <div class="flex h-14 w-14 items-center justify-center rounded-full bg-primary text-xl font-bold text-primary-foreground" aria-hidden="true">
           {{ userInitial }}
         </div>
         <div>
@@ -34,13 +34,14 @@
           {{ myTeamsError }}
           <button type="button" class="ml-2 underline" data-testid="my-profile-my-teams-retry" @click="loadMyTeams">{{ $t('views.SettingsTeamsView.retry') }}</button>
         </div>
-        <div v-else-if="myTeams.length === 0" class="py-2 text-sm text-muted-foreground">
-          {{ $t('views.MyProfileView.not_a_member_of_any_team') }}
-        </div>
+        <EmptyState
+          v-else-if="myTeams.length === 0"
+          :title="$t('views.MyProfileView.not_a_member_of_any_team')"
+        />
         <div v-else class="space-y-2">
           <div v-for="team in myTeams" :key="team.team_id" class="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2" data-testid="my-profile-my-team">
             <span class="font-medium">{{ team.team_name }}</span>
-            <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary-text">{{ $t('views.SettingsTeamsView.' + team.role) }}</span>
+            <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary-text">{{ teamRoleLabel(team.role) }}</span>
           </div>
         </div>
       </div>
@@ -117,9 +118,11 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import ChangePasswordForm from '../components/shared/ChangePasswordForm.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import Button from 'primevue/button'
 import { api } from '../lib/api/client'
@@ -170,6 +173,13 @@ function formatMemberSince(dateStr: string): string {
   const d = new Date(dateStr)
   if (Number.isNaN(d.getTime())) return '—'
   return formatDateShort(d)
+}
+
+const { t, te } = useI18n()
+
+function teamRoleLabel(role: string): string {
+  const key = `views.SettingsTeamsView.${role}`
+  return te(key) ? t(key) : role
 }
 
 async function loadProfile() {
