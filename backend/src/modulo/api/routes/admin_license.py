@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -109,6 +109,9 @@ def derive_licence_state(
     An unparseable one cannot be counted down and its capability cannot be
     established; it is logged and resolves to ``lapsed`` so the admin is told
     to install a valid key rather than shown a silently reassuring "active".
+    A naive ``expires_at`` (no UTC offset) is read as LOCAL time — the same
+    convention core's ``_expiry_failure`` uses for this key — and never
+    subtracted from an aware instant, which raised ``TypeError``.
     """
     if not expires_at:
         return None, LICENCE_STATE_ACTIVE
@@ -119,7 +122,13 @@ def derive_licence_state(
         logger.warning("license.expiry_unparseable value=%r", expires_at)
         return None, LICENCE_STATE_LAPSED
 
-    reference = now if now is not None else datetime.now(expiry.tzinfo or UTC)
+    # The reference MUST share the expiry's awareness: an aware ``now``
+    # subtracted from a naive ``expiry`` raises ``TypeError`` (a 500 on
+    # ``GET /api/v1/admin/license`` for a key whose ``expires_at`` carries no
+    # offset). ``datetime.now(expiry.tzinfo)`` is core's ``_expiry_failure``
+    # convention for the same key — a naive expiry means LOCAL time — so the
+    # two readers of one key cannot interpret it differently.
+    reference = now if now is not None else datetime.now(expiry.tzinfo)
     remaining = expiry - reference
     days_until_expiry = math.floor(remaining.total_seconds() / 86_400)
 

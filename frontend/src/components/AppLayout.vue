@@ -246,7 +246,9 @@ async function openLicenceKeyInput() {
     await router.push({ name: "settings-license" });
   }
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    const input = document.getElementById("settingslicenseview-field-1");
+    // The textarea's own ``data-testid`` — not PrimeVue's generated element
+    // id, which changes with the rendered field order.
+    const input = document.querySelector<HTMLElement>('[data-testid="license-key-input"]');
     if (input) {
       input.scrollIntoView?.({ behavior: "smooth", block: "center" });
       input.focus();

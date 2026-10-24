@@ -425,6 +425,57 @@ class TestDeriveLicenceState:
         assert days is None
         assert state == admin_license.LICENCE_STATE_ACTIVE
 
+    @pytest.mark.parametrize(
+        ("offset", "expected_days", "expected_state"),
+        [
+            pytest.param(
+                timedelta(days=LICENCE_GRACE_DAYS, minutes=1),
+                14,
+                admin_license.LICENCE_STATE_ACTIVE,
+                id="naive-active",
+            ),
+            pytest.param(
+                timedelta(days=LICENCE_GRACE_DAYS, minutes=-1),
+                13,
+                admin_license.LICENCE_STATE_RENEWAL_DUE,
+                id="naive-renewal-due-just-inside-14d",
+            ),
+            pytest.param(
+                timedelta(minutes=-1),
+                -1,
+                admin_license.LICENCE_STATE_GRACE,
+                id="naive-grace-1m-past",
+            ),
+            pytest.param(
+                -timedelta(days=LICENCE_GRACE_DAYS, minutes=-1),
+                -14,
+                admin_license.LICENCE_STATE_GRACE,
+                id="naive-grace-just-inside-14d-past",
+            ),
+            pytest.param(
+                -timedelta(days=LICENCE_GRACE_DAYS, minutes=1),
+                -15,
+                admin_license.LICENCE_STATE_LAPSED,
+                id="naive-lapsed-14d-plus-1m-past",
+            ),
+        ],
+    )
+    def test_naive_expiry_hits_the_same_boundaries(
+        self, offset: timedelta, expected_days: int, expected_state: str
+    ) -> None:
+        """An ``expires_at`` with no UTC offset must not shift any boundary.
+
+        This drives the PRODUCTION path (no ``now`` argument), where the naive
+        expiry used to be subtracted from ``datetime.now(UTC)`` and raised
+        ``TypeError`` — a 500 on ``GET /api/v1/admin/license``. The offsets hold
+        a one-minute margin so the clock advancing during the call cannot
+        straddle a boundary.
+        """
+        naive_now = datetime.now().replace(microsecond=0)
+        days, state = admin_license.derive_licence_state((naive_now + offset).isoformat())
+        assert days == expected_days
+        assert state == expected_state
+
     def test_unparseable_expiry_is_lapsed_and_logged(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level("WARNING", logger="modulo.api.routes.admin_license"):
             days, state = admin_license.derive_licence_state("not-a-date", now=_STATE_NOW)

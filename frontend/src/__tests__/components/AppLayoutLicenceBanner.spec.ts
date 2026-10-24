@@ -238,7 +238,7 @@ describe('AppLayout licence renewal notice', () => {
 
   it('takes an administrator from another route to the licence key input', async () => {
     const input = document.createElement('textarea')
-    input.id = 'settingslicenseview-field-1'
+    input.setAttribute('data-testid', 'license-key-input')
     document.body.appendChild(input)
 
     const wrapper = await mountShell()
@@ -257,7 +257,7 @@ describe('AppLayout licence renewal notice', () => {
     mockRoute.path = '/settings/license'
     mockRoute.fullPath = '/settings/license'
     const input = document.createElement('textarea')
-    input.id = 'settingslicenseview-field-1'
+    input.setAttribute('data-testid', 'license-key-input')
     document.body.appendChild(input)
 
     const wrapper = await mountShell()
@@ -279,7 +279,7 @@ describe('AppLayout licence renewal notice', () => {
     // resolves, so the shell must poll on later frames rather than focusing a
     // node that does not exist yet.
     const input = document.createElement('textarea')
-    input.id = 'settingslicenseview-field-1'
+    input.setAttribute('data-testid', 'license-key-input')
     document.body.appendChild(input)
 
     await vi.waitFor(() => {
@@ -298,7 +298,7 @@ describe('AppLayout licence renewal notice', () => {
       await wrapper.get('[data-testid="licence-renewal-install-action"]').trigger('click')
 
       const input = document.createElement('textarea')
-      input.id = 'settingslicenseview-field-1'
+      input.setAttribute('data-testid', 'license-key-input')
       document.body.appendChild(input)
 
       await vi.waitFor(() => {
