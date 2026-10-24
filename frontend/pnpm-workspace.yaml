@@ -231,3 +231,8 @@ minimumReleaseAgeExclude:
   - '@rollup/rollup-win32-x64-gnu@4.65.0'
   - '@rollup/rollup-win32-x64-msvc@4.65.0'
   - 'rollup@4.65.0'
+  - '@stryker-mutator/api@10.1.1'
+  - '@stryker-mutator/core@10.1.1'
+  - '@stryker-mutator/instrumenter@10.1.1'
+  - '@stryker-mutator/util@10.1.1'
+  - '@stryker-mutator/vitest-runner@10.1.1'
