@@ -18,6 +18,10 @@ on:
         description: "RC tag being released (e.g. v0.1.0-rc1)"
         type: string
         required: true
+      ref:
+        description: "Git ref to build from (the RC tag for cut/recut; main for a dry-run)"
+        type: string
+        required: true
     secrets:
       BUNDLE_MANIFEST_SIGNING_KEY:
         required: true
@@ -46,6 +50,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Build from the RC commit, never from whatever the caller's ref
+          # happens to be: a recut after main moved must publish artefacts that
+          # match the tagged/validated RC.
+          ref: ${{ inputs.ref }}
 
       - name: Assert bundle-versions.env majors match docker-compose.yml tags
         run: |
@@ -88,6 +97,9 @@ jobs:
           - arch: amd64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Build from the RC commit (see version-parity above).
+          ref: ${{ inputs.ref }}
 
       - name: Resolve pinned versions (scripts/bundle-versions.env)
         run: |
@@ -191,7 +203,7 @@ jobs:
           chmod 755 "$BUNDLE/launcher"
 
           echo "${{ inputs.rc_tag }}" > "$BUNDLE/RC_TAG"
-          echo "$GITHUB_REF_NAME" > "$BUNDLE/VERSION"
+          echo "bundle-v${VERSION_NUM}" > "$BUNDLE/VERSION"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
@@ -256,7 +268,6 @@ jobs:
       - name: Generate and sign the SIGNED release manifest
         env:
           MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
-          RC_TAG: ${{ inputs.rc_tag }}
         run: |
           set -euo pipefail
           if [ -z "${MANIFEST_SIGNING_KEY}" ]; then
@@ -278,7 +289,6 @@ jobs:
           build_root = os.path.join("..", "build")
           pg_version = os.environ.get("PG_DEB_VERSION", "unknown").split("+")[0]
           redis_version = os.environ.get("REDIS_DEB_VERSION", "unknown").split("+")[0]
-          rc_tag = os.environ["RC_TAG"]
 
           def digest_for(path):
               with open(path, "rb") as handle:

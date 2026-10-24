@@ -10,6 +10,12 @@ name: "Release: Unified Pipeline"
 #   recut    - Re-publish from existing RC tag (no version bump)
 #   promote  - Promote RC to GA (retag, update release, lift freeze)
 #   dry-run  - Build + verify everything, emit artefacts as CI artefacts, publish NOTHING
+#
+# The bundle is built by the reusable `.github/workflows/bundle-release.yml`
+# workflow (FAR-670/FAR-675), never by a second in-repo implementation: the
+# single source of truth for the tarball, SHA256SUMS and signed manifest is that
+# workflow, and this one only orchestrates it, pushes the bundle-v* tag and
+# creates the GitHub Release from the artefacts it uploads.
 
 on:
   workflow_dispatch:
@@ -75,6 +81,7 @@ jobs:
         # values are data, never code.
         env:
           VERSION: ${{ inputs.version }}
+          IMAGE_NAMESPACE: ${{ github.repository }}
         run: |
           set -euo pipefail
           for img in all-in-one backend frontend runner-opencode; do
@@ -82,22 +89,22 @@ jobs:
               all-in-one)
                 context="."
                 dockerfile="deploy/docker/Dockerfile.all-in-one"
-                image_name="${{ github.repository }}"
+                image_name="$IMAGE_NAMESPACE"
                 ;;
               backend)
                 context="backend"
                 dockerfile="backend/Dockerfile"
-                image_name="${{ github.repository }}/backend"
+                image_name="$IMAGE_NAMESPACE/backend"
                 ;;
               frontend)
                 context="frontend"
                 dockerfile="frontend/Dockerfile.prod"
-                image_name="${{ github.repository }}/frontend"
+                image_name="$IMAGE_NAMESPACE/frontend"
                 ;;
               runner-opencode)
                 context="."
                 dockerfile="deploy/docker/runner-opencode.Dockerfile"
-                image_name="${{ github.repository }}/runner-opencode"
+                image_name="$IMAGE_NAMESPACE/runner-opencode"
                 ;;
             esac
             echo "Building $img..."
@@ -110,11 +117,6 @@ jobs:
               --cache-from type=gha,scope=$img \
               --cache-to type=gha,mode=max,scope=$img
           done
-
-      - name: Rehearse bundle build (no sign/push)
-        run: |
-          echo "Bundle build rehearsal - scripts/build-bundle.sh would run here"
-          echo "Dry-run: bundle build, sign, and attest would execute but publish NOTHING"
 
       - name: Verify SBOM generation
         run: |
@@ -149,12 +151,26 @@ jobs:
             echo "| Step | Status |"
             echo "|---|---|"
             echo "| Container images (4) | Built locally, not pushed |"
-            echo "| Release bundle | Build rehearsed, not signed/pushed |"
+            echo "| Release bundle | Built and signed by the bundle rehearsal job, not published |"
             echo "| GitHub Release | Not created |"
             echo "| Helm chart | Not pushed to OCI |"
             echo "| Deploy / rc-validate | Not dispatched |"
             echo "| SBOM | Generated and uploaded as artefact |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  dry-run-bundle:
+    name: Rehearse bundle build (no publish)
+    if: inputs.mode == 'dry-run'
+    uses: ./.github/workflows/bundle-release.yml
+    with:
+      version: ${{ inputs.version }}
+      # A rehearsal tag that is never created or pushed. It only lands in the
+      # throwaway bundle's RC_TAG file; the checkout below uses main.
+      rc_tag: v${{ inputs.version }}-dry-run
+      ref: main
+    secrets:
+      BUNDLE_MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+      GH_TOKEN: ${{ github.token }}
 
   # ---------------------------------------------------------------------------
   # Cut / Recut / Promote: main release logic
@@ -170,6 +186,8 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    outputs:
+      rc_tag: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -194,6 +212,35 @@ jobs:
           if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::version must be semver X.Y.Z (e.g. 0.1.0); got '$VERSION'"
             exit 1
+          fi
+
+      # -----------------------------------------------------------------------
+      # Version bump (cut only). Runs BEFORE the RC tag is created so the
+      # tagged commit is the bumped one. Committed and pushed to main by the
+      # workflow, matching the header contract.
+      # -----------------------------------------------------------------------
+      - name: Bump version in SoT files and commit to main (cut only)
+        if: inputs.mode == 'cut'
+        # Mapped through the step env block (S7630): GitHub expressions inside a
+        # run block are interpolated before the shell parses the script, so
+        # values are data, never code.
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          CURRENT="$(python3 -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$CURRENT" = "$VERSION" ]; then
+            echo "backend/pyproject.toml is already at ${VERSION}; no bump required."
+          else
+            python3 scripts/bump-version.py --set "$VERSION"
+            git add backend/pyproject.toml frontend/package.json deploy/helm/modulo/Chart.yaml
+            if git diff --cached --quiet; then
+              echo "::error::bump-version.py changed nothing - refusing to tag an unbumped tree."
+              exit 1
+            fi
+            git commit -m "chore(release): bump version to ${VERSION}"
+            git push origin main
+            echo "Committed version bump to ${VERSION} on main."
           fi
 
       # -----------------------------------------------------------------------
@@ -227,10 +274,8 @@ jobs:
           git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
           git push origin release-freeze --force
 
-          # Kick off validation against the deployed RC (app.modulo.run).
-          gh workflow run rc-validate.yml --ref main -f rc_tag="$RC_TAG"
-          echo "Triggered rc-validate.yml for $RC_TAG."
-
+          # rc-validate.yml is dispatched once, by the consolidated
+          # "Dispatch Deploy and rc-validate" step after the artefacts publish.
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
@@ -257,10 +302,6 @@ jobs:
           # Force-move the freeze tag to the latest RC
           git tag -f -a release-freeze -m "Release freeze active (for $LATEST_RC)"
           git push origin release-freeze --force
-
-          # Re-trigger validation
-          gh workflow run rc-validate.yml --ref main -f rc_tag="$LATEST_RC"
-          echo "Triggered rc-validate.yml for $LATEST_RC (recut)."
 
           echo "rc_tag=$LATEST_RC" >> "$GITHUB_OUTPUT"
 
@@ -298,7 +339,17 @@ jobs:
           fi
           RC_SHA=$(git rev-parse "${LATEST_RC}^{commit}")
 
-          # Safety 4: GA may only be promoted from a VALIDATED RC.
+          # Safety 4: main must still be exactly the validated RC commit. Fetch
+          # live so a commit landing after checkout is caught - we promote the
+          # commit that was validated, never "whatever is on main now".
+          git fetch origin main
+          HEAD_SHA=$(git rev-parse origin/main)
+          if [ "$RC_SHA" != "$HEAD_SHA" ]; then
+            echo "::error::main HEAD (${HEAD_SHA}) is not the latest RC ${LATEST_RC} (${RC_SHA}). Re-cut or investigate before promoting."
+            exit 1
+          fi
+
+          # Safety 5: GA may only be promoted from a VALIDATED RC.
           VALIDATED_TAG="validated/${LATEST_RC}"
           if ! git rev-parse -q --verify "refs/tags/${VALIDATED_TAG}" >/dev/null 2>&1; then
             echo "::error::No validation marker ${VALIDATED_TAG} - rc-validate.yml has not recorded a successful validation for ${LATEST_RC}. Wait for (or re-run) validation before promoting."
@@ -322,18 +373,19 @@ jobs:
           echo "rc_tag=$LATEST_RC" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
-      # Version bump (cut mode only)
+      # RECUT: publish from the RC commit, not from main's current tip. A recut
+      # after main has moved must never tag main-HEAD artefacts with an older
+      # RC tag. (Cut already sits on the bumped commit the new tag points at.)
       # -----------------------------------------------------------------------
-      - name: Bump version in SoT files (cut only)
-        id: bump
-        if: inputs.mode == 'cut'
-        # Mapped through the step env block (S7630): GitHub expressions inside a
-        # run block are interpolated before the shell parses the script, so
-        # values are data, never code.
+      - name: Check out the RC commit for publishing (recut only)
+        if: inputs.mode == 'recut'
         env:
-          VERSION: ${{ inputs.version }}
+          RC_TAG: ${{ steps.recut.outputs.rc_tag }}
+        shell: bash
         run: |
-          python3 scripts/bump-version.py --set "$VERSION"
+          set -euo pipefail
+          git checkout --detach "$RC_TAG"
+          echo "Publishing from RC commit $(git rev-parse --short HEAD) tagged ${RC_TAG}"
 
       # -----------------------------------------------------------------------
       # Publish container images (cut and recut)
@@ -344,6 +396,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE_NAMESPACE: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
@@ -351,29 +405,29 @@ jobs:
           VERSION_NUM="${VERSION}"
 
           # Log in to GHCR
-          echo "${GH_TOKEN}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "${GH_TOKEN}" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
 
           for img in all-in-one backend frontend runner-opencode; do
             case "$img" in
               all-in-one)
                 context="."
                 dockerfile="deploy/docker/Dockerfile.all-in-one"
-                image_name="${{ github.repository }}"
+                image_name="$IMAGE_NAMESPACE"
                 ;;
               backend)
                 context="backend"
                 dockerfile="backend/Dockerfile"
-                image_name="${{ github.repository }}/backend"
+                image_name="$IMAGE_NAMESPACE/backend"
                 ;;
               frontend)
                 context="frontend"
                 dockerfile="frontend/Dockerfile.prod"
-                image_name="${{ github.repository }}/frontend"
+                image_name="$IMAGE_NAMESPACE/frontend"
                 ;;
               runner-opencode)
                 context="."
                 dockerfile="deploy/docker/runner-opencode.Dockerfile"
-                image_name="${{ github.repository }}/runner-opencode"
+                image_name="$IMAGE_NAMESPACE/runner-opencode"
                 ;;
             esac
 
@@ -389,78 +443,26 @@ jobs:
               --cache-from type=gha,scope=$img \
               --cache-to type=gha,mode=max,scope=$img
 
-            # Smoke checks
+            # Smoke checks. Each image only runs the checks it can actually
+            # satisfy, and a failure FAILS the job - never `|| true`.
             IMAGE="ghcr.io/$image_name:$TAG"
             echo "Smoke check: $IMAGE"
-            docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)" 2>/dev/null || true
-            if [ "$img" = "all-in-one" ] || [ "$img" = "frontend" ] || [ "$img" = "runner-opencode" ]; then
-              docker run --rm --entrypoint nginx "$IMAGE" -t 2>/dev/null || true
-            fi
+            case "$img" in
+              all-in-one)
+                docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+                docker run --rm --entrypoint nginx "$IMAGE" -t
+                ;;
+              backend)
+                docker run --rm --entrypoint python "$IMAGE" -c "import modulo; print(modulo.__file__)"
+                ;;
+              frontend)
+                docker run --rm --entrypoint nginx "$IMAGE" -t
+                ;;
+              runner-opencode)
+                docker run --rm --entrypoint opencode "$IMAGE" --version
+                ;;
+            esac
           done
-
-      # -----------------------------------------------------------------------
-      # Build, sign, and attest release bundle (cut and recut)
-      # -----------------------------------------------------------------------
-      - name: Build and sign release bundle
-        id: bundle
-        if: inputs.mode == 'cut' || inputs.mode == 'recut'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
-          RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
-          BUNDLE_MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${RC_TAG}"
-          VERSION_NUM="${VERSION}"
-          BUNDLE_TAG="bundle-v${VERSION_NUM}"
-
-          # Run the bundle build script
-          bash scripts/build-bundle.sh "$VERSION_NUM" "$TAG"
-
-          # Push bundle tag
-          git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
-          git push origin "$BUNDLE_TAG"
-
-          echo "bundle_tag=$BUNDLE_TAG" >> "$GITHUB_OUTPUT"
-
-      # -----------------------------------------------------------------------
-      # Create GitHub Release (cut and recut)
-      # -----------------------------------------------------------------------
-      - name: Create GitHub Release with assets
-        if: inputs.mode == 'cut' || inputs.mode == 'recut'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
-          RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
-          BUNDLE_TAG: ${{ steps.bundle.outputs.bundle_tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Generate changelog and release notes
-          NOTES_FILE="$(mktemp)"
-          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
-          if [ -z "$PREV" ]; then
-            PREV="$(git rev-list --max-parents=0 "$TAG" | tail -n1)"
-          fi
-
-          python3 scripts/generate_changelog.py \
-            --from "$PREV" --to "$TAG" \
-            --version "$VERSION_NUM" \
-            --output CHANGELOG.md > "$NOTES_FILE"
-
-          # Create GitHub Release with assets
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes-file "$NOTES_FILE" \
-            "release-artefacts/modulo-${VERSION_NUM}-linux-amd64.tar.gz" \
-            "release-artefacts/SHA256SUMS" \
-            "release-artefacts/RELEASE_MANIFEST.json" \
-            "release-artefacts/RELEASE_MANIFEST.json.sig" \
-            "release-artefacts/openapi.json" \
-            2>/dev/null || echo "::warning::Some release assets may be missing"
 
       # -----------------------------------------------------------------------
       # Push Helm chart to OCI registry (cut and recut)
@@ -471,18 +473,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE_NAMESPACE: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
           VERSION_NUM="${VERSION}"
 
           # Log in to GHCR for Helm
-          echo "${GH_TOKEN}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "${GH_TOKEN}" | helm registry login ghcr.io -u "$REGISTRY_USER" --password-stdin
 
           # Package and push chart
           helm package deploy/helm/modulo --destination /tmp/helm-pkg --version "$VERSION_NUM" --app-version "$VERSION_NUM"
           CHART_TGZ="/tmp/helm-pkg/modulo-${VERSION_NUM}.tgz"
-          helm push "$CHART_TGZ" oci://ghcr.io/${{ github.repository }}/charts
+          helm push "$CHART_TGZ" "oci://ghcr.io/${IMAGE_NAMESPACE}/charts"
 
       # -----------------------------------------------------------------------
       # Dispatch Deploy + rc-validate (cut and recut)
@@ -507,7 +511,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           GA_TAG: ${{ steps.promote.outputs.ga_tag }}
-          RC_TAG: ${{ steps.promote.outputs.rc_tag }}
         shell: bash
         run: |
           set -uo pipefail
@@ -532,7 +535,7 @@ jobs:
           if [ "$rc" -eq 0 ]; then
             if ! python3 scripts/generate_changelog.py \
                 --from "$PREV" --to "$GA_TAG" \
-                --version "$VERSION_NUM" --output CHANGELOG.md > "$NOTES_FILE"; then
+                --version "$VERSION" --output CHANGELOG.md > "$NOTES_FILE"; then
               echo "::warning::generate_changelog.py failed; falling back to minimal notes"
               printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
               rc=1
@@ -564,6 +567,115 @@ jobs:
           fi
 
           exit $rc
+
+  # ---------------------------------------------------------------------------
+  # Build and sign the release bundle (cut and recut).
+  #
+  # Delegated to the single implementation in bundle-release.yml (FAR-670 /
+  # FAR-675): it builds from the RC tag, writes the per-file SHA256SUMS and the
+  # per-file tarball checksum, and signs the manifest. It publishes nothing -
+  # the GitHub Release is created by publish-release below from its artefacts.
+  # ---------------------------------------------------------------------------
+  bundle:
+    name: Build and sign release bundle
+    needs: release
+    if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    uses: ./.github/workflows/bundle-release.yml
+    with:
+      version: ${{ inputs.version }}
+      rc_tag: ${{ needs.release.outputs.rc_tag }}
+      ref: ${{ needs.release.outputs.rc_tag }}
+    secrets:
+      BUNDLE_MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+      GH_TOKEN: ${{ github.token }}
+
+  # ---------------------------------------------------------------------------
+  # Create the GitHub Release from the bundle artefacts (cut and recut)
+  # ---------------------------------------------------------------------------
+  publish-release:
+    name: Create GitHub Release
+    needs: [release, bundle]
+    if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.rc_tag }}
+
+      - name: Download bundle artefacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bundle-artefacts-amd64
+          path: release-artefacts
+
+      - name: Create GitHub Release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          TAG: ${{ needs.release.outputs.rc_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Generate changelog and release notes
+          NOTES_FILE="$(mktemp)"
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          if [ -z "$PREV" ]; then
+            PREV="$(git rev-list --max-parents=0 "$TAG" | tail -n1)"
+          fi
+
+          python3 scripts/generate_changelog.py \
+            --from "$PREV" --to "$TAG" \
+            --version "$VERSION" \
+            --output CHANGELOG.md > "$NOTES_FILE"
+
+          ASSETS=(
+            "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz"
+            "release-artefacts/SHA256SUMS"
+            "release-artefacts/RELEASE_MANIFEST.json"
+            "release-artefacts/RELEASE_MANIFEST.json.sig"
+          )
+          for asset in "${ASSETS[@]}"; do
+            if [ ! -f "$asset" ]; then
+              echo "::error::Expected release asset ${asset} is missing - refusing to publish an incomplete release."
+              exit 1
+            fi
+          done
+
+          # NEVER --clobber an existing asset: a replaced release artifact
+          # invalidates every verify-against-the-manifest already downloaded.
+          # An existing release gets an upload (which fails loudly on an
+          # existing asset); a new one is created with its assets atomically.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::warning::release ${TAG} already exists - uploading assets without clobbering"
+            gh release upload "$TAG" "${ASSETS[@]}"
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file "$NOTES_FILE" \
+              "${ASSETS[@]}"
+          fi
+
+      - name: Push the bundle tag
+        # LAST: native-release-smoke.yml triggers on the bundle-v* tag push and
+        # downloads the GitHub Release assets, so the release must already exist.
+        env:
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_TAG="bundle-v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/${BUNDLE_TAG}" >/dev/null 2>&1; then
+            echo "::error::${BUNDLE_TAG} already exists - refusing to overwrite a published bundle tag."
+            exit 1
+          fi
+          git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
+          git push origin "$BUNDLE_TAG"
+          echo "Pushed $BUNDLE_TAG at $(git rev-parse --short HEAD)"
 
   # ---------------------------------------------------------------------------
   # SBOM production (runs for ALL modes)
