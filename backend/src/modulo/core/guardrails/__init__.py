@@ -1255,6 +1255,9 @@ def _over_budget_enforcement_outcome(
         _log.warning("guardrails.payload_over_budget", extra={"reason": reason, "seam": seam})
         return GuardrailInterceptionOutcome(
             payload=copy.deepcopy(payload),
+            # Muted definitions still run detection and retain evidence even
+            # when an active guardrail fails closed on the same payload.
+            results=[_mechanism_fail_result(d, reason) for d in definitions if d.is_muted],
             skipped=list(skipped),
             blocked=True,
             block_message=f"guardrail mechanism error at {seam}",
@@ -1520,7 +1523,7 @@ def non_conformant_blocking_guardrails(
     canonical_registered = _bare_registered_capability_map(registered)
     out: list[tuple[EvalDefinition, ConformanceDerivation]] = []
     for eval_def in definitions:
-        if _resolve_action(eval_def) != GuardrailAction.BLOCK:
+        if eval_def.is_muted or _resolve_action(eval_def) != GuardrailAction.BLOCK:
             continue
         required = eval_def.config.get("required_capabilities") or []
         if not required:

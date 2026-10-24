@@ -47,7 +47,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.guardrails import GuardrailAction, run_interception_pass, to_engine_definition
+from modulo.core.guardrails import GuardrailAction, _mechanism_fail_result, run_interception_pass, to_engine_definition
 
 _log = logging.getLogger(__name__)
 
@@ -159,7 +159,10 @@ async def run_pre_trigger_guardrail_pass(
     definitions = await _load_guardrail_definitions(session, org_id=org_id, pipeline_id=pipeline_id)
     if not definitions:
         return PreTriggerGuardrailOutcome(payload=dict(raw_payload))
-    any_guarding = any(d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
+    any_guarding = any(
+        not d.is_muted and d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
+        for d in definitions
+    )
     from modulo.core.eval_engine import EvalEngine
 
     try:
@@ -176,6 +179,11 @@ async def run_pre_trigger_guardrail_pass(
         if not detection_only and any_guarding:
             return PreTriggerGuardrailOutcome(
                 payload=dict(raw_payload),
+                results=[
+                    _mechanism_fail_result(d, "guardrail interception mechanism error")
+                    for d in definitions
+                    if d.is_muted
+                ],
                 blocked=True,
                 block_message="guardrail mechanism error at webhook intake",
             )

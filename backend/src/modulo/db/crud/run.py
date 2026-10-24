@@ -1428,7 +1428,7 @@ async def _run_guardrail_interception_pass(
     a pre-run safety gate, not a per-node policy evaluation).
     """
     from modulo.core.eval_engine import EvalEngine
-    from modulo.core.guardrails import run_interception_pass_async
+    from modulo.core.guardrails import _mechanism_fail_result, run_interception_pass_async
 
     start_wall = time.perf_counter()
     try:
@@ -1445,16 +1445,18 @@ async def _run_guardrail_interception_pass(
         _log.exception("guardrails.interception_error")
         if any_guarding:
             payload_out: dict[str, Any] = payload
-            results: list[Any] = []
-            redactions: list[Any] = []
             blocked = True
             block_message = "guardrail mechanism error at ingestion edge"
         else:
             payload_out = payload
-            results = []
-            redactions = []
             blocked = False
             block_message = ""
+        # Keep muted guardrail mechanism evidence regardless of whether an
+        # active sibling makes the outer interception path fail closed.
+        results = [
+            _mechanism_fail_result(d, "guardrail interception mechanism error") for d in guardrail_defs if d.is_muted
+        ]
+        redactions: list[Any] = []
         latency_ms = (time.perf_counter() - start_wall) * 1000
         _log.info(
             "guardrails.interception_latency_ms",

@@ -570,6 +570,13 @@ def test_conformance_block_action_fail_closed_absent_and_unknown():
 # ---------------------------------------------------------------------------
 
 
+def test_muted_block_guardrail_never_blocks_on_non_conformance():
+    """FAR-2028: muted enforcement definitions do not block conformance."""
+    guardrail = _guardrail(name="muted", required_capabilities=["read"])
+    guardrail.is_muted = True
+    assert not non_conformant_blocking_guardrails([guardrail], {"read": False})
+
+
 def test_non_conformant_profile_qualified_capability_cannot_satisfy_qualified_claim():
     """FAR-1615: a profile declaring the literal string ``github.read`` must
     NOT satisfy a type-qualified ``github.read`` claim at run creation.

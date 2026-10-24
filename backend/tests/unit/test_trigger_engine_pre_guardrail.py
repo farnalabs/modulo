@@ -90,6 +90,7 @@ def _make_guardrail_row(
     action: str,
     name: str = "no-secrets",
     config: dict[str, Any] | None = None,
+    is_muted: bool = False,
 ) -> MagicMock:
     row = MagicMock()
     row.id = uuid.uuid4()
@@ -102,7 +103,7 @@ def _make_guardrail_row(
     row.failure_behaviour = "warn"
     row.pass_threshold = None
     row.suite_id = None
-    row.is_muted = False
+    row.is_muted = is_muted
     return row
 
 
@@ -503,6 +504,68 @@ async def test_handle_webhook_mechanism_error_fails_closed_for_block() -> None:
 
     assert "mechanism error" in exc_info.value.detail
     assert _execute_call_count(session) == 4  # no dedup consumed
+
+
+async def test_handle_webhook_mechanism_error_preserves_muted_evidence_with_active_block() -> None:
+    """FAR-2028: active fallback blocking still retains muted evidence."""
+    trigger = _make_trigger()
+    session = _make_session(
+        trigger=trigger,
+        guardrail_rows=[
+            _make_guardrail_row(action="block", name="active"),
+            _make_guardrail_row(action="block", name="muted", is_muted=True),
+        ],
+    )
+
+    with (
+        patch(
+            "modulo.core.trigger_engine.pre_guardrail.run_interception_pass",
+            side_effect=RuntimeError("eval backend unavailable"),
+        ),
+        pytest.raises(GuardrailBlockedAtIntakeError),
+    ):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=None,
+            modulo_timestamp=str(int(time.time())),
+            snapshot_id=_SNAP,
+        )
+
+
+async def test_handle_webhook_mechanism_error_does_not_block_muted_block() -> None:
+    """FAR-2028: muted block definitions are not active fail-closed guards."""
+    trigger = _make_trigger()
+    session = _make_session(
+        trigger=trigger,
+        guardrail_rows=[_make_guardrail_row(action="block", is_muted=True)],
+    )
+    run_mock = MagicMock(id=uuid.uuid4())
+
+    with (
+        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
+        patch(
+            "modulo.core.trigger_engine.pre_guardrail.run_interception_pass",
+            side_effect=RuntimeError("eval backend unavailable"),
+        ),
+        patch("modulo.core.trigger_engine.time.time", return_value=int(time.time())),
+    ):
+        run, te, _ = await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=None,
+            modulo_timestamp=str(int(time.time())),
+            snapshot_id=_SNAP,
+        )
+
+    assert run is run_mock
+    assert te.validation_result == "accepted"
 
 
 async def test_handle_webhook_mechanism_error_advisory_for_observe() -> None:
