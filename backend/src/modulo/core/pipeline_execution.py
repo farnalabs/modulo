@@ -542,6 +542,16 @@ _STRANDED_REDISPATCH_TTL_MINUTES = 12
 # terminalisers under every configuration.
 _SAQ_ZERO_PROGRESS_SWEEP_MAX_ROWS = 25
 
+# FAR-1886 B1: the graceful worker-shutdown handback's registry code
+# (``worker_handoff.WORKER_LOST_ERROR_CODE``). Its terminal path writes no
+# sandbox attempt marker, so the run-detail triage surface was empty for the
+# exact class it exists to explain. Defined here as a literal (not imported
+# from ``worker_handoff``, which imports THIS module) and compared exactly:
+# the legacy ``worker_lost`` spelling belongs to a different class (its alias
+# is ``harness.dispatch_failed``, not worker-loss). Defined in the constants
+# block so the worker-loss classifiers below share one spelling.
+_WORKER_LOST_TRIAGE_ERROR_CODE = "harness.worker_lost"
+
 # FAR-2102: the derived-cost pass that runs AFTER the sweep's terminal UPDATEs
 # commit. The raw UPDATEs record no cost columns, so a run that occupied a
 # sandbox for hours reached the ledger as ``NULL``; the pass re-reads each
@@ -556,7 +566,7 @@ _SAQ_ZERO_PROGRESS_SWEEP_MAX_ROWS = 25
 # a wedge spanning the whole age bound, so crediting it would OVERSTATE sandbox
 # spend (the FAR-1993 rationale; that class is booked from a heartbeat
 # liveness window on the reconcile path, which this sweep does not compute).
-_SWEEP_DERIVED_COST_ERROR_CODES: frozenset[str] = frozenset({"worker_lost", "harness.worker_lost"})
+_SWEEP_DERIVED_COST_ERROR_CODES: frozenset[str] = frozenset({"worker_lost", _WORKER_LOST_TRIAGE_ERROR_CODE})
 
 # Per-tick cap on that pass. Each booking opens its own fail-open session (RLS
 # scope + bounded row lock + re-read + finalize), so a mass worker-loss backlog
@@ -1426,7 +1436,7 @@ _ATTEMPT_WORKER_LOST_CODES: frozenset[str] = frozenset(
     {
         EXECUTOR_HEARTBEAT_LOST_ERROR_CODE,
         "harness.executor_heartbeat_lost",
-        "harness.worker_lost",
+        _WORKER_LOST_TRIAGE_ERROR_CODE,
         "worker_lost",
         "harness.dispatch_failed",
         "never_dispatched",
@@ -1660,16 +1670,6 @@ async def mark_complete(
             org_id,
             terminal_reason=ATTEMPT_TERMINAL_REASON_COMPLETED,
         )
-
-
-# FAR-1886 B1: the graceful worker-shutdown handback's registry code
-# (``worker_handoff.WORKER_LOST_ERROR_CODE``). Its terminal path writes no
-# sandbox attempt marker, so the run-detail triage surface was empty for the
-# exact class it exists to explain. Defined here as a literal (not imported
-# from ``worker_handoff``, which imports THIS module) and compared exactly:
-# the legacy ``worker_lost`` spelling belongs to a different class (its alias
-# is ``harness.dispatch_failed``, not worker-loss).
-_WORKER_LOST_TRIAGE_ERROR_CODE = "harness.worker_lost"
 
 
 async def _persist_worker_lost_triage(

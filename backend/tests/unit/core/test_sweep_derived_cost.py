@@ -446,3 +446,86 @@ class TestSweepBooksDerivedCost:
         assert result["derived_cost_attempted"] == 1
         assert result["derived_cost_deferred"] == 1
         assert booking.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Booking guards — nothing is fabricated, and cancellation is never swallowed
+# ---------------------------------------------------------------------------
+
+
+class TestDerivedCostGuards:
+    async def test_missing_run_is_logged_and_skipped(
+        self,
+        db_engine: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A row deleted between the sweep and the booking pass is left alone."""
+        monkeypatch.setattr(
+            pe,
+            "async_sessionmaker",
+            lambda *a, **k: async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False),
+        )
+        booking = AsyncMock()
+        monkeypatch.setattr("modulo.core.cost_controller.finalize.finalize_worker_lost_run", booking)
+
+        with caplog.at_level(logging.INFO, logger="modulo.core.pipeline_execution"):
+            await pe._attribute_swept_run_derived_cost(db_engine, uuid.uuid4(), ORG_ID)
+
+        assert "swept_cost_run_missing" in caplog.text
+        booking.assert_not_awaited()
+
+    async def test_a_row_a_later_writer_relabelled_is_not_priced(
+        self,
+        db_session: AsyncSession,
+        db_engine: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Only the sweep's own worker-lost codes qualify — never fabricate spend."""
+        relabelled = _seed_orphan(name="-relabelled", status="failed")
+        relabelled.error_code = "never_dispatched"
+        relabelled.error_detail = "synthetic"
+        db_session.add(relabelled)
+        await db_session.commit()
+
+        monkeypatch.setattr(
+            pe,
+            "async_sessionmaker",
+            lambda *a, **k: async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False),
+        )
+        booking = AsyncMock()
+        monkeypatch.setattr("modulo.core.cost_controller.finalize.finalize_worker_lost_run", booking)
+
+        await pe._attribute_swept_run_derived_cost(db_engine, relabelled.id, ORG_ID)
+
+        booking.assert_not_awaited()
+        await db_session.refresh(relabelled)
+        assert relabelled.total_cost_usd is None
+
+    async def test_cancelled_error_is_reraised(
+        self,
+        db_session: AsyncSession,
+        db_engine: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Worker shutdown is not ours to swallow — only ordinary failures are."""
+        import asyncio
+
+        orphan = _seed_orphan(name="-cancelled", sandbox_id="sbx-1", status="failed")
+        orphan.error_code = "harness.worker_lost"
+        orphan.error_detail = "synthetic"
+        db_session.add(orphan)
+        await db_session.commit()
+
+        monkeypatch.setattr(
+            pe,
+            "async_sessionmaker",
+            lambda *a, **k: async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False),
+        )
+        monkeypatch.setattr(
+            "modulo.core.cost_controller.finalize.finalize_worker_lost_run",
+            AsyncMock(side_effect=asyncio.CancelledError()),
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await pe._attribute_swept_run_derived_cost(db_engine, orphan.id, ORG_ID)
