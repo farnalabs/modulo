@@ -146,22 +146,30 @@ _record_crash() {
 echo "=== Bootstrap: fix DATABASE_URL and create alembic_version ==="
 python3 /app/deploy/fly/bootstrap_db.py
 
+# Never print a connection URL's password. Match on the `://user:pw@` shape so
+# driver-qualified schemes (postgresql+asyncpg://, postgresql+psycopg://) are
+# covered too: matching on the bare `postgres(ql)://` prefix missed them and put
+# the staging DB password in the captured deploy logs (2026-10-23 outage).
+redact_url_credentials() {
+  sed -E 's#(://[^:/@]+:)[^@]*@#\1***@#'
+}
+
 if [[ -f /tmp/database_url.env ]]; then
   FIXED_URL=$(cat /tmp/database_url.env)
   export DATABASE_URL="$FIXED_URL"
-  echo "DATABASE_URL fixed: $(echo $DATABASE_URL | cut -c1-80)..."
+  echo "DATABASE_URL fixed: $(printf '%s' "$DATABASE_URL" | redact_url_credentials | cut -c1-80)..."
 fi
 
 if [[ -f /tmp/database_admin_url.env ]]; then
   ADMIN_URL=$(cat /tmp/database_admin_url.env)
   export DATABASE_ADMIN_URL="$ADMIN_URL"
-  echo "DATABASE_ADMIN_URL fixed: $(echo $DATABASE_ADMIN_URL | cut -c1-80)..."
+  echo "DATABASE_ADMIN_URL fixed: $(printf '%s' "$DATABASE_ADMIN_URL" | redact_url_credentials | cut -c1-80)..."
 fi
 
 if [[ -f /tmp/system_database_url.env ]]; then
   SYSTEM_URL=$(cat /tmp/system_database_url.env)
   export MODULO_SYSTEM_DATABASE_URL="$SYSTEM_URL"
-  echo "MODULO_SYSTEM_DATABASE_URL fixed: $(echo $SYSTEM_URL | cut -c1-80)..."
+  echo "MODULO_SYSTEM_DATABASE_URL fixed: $(printf '%s' "$SYSTEM_URL" | redact_url_credentials | cut -c1-80)..."
 fi
 
 echo "=== Bootstrapping modulo_app role ==="

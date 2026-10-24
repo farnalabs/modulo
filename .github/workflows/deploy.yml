@@ -1789,8 +1789,12 @@ jobs:
             # Bounded: a log fetch must never add another multi-minute wait.
             timeout 90 fly logs --app staging-modulo --machine "$MID" --no-tail > "$OUT" 2>&1 || true
             # The entrypoint prints the DATABASE_URL prefix; redact credentials
-            # before the capture is echoed or persisted.
-            sed -i -E 's#(postgres(ql)?://[^:/@]+:)[^@]*@#\1***@#g; s#(redis(s)?://[^:/@]+:)[^@]*@#\1***@#g' "$OUT" 2>/dev/null || true
+            # before the capture is echoed or persisted. Match on the
+            # `://user:pw@` shape, not a bare `postgres(ql)://` prefix, so
+            # driver-qualified schemes (postgresql+asyncpg://,
+            # postgresql+psycopg://) are redacted too - the prefix form leaked
+            # a staging DB password into the deploy artifact (2026-10-23).
+            sed -i -E 's#(://[^:/@]+:)[^@]*@#\1***@#g' "$OUT" 2>/dev/null || true
             echo "----- ${GROUP} machine ${MID} (${STATE}) log (tail) -----"
             tail -n 80 "$OUT" || true
             echo "----- end ${GROUP} machine ${MID} -----"
@@ -3041,8 +3045,12 @@ jobs:
             # Bounded: a log fetch must never add another multi-minute wait.
             timeout 90 fly logs --app app-modulo --machine "$MID" --no-tail > "$OUT" 2>&1 || true
             # The entrypoint prints the DATABASE_URL prefix; redact credentials
-            # before the capture is echoed or persisted.
-            sed -i -E 's#(postgres(ql)?://[^:/@]+:)[^@]*@#\1***@#g; s#(redis(s)?://[^:/@]+:)[^@]*@#\1***@#g' "$OUT" 2>/dev/null || true
+            # before the capture is echoed or persisted. Match on the
+            # `://user:pw@` shape, not a bare `postgres(ql)://` prefix, so
+            # driver-qualified schemes (postgresql+asyncpg://,
+            # postgresql+psycopg://) are redacted too - the prefix form leaked
+            # a staging DB password into the deploy artifact (2026-10-23).
+            sed -i -E 's#(://[^:/@]+:)[^@]*@#\1***@#g' "$OUT" 2>/dev/null || true
             echo "----- ${GROUP} machine ${MID} (${STATE}) log (tail) -----"
             tail -n 80 "$OUT" || true
             echo "----- end ${GROUP} machine ${MID} -----"
