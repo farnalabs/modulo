@@ -128,7 +128,7 @@ Each site is assigned **exactly one** category:
 
 ---
 
-## 3. SQLAlchemy `.with_for_update` inventory (62 lock sites; 63 rows incl. lockless D4)
+## 3. SQLAlchemy `.with_for_update` inventory (63 lock sites; 64 rows incl. lockless D4)
 
 `lock` = the effective PostgreSQL strength (`with_for_update()` → `FOR UPDATE`;
 `key_share=True` → `FOR NO KEY UPDATE`; `read=True` → `FOR SHARE`). `txn` = transaction the
@@ -216,7 +216,7 @@ unrelated writer or is held across non-lock work.
 | C22 | `core/assistant/context_source_service.py:138` | `_upsert_context_source` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the branch) | Org-scoped assistant-context-source upsert. | no. |
 | C23 | `core/assistant/context_source_service.py:148` | `_upsert_context_source` | FOR UPDATE | caller txn, **bounded** (same FAR-1825 bound as C22 – one statement precedes both branches) | User-scoped assistant-context-source upsert (per-user variant of C22). | no. |
 
-### D – operational / other (13 lock sites; D4 retained as a none-row)
+### D – operational / other (14 lock sites; D4 retained as a none-row)
 
 > **D7, D9 and D14 have been removed.** **FAR-1822** removed D7 (the `cron_helpers`
 > scheduled-report lock – PR #1842 merged 2026-10-15; the stamp-and-commit path now
@@ -242,6 +242,7 @@ unrelated writer or is held across non-lock work.
 | D15 | `core/cron_helpers.py:5849` | `_fail_node_deadline_run` | FOR UPDATE (`session.get`) | caller txn, **bounded** by the reconcile org transaction (`cron_helpers.py:9305`, FAR-1601) | FAR-1999 node-deadline reaper: locks the run row, re-checks every premise on the locked row, then terminal-fails it. Background reconciliation only (no request path). | no – single-run fence. |
 | D16 | `core/cron_helpers.py:6009` | `_write_terminal_triage_marker` | FOR UPDATE | own savepoint inside the caller's sweep txn, **bounded** by `_TERMINAL_TRIAGE_PERSIST_TIMEOUT` (`asyncio.wait_for`) and the reconcile org transaction's bound (`cron_helpers.py:9305`) | FAR-704-family terminal-triage marker: locked read-merge-write of the run's triage marker so the delete-absent half never drops a concurrent writer's key (same contract as `node_runner._write_raw_output_marker`). Best-effort observability only. | no – single-run marker fence. |
 | D17 | `core/cron_helpers.py:7021` | `_terminalize_aged_nodeless_zombies` | FOR UPDATE (`session.get`) | caller txn, **bounded** by the reconcile org transaction (same bound at `cron_helpers.py:9305`) | FAR-1329/FAR-1914 age-bound nodeless router: locks the run row so the premise re-check (`_locked_row_disproves_nodeless_premise`) and the terminal write share ONE lock; defers (fails closed) when the locked row is unreadable. Background reconciliation only. | no – single-run fence. |
+| D18 | `core/eval/finding_resolver.py:244` | `apply_mute_policy` | FOR UPDATE | caller txn | FAR-2028 serialises concurrent mute-policy evaluations for one Eval definition while the acceptance-rate read and muted-state transition execute in the same transaction. This is an eval/guardrail background and API service path; the caller owns the transaction. | no. |
 
 > **D9 is retired (FAR-1833).** The org spend-ceiling gate
 > (`core/cost_controller/finalize.py::_apply_spend_ceiling_gate`) no longer takes
@@ -275,17 +276,18 @@ unrelated writer or is held across non-lock work.
 | A – pipeline/trigger serialisation | 19 | 1 (R2) | **20** |
 | B – credential rotation | 10 | 0 | **10** |
 | C – entity CRUD | 20 | 0 | **20** |
-| D – operational/other | 13 | 1 (R1) | **14** |
-| **Total** | **62** | **2** | **64** |
+| D – operational/other | 14 | 1 (R1) | **15** |
+| **Total** | **63** | **2** | **65** |
 
 These are the §3 counts as they stand on this branch: the FAR-1801 authoring snapshot
 with D7 retired by FAR-1822, C1/C2/C3/D14 removed by FAR-1832, D9 retired by
 FAR-1833, **D4's row lock removed by FAR-1823**, and the four post-cutover sites added by other work (A19
 `_replace_pipeline_graph_txn`, D15 `_fail_node_deadline_run`, D16
-`_write_terminal_triage_marker`, D17 `_terminalize_aged_nodeless_zombies`).
-FAR-1825 re-ran §1's commands against the branch tip and reads the same **62**
-SQLAlchemy sites (58 `.with_for_update(` + 4 `with_for_update=`), so the inventory
-and the measurement agree when D4's removed lock is accounted for; see §9 and §10.
+`_write_terminal_triage_marker`, D17 `_terminalize_aged_nodeless_zombies`, and D18
+`core/eval/finding_resolver.py::apply_mute_policy` (FAR-2028).
+FAR-1825 re-ran §1's commands against the branch tip and reads the same **63**
+SQLAlchemy sites (59 `.with_for_update(` + 4 `with_for_update=`), so the inventory
+and the measurement agree when D4's removed lock and D18's new lock are accounted for; see §9 and §10.
 
 Distinct **locked tables** (by frequency): `runs` (heaviest – A5, A6, A7, A14, A15, A18, R2, D10, D15, D16, D17, R1), `organisations` (C5, C6-generic-fallback, **D1–D3**; D4 is now "none"), `pipelines` (A1–A4, A10–A13, A16, A17, A19), `accounts` (B9, C8), `token_families` (B4–B6), `ScheduledReport` (D8), plus
 single-use rows for credentials/entities.
@@ -545,10 +547,10 @@ shipped behaviour. The corrections:
     measured on this branch – **58** SQLAlchemy call sites, **60** total row-lock sites.
     §3/§5/§7 carry the post-change shape; removed row IDs are left as gaps so cross-references
     stay stable.
-    *Post-cutover re-derivation (FAR-1825):* four more sites landed by other work after
-    that cutover (A19 and the D15–D17 trio in `cron_helpers`), so the branch tip now
-    measures **59** `.with_for_update(` sites, **63** SQLAlchemy call sites, **65** total
-    row-lock sites – see the re-derivation block in §1 and the FAR-1825 section below.
+*Post-cutover re-derivation (FAR-1825):* five more sites landed by other work after
+     that cutover (A19, D15–D17 in `cron_helpers`, and D18 in `core/eval/finding_resolver.py`), so the branch tip now
+     measures **59** `.with_for_update(` sites, **63** SQLAlchemy call sites, **65** total
+     row-lock sites – see the re-derivation block in §1 and the FAR-1825 section below.
 
     **Note on D4:** FAR-1823 removed D4's `FOR UPDATE` lock. The `.with_for_update(` count
     including D4 is 59; excluding D4 it is 58. The SQLAlchemy total including D4 is 63;
@@ -603,7 +605,7 @@ re-ran §1's two commands against the branch tip before changing anything:
 | raw locking `FOR UPDATE` | **2** | **2** |
 | **total** | **65** | **64** |
 
-The +4 since the FAR-1833 snapshot are sites added by unrelated work, all outside
+The +5 since the FAR-1833 snapshot are sites added by unrelated work, all outside
 category C: **A19** `api/mcp_server.py::_replace_pipeline_graph_txn` (already self-bounds
 with `set_mutation_row_lock_timeout`, FAR-1361); **D15**
 `core/cron_helpers.py::_fail_node_deadline_run` (bounded by the reconcile org transaction
@@ -611,12 +613,14 @@ at `cron_helpers.py:9305`, FAR-1601); **D16**
 `core/cron_helpers.py::_write_terminal_triage_marker` (the `.with_for_update()` at
 `6009`, a best-effort marker write inside the reconcile sweep's bounded transaction);
 and **D17** `core/cron_helpers.py::_terminalize_aged_nodeless_zombies` (the FAR-1914
-locked re-read at `7021`, same reconcile transaction bound). Category C remains exactly
+locked re-read at `7021`, same reconcile transaction bound); and **D18**
+`core/eval/finding_resolver.py::apply_mute_policy` (FAR-2028). Category C remains exactly
 **20** sites.
 
 **Post-FAR-1823 (D4 excluded):** the `.with_for_update(` count is 58, SQLAlchemy
 total is 62, and total row-lock sites is 64. D4 (`export_org_data`) is now "none"
-in §3, so it is not counted as a row-lock site.
+in §3, so it is not counted as a row-lock site. D18 is the additional FAR-2028 lock
+listed in §3, bringing the current branch-tip totals to 59, 63, and 65 respectively.
 
 **Disposition of every category-C site** (the `txn` column in §3 carries the per-row note):
 

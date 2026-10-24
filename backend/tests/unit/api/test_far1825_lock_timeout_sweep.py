@@ -113,6 +113,7 @@ _ROW_LOCK_FILES: frozenset[str] = frozenset(
         "auth/oauth.py",
         "core/assistant/context_source_service.py",
         "core/audit_logger/__init__.py",
+        "core/eval/finding_resolver.py",
         "core/cost_controller/__init__.py",
         "core/cost_controller/finalize.py",
         "core/cron_helpers.py",
