@@ -668,6 +668,102 @@ jobs:
           : > /tmp/migration_collision_prs.txt
           : > /tmp/migration_collision_details.txt
 
+          # --- FAR-2107: multi-head (down_revision) gate ----------------------
+          # The prefix gate above only catches two migrations claiming ONE
+          # numeric prefix. It does NOT catch a second head at a DIFFERENT
+          # prefix: on 2026-10-22 main held 0327_runs_execution_attempt_count
+          # with down_revision "0325_run_seam_coverage", and a PR added
+          # 0326_evidence_index_aggregate_indexes with the SAME down_revision.
+          # Both prefixes were free, so the gate accepted the PR; the combined
+          # batch then carried TWO Alembic heads, and the PR was only isolated
+          # after a full CI cycle ("Dropping from the batch (migration-head
+          # offenders): 2201"). A migration that does not chain onto main's
+          # CURRENT head forks the graph exactly as surely as a prefix clash,
+          # and is just as fatal (`alembic upgrade head` fails at startup).
+          #
+          # So: compute main's single head from its own migration files, then
+          # require the FIRST migration a PR adds to point its down_revision at
+          # that head. Anything else is excluded exactly like a prefix
+          # collision - the PR stays OPEN and the notification step below asks
+          # the Branch Fixer to renumber/re-chain it. If main does not have
+          # exactly one head, the check is SKIPPED with a loud warning: an
+          # already-broken main must not block every migration PR.
+          #
+          # Scope note: compared against MAIN's head only, never against the
+          # revisions an earlier PR in this same batch added. Judging a PR
+          # against another batch PR's migration would false-positive on a
+          # legitimate chain (PR B chained onto PR A is correct but does not
+          # point at main's head). That residual same-batch case is still
+          # caught - later, and more expensively - by the post-merge heads
+          # gate's drop-and-rebuild, which must therefore stay in place.
+
+          # First string literal of a module-level `revision` / `down_revision`
+          # assignment in migration-file content. Handles an optional type
+          # annotation (`revision: str = "x"`, `down_revision: str | None = ...`),
+          # both quote styles, and the tuple form a merge migration uses (its
+          # FIRST parent is returned). `None` or a missing assignment -> "".
+          mig_first_literal() {
+            local field="$1" content="$2" line value out
+            line=$(printf '%s\n' "$content" | grep -m1 -E "^[[:space:]]*${field}([[:space:]]*:[^=]*)?[[:space:]]*=" || true)
+            if [ -z "$line" ]; then
+              return 0
+            fi
+            value=${line#*=}
+            out=$(printf '%s\n' "$value" | grep -oE '"[^"]*"' | tr -d '"' || true)
+            if [ -z "$out" ]; then
+              out=$(printf '%s\n' "$value" | grep -oE "'[^']*'" | tr -d "'" || true)
+            fi
+            printf '%s' "${out%%$'\n'*}"
+            return 0
+          }
+
+          # Main's migration graph: the revisions it defines, plus the set of
+          # revisions that have a child. Exactly one childless revision is the
+          # head; duplicates, unparseable files or several childless revisions
+          # all mean "main's graph is not a clean single chain" -> skip.
+          declare -A main_seen=()
+          declare -A main_has_child=()
+          MAIN_GRAPH_PROBLEM=""
+          while IFS= read -r fname; do
+            [ -z "$fname" ] && continue
+            content=$(git show "main:${fname}" 2>/dev/null || true)
+            if [ -z "$content" ]; then
+              MAIN_GRAPH_PROBLEM="could not read ${fname} from main"
+              break
+            fi
+            rev=$(mig_first_literal revision "$content")
+            if [ -z "$rev" ]; then
+              MAIN_GRAPH_PROBLEM="${fname} on main has no parseable revision"
+              break
+            fi
+            if [ -n "${main_seen[$rev]+x}" ]; then
+              MAIN_GRAPH_PROBLEM="revision ${rev} is defined by more than one file on main"
+              break
+            fi
+            down=$(mig_first_literal down_revision "$content")
+            main_seen["$rev"]=1
+            if [ -n "$down" ]; then main_has_child["$down"]=1; fi
+          done < <(git ls-tree --name-only main -- "$MIG_DIR/" 2>/dev/null | grep '\.py$' || true)
+
+          MAIN_HEAD=""
+          if [ -z "$MAIN_GRAPH_PROBLEM" ]; then
+            main_heads=()
+            for rev in "${!main_seen[@]}"; do
+              [ -n "${main_has_child[$rev]+x}" ] && continue
+              main_heads+=("$rev")
+            done
+            if [ "${#main_heads[@]}" -eq 1 ]; then
+              MAIN_HEAD="${main_heads[0]}"
+            else
+              MAIN_GRAPH_PROBLEM="main's migration graph has ${#main_heads[@]} head(s) (${main_heads[*]:-none}), not exactly 1"
+            fi
+          fi
+          if [ -n "$MAIN_HEAD" ]; then
+            echo "Migration multi-head gate active: main's head is '$MAIN_HEAD'."
+          else
+            echo "::warning::Migration multi-head gate SKIPPED - ${MAIN_GRAPH_PROBLEM}. A PR that forks the migration graph at a free numeric prefix will not be excluded pre-merge this pass; the post-merge heads gate still isolates it."
+          fi
+
           while IFS= read -r pr; do
             NUM=$(echo "$pr" | jq -r '.number')
             TITLE=$(echo "$pr" | jq -r '.title')
@@ -771,9 +867,109 @@ jobs:
               esac
             done < <(git diff --name-status "main...pr-${NUM}" -- "$MIG_DIR" 2>/dev/null || true)
 
+            # --- FAR-2107: multi-head check on what THIS PR adds ---------------
+            # A free numeric prefix is not enough: the added migration must also
+            # chain onto main's current head, or combining the PR with main (and
+            # the rest of the batch) leaves two childless revisions - two Alembic
+            # heads - and `alembic upgrade head` fails at startup. This is the
+            # #2201 observation: a brand-new 0326 whose down_revision pointed at
+            # 0325 while main's head was already 0327. The prefix gate accepted
+            # it and the batch was only cleaned up after a full CI cycle.
+            #
+            # Only ADDITIONS (and a rename landing in the migration dir) are
+            # considered: they are the only shapes that can introduce a fork. A
+            # modification of an existing migration keeps its revision and its
+            # slot in the chain, and a deletion only shortens it.
+            #
+            # A PR may legitimately add a CHAIN of migrations, so the check is on
+            # the first link only: the revision whose down_revision is not another
+            # revision the same PR adds. More than one such link means the PR
+            # forks the graph by itself, and no link at all means the added
+            # files' down_revisions form a cycle - both are flagged.
+            if [ -n "$MAIN_HEAD" ]; then
+              unset added_rev added_down 2>/dev/null || true
+              declare -A added_rev=()
+              declare -A added_down=()
+              added_order=()
+              multihead_collides=false
+              while IFS=$'\t' read -r status path extra; do
+                case "$status" in
+                  A) new_path="$path" ;;
+                  R*)
+                    new_path="$extra"
+                    # A rename of a migration main ALREADY has only moves a
+                    # revision that is already in the chain - it cannot fork the
+                    # graph, and judging it against main's head would exclude a
+                    # harmless filename fix. A rename that brings a file INTO
+                    # the migration dir is an addition, and is checked.
+                    case "$path" in
+                      "$MIG_DIR"/*)
+                        if git cat-file -e "main:${path}" 2>/dev/null; then
+                          continue
+                        fi
+                        ;;
+                    esac
+                    ;;
+                  *) continue ;;
+                esac
+                [ -z "$new_path" ] && continue
+                case "$new_path" in
+                  "$MIG_DIR"/*) : ;;
+                  *) continue ;;
+                esac
+                content=$(git show "pr-${NUM}:${new_path}" 2>/dev/null || true)
+                rev=$(mig_first_literal revision "$content")
+                down=$(mig_first_literal down_revision "$content")
+                if [ -z "$rev" ]; then
+                  # Cannot show it chains onto main's head -> treat as a collision
+                  # (fail closed: the PR stays open and the fixer can fix the file)
+                  # rather than letting an unparseable migration through.
+                  multihead_collides=true
+                  new_base=$(basename "$new_path")
+                  echo "    MIGRATION MULTI-HEAD: PR #$NUM adds $new_base but its revision could not be parsed - cannot show it chains onto main's head '$MAIN_HEAD'"
+                  echo "PR #$NUM: adds $new_base, whose revision could not be parsed, so it cannot be shown to chain onto main's head '$MAIN_HEAD'" >> /tmp/migration_collision_details.txt
+                  continue
+                fi
+                added_rev["$rev"]="$new_path"
+                added_down["$rev"]="$down"
+                added_order+=("$rev")
+              done < <(git diff --name-status "main...pr-${NUM}" -- "$MIG_DIR" 2>/dev/null || true)
+
+              if [ "${#added_order[@]}" -gt 0 ]; then
+                multihead_roots=()
+                for rev in "${added_order[@]}"; do
+                  down="${added_down[$rev]}"
+                  if [ -z "$down" ] || [ -z "${added_rev[$down]+x}" ]; then
+                    multihead_roots+=("$rev")
+                  fi
+                done
+                if [ "${#multihead_roots[@]}" -eq 0 ]; then
+                  multihead_collides=true
+                  echo "    MIGRATION MULTI-HEAD: PR #$NUM adds ${#added_order[@]} migration(s) (${added_order[*]}) whose down_revision chain never leaves the files it adds (cycle) - cannot show a chain onto main's head '$MAIN_HEAD'"
+                  echo "PR #$NUM: adds migrations ${added_order[*]} whose down_revision values form a cycle, so the chain cannot be shown to reach main's head '$MAIN_HEAD'" >> /tmp/migration_collision_details.txt
+                elif [ "${#multihead_roots[@]}" -gt 1 ]; then
+                  multihead_collides=true
+                  echo "    MIGRATION MULTI-HEAD: PR #$NUM adds ${#multihead_roots[@]} independent migration links (${multihead_roots[*]}) that do not chain onto each other - combining it would produce multiple Alembic heads"
+                  echo "PR #$NUM: adds ${#multihead_roots[@]} independent migrations (${multihead_roots[*]}) that do not chain onto each other, so the PR forks the migration graph by itself (main's head is '$MAIN_HEAD')" >> /tmp/migration_collision_details.txt
+                else
+                  first_rev="${multihead_roots[0]}"
+                  first_down="${added_down[$first_rev]}"
+                  if [ "$first_down" != "$MAIN_HEAD" ]; then
+                    multihead_collides=true
+                    first_base=$(basename "${added_rev[$first_rev]}")
+                    echo "    MIGRATION MULTI-HEAD: PR #$NUM adds $first_base with down_revision '$first_down', but main's head is '$MAIN_HEAD' - combining it would produce a second Alembic head"
+                    echo "PR #$NUM: adds $first_base, whose down_revision '$first_down' is not main's current head '$MAIN_HEAD' (a different, free numeric prefix does not help) - that forks the migration graph into two heads" >> /tmp/migration_collision_details.txt
+                  fi
+                fi
+              fi
+              if [ "$multihead_collides" = "true" ]; then
+                COLLIDES=true
+              fi
+            fi
+
             if [ "$COLLIDES" = "true" ]; then
               migration_skip_prs="$migration_skip_prs $NUM"
-              echo "PR #$NUM EXCLUDED from this batch (migration-number collision - combining it would produce multiple Alembic heads). The rest of the batch is unaffected."
+              echo "PR #$NUM EXCLUDED from this batch (migration collision - combining it would produce multiple Alembic heads). The rest of the batch is unaffected."
               continue
             fi
 
@@ -875,9 +1071,9 @@ jobs:
           echo "  confirmed already on main (closeable): $closeable_prs"
           echo "  NOT confirmed on main (kept open): $unproven_prs"
           echo "Conflicts: $conflict_prs"
-          echo "Excluded (migration-number collision): $migration_skip_prs"
+          echo "Excluded (migration collision): $migration_skip_prs"
           if [ "$migration_skip_count" -gt 0 ]; then
-            echo "::warning::Excluded $migration_skip_count PR(s) from this batch for migration-number collisions: $migration_skip_prs - the rest of the batch continues."
+            echo "::warning::Excluded $migration_skip_count PR(s) from this batch for migration collisions (prefix clash or a fork at a free prefix - see /tmp/migration_collision_details.txt): $migration_skip_prs - the rest of the batch continues."
           fi
           if [ -n "$unproven_prs" ]; then
             echo "::warning::Kept $unproven_prs open: each produced no changes to merge, but its content was not proven to be on main. They are re-checked next pass."
