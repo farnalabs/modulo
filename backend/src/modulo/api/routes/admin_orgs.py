@@ -23,12 +23,14 @@ from modulo.api.dependencies import (
     require_target_org_role,
     resolve_audit_principal,
 )
+from modulo.api.models.problem import ProblemDetail, ProblemException, ProblemType
 from modulo.api.routes._org_settings import apply_org_settings_patch_or_404
 from modulo.api.routes.admin_license import invalidate_license_status_cache
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.license import REASON_MALFORMED, LicenseValidation
 from modulo.core.seed_data.cost_components import seed_cost_components_for_org
 from modulo.db.crud.account import create_account, get_account_by_email
 from modulo.db.crud.org_membership import (
@@ -587,6 +589,42 @@ async def admin_get_org_license(
     return _resolve_org_license(org)
 
 
+class _OrgLicenseProblemDetail(ProblemDetail):
+    """Problem detail carrying the licence failure classification (FAR-2099).
+
+    The org-level licence PUT must expose the same machine-readable ``reason``
+    (and actionable ``hint``) the system licence install path returns, so an
+    operator can tell a trust-anchor mismatch from a corrupt key. ``detail``
+    stays the prose string every existing client renders; ``reason``/``hint``
+    are RFC 9457 extension members added alongside it.
+    """
+
+    reason: str | None = None
+    hint: str | None = None
+
+
+class InvalidOrgLicenseError(ProblemException):
+    """422 raised for an org licence key that cannot be verified (FAR-2099).
+
+    Subclasses ``ProblemException`` (itself an ``HTTPException``) so the route
+    still RAISES on failure: the ``audited`` dependency derives the audit
+    outcome from whether the handler raised, so returning a 422 response would
+    record a failed licence install as a SUCCESS.
+    """
+
+    def __init__(self, validation: LicenseValidation) -> None:
+        detail = validation.error or "Invalid license key"
+        if validation.hint:
+            detail = f"{detail}. {validation.hint}"
+        problem = cast(
+            _OrgLicenseProblemDetail, _OrgLicenseProblemDetail.from_type(ProblemType.VALIDATION_ERROR, detail)
+        )
+        problem.reason = validation.reason or REASON_MALFORMED
+        problem.hint = validation.hint
+        super().__init__(ProblemType.VALIDATION_ERROR, detail)
+        self.problem = problem
+
+
 def _verify_license_key(req: SetOrgLicenseRequest) -> Any:
     from modulo.core.license import parse_and_verify
 
@@ -599,10 +637,7 @@ def _verify_license_key(req: SetOrgLicenseRequest) -> Any:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     if not validation.valid or validation.license_data is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=validation.error or "Invalid license key",
-        )
+        raise InvalidOrgLicenseError(validation)
     return validation.license_data
 
 

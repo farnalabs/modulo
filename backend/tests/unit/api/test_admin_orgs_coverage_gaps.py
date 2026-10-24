@@ -27,6 +27,7 @@ from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.license import LicenseValidation
 from modulo.db.models.organisation import (
     MODULO_REGISTRY_ORG_ID,
     SYSTEM_ORG_ID,
@@ -503,7 +504,7 @@ def test_set_org_license_invalid_key_422(api: tuple[TestClient, AsyncMock], monk
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org(settings_json={})))
     monkeypatch.setattr(
         "modulo.core.license.parse_and_verify",
-        MagicMock(return_value=SimpleNamespace(valid=False, license_data=None, error="expired")),
+        MagicMock(return_value=LicenseValidation(valid=False, license_data=None, error="expired")),
     )
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "expired-key"})
     assert resp.status_code == 422

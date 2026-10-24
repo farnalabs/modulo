@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -13,6 +14,12 @@ from modulo.api.dependencies import get_db_session, get_plan_context, resolve_au
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.license import (
+    REASON_ANCHOR_MISMATCH,
+    REASON_EXPIRED,
+    REASON_MALFORMED,
+    REASON_SIGNATURE_MISMATCH,
+)
 from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.settings import get_settings
 from tests.unit.api.mock_session import configure_rls_preamble
@@ -707,3 +714,125 @@ class TestResolveAuditPrincipal:
         assert resolved.organisation_id == SYSTEM_ORG_ID
         # No role claim: the neutral "" sentinel (falsy), never a fabricated role.
         assert not resolved.org_role
+
+
+class TestOrgLicenseValidationFailure:
+    """FAR-2099: the org-level licence PUT names WHY a key failed.
+
+    The system licence install path returns a structured ``reason`` plus an
+    actionable ``hint`` (FAR-2091). The org-level PUT is the other install
+    surface, so it must carry the same classification — while keeping
+    ``detail`` a prose STRING for existing clients and the RFC 9457 shape it
+    already returns.
+    """
+
+    @staticmethod
+    def _wire(monkeypatch: pytest.MonkeyPatch, validation: Any) -> AsyncMock:
+        """Wire a passing org lookup with ``parse_and_verify`` returning *validation*."""
+        from modulo.api.routes import admin_orgs
+
+        # The gated dependency resolves the live role first — admit the admin.
+        monkeypatch.setattr("modulo.api.dependencies._resolve_live_org_role", AsyncMock(return_value="admin"))
+        monkeypatch.setattr("modulo.db.settings_resolver.resolve_authz_enforce", AsyncMock(return_value=False))
+        org = MagicMock()
+        org.settings_json = {"existing": True}
+        monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
+        monkeypatch.setattr("modulo.core.license.parse_and_verify", MagicMock(return_value=validation))
+        patch_recorder = AsyncMock()
+        monkeypatch.setattr("modulo.api.routes._org_settings.update_org_settings_patch", patch_recorder)
+        monkeypatch.setattr(admin_orgs, "invalidate_license_status_cache", AsyncMock())
+        return patch_recorder
+
+    @pytest.mark.parametrize(
+        ("reason", "error", "hint"),
+        [
+            pytest.param(
+                REASON_MALFORMED, "Invalid license key format: expected <payload>.<signature>", None, id="malformed"
+            ),
+            pytest.param(
+                REASON_SIGNATURE_MISMATCH,
+                "Signature verification failed",
+                "The key was not signed by the authority this deployment trusts.",
+                id="signature-mismatch",
+            ),
+            pytest.param(
+                REASON_ANCHOR_MISMATCH,
+                "Signature verification failed",
+                "Set MODULO_LICENSE_PUBLIC_KEY to the public key Farnalabs issued with your licence.",
+                id="anchor-mismatch",
+            ),
+            pytest.param(REASON_EXPIRED, "License has expired", None, id="expired"),
+        ],
+    )
+    @pytest.mark.anyio
+    async def test_invalid_key_returns_reason_and_hint(
+        self,
+        client_admin,
+        mock_session,
+        monkeypatch: pytest.MonkeyPatch,
+        reason: str,
+        error: str,
+        hint: str | None,
+    ) -> None:
+        from modulo.core.license import LicenseValidation
+
+        patch_recorder = self._wire(
+            monkeypatch,
+            LicenseValidation(valid=False, error=error, reason=reason, hint=hint),
+        )
+
+        resp = await client_admin.put(f"/api/v1/admin/orgs/{ORG_ID}/license", json={"license_key": "bad.key"})
+
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
+        body = resp.json()
+        # The RFC 9457 shape and the string ``detail`` are unchanged...
+        assert body["type"] == "urn:problem:modulo:validation_error"
+        assert body["status"] == 422
+        assert isinstance(body["detail"], str)
+        assert body["detail"].startswith(error)
+        # ...and the classification rides alongside them.
+        assert body["reason"] == reason
+        if hint is not None:
+            assert body["hint"] == hint
+            assert hint in body["detail"]
+        # A rejected key is never written.
+        patch_recorder.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_rejected_key_is_audited_as_an_error(
+        self,
+        client_admin,
+        mock_session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The route must RAISE, not return, or ``audited`` records a success.
+
+        ``audited`` derives the outcome from whether the handler raised; a
+        returned 422 response would stamp the failed licence install as
+        ``outcome="success"`` — falsifying the audit record for a security-
+        relevant change.
+        """
+        from modulo.core.audit_coverage import audit_session
+        from modulo.core.license import LicenseValidation
+
+        patch_recorder = self._wire(
+            monkeypatch,
+            LicenseValidation(valid=False, error="License has expired", reason=REASON_EXPIRED),
+        )
+        emitted: list[dict[str, Any]] = []
+
+        async def _capture_audit(_session: Any, _principal: Any, **kwargs: Any) -> None:
+            emitted.append(kwargs)
+
+        monkeypatch.setattr("modulo.core.audit_coverage.append_audit_event_isolated", _capture_audit)
+        app.dependency_overrides[audit_session] = lambda: mock_session
+        try:
+            resp = await client_admin.put(f"/api/v1/admin/orgs/{ORG_ID}/license", json={"license_key": "bad.key"})
+        finally:
+            app.dependency_overrides.pop(audit_session, None)
+
+        assert resp.status_code == 422
+        patch_recorder.assert_not_awaited()
+        licence_events = [e for e in emitted if e.get("event_type") == "organisation_license_updated"]
+        assert licence_events, f"expected the audited licence update event, got {emitted!r}"
+        assert licence_events[-1]["payload"]["outcome"] == "error"
