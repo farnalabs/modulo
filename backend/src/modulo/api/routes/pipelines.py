@@ -89,8 +89,10 @@ from modulo.core.agent_command_sync import (
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
+    BLANK_CONNECTOR_KIND,
     ScopeViolationError,
     agent_granted_connector_types,
+    validate_allowed_connectors_not_blank,
     validate_allowed_connectors_subset,
     validate_no_self_tools,
 )
@@ -3131,6 +3133,18 @@ def _validate_capability_scopes(
     checked against the caller-scoped (``.self``) tool set — those tools are
     FORBIDDEN from node allowed_tools regardless of connector narrowing (a
     pipeline node is never the "caller" a ``.self`` tool operates on).
+
+    A blank / whitespace-only ``allowed_connectors`` entry is REFUSED for EVERY
+    scoped node (checked here, before the Agent reference is consulted): it
+    names no connector, and a blanks-only list is truthy — it stored a node
+    "narrowed" to nothing, so the run computed an empty fetch scope and decrypted
+    every active org connector while the node matched none of them at the hub.
+
+    Coverage is the REST graph-write paths only — this is the sole production
+    call site of the two capability-scope guards. Writers that persist raw graph
+    dicts (MCP ``update_pipeline_graph``, bundle import, library/template
+    install, clone, snapshot rollback) never reach it, so the runtime
+    normalisation remains the backstop for the graphs they store.
     """
     for node in nodes:
         scope = node.capability_scope
@@ -3140,6 +3154,13 @@ def _validate_capability_scopes(
         # allowed_tools — checked for EVERY scoped node (independent of
         # connector narrowing, and of any Agent reference).
         validate_no_self_tools(node_id=str(node.id), allowed_tools=scope.allowed_tools)
+        # Blankness is a property of the list, not of the Agent's grants — so it
+        # is refused for every scoped node, including the connector/dispatch
+        # nodes the widen check skips below.
+        validate_allowed_connectors_not_blank(
+            node_id=str(node.id),
+            allowed_connectors=scope.allowed_connectors,
+        )
         if not scope.allowed_connectors:
             continue
         if node.agent_id is None:
@@ -3184,9 +3205,17 @@ async def _resolve_graph_references(
     except ScopeViolationError as exc:
         # FAR-418: a node that widens (never narrows) its Agent's connector grants
         # is rejected — the save is refused, not silently accepted.
+        detail = str(exc)
+        if exc.kind == BLANK_CONNECTOR_KIND:
+            # The bare ``scope.violation node=... blank_connector=''`` names
+            # neither the field nor the fix; this is the one rejection whose
+            # remedy is a literal edit the author can make, so spell it out.
+            detail += (
+                "; Allowed Connectors contains a blank entry — remove it, or leave the list empty for unrestricted"
+            )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
+            detail=detail,
         ) from exc
     await _load_existing_schema_ids(session, org_id, _collect_schema_ids(nodes))
     schema_pins, model_backend_pins = _build_schema_and_backend_pins(nodes, agents_by_id)

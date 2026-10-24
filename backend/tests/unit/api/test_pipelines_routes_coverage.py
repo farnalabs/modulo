@@ -890,6 +890,55 @@ def test_update_pipeline_graph_payload_happy_path(client: tuple[TestClient, Asyn
     assert resp.json()["node_count"] == 1
 
 
+def test_replace_pipeline_graph_rejects_blank_allowed_connector_with_remedy(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """A blank ``allowed_connectors`` entry is refused by the REAL capability-scope
+    guard on the graph-write route, and the 422 detail names the field and the
+    remedy.
+
+    The guard's blanket ``ScopeViolationError -> 422`` translation is covered
+    generically elsewhere; what is pinned here is (a) that the blank-entry check
+    actually runs on this route path and (b) that its detail is actionable — the
+    bare ``scope.violation node=<uuid> blank_connector=''`` names neither the
+    field nor the fix.
+    """
+    http, _session = client
+    node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "connector",
+        "position": {"x": 0.0, "y": 0.0},
+        "capability_scope": {"allowed_connectors": ["   "]},
+        "connector_binding": {
+            "type": "github",
+            "instance_id": str(uuid.uuid4()),
+            "operation": "query",
+            "resource": "pull",
+        },
+    }
+    with (
+        patch(f"{_PREFIX}_get_pipeline_or_404", new=AsyncMock(return_value=_make_pipeline())),
+        patch(f"{_PREFIX}_enforce_connector_team_bindings", new_callable=AsyncMock),
+        patch(f"{_PREFIX}replace_pipeline_graph", new=AsyncMock()) as replace,
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.put(
+                f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+                json={"nodes": [node], "edges": []},
+            )
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert "blank_connector" in detail
+    assert "Allowed Connectors contains a blank entry" in detail
+    assert "leave the list empty for unrestricted" in detail
+    # The rejection happens before the write: nothing was persisted.
+    replace.assert_not_awaited()
+
+
 def test_update_pipeline_team_visibility_without_owner_rejected(operator_client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = operator_client
     current = _make_pipeline()
