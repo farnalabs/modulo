@@ -229,8 +229,14 @@ def _build_pytest_command(args: argparse.Namespace, jobs: str) -> list[str]:
         "-q",
         "--tb=short",
         f"--timeout={args.timeout}",
-        "-p",
-        "no:warnings",
+        # Defence in depth for the gated-suite warning gate installed by
+        # tests/conftest.py::pytest_runtest_setup. `-p no:warnings` would
+        # disable the warnings plugin the escalation rides on, so it must never
+        # come back. Byte-identical to every CI command; pinned by
+        # tests/architecture/test_ci_pytest_commands_carry_the_warning_gate.py.
+        "-W",
+        "error::pytest.PytestUnraisableExceptionWarning",
+        "--disable-warnings",
     ]
     if args.lenses:
         cmd.extend(["-k", args.lenses])

@@ -79,7 +79,7 @@ run_shard() {
   # once, below, against the combined dataset.
   COVERAGE_FILE="${data_file}" uv run --no-sync pytest "${files[@]}" \
     -n "$PARALLELISM" --cov=src/modulo --cov-report= --cov-fail-under=0 -q \
-    -W "error::pytest.PytestUnraisableExceptionWarning"
+    -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
   echo "::endgroup::"
 }
 

@@ -191,7 +191,7 @@
       # manifest). Only fires when manifest, views/ or components/ change.
       - id: product-map-consistency
         name: product map consistency (declared data-testids)
-        entry: uv run --directory backend --no-sync python -m pytest tests/architecture/test_product_map_consistency.py -q
+        entry: uv run --directory backend --no-sync python -m pytest tests/architecture/test_product_map_consistency.py -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
         language: system
         files: ^frontend/src/(manifest\.yaml|views/|components/)
         pass_filenames: false
