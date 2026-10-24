@@ -1455,9 +1455,7 @@ async def _run_guardrail_interception_pass(
             block_message = ""
         # Keep muted guardrail mechanism evidence regardless of whether an
         # active sibling makes the outer interception path fail closed.
-        results = [
-            _mechanism_fail_result(d, "guardrail interception mechanism error") for d in guardrail_defs if d.is_muted
-        ]
+        results = [_mechanism_fail_result(d, "guardrail interception mechanism error") for d in guardrail_defs]
         redactions: list[Any] = []
         latency_ms = (time.perf_counter() - start_wall) * 1000
         _log.info(

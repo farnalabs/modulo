@@ -939,17 +939,20 @@ def _apply_redaction_phase(
 
 
 def _mechanism_fail_result(eval_def: EvalDefinition, reason: str) -> EvalResult:
-    """A synthetic failed eval result for a log-and-continue mechanism error.
+    """A synthetic failed eval result for a mechanism error.
 
     Never a raw payload in the detail — only descriptive text (the no-raw
-    persist contract).
+    persist contract). The DTO keeps a generated run id for compatibility with
+    the run-scoped evidence seam; runless intake persistence uses only its
+    ``eval_id``, ``passed``, ``score`` and ``detail`` fields.
     """
     return EvalResult(
         run_id=uuid.uuid4(),
         node_id=eval_def.node_id or "",
         eval_id=eval_def.id,
         passed=False,
-        score=0.0,
+        outcome="error",
+        score=None,
         detail=f"guardrail {eval_def.name!r} mechanism error: {reason}",
     )
 

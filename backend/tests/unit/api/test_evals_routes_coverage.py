@@ -815,6 +815,7 @@ def test_resolve_finding_endpoint_uses_wire_contract_and_mute_wiring(client: tup
             return_value=finding,
         ) as resolve,
         patch("modulo.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock) as apply_mute,
+        patch("modulo.api.routes.evals.append_audit_event", new_callable=AsyncMock) as audit,
     ):
         response = http.post(
             f"/api/v1/evals/findings/{finding.id}/resolve",
@@ -844,6 +845,7 @@ def test_resolve_finding_endpoint_uses_wire_contract_and_mute_wiring(client: tup
         muted_by=None,
         automatic=True,
     )
+    audit.assert_awaited_once()
 
 
 def test_resolve_finding_endpoint_rejects_invalid_payload(client: tuple[TestClient, AsyncMock]) -> None:

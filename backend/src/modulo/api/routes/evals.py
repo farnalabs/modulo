@@ -59,6 +59,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.eval.finding_resolver import load_trigger_event_finding
 from modulo.core.eval_engine.author_warnings import check_author_warnings
 from modulo.core.eval_engine.coverage_gap import (
     DEFAULT_DIVERGENCE_THRESHOLD,
@@ -95,6 +96,7 @@ from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import Run
+from modulo.db.models.trigger_event_finding import TriggerEventFinding
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.db.sqlstates import sqlstate_of
@@ -3126,11 +3128,89 @@ class MutePolicyConfigResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+@router.get(
+    "/evals/findings/{finding_id}",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Finding not found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_RESOLVE_FINDING)
+async def get_finding(
+    finding_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
+) -> dict[str, Any]:
+    """Read an eval result or runless trigger-event guardrail finding."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+        eval_res = (
+            await session.execute(
+                select(EvalResult).where(
+                    EvalResult.id == finding_id,
+                    EvalResult.organisation_id == principal.organisation_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if eval_res is not None:
+            return {
+                "id": str(eval_res.id),
+                "finding_id": str(eval_res.id),
+                "finding_type": "eval_result",
+                "eval_id": str(eval_res.eval_id),
+                "resolution": eval_res.resolution,
+                "resolution_reason": eval_res.resolution_reason,
+                "resolved_at": eval_res.resolved_at.isoformat() if eval_res.resolved_at else None,
+                "resolved_by": str(eval_res.resolved_by) if eval_res.resolved_by else None,
+                "detail": eval_res.detail,
+                "passed": eval_res.passed,
+                "outcome": eval_res.outcome,
+            }
+
+        te_finding = await load_trigger_event_finding(
+            session,
+            str(finding_id),
+            str(principal.organisation_id),
+        )
+        if te_finding is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finding not found")
+
+        trigger_event_id, eval_id, passed, error_detail = te_finding
+        finding = (
+            await session.execute(
+                select(TriggerEventFinding).where(
+                    TriggerEventFinding.trigger_event_id == trigger_event_id,
+                    TriggerEventFinding.eval_id == eval_id,
+                    TriggerEventFinding.organisation_id == principal.organisation_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        return {
+            "id": str(finding_id),
+            "finding_id": str(finding_id),
+            "finding_type": "trigger_event",
+            "eval_id": str(eval_id),
+            "resolution": finding.resolution if finding else "pending",
+            "resolution_reason": finding.resolution_reason if finding else None,
+            "resolved_at": finding.resolved_at.isoformat() if finding and finding.resolved_at else None,
+            "resolved_by": str(finding.resolved_by) if finding and finding.resolved_by else None,
+            "detail": error_detail,
+            "passed": passed,
+            "outcome": "pass" if passed else "fail",
+        }
+
+
 @router.post(
     "/evals/findings/{finding_id}/resolve",
     status_code=status.HTTP_200_OK,
     dependencies=[
-        Depends(audited("eval_finding_resolved", "eval_finding", principal_dep=get_current_tenant_user)),
+        Depends(audited("api_access_post", "eval_finding", principal_dep=get_current_tenant_user)),
     ],
     responses={
         400: {"description": "Invalid resolution value"},
@@ -3151,49 +3231,111 @@ async def resolve_finding(
 
     Marks a finding as accepted, dismissed, superseded, or pending with an
     optional reason. Triggers mute policy evaluation for the associated
-    eval/guardrail definition.
+    eval/guardrail definition and records an explicit audit event.
     """
     from modulo.core.eval.finding_resolver import (
         FindingResolutionError,
         apply_mute_policy,
     )
-    from modulo.core.eval.finding_resolver import (
-        resolve_finding as resolve_finding_core,
-    )
+    from modulo.core.eval.finding_resolver import resolve_finding as resolve_finding_core
 
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
-            finding = await resolve_finding_core(
+            finding: Any
+            eval_id: uuid.UUID
+            try:
+                finding = await resolve_finding_core(
+                    session,
+                    str(finding_id),
+                    req.resolution,
+                    req.reason,
+                    str(principal.account_id),
+                    str(principal.organisation_id),
+                )
+                eval_id = finding.eval_id
+            except FindingResolutionError as resolution_error:
+                if str(resolution_error) != "Finding not found":
+                    raise
+                te_finding = await load_trigger_event_finding(
+                    session,
+                    str(finding_id),
+                    str(principal.organisation_id),
+                )
+                if te_finding is None:
+                    raise FindingResolutionError("Finding not found") from None
+
+                trigger_event_id, eval_id, passed, _error_detail = te_finding
+                existing_runless = (
+                    await session.execute(
+                        select(TriggerEventFinding).where(
+                            TriggerEventFinding.trigger_event_id == trigger_event_id,
+                            TriggerEventFinding.eval_id == eval_id,
+                            TriggerEventFinding.organisation_id == principal.organisation_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                now = datetime.now(UTC)
+                if existing_runless is None:
+                    finding = TriggerEventFinding(
+                        organisation_id=principal.organisation_id,
+                        trigger_event_id=trigger_event_id,
+                        eval_id=eval_id,
+                        passed=passed,
+                        outcome="pass" if passed else "fail",
+                        score=1.0 if passed else 0.0,
+                        detail=f"intake_evidence:{trigger_event_id}_{eval_id}",
+                        resolution=req.resolution,
+                        resolution_reason=req.reason,
+                        resolved_at=now,
+                        resolved_by=principal.account_id,
+                    )
+                    session.add(finding)
+                    await session.flush()
+                else:
+                    existing_runless.resolution = req.resolution
+                    existing_runless.resolution_reason = req.reason
+                    existing_runless.resolved_at = now
+                    existing_runless.resolved_by = principal.account_id
+                    await session.flush()
+                    finding = existing_runless
+
+            await append_audit_event(
                 session,
-                str(finding_id),
-                req.resolution,
-                req.reason,
-                str(principal.account_id),
-                str(principal.organisation_id),
+                org_id=principal.organisation_id,
+                event_type="eval_finding_resolved",
+                actor_user_id=principal.account_id,
+                resource_type="eval_finding",
+                resource_id=finding_id,
+                payload_json={
+                    "finding_id": str(finding_id),
+                    "eval_id": str(eval_id),
+                    "resolution": req.resolution,
+                    "reason": req.reason,
+                },
             )
 
-            # Evaluate and apply mute policy for the associated eval definition.
-            # This transition is automatic, even though the finding resolution is
-            # user-initiated, so the audit event identifies the system source.
             await apply_mute_policy(
                 session,
-                str(finding.eval_id),
+                str(eval_id),
                 str(principal.organisation_id),
                 muted_by=None,
                 automatic=True,
             )
 
         return ResolveFindingResponse(
-            id=finding.id,
+            id=finding_id,
             resolution=finding.resolution,
             resolution_reason=finding.resolution_reason,
             resolved_at=finding.resolved_at.isoformat() if finding.resolved_at else None,
             resolved_by=finding.resolved_by,
         )
     except FindingResolutionError as e:
+        if str(e) == "Finding not found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except HTTPException:
         raise

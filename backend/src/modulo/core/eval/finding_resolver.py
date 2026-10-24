@@ -9,11 +9,12 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.trigger_event_finding import TriggerEventFinding
 
 # Resolution vocabulary — must match the CHECK constraint on eval_results.resolution
 RESOLUTION_VALUES = ("accepted", "dismissed", "superseded", "pending")
@@ -70,6 +71,26 @@ async def resolve_finding(
     return finding
 
 
+async def load_trigger_event_finding(
+    session: AsyncSession,
+    finding_id: str,
+    org_id: str,
+) -> tuple[uuid.UUID, uuid.UUID, bool, str | None] | None:
+    """Resolve a runless trigger-event evidence row to its eval finding identity."""
+    trigger_event_id = uuid.UUID(finding_id)
+    row = (
+        await session.execute(
+            select(TriggerEventFinding).where(
+                TriggerEventFinding.trigger_event_id == trigger_event_id,
+                TriggerEventFinding.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return trigger_event_id, row.eval_id, row.passed, row.detail
+
+
 async def compute_acceptance_rate(
     session: AsyncSession,
     eval_id: str,
@@ -96,28 +117,46 @@ async def compute_acceptance_rate(
     """
     from datetime import timedelta
 
-    # Build the base query for resolved findings
-    conditions = [
+    cutoff = datetime.now(UTC) - timedelta(days=window_days) if window_days is not None else None
+
+    eval_conditions = [
         EvalResult.eval_id == eval_id,
         EvalResult.organisation_id == org_id,
         EvalResult.resolution.in_(("accepted", "dismissed", "superseded")),
     ]
+    if cutoff is not None:
+        eval_conditions.append(EvalResult.evaluated_at >= cutoff)
 
-    if window_days is not None:
-        cutoff = datetime.now(UTC) - timedelta(days=window_days)
-        conditions.append(EvalResult.evaluated_at >= cutoff)
+    trigger_conditions = [
+        TriggerEventFinding.eval_id == eval_id,
+        TriggerEventFinding.organisation_id == org_id,
+        TriggerEventFinding.resolution.in_(("accepted", "dismissed", "superseded")),
+    ]
+    if cutoff is not None:
+        trigger_conditions.append(TriggerEventFinding.created_at >= cutoff)
 
-    # Count total resolved
-    total_q = select(func.count(EvalResult.id)).where(*conditions)
-    total = (await session.execute(total_q)).scalar() or 0
+    eval_sub = select(
+        EvalResult.id.label("id"),
+        EvalResult.resolution.label("resolution"),
+    ).where(*eval_conditions)
+
+    trigger_sub = select(
+        TriggerEventFinding.id.label("id"),
+        TriggerEventFinding.resolution.label("resolution"),
+    ).where(*trigger_conditions)
+
+    combined = union_all(eval_sub, trigger_sub).subquery()
+
+    total_q = select(func.count()).select_from(combined)
+    total_result = await session.execute(total_q)
+    total = int(total_result.scalar() or 0)
 
     if total == 0:
         return 0.0, 0
 
-    # Count accepted
-    accepted_conditions = [*conditions, EvalResult.resolution == "accepted"]
-    accepted_q = select(func.count(EvalResult.id)).where(*accepted_conditions)
-    accepted = (await session.execute(accepted_q)).scalar() or 0
+    accepted_q = select(func.count()).select_from(combined).where(combined.c.resolution == "accepted")
+    accepted_result = await session.execute(accepted_q)
+    accepted = int(accepted_result.scalar() or 0)
 
     return accepted / total, total
 

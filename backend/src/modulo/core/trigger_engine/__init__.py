@@ -1463,6 +1463,7 @@ class TriggerEngine:
         if not guardrail_results:
             return
         from modulo.core.eval_engine.evidence_layer import append_evidence
+        from modulo.db.models.trigger_event_finding import TriggerEventFinding
 
         # ``EvalResult`` is intentionally run- or suite-run-scoped. Intake
         # blocks create neither, so writing one here would violate
@@ -1471,6 +1472,17 @@ class TriggerEngine:
         # subject directly; the TriggerEvent remains the durable intake finding
         # and the evidence row records the guardrail decision against it.
         for result in guardrail_results:
+            session.add(
+                TriggerEventFinding(
+                    organisation_id=org_id,
+                    trigger_event_id=trigger_event_id,
+                    eval_id=result.eval_id,
+                    passed=result.passed,
+                    outcome=str(result.outcome),
+                    score=result.score,
+                    detail=result.detail[:2000],
+                )
+            )
             append_evidence(
                 session,
                 organisation_id=org_id,

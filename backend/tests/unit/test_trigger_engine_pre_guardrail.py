@@ -533,11 +533,11 @@ async def test_handle_webhook_mechanism_error_preserves_muted_evidence_with_acti
         )
 
     persist.assert_awaited_once()
-    muted_results = persist.await_args.kwargs["guardrail_results"]
-    assert len(muted_results) == 1
-    assert muted_results[0].eval_id == muted.id
-    assert muted_results[0].passed is False
-    assert "mechanism error" in muted_results[0].detail
+    guardrail_results = persist.await_args.kwargs["guardrail_results"]
+    assert len(guardrail_results) == 2
+    assert {result.eval_id for result in guardrail_results} == {active.id, muted.id}
+    assert all(result.passed is False for result in guardrail_results)
+    assert all("mechanism error" in result.detail for result in guardrail_results)
 
 
 async def test_handle_webhook_mechanism_error_does_not_block_muted_block() -> None:

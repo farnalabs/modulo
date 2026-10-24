@@ -179,11 +179,7 @@ async def run_pre_trigger_guardrail_pass(
         if not detection_only and any_guarding:
             return PreTriggerGuardrailOutcome(
                 payload=dict(raw_payload),
-                results=[
-                    _mechanism_fail_result(d, "guardrail interception mechanism error")
-                    for d in definitions
-                    if d.is_muted
-                ],
+                results=[_mechanism_fail_result(d, "guardrail interception mechanism error") for d in definitions],
                 blocked=True,
                 block_message="guardrail mechanism error at webhook intake",
             )
