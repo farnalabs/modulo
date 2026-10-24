@@ -5,6 +5,7 @@ run even when the optional *boto3* package is not installed.
 """
 
 import asyncio
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,6 +35,17 @@ def _make_backend():
     mock_client.exceptions.ResourceExistsException = type("ResourceExistsException", (Exception,), {})
     backend._client = mock_client
     return backend
+
+
+def _timeout(coro: Any, *, timeout: float) -> Any:
+    """Raise ``TimeoutError`` after closing the awaitable ``wait_for`` was given.
+
+    Closing it first is what keeps the test from leaking an un-awaited
+    ``asyncio.to_thread`` coroutine, which the unit suite escalates to an error
+    via ``PytestUnraisableExceptionWarning``.
+    """
+    coro.close()
+    raise TimeoutError
 
 
 class TestAWSSecretsManagerBackend:
@@ -131,7 +143,7 @@ class TestAWSSecretsManagerBackend:
         backend = _make_backend()
 
         with (
-            patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
+            patch.object(asyncio, "wait_for", side_effect=_timeout),
             pytest.raises(RuntimeError, match="timeout writing secret"),
         ):
             await backend.set_secret("my-key", "my-value")
@@ -187,7 +199,7 @@ class TestAWSSecretsManagerBackend:
         backend = _make_backend()
 
         with (
-            patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
+            patch.object(asyncio, "wait_for", side_effect=_timeout),
             pytest.raises(RuntimeError, match="timeout reading secret"),
         ):
             await backend.get_secret("my-key")
@@ -196,7 +208,7 @@ class TestAWSSecretsManagerBackend:
         backend = _make_backend()
 
         with (
-            patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
+            patch.object(asyncio, "wait_for", side_effect=_timeout),
             pytest.raises(RuntimeError, match="timeout deleting secret"),
         ):
             await backend.delete_secret("my-key")
