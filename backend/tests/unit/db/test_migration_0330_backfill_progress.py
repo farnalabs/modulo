@@ -130,3 +130,62 @@ def test_the_backfill_runs_on_the_migration_connection_when_it_already_locks_the
     assert _MIGRATION._backfill_outcome() == 1
     assert not side.params
     assert len(migration.params) == 2
+
+
+def test_rehearsal_mode_reads_the_runner_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the rehearsal runner's ``ALEMBIC_REHEARSAL=1`` means rehearsal."""
+    monkeypatch.delenv(_MIGRATION._REHEARSAL_ENV_VAR, raising=False)
+    assert _MIGRATION._rehearsal_mode() is False
+
+    monkeypatch.setenv(_MIGRATION._REHEARSAL_ENV_VAR, "1")
+    assert _MIGRATION._rehearsal_mode() is True
+
+    monkeypatch.setenv(_MIGRATION._REHEARSAL_ENV_VAR, "0")
+    assert _MIGRATION._rehearsal_mode() is False
+
+
+def test_a_rehearsal_never_opens_a_side_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rehearsal rolls back ONE transaction; a side commit would persist.
+
+    ``env.py`` refuses any side checkout under ``ALEMBIC_REHEARSAL=1``, so both
+    the DDL and the keyset backfill must stay on the migration connection.
+    """
+    migration = _FakeConnection([[(1,)], []])
+    executed: list[str] = []
+
+    def _refuse() -> None:
+        raise AssertionError("a rehearsal must not open a side connection")
+
+    monkeypatch.setenv(_MIGRATION._REHEARSAL_ENV_VAR, "1")
+    monkeypatch.setattr(_MIGRATION, "_autocommit_connection", _refuse)
+    monkeypatch.setattr(
+        _MIGRATION,
+        "op",
+        SimpleNamespace(get_bind=lambda: migration, execute=lambda s: executed.append(str(s))),
+    )
+
+    _MIGRATION._execute_side(("ALTER TABLE eval_results ADD COLUMN IF NOT EXISTS outcome VARCHAR(16)",))
+
+    assert _MIGRATION._backfill_outcome() == 1
+    assert len(executed) == 1
+    assert len(migration.params) == 2
+
+
+def test_a_fresh_chain_rehearsal_skips_the_backfill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-rehearsal fresh chain: no side visibility, so nothing to backfill."""
+    monkeypatch.delenv(_MIGRATION._REHEARSAL_ENV_VAR, raising=False)
+    side = _FakeConnection([[(0,)]])
+
+    def _refuse_get_bind() -> None:
+        raise AssertionError("a fresh chain has nothing to backfill")
+
+    monkeypatch.setattr(_MIGRATION, "_autocommit_connection", lambda: _FakeConnectionContext(side))
+    monkeypatch.setattr(_MIGRATION, "_relation_visible", lambda _conn: False)
+    monkeypatch.setattr(_MIGRATION, "op", SimpleNamespace(get_bind=_refuse_get_bind))
+
+    assert _MIGRATION._backfill_outcome() == 0
+    assert not side.params

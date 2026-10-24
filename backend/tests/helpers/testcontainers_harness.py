@@ -33,79 +33,27 @@ Usage in a test module::
 from __future__ import annotations
 
 import contextlib
-import sys
+import logging
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+import requests
+from docker.errors import APIError, ImageNotFound
 
 SSRF_LOOPBACK_OPTIN = "127.0.0.0/8,::1/128"
 
-# A container-registry outage is transient, and it aborts a pull that would
-# succeed moments later: on 2026-10-24 quay.io returned 503 for the Keycloak
-# manifest and the auth tier errored on main (run 40076695793). The pull is
-# therefore retried with a bounded backoff. These are DELAYS rather than a
-# count so the worst case (~100s) stays inside the CI job's pytest budget;
-# they are deliberately not exponential-unbounded — a registry that is still
-# down after this window is an outage CI must report, not paper over.
-TRANSIENT_PULL_RETRY_DELAYS_SECONDS: tuple[float, ...] = (10.0, 30.0, 60.0)
+logger = logging.getLogger(__name__)
 
-
-def _exception_chain(exc: BaseException) -> Iterator[BaseException]:
-    """Yield *exc* and every exception it wraps (``__cause__`` / ``__context__``)."""
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        yield current
-        current = current.__cause__ or current.__context__
-
-
-def is_transient_registry_error(exc: BaseException) -> bool:
-    """True when *exc* is a registry/daemon failure a retry can plausibly clear.
-
-    Deliberately narrow so a genuine failure is never retried: a registry
-    outage surfaces through the Docker SDK as an ``APIError`` whose
-    ``response.status_code`` is a 5xx (the daemon wraps the registry's own 503
-    in a 500), and a connection reset mid-pull as a ``requests`` transport
-    error. A 404 for a renamed tag, an unsupported manifest format or a
-    disk-full abort is a real failure and is raised on the first attempt.
-    """
-    for err in _exception_chain(exc):
-        status = getattr(getattr(err, "response", None), "status_code", None)
-        if isinstance(status, int) and status >= 500:
-            return True
-        if type(err).__module__.startswith("requests.exceptions"):
-            return True
-    return False
-
-
-def start_container_with_transient_pull_retry(container: Any, image: str) -> None:
-    """``container.start()``, retrying transient registry/connection failures.
-
-    Each retry is announced on stderr so a flaky registry leaves a visible
-    trace in the job log instead of silently masking an outage. The final
-    attempt's error propagates unchanged, so the caller still turns a
-    genuinely broken fixture into a loud ``Tier1bFixtureError`` — a registry
-    that stays down keeps failing CI rather than degrading to a skip.
-    """
-    delays: tuple[float | None, ...] = (*TRANSIENT_PULL_RETRY_DELAYS_SECONDS, None)
-    attempts = len(delays)
-    for attempt, delay in enumerate(delays, start=1):
-        try:
-            container.start()
-            return
-        except Exception as exc:
-            if delay is None or not is_transient_registry_error(exc):
-                raise
-            sys.stderr.write(
-                f"Tier 1b fixture {image!r}: transient registry failure on attempt "
-                f"{attempt}/{attempts} ({type(exc).__name__}: {exc}); retrying in {delay:.0f}s\n"
-            )
-            sys.stderr.flush()
-            time.sleep(delay)
+# Image pulls hit public registries on every per-PR tier1b-light run, and a
+# single registry hiccup must not fail a job whose product code is untouched.
+# Three attempts with a 5s/10s backoff ride over an anonymous-pull rate limit
+# or a dropped connection without hiding a genuinely missing image: that fails
+# identically on every attempt and is reported loudly after the last one.
+TIER1B_START_ATTEMPTS = 3
+TIER1B_START_BACKOFF_SECONDS = 5.0
 
 
 class Tier1bFixtureError(RuntimeError):
@@ -218,12 +166,51 @@ class ContainerHandle:
             self._docker_container = None
 
 
+def is_transient_start_error(exc: Exception) -> bool:
+    """Whether *exc* is a transient registry/daemon hiccup worth retrying.
+
+    ``docker-py``'s ``images.pull`` decodes the progress stream and does NOT
+    raise on an error record, so a rate-limited or 5xx pull surfaces only as
+    ``ImageNotFound`` from the follow-up ``inspect_image`` (observed in CI:
+    quay.io answered 404 for the Keycloak manifest while the pull request
+    itself returned 200, PR #2275). Connection resets and 429/5xx API errors
+    are the same class of failure. A genuinely missing tag also raises
+    ``ImageNotFound`` and fails identically on every attempt, so it is still
+    reported loudly after the last one. The classification inspects the
+    whole ``__cause__``/``__context__`` chain, so a transient failure wrapped
+    by an outer exception is still retried.
+    """
+    return any(_is_transient_start_error(err) for err in _exception_chain(exc))
+
+
+def _exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    """Yield *exc* and every exception it wraps (``__cause__`` / ``__context__``)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _is_transient_start_error(err: BaseException) -> bool:
+    if isinstance(err, (ImageNotFound, requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    if isinstance(err, APIError):
+        response = getattr(err, "response", None)
+        status = getattr(response, "status_code", None) if response is not None else None
+        return status is None or status == 429 or status >= 500
+    return False
+
+
 def start_tier1b_container(spec: ContainerSpec) -> ContainerHandle:
     """Start *spec* via Testcontainers and wait on the real readiness probe.
 
     Raises ``Tier1bFixtureError`` upfront when no Docker daemon is reachable
     (the integration conftest then marks the suite skipped with the reason
-    recorded), and at probe time-out with the last failure reason.
+    recorded), and at probe time-out with the last failure reason. A transient
+    image-pull failure (registry rate limit / 5xx / reset) is retried
+    ``TIER1B_START_ATTEMPTS`` times before the fixture is declared unavailable.
 
     The ``SSRF_ALLOW_PRIVATE_RANGES`` loopback opt-in must already be set by
     the caller — Tier 1b suites do it via a ``monkeypatch.setenv`` autouse
@@ -245,22 +232,45 @@ def start_tier1b_container(spec: ContainerSpec) -> ContainerHandle:
             container.with_volume_mapping(host_dir, mount_path, spec.volume_mode)
         if spec.container_port is not None:
             container.with_exposed_ports(spec.container_port)
-        # Retries ONLY a transient registry/connection failure (borderline
-        # outages, e.g. quay.io 503); every other start error is raised on the
-        # first attempt and becomes the loud Tier1bFixtureError below.
-        start_container_with_transient_pull_retry(container, spec.image)
     except Exception as exc:
-        # Docker-level unavailability (no daemon, image pull/start failure — e.g.
-        # a multi-GB pull exhausting the runner's disk) is a FIXTURE problem, not
-        # a test failure: every Tier 1b fixture translates Tier1bFixtureError into
+        # Docker-level unavailability (no daemon) is a FIXTURE problem, not a
+        # test failure: every Tier 1b fixture translates Tier1bFixtureError into
         # a loud, recorded pytest.skip. Without this wrap the raw docker error
-        # (docker.errors.ImageNotFound / requests.HTTPError) escapes and ERRORs
+        # (docker.errors.DockerException / requests.HTTPError) escapes and ERRORs
         # every dependent test instead of skipping it (observed on PR #773).
         with contextlib.suppress(Exception):
             container.stop()
         raise Tier1bFixtureError(
             f"Fixture {spec.image!r} could not be started on this Docker host: {type(exc).__name__}: {exc}"
         ) from exc
+
+    # An image pull/start failure is retried when it is transient: the
+    # container is configured once above (re-configuring would duplicate the
+    # bind mounts), so only ``start()`` — which pulls a missing image — runs in
+    # the loop. ``stop()`` between attempts releases anything a half-started
+    # container created.
+    for attempt in range(1, TIER1B_START_ATTEMPTS + 1):
+        try:
+            container.start()
+            break
+        except Exception as exc:
+            transient = is_transient_start_error(exc)
+            with contextlib.suppress(Exception):
+                container.stop()
+            if not transient or attempt == TIER1B_START_ATTEMPTS:
+                raise Tier1bFixtureError(
+                    f"Fixture {spec.image!r} could not be started on this Docker host "
+                    f"after {attempt} attempt(s): {type(exc).__name__}: {exc}"
+                ) from exc
+            logger.warning(
+                "Tier 1b fixture %r failed to start (attempt %d/%d, transient): %s: %s - retrying",
+                spec.image,
+                attempt,
+                TIER1B_START_ATTEMPTS,
+                type(exc).__name__,
+                exc,
+            )
+            time.sleep(TIER1B_START_BACKOFF_SECONDS * attempt)
     # From this point on the container EXISTS — any failure (port-mapping
     # read, probe poll/timeout) must stop it before the exception propagates,
     # or a red test leaks a live container on the host.

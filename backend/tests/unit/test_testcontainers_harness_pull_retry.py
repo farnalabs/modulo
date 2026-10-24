@@ -6,14 +6,23 @@ though the registry recovered within minutes. A pull failure that the
 registry itself declares transient must be retried; every other start
 failure (unknown tag, unsupported manifest, disk full) must NOT be, and a
 registry that stays down must still fail the job loudly.
+
+The retry mechanics live in ``start_tier1b_container`` (shared with the
+sibling suite ``test_testcontainers_harness.py``). This module covers the
+registry-specific cases: 5xx status handling, transport errors, a transient
+cause reachable only through the exception chain, permanent 4xx failures,
+and the end-to-end wiring that must still fail loudly after the budget.
 """
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
 import requests
+import testcontainers.core.docker_client as docker_client_module
+import testcontainers.core.generic as generic_module
 from docker.errors import APIError
 
 from tests.helpers import testcontainers_harness as harness
@@ -31,11 +40,16 @@ def _api_error(status_code: int, message: str = "Server Error") -> APIError:
     return APIError(f"{status_code} {message}", response=response)
 
 
-def _wrapped_connection_error() -> BaseException:
+def _wrapped_connection_error() -> Exception:
     """A pull failure that only reveals its transient cause through ``__cause__``."""
     wrapped = RuntimeError("pull failed")
     wrapped.__cause__ = requests.exceptions.ConnectionError("connection reset")
     return wrapped
+
+
+class _FakeDockerClient:
+    def __init__(self) -> None:
+        self.client = Mock()
 
 
 class _FakeContainer:
@@ -44,7 +58,7 @@ class _FakeContainer:
     def __init__(self, outcomes: list[BaseException | None]) -> None:
         self._outcomes = outcomes
         self.start_calls = 0
-        self.stopped = False
+        self.stop_calls = 0
 
     def start(self) -> None:
         self.start_calls += 1
@@ -52,17 +66,17 @@ class _FakeContainer:
         if outcome is not None:
             raise outcome
 
-    def with_env(self, key: str, value: str) -> None:
+    def with_env(self, _key: str, _value: str) -> None:
         pass
 
-    def with_command(self, command: list[str]) -> None:
+    def with_command(self, _command: Any) -> None:
         pass
 
-    def with_exposed_ports(self, port: int) -> None:
+    def with_exposed_ports(self, _port: int) -> None:
         pass
 
     def stop(self) -> None:
-        self.stopped = True
+        self.stop_calls += 1
 
 
 @pytest.fixture
@@ -70,6 +84,11 @@ def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     recorded: list[float] = []
     monkeypatch.setattr(harness.time, "sleep", recorded.append)
     return recorded
+
+
+def _install_fakes(monkeypatch: pytest.MonkeyPatch, container: _FakeContainer) -> None:
+    monkeypatch.setattr(docker_client_module, "DockerClient", _FakeDockerClient)
+    monkeypatch.setattr(generic_module, "DockerContainer", lambda _image: container)
 
 
 @pytest.mark.parametrize(
@@ -82,8 +101,8 @@ def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
         pytest.param(_wrapped_connection_error(), id="wrapped"),
     ],
 )
-def test_is_transient_registry_error_true(exc: BaseException) -> None:
-    assert harness.is_transient_registry_error(exc) is True
+def test_is_transient_start_error_true(exc: Exception) -> None:
+    assert harness.is_transient_start_error(exc) is True
 
 
 @pytest.mark.parametrize(
@@ -94,61 +113,59 @@ def test_is_transient_registry_error_true(exc: BaseException) -> None:
         pytest.param(ValueError("no space left on device"), id="unrelated"),
     ],
 )
-def test_is_transient_registry_error_false(exc: BaseException) -> None:
-    assert harness.is_transient_registry_error(exc) is False
+def test_is_transient_start_error_false(exc: Exception) -> None:
+    assert harness.is_transient_start_error(exc) is False
 
 
-def test_retries_a_transient_failure_then_succeeds(sleeps: list[float]) -> None:
+def test_retries_a_transient_failure_then_succeeds(monkeypatch: pytest.MonkeyPatch, sleeps: list[float]) -> None:
     container = _FakeContainer([_api_error(503), _api_error(503), None])
+    _install_fakes(monkeypatch, container)
 
-    harness.start_container_with_transient_pull_retry(container, _IMAGE)
+    harness.start_tier1b_container(harness.ContainerSpec(image=_IMAGE, container_port=None))
 
     assert container.start_calls == 3
-    assert sleeps == list(harness.TRANSIENT_PULL_RETRY_DELAYS_SECONDS[:2])
+    assert sleeps == [harness.TIER1B_START_BACKOFF_SECONDS * 1, harness.TIER1B_START_BACKOFF_SECONDS * 2]
 
 
-def test_non_transient_failure_is_not_retried(sleeps: list[float]) -> None:
+def test_non_transient_failure_is_not_retried(monkeypatch: pytest.MonkeyPatch, sleeps: list[float]) -> None:
     container = _FakeContainer([_api_error(404, "Not Found")])
+    _install_fakes(monkeypatch, container)
 
-    with pytest.raises(APIError):
-        harness.start_container_with_transient_pull_retry(container, _IMAGE)
+    with pytest.raises(harness.Tier1bFixtureError, match="after 1 attempt"):
+        harness.start_tier1b_container(harness.ContainerSpec(image=_IMAGE, container_port=None))
 
     assert container.start_calls == 1
     assert sleeps == []
 
 
-def test_exhausted_budget_reraises_the_last_error(sleeps: list[float]) -> None:
-    failures = [_api_error(503) for _ in harness.TRANSIENT_PULL_RETRY_DELAYS_SECONDS]
+def test_exhausted_budget_reports_the_last_error(monkeypatch: pytest.MonkeyPatch, sleeps: list[float]) -> None:
+    failures = [_api_error(503) for _ in range(harness.TIER1B_START_ATTEMPTS - 1)]
     failures.append(_api_error(503, "Still Unavailable"))
     container = _FakeContainer(list(failures))
+    _install_fakes(monkeypatch, container)
 
-    with pytest.raises(APIError, match="Still Unavailable"):
-        harness.start_container_with_transient_pull_retry(container, _IMAGE)
+    with pytest.raises(harness.Tier1bFixtureError, match="Still Unavailable"):
+        harness.start_tier1b_container(harness.ContainerSpec(image=_IMAGE, container_port=None))
 
-    assert container.start_calls == len(harness.TRANSIENT_PULL_RETRY_DELAYS_SECONDS) + 1
-    assert sleeps == list(harness.TRANSIENT_PULL_RETRY_DELAYS_SECONDS)
+    assert container.start_calls == harness.TIER1B_START_ATTEMPTS
+    assert sleeps == [
+        harness.TIER1B_START_BACKOFF_SECONDS * attempt for attempt in range(1, harness.TIER1B_START_ATTEMPTS)
+    ]
 
 
 def test_start_tier1b_container_retries_and_still_fails_loudly(
     monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
 ) -> None:
     """End-to-end wiring: the retry runs, then the fixture failure is loud."""
-    import testcontainers.core.docker_client as docker_client_module
-    import testcontainers.core.generic as generic_module
-
-    container = _FakeContainer([_api_error(503) for _ in harness.TRANSIENT_PULL_RETRY_DELAYS_SECONDS])
-
-    class _FakeClient:
-        def __init__(self) -> None:
-            self.client = Mock()
-
-    monkeypatch.setattr(docker_client_module, "DockerClient", _FakeClient)
-    monkeypatch.setattr(generic_module, "DockerContainer", lambda image: container)
+    container = _FakeContainer([_api_error(503) for _ in range(harness.TIER1B_START_ATTEMPTS)])
+    _install_fakes(monkeypatch, container)
 
     with pytest.raises(harness.Tier1bFixtureError) as excinfo:
         harness.start_tier1b_container(harness.ContainerSpec(image=_IMAGE, container_port=8443))
 
     assert _IMAGE in str(excinfo.value)
-    assert container.start_calls == len(harness.TRANSIENT_PULL_RETRY_DELAYS_SECONDS) + 1
-    assert sleeps == list(harness.TRANSIENT_PULL_RETRY_DELAYS_SECONDS)
-    assert container.stopped is True
+    assert container.start_calls == harness.TIER1B_START_ATTEMPTS
+    assert sleeps == [
+        harness.TIER1B_START_BACKOFF_SECONDS * attempt for attempt in range(1, harness.TIER1B_START_ATTEMPTS)
+    ]
+    assert container.stop_calls == harness.TIER1B_START_ATTEMPTS

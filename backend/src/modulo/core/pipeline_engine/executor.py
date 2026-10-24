@@ -181,6 +181,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
+from modulo.db.models.run_attempt import ATTEMPT_TERMINAL_REASON_RESET
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, is_lock_abort, sqlstate_of
 from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
@@ -2841,6 +2842,37 @@ class PipelineExecutor:
                     run_id,
                     org_id,
                 )
+            else:
+                # FAR-2078: open the durable per-attempt row at the EXACT point
+                # the retry budget is spent, in the SAME transaction — the two
+                # describe the same event, so they can never disagree, and a
+                # crash after this commit leaves both the spend and the attempt
+                # recorded. Gated on ``counted``: a fence-rejected bump opened
+                # no execution, so writing a row would make attempts OUTNUMBER
+                # ``execution_attempt_count``.
+                #
+                # FAIL-OPEN, inside a SAVEPOINT: diagnostics must never fail
+                # the admission. A bare try/except would be wrong on Postgres —
+                # a failed statement aborts the WHOLE transaction, so the
+                # caller's admission commit would fail instead of the attempt
+                # write alone. The savepoint rolls back just this statement.
+                # ``model_used`` is unknown at admission (nodes have not run).
+                try:
+                    from modulo.db.crud.run_attempts import start_attempt
+
+                    async with session.begin_nested():
+                        await start_attempt(session, run_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "pipeline.execution_attempt_row_failed run=%s org=%s — the "
+                        "per-attempt history row could not be written; the execution "
+                        "proceeds (attempt history is diagnostics, never a gate)",
+                        run_id,
+                        org_id,
+                        exc_info=True,
+                    )
             return admitted
 
     async def _capacity_snapshot(
@@ -6434,6 +6466,18 @@ class PipelineExecutor:
                     "re-raised retry cannot claim a fresh running row)",
                     run_id,
                 )
+            elif reset_rowcount:
+                # FAR-2078: the attempt ended in a CONFIRMED reset. Close its row
+                # with the cause the reset just erased from ``runs.error_code``
+                # — this is the history the table exists to retain. Only a
+                # confirmed reset (rowcount 1): a fence loss (0) belongs to a
+                # successor's row and a timeout (None) is closed by the
+                # backstop's terminal write.
+                await self._record_attempt_reset(
+                    run_id=run_id,
+                    org_id=org_id,
+                    error_code=failure_code or type(exc).__name__,
+                )
             # The caller's re-raise propagates out of execute() BEFORE the
             # post-stream try/finally, so run its cleanup here: clear the
             # cancellation check + hubs and close the run's broker so the
@@ -7120,6 +7164,38 @@ class PipelineExecutor:
             # fence loss and terminalise.
             return None
 
+    async def _record_attempt_reset(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        error_code: str | None,
+    ) -> None:
+        """Close the attempt that just ended in a CONFIRMED fenced reset.
+
+        FAR-2078 — this is the load-bearing case the whole table exists for:
+        ``_fenced_pending_reset`` nulls the run's ``error_code``, so the trigger
+        for a retry used to vanish. The attempt row carries its OWN
+        ``terminal_reason`` ("reset") and the pre-reset ``error_code``, and the
+        reset never touches it.
+
+        Call ONLY when the reset is confirmed (rowcount 1). A fence loss (0)
+        means a successor owns the run and its OWN open attempt row must not be
+        closed by us; a timeout (``None``) leaves the run running for the
+        nodeless/age backstop, whose terminal write closes the row with the
+        truth. FAIL-OPEN — the reset already committed, so diagnostics can
+        never undo it.
+        """
+        from modulo.core.pipeline_execution import record_attempt_close
+
+        await record_attempt_close(
+            self._session_factory,
+            run_id,
+            org_id,
+            terminal_reason=ATTEMPT_TERMINAL_REASON_RESET,
+            error_code=error_code,
+        )
+
     async def _cleanup_run_resources(
         self,
         *,
@@ -7416,6 +7492,9 @@ class PipelineExecutor:
             # loss (rowcount 0) means a successor already owns the run, and
             # ``None`` means the reset timed out (unconfirmed).
             _record_retry_redispatch(reason=final_status, schedule_state=schedule_state, delay_seconds=effective_sleep)
+            # FAR-2078: close the attempt that ended in this confirmed reset with
+            # the outcome the reset just cleared from ``runs.error_code``.
+            await self._record_attempt_reset(run_id=run_id, org_id=org_id, error_code=error_code)
         await asyncio.sleep(effective_sleep)
         raise RunRetryPolicyError(final_status, retry_budget)
 

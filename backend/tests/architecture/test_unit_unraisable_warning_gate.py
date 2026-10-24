@@ -43,6 +43,8 @@ A gate that can be deleted silently is not a gate. These tests pin:
   tier1b-light, CI architecture and connector-contract steps, merge-queue unit
   run, schemathesis and Tier 1b nightly runs, both conformance-suite commands
   in the k8s-conformance workflow, and the runner-ci docker harness suite);
+- the runner-ci harness command runs EVERY module in ``tests/docker`` (a gated
+  test that no CI job runs is a test the gate cannot protect);
 - EVERY pytest invocation in ``.github/scripts/coverage-thresholds.sh`` still
   carries the byte-identical escalation. The unit suite is run as shards, so
   the script passes an enumerated file list rather than a literal
@@ -292,6 +294,25 @@ def test_ci_command_for_a_gated_suite_carries_the_escalation(workflow: Path, nee
         assert _ESCALATION in command, f"{workflow.name} command lost the escalation: {command}"
         assert "-p no:warnings" not in command, f"{workflow.name} command disables the warnings plugin: {command}"
         assert "--disable-warnings" in command, f"{workflow.name} command lacks --disable-warnings: {command}"
+
+
+def test_runner_ci_command_runs_every_docker_test_module() -> None:
+    """The harness job runs EVERY docker module, not only the rig-backed one.
+
+    The `docker` tree is gated in-process, but a docker test that no CI job
+    runs is a test the gate cannot protect (the gap this closes: two of the
+    four modules were gated yet never executed in CI). Pinning the file list
+    against the tree itself means adding a module without wiring it into the
+    command fails here, and dropping one fails too.
+    """
+    commands = [command for command in _workflow_run_commands(RUNNER_CI_WORKFLOW) if "pytest tests/docker/" in command]
+    assert len(commands) == 1, f"expected exactly one docker pytest command, found {len(commands)}"
+    wired = set(re.findall(r"tests/docker/(\w+\.py)", commands[0]))
+    on_disk = {path.name for path in (TESTS / "docker").glob("test_*.py")}
+    assert wired == on_disk, (
+        "the runner-ci docker command does not run every tests/docker module: "
+        f"missing={sorted(on_disk - wired)} extra={sorted(wired - on_disk)}"
+    )
 
 
 def _without_shell_comments(command: str) -> str:
