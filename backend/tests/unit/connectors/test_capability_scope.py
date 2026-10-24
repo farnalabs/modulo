@@ -23,7 +23,7 @@ import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
@@ -37,6 +37,7 @@ from modulo.core.capability_scope import (
     compute_run_fetch_scope,
     filter_run_context_scope,
     is_connector_allowed,
+    record_scope_violation,
     validate_allowed_connectors_not_blank,
     validate_allowed_connectors_subset,
 )
@@ -226,6 +227,15 @@ def test_agent_granted_connector_types_handles_both_shapes():
     assert not agent_granted_connector_types([])
 
 
+def test_agent_granted_connector_types_ignores_unintelligible_refs():
+    """A ref that names no connector type contributes nothing — an integer, None,
+    or a dict whose ``connector_type`` is absent or not a string. One such entry
+    must not discard its siblings: the intelligible refs in the same list still
+    land, so a partially-malformed grant list is read for what it does say."""
+    assert not agent_granted_connector_types([None, 7, {"capabilities": []}, {"connector_type": 7}])
+    assert agent_granted_connector_types([None, "github", {"connector_type": 7}, 7]) == {"github"}
+
+
 # ---------------------------------------------------------------------------
 # Default UNRESTRICTED (- populated from Agent grants, not empty set)
 # ---------------------------------------------------------------------------
@@ -361,6 +371,32 @@ def test_scope_violation_is_named_in_error_taxonomy():
     assert is_retryable("scope.violation") is False
 
 
+def test_record_scope_violation_noops_without_a_meter_provider():
+    """With no configured meter provider the helper returns without raising.
+
+    Metrics are advisory and the typed error is not: an unconfigured meter must
+    never be the reason a ``scope.violation`` goes unreported.
+    """
+    with patch("opentelemetry.metrics.get_meter_provider", return_value=None):
+        assert record_scope_violation(node_id="n1", target="slack", kind="connector") is None
+
+
+def test_record_scope_violation_swallows_meter_backend_failures():
+    """A metric-backend failure while emitting the counter is swallowed.
+
+    The counter is reached and called with the documented labels, so this pins
+    that the emission really was attempted — and that its failure does not
+    replace the typed error the caller already raised.
+    """
+    counter = MagicMock()
+    counter.add.side_effect = RuntimeError("meter backend down")
+    provider = MagicMock()
+    provider.get_meter.return_value.create_counter.return_value = counter
+    with patch("opentelemetry.metrics.get_meter_provider", return_value=provider):
+        assert record_scope_violation(node_id="n1", target="slack", kind="connector", graph_id="g1") is None
+    counter.add.assert_called_once_with(1, {"graph_id": "g1", "node_id": "n1", "connector": "slack"})
+
+
 # ---------------------------------------------------------------------------
 # allowed_tools narrowing via check_tool_scope
 # ---------------------------------------------------------------------------
@@ -468,6 +504,31 @@ def test_assert_no_secret_objects_allows_plain_data():
     # Opaque connector ID strings + plain dicts/list are valid port payloads.
     result = assert_no_secret_objects({"connector_id": str(uuid.uuid4()), "records": [{"ok": True}]}, node_id="n1")
     assert result is None
+
+
+def test_assert_no_secret_objects_descends_into_plain_object_attributes():
+    """A non-dataclass object is descended into through its ``__dict__``.
+
+    Agents may wrap a port payload in a plain class, and such a wrapper is none of
+    dict / list / tuple / dataclass — so without the attribute-bag backstop a
+    connector object riding inside one would pass the guard. The clean wrapper
+    passing only shows the guard tolerates the shape; the smuggled connector is
+    what proves the descent happens.
+    """
+
+    class _PlainPayload:
+        def __init__(self, value: Any) -> None:
+            self.value = value
+
+    class _SmuggledConnector:
+        connector_type = "github"
+        query = lambda *a, **k: None  # noqa: E731
+
+    assert assert_no_secret_objects(_PlainPayload({"ok": True}), node_id="n1") is None
+    with pytest.raises(ScopeViolationError) as exc_info:
+        assert_no_secret_objects(_PlainPayload({"raw": _SmuggledConnector()}), node_id="n1")
+    assert exc_info.value.kind == "secret"
+    assert exc_info.value.target == "_SmuggledConnector"
 
 
 # Save-time (route-level) narrow-not-widen control (FAR-418 MINOR-1)
@@ -951,7 +1012,7 @@ def test_bare_string_allowed_connectors_is_one_entry_not_a_char_sequence():
     )
 
 
-@pytest.mark.parametrize("malformed", [{"github": True}, 7, frozenset({"github"})])
+@pytest.mark.parametrize("malformed", [{"github": True}, 7, frozenset({"github"}), True])
 def test_malformed_allowed_connectors_fails_closed(malformed):
     """A value that cannot express an allowlist is NOT unrestricted.
 
@@ -970,7 +1031,8 @@ def test_malformed_allowed_connectors_fails_closed(malformed):
     )
 
 
-def test_malformed_allowed_connectors_is_never_widened_by_agent_grants():
+@pytest.mark.parametrize("malformed", [{"github": True}, 7, frozenset({"github"}), True])
+def test_malformed_allowed_connectors_is_never_widened_by_agent_grants(malformed):
     """The malformed case contributes NOTHING and never falls through to the
     Agent-grant arm (FAR-418): falling through would WIDEN a node whose scope the
     engine could not interpret. The run scope stays empty and the runtime
@@ -983,7 +1045,7 @@ def test_malformed_allowed_connectors_is_never_widened_by_agent_grants():
                 "id": "agent",
                 "node_type": "agent",
                 "agent_id": agent_id,
-                "capability_scope": {"allowed_connectors": {"github": True}},
+                "capability_scope": {"allowed_connectors": malformed},
             }
         ]
     }
@@ -1040,6 +1102,140 @@ def test_routed_binding_without_an_instance_id_contributes_nothing():
         ]
     }
     assert compute_run_fetch_scope(graph) is None
+
+
+# ---------------------------------------------------------------------------
+# The contribution arms, reached through the public run-scope entry point:
+# an absent / non-mapping scope, the Agent-grant arm, the routed-binding arm,
+# and a non-mapping node. Each test pins the CONTRACT (what the run fetches),
+# never the shape of the helper that implements it.
+# ---------------------------------------------------------------------------
+
+
+def test_non_dict_capability_scope_is_treated_as_absent():
+    """A ``capability_scope`` that is not a mapping carries no connector scope.
+
+    It is read as ABSENT (unrestricted), not as a malformed allowlist: the
+    malformed check applies to ``allowed_connectors`` — the one value that can
+    narrow the fetch — and there is none here. The node therefore falls through
+    to its Agent's grants. The assertion is sharp: a grants set of ``{"slack"}``
+    is contributed, so the ``"github"`` / ``["github"]`` / ``7`` scope value was
+    demonstrably NOT read as an allowlist (which would have contributed
+    ``"github"`` for the first two).
+    """
+    agent_id = str(uuid.uuid4())
+    for cap_scope in ("github", ["github"], 7):
+        graph = {
+            "nodes": [
+                {"id": "n", "node_type": "agent", "agent_id": agent_id, "capability_scope": cap_scope},
+            ]
+        }
+        assert compute_run_fetch_scope(graph, {agent_id: {"slack"}}) == ["slack"]
+        # With no Agent grants to fall through to, the node still contributes
+        # nothing — an uninterpretable scope never invents a contribution.
+        assert compute_run_fetch_scope(graph) is None
+
+
+def test_scope_without_allowed_connectors_is_unrestricted():
+    """A scope that narrows only tools/context carries no connector scope.
+
+    Connector restriction is one key of ``capability_scope``; a scope that omits
+    it is connector-UNRESTRICTED, so the node behaves exactly like one with no
+    scope at all and contributes its Agent's grants.
+    """
+    agent_id = str(uuid.uuid4())
+    graph = {
+        "nodes": [
+            {
+                "id": "n",
+                "node_type": "agent",
+                "agent_id": agent_id,
+                "capability_scope": {"allowed_tools": ["search"]},
+            }
+        ]
+    }
+    assert compute_run_fetch_scope(graph, {agent_id: {"github", "linear"}}) == ["github", "linear"]
+
+
+def test_agent_node_without_a_grants_map_contributes_nothing():
+    """An agent node whose Agent grants were never resolved contributes nothing.
+
+    No map supplied (and an empty one) means there are no grants to contribute;
+    the node has no static connector binding either, so the union stays empty and
+    the run keeps the unrestricted default instead of narrowing to nothing.
+    """
+    agent_id = str(uuid.uuid4())
+    graph = {"nodes": [{"id": "n", "node_type": "agent", "agent_id": agent_id}]}
+    assert compute_run_fetch_scope(graph) is None
+    assert compute_run_fetch_scope(graph, {}) is None
+
+
+def test_agent_node_missing_from_the_grants_map_contributes_nothing():
+    """A grants map with no entry for this node's Agent contributes nothing.
+
+    The arm must look up THIS agent: contributing the map's other entries would
+    fetch every other agent's connector types, and contributing the whole map
+    would hand this node capabilities it was never granted.
+    """
+    agent_id = str(uuid.uuid4())
+    other_agent_id = str(uuid.uuid4())
+    graph = {"nodes": [{"id": "n", "node_type": "agent", "agent_id": agent_id}]}
+    assert compute_run_fetch_scope(graph, {other_agent_id: {"github"}}) is None
+
+
+def test_mixed_blank_and_real_entries_contribute_only_the_real_one():
+    """A list mixing blanks with real entries is a genuine NARROWING.
+
+    The blanks name no connector and are dropped, but they must not discount
+    their siblings: the real entry is still contributed, and the runtime
+    allow-check still admits the connector it names while denying an unrelated
+    one. Both readers must agree — a mixed list is not a widened list.
+    """
+    inst = uuid.uuid4()
+    graph = {
+        "nodes": [
+            {"capability_scope": {"allowed_connectors": ["", f"  {inst}  ", "\t", "github"]}},
+        ]
+    }
+    assert set(compute_run_fetch_scope(graph)) == {str(inst), "github"}
+    allowed = ["", " github "]
+    assert is_connector_allowed(connector_instance_id=inst, connector_type="github", allowed_connectors=allowed)
+    assert not is_connector_allowed(connector_instance_id=inst, connector_type="slack", allowed_connectors=allowed)
+
+
+def test_non_dict_routed_binding_contributes_nothing(monkeypatch):
+    """A node the router classifies as routed but whose binding is not a mapping
+    contributes nothing, instead of escaping as an ``AttributeError``.
+
+    ``node_routes_binding_to_connector`` lives in the connectors layer and itself
+    rejects a non-dict binding, so this shape cannot arise from today's graph
+    dicts — the predicate is stubbed here deliberately. The routed-binding arm
+    re-validates the binding it reads because routing is ANOTHER layer's
+    classification: a run-scope computation that trusted it and then called
+    ``.get`` on whatever it found would turn a graph shape into a failed run
+    rather than an empty contribution.
+    """
+    monkeypatch.setattr("modulo.connectors.base.node_routes_binding_to_connector", lambda node: True)
+    for binding in ("not-a-dict", ["x"], 7):
+        graph = {"nodes": [{"id": "conn", "node_type": "connector", "connector_binding": binding}]}
+        assert compute_run_fetch_scope(graph) is None
+
+
+def test_non_dict_node_contributes_nothing():
+    """A non-mapping entry in ``nodes`` contributes nothing and poisons nothing.
+
+    Raw-dict writers can store any JSON value where a node belongs, so one
+    unreadable entry must neither raise nor suppress its siblings' contributions:
+    the readable node's connector is still fetched.
+    """
+    assert compute_run_fetch_scope({"nodes": ["not-a-node", 7, None]}) is None
+    graph = {
+        "nodes": [
+            "not-a-node",
+            {"capability_scope": {"allowed_connectors": ["github"]}},
+        ]
+    }
+    assert compute_run_fetch_scope(graph) == ["github"]
 
 
 # ---------------------------------------------------------------------------
