@@ -33,14 +33,79 @@ Usage in a test module::
 from __future__ import annotations
 
 import contextlib
+import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
 SSRF_LOOPBACK_OPTIN = "127.0.0.0/8,::1/128"
+
+# A container-registry outage is transient, and it aborts a pull that would
+# succeed moments later: on 2026-10-24 quay.io returned 503 for the Keycloak
+# manifest and the auth tier errored on main (run 40076695793). The pull is
+# therefore retried with a bounded backoff. These are DELAYS rather than a
+# count so the worst case (~100s) stays inside the CI job's pytest budget;
+# they are deliberately not exponential-unbounded — a registry that is still
+# down after this window is an outage CI must report, not paper over.
+TRANSIENT_PULL_RETRY_DELAYS_SECONDS: tuple[float, ...] = (10.0, 30.0, 60.0)
+
+
+def _exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    """Yield *exc* and every exception it wraps (``__cause__`` / ``__context__``)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def is_transient_registry_error(exc: BaseException) -> bool:
+    """True when *exc* is a registry/daemon failure a retry can plausibly clear.
+
+    Deliberately narrow so a genuine failure is never retried: a registry
+    outage surfaces through the Docker SDK as an ``APIError`` whose
+    ``response.status_code`` is a 5xx (the daemon wraps the registry's own 503
+    in a 500), and a connection reset mid-pull as a ``requests`` transport
+    error. A 404 for a renamed tag, an unsupported manifest format or a
+    disk-full abort is a real failure and is raised on the first attempt.
+    """
+    for err in _exception_chain(exc):
+        status = getattr(getattr(err, "response", None), "status_code", None)
+        if isinstance(status, int) and status >= 500:
+            return True
+        if type(err).__module__.startswith("requests.exceptions"):
+            return True
+    return False
+
+
+def start_container_with_transient_pull_retry(container: Any, image: str) -> None:
+    """``container.start()``, retrying transient registry/connection failures.
+
+    Each retry is announced on stderr so a flaky registry leaves a visible
+    trace in the job log instead of silently masking an outage. The final
+    attempt's error propagates unchanged, so the caller still turns a
+    genuinely broken fixture into a loud ``Tier1bFixtureError`` — a registry
+    that stays down keeps failing CI rather than degrading to a skip.
+    """
+    delays: tuple[float | None, ...] = (*TRANSIENT_PULL_RETRY_DELAYS_SECONDS, None)
+    attempts = len(delays)
+    for attempt, delay in enumerate(delays, start=1):
+        try:
+            container.start()
+            return
+        except Exception as exc:
+            if delay is None or not is_transient_registry_error(exc):
+                raise
+            sys.stderr.write(
+                f"Tier 1b fixture {image!r}: transient registry failure on attempt "
+                f"{attempt}/{attempts} ({type(exc).__name__}: {exc}); retrying in {delay:.0f}s\n"
+            )
+            sys.stderr.flush()
+            time.sleep(delay)
 
 
 class Tier1bFixtureError(RuntimeError):
@@ -180,7 +245,10 @@ def start_tier1b_container(spec: ContainerSpec) -> ContainerHandle:
             container.with_volume_mapping(host_dir, mount_path, spec.volume_mode)
         if spec.container_port is not None:
             container.with_exposed_ports(spec.container_port)
-        container.start()
+        # Retries ONLY a transient registry/connection failure (borderline
+        # outages, e.g. quay.io 503); every other start error is raised on the
+        # first attempt and becomes the loud Tier1bFixtureError below.
+        start_container_with_transient_pull_retry(container, spec.image)
     except Exception as exc:
         # Docker-level unavailability (no daemon, image pull/start failure — e.g.
         # a multi-GB pull exhausting the runner's disk) is a FIXTURE problem, not
