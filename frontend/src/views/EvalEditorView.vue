@@ -68,34 +68,510 @@
                 />
               </div>
 
-              <div>
-                <label for="evaleditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.eval_type') }}</label>
-                <Select
-  :aria-label="$t('views.EvalEditorView.eval_type_aria')"
-  v-model="form.eval_type"
-  :placeholder="$t('views.EvalEditorView.model_judge')"
-  data-testid="eval-editor-eval-type"
-  class="w-full"
-  :options="[{ value: 'model_judge', label: $t('views.EvalEditorView.model_judge') }, { value: 'regex', label: $t('views.EvalEditorView.regex') }, { value: 'json_schema', label: $t('views.EvalEditorView.json_schema') }, { value: 'custom_function', label: $t('views.EvalEditorView.custom_function') }]"
-  option-label="label"
-  option-value="value"
->
-  <template #option="{ option }">
-    <span :data-value="option.value">{{ option.label }}</span>
-  </template>
-</Select>
-              </div>
+              <!-- ADR 066 D19: a two-axis Judging control — mechanism first,
+                   then the backing. Never one flat list mixing a deterministic
+                   eval_type with a backend. -->
+              <div class="rounded-lg border bg-card p-4" data-testid="eval-editor-judging">
+                <h3 class="mb-3 text-sm font-semibold">{{ $t('views.EvalEditorView.judging.heading') }}</h3>
 
-              <div>
-                <label for="evaleditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.config_json') }} <span class="text-muted-foreground">{{ $t('views.EvalEditorView.config_json_hint') }}</span></label>
-                <textarea id="evaleditorview-field-4"
-                  v-model="form.config_json"
-                  rows="6"
-                  data-testid="eval-editor-config"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :placeholder="configPlaceholder"
-                />
-                <div v-if="configParseError" class="mt-1 text-xs text-destructive">{{ configParseError }}</div>
+                <div>
+                  <label for="evaleditorview-mechanism" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.mechanism') }}</label>
+                  <Select
+                    :aria-label="$t('views.EvalEditorView.judging.mechanismAria')"
+                    :model-value="isTyped ? 'typed_questions' : 'deterministic'"
+                    :placeholder="$t('views.EvalEditorView.judging.mechanism')"
+                    data-testid="eval-editor-eval-type"
+                    class="w-full"
+                    :options="mechanismOptions"
+                    option-label="label"
+                    option-value="value"
+                    @update:model-value="onMechanismChange"
+                  >
+                    <template #option="{ option }">
+                      <span :data-value="option.value">{{ option.label }}</span>
+                    </template>
+                  </Select>
+                </div>
+
+                <template v-if="isTyped">
+                  <div v-if="legacyMode" class="mt-3 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs" data-testid="eval-editor-legacy-notice">
+                    <p class="font-medium">{{ $t('views.EvalEditorView.judging.legacyNoticeTitle') }}</p>
+                    <p class="mt-1 text-muted-foreground">{{ $t('views.EvalEditorView.judging.legacyNoticeBody') }}</p>
+                    <pre class="mt-2 max-h-40 overflow-auto rounded bg-background p-2 font-mono text-[11px]">{{ legacyConfigJson }}</pre>
+                    <button
+                      type="button"
+                      data-testid="eval-editor-migrate-legacy"
+                      class="mt-2 rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                      @click="migrateLegacyConfig"
+                    >
+                      {{ $t('views.EvalEditorView.judging.migrateLegacy') }}
+                    </button>
+                  </div>
+
+                  <div v-else class="mt-3 space-y-3" data-testid="eval-editor-config">
+                    <div>
+                      <label for="evaleditorview-backing-kind" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.backing') }}</label>
+                      <Select
+                        :aria-label="$t('views.EvalEditorView.judging.backingAria')"
+                        v-model="typedDraft.backingKind"
+                        data-testid="eval-editor-backing-kind"
+                        class="w-full"
+                        :options="backingOptions"
+                        option-label="label"
+                        option-value="value"
+                      >
+                        <template #option="{ option }">
+                          <span :data-value="option.value">{{ option.label }}</span>
+                        </template>
+                      </Select>
+                    </div>
+
+                    <div v-if="typedDraft.backingKind === 'model_backend'">
+                      <label for="evaleditorview-backing-model" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.modelBackend') }}</label>
+                      <Select
+                        :aria-label="$t('views.EvalEditorView.judging.modelBackendAria')"
+                        v-model="typedDraft.modelBackendId"
+                        data-testid="eval-editor-backing-model"
+                        class="w-full"
+                        :options="modelBackendOptions"
+                        option-label="label"
+                        option-value="value"
+                      >
+                        <template #option="{ option }">
+                          <span :data-value="option.value">{{ option.label }}</span>
+                        </template>
+                      </Select>
+                      <p v-if="modelBackendsError" class="mt-1 text-xs text-destructive">{{ modelBackendsError }}</p>
+                      <p v-else-if="modelBackends.length === 0" class="mt-1 text-xs text-muted-foreground">{{ $t('views.EvalEditorView.judging.noModelBackends') }}</p>
+                      <p v-else-if="!typedDraft.modelBackendId" class="mt-1 text-xs text-muted-foreground">{{ $t('views.EvalEditorView.judging.noBackendSelectedHint') }}</p>
+                    </div>
+
+                    <div v-else>
+                      <label for="evaleditorview-backing-vendor" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.decisionVendor') }}</label>
+                      <input
+                        id="evaleditorview-backing-vendor"
+                        v-model="typedDraft.decisionVendor"
+                        type="text"
+                        data-testid="eval-editor-backing-vendor"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        :placeholder="$t('views.EvalEditorView.judging.decisionVendorPlaceholder')"
+                      />
+                    </div>
+
+                    <p class="rounded bg-muted px-2 py-1 text-xs text-muted-foreground" data-testid="eval-editor-backing-preview">
+                      {{ backingPreview }}
+                    </p>
+
+                    <div>
+                      <label for="evaleditorview-verdict-kind" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.verdictKind') }}</label>
+                      <Select
+                        :aria-label="$t('views.EvalEditorView.judging.verdictKindAria')"
+                        v-model="typedDraft.verdictKind"
+                        data-testid="eval-editor-verdict-kind"
+                        class="w-full"
+                        :options="verdictKindOptions"
+                        option-label="label"
+                        option-value="value"
+                      >
+                        <template #option="{ option }">
+                          <span :data-value="option.value">{{ option.label }}</span>
+                        </template>
+                      </Select>
+                    </div>
+                    <div
+                      v-if="typedDraft.verdictKind === 'derivation'"
+                      role="alert"
+                      aria-live="assertive"
+                      data-testid="eval-editor-derivation-warning"
+                      class="rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive-text"
+                    >
+                      {{ $t('views.EvalEditorView.judging.derivationWarning') }}
+                    </div>
+
+                    <div>
+                      <label for="evaleditorview-field" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.judgedField') }}</label>
+                      <input
+                        id="evaleditorview-field"
+                        v-model="typedDraft.field"
+                        type="text"
+                        data-testid="eval-editor-field"
+                        :disabled="typedDraft.judgeWholeOutput"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                        :placeholder="$t('views.EvalEditorView.judging.judgedFieldPlaceholder')"
+                      />
+                      <label class="mt-2 flex items-center gap-2 text-xs">
+                        <input
+                          v-model="typedDraft.judgeWholeOutput"
+                          type="checkbox"
+                          data-testid="eval-editor-judge-whole-output"
+                          class="accent-primary"
+                        />
+                        <span>{{ $t('views.EvalEditorView.judging.judgeWholeOutput') }}</span>
+                      </label>
+                    </div>
+
+                    <div>
+                      <label for="evaleditorview-context-fields" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.contextFields') }}</label>
+                      <input
+                        id="evaleditorview-context-fields"
+                        v-model="typedDraft.contextFields"
+                        type="text"
+                        data-testid="eval-editor-context-fields"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        :placeholder="$t('views.EvalEditorView.judging.contextFieldsPlaceholder')"
+                      />
+                    </div>
+
+                    <div class="rounded border border-dashed p-3">
+                      <div class="mb-2 flex items-center justify-between gap-2">
+                        <h4 class="text-xs font-semibold uppercase tracking-wide">{{ $t('views.EvalEditorView.judging.questions') }}</h4>
+                        <button
+                          type="button"
+                          data-testid="eval-editor-question-add"
+                          class="rounded border border-input px-2 py-1 text-xs font-medium hover:bg-accent"
+                          @click="addQuestion"
+                        >
+                          {{ $t('views.EvalEditorView.judging.addQuestion') }}
+                        </button>
+                      </div>
+
+                      <div
+                        v-for="(question, questionIndex) in typedDraft.questions"
+                        :key="questionIndex"
+                        data-testid="eval-editor-question"
+                        class="mb-3 space-y-2 rounded border bg-background p-3 last:mb-0"
+                      >
+                        <div class="flex items-center justify-between gap-2">
+                          <span class="text-xs font-medium">{{ $t('views.EvalEditorView.judging.questionNumber', { index: questionIndex + 1 }) }}</span>
+                          <button
+                            type="button"
+                            data-testid="eval-editor-question-remove"
+                            :aria-label="$t('views.EvalEditorView.judging.removeQuestionAria', { index: questionIndex + 1 })"
+                            class="rounded p-1 text-destructive hover:bg-destructive/10"
+                            @click="removeQuestion(questionIndex)"
+                          >
+                            <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
+
+                        <div class="grid gap-2 sm:grid-cols-2">
+                          <div>
+                            <span class="mb-1 block text-xs font-medium">{{ $t('views.EvalEditorView.judging.questionId') }}</span>
+                            <input
+                              v-model="question.id"
+                              type="text"
+                              data-testid="eval-editor-question-id"
+                              :aria-label="$t('views.EvalEditorView.judging.questionIdAria', { index: questionIndex + 1 })"
+                              class="w-full rounded-lg border border-input bg-background px-2 py-1.5 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            />
+                          </div>
+                          <div>
+                            <span class="mb-1 block text-xs font-medium">{{ $t('views.EvalEditorView.judging.questionType') }}</span>
+                            <Select
+                              :aria-label="$t('views.EvalEditorView.judging.questionTypeAria', { index: questionIndex + 1 })"
+                              :model-value="question.type"
+                              data-testid="eval-editor-question-type"
+                              class="w-full"
+                              :options="questionTypeOptions"
+                              option-label="label"
+                              option-value="value"
+                              @update:model-value="(value) => setQuestionType(question, value)"
+                            >
+                              <template #option="{ option }">
+                                <span :data-value="option.value">{{ option.label }}</span>
+                              </template>
+                            </Select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <span class="mb-1 block text-xs font-medium">{{ $t('views.EvalEditorView.judging.instructions') }}</span>
+                          <textarea
+                            v-model="question.instructions"
+                            rows="2"
+                            data-testid="eval-editor-question-instructions"
+                            :aria-label="$t('views.EvalEditorView.judging.instructionsAria', { index: questionIndex + 1 })"
+                            class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          />
+                        </div>
+
+                        <div>
+                          <span class="mb-1 block text-xs font-medium">{{ $t('views.EvalEditorView.judging.criteria') }}</span>
+                          <textarea
+                            v-model="question.criteriaText"
+                            rows="2"
+                            data-testid="eval-editor-question-criteria"
+                            :aria-label="$t('views.EvalEditorView.judging.criteriaAria', { index: questionIndex + 1 })"
+                            :placeholder="$t('views.EvalEditorView.judging.criteriaPlaceholder')"
+                            class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          />
+                        </div>
+
+                        <div class="grid gap-2 sm:grid-cols-3">
+                          <div>
+                            <span class="mb-1 block text-xs font-medium">{{ $t('views.EvalEditorView.judging.weight') }}</span>
+                            <input
+                              v-model="question.weight"
+                              type="number"
+                              min="0"
+                              step="0.1"
+                              data-testid="eval-editor-question-weight"
+                              :aria-label="$t('views.EvalEditorView.judging.weightAria', { index: questionIndex + 1 })"
+                              class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            />
+                          </div>
+                          <div>
+                            <span class="mb-1 block text-xs font-medium">{{ $t('views.EvalEditorView.judging.minPassConfidence') }}</span>
+                            <input
+                              v-model="question.minPassConfidence"
+                              type="number"
+                              min="0"
+                              max="1"
+                              step="0.05"
+                              data-testid="eval-editor-question-min-confidence"
+                              :aria-label="$t('views.EvalEditorView.judging.minPassConfidenceAria', { index: questionIndex + 1 })"
+                              class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            />
+                          </div>
+                          <label class="flex items-end gap-2 pb-1 text-xs">
+                            <input
+                              v-model="question.required"
+                              type="checkbox"
+                              data-testid="eval-editor-question-required"
+                              :aria-label="$t('views.EvalEditorView.judging.requiredAria', { index: questionIndex + 1 })"
+                              class="accent-primary"
+                            />
+                            <span>{{ $t('views.EvalEditorView.judging.required') }}</span>
+                          </label>
+                        </div>
+
+                        <div v-if="question.type === 'choice'" class="rounded border border-dashed p-2">
+                          <div class="mb-2 flex items-center justify-between gap-2">
+                            <span class="text-xs font-medium">{{ $t('views.EvalEditorView.judging.options') }}</span>
+                            <button
+                              type="button"
+                              data-testid="eval-editor-question-add-option"
+                              :disabled="question.options.length >= maxChoiceOptions"
+                              class="rounded border border-input px-2 py-0.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+                              @click="addOption(question)"
+                            >
+                              {{ $t('views.EvalEditorView.judging.addOption') }}
+                            </button>
+                          </div>
+                          <div
+                            v-for="(option, optionIndex) in question.options"
+                            :key="optionIndex"
+                            class="mb-2 grid gap-2 sm:grid-cols-12"
+                          >
+                            <input
+                              v-model="option.key"
+                              type="text"
+                              data-testid="eval-editor-question-option-key"
+                              :aria-label="$t('views.EvalEditorView.judging.optionKeyAria', { question: questionIndex + 1, option: optionIndex + 1 })"
+                              :placeholder="$t('views.EvalEditorView.judging.optionKey')"
+                              class="rounded-lg border border-input bg-background px-2 py-1.5 font-mono text-xs sm:col-span-3"
+                            />
+                            <input
+                              v-model="option.description"
+                              type="text"
+                              data-testid="eval-editor-question-option-description"
+                              :aria-label="$t('views.EvalEditorView.judging.optionDescriptionAria', { question: questionIndex + 1, option: optionIndex + 1 })"
+                              :placeholder="$t('views.EvalEditorView.judging.optionDescription')"
+                              class="rounded-lg border border-input bg-background px-2 py-1.5 text-xs sm:col-span-4"
+                            />
+                            <label class="flex items-center gap-1 text-xs sm:col-span-2">
+                              <input
+                                v-model="option.passing"
+                                type="checkbox"
+                                data-testid="eval-editor-question-option-passing"
+                                :aria-label="$t('views.EvalEditorView.judging.optionPassingAria', { question: questionIndex + 1, option: optionIndex + 1 })"
+                                class="accent-primary"
+                              />
+                              <span>{{ $t('views.EvalEditorView.judging.passing') }}</span>
+                            </label>
+                            <input
+                              v-model="option.score"
+                              type="number"
+                              min="0"
+                              max="1"
+                              step="0.05"
+                              data-testid="eval-editor-question-option-score"
+                              :aria-label="$t('views.EvalEditorView.judging.optionScoreAria', { question: questionIndex + 1, option: optionIndex + 1 })"
+                              :placeholder="$t('views.EvalEditorView.judging.optionScore')"
+                              class="rounded-lg border border-input bg-background px-2 py-1.5 text-xs sm:col-span-2"
+                            />
+                            <button
+                              type="button"
+                              data-testid="eval-editor-question-remove-option"
+                              :aria-label="$t('views.EvalEditorView.judging.removeOptionAria', { question: questionIndex + 1, option: optionIndex + 1 })"
+                              class="rounded p-1 text-destructive hover:bg-destructive/10 sm:col-span-1"
+                              @click="removeOption(question, optionIndex)"
+                            >
+                              <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
+                          <p class="text-[11px] text-muted-foreground">{{ $t('views.EvalEditorView.judging.optionsHint') }}</p>
+                        </div>
+
+                        <div v-if="question.type === 'score'" class="rounded border border-dashed p-2">
+                          <div class="mb-2 flex items-center justify-between gap-2">
+                            <span class="text-xs font-medium">{{ $t('views.EvalEditorView.judging.levels') }}</span>
+                            <button
+                              type="button"
+                              data-testid="eval-editor-question-add-level"
+                              :disabled="question.levels.length >= maxScoreLevels"
+                              class="rounded border border-input px-2 py-0.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+                              @click="addLevel(question)"
+                            >
+                              {{ $t('views.EvalEditorView.judging.addLevel') }}
+                            </button>
+                          </div>
+                          <div
+                            v-for="(level, levelIndex) in question.levels"
+                            :key="levelIndex"
+                            class="mb-2 grid gap-2 sm:grid-cols-12"
+                          >
+                            <input
+                              v-model="level.score"
+                              type="number"
+                              data-testid="eval-editor-question-level-score"
+                              :aria-label="$t('views.EvalEditorView.judging.levelScoreAria', { question: questionIndex + 1, level: levelIndex + 1 })"
+                              :placeholder="$t('views.EvalEditorView.judging.levelScore')"
+                              class="rounded-lg border border-input bg-background px-2 py-1.5 text-xs sm:col-span-3"
+                            />
+                            <input
+                              v-model="level.description"
+                              type="text"
+                              data-testid="eval-editor-question-level-description"
+                              :aria-label="$t('views.EvalEditorView.judging.levelDescriptionAria', { question: questionIndex + 1, level: levelIndex + 1 })"
+                              :placeholder="$t('views.EvalEditorView.judging.levelDescription')"
+                              class="rounded-lg border border-input bg-background px-2 py-1.5 text-xs sm:col-span-8"
+                            />
+                            <button
+                              type="button"
+                              data-testid="eval-editor-question-remove-level"
+                              :aria-label="$t('views.EvalEditorView.judging.removeLevelAria', { question: questionIndex + 1, level: levelIndex + 1 })"
+                              class="rounded p-1 text-destructive hover:bg-destructive/10 sm:col-span-1"
+                              @click="removeLevel(question, levelIndex)"
+                            >
+                              <Trash2 class="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
+                          <div class="grid gap-2 sm:grid-cols-2">
+                            <div>
+                              <span class="mb-1 block text-xs font-medium">{{ $t('views.EvalEditorView.judging.passFrom') }}</span>
+                              <input
+                                v-model="question.passFrom"
+                                type="number"
+                                data-testid="eval-editor-question-pass-from"
+                                :aria-label="$t('views.EvalEditorView.judging.passFromAria', { index: questionIndex + 1 })"
+                                class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs"
+                              />
+                            </div>
+                          </div>
+                          <p class="mt-1 text-[11px] text-muted-foreground">{{ $t('views.EvalEditorView.judging.levelsHint') }}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="grid gap-2 sm:grid-cols-3">
+                      <div>
+                        <label for="evaleditorview-pass-rule" class="mb-1 block text-xs font-medium">{{ $t('views.EvalEditorView.judging.passRuleThreshold') }}</label>
+                        <input
+                          id="evaleditorview-pass-rule"
+                          v-model="typedDraft.threshold"
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.05"
+                          data-testid="eval-editor-pass-rule-threshold"
+                          class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        />
+                      </div>
+                      <div>
+                        <label for="evaleditorview-timeout-question" class="mb-1 block text-xs font-medium">{{ $t('views.EvalEditorView.judging.perQuestionSeconds') }}</label>
+                        <input
+                          id="evaleditorview-timeout-question"
+                          v-model="typedDraft.perQuestionSeconds"
+                          type="number"
+                          min="0"
+                          step="1"
+                          data-testid="eval-editor-timeout-question"
+                          class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        />
+                      </div>
+                      <div>
+                        <label for="evaleditorview-timeout-definition" class="mb-1 block text-xs font-medium">{{ $t('views.EvalEditorView.judging.perDefinitionSeconds') }}</label>
+                        <input
+                          id="evaleditorview-timeout-definition"
+                          v-model="typedDraft.perDefinitionSeconds"
+                          type="number"
+                          min="0"
+                          step="1"
+                          data-testid="eval-editor-timeout-definition"
+                          class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    v-if="!legacyMode && clientErrors.length > 0"
+                    role="alert"
+                    aria-live="polite"
+                    data-testid="eval-editor-client-errors"
+                    class="mt-3 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive-text"
+                  >
+                    <ul class="list-disc space-y-0.5 pl-4">
+                      <li v-for="(error, errorIndex) in clientErrors" :key="`${error.path}-${errorIndex}`">
+                        {{ $t('views.EvalEditorView.judging.errors.' + error.key, error.params ?? {}) }}
+                      </li>
+                    </ul>
+                  </div>
+                </template>
+
+                <template v-else>
+                  <div class="mt-3">
+                    <label for="evaleditorview-deterministic-type" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.deterministicType') }}</label>
+                    <Select
+                      :aria-label="$t('views.EvalEditorView.judging.deterministicTypeAria')"
+                      :model-value="deterministicType"
+                      data-testid="eval-editor-deterministic-type"
+                      class="w-full"
+                      :options="deterministicOptions"
+                      option-label="label"
+                      option-value="value"
+                      @update:model-value="onDeterministicTypeChange"
+                    >
+                      <template #option="{ option }">
+                        <span :data-value="option.value">{{ option.label }}</span>
+                      </template>
+                    </Select>
+                  </div>
+
+                  <div class="mt-3">
+                    <label for="evaleditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.config_json') }} <span class="text-muted-foreground">{{ $t('views.EvalEditorView.config_json_hint') }}</span></label>
+                    <textarea id="evaleditorview-field-4"
+                      v-model="form.config_json"
+                      rows="6"
+                      data-testid="eval-editor-config"
+                      class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      :placeholder="configPlaceholder"
+                    />
+                    <div v-if="configParseError" class="mt-1 text-xs text-destructive">{{ configParseError }}</div>
+                  </div>
+                </template>
+
+                <div
+                  v-if="serverConfigError"
+                  role="alert"
+                  aria-live="assertive"
+                  data-testid="eval-editor-server-error"
+                  class="mt-3 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive-text"
+                >
+                  <p class="font-medium">{{ serverConfigErrorHeading }}</p>
+                  <p class="mt-1">{{ serverConfigError.message }}</p>
+                </div>
               </div>
 
               <div>
@@ -117,6 +593,7 @@
                   />
                   <span class="text-xs text-muted-foreground">1.0</span>
                 </div>
+                <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.EvalEditorView.pass_threshold_hint') }}</p>
               </div>
 
               <!-- Policy Gate section -->
@@ -367,7 +844,14 @@
                 <div class="min-w-0 flex-1">
                   <p class="truncate font-medium">{{ ev.name }}</p>
                   <div class="mt-1 flex flex-wrap items-center gap-2">
-                    <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text">{{ ev.eval_type }}</span>
+                    <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary-text">{{ ev.eval_type === 'model_judge' ? $t('views.EvalEditorView.judging.mechanismTyped') : ev.eval_type }}</span>
+                    <!-- ADR 066 §0: the judge display is composed by the backend
+                         naming module and rendered verbatim — never composed here. -->
+                    <span
+                      v-if="ev.judge?.display"
+                      class="inline-block rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                      data-testid="eval-editor-judge-display"
+                    >{{ ev.judge.display }}</span>
                     <span
                       v-if="evalGateActions[ev.id]"
                       class="inline-block rounded px-2 py-0.5 text-xs font-medium"
@@ -455,6 +939,19 @@ import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil, Trash2 } from '@lucide/vue'
 import { api } from '../lib/api/client'
+import {
+  MAX_CHOICE_OPTIONS,
+  MAX_SCORE_LEVELS,
+  buildTypedJudgeConfig,
+  createDefaultDraft,
+  createQuestion,
+  draftFromConfig,
+  seedAnswerSpace,
+  validateTypedJudgeDraft,
+  type QuestionDraft,
+  type QuestionType,
+  type TypedJudgeDraft,
+} from '../components/eval/typedJudge'
 
 const { t } = useI18n()
 
@@ -475,6 +972,10 @@ interface GraphNode {
   position: { x: number; y: number }
 }
 
+interface EvalJudgeDisplay {
+  display?: string
+}
+
 interface EvalDefinition {
   id: string
   pipeline_id: string
@@ -485,32 +986,47 @@ interface EvalDefinition {
   pass_threshold: number | null
   suite_id: string | null
   created_by: string
+  judge?: EvalJudgeDisplay | null
 }
 
-// ADR 066 D8: a new model_judge definition must carry the typed dialect.
-// "Name it and save" must be a VALID create, not a guaranteed 422.
-const DEFAULT_MODEL_JUDGE_CONFIG = JSON.stringify(
-  {
-    field: 'output',
-    answer_contract: 'typed_questions',
-    backing: { kind: 'model_backend' },
-    questions: [
-      {
-        id: 'verdict',
-        type: 'noul',
-        instructions: 'Is the output acceptable?',
-        criteria: [],
-        weight: 1.0,
-        required: true,
-        min_pass_confidence: 0.5,
-      },
-    ],
-    pass_rule: { kind: 'weighted_score_at_least', threshold: 0.5 },
-    verdict_kind: 'assessment',
-  },
-  null,
-  2,
-)
+interface ModelBackendItem {
+  id: string
+  name: string
+  display_name: string
+  provider: string
+  model_id: string
+}
+
+type DeterministicType = 'regex' | 'json_schema' | 'custom_function'
+
+const DETERMINISTIC_TYPES: DeterministicType[] = ['regex', 'json_schema', 'custom_function']
+
+// A deterministic config is still authored as JSON, so each type gets a valid
+// starting document instead of a placeholder the user must retype.
+const DETERMINISTIC_DEFAULTS: Record<DeterministicType, string> = {
+  regex: JSON.stringify({ pattern: '(error|failed)', field: 'output' }, null, 2),
+  json_schema: JSON.stringify(
+    { schema: { type: 'object', properties: { valid: { type: 'boolean' } } } },
+    null,
+    2,
+  ),
+  custom_function: JSON.stringify(
+    { function: "def evaluate(output):\n    return output.get('score', 0) >= 0.8" },
+    null,
+    2,
+  ),
+}
+
+// Stable 422 codes the judge write chokepoint emits (ADR 066 D4/D8).
+const JUDGE_WRITE_CODES = [
+  'judge_config_invalid',
+  'judge_config_typed_required',
+  'judge_config_legacy_read_only',
+  'judge_verdict_kind_unsupported',
+  'judge_backend_not_found',
+  'judge_backend_not_org_owned',
+  'judge_backend_not_active',
+]
 
 const selectedPipelineId = ref('__all__')
 const nodes = ref<GraphNode[]>([])
@@ -523,9 +1039,21 @@ const form = reactive({
   name: '',
   node_id: '__all__',
   eval_type: 'model_judge',
-  config_json: DEFAULT_MODEL_JUDGE_CONFIG,
+  config_json: '',
   pass_threshold: 0.8,
 })
+
+// Typed-question authoring state (ADR 066 D4/D19). The builder owns the
+// config; `form.config_json` is only the deterministic JSON editor's buffer.
+const typedDraft = ref<TypedJudgeDraft>(createDefaultDraft())
+const deterministicType = ref<DeterministicType>('regex')
+// A legacy model_judge config is read-only until the author explicitly
+// migrates it (ADR 066 D8) — a metadata edit must never silently rewrite it.
+const legacyMode = ref(false)
+const legacyConfigJson = ref<string | null>(null)
+const serverConfigError = ref<{ code: string; message: string } | null>(null)
+const modelBackends = ref<ModelBackendItem[]>([])
+const modelBackendsError = ref<string | null>(null)
 
 const saving = ref(false)
 const formError = ref<string | null>(null)
@@ -571,14 +1099,106 @@ const dirtyConfirmVisible = ref(false)
 const dirtyConfirmProceedBtnRef = ref<HTMLElement | null>(null)
 let dirtyConfirmResolve: ((value: boolean) => void) | null = null
 
-const configParseError = computed(() => {
-  if (!form.config_json.trim()) return null
+const isTyped = computed(() => form.eval_type === 'model_judge')
+
+const mechanismOptions = computed(() => [
+  { value: 'typed_questions', label: t('views.EvalEditorView.judging.mechanismTyped') },
+  { value: 'deterministic', label: t('views.EvalEditorView.judging.mechanismDeterministic') },
+])
+
+const deterministicOptions = computed(() =>
+  DETERMINISTIC_TYPES.map((value) => ({
+    value,
+    label: t(`views.EvalEditorView.${value}`),
+  })),
+)
+
+const backingOptions = computed(() => [
+  { value: 'model_backend', label: t('views.EvalEditorView.judging.backingModelBackend') },
+  { value: 'decision_model', label: t('views.EvalEditorView.judging.backingDecisionModel') },
+])
+
+const verdictKindOptions = computed(() => [
+  { value: 'assessment', label: t('views.EvalEditorView.judging.verdictAssessment') },
+  { value: 'derivation', label: t('views.EvalEditorView.judging.verdictDerivation') },
+])
+
+const questionTypeOptions = computed(() => [
+  { value: 'noul', label: t('views.EvalEditorView.judging.questionTypeNoul') },
+  { value: 'choice', label: t('views.EvalEditorView.judging.questionTypeChoice') },
+  { value: 'score', label: t('views.EvalEditorView.judging.questionTypeScore') },
+])
+
+const modelBackendOptions = computed(() => [
+  { value: '', label: t('views.EvalEditorView.judging.noBackendSelected') },
+  ...modelBackends.value.map((backend) => ({
+    value: backend.id,
+    label: `${backend.display_name || backend.name} — ${backend.provider} · ${backend.model_id}`,
+  })),
+])
+
+const selectedModelBackend = computed(
+  () => modelBackends.value.find((backend) => backend.id === typedDraft.value.modelBackendId) ?? null,
+)
+
+// ADR 066 §0: the mechanism label is "Typed questions" and a backing renders
+// as `<mechanism> — <vendor/model> (<evidence>)`. The decision-model class
+// phrase is read from its one locale value; this component never composes it,
+// and a model-backed judge is always labelled "LLM, self-reported confidence".
+const backingPreview = computed(() => {
+  if (!isTyped.value) return ''
+  const mechanism = t('views.EvalEditorView.judging.mechanismTyped')
+  if (typedDraft.value.backingKind === 'decision_model') {
+    const vendor = typedDraft.value.decisionVendor.trim() || t('views.EvalEditorView.judging.decisionModelFallback')
+    return t('views.EvalEditorView.judging.displayDecisionModel', {
+      mechanism,
+      vendor,
+      modelClass: t('views.EvalEditorView.judging.systemOneModel'),
+    })
+  }
+  const backend = selectedModelBackend.value
+  if (!backend) {
+    if (typedDraft.value.modelBackendId) {
+      return t('views.EvalEditorView.judging.displayModelBackendUnknown', {
+        mechanism,
+        id: typedDraft.value.modelBackendId,
+      })
+    }
+    return t('views.EvalEditorView.judging.displayModelBackendUnset', { mechanism })
+  }
+  return t('views.EvalEditorView.judging.displayModelBackend', {
+    mechanism,
+    model: backend.model_id,
+    vendor: backend.provider,
+    evidence: t('views.EvalEditorView.judging.confidenceModelSelfReported'),
+  })
+})
+
+const clientErrors = computed(() =>
+  isTyped.value && !legacyMode.value ? validateTypedJudgeDraft(typedDraft.value) : [],
+)
+
+const serverConfigErrorHeading = computed(() => {
+  const code = serverConfigError.value?.code
+  if (code && JUDGE_WRITE_CODES.includes(code)) {
+    return t(`views.EvalEditorView.judging.serverErrors.${code}`)
+  }
+  return t('views.EvalEditorView.judging.serverErrors.generic')
+})
+
+const deterministicConfigValid = computed(() => {
+  if (!form.config_json.trim()) return false
   try {
     JSON.parse(form.config_json)
-    return null
+    return true
   } catch {
-    return t('views.EvalEditorView.invalid_json')
+    return false
   }
+})
+
+const configParseError = computed(() => {
+  if (isTyped.value || !form.config_json.trim()) return null
+  return deterministicConfigValid.value ? null : t('views.EvalEditorView.invalid_json')
 })
 
 const configPlaceholder = computed(() => {
@@ -586,13 +1206,108 @@ const configPlaceholder = computed(() => {
 })
 
 const canSave = computed(() => {
-  return (
-    selectedPipelineId.value && selectedPipelineId.value !== '__all__' &&
-    form.name.trim() &&
-    form.eval_type &&
-    !configParseError.value
-  )
+  if (!selectedPipelineId.value || selectedPipelineId.value === '__all__') return false
+  if (!form.name.trim() || !form.eval_type) return false
+  if (isTyped.value) return legacyMode.value || clientErrors.value.length === 0
+  return deterministicConfigValid.value
 })
+
+const maxChoiceOptions = MAX_CHOICE_OPTIONS
+const maxScoreLevels = MAX_SCORE_LEVELS
+
+function onMechanismChange(value: unknown): void {
+  const mechanism = String(value)
+  if (mechanism === 'typed_questions') {
+    form.eval_type = 'model_judge'
+    return
+  }
+  form.eval_type = deterministicType.value
+  form.config_json = DETERMINISTIC_DEFAULTS[deterministicType.value]
+}
+
+function onDeterministicTypeChange(value: unknown): void {
+  const next = String(value) as DeterministicType
+  if (!DETERMINISTIC_TYPES.includes(next)) return
+  deterministicType.value = next
+  form.eval_type = next
+  form.config_json = DETERMINISTIC_DEFAULTS[next]
+}
+
+function setQuestionType(question: QuestionDraft, value: unknown): void {
+  const next = String(value) as QuestionType
+  if (next !== 'noul' && next !== 'choice' && next !== 'score') return
+  question.type = next
+  seedAnswerSpace(question)
+}
+
+function nextQuestionId(): string {
+  let index = typedDraft.value.questions.length + 1
+  while (typedDraft.value.questions.some((question) => question.id === `q${index}`)) {
+    index += 1
+  }
+  return `q${index}`
+}
+
+function addQuestion(): void {
+  typedDraft.value.questions.push(createQuestion('noul', nextQuestionId()))
+}
+
+function removeQuestion(index: number): void {
+  typedDraft.value.questions.splice(index, 1)
+}
+
+function addOption(question: QuestionDraft): void {
+  if (question.options.length >= MAX_CHOICE_OPTIONS) return
+  question.options.push({ key: '', description: '', passing: false, score: '' })
+}
+
+function removeOption(question: QuestionDraft, index: number): void {
+  question.options.splice(index, 1)
+}
+
+function addLevel(question: QuestionDraft): void {
+  if (question.levels.length >= MAX_SCORE_LEVELS) return
+  question.levels.push({ score: '', description: '' })
+}
+
+function removeLevel(question: QuestionDraft, index: number): void {
+  question.levels.splice(index, 1)
+}
+
+function migrateLegacyConfig(): void {
+  const draft = createDefaultDraft()
+  if (legacyConfigJson.value) {
+    try {
+      const legacy = JSON.parse(legacyConfigJson.value) as Record<string, unknown>
+      if (typeof legacy.field === 'string' && legacy.field.trim() !== '') {
+        draft.field = legacy.field
+      }
+    } catch {
+      // A malformed legacy blob still migrates to a valid default draft.
+    }
+  }
+  typedDraft.value = draft
+  legacyMode.value = false
+  legacyConfigJson.value = null
+}
+
+async function loadModelBackends(): Promise<void> {
+  modelBackendsError.value = null
+  try {
+    const { data, error } = await api.GET('/api/v1/model-backends', {
+      params: { query: { page_size: 100 } },
+    })
+    if (error) {
+      modelBackends.value = []
+      modelBackendsError.value = t('views.EvalEditorView.judging.failedToLoadBackends')
+      return
+    }
+    modelBackends.value = (data?.items ?? []) as ModelBackendItem[]
+  } catch {
+    modelBackends.value = []
+    modelBackendsError.value = t('views.EvalEditorView.judging.failedToLoadBackends')
+  }
+}
 
 // §3.2 dirty-gate guard: the gate is dirty when its action differs from the
 // snapshot taken on edit-start (or from the default 'warn' when creating).
@@ -602,8 +1317,13 @@ function resetForm() {
   form.name = ''
   form.node_id = '__all__'
   form.eval_type = 'model_judge'
-  form.config_json = DEFAULT_MODEL_JUDGE_CONFIG
+  form.config_json = ''
   form.pass_threshold = 0.8
+  typedDraft.value = createDefaultDraft()
+  deterministicType.value = 'regex'
+  legacyMode.value = false
+  legacyConfigJson.value = null
+  serverConfigError.value = null
   editingEvalId.value = null
   formError.value = null
   formSuccess.value = null
@@ -748,6 +1468,23 @@ async function onPipelineChange() {
   await Promise.all([loadNodes(), loadEvals()])
 }
 
+/**
+ * The config this save will send.
+ *
+ * Typed: the builder's exact wire payload (ADR 066 D4). A legacy definition in
+ * read-only mode re-sends its stored config unchanged, so a metadata edit does
+ * not silently migrate it — migration is an explicit author action.
+ */
+function buildConfigForSave(): Record<string, unknown> {
+  if (isTyped.value) {
+    if (legacyMode.value && legacyConfigJson.value !== null) {
+      return JSON.parse(legacyConfigJson.value) as Record<string, unknown>
+    }
+    return buildTypedJudgeConfig(typedDraft.value)
+  }
+  return JSON.parse(form.config_json) as Record<string, unknown>
+}
+
 function buildEvalBody(configParsed: Record<string, unknown>) {
   return {
     pipeline_id: selectedPipelineId.value,
@@ -765,18 +1502,50 @@ function buildEvalBody(configParsed: Record<string, unknown>) {
 // distinguishable.
 type PersistEvalResult = { ok: true; evalId: string | null } | { ok: false }
 
+/**
+ * Surface a failed eval write. The judge chokepoint's typed 422 codes
+ * (``judge_config_*`` / ``judge_backend_*``) render inline next to the builder
+ * — the server stays authoritative and the client mirror cannot check backend
+ * existence, ownership or activity.
+ */
+function handleEvalWriteError(error: unknown): void {
+  const code =
+    typeof (error as { code?: unknown } | null)?.code === 'string'
+      ? (error as { code: string }).code
+      : null
+  if (code && code.startsWith('judge_')) {
+    serverConfigError.value = { code, message: formatApiError(error) }
+    formError.value = null
+    return
+  }
+  serverConfigError.value = null
+  formError.value = formatApiError(error)
+}
+
 // Phase 1: persist the eval definition itself.
 async function persistEval(configParsed: Record<string, unknown>): Promise<PersistEvalResult> {
   try {
     const evalId = editingEvalId.value
     if (evalId) {
-      await api.PUT('/api/v1/evals/{eval_id}', {
+      const res = await api.PUT('/api/v1/evals/{eval_id}', {
         params: { path: { eval_id: evalId } },
         body: buildEvalBody(configParsed),
       })
+      // openapi-fetch resolves non-2xx as { data: undefined, error } — it never
+      // throws, so the envelope error must be handled here.
+      if (res.error) {
+        handleEvalWriteError(res.error)
+        return { ok: false }
+      }
       return { ok: true, evalId }
     }
-    const { data: created } = await api.POST('/api/v1/evals', { body: buildEvalBody(configParsed) })
+    const { data: created, error } = await api.POST('/api/v1/evals', {
+      body: buildEvalBody(configParsed),
+    })
+    if (error) {
+      handleEvalWriteError(error)
+      return { ok: false }
+    }
     const createdId = (created as any)?.id ?? null
     if (createdId) {
       track(ANALYTICS_EVENTS.EVAL_CREATED, { eval_id: createdId })
@@ -843,11 +1612,12 @@ async function saveEval() {
   saving.value = true
   formError.value = null
   formSuccess.value = null
+  serverConfigError.value = null
   gateError.value = false
 
   let configParsed: Record<string, unknown> = {}
   try {
-    configParsed = JSON.parse(form.config_json)
+    configParsed = buildConfigForSave()
   } catch {
     formError.value = t('views.EvalEditorView.config_json_is_invalid')
     saving.value = false
@@ -892,10 +1662,34 @@ async function startEdit(ev: EvalDefinition) {
   form.name = ev.name
   form.node_id = ev.node_id ?? '__all__'
   form.eval_type = ev.eval_type
-  form.config_json = JSON.stringify(ev.config_json, null, 2)
   form.pass_threshold = ev.pass_threshold ?? 0.8
   formError.value = null
   formSuccess.value = null
+  serverConfigError.value = null
+  legacyMode.value = false
+  legacyConfigJson.value = null
+
+  if (ev.eval_type === 'model_judge') {
+    const draft = draftFromConfig(ev.config_json)
+    if (draft) {
+      typedDraft.value = draft
+      form.config_json = ''
+    } else {
+      // ADR 066 D8: a stored legacy prompt blob is readable but immutable.
+      // Editing its config must migrate it, so the author gets an explicit
+      // migration action instead of a silent rewrite on save.
+      legacyMode.value = true
+      legacyConfigJson.value = JSON.stringify(ev.config_json, null, 2)
+      typedDraft.value = createDefaultDraft()
+      form.config_json = ''
+    }
+  } else {
+    deterministicType.value = DETERMINISTIC_TYPES.includes(ev.eval_type as DeterministicType)
+      ? (ev.eval_type as DeterministicType)
+      : 'regex'
+    form.config_json = JSON.stringify(ev.config_json, null, 2)
+    typedDraft.value = createDefaultDraft()
+  }
   // Fetch gate state for this eval (§3.2 — switching evals re-populates)
   fetchPolicyGate(ev.id)
 }
@@ -1124,5 +1918,11 @@ async function retryPolicyGate() {
   }
 }
 
-onMounted(() => { planStore.fetchPlan(); loadAll() })
+onMounted(() => {
+  planStore.fetchPlan()
+  loadAll()
+  // The typed builder's backing axis needs the org's model backends. A failure
+  // is non-fatal: the select stays empty and shows an inline message.
+  loadModelBackends()
+})
 </script>
