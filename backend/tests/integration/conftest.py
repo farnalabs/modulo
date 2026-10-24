@@ -821,36 +821,6 @@ async def test_trigger(
 
 
 @pytest_asyncio.fixture(scope="session")
-async def test_run(
-    db_engine: AsyncEngine,
-    test_org: uuid.UUID,
-    test_pipeline: uuid.UUID,
-    test_snapshot: uuid.UUID,
-    test_trigger: uuid.UUID,
-) -> uuid.UUID:
-    """Committed run row in test_org."""
-    run_id = uuid.uuid4()
-    async with db_engine.connect() as conn, conn.begin():
-        await conn.execute(
-            text(
-                "INSERT INTO runs ("
-                "id, organisation_id, pipeline_id, trigger_id, status, snapshot_id, "
-                "trigger_type, input_hash, created_at, started_at) "
-                "VALUES (:id, :oid, :pid, :tid, 'running', :sid, 'webhook', "
-                "'test_hash', now(), now())"
-            ),
-            {
-                "id": str(run_id),
-                "oid": str(test_org),
-                "pid": str(test_pipeline),
-                "tid": str(test_trigger),
-                "sid": str(test_snapshot),
-            },
-        )
-    return run_id
-
-
-@pytest_asyncio.fixture(scope="session")
 async def test_suite_run(
     db_engine: AsyncEngine,
     test_org: uuid.UUID,

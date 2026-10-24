@@ -211,6 +211,17 @@ async def test_block_before_with_block_on_guardrail_false_records_not_refuses():
     assert audit[0].event_type == "guardrail.loop_blocked"
 
 
+async def test_muted_block_records_evidence_without_enforcing():
+    cfg = _cfg()
+    definition = _guardrail(name="muted-block")
+    definition.is_muted = True
+    outcome, audit = await run_loop_interception(EvalEngine(), [definition], _event(), config=cfg)
+    assert outcome.action == "pass"
+    assert outcome.blocked is False
+    assert [record.event_type for record in audit] == ["guardrail.loop_detected"]
+    assert audit[0].payload["guardrail"] == "muted-block"
+
+
 async def test_block_after_records_not_refuses():
     cfg = _cfg()
     event = _event(direction="after", summary=f"pushed with {_SECRET}")

@@ -274,6 +274,33 @@ class TestC12RaisingPathsShareExactType:
         assert raised.value.eval_name == definition.name
 
     @pytest.mark.asyncio
+    async def test_evaluate_guardrails_muted_bound_block_records_result_without_raising(
+        self, db_engine: AsyncEngine
+    ) -> None:
+        org_id, acc_id, pipe_id = await _setup_org(db_engine)
+        eval_id = await _seed_bound_guardrail(
+            db_engine,
+            org_id,
+            pipe_id,
+            acc_id,
+            eval_name="gr-c12-muted",
+            config_action="block",
+            gate_action="block",
+        )
+        definition, binding = await _load_dto_and_binding(db_engine, eval_id)
+        definition.is_muted = True
+
+        results = evaluate_guardrails(
+            EvalEngine(),
+            [definition],
+            dict(_VIOLATION),
+            policy_gates={definition.id: binding},
+        )
+
+        assert len(results) == 1
+        assert results[0].passed is False
+
+    @pytest.mark.asyncio
     async def test_run_guardrail_pass_raises_same_exact_type(self, db_engine: AsyncEngine) -> None:
         org_id, acc_id, pipe_id = await _setup_org(db_engine)
         eval_id = await _seed_bound_guardrail(

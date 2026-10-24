@@ -714,9 +714,11 @@ def evaluate_guardrails(
 
         gate_row = (policy_gates or {}).get(eval_def.id)
         if gate_row is not None:
-            _record_gated_violation(eval_def, result, gate_row, violations)
+            if not eval_def.is_muted:
+                _record_gated_violation(eval_def, result, gate_row, violations)
+            continue
         # No gate row — fall back to direct config_json.action check.
-        elif eval_def.config.get("action") == GuardrailAction.BLOCK:
+        if not eval_def.is_muted and eval_def.config.get("action") == GuardrailAction.BLOCK:
             violations.append((eval_def, result))
 
     if violations and raise_on_block:
