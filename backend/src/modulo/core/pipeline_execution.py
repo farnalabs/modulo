@@ -2467,16 +2467,33 @@ async def _fail_overdue_node(
     # FAR-2050: check if this attempt has any completed nodes before consulting
     # the retry policy. If no node has completed in this attempt, skip re-dispatch
     # and terminal-fail directly with node_deadline_exceeded.
-    if completion_probe is not None:
-        has_completions = await completion_probe(run_id, org_id, claim_token)
-    elif not isinstance(aeng, AsyncEngine):
-        # Unit watchdog doubles use a non-engine sentinel and must supply their
-        # own completion policy; preserve their pre-FAR-2050 retry coverage
-        # without weakening the real AsyncEngine path below. Production always
-        # passes an AsyncEngine, so invalid IDs still fail closed there.
-        has_completions = True
-    else:
-        has_completions = await _probe_completed_nodes(aeng, run_id, org_id, claim_token)
+    try:
+        if completion_probe is not None:
+            has_completions = await completion_probe(run_id, org_id, claim_token)
+        elif not isinstance(aeng, AsyncEngine):
+            # Unit watchdog doubles use a non-engine sentinel and must supply their
+            # own completion policy; preserve their pre-FAR-2050 retry coverage
+            # without weakening the real AsyncEngine path below. Production always
+            # passes an AsyncEngine, so invalid IDs still fail closed there.
+            has_completions = True
+        else:
+            has_completions = await _probe_completed_nodes(aeng, run_id, org_id, claim_token)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.node_deadline_completion_probe_failed run=%s node=%s — "
+            "terminal-failing without re-dispatch",
+            run_id,
+            node_id,
+            exc_info=True,
+        )
+        # A completion-probe failure is fail-closed: the watchdog cannot prove
+        # that re-dispatch is safe, so continue through the terminal-fail path.
+        # Keep this separate from the terminal write so a terminalisation error
+        # remains visible to the caller rather than being masked by this probe
+        # error.
+        has_completions = False
 
     if not has_completions:
         _log.warning(
