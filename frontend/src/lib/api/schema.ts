@@ -8142,6 +8142,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evals/findings/{finding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Finding
+         * @description Read an eval result or runless trigger-event guardrail finding.
+         */
+        get: operations["get_finding_api_v1_evals_findings__finding_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/evals/findings/{finding_id}/resolve": {
         parameters: {
             query?: never;
@@ -8157,7 +8177,7 @@ export interface paths {
          *
          *     Marks a finding as accepted, dismissed, superseded, or pending with an
          *     optional reason. Triggers mute policy evaluation for the associated
-         *     eval/guardrail definition.
+         *     eval/guardrail definition and records an explicit audit event.
          */
         post: operations["resolve_finding_api_v1_evals_findings__finding_id__resolve_post"];
         delete?: never;
@@ -40361,6 +40381,69 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
                 };
+            };
+        };
+    };
+    get_finding_api_v1_evals_findings__finding_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Finding not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
