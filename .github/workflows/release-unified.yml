@@ -470,7 +470,7 @@ jobs:
 
           # Package and push chart
           helm package deploy/helm/modulo --destination /tmp/helm-pkg --version "$VERSION_NUM" --app-version "$VERSION_NUM"
-          CHART_TGZ="$(ls /tmp/helm-pkg/modulo-${VERSION_NUM}.tgz)"
+          CHART_TGZ="/tmp/helm-pkg/modulo-${VERSION_NUM}.tgz"
           helm push "$CHART_TGZ" oci://ghcr.io/${{ github.repository }}/charts
 
       # -----------------------------------------------------------------------
