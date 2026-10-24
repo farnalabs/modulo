@@ -471,7 +471,7 @@ class TestDeriveLicenceState:
         a one-minute margin so the clock advancing during the call cannot
         straddle a boundary.
         """
-        naive_now = datetime.now().replace(microsecond=0)
+        naive_now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
         days, state = admin_license.derive_licence_state((naive_now + offset).isoformat())
         assert days == expected_days
         assert state == expected_state
