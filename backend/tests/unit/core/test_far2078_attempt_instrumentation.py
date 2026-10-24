@@ -19,6 +19,7 @@ the four properties the slice exists for:
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -232,6 +233,13 @@ async def test_attempt_row_write_failure_never_fails_the_admission() -> None:
     assert session.savepoints == ["nested"]
 
 
+async def test_a_cancelled_attempt_write_still_propagates() -> None:
+    """Fail-open swallows errors, never cancellation: swallowing a cancel is a
+    hang, so the admission must still observe it."""
+    with pytest.raises(asyncio.CancelledError):
+        await _admit(start_error=asyncio.CancelledError())
+
+
 # ---------------------------------------------------------------------------
 # 3. The reset retains its own reason (REAL SQLite — the load-bearing case)
 # ---------------------------------------------------------------------------
@@ -343,6 +351,27 @@ async def test_attempt_close_failure_is_swallowed_and_logged(
 
     assert result is None
     assert any("attempt_close_failed" in record.message for record in caplog.records)
+
+
+async def test_attempt_close_propagates_cancellation(
+    sqlite_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Swallowing a cancel is a hang, not fail-open — the close re-raises it."""
+    with (
+        patch.object(attempt_crud, "close_attempt", AsyncMock(side_effect=asyncio.CancelledError())),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await pe.record_attempt_close(sqlite_maker, RUN, ORG, terminal_reason="reset")
+
+
+async def test_a_non_terminal_status_closes_no_attempt() -> None:
+    """``awaiting_human`` continues the SAME attempt on resume, so the named
+    ``_record_executor_outcome_attempt`` seam must leave the row open."""
+    closer = AsyncMock()
+    with patch.object(pe, "record_attempt_close", closer):
+        await pe._close_attempt_for_terminal_row(MagicMock(), RUN, ORG, status="awaiting_human", error_code=None)
+
+    closer.assert_not_awaited()
 
 
 async def test_a_failing_close_never_breaks_the_reset_path(
