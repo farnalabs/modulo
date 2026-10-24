@@ -180,6 +180,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
     guardrail_row.failure_behaviour = "warn"
     guardrail_row.pass_threshold = None
     guardrail_row.suite_id = None
+    guardrail_row.is_muted = False
 
     session = AsyncMock(spec=AsyncSession)
     session.execute.side_effect = [
@@ -257,6 +258,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
             "failure_behaviour": "warn",
             "pass_threshold": None,
             "suite_id": None,
+            "is_muted": False,
         }
     ]
     # FAR-309 PR B: the snapshot carries a deterministic fingerprint of the

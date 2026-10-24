@@ -98,6 +98,7 @@ def _guardrail_row() -> MagicMock:
     row.failure_behaviour = "block"
     row.pass_threshold = None
     row.suite_id = None
+    row.is_muted = False
     return row
 
 
@@ -263,6 +264,7 @@ async def test_guardrail_override_persists_post_redaction_payload():
     redact_row.failure_behaviour = "warn"
     redact_row.pass_threshold = None
     redact_row.suite_id = None
+    redact_row.is_muted = False
 
     run = _make_run(input_payload={})
     session = _mock_session()

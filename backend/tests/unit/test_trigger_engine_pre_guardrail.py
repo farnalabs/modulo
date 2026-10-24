@@ -102,6 +102,7 @@ def _make_guardrail_row(
     row.failure_behaviour = "warn"
     row.pass_threshold = None
     row.suite_id = None
+    row.is_muted = False
     return row
 
 
