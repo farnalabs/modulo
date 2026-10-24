@@ -392,10 +392,17 @@ routes:
         breadcrumb: License
         parent: /
         product_map: [feat-license]
-        sidebar_group: system
-        sidebar_order: 1
+        # FAR-2104: the licence is an org-level object, so an org admin must
+        # reach this screen — it cannot sit in the system-admin-only SYSTEM
+        # group. The gate is the permission the licence endpoints enforce
+        # (`org.license.manage`), not a separate role check, and the tier floor
+        # is community so a deployment whose licence has LAPSED can still reach
+        # the page to install a replacement key.
+        sidebar_group: admin
+        sidebar_order: 12
         type: form_page
-        <<: *team
+        <<: *community
+        required_permissions: [org.license.manage]
         deprecated: false
     /settings/mcp:
         name: settings-mcp
@@ -5479,13 +5486,28 @@ elements:
       - testid: license-title
         type: element
         dynamic_testid: false
+      - testid: licence-org-controls
+        type: element
+        dynamic_testid: false
       - testid: license-key-input
+        type: textarea
+        dynamic_testid: false
+      - testid: license-apply-btn
+        type: button
+        dynamic_testid: false
+      - testid: license-remove-btn
+        type: button
+        dynamic_testid: false
+      - testid: licence-system-controls
+        type: element
+        dynamic_testid: false
+      - testid: license-key-input-system
         type: textarea
         dynamic_testid: false
       - testid: license-verify-btn
         type: button
         dynamic_testid: false
-      - testid: license-apply-btn
+      - testid: license-apply-btn-system
         type: button
         dynamic_testid: false
       - testid: licence-renewal-banner
@@ -6726,6 +6748,7 @@ features:
             - "[x] Caller-scoped plan bootstrap: GET /api/v1/plan returns 200 to ANY authenticated org member with license.tier / expires_at / org_id, dev_mode, and the FULL known flag set with the org feature_overrides overlay applied (inactive flags present as currently_active: false), so a non-admin reads their org's real tier, dev mode and effective flags instead of the bootstrap defaults left by the instance-admin-only /api/v1/admin/feature-flags + /api/v1/admin/license reads; the frontend planStore bootstraps from it alongside the viewer-readable /api/v1/admin/tiers catalogue, and the admin endpoints keep their system-admin gates for the inspection/toggle UI (backend/src/modulo/api/routes/viewmodel.py plan_bootstrap, backend/tests/unit/api/test_viewmodel_plan.py, frontend/src/stores/planStore.ts, docs/product-map/licensing/license.md; FAR-1806 + FAR-1809)"
             - "[x] Plan/license-based gating is wired at the composition root (require_feature / get_plan_context): the Team-tier licensed surfaces (SSO administration, /api/v1/teams, audit export, admin spend limits) return 402 naming the gated feature without a valid Team license and pass with one; SSO AUTHENTICATION entry points are exempt from that 402 when NO license resolves at all, so a lapse never locks an administrator out of the licence screen (env-var SAML availability/config are configuration-only; FAR-2059/FAR-2060); the license resolves from the org settings with a system-license fallback (team_gates.feature, test_sso_licence_admin_invariant.py, docs/product-map/licensing/license.md)"
             - "[x] The authenticated shell surfaces a backend-derived renewal state (FAR-2075): GET /api/v1/admin/license returns `licence_state` (none | active | renewal_due | grace | lapsed), `days_until_expiry` and `grace_ends_at`, derived once from `expires_at` + `LICENCE_GRACE_DAYS` in `derive_licence_state`; the shell reads that status once per session for org admins and renders the notice on EVERY authenticated route (not only the licence page) without comparing dates itself — `renewal_due` shows a countdown banner that offers a purchase path ONLY for a manual renewal (an auto-renewing licence is never invited to buy again), `grace` shows a dismissible dialog that returns on the next visit until the licence is renewed, with two equally-weighted actions (install a key the customer may never have received, or buy a new licence), and `lapsed` explains that Team capability is off and where to install a key; the licence page reuses the same query instead of issuing a second read (backend/src/modulo/api/routes/admin_license.py, frontend/src/components/AppLayout.vue, frontend/src/components/licence/LicenceRenewalNotice.vue, backend/tests/unit/api/test_admin_license.py, frontend/src/__tests__/LicenceRenewalNotice.spec.ts, frontend/src/__tests__/components/AppLayoutLicenceBanner.spec.ts)"
+            - "[x] The licence screen's audience is ONE permission, not a parallel role check (FAR-2104): /settings/license sits in the ADMIN group with `required_permissions: [org.license.manage]` and a community tier floor, so an org admin — and a deployment whose licence has lapsed — can reach the page and install a key; the authenticated shell derives the renewal notice's audience from the same permission (frontend/src/composables/useLicenceAccess.ts → the server-resolved GET /api/v1/auth/permissions list) instead of an `orgRole === admin` check; the page splits the scopes — an org admin installs/removes the organisation's key via PUT/DELETE /api/v1/admin/orgs/{org_id}/license, while the instance-wide POST /api/v1/admin/license controls render only for a system admin (system.config.manage); GET /api/v1/admin/license is require_system_or_org_admin so the read admits exactly the principals those writes admit, and backend/tests/unit/api/test_admin_license_permission_agreement.py pins the agreement so the surfaces cannot drift apart again"
             - "[ ] License-driven gating is not applied to EVERY registered feat-* surface — gating targets the licensed Team-tier surfaces, not the whole feature registry"
         deferrals:
             - "Universal license gating of every registered feature is tracked under feat-license"

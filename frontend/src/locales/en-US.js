@@ -3041,7 +3041,12 @@ export default {
       "tier_upgrade_sentence": "You are currently on the {currentTier} tier. Upgrade to {teamTier} to unlock all features.",
       "restart_note": "Applying a new license key requires a server restart to take full effect.",
       "failed_to_apply": "Failed to apply:",
-      "failed_to_remove": "Failed to remove:"
+      "failed_to_remove": "Failed to remove:",
+      "org_license_title": "Organisation License",
+      "org_license_scope": "This key applies to this organisation only. It takes precedence over the instance-wide license and keeps Team features on for your team.",
+      "system_license_title": "System License",
+      "system_license_scope": "This key applies to the whole deployment, for every organisation that does not have its own key. Only a system administrator can change it.",
+      "install_system_license": "Install System License"
     },
     "SchemaEditorView": {
       "schema_name_is_required": "Schema name is required",

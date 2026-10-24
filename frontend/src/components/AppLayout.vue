@@ -60,11 +60,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, provide } from "vue";
+import { ref, computed, nextTick, onMounted, provide, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api, clearAccessTokenForLogout } from "../lib/api/client";
 import { useCurrentUser } from "../composables/useCurrentUser";
 import { useDataFetch } from "../composables/useDataFetch";
+import { useLicenceAccess } from "../composables/useLicenceAccess";
 import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
 import AssistantPanel from "./assistant/AssistantPanel.vue";
@@ -189,13 +190,12 @@ const isAdminUser = computed(
 // ---------------------------------------------------------------------------
 const LICENCE_STATUS_INJECTION_KEY = "modulo:licence-status";
 
-// GET /api/v1/admin/license is guarded by `org.license.manage`, which the
-// permission registry assigns to the org "admin" role. Gate on exactly that
-// role: a non-admin never fetches it (the request would 403) and never sees
-// licence-administration copy. A system admin whose org role is below admin is
-// excluded too — they cannot read the licence state, so there is nothing to
-// show them.
-const canManageLicence = computed(() => userRole.value === "admin");
+// FAR-2104: the notice's audience is the set of principals that can act on
+// it — derived from `org.license.manage`, the permission the licence read and
+// the org-scoped writes enforce, never from a parallel role check. A principal
+// without it never fetches the status (the request would 403) and never sees
+// licence-administration copy.
+const { canManageOrgLicence } = useLicenceAccess();
 
 const licenceStatus = useDataFetch<components["schemas"]["LicenseStatusResponse"]>(
   () => (api as any).GET("/api/v1/admin/license"),
@@ -209,26 +209,39 @@ const licenceStatus = useDataFetch<components["schemas"]["LicenseStatusResponse"
       renewal_mode: "manual",
       licence_state: "none",
     },
-    immediate: canManageLicence.value,
+    // The permission list resolves asynchronously (GET /auth/permissions), so
+    // the query starts disabled and is kicked off by the watcher below the
+    // moment the capability becomes true. `immediate: true` here would read
+    // the empty bootstrap list and never fetch.
+    immediate: false,
   },
+);
+
+watch(
+  canManageOrgLicence,
+  (canManage) => {
+    if (canManage) void licenceStatus.load();
+  },
+  { immediate: true },
 );
 
 const licenceStatusValue = computed(() => licenceStatus.data.value);
 
 const showsLicenceNotice = computed(
   () =>
-    canManageLicence.value &&
+    canManageOrgLicence.value &&
     ["renewal_due", "grace", "lapsed"].includes(licenceStatusValue.value.licence_state),
 );
 
-if (canManageLicence.value) {
-  provide(LICENCE_STATUS_INJECTION_KEY, {
-    data: licenceStatus.data,
-    loading: licenceStatus.loading,
-    error: licenceStatus.error,
-    load: licenceStatus.load,
-  });
-}
+// Provided unconditionally: the query is inert until the permission resolves
+// (the watcher above starts it), and the licence page — reachable only with
+// the same permission — consumes it instead of issuing a second read.
+provide(LICENCE_STATUS_INJECTION_KEY, {
+  data: licenceStatus.data,
+  loading: licenceStatus.loading,
+  error: licenceStatus.error,
+  load: licenceStatus.load,
+});
 
 const route = useRoute();
 const router = useRouter();
@@ -247,8 +260,12 @@ async function openLicenceKeyInput() {
   }
   for (let attempt = 0; attempt < 120; attempt += 1) {
     // The textarea's own ``data-testid`` — not PrimeVue's generated element
-    // id, which changes with the rendered field order.
-    const input = document.querySelector<HTMLElement>('[data-testid="license-key-input"]');
+    // id, which changes with the rendered field order. The org-scoped input is
+    // the primary target; the system-scoped one is the fallback for a principal
+    // that holds only the system permission.
+    const input = document.querySelector<HTMLElement>(
+      '[data-testid="license-key-input"], [data-testid="license-key-input-system"]',
+    );
     if (input) {
       input.scrollIntoView?.({ behavior: "smooth", block: "center" });
       input.focus();

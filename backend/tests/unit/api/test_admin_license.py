@@ -155,6 +155,46 @@ def tenantless_admin_client() -> Generator[TestClient, None, None]:
 
 
 @pytest.fixture
+def org_admin_client() -> Generator[TestClient, None, None]:
+    """An org admin WITHOUT the system-admin claim (FAR-2104's intended audience)."""
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = _make_mock_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="orgadmin",
+        organisation_id=_TEST_ORG_ID,
+        account_id=_TEST_ACCOUNT_ID,
+        org_role="admin",
+        is_system_admin=False,
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def system_admin_operator_client() -> Generator[TestClient, None, None]:
+    """A system admin whose ORG role is below admin (FAR-2104 hybrid read)."""
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = _make_mock_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="sysadmin",
+        organisation_id=_TEST_ORG_ID,
+        account_id=_TEST_ACCOUNT_ID,
+        org_role="operator",
+        is_system_admin=True,
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def operator_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = _make_mock_session
@@ -337,6 +377,23 @@ class TestGetLicense:
     def test_requires_admin(self, operator_client: TestClient) -> None:
         resp = operator_client.get(self.URL)
         assert resp.status_code == 403
+
+    def test_an_org_admin_without_the_system_claim_can_read_the_licence(self, org_admin_client: TestClient) -> None:
+        """FAR-2104: the org admin who bought the licence is the read's audience."""
+        org = _mock_org(settings_json=None)
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = org_admin_client.get(self.URL)
+        assert resp.status_code == 200
+        assert resp.json()["tier"] == "community"
+
+    def test_a_system_admin_below_org_admin_can_read_the_licence(
+        self, system_admin_operator_client: TestClient
+    ) -> None:
+        """The read is system-OR-org admin, matching /auth/permissions' floor."""
+        org = _mock_org(settings_json=None)
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = system_admin_operator_client.get(self.URL)
+        assert resp.status_code == 200
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with patch("modulo.api.routes.admin_license.get_organisation", side_effect=RuntimeError("boom")):
