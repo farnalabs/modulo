@@ -251,4 +251,63 @@ describe('AppLayout licence renewal notice', () => {
     wrapper.unmount()
     input.remove()
   })
+
+  it('does not navigate again when the administrator is already on the licence page', async () => {
+    mockRoute.name = 'settings-license'
+    mockRoute.path = '/settings/license'
+    mockRoute.fullPath = '/settings/license'
+    const input = document.createElement('textarea')
+    input.id = 'settingslicenseview-field-1'
+    document.body.appendChild(input)
+
+    const wrapper = await mountShell()
+    await wrapper.get('[data-testid="licence-renewal-install-action"]').trigger('click')
+
+    expect(routerPush).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(input)
+    })
+    wrapper.unmount()
+    input.remove()
+  })
+
+  it('waits for the licence key input to mount before focusing it', async () => {
+    const wrapper = await mountShell()
+    await wrapper.get('[data-testid="licence-renewal-install-action"]').trigger('click')
+
+    // The licence page renders its textarea only after its own status read
+    // resolves, so the shell must poll on later frames rather than focusing a
+    // node that does not exist yet.
+    const input = document.createElement('textarea')
+    input.id = 'settingslicenseview-field-1'
+    document.body.appendChild(input)
+
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(input)
+    })
+    wrapper.unmount()
+    input.remove()
+  })
+
+  it('falls back to a timer when requestAnimationFrame is unavailable', async () => {
+    const original = window.requestAnimationFrame
+    ;(window as unknown as { requestAnimationFrame: unknown }).requestAnimationFrame = undefined
+
+    try {
+      const wrapper = await mountShell()
+      await wrapper.get('[data-testid="licence-renewal-install-action"]').trigger('click')
+
+      const input = document.createElement('textarea')
+      input.id = 'settingslicenseview-field-1'
+      document.body.appendChild(input)
+
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(input)
+      })
+      wrapper.unmount()
+      input.remove()
+    } finally {
+      window.requestAnimationFrame = original
+    }
+  })
 })

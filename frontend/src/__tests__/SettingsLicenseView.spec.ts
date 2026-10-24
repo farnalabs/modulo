@@ -340,6 +340,29 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.find('[data-testid="licence-lapsed-banner"]').exists()).toBe(false)
   })
 
+  it('reloads its own licence status after a key is applied when mounted without the shell', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+    ;(api.POST as any).mockResolvedValue({ data: { tier: 'team', expires_at: '2027-01-01' }, error: undefined })
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    const licenceGets = () =>
+      (api.GET as any).mock.calls.filter(([path]: [string]) => path === '/api/v1/admin/license')
+    expect(licenceGets()).toHaveLength(1)
+
+    await wrapper.find('textarea').setValue('some-key')
+    await wrapper.find('[data-testid="license-apply-btn"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    expect(licenceGets()).toHaveLength(2)
+  })
+
   it('reuses the shell-provided licence status instead of fetching it again', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)

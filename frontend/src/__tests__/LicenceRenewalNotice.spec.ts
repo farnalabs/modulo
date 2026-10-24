@@ -102,6 +102,20 @@ describe('LicenceRenewalNotice', () => {
       const wrapper = mountNotice({ licence_state: 'renewal_due', days_until_expiry: null })
       expect(wrapper.text()).not.toContain('days left')
     })
+
+    it('renders an em dash when the backend sends no expiry', () => {
+      const wrapper = mountNotice({ licence_state: 'renewal_due', expires_at: null })
+
+      const banner = wrapper.get('[data-testid="licence-renewal-banner"]')
+      expect(banner.text()).toContain('—')
+      expect(banner.text()).not.toContain('null')
+    })
+
+    it('falls back to the raw value when the expiry date cannot be parsed', () => {
+      const wrapper = mountNotice({ licence_state: 'renewal_due', expires_at: 'not-a-date' })
+
+      expect(wrapper.get('[data-testid="licence-renewal-banner"]').text()).toContain('not-a-date')
+    })
   })
 
   // ── Delivery grace ────────────────────────────────────────────────────
@@ -129,6 +143,12 @@ describe('LicenceRenewalNotice', () => {
     it('renders the backend-supplied grace deadline without deriving it', () => {
       const wrapper = mountNotice({ licence_state: 'grace', days_until_expiry: -3 })
       expect(wrapper.text()).toContain(formatted(GRACE_ENDS_AT))
+    })
+
+    it('renders an em dash when the backend sends no grace deadline', () => {
+      const wrapper = mountNotice({ licence_state: 'grace', days_until_expiry: -3, grace_ends_at: null })
+
+      expect(wrapper.get('[data-testid="licence-grace-dialog"]').text()).toContain('—')
     })
 
     it('the install action emits install-key', async () => {
