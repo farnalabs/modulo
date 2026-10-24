@@ -9,6 +9,7 @@ code under test were deleted or altered.
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,6 +19,7 @@ from langchain_core.messages import AIMessage
 from langgraph.errors import NodeCancelledError
 from langgraph.types import Interrupt
 
+from modulo.core.pipeline_engine.decorator import set_connector_hub
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunNotFoundError,
@@ -49,6 +51,7 @@ from modulo.core.pipeline_engine.executor import (
     _interrupt_subject_parent,
     _map_lg_event,
     _node_output_agent_failure,
+    _node_output_connector_failure,
     _node_output_has_idempotency_gate,
     _node_output_sandbox_session_lost,
     _node_output_sandbox_session_lost_text,
@@ -68,6 +71,7 @@ from modulo.core.pipeline_engine.executor import (
     _seed_state,
     _should_skip_retry,
     _stream_terminal_reason,
+    _StreamContext,
     _streamed_interrupts,
     _StreamState,
     _terminal_failure,
@@ -76,6 +80,7 @@ from modulo.core.pipeline_engine.executor import (
 )
 from modulo.core.pipeline_engine.node_runner import (
     SupersededNodeError,
+    make_connector_fn,
 )
 from modulo.core.pipeline_engine.runaway_protection import RunawayRunError
 
@@ -688,6 +693,118 @@ def test_agent_failure_empty_string_error():
     assert result == "agent self-reported failure"
 
 
+def test_connector_failure_envelope_is_recognized_by_node_type():
+    envelope = {"artifacts": [{"node_id": "connector-1", "status": "failed", "error": "scope denied"}]}
+
+    assert _node_output_connector_failure(envelope, "connector") == "scope denied"
+    assert _node_output_connector_failure(envelope, "sandbox_agent") is None
+
+
+@pytest.mark.asyncio
+async def test_connector_failure_envelope_survives_node_stream_and_finalization() -> None:
+    """The real connector envelope reaches stream handling and finalization.
+
+    This deliberately composes the production seams instead of testing the
+    envelope maker, chain-end handler, and finalizer in isolation: the real
+    connector node raises into its failure envelope, the stream consumes that
+    envelope, and finalization must persist the typed connector failure.
+    """
+
+    class _FailingConnector:
+        async def query(self, _payload: Any) -> Any:
+            raise RuntimeError("upstream connector unavailable")
+
+    class _Hub:
+        def __init__(self, connector: Any) -> None:
+            self.connector = connector
+
+        def get(self, _instance_id: uuid.UUID) -> Any:
+            return self.connector
+
+    node_id = "connector-1"
+    instance_id = uuid.uuid4()
+    connector_fn = make_connector_fn(
+        {
+            "id": node_id,
+            "node_type": "connector",
+            "connector_binding": {
+                "instance_id": str(instance_id),
+                "type": "test",
+                "operation": "query",
+            },
+        }
+    )
+    set_connector_hub(_Hub(_FailingConnector()))
+    try:
+        envelope = await connector_fn({"run_context": {"input": {}}})
+    finally:
+        set_connector_hub(None)
+
+    assert envelope["connector_failure"] is True
+    assert envelope["artifacts"][0]["status"] == "failed"
+
+    class _Compiled:
+        async def astream_events(self, _initial_state: Any, _config: Any, *, version: str) -> Any:
+            assert version == "v2"
+            yield {"event": "on_chain_end", "name": node_id, "run_id": "stream-1", "data": {"output": envelope}}
+
+    run_id = uuid.uuid4()
+    executor = PipelineExecutor(MagicMock())
+    completed: dict[str, Any] = {}
+    stream_status = await executor._stream_graph(
+        _Compiled(),
+        None,
+        {"configurable": {"thread_id": str(run_id)}},
+        {node_id},
+        MagicMock(),
+        run_id,
+        completed_node_outputs=completed,
+        node_type_map={node_id: "connector"},
+    )
+
+    assert stream_status[:3] == ("failed", "connector.failed", "upstream connector unavailable")
+    assert completed[node_id]["artifacts"][0]["status"] == "failed"
+
+    session = MagicMock()
+    session.execute = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    @asynccontextmanager
+    async def _session_context() -> Any:
+        yield session
+
+    executor._session_factory = MagicMock(side_effect=lambda: _session_context())
+    with (
+        patch.object(executor, "_compute_run_work_intact", return_value=None),
+        patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
+        patch.object(executor, "_dispatch_run_failed", new=AsyncMock()),
+        patch.object(executor, "_alert_provider_failure", new=AsyncMock()),
+        patch.object(executor, "_run_finalize_cost_transaction", new=AsyncMock()) as finalize_cost,
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
+    ):
+        final_run = await executor._finalize_run_after_stream(
+            run_id=run_id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            node_type_map={node_id: "connector"},
+            final_status=stream_status[0],
+            error_code=stream_status[1],
+            error_detail=stream_status[2],
+            node_token_usage=stream_status[3],
+            completed_node_outputs=completed,
+            node_ids={node_id},
+        )
+
+    assert final_run is not None
+    assert finalize_cost.await_args.kwargs["final_status"] == "failed"
+    assert finalize_cost.await_args.kwargs["error_code"] == "connector.failed"
+    assert "upstream connector unavailable" in finalize_cost.await_args.kwargs["error_detail"]
+
+
 # ---------------------------------------------------------------------------
 # _node_output_sandbox_session_lost
 # ---------------------------------------------------------------------------
@@ -724,6 +841,35 @@ def test_session_lost_non_string_error():
 # ---------------------------------------------------------------------------
 # _node_output_sandbox_session_lost_text
 # ---------------------------------------------------------------------------
+
+
+async def test_chain_end_latches_connector_failure_from_real_envelope():
+    executor = PipelineExecutor(MagicMock())
+    state = _StreamState()
+    completed: dict[str, Any] = {}
+    ctx = _StreamContext(
+        node_ids={"node-conn"},
+        guard=None,
+        completed_node_outputs=completed,
+        run_trace_id=None,
+        broker=MagicMock(),
+        run_id=uuid.uuid4(),
+        pipeline_id=None,
+        org_id=None,
+        node_token_budgets=None,
+        eval_definitions_by_node=None,
+        node_type_map={"node-conn": "connector"},
+    )
+    event = {
+        "name": "node-conn",
+        "run_id": str(uuid.uuid4()),
+        "data": {"output": {"artifacts": [{"node_id": "node-conn", "status": "failed", "error": "scope denied"}]}},
+    }
+
+    await executor._handle_chain_end_event(state=state, ctx=ctx, lg_event=event)
+
+    assert state.connector_failure_reason == "scope denied"
+    assert completed["node-conn"]["artifacts"][0]["status"] == "failed"
 
 
 async def test_chain_end_returns_early_without_envelope():

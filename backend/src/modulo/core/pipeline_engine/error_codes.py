@@ -117,6 +117,10 @@ _CODE_CAPACITY_ORG = "capacity.org"
 # dotted spelling mirrors the ``script.side_effect_unknown`` taxonomy pattern
 # ("side-effect state unknown; never retried").
 _CODE_CONNECTOR_UNKNOWN = "connector.side_effect_unknown"
+# Generic connector-returned failure. The connector has explicitly reported a
+# failed operation, so this is distinct from ``connector.side_effect_unknown``
+# (a raised/cancelled write whose upstream effect is unknowable).
+_CODE_CONNECTOR_FAILED = "connector.failed"
 _CODE_SCOPE_VIOLATION = "scope.violation"
 
 
@@ -677,6 +681,12 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         ),
     ),
     # --- connector codes -------------------------------------------------
+    _CODE_CONNECTOR_FAILED: ErrorCodeSpec(
+        error_class="connector",
+        retryable=False,
+        alert_severity="critical",
+        guidance="Connector reported that its operation failed.",
+    ),
     "connector.invalid_key": ErrorCodeSpec(
         error_class="connector",
         retryable=False,
@@ -1067,6 +1077,8 @@ LEGACY_ALIASES: dict[str, str] = {
     "ConnectorUnknownError": _CODE_CONNECTOR_UNKNOWN,
     "connector.unknown": _CODE_CONNECTOR_UNKNOWN,
     "ConnectorNodeFailedError": _CODE_CONNECTOR_UNKNOWN,
+    "connector_failed": _CODE_CONNECTOR_FAILED,
+    "ConnectorReportedFailure": _CODE_CONNECTOR_FAILED,
     # Provider (model backend) exception class names published by executor's
     # generic catch (``type(exc).__name__``) on LLM-node failures.
     "RateLimitError": "provider.rate_limited",
