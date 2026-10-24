@@ -1826,6 +1826,19 @@ async def alert_unexpected_guardrail_skip(
 # ---------------------------------------------------------------------------
 
 
+def _coerce_is_muted(value: Any) -> bool:
+    """Read the persisted mute flag without trusting mock-like sentinels.
+
+    ORM rows and snapshot pins carry a real boolean.  Test doubles and legacy
+    row-shaped objects may not define the new column, in which case the safe
+    compatibility value is the historical unmuted state rather than the
+    truthiness of an arbitrary sentinel object.  Coercing truthy non-booleans
+    would silently suppress a guardrail's enforcement action, so only a real
+    ``bool`` may turn enforcement off.
+    """
+    return value if isinstance(value, bool) else False
+
+
 def serialize_guardrail_pin(db_row: Any) -> dict[str, Any]:
     """Serialize a DB guardrail row into a snapshot pin.
 
@@ -1848,7 +1861,7 @@ def serialize_guardrail_pin(db_row: Any) -> dict[str, Any]:
         "failure_behaviour": getattr(db_row, "failure_behaviour", None) or "warn",
         "pass_threshold": str(db_row.pass_threshold) if db_row.pass_threshold is not None else None,
         "suite_id": db_row.suite_id,
-        "is_muted": bool(getattr(db_row, "is_muted", False)),
+        "is_muted": _coerce_is_muted(getattr(db_row, "is_muted", False)),
     }
 
 
@@ -1895,7 +1908,7 @@ def to_engine_definition_from_pin(entry: dict[str, Any]) -> EvalDefinition:
         failure_behaviour=str(entry.get("failure_behaviour") or "warn"),
         pass_threshold=float(entry["pass_threshold"]) if entry.get("pass_threshold") else None,
         suite_id=entry.get("suite_id"),
-        is_muted=bool(entry.get("is_muted", False)),
+        is_muted=_coerce_is_muted(entry.get("is_muted", False)),
     )
 
 
@@ -1923,7 +1936,7 @@ def to_engine_definition(db_row: Any) -> EvalDefinition:
         failure_behaviour=getattr(db_row, "failure_behaviour", None) or "warn",
         pass_threshold=float(db_row.pass_threshold) if db_row.pass_threshold is not None else None,
         suite_id=db_row.suite_id,
-        is_muted=bool(getattr(db_row, "is_muted", False)),
+        is_muted=_coerce_is_muted(getattr(db_row, "is_muted", False)),
     )
 
 
