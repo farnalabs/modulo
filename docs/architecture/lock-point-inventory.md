@@ -17,12 +17,12 @@
 ## 1. Method (reproducible enumeration)
 
 > **FAR-1825 re-derivation (this branch).** §1's commands were re-run against the
-> branch tip (`27d2a4fa`), not trusted from the previous snapshot: **59**
+> branch tip, not trusted from the previous snapshot: **59**
 > `.with_for_update(` + **4** `with_for_update=` = **63** SQLAlchemy call sites
 > (+2 raw SQL = **65** row-lock sites). The kwarg grep returns **5** lines, but one
 > (`cron_helpers.py:6884`) is the FAR-1914 docstring mention, not a call site, so 4
 > kwarg code sites are counted (`api_keys.py:308`, `account.py:137`,
-> `cron_helpers.py:5849`, `cron_helpers.py:7021`). The +4 since the FAR-1833
+> `cron_helpers.py:5849`, `cron_helpers.py:7021`). The +5 since the FAR-1833
 > cutover are **new sites landed by other work**, neither category C:
 >
 > - `api/mcp_server.py::_replace_pipeline_graph_txn` (A19; self-bounds with
@@ -36,6 +36,9 @@
 > - `core/cron_helpers.py::_terminalize_aged_nodeless_zombies` (D17; the FAR-1914
 >   `session.get(Run, with_for_update=True)` locked re-read at `7021`, same
 >   reconcile transaction bound).
+> - `core/eval/finding_resolver.py::apply_mute_policy` (D18; the
+>   `.with_for_update()` call at `244`, serialising concurrent mute-policy
+>   evaluations in the caller-owned transaction, FAR-2028).
 >
 > **FAR-1823 (this branch) removed D4's org-row lock** (`export_org_data`): the
 > export now uses a read-only REPEATABLE READ snapshot on a separate connection,
