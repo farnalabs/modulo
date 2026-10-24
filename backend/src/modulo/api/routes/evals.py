@@ -59,7 +59,14 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
-from modulo.core.eval.finding_resolver import load_trigger_event_finding
+from modulo.core.eval.finding_resolver import (
+    FindingResolutionError,
+    apply_mute_policy,
+    load_trigger_event_finding,
+)
+from modulo.core.eval.finding_resolver import (
+    resolve_finding as resolve_finding_core,
+)
 from modulo.core.eval_engine.author_warnings import check_author_warnings
 from modulo.core.eval_engine.coverage_gap import (
     DEFAULT_DIVERGENCE_THRESHOLD,
@@ -135,6 +142,7 @@ _CODE_EVAL_DEFINITION_CREATE = "eval.definition.create"
 _CODE_EVALS_RESOLVE_FINDING = _CODE_EVAL_DEFINITION_UPDATE
 _CODE_EVALS_GET_ACCEPTANCE_RATE = "eval.list"
 _CODE_EVALS_MUTE_POLICY = _CODE_EVAL_DEFINITION_UPDATE
+_MSG_FINDING_NOT_FOUND = "Finding not found"
 _VISIBILITY_PATTERN = "^(org|team)$"
 
 _MSG_POLICY_GATE_CASCADE_CONFLICT = (
@@ -3127,6 +3135,72 @@ class MutePolicyConfigResponse(BaseModel):
     muted_by: uuid.UUID | None = None
 
 
+async def _resolve_finding_record(
+    session: AsyncSession,
+    finding_id: uuid.UUID,
+    req: ResolveFindingRequest,
+    principal: TenantPrincipal,
+) -> tuple[Any, uuid.UUID]:
+    """Resolve an eval result, falling back to a trigger-event finding."""
+    try:
+        finding = await resolve_finding_core(
+            session,
+            str(finding_id),
+            req.resolution,
+            req.reason,
+            str(principal.account_id),
+            str(principal.organisation_id),
+        )
+        return finding, finding.eval_id
+    except FindingResolutionError as resolution_error:
+        if str(resolution_error) != _MSG_FINDING_NOT_FOUND:
+            raise
+        te_finding = await load_trigger_event_finding(
+            session,
+            str(finding_id),
+            str(principal.organisation_id),
+        )
+        if te_finding is None:
+            raise FindingResolutionError(_MSG_FINDING_NOT_FOUND) from None
+        te_finding.resolution = req.resolution
+        te_finding.resolution_reason = req.reason
+        if req.resolution == "pending":
+            te_finding.resolved_at = None
+            te_finding.resolved_by = None
+        else:
+            te_finding.resolved_at = datetime.now(UTC)
+            te_finding.resolved_by = principal.account_id
+        await session.flush()
+        return te_finding, te_finding.eval_id
+
+
+def _finding_source_fields(finding: Any) -> tuple[str, str | None]:
+    """Return the public source and trigger-event id for a finding."""
+    if isinstance(finding, TriggerEventFinding):
+        return "trigger_event", str(finding.trigger_event_id)
+    return "eval_result", None
+
+
+def _finding_response(
+    finding_id: uuid.UUID,
+    finding: Any,
+    eval_id: uuid.UUID,
+) -> ResolveFindingResponse:
+    """Build the stable wire response for either finding storage type."""
+    finding_source, trigger_event_id = _finding_source_fields(finding)
+    return ResolveFindingResponse(
+        id=finding_id,
+        finding_id=finding_id,
+        finding_source=finding_source,
+        trigger_event_id=uuid.UUID(trigger_event_id) if trigger_event_id else None,
+        eval_id=eval_id,
+        resolution=finding.resolution,
+        resolution_reason=finding.resolution_reason,
+        resolved_at=finding.resolved_at.isoformat() if finding.resolved_at else None,
+        resolved_by=finding.resolved_by,
+    )
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/evals/findings/{finding_id}/resolve
 # ---------------------------------------------------------------------------
@@ -3136,7 +3210,7 @@ class MutePolicyConfigResponse(BaseModel):
     "/evals/findings/{finding_id}",
     status_code=status.HTTP_200_OK,
     responses={
-        404: {"description": "Finding not found"},
+        404: {"description": _MSG_FINDING_NOT_FOUND},
         500: {"description": "Internal Server Error"},
         501: {"description": "Not Implemented"},
         503: {"description": "Service Unavailable"},
@@ -3182,7 +3256,7 @@ async def get_finding(
             str(principal.organisation_id),
         )
         if te_finding is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finding not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_FINDING_NOT_FOUND)
 
         finding = te_finding
         return {
@@ -3209,7 +3283,7 @@ async def get_finding(
     ],
     responses={
         400: {"description": "Invalid resolution value"},
-        404: {"description": "Finding not found"},
+        404: {"description": _MSG_FINDING_NOT_FOUND},
         500: {"description": "Internal Server Error"},
         501: {"description": "Not Implemented"},
         503: {"description": "Service Unavailable"},
@@ -3228,55 +3302,12 @@ async def resolve_finding(
     optional reason. Triggers mute policy evaluation for the associated
     eval/guardrail definition and records an explicit audit event.
     """
-    from modulo.core.eval.finding_resolver import (
-        FindingResolutionError,
-        apply_mute_policy,
-    )
-    from modulo.core.eval.finding_resolver import resolve_finding as resolve_finding_core
-
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-
-            finding: Any
-            eval_id: uuid.UUID
-            try:
-                finding = await resolve_finding_core(
-                    session,
-                    str(finding_id),
-                    req.resolution,
-                    req.reason,
-                    str(principal.account_id),
-                    str(principal.organisation_id),
-                )
-                eval_id = finding.eval_id
-            except FindingResolutionError as resolution_error:
-                if str(resolution_error) != "Finding not found":
-                    raise
-                te_finding = await load_trigger_event_finding(
-                    session,
-                    str(finding_id),
-                    str(principal.organisation_id),
-                )
-                if te_finding is None:
-                    raise FindingResolutionError("Finding not found") from None
-
-                finding = te_finding
-                eval_id = finding.eval_id
-                finding.resolution = req.resolution
-                finding.resolution_reason = req.reason
-                if req.resolution == "pending":
-                    finding.resolved_at = None
-                    finding.resolved_by = None
-                else:
-                    finding.resolved_at = datetime.now(UTC)
-                    finding.resolved_by = principal.account_id
-                await session.flush()
-
-            is_te_finding = isinstance(finding, TriggerEventFinding)
-            finding_source = "trigger_event" if is_te_finding else "eval_result"
-            trigger_event_id_val = str(finding.trigger_event_id) if is_te_finding else None
+            finding, eval_id = await _resolve_finding_record(session, finding_id, req, principal)
+            finding_source, trigger_event_id_val = _finding_source_fields(finding)
             await append_audit_event(
                 session,
                 org_id=principal.organisation_id,
@@ -3302,19 +3333,9 @@ async def resolve_finding(
                 automatic=True,
             )
 
-        return ResolveFindingResponse(
-            id=finding_id,
-            finding_id=finding_id,
-            finding_source="trigger_event" if isinstance(finding, TriggerEventFinding) else "eval_result",
-            trigger_event_id=finding.trigger_event_id if isinstance(finding, TriggerEventFinding) else None,
-            eval_id=eval_id,
-            resolution=finding.resolution,
-            resolution_reason=finding.resolution_reason,
-            resolved_at=finding.resolved_at.isoformat() if finding.resolved_at else None,
-            resolved_by=finding.resolved_by,
-        )
+        return _finding_response(finding_id, finding, eval_id)
     except FindingResolutionError as e:
-        if str(e) == "Finding not found":
+        if str(e) == _MSG_FINDING_NOT_FOUND:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except HTTPException:
