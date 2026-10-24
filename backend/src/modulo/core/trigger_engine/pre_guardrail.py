@@ -47,7 +47,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.guardrails import GuardrailAction, run_interception_pass, to_engine_definition
+from modulo.core.guardrails import (
+    GuardrailAction,
+    _interpret_violation,
+    _mechanism_fail_result,
+    _resolve_detection,
+    run_interception_pass,
+    to_engine_definition,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -159,7 +166,10 @@ async def run_pre_trigger_guardrail_pass(
     definitions = await _load_guardrail_definitions(session, org_id=org_id, pipeline_id=pipeline_id)
     if not definitions:
         return PreTriggerGuardrailOutcome(payload=dict(raw_payload))
-    any_guarding = any(d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
+    any_guarding = any(
+        not d.is_muted and d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
+        for d in definitions
+    )
     from modulo.core.eval_engine import EvalEngine
 
     try:
@@ -173,20 +183,36 @@ async def run_pre_trigger_guardrail_pass(
         raise
     except Exception:
         _log.exception("guardrails.pre_trigger_interception_error")
+        mechanism_results = [_mechanism_fail_result(d, "guardrail interception mechanism error") for d in definitions]
         if not detection_only and any_guarding:
             return PreTriggerGuardrailOutcome(
                 payload=dict(raw_payload),
+                results=mechanism_results,
                 blocked=True,
                 block_message="guardrail mechanism error at webhook intake",
             )
-        return PreTriggerGuardrailOutcome(payload=dict(raw_payload))
+        return PreTriggerGuardrailOutcome(
+            payload=dict(raw_payload),
+            results=mechanism_results,
+            evaluated_count=len(definitions),
+        )
 
+    definitions_by_id = {definition.id: definition for definition in definitions}
+    meaningful_results = [
+        result
+        for result in outcome.results
+        if result.outcome == "error"
+        or (
+            (definition := definitions_by_id.get(result.eval_id)) is not None
+            and _interpret_violation(_resolve_detection(definition)[0], result)
+        )
+    ]
     return PreTriggerGuardrailOutcome(
         payload=outcome.payload,
         blocked=outcome.blocked,
         block_message=outcome.block_message,
         blocking_eval_name=outcome.blocking_eval_name,
-        results=outcome.results,
+        results=meaningful_results,
         redactions=outcome.redactions,
         evaluated_count=len(outcome.results),
     )

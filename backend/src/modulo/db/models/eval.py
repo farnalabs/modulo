@@ -4,10 +4,11 @@ Net-new table mirroring EvalDefinition minus failure_behaviour.
 """
 
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Integer, Numeric, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
@@ -37,6 +38,16 @@ class Eval(SoftDeleteMixin, OrgScoped):
         CheckConstraint(
             "pass_threshold IS NULL OR pass_threshold BETWEEN 0 AND 1",
             name="ck_evals_pass_threshold",
+        ),
+        # FAR-2028: mute threshold must be between 0 and 1.
+        CheckConstraint(
+            "mute_threshold IS NULL OR mute_threshold BETWEEN 0 AND 1",
+            name="ck_evals_mute_threshold",
+        ),
+        # FAR-2028: mute_min_outcomes must be positive when set.
+        CheckConstraint(
+            "mute_min_outcomes IS NULL OR mute_min_outcomes > 0",
+            name="ck_evals_mute_min_outcomes",
         ),
         UniqueConstraint("id", "organisation_id", name="uq_evals_id_organisation_id"),
     )
@@ -72,3 +83,17 @@ class Eval(SoftDeleteMixin, OrgScoped):
     pass_threshold: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     # deleted_by exists but SoftDeleteMixin supplies deleted_at.
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    # FAR-2028: Cached acceptance rate (percentage of findings resolved as 'accepted').
+    # Computed by the mute policy evaluator on each finding resolution.
+    acceptance_rate: Mapped[float | None] = mapped_column(nullable=True)
+    # FAR-2028: Mute policy fields.
+    is_muted: Mapped[bool] = mapped_column(nullable=False, server_default="false", default=False)
+    muted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    muted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    # FAR-2028: Mute policy configuration.
+    # When acceptance_rate < mute_threshold across mute_min_outcomes recorded outcomes,
+    # the definition is auto-muted (stops interrupting but keeps recording).
+    mute_threshold: Mapped[float | None] = mapped_column(nullable=True)
+    mute_min_outcomes: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -918,7 +918,7 @@ class TriggerEngine:
             # BEFORE the dedup insert so a guardrail-blocked delivery never
             # consumes a dedup slot. Reuses the T1 run-creation seam's engine
             # and row-loading semantics; detection is never reimplemented.
-            post_guardrail_payload, dedup_hash = await self._run_pre_trigger_guardrail(
+            post_guardrail_payload, dedup_hash, guardrail_results = await self._run_pre_trigger_guardrail(
                 session,
                 delivery,
                 payload_hash=payload_hash,
@@ -987,6 +987,12 @@ class TriggerEngine:
                 payload_hash=dedup_hash,
                 rate_limit=rate_limit,
                 ci_failure_coalesce_key=ci_failure_coalesce_key,
+            )
+            await self._persist_pre_trigger_guardrail_evidence(
+                session,
+                org_id=org_id,
+                trigger_event_id=trigger_event.id,
+                guardrail_results=guardrail_results,
             )
             _log.info("Webhook accepted for trigger %s → run %s", trigger_id, run.id)
 
@@ -1103,7 +1109,7 @@ class TriggerEngine:
             # A replay bypasses dedup but must still be guardrail-checked (the
             # payload may have been fixed since the original delivery). The
             # canonical POST-guardrail hash feeds the post-guardrail events.
-            post_guardrail_payload, payload_hash = await self._run_pre_trigger_guardrail(
+            post_guardrail_payload, payload_hash, guardrail_results = await self._run_pre_trigger_guardrail(
                 session,
                 delivery,
                 payload_hash=raw_body_hash,
@@ -1150,6 +1156,12 @@ class TriggerEngine:
                 rate_limit=rate_limit,
                 is_replay=True,
                 ci_failure_coalesce_key=ci_failure_coalesce_key,
+            )
+            await self._persist_pre_trigger_guardrail_evidence(
+                session,
+                org_id=org_id,
+                trigger_event_id=trigger_event.id,
+                guardrail_results=guardrail_results,
             )
 
             return run, trigger_event, input_payload
@@ -1445,6 +1457,55 @@ class TriggerEngine:
         """
         return await count_trigger_slot_occupancy(session, trigger_id)
 
+    async def _persist_pre_trigger_guardrail_evidence(
+        self,
+        session: AsyncSession,
+        *,
+        org_id: uuid.UUID,
+        trigger_event_id: uuid.UUID,
+        guardrail_results: list[Any],
+    ) -> None:
+        """Persist muted pre-trigger results without creating a Run.
+
+        The normal guardrail evidence sink is attached to ``create_run`` and
+        therefore cannot observe an intake block.  Only the result DTOs are
+        persisted here; the payload never enters the result detail or evidence
+        value.  The event id is the durable subject for this runless delivery.
+        """
+        if not guardrail_results:
+            return
+        from modulo.core.eval_engine.evidence_layer import append_evidence
+        from modulo.db.models.trigger_event_finding import TriggerEventFinding
+
+        # ``EvalResult`` is intentionally run- or suite-run-scoped. Intake
+        # blocks create neither, so writing one here would violate
+        # ``ck_eval_results_run_xor_suite`` and roll back the committed
+        # TriggerEvent. The generic evidence store supports this runless
+        # subject directly; the TriggerEvent remains the durable intake finding
+        # and the evidence row records the guardrail decision against it.
+        for result in guardrail_results:
+            session.add(
+                TriggerEventFinding(
+                    organisation_id=org_id,
+                    trigger_event_id=trigger_event_id,
+                    eval_id=result.eval_id,
+                    passed=result.passed,
+                    outcome=str(result.outcome),
+                    score=result.score,
+                    detail=result.detail[:2000],
+                )
+            )
+            append_evidence(
+                session,
+                organisation_id=org_id,
+                key=f"eval_guardrail_{result.eval_id}",
+                subject_type="trigger_event",
+                subject_id=str(trigger_event_id),
+                value=result.passed,
+                producer_type="eval",
+                producer_id=result.eval_id,
+            )
+
     async def _store_raw_payload(
         self,
         session: AsyncSession,
@@ -1630,7 +1691,7 @@ class TriggerEngine:
         *,
         payload_hash: str,
         is_replay: bool,
-    ) -> tuple[dict[str, Any], str]:
+    ) -> tuple[dict[str, Any], str, list[Any]]:
         """Run the pre-trigger guardrail pass; return (post-guardrail payload, canonical hash).
 
         A block outcome (webhook path only — replays are detection-only and
@@ -1659,6 +1720,12 @@ class TriggerEngine:
                 payload_hash=payload_hash,
                 result="guardrail_blocked",
                 error_detail=outcome.block_message[:2000],
+            )
+            await self._persist_pre_trigger_guardrail_evidence(
+                session,
+                org_id=delivery.org_id,
+                trigger_event_id=block_event.id,
+                guardrail_results=outcome.results,
             )
             # Store the raw payload for replay so the sender/provider can
             # retry after fixing — the delivery is reject-and-retry, NOT
@@ -1689,7 +1756,7 @@ class TriggerEngine:
                 delivery.trigger.id,
                 delivery.trigger.pipeline_id,
             )
-        return outcome.payload, canonical_payload_hash(outcome.payload)
+        return outcome.payload, canonical_payload_hash(outcome.payload), outcome.results
 
     async def _resolve_rate_limit_state(
         self,

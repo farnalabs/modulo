@@ -570,6 +570,13 @@ def test_conformance_block_action_fail_closed_absent_and_unknown():
 # ---------------------------------------------------------------------------
 
 
+def test_muted_block_guardrail_never_blocks_on_non_conformance():
+    """FAR-2028: muted enforcement definitions do not block conformance."""
+    guardrail = _guardrail(name="muted", required_capabilities=["read"])
+    guardrail.is_muted = True
+    assert not non_conformant_blocking_guardrails([guardrail], {"read": False})
+
+
 def test_non_conformant_profile_qualified_capability_cannot_satisfy_qualified_claim():
     """FAR-1615: a profile declaring the literal string ``github.read`` must
     NOT satisfy a type-qualified ``github.read`` claim at run creation.
@@ -642,3 +649,36 @@ def test_non_conformant_empty_key_certifies_nothing():
     non_conformant = non_conformant_blocking_guardrails([guardrail], {"": True})
     assert [g.name for g, _derivation in non_conformant] == ["g_empty"]
     assert non_conformant[0][1].state == "unknown"
+
+
+def test_evaluate_guardrails_policy_gate_skips_muted_and_records_active(monkeypatch: pytest.MonkeyPatch):
+    """A gate-owning violation is resolved for an active guardrail only.
+
+    A muted sibling with the same gate row must not be recorded — the mutation
+    filter runs before the resolver so a muted guardrail cannot block.
+    """
+    from types import SimpleNamespace
+
+    recorded: list[str] = []
+
+    def _fake_record(eval_def: EvalDefinition, result: object, gate_row: object, violations: list) -> None:
+        recorded.append(eval_def.name)
+        violations.append((eval_def, result))
+
+    monkeypatch.setattr("modulo.core.guardrails._record_gated_violation", _fake_record)
+
+    gate = SimpleNamespace(id=uuid.uuid4())
+    active = _guardrail(name="gated-active")
+    muted = _guardrail(name="gated-muted")
+    muted.is_muted = True
+    policy_gates = {active.id: gate, muted.id: gate}
+
+    with pytest.raises(GuardrailBlockedError):
+        evaluate_guardrails(
+            EvalEngine(),
+            [active, muted],
+            {"body": "leak SECRET_ABC12345"},
+            policy_gates=policy_gates,
+        )
+
+    assert recorded == ["gated-active"]

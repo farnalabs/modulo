@@ -1415,6 +1415,7 @@ async def _run_guardrail_interception_pass(
     is_replay: bool | None,
     skipped_guardrails: list[Any],
     any_guarding: bool,
+    detection_only: bool,
 ) -> tuple[dict[str, Any], list[Any], list[Any], bool, str, list[Any], str]:
     """Execute the interception pass and return every mutated run state field.
 
@@ -1428,15 +1429,16 @@ async def _run_guardrail_interception_pass(
     a pre-run safety gate, not a per-node policy evaluation).
     """
     from modulo.core.eval_engine import EvalEngine
-    from modulo.core.guardrails import run_interception_pass_async
+    from modulo.core.guardrails import _mechanism_fail_result, run_interception_pass_async
 
     start_wall = time.perf_counter()
+    is_detection_only = detection_only or bool(is_replay)
     try:
         outcome = await run_interception_pass_async(
             EvalEngine(),
             guardrail_defs,
             payload,
-            detection_only=bool(is_replay),
+            detection_only=is_detection_only,
             skipped=skipped_guardrails,
         )
     except asyncio.CancelledError:
@@ -1445,16 +1447,16 @@ async def _run_guardrail_interception_pass(
         _log.exception("guardrails.interception_error")
         if any_guarding:
             payload_out: dict[str, Any] = payload
-            results: list[Any] = []
-            redactions: list[Any] = []
             blocked = True
             block_message = "guardrail mechanism error at ingestion edge"
         else:
             payload_out = payload
-            results = []
-            redactions = []
             blocked = False
             block_message = ""
+        # Keep muted guardrail mechanism evidence regardless of whether an
+        # active sibling makes the outer interception path fail closed.
+        results = [_mechanism_fail_result(d, "guardrail interception mechanism error") for d in guardrail_defs]
+        redactions: list[Any] = []
         latency_ms = (time.perf_counter() - start_wall) * 1000
         _log.info(
             "guardrails.interception_latency_ms",
@@ -1695,7 +1697,8 @@ async def _run_guardrail_gate(
 
         observed_by_eval = {d.id: d.config.get("action") == GuardrailAction.OBSERVE for d in guardrail_defs}
         any_guarding = any(
-            d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in guardrail_defs
+            not d.is_muted and d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
+            for d in guardrail_defs
         )
 
         # Conformance enforcement (FAR-223 item 7 "Plus"): a block-action
@@ -1731,6 +1734,21 @@ async def _run_guardrail_gate(
                 is_replay=request.is_replay,
                 skipped_guardrails=skipped_guardrails,
                 any_guarding=any_guarding,
+                detection_only=False,
+            )
+        elif conformance_blocked:
+            # A conformance block is decided before enforcement. Still run every
+            # definition in detection-only mode so muted siblings retain their
+            # evidence, without allowing detection to clear or weaken the block.
+            _, results, redactions, _, _, skipped_guardrails, _ = await _run_guardrail_interception_pass(
+                org_id=org_id,
+                _run_id=run_id,
+                guardrail_defs=guardrail_defs,
+                payload=payload,
+                is_replay=request.is_replay,
+                skipped_guardrails=skipped_guardrails,
+                any_guarding=False,
+                detection_only=True,
             )
         # NOTE (item 10 invariant): a conformance block (``blocked`` True via
         # the block above) must NOT clear the accumulated pin-skips collected
