@@ -46,6 +46,7 @@ depends_on: tuple[str, ...] | None = None
 logger = logging.getLogger("alembic.runtime.migration")
 
 _ADD_COMPLETED_AT = "ALTER TABLE run_node_outputs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE"
+_DROP_COMPLETED_AT = "ALTER TABLE run_node_outputs DROP COLUMN IF EXISTS completed_at"
 
 _SET_SIDE_LOCK_TIMEOUT = "SET lock_timeout = '15s'"
 _REHEARSAL_ENV_VAR = "ALEMBIC_REHEARSAL"
@@ -122,11 +123,11 @@ def downgrade() -> None:
         return
 
     if _rehearsal_mode():
-        op.execute(sa.text("ALTER TABLE run_node_outputs DROP COLUMN IF EXISTS completed_at"))
+        op.execute(sa.text(_DROP_COMPLETED_AT))
     else:
         with _autocommit_connection() as conn:
             if not _relation_visible(conn) or _migration_transaction_locks_table():
-                op.execute(sa.text("ALTER TABLE run_node_outputs DROP COLUMN IF EXISTS completed_at"))
+                op.execute(sa.text(_DROP_COMPLETED_AT))
             else:
-                conn.execute(sa.text("ALTER TABLE run_node_outputs DROP COLUMN IF EXISTS completed_at"))
+                conn.execute(sa.text(_DROP_COMPLETED_AT))
     logger.info("0332_per_node_completion: dropped completed_at column from run_node_outputs")

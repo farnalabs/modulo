@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from modulo.core.pipeline_execution import _fail_overdue_node, _write_node_completion
+from modulo.core.pipeline_execution import (
+    _fail_overdue_node,
+    _probe_completed_nodes,
+    _wire_node_deadline_hooks,
+    _write_node_completion,
+)
 from modulo.db.crud.run_node_outputs import attempt_key_for_node, has_completed_nodes_in_attempt
 from modulo.db.models.base import Base
 from modulo.db.models.organisation import Organisation
@@ -62,6 +70,103 @@ async def _insert_output(
                 completed_at=datetime.now(UTC) if completed else None,
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_completion_probe_reads_current_attempt(
+    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    run_id = uuid.uuid4()
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=True, claim_token="claim-a")
+
+    assert await _probe_completed_nodes(sqlite_engine, str(run_id), str(_ORG), "claim-a") is True
+    assert await _probe_completed_nodes(sqlite_engine, str(run_id), str(_ORG), "claim-b") is False
+
+
+@pytest.mark.asyncio
+async def test_completion_writer_updates_existing_row_without_creating_duplicate(
+    sqlite_engine: AsyncEngine,
+    sqlite_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    run_id = uuid.uuid4()
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=False, claim_token="claim-a")
+
+    await _write_node_completion(sqlite_engine, str(run_id), str(_ORG), "agent", "claim-a")
+    await _write_node_completion(sqlite_engine, str(run_id), str(_ORG), "agent", "claim-a")
+
+    async with sqlite_sessionmaker() as session, session.begin():
+        result = await session.execute(
+            select(RunNodeOutput).where(
+                RunNodeOutput.run_id == run_id,
+                RunNodeOutput.node_id == "agent",
+            )
+        )
+        assert len(result.scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_completion_writer_logs_and_swallows_database_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with (
+        patch(
+            "modulo.core.pipeline_execution.async_sessionmaker",
+            side_effect=RuntimeError("database unavailable"),
+        ),
+        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
+    ):
+        await _write_node_completion(
+            MagicMock(),
+            str(uuid.uuid4()),
+            str(_ORG),
+            "agent",
+            "claim-a",
+        )
+
+    assert "node_completion_write_failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_node_deadline_hook_records_completion_when_configured() -> None:
+    executor = SimpleNamespace()
+    deadlines: dict[str, tuple[float, int]] = {}
+    started = asyncio.Event()
+    completed = asyncio.Event()
+    writer = AsyncMock()
+
+    engine = MagicMock()
+    with patch("modulo.core.pipeline_execution._write_node_completion", writer):
+        _wire_node_deadline_hooks(
+            executor,
+            deadlines,
+            started,
+            completed,
+            {},
+            30,
+            aeng=engine,
+            run_id="run-1",
+            org_id="org-1",
+            claim_token="claim-a",
+        )
+        await executor.on_node_completed("agent")
+
+    writer.assert_awaited_once_with(engine, "run-1", "org-1", "agent", "claim-a")
+    assert completed.is_set()
+    assert not deadlines
+
+
+@pytest.mark.asyncio
+async def test_node_deadline_hook_skips_completion_record_without_database_context() -> None:
+    executor = SimpleNamespace()
+    deadlines = {"agent": (1.0, 30)}
+    started = asyncio.Event()
+    completed = asyncio.Event()
+
+    _wire_node_deadline_hooks(executor, deadlines, started, completed, {}, 30)
+    await executor.on_node_completed("agent")
+
+    assert completed.is_set()
+    assert not deadlines
 
 
 @pytest.mark.asyncio

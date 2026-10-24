@@ -111,6 +111,90 @@ def test_existing_install_uses_visible_side_connection(
     assert any("ADD COLUMN" in statement for statement in side_connection.executed)
 
 
+def test_non_postgres_upgrade_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    migration_statements: list[str] = []
+    monkeypatch.setattr(
+        _MIGRATION,
+        "op",
+        SimpleNamespace(
+            get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
+            execute=lambda statement: migration_statements.append(str(statement)),
+        ),
+    )
+    _MIGRATION.upgrade()
+    assert not migration_statements
+
+
+def test_existing_install_downgrade_uses_visible_side_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_connection = _FakeConnection(relation_visible=True)
+    side_connection = _FakeConnection(relation_visible=True)
+    migration_statements: list[str] = []
+    monkeypatch.delenv(_MIGRATION._REHEARSAL_ENV_VAR, raising=False)
+    monkeypatch.setattr(
+        _MIGRATION,
+        "op",
+        SimpleNamespace(
+            get_bind=lambda: migration_connection,
+            execute=lambda statement: migration_statements.append(str(statement)),
+        ),
+    )
+    monkeypatch.setattr(_MIGRATION, "_autocommit_connection", lambda: _ConnectionContext(side_connection))
+    monkeypatch.setattr(_MIGRATION, "_is_postgres", lambda: True)
+    monkeypatch.setattr(_MIGRATION, "_migration_transaction_locks_table", lambda: False)
+
+    _MIGRATION.downgrade()
+
+    assert not migration_statements
+    assert any(statement == _MIGRATION._DROP_COMPLETED_AT for statement in side_connection.executed)
+
+
+def test_downgrade_rehearsal_stays_on_migration_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    migration_connection = _FakeConnection(relation_visible=True)
+    migration_statements: list[str] = []
+    monkeypatch.setenv(_MIGRATION._REHEARSAL_ENV_VAR, "1")
+    monkeypatch.setattr(
+        _MIGRATION,
+        "op",
+        SimpleNamespace(
+            get_bind=lambda: migration_connection,
+            execute=lambda statement: migration_statements.append(str(statement)),
+        ),
+    )
+    monkeypatch.setattr(_MIGRATION, "_autocommit_connection", lambda: pytest.fail("rehearsal opened side connection"))
+    monkeypatch.setattr(_MIGRATION, "_is_postgres", lambda: True)
+
+    _MIGRATION.downgrade()
+
+    assert migration_statements == [_MIGRATION._DROP_COMPLETED_AT]
+
+
+def test_downgrade_falls_back_when_side_connection_cannot_see_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration_connection = _FakeConnection(relation_visible=True)
+    side_connection = _FakeConnection(relation_visible=False)
+    migration_statements: list[str] = []
+    monkeypatch.delenv(_MIGRATION._REHEARSAL_ENV_VAR, raising=False)
+    monkeypatch.setattr(
+        _MIGRATION,
+        "op",
+        SimpleNamespace(
+            get_bind=lambda: migration_connection,
+            execute=lambda statement: migration_statements.append(str(statement)),
+        ),
+    )
+    monkeypatch.setattr(_MIGRATION, "_autocommit_connection", lambda: _ConnectionContext(side_connection))
+    monkeypatch.setattr(_MIGRATION, "_is_postgres", lambda: True)
+    monkeypatch.setattr(_MIGRATION, "_migration_transaction_locks_table", lambda: False)
+
+    _MIGRATION.downgrade()
+
+    assert migration_statements == [_MIGRATION._DROP_COMPLETED_AT]
+    assert not any(statement == _MIGRATION._DROP_COMPLETED_AT for statement in side_connection.executed)
+
+
 def test_rehearsal_stays_on_migration_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
