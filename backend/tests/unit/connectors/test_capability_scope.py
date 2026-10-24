@@ -1042,6 +1042,49 @@ def test_routed_binding_without_an_instance_id_contributes_nothing():
     assert compute_run_fetch_scope(graph) is None
 
 
+def test_non_dict_capability_scope_is_treated_as_unrestricted():
+    """A ``capability_scope`` that is not a dict carries no allowlist at all.
+
+    Reachable only through a writer that stores raw graph dicts. It must be read
+    as an ABSENT scope (unrestricted), never as a malformed
+    ``allowed_connectors``: an unrestricted agent node still contributes its
+    Agent's grants, and an unrestricted connector node still contributes the
+    connector its binding is routed to.
+    """
+    agent_id = str(uuid.uuid4())
+    inst = str(uuid.uuid4())
+    graph = {
+        "nodes": [
+            {
+                "id": "agent",
+                "node_type": "agent",
+                "agent_id": agent_id,
+                "capability_scope": "github",
+            },
+            {
+                "id": "conn",
+                "node_type": "connector",
+                "capability_scope": ["nonsense"],
+                "connector_binding": {"type": "github", "instance_id": inst, "operation": "query"},
+            },
+        ]
+    }
+    assert compute_run_fetch_scope(graph, {agent_id: {"github"}}) == sorted({inst, "github"})
+
+
+def test_routed_binding_with_a_non_dict_binding_contributes_nothing():
+    """The routed-binding arm never trusts a non-dict ``connector_binding``.
+
+    ``node_routes_binding_to_connector`` already rejects one, so this guard is
+    defence in depth: a loosened routing predicate must not let a malformed
+    binding contribute — or widen — the fetch scope. Simulating that contract
+    change is the only way to reach it.
+    """
+    graph = {"nodes": [{"id": "conn", "node_type": "connector", "connector_binding": "github"}]}
+    with patch("modulo.connectors.base.node_routes_binding_to_connector", return_value=True):
+        assert compute_run_fetch_scope(graph) is None
+
+
 # ---------------------------------------------------------------------------
 # Executor wiring — prove the run environment passes the computed fetch scope
 # through to ConnectorHub.initialise (FAR-418 prove-the-fix).
