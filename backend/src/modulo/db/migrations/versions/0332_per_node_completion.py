@@ -1,6 +1,6 @@
 """Per-node completion record: add completed_at to run_node_outputs (FAR-2050).
 
-Revision ID: 0331_per_node_completion
+Revision ID: 0332_per_node_completion
 Revises: 0330_eval_verdict_contract
 Create Date: 2026-10-24
 
@@ -34,7 +34,7 @@ import logging
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0331_per_node_completion"
+revision: str = "0332_per_node_completion"
 down_revision: str | None = "0330_eval_verdict_contract"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
