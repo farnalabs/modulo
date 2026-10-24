@@ -1248,7 +1248,9 @@ def _over_budget_enforcement_outcome(
     seam: str,
 ) -> GuardrailInterceptionOutcome:
     """Fail-closed outcome for an over-budget payload under enforcement guardrails."""
-    any_guarding = any(_resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
+    any_guarding = any(
+        not d.is_muted and _resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions
+    )
     if any_guarding:
         _log.warning("guardrails.payload_over_budget", extra={"reason": reason, "seam": seam})
         return GuardrailInterceptionOutcome(
