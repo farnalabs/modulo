@@ -202,9 +202,12 @@ describe('SettingsErrorForwardersView', () => {
       'ddog-gov.com',
     ])
 
-    // PrimeVue selects an option on mousedown, which flows back through
-    // v-model into configs.datadog.site.
-    await datadog.find('.p-select-option [data-value="datadoghq.eu"]').trigger('mousedown')
+    // PrimeVue 5.0.3 moved option selection from mousedown to click (mousedown
+    // now only moves focus), so follow a real pointer: press, then click. The
+    // selection flows back through v-model into configs.datadog.site.
+    const euOption = datadog.find('.p-select-option [data-value="datadoghq.eu"]')
+    await euOption.trigger('mousedown')
+    await euOption.trigger('click')
     await flushPromises()
     await nextTick()
     expect(datadog.find('.p-select-label').text()).toBe('EU (datadoghq.eu)')
