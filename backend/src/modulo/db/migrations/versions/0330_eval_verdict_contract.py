@@ -87,6 +87,11 @@ Locking / online safety (FAR-403 class, and a deadlock found in review):
   was created by an earlier migration whose DDL is still uncommitted — so that
   path runs the ``eval_results`` statements on the migration connection. There
   is no traffic or data on a fresh chain.
+* A REHEARSAL (``ALEMBIC_REHEARSAL=1``, FAR-717) runs the whole chain in one
+  transaction and refuses EVERY side connection (their commits would survive
+  the mandatory rollback), so this revision executes all of its work on the
+  migration connection under a rehearsal. The online-safety split above applies
+  to a real upgrade only.
 
 Non-Postgres backends are a no-op, matching ``0323`` and
 ``0324_purge_eval_definitions``: their schemas come from the ORM
@@ -106,8 +111,11 @@ by the previous code path.
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import sqlalchemy as sa
@@ -132,6 +140,10 @@ _PROGRESS_EVERY_SECONDS = 60.0
 #: Fail loudly rather than wait forever on a lock the migration cannot get.
 _SET_MIGRATION_LOCK_TIMEOUT = "SET LOCAL lock_timeout = '15s'"
 _SET_SIDE_LOCK_TIMEOUT = "SET lock_timeout = '15s'"
+
+#: Set by the migration rehearsal runner (``env.py``, FAR-717): the chain runs
+#: in ONE transaction and every side connection is refused.
+_REHEARSAL_ENV_VAR = "ALEMBIC_REHEARSAL"
 
 _OUTCOME_CHECK = "ck_eval_results_outcome"
 _CONFIDENCE_CHECK = "ck_eval_results_judge_confidence_kind"
@@ -253,6 +265,23 @@ def _set_migration_lock_timeout() -> None:
     op.execute(sa.text(_SET_MIGRATION_LOCK_TIMEOUT))
 
 
+def _rehearsal_mode() -> bool:
+    """True while the migration rehearsal runner executes this revision.
+
+    A rehearsal (``ALEMBIC_REHEARSAL=1``, FAR-717) executes the whole chain
+    inside ONE transaction and REFUSES any side connection: a side
+    connection's commits are independent of that transaction, so they would
+    survive the mandatory rollback. This revision therefore does ALL of its
+    work on the migration connection under a rehearsal, and only a real
+    upgrade takes the per-statement online-safety side-connection path.
+
+    The environment variable (not ``env.py``'s module state) is the signal:
+    alembic loads ``env.py`` as a fresh module object, so a migration cannot
+    see the state of the instance that is actually running the chain.
+    """
+    return os.environ.get(_REHEARSAL_ENV_VAR, "") == "1"
+
+
 def _autocommit_connection() -> Any:
     """A dedicated AUTOCOMMIT connection for the ``eval_results`` work.
 
@@ -314,8 +343,12 @@ def _execute_side(statements: tuple[str, ...]) -> None:
     Each statement commits on its own, so an ACCESS EXCLUSIVE is released before
     the next statement's ``VALIDATE`` scan. On a fresh chain (table not visible)
     or when this transaction already locks the table, the statements run on the
-    migration connection instead.
+    migration connection instead. A rehearsal forbids side connections outright,
+    so it always uses the migration connection inside its single transaction.
     """
+    if _rehearsal_mode():
+        _execute_migration(statements)
+        return
     with _autocommit_connection() as conn:
         if not _side_connection_can_write_eval_results(conn):
             for statement in statements:
@@ -325,19 +358,38 @@ def _execute_side(statements: tuple[str, ...]) -> None:
             conn.execute(sa.text(statement))
 
 
+@contextmanager
+def _backfill_connection() -> Iterator[Any | None]:
+    """The connection the outcome backfill runs on (``None`` = nothing to do).
+
+    A rehearsal forbids side connections, so it uses the migration connection
+    inside its single transaction. A real upgrade prefers the AUTOCOMMIT side
+    connection (each batch commits before the next scan) and falls back to the
+    migration connection on a fresh chain or when this transaction already
+    locks ``eval_results``.
+    """
+    if _rehearsal_mode():
+        yield op.get_bind()
+        return
+    with _autocommit_connection() as side:
+        if not _relation_visible(side):
+            yield None
+            return
+        # When this transaction already locks ``eval_results`` (the 0328 index),
+        # the side connection's UPDATE would wait on our own lock; the migration
+        # connection can upgrade it, so the keyset loop runs there instead.
+        yield op.get_bind() if _migration_transaction_locks_eval_results() else side
+
+
 def _backfill_outcome() -> int:
     """Primary-key keyset backfill of ``outcome`` (index-backed, resumable)."""
     total = 0
     batches = 0
     last: Any = _ZERO_UUID
-    with _autocommit_connection() as side:
-        if not _relation_visible(side):
+    with _backfill_connection() as conn:
+        if conn is None:
             logger.info("0330_eval_verdict_contract: fresh chain, no rows to backfill")
             return 0
-        # When this transaction already locks ``eval_results`` (the 0328 index),
-        # the side connection's UPDATE would wait on our own lock; the migration
-        # connection can upgrade it, so the keyset loop runs there instead.
-        conn = op.get_bind() if _migration_transaction_locks_eval_results() else side
         logger.info(
             "0330_eval_verdict_contract: starting online outcome backfill "
             "(batch_size=%d, primary-key keyset, resumable via WHERE outcome IS NULL; "
