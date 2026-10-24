@@ -412,6 +412,7 @@ async def test_destroy_workspace(
     await provider.destroy_workspace(ref)
 
     mock_container.stop.assert_awaited_once()
+    mock_container.delete.assert_awaited_once_with(force=True)
     assert ref not in provider._workspaces
 
 
@@ -420,6 +421,35 @@ async def test_destroy_workspace_unknown(
 ) -> None:
     result = await provider.destroy_workspace("nonexistent")
     assert result is None
+
+
+async def test_destroy_workspace_swallows_delete_error(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    delete_error = _FakeDockerError("removal already in progress")
+    delete_error.status = 409
+    gone_error = _FakeDockerError("gone")
+    gone_error.status = 404
+    mock_container.delete.side_effect = delete_error
+    # First get() resolves the container handle; the removal-confirmation poll
+    # then sees it already gone.
+    mock_docker_client.containers.get.side_effect = [mock_container, gone_error]
+
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        await provider.destroy_workspace(ref)
+
+    assert ref not in provider._workspaces
 
 
 async def test_destroy_workspace_swallows_docker_error(
@@ -456,6 +486,266 @@ async def test_destroy_workspace_removes_ref_on_generic_error(
     mock_container.stop.side_effect = RuntimeError("connection reset")
 
     await provider.destroy_workspace(ref)
+
+    assert ref not in provider._workspaces
+
+
+async def test_destroy_workspace_container_already_gone(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    gone_error = _FakeDockerError("no such container")
+    gone_error.status = 404
+    mock_docker_client.containers.get.side_effect = gone_error
+
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        await provider.destroy_workspace(ref)
+
+    assert ref not in provider._workspaces
+
+
+async def test_destroy_workspace_resolve_non_404_error(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    daemon_error = _FakeDockerError("daemon unavailable")
+    daemon_error.status = 500
+    mock_docker_client.containers.get.side_effect = daemon_error
+
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        await provider.destroy_workspace(ref)
+
+    assert ref not in provider._workspaces
+
+
+async def test_destroy_workspace_resolve_generic_error(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    mock_docker_client.containers.get.side_effect = RuntimeError("connection reset")
+
+    await provider.destroy_workspace(ref)
+
+    assert ref not in provider._workspaces
+
+
+async def test_destroy_workspace_propagates_resolve_cancellation(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    mock_docker_client.containers.get.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.destroy_workspace(ref)
+
+
+async def test_destroy_workspace_propagates_stop_cancellation(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    mock_container.stop.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.destroy_workspace(ref)
+
+
+async def test_destroy_workspace_propagates_delete_cancellation(
+    provider: DockerRuntimeProvider,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    mock_container.delete.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.destroy_workspace(ref)
+
+
+async def test_destroy_workspace_delete_non_404_error_confirms_removal(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    daemon_error = _FakeDockerError("server error")
+    daemon_error.status = 500
+    gone_error = _FakeDockerError("gone")
+    gone_error.status = 404
+    mock_container.delete.side_effect = daemon_error
+    mock_docker_client.containers.get.side_effect = [mock_container, gone_error]
+
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        await provider.destroy_workspace(ref)
+
+    assert ref not in provider._workspaces
+
+
+async def test_destroy_workspace_delete_generic_error_confirms_removal(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    gone_error = _FakeDockerError("gone")
+    gone_error.status = 404
+    mock_container.delete.side_effect = RuntimeError("connection reset")
+    mock_docker_client.containers.get.side_effect = [mock_container, gone_error]
+
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        await provider.destroy_workspace(ref)
+
+    assert ref not in provider._workspaces
+
+
+async def test_await_container_removed_polls_until_gone(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+    mock_container: MagicMock,
+) -> None:
+    gone_error = _FakeDockerError("gone")
+    gone_error.status = 404
+    mock_docker_client.containers.get.side_effect = [mock_container, mock_container, gone_error]
+
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        removed = await provider._await_container_removed(mock_docker_client, "cntnr-12345")
+
+    assert removed is True
+
+
+async def test_await_container_removed_propagates_cancellation(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    mock_docker_client.containers.get.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider._await_container_removed(mock_docker_client, "cntnr-12345")
+
+
+async def test_await_container_removed_returns_false_on_non_404_error(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    daemon_error = _FakeDockerError("server error")
+    daemon_error.status = 500
+    mock_docker_client.containers.get.side_effect = daemon_error
+
+    with patch(
+        "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+        _FakeDockerError,
+    ):
+        removed = await provider._await_container_removed(mock_docker_client, "cntnr-12345")
+
+    assert removed is False
+
+
+async def test_await_container_removed_returns_false_on_generic_error(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    mock_docker_client.containers.get.side_effect = RuntimeError("connection reset")
+
+    removed = await provider._await_container_removed(mock_docker_client, "cntnr-12345")
+
+    assert removed is False
+
+
+async def test_await_container_removed_returns_false_when_still_present(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+    mock_container: MagicMock,
+) -> None:
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with patch("modulo.core.runtime_provider.docker._REMOVE_CONFIRM_TIMEOUT_S", 0.0):
+        removed = await provider._await_container_removed(mock_docker_client, "cntnr-12345")
+
+    assert removed is False
+
+
+async def test_destroy_workspace_warns_when_container_survives(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+    mock_container: MagicMock,
+) -> None:
+    ref = await provider.create_workspace(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+        )
+    )
+    delete_error = _FakeDockerError("removal already in progress")
+    delete_error.status = 409
+    mock_container.delete.side_effect = delete_error
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with (
+        patch(
+            "modulo.core.runtime_provider.docker.aiodocker.exceptions.DockerError",
+            _FakeDockerError,
+        ),
+        patch("modulo.core.runtime_provider.docker._REMOVE_CONFIRM_TIMEOUT_S", 0.0),
+    ):
+        await provider.destroy_workspace(ref)
 
     assert ref not in provider._workspaces
 
