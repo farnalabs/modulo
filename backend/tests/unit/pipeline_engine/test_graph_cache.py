@@ -11,12 +11,14 @@ from modulo.core.pipeline_engine.graph_cache import (
     _CACHE,
     _MAX_SIZE,
     _make_gate_kickback_router,
+    _make_node_fn,
     build_graph_from_json,
     compute_eval_defs_hash,
     evict,
     get_or_compile,
     struct_hash_with_eval_defs,
 )
+from modulo.core.pipeline_engine.node_runner import _connector_inputs
 
 
 @pytest.fixture(autouse=True)
@@ -720,6 +722,54 @@ def test_connector_node_compiles():
     }
     compiled = build_graph_from_json(graph)
     assert compiled is not None
+
+
+def test_connector_node_routes_its_binding_to_the_connector_fn():
+    """FAR-2089: a ``connector`` node resolves to ``make_connector_fn``, query intact.
+
+    ``test_connector_node_compiles`` proves compilation succeeds; this pins WHICH
+    factory the type resolves to (an accepted-but-unrouted type would fall
+    through to the LLM node factory) and that the saved ``resource`` /
+    ``filters`` / ``data`` are what ``_connector_inputs`` hands the connector.
+    """
+    binding: dict[str, Any] = {
+        "instance_id": str(uuid.uuid4()),
+        "type": "github",
+        "operation": "query",
+        "resource": "pull",
+        "filters": {"state": "open", "labels": ["agent"]},
+        "data": {"note": "round-trip"},
+    }
+    node_def: dict[str, Any] = {"id": "conn", "node_type": "connector", "connector_binding": binding}
+    sentinel = object()
+
+    with patch(
+        "modulo.core.pipeline_engine.graph_cache.make_connector_fn",
+        return_value=sentinel,
+    ) as make_connector:
+        node_fn = _make_node_fn(node_def, timeout=30, session_factory=None, single_sandbox_node=False)
+
+    assert node_fn is sentinel
+    routed_def = make_connector.call_args.args[0]
+    assert routed_def["node_type"] == "connector"
+    resource, filters, data = _connector_inputs(routed_def["connector_binding"], {})
+    assert resource == "pull"
+    assert filters["state"] == "open"
+    assert filters["labels"] == ["agent"]
+    assert data["note"] == "round-trip"
+
+
+def test_connector_node_without_binding_fails_at_graph_build():
+    """FAR-2089: a binding-less ``connector`` node fails loud, like ``dispatch``.
+
+    The fall-through below the routing predicate is the general LLM factory, so
+    without this guard a connector node with no binding silently ran as an agent
+    node with no agent — no connector call, no error.
+    """
+    graph: dict[str, Any] = {"nodes": [{"id": "conn", "node_type": "connector"}], "edges": []}
+
+    with pytest.raises(ValueError, match="no connector_binding"):
+        build_graph_from_json(graph)
 
 
 def test_dispatch_node_compiles():

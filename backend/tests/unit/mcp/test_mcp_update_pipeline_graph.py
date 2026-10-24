@@ -187,6 +187,88 @@ class TestUpdatePipelineGraphGuardrailStrip:
         assert result["pipeline_id"] == str(pipeline_id)
         mock_replace_graph.assert_awaited_once()
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[])
+    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    async def test_connector_binding_payload_reaches_shared_graph_write(
+        self,
+        mock_replace_graph: AsyncMock,
+        mock_guardrail_rows: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """MCP validation retains connector query/write inputs."""
+        _set_ctx(role="admin")
+        pipeline_id = uuid.uuid4()
+        binding = {
+            "type": "filesystem",
+            "instance_id": str(uuid.uuid4()),
+            "operation": "query",
+            "resource": "list_files",
+            "filters": {"path": "/workspace", "recursive": True},
+            "data": {"include_hidden": False},
+        }
+        node = {
+            "id": str(uuid.uuid4()),
+            "node_type": "agent",
+            "agent_id": str(uuid.uuid4()),
+            "position": {"x": 0, "y": 0},
+            "connector_binding": binding,
+        }
+        mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None, graph_nodes_json=[])
+        mock_replace_graph.return_value = ([node], [])
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
+
+        result = await update_pipeline_graph(pipeline_id=str(pipeline_id), nodes=[node], edges=[])
+
+        assert "error" not in result, result
+        written_binding = mock_replace_graph.await_args.kwargs["nodes"][0]["connector_binding"]
+        assert written_binding["resource"] == "list_files"
+        assert written_binding["filters"] == {"path": "/workspace", "recursive": True}
+        assert written_binding["data"] == {"include_hidden": False}
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("modulo.db.crud.guardrail_config.load_pipeline_guardrail_rows", return_value=[])
+    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    async def test_connector_binding_without_inputs_persists_no_null_keys(
+        self,
+        mock_replace_graph: AsyncMock,
+        mock_guardrail_rows: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """MCP re-saves must not turn absent optional inputs into nulls (FAR-2089)."""
+        _set_ctx(role="admin")
+        pipeline_id = uuid.uuid4()
+        node = {
+            "id": str(uuid.uuid4()),
+            "node_type": "agent",
+            "agent_id": str(uuid.uuid4()),
+            "position": {"x": 0, "y": 0},
+            "connector_binding": {"type": "github", "instance_id": str(uuid.uuid4())},
+        }
+        mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None, graph_nodes_json=[])
+        mock_replace_graph.return_value = ([node], [])
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
+
+        result = await update_pipeline_graph(pipeline_id=str(pipeline_id), nodes=[node], edges=[])
+
+        assert "error" not in result, result
+        written_binding = mock_replace_graph.await_args.kwargs["nodes"][0]["connector_binding"]
+        assert "resource" not in written_binding
+        assert "filters" not in written_binding
+        assert "data" not in written_binding
+
 
 def _hitl_node(node_id: uuid.UUID, hitl_config: dict | None) -> dict:
     return {
@@ -491,3 +573,93 @@ class TestUpdatePipelineGraphDispatchAndValidation:
 
         assert result["error"] == "validation_failed"
         assert "Graph validation failed" in result["detail"]
+
+
+class TestUpdatePipelineGraphConnectorNode:
+    """FAR-2089: the MCP full-graph write accepts a ``connector`` node.
+
+    ``_validate_graph_update`` runs the REST-parity ``PipelineGraphUpdate``
+    model, so the ``connector`` node type was rejected here for the same reason
+    the REST surface rejected it: the ``node_type`` Literal did not list it. A
+    GitHub query node could therefore not be authored through MCP either.
+    """
+
+    def setup_method(self) -> None:
+        _set_ctx(role="operator")
+
+    def teardown_method(self) -> None:
+        _clear_ctx()
+
+    @staticmethod
+    def _connector_node() -> dict:
+        return {
+            "id": str(uuid.uuid4()),
+            "node_type": "connector",
+            "position": {"x": 0, "y": 0},
+            "connector_binding": {
+                "type": "github",
+                "instance_id": str(uuid.uuid4()),
+                "operation": "query",
+                "resource": "pull",
+                "filters": {"state": "open", "labels": ["agent", "backend"], "limit": 25},
+                "data": {"note": "round-trip"},
+            },
+        }
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
+    async def test_a_connector_node_binding_fields_reach_the_writer(
+        self,
+        mock_replace_graph: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """The write is accepted, and resource/filters/data survive to the writer.
+
+        Before the model change this call returned ``validation_failed`` and
+        ``replace_pipeline_graph`` was never reached.
+        """
+        pipeline_id = uuid.uuid4()
+        node = self._connector_node()
+        mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None)
+        mock_session.return_value.__aenter__.return_value = make_session_scope()
+        mock_replace_graph.return_value = ([node], [])
+
+        result = await update_pipeline_graph(pipeline_id=str(pipeline_id), nodes=[node], edges=[])
+
+        assert "error" not in result, result
+        mock_replace_graph.assert_awaited_once()
+        written = mock_replace_graph.await_args.kwargs["nodes"][0]
+        assert written["node_type"] == "connector"
+        binding = written["connector_binding"]
+        assert binding["resource"] == "pull"
+        assert binding["filters"] == {"state": "open", "labels": ["agent", "backend"], "limit": 25}
+        assert binding["data"] == {"note": "round-trip"}
+        # FAR-2089: the gate must be asked about THIS node's instance. Patching
+        # the mismatch check to ``[]`` alone passed even if a ``connector``
+        # node's binding were silently dropped before the gate.
+        mock_find_mismatches.assert_awaited_once()
+        assert mock_find_mismatches.await_args.kwargs["connector_bindings"] == [
+            {"node_id": node["id"], "connector_instance_id": node["connector_binding"]["instance_id"]}
+        ]
+
+    async def test_a_connector_node_without_a_binding_is_rejected(self) -> None:
+        """A binding-less connector node is refused before any DB work.
+
+        No patches beyond the auth/context: validation runs first, so the tool
+        returns the ``validation_failed`` envelope rather than touching a
+        session.
+        """
+        node = self._connector_node()
+        node["connector_binding"] = None
+
+        with patch("modulo.api.mcp_server.validate_current_auth", return_value=True):
+            result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=[node], edges=[])
+
+        assert result["error"] == "validation_failed", result
+        assert "Connector nodes require a connector_binding" in result["detail"]

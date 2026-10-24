@@ -6593,12 +6593,26 @@ def _connector_inputs(binding: dict[str, Any], state: dict[str, Any]) -> tuple[s
     Run input keys slot into ``filters`` by default and into ``data`` only
     when the binding already carries them; a shell connector without a
     ``provider_ref`` defaults to ``"/"``.
+
+    An explicit ``null`` is treated exactly like an absent key. A stored graph
+    can carry ``"resource": null`` / ``"filters": null`` (a binding written
+    before the model defaulted them, or a hand-written/legacy graph), and
+    ``dict(None)`` raises ``TypeError`` on the only run path — so every read is
+    coerced with ``or`` rather than a ``.get(key, default)`` that only covers an
+    ABSENT key. One consequence worth knowing: the same ``or`` guard also
+    treats an explicitly EMPTY ``resource`` string as unset and falls back to
+    ``"command"``, which differs from the pre-FAR-2089 behaviour that preserved
+    ``""``.
     """
     run_context = state.get("run_context") or {}
     raw_input = run_context.get("input", {})
-    resource: str = binding.get("resource", "command")
-    filters = dict(binding.get("filters", {}))
-    data = dict(binding.get("data", {}))
+    # FAR-2089: a persisted ``None`` (older graph writes emitted explicit nulls
+    # for the optional inputs) must fall back to the documented defaults rather
+    # than reaching the connector as ``None`` — ``dict(None)`` raises TypeError
+    # and ``resource=None`` bypasses the "command" default.
+    resource: str = binding.get("resource") or "command"
+    filters = dict(binding.get("filters") or {})
+    data = dict(binding.get("data") or {})
     if isinstance(raw_input, dict):
         filters.update({k: v for k, v in raw_input.items() if k not in data})
         data.update({k: v for k, v in raw_input.items() if k not in filters})

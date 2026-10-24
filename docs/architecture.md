@@ -80,7 +80,7 @@ Includes:
 
 ### Pipeline Engine (`modulo/core/pipeline_engine/`)
 
-Built on LangGraph's `StateGraph` with `dict[str, Any]` state. Each pipeline snapshot compiles to a StateGraph at run-start. Node types: `agent`, `sandbox_agent`, `manual` (human output), `composite` (expand-only), `router` (ordered JMESPath rules + `default`, lowers to the conditional-edge compile path, FAR-402 P1), `hitl` (human-in-the-loop gate that compiles to the existing synthetic-gate path, FAR-402 P1), `join` (fan-in for scatter/gather patterns), and `dispatch` (fires a CI-runner operation through a connector binding, FAR-1141). `connector` is an internal engine resolution, never an API-authored node type. Edges carry HITL gate config, rejection routing, or a `loop`/`conditional`/`normal`/`reject` edge type.
+Built on LangGraph's `StateGraph` with `dict[str, Any]` state. Each pipeline snapshot compiles to a StateGraph at run-start. Node types: `agent`, `sandbox_agent`, `manual` (human output), `composite` (expand-only), `router` (ordered JMESPath rules + `default`, lowers to the conditional-edge compile path, FAR-402 P1), `hitl` (human-in-the-loop gate that compiles to the existing synthetic-gate path, FAR-402 P1), `join` (fan-in for scatter/gather patterns), `dispatch` (fires a CI-runner operation through a connector binding, FAR-1141), and `connector` (an API-authorable node type whose whole job is its `connector_binding`: the binding is routed to the bound connector by `make_connector_fn`, FAR-2089). Edges carry HITL gate config, rejection routing, or a `loop`/`conditional`/`normal`/`reject` edge type.
 
 Key design:
 - Compiled graphs cached by `(pipeline_id, snapshot_id)` with LRU eviction

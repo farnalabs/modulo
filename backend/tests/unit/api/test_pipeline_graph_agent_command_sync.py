@@ -469,6 +469,87 @@ def test_put_graph_endpoint_invokes_agent_commands_sync(client: TestClient) -> N
     assert any(node.get("agent_commands") == ["opencode run -- patched"] for node in synced_nodes)
 
 
+def test_put_graph_endpoint_preserves_connector_binding_inputs(client: TestClient) -> None:
+    """REST graph writes retain connector query/write inputs for the snapshot."""
+    node_id = uuid.uuid4()
+    connector_id = uuid.uuid4()
+    nodes = [_node(node_id, agent_id=None, agent_commands=["opencode run"])]
+    nodes[0]["connector_binding"] = {
+        "type": "filesystem",
+        "instance_id": str(connector_id),
+        "operation": "query",
+        "resource": "list_files",
+        "filters": {"path": "/workspace", "recursive": True},
+        "data": {"include_hidden": False},
+    }
+    validation = MagicMock()
+    validation.issues = []
+
+    with (
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])) as replace,
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=0)),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new=AsyncMock()),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 200, resp.text
+    written = replace.await_args.kwargs["nodes"][0]["connector_binding"]
+    assert written["resource"] == "list_files"
+    assert written["filters"] == {"path": "/workspace", "recursive": True}
+    assert written["data"] == {"include_hidden": False}
+
+
+def test_put_graph_endpoint_omits_unset_connector_binding_inputs(client: TestClient) -> None:
+    """A binding that sets none of the new inputs persists no null keys.
+
+    FAR-2089 review regression guard: re-saving an existing graph must not turn
+    the previously ABSENT ``resource``/``filters``/``data`` keys into explicit
+    nulls. The engine helper consumes ``filters: None`` with ``dict(...)``
+    (TypeError) and ``resource: None`` bypasses its ``"command"`` default, so
+    every existing query/dispatch binding would crash once edited and re-saved.
+    """
+    node_id = uuid.uuid4()
+    connector_id = uuid.uuid4()
+    nodes = [_node(node_id, agent_id=None, agent_commands=["opencode run"])]
+    nodes[0]["connector_binding"] = {
+        "type": "filesystem",
+        "instance_id": str(connector_id),
+        "operation": "query",
+    }
+    validation = MagicMock()
+    validation.issues = []
+
+    with (
+        patch("modulo.api.routes.pipelines.replace_pipeline_graph", return_value=(nodes, [])) as replace,
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new=AsyncMock(return_value=0)),
+        patch("modulo.api.routes.pipelines.GraphValidator.validate_definition", return_value=validation),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", return_value=([], [])),
+        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new=AsyncMock()),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=MagicMock(owner_team_id=None)),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 200, resp.text
+    written = replace.await_args.kwargs["nodes"][0]["connector_binding"]
+    assert "resource" not in written
+    assert "filters" not in written
+    assert "data" not in written
+    assert written["operation"] == "query"
+
+
 def test_put_graph_endpoint_syncs_agent_rows_before_the_graph_write(client: TestClient) -> None:
     """Ordering (FAR-1810 review): the Agent-row sync must run BEFORE the
     ``replace_pipeline_graph`` call that mints the FAR-1810 edit snapshot. The

@@ -934,6 +934,16 @@
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
                   </div></template>
+          <!-- FAR-2089: connector nodes render with their own badge/colour
+               instead of the generic `agent` card. Reachable because
+               CANVAS_TYPE_BY_BACKEND_TYPE maps 'connector' to this canvas
+               type; without that entry the node would be emitted as an
+               `agent` node and this slot would never render. Display only —
+               no config panel or palette entry in this slice. -->
+          <template #node-connector="nodeProps"><div class="rounded-lg border-2 border-teal-500/60 bg-teal-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-teal-700 dark:text-teal-300">{{ $t('views.PipelineEditorView.node_connector_badge') }}</div>
+                    <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_connector_label') }}</div>
+                  </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
               <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
@@ -2088,6 +2098,7 @@ function nodeTypeBadgeClass(nodeType: string): string {
   if (nodeType === 'router') return 'badge bg-indigo-500/10 text-indigo-600 dark:bg-indigo-900 dark:text-indigo-300'
   if (nodeType === 'hitl') return 'badge bg-rose-500/10 text-rose-600 dark:bg-rose-900 dark:text-rose-300'
   if (nodeType === 'dispatch') return 'badge bg-cyan-500/10 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300'
+  if (nodeType === 'connector') return 'badge bg-teal-500/10 text-teal-700 dark:bg-teal-900 dark:text-teal-300'
   return 'badge badge-status-primary'
 }
 
@@ -2099,6 +2110,9 @@ function nodeTypeLabel(nodeType: string): string {
   // FAR-1141: a dispatch node must never fall through to the agent label —
   // its work ran outside Modulo, and mislabelling it hides that provenance.
   if (nodeType === 'dispatch') return t('views.PipelineEditorView.node_dispatch_label')
+  // FAR-2089: a connector node's work is done by the bound connector, not by an
+  // LLM, so it must never fall through to the agent label.
+  if (nodeType === 'connector') return t('views.PipelineEditorView.node_connector_label')
   return t('views.PipelineEditorView.node_type_agent')
 }
 const planStore = usePlanStore()
@@ -2127,7 +2141,7 @@ const selectedEdgeData = ref<any | null>(null)
 const showSaveAsDropdown = ref(false)
 const saveAsDropdownTriggerRef = ref<HTMLButtonElement | null>(null)
 const saveAsDropdownStyle = ref<Record<string, string>>({})
-const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch' }
+const nodeTypes = { agent: 'agent', manual: 'manual', router: 'router', hitl: 'hitl', dispatch: 'dispatch', connector: 'connector' }
 const { fitView, onPaneReady } = useVueFlow()
 
 // Docked-toolbar styling: one height/radius/spacing per action class so the
@@ -3348,8 +3362,12 @@ async function loadParamSets() {
 const canConvert = computed(() => pickerAgentId.value !== '__all__' && pickerConnectorId.value !== '__all__')
 
 // Backend node types that map 1:1 onto their canvas type. Everything else
-// (including 'agent') collapses into the generic agent node — except dispatch,
-// which is a first-class canvas type (FAR-1141) and must never be collapsed.
+// (including 'agent') collapses into the generic agent node — except dispatch
+// (FAR-1141) and connector (FAR-2089), which are first-class canvas types with
+// their own `#node-<type>` slot and must never be collapsed. Every canvas
+// node originates here — both loadGraph() and loadViewedSnapshot() map through
+// convertBackendNode — so this map is the single place that decides which
+// card a node renders as.
 // A Map (not an object literal) so an unknown node_type such as 'constructor'
 // or 'toString' cannot resolve to an inherited Object.prototype member — it
 // must fall through to 'agent', matching the original ternary chain.
@@ -3358,6 +3376,7 @@ const CANVAS_TYPE_BY_BACKEND_TYPE = new Map<string, string>([
   ['router', 'router'],
   ['hitl', 'hitl'],
   ['dispatch', 'dispatch'],
+  ['connector', 'connector'],
 ])
 
 function convertBackendNode(n: any): any {

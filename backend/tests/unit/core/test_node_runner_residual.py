@@ -1299,6 +1299,22 @@ def test_connector_inputs_merges_run_input_and_defaults_provider_ref():
     assert filters["provider_ref"] == "/"
 
 
+def test_connector_inputs_tolerates_persisted_null_optional_fields():
+    """FAR-2089: an explicit ``null`` for the optional inputs uses the defaults.
+
+    Older graph writes could persist the new optional keys as ``None`` (rather
+    than omitting them). ``dict(None)`` raises TypeError and ``resource=None``
+    bypasses the documented ``"command"`` default, so the engine must fall back.
+    """
+    resource, filters, data = nr._connector_inputs(
+        {"resource": None, "filters": None, "data": None},
+        {"run_context": {"input": {"q": "abc"}}},
+    )
+    assert resource == "command"
+    assert filters == {"q": "abc", "provider_ref": "/"}
+    assert data == {}
+
+
 def test_connector_inputs_non_dict_input_leaves_binding_values():
     state = {"run_context": {"input": "raw-string"}}
     resource, filters, _data = nr._connector_inputs(
@@ -1306,6 +1322,44 @@ def test_connector_inputs_non_dict_input_leaves_binding_values():
     )
     assert resource == "command"
     assert filters["provider_ref"] == "/x"
+
+
+def test_connector_inputs_explicit_nulls_fall_back_to_defaults():
+    """FAR-2089: an explicit ``null`` is treated exactly like an absent key.
+
+    ``_prepare_graph_write`` serialises nodes with ``model_dump(mode="json")``
+    and no ``exclude_none``, so a binding authored with only a ``resource`` can
+    persist ``"resource": null, "filters": null, "data": null``. ``.get(key,
+    default)`` only defaults when the key is ABSENT, so ``dict(None)`` raised
+    ``TypeError`` on the only run path for both query and write, and
+    ``resource`` silently lost its documented ``"command"`` default.
+    """
+    resource, filters, data = nr._connector_inputs({"resource": None, "filters": None, "data": None}, {})
+
+    assert resource == "command"
+    assert filters == {"provider_ref": "/"}
+    assert data == {}
+
+
+def test_connector_binding_defaults_dump_empty_dicts_not_null():
+    """FAR-2089: a binding written without filters/data dumps ``{}``, not ``null``.
+
+    The graph write persists the model dump verbatim, so a ``None`` default here
+    is exactly what produced the ``"filters": null`` rows the engine cannot
+    iterate.
+    """
+    from modulo.api.routes.pipelines import ConnectorBinding
+
+    binding = ConnectorBinding(type="github", instance_id=uuid.uuid4())
+    dumped = binding.model_dump(mode="json")
+
+    # An empty DICT, not ``null``: ``isinstance`` is what distinguishes the two
+    # here (both are falsy).
+    assert isinstance(dumped["filters"], dict)
+    assert isinstance(dumped["data"], dict)
+    assert not dumped["filters"]
+    assert not dumped["data"]
+    assert dumped["resource"] is None
 
 
 def test_enforce_connector_scope_missing_instance_id_allowed():
@@ -1767,9 +1821,9 @@ def test_api_dispatch_wait_fields_rejected_off_dispatch_nodes():
     }
     from modulo.api.routes.pipelines import PipelineGraphNode
 
-    with pytest.raises(ValidationError, match="Only dispatch nodes"):
+    with pytest.raises(ValidationError, match="Only a dispatch node"):
         PipelineGraphNode.model_validate({**agent_payload, "await_completion": True})
-    with pytest.raises(ValidationError, match="Only dispatch nodes"):
+    with pytest.raises(ValidationError, match="Only a dispatch node"):
         PipelineGraphNode.model_validate({**agent_payload, "wait_timeout": 60.0})
     # A default-valued echo (false / null) must keep saving: it is the same
     # state at rest as an absent key, and forms round-trip every key.

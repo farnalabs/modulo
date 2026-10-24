@@ -581,13 +581,18 @@ def _make_node_fn(
 
     connector_binding = node_def.get("connector_binding")
 
-    if node_type == "dispatch" and not connector_binding:
+    if node_type in ("dispatch", "connector") and not connector_binding:
         # FAR-1141 (MAJOR 7): a dispatch node's whole job is its binding. With
         # none it used to fall through to the general agent-node factory and
         # silently execute as an LLM node — no dispatch, no error. Fail LOUD at
         # graph build instead (the API model rejects the shape at save time;
         # this catches hand-written and legacy graphs).
-        raise ValueError(f"Dispatch node {node_id!r} has no connector_binding")
+        #
+        # FAR-2089: a ``connector`` node is the same shape — its whole job is the
+        # binding, and the ownerless fall-through below is the general LLM
+        # factory. A binding-less connector node therefore ran as an agent node
+        # with no agent instead of failing; same guard, same message shape.
+        raise ValueError(f"{node_type.capitalize()} node {node_id!r} has no connector_binding")
 
     if node_type == "sandbox_agent":
         return make_sandbox_agent_fn(

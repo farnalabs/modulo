@@ -13136,6 +13136,16 @@ export interface components {
              * @enum {string}
              */
             dispatch_action: "trigger_run" | "get_run_status" | "get_run_logs" | "list_runs";
+            /** Resource */
+            resource?: string | null;
+            /** Filters */
+            filters?: {
+                [key: string]: unknown;
+            };
+            /** Data */
+            data?: {
+                [key: string]: unknown;
+            };
         };
         /** ConnectorCreate */
         ConnectorCreate: {
@@ -17814,7 +17824,7 @@ export interface components {
              * @default agent
              * @enum {string}
              */
-            node_type: "agent" | "manual" | "composite" | "sandbox_agent" | "router" | "hitl" | "join" | "dispatch";
+            node_type: "agent" | "manual" | "composite" | "sandbox_agent" | "router" | "hitl" | "join" | "dispatch" | "connector";
             /** Agent Id */
             agent_id?: string | null;
             position: components["schemas"]["GraphPosition"];

@@ -1033,6 +1033,214 @@ def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient)
         )
 
 
+def _connector_node_json(connector_id: uuid.UUID) -> dict[str, object]:
+    """A GitHub query ``connector`` node (FAR-2089)."""
+    return {
+        "id": str(uuid.uuid4()),
+        "node_type": "connector",
+        "position": {"x": 10, "y": 20},
+        "connector_binding": {
+            "type": "github",
+            "instance_id": str(connector_id),
+            "operation": "query",
+            "resource": "pull",
+            "filters": {"state": "open", "labels": ["agent", "backend"], "limit": 25},
+            "data": {"note": "round-trip"},
+        },
+    }
+
+
+def test_replace_pipeline_graph_accepts_connector_node_and_keeps_binding_fields(
+    client: TestClient,
+) -> None:
+    """FAR-2089: a ``connector`` node is accepted and its query reaches the writer.
+
+    Before the model accepted the type the request was rejected by FastAPI's
+    request-body validation (422) and never reached the handler, so nothing here
+    could persist a GitHub query binding.
+    """
+    connector_id = uuid.uuid4()
+    nodes = [_connector_node_json(connector_id)]
+
+    with (
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            return_value=(nodes, []),
+        ) as replace,
+        patch(
+            "modulo.api.routes.pipelines.GraphValidator.validate_definition",
+            return_value=MagicMock(issues=[]),
+        ),
+        patch(
+            "modulo.api.routes.pipelines._resolve_graph_references",
+            return_value=([], []),
+        ),
+        patch(
+            "modulo.api.routes.pipelines.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 200, resp.text
+    persisted = replace.await_args.kwargs["nodes"][0]
+    assert persisted["node_type"] == "connector"
+    binding = persisted["connector_binding"]
+    assert binding["resource"] == "pull"
+    assert binding["filters"] == {"state": "open", "labels": ["agent", "backend"], "limit": 25}
+    assert binding["data"] == {"note": "round-trip"}
+
+
+def test_replace_pipeline_graph_rejects_connector_node_without_binding(
+    client: TestClient,
+) -> None:
+    """A binding-less ``connector`` node is refused with a 422, not persisted."""
+    nodes = [_connector_node_json(uuid.uuid4())]
+    nodes[0]["connector_binding"] = None
+
+    with (
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            return_value=(nodes, []),
+        ) as replace,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 422
+    assert "Connector nodes require a connector_binding" in resp.text
+    replace.assert_not_awaited()
+
+
+def test_replace_pipeline_graph_rejects_connector_node_with_agent(
+    client: TestClient,
+) -> None:
+    """FAR-2089: a ``connector`` node cannot reference an agent.
+
+    The binding would still route (only an ``agent`` node is exempted from
+    routing), so the pairing is refused as dead configuration rather than
+    persisted as if the agent took part.
+    """
+    nodes = [_connector_node_json(uuid.uuid4())]
+    nodes[0]["agent_id"] = str(uuid.uuid4())
+
+    with (
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            return_value=(nodes, []),
+        ) as replace,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 422
+    assert "Connector nodes cannot reference an agent" in resp.text
+    replace.assert_not_awaited()
+
+
+def test_replace_pipeline_graph_rejects_connector_query_without_resource(
+    client: TestClient,
+) -> None:
+    """FAR-2089: a query/write connector binding must carry a non-empty resource."""
+    nodes = [_connector_node_json(uuid.uuid4())]
+    nodes[0]["connector_binding"].pop("resource")
+
+    with (
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            return_value=(nodes, []),
+        ) as replace,
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/graph",
+            json={"nodes": nodes, "edges": []},
+        )
+
+    assert resp.status_code == 422
+    assert "non-empty connector_binding.resource" in resp.text
+    replace.assert_not_awaited()
+
+
+def test_connector_dispatch_binding_needs_no_resource() -> None:
+    """The resource rule applies only to ``query`` / ``write``.
+
+    A dispatch binding carries no resource at all (its work is selected by
+    ``dispatch_action``), so the node-level rule must not reject the one shape
+    the binding model documents as resource-less.
+    """
+    node = PipelineGraphNode.model_validate(
+        {
+            "id": str(uuid.uuid4()),
+            "node_type": "connector",
+            "position": {"x": 0, "y": 0},
+            "connector_binding": {
+                "type": "github_actions_ci",
+                "instance_id": str(uuid.uuid4()),
+                "operation": "dispatch",
+                "dispatch_action": "trigger_run",
+            },
+        }
+    )
+
+    assert node.connector_binding is not None
+    assert node.connector_binding.resource is None
+
+
+async def test_a_connector_node_bound_to_another_teams_connector_is_refused() -> None:
+    """FAR-2089: a ``connector`` node's binding drives the REAL team gate.
+
+    The binding is derived from the node by ``extract_connector_bindings`` (the
+    same call the graph-write path makes) and judged by the real
+    ``find_connector_team_mismatches`` — no patch — so a node the extractor
+    skipped could not ride through the 409.
+    """
+    from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+    from modulo.core.team_visibility import extract_connector_bindings
+
+    team_a = uuid.UUID("00000000-0000-0000-0000-000000000003")
+    team_b = uuid.UUID("00000000-0000-0000-0000-000000000004")
+    cid = uuid.uuid4()
+    instance = MagicMock()
+    instance.id = cid
+    instance.name = "shared-ci"
+    instance.visibility = "team"
+    instance.owner_team_id = team_b
+
+    session = AsyncMock()
+    configure_rls_preamble(session)
+    result = MagicMock()
+    scalars = MagicMock()
+    scalars.all.return_value = [instance]
+    result.scalars.return_value = scalars
+    session.execute = AsyncMock(return_value=result)
+
+    node = _connector_node_json(cid)
+    bindings = extract_connector_bindings([node])
+    assert bindings == [{"node_id": node["id"], "connector_instance_id": str(cid)}]
+
+    with pytest.raises(HTTPException) as excinfo:
+        await _enforce_connector_team_bindings(session, _ORG_ID, team_a, bindings)
+
+    assert excinfo.value.status_code == 409
+    assert str(excinfo.value.detail).startswith("connector_team_mismatch")
+
+
 def _sandbox_node_json() -> dict[str, object]:
     return {
         "id": str(uuid.uuid4()),

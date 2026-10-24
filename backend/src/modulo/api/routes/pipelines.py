@@ -36,6 +36,7 @@ from pydantic import (
     ValidationError,
     ValidationInfo,
     WithJsonSchema,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -1306,6 +1307,69 @@ class ConnectorBinding(BaseModel):
         "get_run_logs",
         "list_runs",
     ] = "trigger_run"
+    # FAR-2089: resource/filters/data for connector query/write operations.
+    # Without these fields declared, Pydantic's extra="ignore" silently drops
+    # them on REST/MCP graph writes, making GitHub connector nodes unable to
+    # perform real queries (the binding reaches the engine empty).
+    #
+    # ``filters`` / ``data`` default to an EMPTY DICT, not ``None``: the graph
+    # write serialises with ``model_dump(mode="json")`` (no ``exclude_none``),
+    # so a ``None`` default would persist ``"filters": null`` for every binding
+    # that only supplies a ``resource`` — and the engine's ``dict(...)`` over
+    # ``null`` raises at run time. An empty dict is the same "no filters" value
+    # in a shape every reader can iterate.
+    resource: str | None = Field(default=None, max_length=200)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+# The optional binding inputs whose absence must stay ABSENT, not become an
+# explicit ``null`` (or a model-defaulted empty dict) in the persisted graph —
+# see the helper below.
+_CONNECTOR_BINDING_OPTIONAL_INPUT_FIELDS = ("resource", "filters", "data")
+
+
+def _is_unset_binding_input(value: Any) -> bool:
+    """True when a binding input carries no author-supplied value.
+
+    ``None`` is the serialised form of an unset optional field on a model that
+    declares it nullable; ``{}`` is the serialised form of the model default
+    for ``filters`` / ``data``. Both mean "not set", and both must not be
+    persisted as though the author had written them.
+    """
+    return value is None or value == {}
+
+
+def strip_unset_connector_binding_inputs(node: dict[str, Any]) -> dict[str, Any]:
+    """Drop unset values for a binding's optional query/write inputs.
+
+    FAR-2089 review: graph writes persist ``node.model_dump(mode="json")`` —
+    REST ``_prepare_graph_write``, MCP ``update_pipeline_graph`` and the CLI
+    apply normaliser all do. A binding that never set ``resource``/``filters``/
+    ``data`` dumps them as ``None`` and/or ``{}`` (the model defaults), so a
+    graph re-save turns previously ABSENT keys into explicit values. The
+    engine's ``_connector_inputs`` then reads ``filters: None`` and raises
+    ``TypeError`` inside ``dict(...)``, while ``resource: None`` bypasses its
+    ``"command"`` default — every existing query/dispatch binding would crash
+    on its next run.
+
+    Removing only those unset keys keeps the persisted shape identical to the
+    pre-FAR-2089 graph; a binding that sets them is untouched. ``{}`` is
+    stripped for the same reason as ``None``: it is the model default, not an
+    author-supplied value, and every reader treats an absent key and an empty
+    mapping identically (``_connector_inputs`` coerces with ``or {}``).
+    """
+    binding = node.get("connector_binding")
+    if not isinstance(binding, dict):
+        return node
+    cleaned = {
+        key: value
+        for key, value in binding.items()
+        if not (key in _CONNECTOR_BINDING_OPTIONAL_INPUT_FIELDS and _is_unset_binding_input(value))
+    }
+    if len(cleaned) == len(binding):
+        return node
+    return {**node, "connector_binding": cleaned}
 
 
 class SchemaPin(BaseModel):
@@ -1394,7 +1458,22 @@ class PipelineGraphPolicyGate(BaseModel):
 
 class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join", "dispatch"] = "agent"
+    node_type: Literal[
+        "agent",
+        "manual",
+        "composite",
+        "sandbox_agent",
+        "router",
+        "hitl",
+        "join",
+        "dispatch",
+        # FAR-2089: a query/write node whose whole job is its ``connector_binding``.
+        # The engine has always built ``make_connector_fn`` for this type
+        # (``pipeline_engine.graph_cache._make_node_fn``), but the public write
+        # model did not accept it, so a connector query node could not be
+        # authored through the API at all.
+        "connector",
+    ] = "agent"
     agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
@@ -1724,6 +1803,7 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             "hitl": self._validate_hitl_node,
             "join": self._validate_join_node,
             "dispatch": self._validate_dispatch_node,
+            "connector": self._validate_connector_node,
         }
         node_validators[self.node_type]()
         # FAR-1141 FIX 2: a ``dispatch`` verb on a node the engine does NOT
@@ -1823,9 +1903,9 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         if self.node_type == "dispatch":
             return
         if self.await_completion:
-            raise ValueError("Only dispatch nodes can set await_completion=True")
+            raise ValueError("Only a dispatch node can set await_completion=True")
         if self.wait_timeout is not None:
-            raise ValueError("Only dispatch nodes can set wait_timeout")
+            raise ValueError("Only a dispatch node can set wait_timeout")
 
     def _validate_stdout_retention(self) -> None:
         """FAR-792: per-node stdout/stderr retention is a sandbox_agent-only surface.
@@ -2075,6 +2155,63 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             )
         if self.wait_timeout is not None and not self.await_completion:
             raise ValueError("wait_timeout requires await_completion=True — the window is never read otherwise")
+
+    def _validate_connector_node(self) -> None:
+        """A connector node routes its ``connector_binding`` to a connector (FAR-2089).
+
+        The engine has always supported this node type
+        (``pipeline_engine.graph_cache._make_node_fn`` builds
+        ``make_connector_fn`` for ``node_type="connector"``), but the public
+        write model rejected the value, so a GitHub query node could not be
+        authored through the API at all.
+
+        Two rules, each mirroring the engine's own branch order:
+
+        * **binding (required).** ``_make_node_fn`` only reaches
+          ``make_connector_fn`` when ``node_routes_binding_to_connector`` is
+          true, and a binding-less node falls through to the general LLM node
+          factory - a ``connector`` node would then run as an agent node with no
+          agent. ``dispatch`` already fails loud on this shape at graph build;
+          rejecting it at save time gives the author the error instead of a
+          run-time surprise.
+        * **agent_id (forbidden).** A ``connector`` node with an ``agent_id``
+          still routes its binding (``node_routes_binding_to_connector``
+          exempts only ``node_type == "agent"``), so the binding would fire —
+          but the node type has no LLM step, so the agent reference is dead
+          configuration that reads as if the agent were involved. Rejected so
+          the author removes it instead of believing it is used.
+        * **resource (required for query/write).** A ``query`` / ``write``
+          binding with no ``resource`` reaches the connector with an empty
+          resource and fails at run time; the binding model allows absence (a
+          ``dispatch`` binding has no resource), so the node-level rule
+          requires it for every non-dispatch operation. Safe for existing data:
+          ``connector`` was never authorable before FAR-2089, so no stored graph
+          can regress.
+
+        Output schema id / pins are deliberately NOT forbidden: a connector's
+        result is an artifact like any other node's, so pinning its shape stays
+        valid. Dispatch-only wait fields, sandbox-only fields and agent-only
+        fields are already rejected on every non-owning node type by the shared
+        checkers, so they need no restating here.
+        """
+        if self.connector_binding is None:
+            raise ValueError(
+                "Connector nodes require a connector_binding - without one the node "
+                "cannot route to a connector and would run as an agent node",
+            )
+        if self.agent_id is not None:
+            raise ValueError(
+                "Connector nodes cannot reference an agent - a connector node has no LLM step, "
+                "so the agent_id would be dead configuration (the binding still routes, the agent "
+                "never runs); remove the agent_id",
+            )
+        binding = self.connector_binding
+        if binding.operation != "dispatch" and not (binding.resource or "").strip():
+            raise ValueError(
+                f"Connector nodes require a non-empty connector_binding.resource for a "
+                f"{binding.operation!r} operation - without one the connector is called with an "
+                "empty resource at run time",
+            )
 
     def _validate_dispatch_binding_routing(self) -> None:
         """FAR-1141 criterion 4 / FIX 2: reject a dispatch verb the engine cannot route.
@@ -2371,12 +2508,45 @@ class PipelineGraphUpdate(BaseModel):
         return self
 
 
+def _graph_response_nodes(nodes):  # type: (list[PipelineGraphNode]) -> list[dict[str, Any]]
+    """Serialise response nodes with the binding shape the WRITE path persisted (FAR-2089 review).
+
+    The graph write persists a binding with its unset optional inputs ABSENT
+    (``_prepare_graph_write`` → ``strip_unset_connector_binding_inputs``). A
+    read re-validates the stored node into ``PipelineGraphNode``, which
+    re-materialises the model defaults, so serialising the model verbatim would
+    emit ``resource: null`` / ``filters: {}`` / ``data: {}`` for keys the
+    persisted graph does not carry. The read contract must match the write
+    contract: the frontend flow is GET → edit → PUT, and ``modulo apply`` hashes
+    fetched graphs against declared state, so an asymmetric wire shape is drift
+    on both.
+
+    Stripping goes through the SAME helper as the write so the two can never
+    diverge; only ``connector_binding`` on top-level nodes is touched, and a
+    genuinely-supplied value is never removed.
+
+    Two deliberate shapes here, both explained by the OpenAPI contract:
+
+    * the return type is a PEP 484 type COMMENT rather than an annotation —
+      Pydantic uses a serializer function's return annotation as the field's
+      serialisation schema, so annotating the dicts would publish
+      ``nodes`` as ``{[key: string]: unknown}[]`` instead of
+      ``PipelineGraphNode[]`` even though the wire contract is unchanged;
+    * it is a module-level function assigned inside the class body (see
+      ``PipelineGraphResponse``) rather than a decorated method, so the
+      dead-code gate sees a real reference to it.
+    """
+    return [strip_unset_connector_binding_inputs(node.model_dump(mode="json")) for node in nodes]
+
+
 class PipelineGraphResponse(PipelineGraphUpdate):
     validation_issues: list[GraphValidationIssue] = Field(default_factory=list)
     # FAR-900: per-node schema translation warnings emitted at design time.
     # Each entry: {node_id, keyword, path, message} — only populated for nodes
     # with a schema_profile that would strip keywords.
     schema_translation_report: list[dict[str, Any]] = Field(default_factory=list)
+
+    _serialise_nodes = field_serializer("nodes")(_graph_response_nodes)
 
 
 async def _resolve_node_providers(
@@ -2706,6 +2876,11 @@ def _graph_response(
     per-edge validation failures are collected into ``validation_issues`` so the
     consumer (frontend, MCP, agents) can surface them without the HTTP response
     failing with an opaque 422.  (FAR-874)
+
+    FAR-2089 review: the response's ``nodes`` serializer strips the connector
+    binding inputs the write path persists as ABSENT, so a read reports the
+    same shape a write stored (see ``PipelineGraphResponse``), rather than the
+    model defaults re-materialised by per-node validation.
     """
     issues: list[GraphValidationIssue] = list(validation_issues or [])
 
@@ -3242,7 +3417,7 @@ def _prepare_graph_write(
     req: PipelineGraphUpdate,
 ) -> tuple[list[dict[str, Any]], list[GraphEdgeData], dict[str, Any], list[dict[str, Any]]]:
     """Serialise a graph update into its write + validator representations."""
-    node_data = [node.model_dump(mode="json") for node in req.nodes]
+    node_data = [strip_unset_connector_binding_inputs(node.model_dump(mode="json")) for node in req.nodes]
     edge_data = [_edge_to_data(edge) for edge in req.edges]
     validator_graph = {
         "nodes": node_data,

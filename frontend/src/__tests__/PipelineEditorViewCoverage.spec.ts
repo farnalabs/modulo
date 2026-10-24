@@ -123,12 +123,21 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     expect(vm.nodeTypeBadgeClass('hitl')).toContain('rose')
     expect(vm.nodeTypeBadgeClass('agent')).toContain('primary')
     expect(vm.nodeTypeBadgeClass('sandbox_agent')).toContain('primary')
+    expect(vm.nodeTypeBadgeClass('connector')).toContain('teal')
 
     expect(vm.nodeTypeLabel('manual')).toBeTruthy()
     expect(vm.nodeTypeLabel('sandbox_agent')).toBeTruthy()
     expect(vm.nodeTypeLabel('router')).toBeTruthy()
     expect(vm.nodeTypeLabel('hitl')).toBeTruthy()
     expect(vm.nodeTypeLabel('agent')).toBeTruthy()
+    // FAR-2089: a connector node must be labelled by its own key, not fall
+    // through to the agent label.
+    expect(vm.nodeTypeLabel('connector')).not.toBe(vm.nodeTypeLabel('agent'))
+    expect(vm.nodeTypeLabel('connector')).toBeTruthy()
+
+    // FAR-2089: registered on the canvas alongside the other node types, so it
+    // renders its own card instead of VueFlow's unstyled default box.
+    expect(vm.nodeTypes.connector).toBe('connector')
 
     wrapper.unmount()
   })
@@ -1308,6 +1317,24 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     wrapper.unmount()
   })
 
+  // -- convertBackendNode: connector keeps its own canvas type --
+  // This is the path that decides which card a backend connector node renders
+  // as: both canvas load paths map through convertBackendNode, so a missing
+  // 'connector' entry in CANVAS_TYPE_BY_BACKEND_TYPE would emit `type: 'agent'`
+  // and render the #node-agent card while the panel says Connector.
+  it('convertBackendNode keeps a connector node on its own canvas type', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    const converted = vm.convertBackendNode({ id: 'c1', node_type: 'connector', label: 'Slack', position: { x: 0, y: 0 } })
+    expect(converted.type).toBe('connector')
+    expect(converted.data.node_type).toBe('connector')
+    wrapper.unmount()
+  })
+
   // -- saveGraph: with selectedNodeData param sync --
   it('saveGraph syncs param set and overrides into selectedNodeData', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
@@ -1829,6 +1856,59 @@ describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping
     expect(vm.savingEdge).toBe(false)
     const patched = vi.mocked(api.PUT).mock.calls.at(-1)?.[1] as { body?: { edges?: unknown[] } } | undefined
     expect(patched?.body?.edges?.length).toBe(3)
+    wrapper.unmount()
+  })
+})
+
+describe('PipelineEditorView — coverage: connector node slot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useApiFns.get.mockReset()
+    useApiFns.post.mockReset()
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    useApiFns.post.mockResolvedValue({})
+  })
+
+  it('renders the connector card with its label and falls back to the default label', async () => {
+    // The default mount stub renders only the unnamed slot, so the
+    // `#node-connector` template (and its `label || $t(...)` fallback) never ran.
+    // Invoke the scoped slot twice — once with a label, once without — to
+    // exercise both arms without depending on VueFlow's real node rendering.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            render(this: { $slots: Record<string, any> }) {
+              const slot = this.$slots['node-connector']
+              return h('div', [
+                slot?.({ data: { label: 'Slack', description: 'Send a message' } }),
+                slot?.({ data: { label: '', description: 'No authored label' } }),
+              ])
+            },
+          },
+          Background: true,
+          Controls: true,
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // One card uses the authored label, the other the connector default.
+    expect(wrapper.text()).toContain('Slack')
+    expect(wrapper.text()).toContain('Connector')
     wrapper.unmount()
   })
 })
