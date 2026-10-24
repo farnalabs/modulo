@@ -1740,6 +1740,71 @@ jobs:
           fi
           exit 0
 
+      # 2026-10-23 staging outage: a FRESH app machine reached `started` and
+      # never passed either check, while the worker machine from the SAME image
+      # came up healthy - and the failing job retained NO machine log, so the
+      # Branch Fixer triage could not tell whether uvicorn hung in its lifespan,
+      # nginx failed to bind 8080, or the VM was unreachable. Each re-dispatch
+      # replaced the machine and discarded the evidence again. Capture EVERY
+      # surviving machine (both process groups, so they can be compared) before
+      # the next attempt touches them.
+      - name: Capture app machine logs (staging)
+        if: failure()
+        # No `continue-on-error` (banned - .semgrep/continue-on-error-in-ci.yaml):
+        # this step only runs after the job has ALREADY failed, so a capture
+        # failure can mask nothing. Every command inside is individually
+        # best-effort (`|| true`); a genuine failure here is worth surfacing.
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          bash .github/scripts/install-flyctl.sh 2>/dev/null || true
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          LOG_DIR="/tmp/app-machine-logs"
+          mkdir -p "$LOG_DIR" 2>/dev/null || true
+          fly machine list --app staging-modulo --json > "$LOG_DIR/machines.json" 2>&1 || true
+          python3 - "$LOG_DIR" <<'PY' > "$LOG_DIR/machines.tsv" 2>/dev/null || true
+          import json
+          import os
+          import sys
+
+          log_dir = sys.argv[1]
+          try:
+              with open(os.path.join(log_dir, "machines.json"), encoding="utf-8") as fh:
+                  machines = json.load(fh)
+          except Exception:
+              machines = []
+          for machine in machines or []:
+              mid = machine.get("id") or ""
+              if not mid:
+                  continue
+              config = machine.get("config") or {}
+              group = (config.get("metadata") or {}).get("fly_process_group") or "unknown"
+              print(f"{mid}\t{group}\t{machine.get('state') or 'unknown'}")
+          PY
+          while IFS=$'\t' read -r MID GROUP STATE; do
+            [ -z "$MID" ] && continue
+            OUT="${LOG_DIR}/${GROUP}-${MID}.log"
+            # Bounded: a log fetch must never add another multi-minute wait.
+            timeout 90 fly logs --app staging-modulo --machine "$MID" --no-tail > "$OUT" 2>&1 || true
+            # The entrypoint prints the DATABASE_URL prefix; redact credentials
+            # before the capture is echoed or persisted.
+            sed -i -E 's#(postgres(ql)?://[^:/@]+:)[^@]*@#\1***@#g; s#(redis(s)?://[^:/@]+:)[^@]*@#\1***@#g' "$OUT" 2>/dev/null || true
+            echo "----- ${GROUP} machine ${MID} (${STATE}) log (tail) -----"
+            tail -n 80 "$OUT" || true
+            echo "----- end ${GROUP} machine ${MID} -----"
+          done < "$LOG_DIR/machines.tsv" || true
+
+      - name: Upload app machine logs (staging)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-machine-logs-staging
+          path: /tmp/app-machine-logs/
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: Upload migration machine logs (staging)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -2931,6 +2996,66 @@ jobs:
             echo "No pre-migrate machine found to destroy (it may never have been created)."
           fi
           exit 0
+
+      # Prod parity with the staging capture above: a failed app rollout must
+      # leave the machine's own boot log behind, not just the exit code. Same
+      # bounded, best-effort, credential-redacted capture.
+      - name: Capture app machine logs (prod)
+        if: failure()
+        # No `continue-on-error` (banned - .semgrep/continue-on-error-in-ci.yaml):
+        # this step only runs after the job has ALREADY failed, so a capture
+        # failure can mask nothing. Every command inside is individually
+        # best-effort (`|| true`); a genuine failure here is worth surfacing.
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          bash .github/scripts/install-flyctl.sh 2>/dev/null || true
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          LOG_DIR="/tmp/app-machine-logs"
+          mkdir -p "$LOG_DIR" 2>/dev/null || true
+          fly machine list --app app-modulo --json > "$LOG_DIR/machines.json" 2>&1 || true
+          python3 - "$LOG_DIR" <<'PY' > "$LOG_DIR/machines.tsv" 2>/dev/null || true
+          import json
+          import os
+          import sys
+
+          log_dir = sys.argv[1]
+          try:
+              with open(os.path.join(log_dir, "machines.json"), encoding="utf-8") as fh:
+                  machines = json.load(fh)
+          except Exception:
+              machines = []
+          for machine in machines or []:
+              mid = machine.get("id") or ""
+              if not mid:
+                  continue
+              config = machine.get("config") or {}
+              group = (config.get("metadata") or {}).get("fly_process_group") or "unknown"
+              print(f"{mid}\t{group}\t{machine.get('state') or 'unknown'}")
+          PY
+          while IFS=$'\t' read -r MID GROUP STATE; do
+            [ -z "$MID" ] && continue
+            OUT="${LOG_DIR}/${GROUP}-${MID}.log"
+            # Bounded: a log fetch must never add another multi-minute wait.
+            timeout 90 fly logs --app app-modulo --machine "$MID" --no-tail > "$OUT" 2>&1 || true
+            # The entrypoint prints the DATABASE_URL prefix; redact credentials
+            # before the capture is echoed or persisted.
+            sed -i -E 's#(postgres(ql)?://[^:/@]+:)[^@]*@#\1***@#g; s#(redis(s)?://[^:/@]+:)[^@]*@#\1***@#g' "$OUT" 2>/dev/null || true
+            echo "----- ${GROUP} machine ${MID} (${STATE}) log (tail) -----"
+            tail -n 80 "$OUT" || true
+            echo "----- end ${GROUP} machine ${MID} -----"
+          done < "$LOG_DIR/machines.tsv" || true
+
+      - name: Upload app machine logs (prod)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-machine-logs-prod
+          path: /tmp/app-machine-logs/
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Upload migration machine logs (prod)
         if: always()

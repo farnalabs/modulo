@@ -677,17 +677,23 @@ class DockerRuntimeProvider(RuntimeProvider):
             # and stop()); the forced delete below is what removes it.
             _log.warning("Failed to stop container %s; deleting it anyway", container_id, exc_info=True)
 
+        await self._remove_container(client, container, container_id)
+
+    async def _remove_container(self, client: aiodocker.Docker, container: Any, container_id: str) -> None:
+        """Force-delete *container* and confirm the daemon finished removing it.
+
+        ``AutoRemove`` removes the container asynchronously as soon as it
+        stops, so the explicit delete can lose the race: the daemon answers
+        409 "removal ... already in progress" (or 404 when the removal already
+        finished). Confirm the removal instead of reporting success while the
+        container is still on disk.
+        """
         try:
             await container.delete(force=True)
             return
         except asyncio.CancelledError:
             raise
         except aiodocker.exceptions.DockerError as exc:
-            # ``AutoRemove`` removes the container asynchronously as soon as
-            # it stops, so the explicit delete can lose the race: the daemon
-            # answers 409 "removal ... already in progress" (or 404 when the
-            # removal already finished). Confirm the removal instead of
-            # reporting success while the container is still on disk.
             status = getattr(exc, "status", None)
             if status in (404, 409):
                 _log.warning(
