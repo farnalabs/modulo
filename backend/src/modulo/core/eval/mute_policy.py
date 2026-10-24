@@ -133,6 +133,8 @@ async def record_mute_audit_event(
     threshold: float | None = None,
     total_outcomes: int | None = None,
     actor_id: str | None = None,
+    actor_source: str = "user",
+    automatic: bool = False,
 ) -> None:
     """Record an audit event for mute/unmute actions.
 
@@ -162,6 +164,9 @@ async def record_mute_audit_event(
             "threshold": threshold,
             "total_outcomes": total_outcomes,
             "action": action,
+            "actor_source": actor_source,
+            "automatic": automatic,
+            "outcome_count": total_outcomes,
         },
     )
 

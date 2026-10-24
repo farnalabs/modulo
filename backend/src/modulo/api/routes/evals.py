@@ -3175,12 +3175,15 @@ async def resolve_finding(
                 str(principal.organisation_id),
             )
 
-            # Evaluate and apply mute policy for the associated eval definition
+            # Evaluate and apply mute policy for the associated eval definition.
+            # This transition is automatic, even though the finding resolution is
+            # user-initiated, so the audit event identifies the system source.
             await apply_mute_policy(
                 session,
                 str(finding.eval_id),
                 str(principal.organisation_id),
-                muted_by=str(principal.account_id),
+                muted_by=None,
+                automatic=True,
             )
 
         return ResolveFindingResponse(
@@ -3364,13 +3367,15 @@ async def update_mute_policy(
             eval_def.muted_at = None
             eval_def.muted_by = None
 
-        # Re-evaluate mute policy if still configured
+        # Re-evaluate mute policy if still configured. The automatic transition
+        # path records a system-sourced audit event with the measured outcome.
         if eval_def.mute_threshold is not None and eval_def.mute_min_outcomes is not None:
             await apply_mute_policy(
                 session,
                 str(eval_id),
                 str(principal.organisation_id),
-                muted_by=str(principal.account_id),
+                muted_by=None,
+                automatic=True,
             )
 
         await session.flush()

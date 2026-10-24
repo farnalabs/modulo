@@ -867,7 +867,11 @@ def _detect_block(
     """
     for eval_def, result in zip(definitions, results, strict=True):
         detection_type, _ = _resolve_detection(eval_def)
-        if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
+        if (
+            not eval_def.is_muted
+            and _interpret_violation(detection_type, result)
+            and eval_def.config.get("action") == GuardrailAction.BLOCK
+        ):
             return BlockDecision(
                 blocked=True,
                 block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
@@ -908,7 +912,7 @@ def _apply_redaction_phase(
                 extra={"guardrail": eval_def.name},
             )
             continue
-        if cfg.action != GuardrailAction.REDACT or not cfg.redaction:
+        if eval_def.is_muted or cfg.action != GuardrailAction.REDACT or not cfg.redaction:
             continue
         detection_type, effective_config = _resolve_detection(eval_def)
         detection_pattern = effective_config.get("pattern") if detection_type == str(EvalType.REGEX) else None
@@ -1333,7 +1337,7 @@ async def _run_detection_loop(
     decision = BlockDecision()
     for eval_def in definitions:
         action = _resolve_action(eval_def)
-        guarding = action in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
+        guarding = not eval_def.is_muted and action in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
         try:
             # NOTE — known trade-off (runaway thread): ``wait_for`` only bounds
             # how long WE wait; the worker thread started by ``to_thread`` keeps
@@ -1842,6 +1846,7 @@ def serialize_guardrail_pin(db_row: Any) -> dict[str, Any]:
         "failure_behaviour": getattr(db_row, "failure_behaviour", None) or "warn",
         "pass_threshold": str(db_row.pass_threshold) if db_row.pass_threshold is not None else None,
         "suite_id": db_row.suite_id,
+        "is_muted": bool(getattr(db_row, "is_muted", False)),
     }
 
 
@@ -1888,6 +1893,7 @@ def to_engine_definition_from_pin(entry: dict[str, Any]) -> EvalDefinition:
         failure_behaviour=str(entry.get("failure_behaviour") or "warn"),
         pass_threshold=float(entry["pass_threshold"]) if entry.get("pass_threshold") else None,
         suite_id=entry.get("suite_id"),
+        is_muted=bool(entry.get("is_muted", False)),
     )
 
 
@@ -1915,6 +1921,7 @@ def to_engine_definition(db_row: Any) -> EvalDefinition:
         failure_behaviour=getattr(db_row, "failure_behaviour", None) or "warn",
         pass_threshold=float(db_row.pass_threshold) if db_row.pass_threshold is not None else None,
         suite_id=db_row.suite_id,
+        is_muted=bool(getattr(db_row, "is_muted", False)),
     )
 
 

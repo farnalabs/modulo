@@ -123,7 +123,7 @@ class TestGuardrailFindingResolutionIntegration:
         )
 
         assert total == 10
-        assert rate == 0.3
+        assert rate == pytest.approx(0.3)
 
     @pytest.mark.asyncio
     async def test_guardrail_mute_policy(
@@ -173,7 +173,7 @@ class TestGuardrailFindingResolutionIntegration:
         )
 
         assert mute_eval["should_mute"] is True
-        assert mute_eval["acceptance_rate"] == 0.1
+        assert mute_eval["acceptance_rate"] == pytest.approx(0.1)
         assert mute_eval["total_outcomes"] == 10
 
         # Apply mute

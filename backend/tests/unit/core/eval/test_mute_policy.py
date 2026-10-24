@@ -115,7 +115,7 @@ class TestGetDefinitionsNearMuteThreshold:
 
         assert len(result) == 1
         assert result[0]["eval_id"] == "eval-123"
-        assert result[0]["acceptance_rate"] == 0.47
+        assert result[0]["acceptance_rate"] == pytest.approx(0.47)
         assert result[0]["threshold"] == 0.5
         assert result[0]["distance_from_threshold"] == pytest.approx(0.03)
 
@@ -195,10 +195,13 @@ class TestRecordMuteAuditEvent:
             assert str(call_args.kwargs["resource_id"]) == "550e8400-e29b-41d4-a716-446655440000"
             assert str(call_args.kwargs["org_id"]) == "550e8400-e29b-41d4-a716-446655440001"
             assert str(call_args.kwargs["actor_user_id"]) == "550e8400-e29b-41d4-a716-446655440002"
-            assert call_args.kwargs["payload_json"]["acceptance_rate"] == 0.3
+            assert call_args.kwargs["payload_json"]["acceptance_rate"] == pytest.approx(0.3)
             assert call_args.kwargs["payload_json"]["threshold"] == 0.5
             assert call_args.kwargs["payload_json"]["total_outcomes"] == 10
             assert call_args.kwargs["payload_json"]["action"] == "muted"
+            assert call_args.kwargs["payload_json"]["actor_source"] == "user"
+            assert call_args.kwargs["payload_json"]["automatic"] is False
+            assert call_args.kwargs["payload_json"]["outcome_count"] == 10
 
     @pytest.mark.asyncio
     async def test_record_unmute_audit_event(self):
@@ -219,3 +222,4 @@ class TestRecordMuteAuditEvent:
             call_args = mock_append.call_args
             assert call_args.kwargs["event_type"] == "eval_definition_unmuted"
             assert call_args.kwargs["payload_json"]["action"] == "unmuted"
+            assert call_args.kwargs["payload_json"]["actor_source"] == "user"

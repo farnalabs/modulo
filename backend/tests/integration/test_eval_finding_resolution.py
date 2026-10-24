@@ -122,7 +122,7 @@ class TestEvalFindingResolutionIntegration:
         )
 
         assert total == 10
-        assert rate == 0.7  # 7 accepted out of 10 resolved
+        assert rate == pytest.approx(0.7)  # 7 accepted out of 10 resolved
 
     @pytest.mark.asyncio
     async def test_mute_policy_evaluation_integration(
@@ -174,7 +174,7 @@ class TestEvalFindingResolutionIntegration:
         )
 
         assert mute_eval["should_mute"] is True
-        assert mute_eval["acceptance_rate"] == 0.2
+        assert mute_eval["acceptance_rate"] == pytest.approx(0.2)
         assert mute_eval["total_outcomes"] == 10
         assert mute_eval["threshold"] == 0.5
         assert mute_eval["min_outcomes"] == 5
@@ -234,7 +234,7 @@ class TestEvalFindingResolutionIntegration:
         assert eval_def.is_muted is True
         assert eval_def.muted_by == test_user
         assert eval_def.muted_at is not None
-        assert eval_def.acceptance_rate == 0.2
+        assert eval_def.acceptance_rate == pytest.approx(0.2)
 
     @pytest.mark.asyncio
     async def test_apply_mute_policy_insufficient_outcomes(

@@ -218,6 +218,7 @@ async def apply_mute_policy(
     org_id: str,
     muted_by: str | None = None,
     window_days: int | None = None,
+    automatic: bool = False,
 ) -> Eval | None:
     """Evaluate and apply mute policy for an eval/guardrail definition.
 
@@ -235,16 +236,20 @@ async def apply_mute_policy(
         The updated Eval row if muted, None if no change.
     """
     eval_result = await session.execute(
-        select(Eval).where(
+        select(Eval)
+        .where(
             Eval.id == eval_id,
             Eval.organisation_id == org_id,
         )
+        .with_for_update()
     )
     eval_def = eval_result.scalar_one_or_none()
     if eval_def is None:
         return None
 
-    # If already muted, no change needed
+    # The row lock serializes concurrent threshold evaluations for this
+    # definition. The acceptance-rate read and state transition therefore share
+    # one transaction and cannot both observe an unmuted definition.
     if eval_def.is_muted:
         return None
 
@@ -255,6 +260,20 @@ async def apply_mute_policy(
         eval_def.muted_by = uuid.UUID(muted_by) if muted_by else None
         eval_def.acceptance_rate = mute_eval["acceptance_rate"]
         await session.flush()
+        if automatic:
+            from modulo.core.eval.mute_policy import record_mute_audit_event
+
+            await record_mute_audit_event(
+                session,
+                eval_id,
+                org_id,
+                "muted",
+                acceptance_rate=mute_eval["acceptance_rate"],
+                threshold=mute_eval["threshold"],
+                total_outcomes=mute_eval["total_outcomes"],
+                actor_source="system",
+                automatic=True,
+            )
         return eval_def
 
     # Update acceptance rate even if not muting

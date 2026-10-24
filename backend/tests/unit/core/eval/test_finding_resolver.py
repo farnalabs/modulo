@@ -1,6 +1,6 @@
 """Unit tests for eval/guardrail finding resolver (FAR-2028)."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -127,7 +127,7 @@ class TestComputeAcceptanceRate:
 
         rate, total = await compute_acceptance_rate(mock_session, "eval-123", "org-123")
 
-        assert rate == 0.7
+        assert rate == pytest.approx(0.7)
         assert total == 10
 
     @pytest.mark.asyncio
@@ -246,7 +246,7 @@ class TestEvaluateMutePolicy:
             result = await evaluate_mute_policy(mock_session, "eval-123", "org-123")
 
         assert result["should_mute"] is True
-        assert result["acceptance_rate"] == 0.3
+        assert result["acceptance_rate"] == pytest.approx(0.3)
         assert result["total_outcomes"] == 10
         assert "below threshold" in result["reason"]
 
@@ -270,7 +270,7 @@ class TestEvaluateMutePolicy:
             result = await evaluate_mute_policy(mock_session, "eval-123", "org-123")
 
         assert result["should_mute"] is False
-        assert result["acceptance_rate"] == 0.7
+        assert result["acceptance_rate"] == pytest.approx(0.7)
         assert "meets threshold" in result["reason"]
 
 
@@ -306,8 +306,49 @@ class TestApplyMutePolicy:
         assert result is not None
         assert mock_eval.is_muted is True
         assert str(mock_eval.muted_by) == "550e8400-e29b-41d4-a716-446655440000"
-        assert mock_eval.acceptance_rate == 0.3
+        assert mock_eval.acceptance_rate == pytest.approx(0.3)
+        statement = mock_session.execute.call_args.args[0]
+        assert statement._for_update_arg is not None
         mock_session.flush.assert_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.asyncio
+    async def test_apply_mute_policy_automatic_records_system_audit(self):
+        """Automatic transitions record their measured mute decision."""
+        mock_session = AsyncMock()
+        mock_eval = MagicMock()
+        mock_eval.is_muted = False
+        mock_eval.mute_threshold = 0.5
+        mock_eval.mute_min_outcomes = 5
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_eval
+        mock_session.execute.return_value = mock_result
+
+        with (
+            patch("modulo.core.eval.finding_resolver.evaluate_mute_policy") as mock_eval_policy,
+            patch("modulo.core.eval.mute_policy.record_mute_audit_event") as mock_audit,
+        ):
+            mock_eval_policy.return_value = {
+                "should_mute": True,
+                "acceptance_rate": 0.3,
+                "total_outcomes": 10,
+                "threshold": 0.5,
+            }
+
+            result = await apply_mute_policy(mock_session, "eval-123", "org-123", automatic=True)
+
+        assert result is not None
+        mock_audit.assert_awaited_once_with(
+            mock_session,
+            "eval-123",
+            "org-123",
+            "muted",
+            acceptance_rate=0.3,
+            threshold=0.5,
+            total_outcomes=10,
+            actor_source="system",
+            automatic=True,
+        )
 
     @pytest.mark.asyncio
     async def test_apply_mute_policy_already_muted(self):
@@ -349,7 +390,7 @@ class TestApplyMutePolicy:
             result = await apply_mute_policy(mock_session, "eval-123", "org-123")
 
         assert result is None
-        assert mock_eval.acceptance_rate == 0.8
+        assert mock_eval.acceptance_rate == pytest.approx(0.8)
         mock_session.flush.assert_called()
 
 

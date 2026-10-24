@@ -401,7 +401,7 @@ def _redaction_policies(definitions: Sequence[EvalDefinition]) -> tuple[list[Any
     policies: list[Any] = []
     names: list[str] = []
     for eval_def in definitions:
-        if _resolve_action(eval_def) != GuardrailAction.REDACT:
+        if eval_def.is_muted or _resolve_action(eval_def) != GuardrailAction.REDACT:
             continue
         names.append(eval_def.name)
         for raw in eval_def.config.get("redaction", []) or []:
@@ -472,7 +472,11 @@ async def run_loop_interception(
     if mechanism_error:
         return _bridge_failure_outcome(tool_name, direction, latency_ms, mechanism_error)
 
-    blocking = [eval_def for eval_def, _ in fired if _resolve_action(eval_def) == GuardrailAction.BLOCK]
+    blocking = [
+        eval_def
+        for eval_def, _ in fired
+        if not eval_def.is_muted and _resolve_action(eval_def) == GuardrailAction.BLOCK
+    ]
     if blocking:
         return _blocking_outcome(tool_name, direction, latency_ms, blocking[0], config)
 
@@ -480,7 +484,13 @@ async def run_loop_interception(
     if redaction_outcome is not None:
         return redaction_outcome
 
-    warned = sorted({eval_def.name for eval_def, _ in fired if _resolve_action(eval_def) == GuardrailAction.WARN})
+    warned = sorted(
+        {
+            eval_def.name
+            for eval_def, _ in fired
+            if not eval_def.is_muted and _resolve_action(eval_def) == GuardrailAction.WARN
+        }
+    )
     if warned:
         return _warn_outcome(tool_name, direction, latency_ms, warned)
 
