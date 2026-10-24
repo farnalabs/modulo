@@ -3515,6 +3515,7 @@ export default {
       "invite_expiry_note": "This link expires on {expires} and can be used once.",
       "pending_invitations": "Pending Invitations",
       "no_pending_invitations": "No pending invitations.",
+      "no_pending_invitations_description": "Invite a teammate and their invitation will appear here.",
       "invited_col": "Invited",
       "expires_col": "Expires",
       "revoke_invitation": "Revoke",
