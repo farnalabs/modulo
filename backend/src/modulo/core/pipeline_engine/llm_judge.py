@@ -250,13 +250,35 @@ def _judge_content(output: dict[str, Any], config: dict[str, Any]) -> Any:
     return output.get(field, "")
 
 
+def _legacy_guidance(config: dict[str, Any]) -> str:
+    """Render a legacy config's authored ``rubric``/``instructions`` for the prompt.
+
+    The pre-ADR-066 prompt read only ``field``, so a rubric authored in the
+    pipeline editor (``OutputValidationTab``) never reached the model — the same
+    silent drop this PR fixes in ``correction.py``. Both keys are carried into
+    the prompt when present so authored guidance is actually used; an absent or
+    blank value contributes nothing (no empty section).
+    """
+    sections: list[str] = []
+    instructions = config.get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        sections.append(f"Instructions:\n{instructions}")
+    rubric = config.get("rubric")
+    if isinstance(rubric, str) and rubric.strip():
+        sections.append(f"Rubric:\n{rubric}")
+    return "\n\n".join(sections)
+
+
 def _build_judge_prompt(config: dict[str, Any], content: Any) -> str:
     if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
         questions = config.get("questions") or []
         return build_typed_judge_prompt(questions, config.get("pass_rule"), str(content))
+    guidance = _legacy_guidance(config)
+    guidance_block = f"{guidance}\n\n" if guidance else ""
     return (
         "Evaluate the following output and return JSON with keys passed "
         "(bool), score (float 0-1), detail (str).\n\n"
+        f"{guidance_block}"
         f"Output:\n{content}"
     )
 

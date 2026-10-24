@@ -17,7 +17,7 @@ claimed by main or an open PR. ``down_revision`` follows main's head:
 ``0328_evidence_index_aggregate_indexes``), so it now sits between ``0328`` and
 this revision; pointing at ``0328`` forked the graph into two heads once main
 advanced (it previously pointed at ``0325_run_seam_coverage``, which forked the
-graph the same way).""
+graph the same way).
 
 **EXPAND release — this migration deliberately does NOT set ``outcome`` NOT NULL
 and does NOT narrow the eval-type vocabulary.** Deploy ordering is

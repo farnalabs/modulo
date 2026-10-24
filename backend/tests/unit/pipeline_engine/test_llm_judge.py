@@ -454,3 +454,63 @@ def test_the_guarded_judge_content_wins_over_the_flat_field() -> None:
     """The engine's delimited content is used when present, the flat field otherwise."""
     assert llm_judge._judge_content({"content": "raw"}, {"_judge_content": "guarded"}) == "guarded"
     assert llm_judge._judge_content({"content": "raw"}, {"field": "content"}) == "raw"
+
+
+# ---------------------------------------------------------------------------
+# _build_judge_prompt: the legacy prompt carries authored rubric/instructions
+# ---------------------------------------------------------------------------
+
+
+def test_the_legacy_prompt_carries_the_authored_rubric() -> None:
+    """A rubric authored in the pipeline editor reaches the legacy judge prompt.
+
+    Pre-fix the legacy prompt read only ``field``, so the rubric never reached
+    the model (the same silent drop this PR fixes in ``correction.py``).
+    """
+    prompt = llm_judge._build_judge_prompt(
+        {"field": "content", "rubric": "must cite a source"},
+        "the output",
+    )
+
+    assert "Rubric:\nmust cite a source" in prompt
+    assert "the output" in prompt
+
+
+def test_the_legacy_prompt_carries_the_authored_instructions() -> None:
+    prompt = llm_judge._build_judge_prompt(
+        {"field": "content", "instructions": "be strict"},
+        "the output",
+    )
+
+    assert "Instructions:\nbe strict" in prompt
+
+
+def test_the_legacy_prompt_carries_both_guidance_fields_in_order() -> None:
+    prompt = llm_judge._build_judge_prompt(
+        {"field": "content", "instructions": "be strict", "rubric": "must cite a source"},
+        "the output",
+    )
+
+    assert prompt.index("Instructions:\nbe strict") < prompt.index("Rubric:\nmust cite a source")
+
+
+def test_the_legacy_prompt_omits_absent_or_blank_guidance() -> None:
+    """No empty sections: an absent, blank or non-string value contributes nothing."""
+    prompt = llm_judge._build_judge_prompt(
+        {"field": "content", "instructions": "   ", "rubric": None},
+        "the output",
+    )
+
+    assert "Instructions:" not in prompt
+    assert "Rubric:" not in prompt
+    assert "the output" in prompt
+
+
+def test_the_legacy_prompt_ignores_a_non_string_guidance_value() -> None:
+    prompt = llm_judge._build_judge_prompt(
+        {"field": "content", "instructions": ["not", "a", "string"], "rubric": {"criteria": ["x"]}},
+        "the output",
+    )
+
+    assert "Instructions:" not in prompt
+    assert "Rubric:" not in prompt

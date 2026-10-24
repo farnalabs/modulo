@@ -311,7 +311,7 @@ def _validate_pass_from(qid: str, question: dict[str, Any], numeric: list[Any]) 
         or not math.isfinite(float(pass_from))
         or not min(float(n) for n in numeric) <= float(pass_from) <= max(float(n) for n in numeric)
     ):
-        raise _invalid(f"score question {qid!r} pass_from must be one of its declared level scores")
+        raise _invalid(f"score question {qid!r} pass_from must be within its declared level scores' range")
 
 
 def _validate_score_question(qid: str, question: dict[str, Any]) -> None:

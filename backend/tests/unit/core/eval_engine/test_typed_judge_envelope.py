@@ -686,3 +686,79 @@ class TestPromptBuilder:
         assert '"id": "tone"' in prompt
         assert '"threshold": 0.5' in prompt
         assert "the output" in prompt
+
+    def test_a_choice_question_embeds_its_option_keys_and_passing_keys(self) -> None:
+        from modulo.core.eval_engine.typed_judge import build_typed_judge_prompt
+
+        prompt = build_typed_judge_prompt(
+            [
+                {
+                    "id": "verdict",
+                    "type": "choice",
+                    "instructions": "pick one",
+                    "options": [
+                        {"key": "approve", "description": "ship it"},
+                        {"key": "reject", "description": "block it"},
+                        "not-an-option",
+                    ],
+                    "passing_keys": ["approve"],
+                }
+            ],
+            None,
+            "the output",
+        )
+
+        assert '"key": "approve"' in prompt
+        assert '"key": "reject"' in prompt
+        assert '"description": "ship it"' in prompt
+        assert '"passing_keys": ["approve"]' in prompt
+        assert "not-an-option" not in prompt
+
+    def test_a_choice_question_without_a_declared_answer_space_still_renders(self) -> None:
+        from modulo.core.eval_engine.typed_judge import build_typed_judge_prompt
+
+        prompt = build_typed_judge_prompt([{"id": "verdict", "type": "choice"}], None, "the output")
+
+        assert '"id": "verdict"' in prompt
+        assert '"options"' not in prompt
+        assert '"passing_keys"' not in prompt
+
+    def test_a_score_question_embeds_its_level_scores_and_pass_from(self) -> None:
+        from modulo.core.eval_engine.typed_judge import build_typed_judge_prompt
+
+        prompt = build_typed_judge_prompt(
+            [
+                {
+                    "id": "quality",
+                    "type": "score",
+                    "instructions": "how good?",
+                    "levels": [
+                        {"score": 0, "description": "poor"},
+                        {"score": 1, "description": "great"},
+                        "not-a-level",
+                    ],
+                    "pass_from": 1,
+                }
+            ],
+            None,
+            "the output",
+        )
+
+        assert '"score": 0' in prompt
+        assert '"score": 1' in prompt
+        assert '"description": "great"' in prompt
+        assert '"pass_from": 1' in prompt
+        assert "not-a-level" not in prompt
+
+    def test_a_score_question_without_declared_levels_still_renders(self) -> None:
+        from modulo.core.eval_engine.typed_judge import build_typed_judge_prompt
+
+        prompt = build_typed_judge_prompt(
+            [{"id": "quality", "type": "score", "pass_from": 1}],
+            None,
+            "the output",
+        )
+
+        assert '"id": "quality"' in prompt
+        assert '"levels"' not in prompt
+        assert '"pass_from": 1' in prompt

@@ -103,7 +103,7 @@ class EvalResult(OrgScoped):
     # is still serving during the rollout (it has no such column). "Every
     # writer sets outcome" is enforced by the ``before_insert`` guard below.
     # STAGE 2 flips this to NOT NULL (no server default) once the new image is
-    # fully rolled out; see migration 0325's docstring.
+    # fully rolled out; see migration 0330's docstring.
     outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Schema-versioned verdict envelope (ADR 066 D5). Physical jsonb; the
@@ -127,7 +127,7 @@ class EvalResult(OrgScoped):
 def _require_outcome_on_insert(mapper: Any, connection: Any, target: EvalResult) -> None:
     """Application-layer NOT NULL while the DB column is still nullable.
 
-    The 0325 EXPAND migration cannot set NOT NULL while the previous image is
+    The 0330 EXPAND migration cannot set NOT NULL while the previous image is
     serving (that image has no ``outcome`` and would fail every insert). This
     guard is the contract in the meantime: a NEW-image write that forgets the
     value fails loudly instead of introducing a NULL. It covers ORM INSERTs

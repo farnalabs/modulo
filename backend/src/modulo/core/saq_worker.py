@@ -1004,8 +1004,9 @@ async def _maybe_wire_suite_judge(
     a ``finally``.
 
     When the org has no ACTIVE backend, nothing is set and ``None`` is returned
-    — the runner's own loud refusal ("suite contains model_judge definitions but
-    no judge callable was provided") is then preserved, never a silent pass.
+    — the runner then persists ``outcome=error`` rows (``judge.unavailable``) for
+    the model_judge definitions and terminalises the run as failed, never a
+    silent pass.
     """
     from sqlalchemy.exc import SQLAlchemyError
 
