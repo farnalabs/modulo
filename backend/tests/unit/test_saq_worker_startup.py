@@ -836,7 +836,7 @@ class TestRunSystemWebStartupFailure:
 
         worker.queue.disconnect.assert_awaited_once()
 
-    def test_serving_runtime_error_without_startup_failure_is_reraised(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_serving_runtime_error_without_startup_failure_is_reraised(self) -> None:
         """A ``RuntimeError`` from ``run_app`` with a healthy worker is a real serving failure."""
         web = MagicMock()
         web.run_app = MagicMock(side_effect=RuntimeError("Event loop stopped before Future completed"))
