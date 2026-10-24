@@ -128,5 +128,5 @@ def test_the_backfill_runs_on_the_migration_connection_when_it_already_locks_the
     monkeypatch.setattr(_MIGRATION, "op", SimpleNamespace(get_bind=lambda: migration))
 
     assert _MIGRATION._backfill_outcome() == 1
-    assert side.params == []
+    assert not side.params
     assert len(migration.params) == 2
