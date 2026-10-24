@@ -226,7 +226,7 @@ jobs:
           MODULO_RUNNER_HARNESS_DIND_HOST: "tcp://127.0.0.1:${{ env.DIND_PORT }}"
           MODULO_RUNNER_HARNESS_NETWORK: "runner-ci-workspace"
         run: |
-          uv run --no-build --no-sync pytest tests/docker/test_bundled_runner_harness.py tests/docker/test_runners_strip_e2e.py -m docker --tb=short -q --timeout=600 -p no:warnings
+          uv run --no-build --no-sync pytest tests/docker/test_bundled_runner_harness.py tests/docker/test_runners_strip_e2e.py -m docker --tb=short -q --timeout=600 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Proxy log completeness dump (always)
         if: always() && steps.changed.outputs.changed == 'true'
         shell: bash

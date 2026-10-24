@@ -73,13 +73,16 @@ UNRAISABLE_ESCALATION = "error::pytest.PytestUnraisableExceptionWarning"
 #: ``-W error::pytest.PytestUnraisableExceptionWarning``) and is gated. It is
 #: still deselected by default via ``addopts``, so the gate only applies to an
 #: explicit ``-m runtime_provider_conformance`` run and to the k8s-conformance
-#: workflow. Still excluded:
+#: workflow.
 #:
-#: - ``docker`` - two pre-existing failures on main (a stop-vs-remove
-#:   expectation and a ``select(distinct(...))`` SAWarning escalated by the
-#:   ``error::RuntimeWarning`` ini rule), so the tree cannot reach green;
+#: Still excluded:
+#:
 #: - ``load`` / ``determination`` - no test modules exist (``load`` holds only
 #:   locust/support files; ``determination`` holds only fixture data).
+#:
+#: ``docker`` is audited and gated: it was brought to green under the
+#: escalation (the FAR-2095 stop-vs-remove defect plus the leaked exec streams
+#: and socket-proxy session), so it is no longer an exclusion.
 #:
 #: The hook lives HERE (the root conftest) rather than in a suite conftest
 #: because pytest only loads a directory's conftest when that directory is on
@@ -93,6 +96,7 @@ GATED_SUITE_ROOTS: tuple[str, ...] = (
     "architecture",
     "connectors",
     "conformance",
+    "docker",
 )
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent

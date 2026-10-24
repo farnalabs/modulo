@@ -386,6 +386,7 @@ async def _control_probe_reachable_op(network: str, proxy_ip: str) -> bool:
             name=f"runner-ci-iso-ctrl-{uuid.uuid4().hex[:8]}",
         )
         container = await docker.containers.get(created.id)
+        started: Any = None
         try:
             await container.start()
             exec_instance = await container.exec(
@@ -404,6 +405,16 @@ async def _control_probe_reachable_op(network: str, proxy_ip: str) -> bool:
                     out += bytes(data)
             return b"IP-BLOCKED" not in out
         finally:
+            # The hijacked exec stream holds an open connection the engine
+            # never releases for us; closing it here is what keeps this probe
+            # from leaking an aiodocker Stream (``Unclosed ExecStream`` — the
+            # ResourceWarning the unraisable-warning gate escalates to an
+            # error).
+            if started is not None:
+                with contextlib.suppress(Exception):
+                    closed = started.close()
+                    if asyncio.iscoroutine(closed):
+                        await closed
             with contextlib.suppress(Exception):
                 await container.delete(force=True)
 
@@ -598,6 +609,7 @@ async def test_engine_kill_via_dind_fails_client_never_success() -> None:
     # workspace. FAR-1020 rejects the bare 'bridge' network MODE at the provider
     # boundary, so the nested engine needs a real named network to attach to.
     dind_network = f"runner-ci-kill-{uuid.uuid4().hex[:8]}"
+    provider: DockerRuntimeProvider | None = None
     try:
         # Pre-pull into the nested store (first-run cost lives here, not in
         # the assertion — spike surprise #6).
@@ -648,6 +660,14 @@ async def test_engine_kill_via_dind_fails_client_never_success() -> None:
         with pytest.raises((aiodocker.exceptions.DockerError, OSError, RuntimeError, TimeoutError)):
             await provider.exec_command(ref, ["echo", "after-death"], cmd_timeout=5)
     finally:
+        # The provider's aiodocker client owns an aiohttp session; leaving it
+        # unclosed leaks a ``ClientSession`` that surfaces at a LATER test's
+        # setup as a PytestUnraisableExceptionWarning (an error under the
+        # docker gate). Closing it is safe even though the engine was killed:
+        # teardown is bounded and best-effort.
+        if provider is not None:
+            with contextlib.suppress(Exception):
+                await provider.close()
         # The engine was killed mid-test, so this delete is usually a no-op;
         # best-effort cleanup keeps a surviving engine free of the network.
         with contextlib.suppress(Exception):
