@@ -671,30 +671,15 @@ def _score_pass_confidence(question: dict[str, Any], qid: str, passed: bool, pro
         return _binary_score(passed)
     normalised = _normalised_probabilities(probabilities, qid)
     pass_from = _required_pass_from(question, qid)
-    level_keys: set[str] = set()
-    for level in question.get("levels") or []:
-        if not isinstance(level, dict):
-            continue
-        level_score = _finite_float(
-            level.get("score"),
-            field=f"question {qid!r} level score",
-            code=JudgeErrorCode.JUDGE_CONFIGURATION,
-        )
-        if level_score is not None:
-            level_keys.add(str(level_score))
-            level_keys.add(f"{level_score:g}")
     mass = 0.0
     for key, probability in normalised.items():
-        numeric = _finite_float(
-            key,
-            field=f"question {qid!r} probability level",
-            code=JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
-        )
-        if numeric is None:
+        try:
+            numeric = float(key)
+        except (TypeError, ValueError) as exc:
             raise JudgeExecutionError(
                 JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
                 f"question {qid!r} probability key {key!r} is not a level score",
-            )
+            ) from exc
         if numeric >= pass_from:
             mass += probability
     return min(1.0, mass)
@@ -714,7 +699,7 @@ def _pass_confidence(
         return _choice_pass_confidence(question, qid, passed, probabilities)
     if qtype == "score":
         return _score_pass_confidence(question, qid, passed, probabilities)
-    raise JudgeExecutionError(
+    raise JudgeExecutionError(  # pragma: no cover - _question_answer_score validates first
         JudgeErrorCode.JUDGE_CONFIGURATION,
         f"question {qid!r} has an unsupported type {qtype!r}",
     )

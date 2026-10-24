@@ -37,10 +37,6 @@ from modulo.core.eval_engine.typed_judge.envelope import JudgeOutcome, error_ver
 _log = logging.getLogger(__name__)
 
 _MAX_JUDGE_CONTENT_LENGTH = 100_000
-#: Fixed overhead of the guard delimiters/instruction. The content bound is
-#: checked on the content itself (the historical contract), with this as the
-#: backstop for the wrapped payload.
-_JUDGE_WRAPPER_OVERHEAD = 1_000
 _MAX_REGEX_PATTERN_LENGTH = 1000
 _CONTENT_BEGIN = "---BEGIN EVALUATED CONTENT---"
 _CONTENT_END = "---END EVALUATED CONTENT---"
@@ -952,11 +948,6 @@ class EvalEngine:
                 safe_content = EvalEngine._guard_wrap(resolved[0][1])
             else:
                 safe_content = "\n".join(EvalEngine._guard_wrap(f"FIELD: {path}\n{text}") for path, text in resolved)
-
-        if len(safe_content) > _MAX_JUDGE_CONTENT_LENGTH + _JUDGE_WRAPPER_OVERHEAD:
-            # A defensive backstop for an absurdly large wrapper input; the
-            # per-content bound above is the contract.
-            raise ContentTooLongError(len(safe_content))
 
         safe_output = dict(output)
         if isinstance(field, str) and field:

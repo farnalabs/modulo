@@ -322,8 +322,9 @@ async def _invoke_question(
             continue
         _BREAKER.record_success(handle.key)
         return parsed, _usage_from_response(response)
-    # Unreachable: the loop returns or raises on its final attempt.
-    raise last_error or JudgeExecutionError(
+    # The loop returns on success or raises on its final attempt; this is the
+    # type-checker's terminator for the function.
+    raise last_error or JudgeExecutionError(  # pragma: no cover
         JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
         f"question {qid!r} produced no usable answer",
     )

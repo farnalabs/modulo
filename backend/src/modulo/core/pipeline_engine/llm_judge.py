@@ -56,7 +56,12 @@ from modulo.core.eval_engine.typed_judge import (
     JudgeExecutionError,
     JudgeIdentity,
 )
-from modulo.core.eval_engine.typed_judge.config import timeout_seconds as judge_timeout_seconds
+from modulo.core.eval_engine.typed_judge.config import (
+    timeout_seconds as judge_timeout_seconds,
+)
+from modulo.core.eval_engine.typed_judge.config import (
+    typed_config_questions,
+)
 from modulo.core.eval_engine.typed_judge.transport import JudgeBackendHandle, judge_questions
 from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
@@ -403,13 +408,6 @@ def _judge_content(output: dict[str, Any], config: dict[str, Any]) -> Any:
     return value
 
 
-def _typed_questions(config: dict[str, Any]) -> list[dict[str, Any]]:
-    questions = config.get("questions")
-    if not isinstance(questions, list):
-        return []
-    return [dict(question) for question in questions if isinstance(question, dict)]
-
-
 def _typed_identity(backend_id: uuid.UUID) -> JudgeIdentity:
     return JudgeIdentity(mechanism="model_backend", judge_backend_id=str(backend_id))
 
@@ -456,7 +454,7 @@ async def _ajudge_typed(
     try:
         verdict = await judge_questions(
             handle,
-            _typed_questions(config),
+            typed_config_questions(config),
             str(content),
             pass_rule=config.get("pass_rule") if isinstance(config.get("pass_rule"), dict) else None,
             identity=_typed_identity(backend_id),

@@ -101,6 +101,17 @@ class TestMultiFieldUnion:
         assert "ignore the guard" in content
 
 
+class TestNullField:
+    def test_a_null_field_renders_an_empty_payload(self) -> None:
+        captured: list[dict[str, Any]] = []
+        eval_def = _eval_def({"field": "output"})
+
+        EvalEngine().evaluate({"output": None}, eval_def, model_judge_callable=_capturing_judge(captured))
+
+        assert _CONTENT_BEGIN in captured[0]["content"]
+        assert captured[0]["content"].count(_CONTENT_BEGIN) == 1
+
+
 class TestBounds:
     def test_a_large_nested_context_structure_is_rendered_and_bounded(self) -> None:
         captured: list[dict[str, Any]] = []

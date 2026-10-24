@@ -242,6 +242,30 @@ class TestChoiceBounds:
         assert isinstance(parsed.questions[0], ChoiceQuestion)
         assert parsed.questions[0].option_scores is None
 
+    def test_duplicate_passing_keys_are_rejected(self) -> None:
+        with pytest.raises(JudgeConfigWriteError) as exc_info:
+            validate_typed_judge_config(_config(questions=[_choice(passing_keys=["neutral", "neutral"])]))
+
+        assert "passing_keys must be unique" in exc_info.value.message
+
+    def test_a_non_uuid_model_backend_id_is_rejected(self) -> None:
+        with pytest.raises(JudgeConfigWriteError) as exc_info:
+            validate_typed_judge_config(_config(backing={"kind": "model_backend", "model_backend_id": "not-a-uuid"}))
+
+        assert exc_info.value.code == CODE_INVALID
+
+    def test_context_fields_must_be_non_empty_strings(self) -> None:
+        with pytest.raises(JudgeConfigWriteError) as exc_info:
+            validate_typed_judge_config(_config(context_fields=[1]))
+
+        assert exc_info.value.code == CODE_INVALID
+
+    def test_a_blank_context_field_is_rejected(self) -> None:
+        with pytest.raises(JudgeConfigWriteError) as exc_info:
+            validate_typed_judge_config(_config(context_fields=[" "]))
+
+        assert exc_info.value.code == CODE_INVALID
+
 
 class TestScoreBounds:
     def test_two_to_ten_ordered_levels_are_accepted(self) -> None:
