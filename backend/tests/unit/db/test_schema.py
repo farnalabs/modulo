@@ -128,6 +128,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "publishers",
         "assistant_context_sources",
         "assistant_skills",
+        "run_attempts",
         "run_daily_facts",
         "run_evidence",
         "run_node_outputs",

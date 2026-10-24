@@ -5,6 +5,8 @@ adr: []
 code:
   - backend/src/modulo/api/routes/model_backends.py
   - backend/src/modulo/api/routes/pipelines.py
+  - backend/src/modulo/cli/backfill_model_backend_base_url.py
+  - backend/src/modulo/core/model_backend_endpoints.py
   - backend/src/modulo/core/model_backend_hub
   - backend/src/modulo/core/team_visibility.py
   - backend/src/modulo/model_backends/base.py
@@ -18,7 +20,9 @@ unit-tests:
   - backend/tests/unit/model_backends/test_anthropic.py
   - backend/tests/unit/model_backends/test_shared.py
   - backend/tests/unit/api/test_model_backends_endpoint.py
+  - backend/tests/unit/api/test_model_backend_base_url_helpers.py
   - backend/tests/unit/api/test_model_backends_pipeline_refs.py
+  - backend/tests/unit/cli/test_backfill_model_backend_base_url.py
   - backend/tests/unit/core/test_team_visibility.py
   - backend/tests/unit/api/test_pipeline_team_visibility.py
 bdd:
@@ -57,6 +61,22 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
       fields / unknown fallback id 422 (`backend_crud.feature`)
 - [x] The API key is never echoed in responses - `has_credentials: true` with the secret
       redacted (`backend_crud.feature`)
+- [x] A model backend's custom endpoint (`base_url`) is endpoint configuration in the
+      encrypted credential JSON, never a model parameter (FAR-2046): the write path
+      validates scheme / userinfo / query / fragment, refuses cloud-metadata hosts and
+      non-canonical IP literals, requires an explicit `allow_insecure_http` opt-in for
+      plain HTTP, and refuses a provider outside the hub capability map. The rules live
+      once in `core/model_backend_endpoints.py` and are shared with the one-shot
+      `modulo backfill-model-backend-base-url` command, which migrates a legacy
+      `default_params.base_url` (valid https) into the credential JSON, strips plain
+      http / invalid / incapable values instead of auto-blessing them, preserves the
+      stored API key, stores the validator's normalised value (never the raw input),
+      reports host only, is dry-run by default, and is idempotent. Each organisation
+      runs under its own RLS scope marked as internal execution, so `visibility='team'`
+      rows are reached rather than silently skipped, and every changed row appends a
+      SYSTEM-actor `model_backend.base_url_backfilled` audit event carrying only the
+      outcome and host (`test_model_backend_base_url_helpers.py`,
+      `test_backfill_model_backend_base_url.py`)
 - [x] A backend referenced as another's fallback cannot be deleted (409)
       (`backend_crud.feature`)
 - [x] Hub resolution: a healthy primary is served; an unhealthy primary fails over to its

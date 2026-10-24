@@ -162,6 +162,20 @@ def _init_once_register_evidence_command() -> None:
 _init_once_register_evidence_command()
 
 
+def _init_once_register_backfill_base_url_command() -> None:
+    """Register the FAR-2067 legacy endpoint backfill (lazy module import)."""
+    from modulo.cli.backfill_model_backend_base_url import backfill_model_backend_base_url
+
+    name = "backfill-model-backend-base-url"
+    existing = cli.commands.get(name)
+    if existing is not None and existing is not backfill_model_backend_base_url:
+        raise RuntimeError(f"command {name!r} is already registered on the modulo group")
+    cli.add_command(backfill_model_backend_base_url, name=name)
+
+
+_init_once_register_backfill_base_url_command()
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------

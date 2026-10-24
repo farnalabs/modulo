@@ -80,6 +80,7 @@ from modulo.db.models.primitive_abuse_report import PrimitiveAbuseReport
 from modulo.db.models.primitive_rating import PrimitiveRating
 from modulo.db.models.publisher import Publisher
 from modulo.db.models.run import Run
+from modulo.db.models.run_attempt import RunAttempt
 from modulo.db.models.run_daily_facts import JourneyFact, RunDailyFact
 from modulo.db.models.run_evidence import RunEvidence
 from modulo.db.models.run_node_outputs import RunNodeOutput
@@ -182,6 +183,7 @@ __all__ = [
     "PrimitiveRating",
     "Publisher",
     "Run",
+    "RunAttempt",
     "RunDailyFact",
     "RunEvidence",
     "RunNodeOutput",

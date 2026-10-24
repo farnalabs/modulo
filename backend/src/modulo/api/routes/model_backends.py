@@ -5,7 +5,6 @@ never exposed in any response — only a boolean `has_credentials` field.
 """
 
 import asyncio
-import ipaddress
 import json
 import logging
 import uuid
@@ -13,7 +12,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
-from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -43,6 +41,15 @@ from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
+from modulo.core.model_backend_endpoints import (
+    BASE_URL_MAX_LENGTH,
+    BaseUrlValidationError,
+    legacy_base_url,
+    redact_base_url,
+    stored_base_url,
+    strip_legacy_base_url,
+)
+from modulo.core.model_backend_endpoints import validate_base_url as _validate_base_url_rules
 from modulo.core.model_backend_hub import (
     BASE_URL_CAPABLE_PROVIDERS,
     _build_backend,
@@ -56,7 +63,6 @@ from modulo.core.secrets_backend import (
     create_secrets_backend,
     resolve_credential,
 )
-from modulo.core.ssrf import validate_outbound_url_syntax
 from modulo.core.validation_level import model_backend_baseline_level, resolve_validation_level
 from modulo.db.crud.model_backend import (
     create_model_backend,
@@ -108,29 +114,18 @@ def _encrypt(api_key: str, fernet_key: str) -> bytes:
 # custom host. The endpoint is ENDPOINT CONFIGURATION (stored beside ``api_key``
 # in the encrypted credentials JSON), never a model parameter, so credentials
 # belong in ``api_key`` and the URL itself must never carry them.
+#
+# The RULES live in ``core.model_backend_endpoints`` so the write path and the
+# legacy-backfill CLI (FAR-2067) cannot drift; this module only maps the shared
+# error to its typed 422.
 
-_BASE_URL_MAX_LENGTH = 2048
-
-# Cloud metadata endpoints are a HARD DENY — never reachable by the model
-# backend egress path regardless of scheme, hostname or allowlist. 169.254.0.0/16
-# is IPv4 link-local (AWS/GCP/Azure IMDS); fe80::/10 is the IPv6 equivalent.
-# fd00:ec2::254 is the AWS IMDS IPv6 address, 100.100.100.200 the Aliyun
-# endpoint, and ::ffff:169.254.169.254 is the IPv4 address in mapped form (the
-# IPv6 network below is checked via ``ipv4_mapped`` too).
-_METADATA_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("fe80::/10"),
-    ipaddress.ip_network("fd00:ec2::254/128"),
-    ipaddress.ip_network("100.100.100.200/32"),
-)
-_METADATA_HOSTNAMES = frozenset(
-    {
-        "metadata",
-        "metadata.google.internal",
-        "instance-data",
-        "instance-data.ec2.internal",
-    }
-)
+# Private aliases retained for the route's own call sites and its FAR-2046
+# helper tests; the implementations live in the shared module.
+_legacy_base_url = legacy_base_url
+_redact_base_url = redact_base_url
+_stored_base_url = stored_base_url
+_strip_legacy_base_url = strip_legacy_base_url
+_BASE_URL_MAX_LENGTH = BASE_URL_MAX_LENGTH
 
 
 def _base_url_error(message: str, *, code: str | None = None, loc: str = "base_url") -> HTTPException:
@@ -182,72 +177,17 @@ def _base_url_change_requires_credential_error() -> HTTPException:
     )
 
 
-def _reject_metadata_endpoint(host: str) -> None:
-    """Raise 422 for a cloud metadata host/literal; never allowlisted."""
-    normalized = host.strip("[]").rstrip(".").lower()
-    if normalized in _METADATA_HOSTNAMES:
-        raise _base_url_error("Base URL must not target a cloud metadata endpoint")
-    try:
-        address: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(normalized)
-    except ValueError:
-        return
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
-        address = address.ipv4_mapped
-    if any(address in network for network in _METADATA_NETWORKS if network.version == address.version):
-        raise _base_url_error("Base URL must not target a cloud metadata endpoint")
-
-
 def _validate_base_url(value: str, *, allow_insecure_http: bool = False) -> str:
-    """Validate and normalise an operator-supplied model-backend base URL.
+    """Validate an operator-supplied base URL, raising the route's typed 422.
 
-    Rules (FAR-2046):
-    * ``http``/``https`` only, no embedded userinfo (credentials belong in
-      ``api_key``), no query and no fragment;
-    * non-canonical IP-literal encodings (decimal/hex integers, mixed-base
-      dotted strings) are rejected by the shared outbound-URL syntax floor;
-    * cloud metadata endpoints are refused outright;
-    * ``https`` is required unless the caller explicitly opts in with
-      ``allow_insecure_http`` (a separate, audited flag — never inferred from
-      the hostname shape, because a name's privacy cannot be established
-      without resolving it).
-
-    Returns the trimmed URL. Raises a typed 422 for any violation.
+    Delegates the rules to :func:`modulo.core.model_backend_endpoints.validate_base_url`
+    (shared with the FAR-2067 backfill CLI) and translates the domain error into
+    the endpoint's 422 shape.
     """
-    candidate = value.strip()
-    if not candidate:
-        raise _base_url_error("Base URL must not be empty")
-    if len(candidate) > _BASE_URL_MAX_LENGTH:
-        raise _base_url_error(f"Base URL must be at most {_BASE_URL_MAX_LENGTH} characters")
     try:
-        scheme, host = validate_outbound_url_syntax(candidate)
-    except ValueError as exc:
-        raise _base_url_error(str(exc)) from None
-    parsed = urlparse(candidate)
-    if parsed.query or parsed.fragment:
-        raise _base_url_error("Base URL must not contain a query string or fragment")
-    _reject_metadata_endpoint(host)
-    if scheme == "http":
-        if not allow_insecure_http:
-            raise _base_url_error(
-                "Base URL must use https://; set allow_insecure_http to permit plain HTTP",
-                code="insecure_http_not_allowed",
-            )
-        logger.warning(
-            "model_backends.base_url_http_downgrade host=%s",
-            _sanitise_log_value(host),
-        )
-    return candidate
-
-
-def _redact_base_url(value: str | None) -> str | None:
-    """Reduce a base URL to its host only, for callers who may not manage backends."""
-    if not value:
-        return None
-    try:
-        host = urlparse(value).hostname
-    except ValueError:
-        return None
-    return host or None
+        return _validate_base_url_rules(value, allow_insecure_http=allow_insecure_http)
+    except BaseUrlValidationError as exc:
+        raise _base_url_error(str(exc), code=exc.code) from None
 
 
 def _can_manage_model_backends(principal: TenantPrincipal) -> bool:
@@ -284,23 +224,6 @@ async def _read_secret_payload(
     return _stored_secret_payload(raw)
 
 
-def _stored_base_url(payload: dict[str, Any]) -> str | None:
-    value = payload.get("base_url")
-    return value if isinstance(value, str) and value.strip() else None
-
-
-def _legacy_base_url(default_params: Mapping[str, Any] | None) -> str | None:
-    """Return a pre-FAR-2046 ``default_params.base_url``, or ``None``.
-
-    The legacy location is still honoured for existing rows but is never
-    written again: create/update migrate it into the credential JSON.
-    """
-    if not isinstance(default_params, Mapping):
-        return None
-    value = default_params.get("base_url")
-    return value if isinstance(value, str) and value.strip() else None
-
-
 def _effective_base_url(
     payload: Mapping[str, Any],
     default_params: Mapping[str, Any] | None,
@@ -335,13 +258,6 @@ def _requested_base_url(base_url: str | None, default_params: Mapping[str, Any] 
             code="base_url_conflict",
         )
     return direct if direct is not None else legacy
-
-
-def _strip_legacy_base_url(default_params: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return *default_params* without the legacy endpoint key."""
-    if not isinstance(default_params, Mapping):
-        return {}
-    return {key: value for key, value in default_params.items() if key != "base_url"}
 
 
 def _try_secrets_backend(settings: Settings, session: AsyncSession) -> SecretsBackend | None:
