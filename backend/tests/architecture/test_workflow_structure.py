@@ -241,6 +241,252 @@ def test_pr_review_dispatches_on_red_ci_too() -> None:
     )
 
 
+# --- FAR-2111: the review STARTS when the PR is ready, not when CI finishes --
+#
+# 2026-10-23/24: `Test (Backend)` inside "CI: Fast Validation" measured 48-53
+# min (PR #2153 52m36s, PR #2246 48m), and the reviewer was dispatched ONLY on
+# that workflow's completion. PR #2246 opened 18:55, CI completed ~19:53, the
+# review arrived 20:00 — 67 min in which nothing about the PR changed — and the
+# merge queue idled at APPROVED_COUNT=0. Review is a quality gate independent of
+# CI colour (the workflow header), so gating its START on CI completion is
+# stricter than the stated design.
+#
+# The early trigger is only half the change: every gate that the CI-completion
+# path applies must also hold on the early path. The tests below pin the trigger
+# AND those gates, because the naive "just add the trigger" edit bypasses the
+# manual-delivery gate (it lived inside the workflow_run branch only).
+
+#: The early trigger's event key. ``pull_request_target`` rather than
+#: ``pull_request`` on purpose: see the test that pins it.
+EARLY_EVENT = "pull_request_target"
+
+
+def _trigger_block() -> dict:
+    """The workflow's ``on:`` mapping (PyYAML parses the bare key ``on`` as True)."""
+    return _on_block(_load_yaml(PR_REVIEW_YML))
+
+
+def _job_steps(job_name: str) -> list[dict]:
+    job = _job_named(_load_yaml(PR_REVIEW_YML), job_name)
+    steps = job.get("steps") or []
+    assert isinstance(steps, list), f"pr-review.yml: job {job_name!r} steps are not a list"
+    return [step for step in steps if isinstance(step, dict)]
+
+
+def _step(job_name: str, step_name: str) -> dict:
+    matches = [step for step in _job_steps(job_name) if step.get("name") == step_name]
+    assert len(matches) == 1, (
+        f"pr-review.yml: expected exactly one {step_name!r} step in job {job_name!r}, "
+        f"found {len(matches)} — the gate moved; update this test deliberately"
+    )
+    return matches[0]
+
+
+def _unquoted(line: str) -> str:
+    """``line`` with the contents of every quoted string removed.
+
+    Shell keywords are matched only where the shell would see them, so a notice
+    message containing the word "if" cannot fake an extra nesting level.
+    """
+    out: list[str] = []
+    quote = ""
+    for char in line:
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in ("'", '"'):
+            quote = char
+            continue
+        out.append(char)
+    return "".join(out)
+
+
+def _top_level_block_end(lines: list[str], start: int) -> int:
+    """Index of the ``fi`` that closes the ``if`` opened at ``lines[start]``.
+
+    ``elif`` neither opens nor closes a level (it swaps arms of the same ``if``),
+    so only ``if`` and ``fi`` tokens move the counter. Quoted-string contents are
+    blanked first, so a notice message containing the word "if" cannot fake an
+    extra nesting level.
+    """
+    depth = 0
+    for index in range(start, len(lines)):
+        code = _unquoted(lines[index]).strip()
+        if not code or code.startswith("#"):
+            continue
+        for token in re.split(r"[\s;()]+", code):
+            if token == "if":
+                depth += 1
+            elif token == "fi":
+                depth -= 1
+                if depth == 0:
+                    return index
+    raise AssertionError(
+        "pr-review.yml: the event-dispatch `if` in 'Set PR details' is unterminated — cannot locate the block end"
+    )
+
+
+def test_pr_review_yml_dispatches_the_review_when_the_pr_is_ready() -> None:
+    """A PR that is ready must be reviewed without waiting ~50 min for CI.
+
+    ``opened`` covers a PR created ready (the common case — #2246 opened 18:55
+    and was not reviewed until 20:00). ``ready_for_review`` covers a draft being
+    marked ready.
+
+    ``synchronize`` is deliberately absent: a push to an existing PR is already
+    covered by the ``workflow_run`` completion path, which carries the
+    superseded-run guard and the head-SHA dedup. Every push is a NEW head SHA, so
+    head-SHA dedup cannot coalesce a burst of pushes into one review — adding
+    ``synchronize`` would fan a review storm onto the shared model capacity.
+    """
+    on = _trigger_block()
+    early = on.get(EARLY_EVENT)
+    assert isinstance(early, dict), (
+        f"pr-review.yml: no {EARLY_EVENT} trigger — a review still cannot start until the whole "
+        "~50-min product-CI run completes (Test (Backend) alone is 48-53 min), so every PR waits an "
+        "hour before it can be approved and the merge queue idles at APPROVED_COUNT=0"
+    )
+    types = early.get("types") or []
+    violations: list[str] = []
+    for required in ("opened", "ready_for_review"):
+        if required not in types:
+            violations.append(
+                f"  {EARLY_EVENT}.types must include {required!r} (got {types!r}) — "
+                "'opened' covers a PR created ready, 'ready_for_review' covers a draft marked ready"
+            )
+    if "synchronize" in types:
+        violations.append(
+            f"  {EARLY_EVENT}.types must NOT include 'synchronize' (got {types!r}) — a push is already "
+            "covered by the workflow_run completion path (superseded guard + head-SHA dedup); every push "
+            "is a new head SHA, so head-SHA dedup cannot coalesce a burst and a few quick pushes would "
+            "fan a review storm onto the shared model capacity"
+        )
+    assert not violations, "pr-review.yml no longer reviews a PR when it becomes ready (FAR-2111):\n" + "\n".join(
+        violations
+    )
+
+
+def test_pr_review_early_trigger_keeps_its_checks_off_the_pr_head() -> None:
+    """The early trigger must be ``pull_request_target``, never ``pull_request``.
+
+    A ``pull_request``-triggered workflow attaches its check run to the PR HEAD.
+    The app-leg merge queue requires EVERY check run on a PR's head SHA to be
+    ``completed``/``success`` (``dogfood/pipeline-scripts/merge-queue.py``
+    ``checks_pass``), so a failed review dispatch would then block that PR's
+    merge — the exact FAR-1843 regression the ``workflow_run`` trigger exists to
+    prevent ("a review-dispatch outage can never block merges").
+
+    ``pull_request_target`` check runs attach to the base branch SHA, exactly
+    like ``workflow_run``'s, so the PR's own checks stay untouched. It also
+    checks out the BASE branch, so the dedup and fork-gate scripts always run
+    trusted base-branch code — never the PR's own copy of them.
+    """
+    on = _trigger_block()
+    assert EARLY_EVENT in on, f"pr-review.yml: {EARLY_EVENT} trigger missing — see the early-trigger test"
+    assert "pull_request" not in on, (
+        "pr-review.yml: a plain `pull_request` trigger is present. Its check run lands on the PR HEAD, and "
+        "the app-leg merge queue requires every head check run to be success — a failed review dispatch "
+        "would block that PR's merge (FAR-1843). Use pull_request_target: its check runs attach to the base "
+        "branch SHA, like workflow_run's."
+    )
+
+
+def test_pr_review_manual_delivery_gate_is_not_bypassed_on_the_early_path() -> None:
+    """The ``manual-delivery`` gate must apply to the early path too.
+
+    This is the defect the naive "add the trigger" edit ships: the gate lived
+    inside the ``workflow_run`` branch of ``Set PR details``, so a PR a human is
+    driving manually would have been auto-reviewed the moment it opened. The gate
+    is now one shared block that runs for EVERY non-manual event; this test pins
+    that it is at the top level of the script (``if`` depth 0), not nested in one
+    event branch.
+    """
+    step = _step("Trigger Modulo PR Review", "Set PR details")
+    run = step.get("run") or ""
+    lines = run.splitlines()
+    arms = [index for index, line in enumerate(lines) if "*,manual-delivery,*" in line]
+    assert len(arms) == 1, (
+        "pr-review.yml: expected exactly ONE manual-delivery case arm in 'Set PR details', "
+        f"found {len(arms)} — a duplicated or missing gate means the two dispatch paths can diverge"
+    )
+    dispatch = [index for index, line in enumerate(lines) if 'if [ "$EVENT_NAME" = "pull_request" ]' in line]
+    assert len(dispatch) == 1, (
+        f"pr-review.yml: expected one per-event PR resolution block in 'Set PR details', found {len(dispatch)}"
+    )
+    block_end = _top_level_block_end(lines, dispatch[0])
+    assert arms[0] > block_end, (
+        "pr-review.yml: the manual-delivery gate runs INSIDE the per-event dispatch block (it ends at line "
+        f"{block_end + 1} of the script) — it is therefore restricted to one event, so a labelled PR is "
+        "auto-reviewed on the other path (the early trigger bypasses it). Move the gate after the block so "
+        "every path shares it."
+    )
+    assert 'if [ "$EVENT_NAME" != "workflow_dispatch" ]' in run, (
+        'pr-review.yml: the manual-delivery gate must be guarded by `!= "workflow_dispatch"` so it covers '
+        "the CI-completion AND early paths while a manual operator re-trigger still bypasses it"
+    )
+
+
+def test_pr_review_fork_gate_is_not_bypassed_on_the_early_path() -> None:
+    """The same-repo author gate must run on the early path as well.
+
+    A fork / external-author PR is never auto-reviewed (FAR-264): its review
+    needs a human path, and under the early trigger secrets are in scope before
+    the gate runs, so a bypass would dispatch a review for an untrusted PR. The
+    gate's ``if:`` must therefore stay event-agnostic (``ready`` only), and the
+    checkout that provides the versioned guard script must not be event-gated.
+    """
+    step = _step("Trigger Modulo PR Review", "Same-repo author gate (FAR-264)")
+    condition = str(step.get("if") or "")
+    assert "github.event_name" not in condition, (
+        "pr-review.yml: the same-repo author gate is restricted by event name — the early path would "
+        "dispatch a review for a fork / external-author PR (FAR-264)"
+    )
+    assert "same-repo-author-guard.py" in (step.get("run") or ""), (
+        "pr-review.yml: the same-repo author gate no longer calls the shared versioned guard script"
+    )
+    checkout = _step("Trigger Modulo PR Review", "Checkout repository (for the gate scripts)")
+    assert "github.event_name" not in str(checkout.get("if") or ""), (
+        "pr-review.yml: the gate-script checkout is event-gated — the dedup and fork gates cannot run on "
+        "the early path without it"
+    )
+
+
+def test_pr_review_early_path_is_deduplicated_per_head_sha() -> None:
+    """One review per head SHA: the early dispatch must be coalesced, not doubled.
+
+    The CI-completion dispatch for the same head SHA arrives ~50 min after the
+    early one. Two mechanical layers coalesce it (the app-side prior-review skip
+    is a third backstop, but it is timestamp-based by design — see the reviewer
+    prompt): (1) the ``workflow_run`` path's superseded-run guard, and (2) the
+    head-SHA dedup step. The dedup must therefore run on BOTH paths — a gate
+    expressed as ``== 'workflow_run'`` leaves the early path undeduplicated, so a
+    draft marked ready (or a second ``ready_for_review`` on an unchanged head)
+    would review the same SHA twice.
+    """
+    step = _step("Trigger Modulo PR Review", "Skip when head already reviewed (dedup)")
+    condition = str(step.get("if") or "")
+    violations: list[str] = []
+    if "workflow_dispatch" not in condition:
+        violations.append(
+            "  the dedup gate no longer names workflow_dispatch — a manual operator re-trigger must stay "
+            "explicit and bypass dedup, as it always has"
+        )
+    if "== 'workflow_run'" in condition:
+        violations.append(
+            "  the dedup gate is still restricted to workflow_run — the early dispatch is never coalesced, "
+            "so the same head SHA can be reviewed twice (e.g. a draft marked ready after its completion "
+            "review, or a repeated ready_for_review)"
+        )
+    if "steps.pr-details.outputs.ready == 'true'" not in condition:
+        violations.append("  the dedup gate no longer requires a resolved PR (ready == 'true')")
+    if "pr-review-dedup.py" not in (step.get("run") or ""):
+        violations.append("  the dedup step no longer calls the versioned .github/scripts/pr-review-dedup.py")
+    assert not violations, "pr-review.yml cannot guarantee one review per head SHA (FAR-2111):\n" + "\n".join(
+        violations
+    )
+
+
 def test_ci_yml_dispatches_no_reviewer_webhook() -> None:
     """``ci.yml`` must not merely rename the job — the reviewer webhook body
     (payload construction or HMAC signing against the review secret) must be
