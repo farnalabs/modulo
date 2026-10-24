@@ -25,6 +25,7 @@ from modulo.api.routes.model_backends import (
     _redact_base_url,
     _requested_base_url,
     _run_health_check_on_save,
+    _stored_base_url,
     _stored_secret_payload,
     _strip_legacy_base_url,
     _to_response,
@@ -93,6 +94,12 @@ def test_stored_secret_payload_parses_an_object() -> None:
         "api_key": "k",
         "base_url": "https://x.example",
     }
+
+
+def test_stored_base_url_ignores_a_non_mapping_payload() -> None:
+    """A credential payload decoded to a non-object has no stored endpoint."""
+    assert _stored_base_url(None) is None
+    assert _stored_base_url("https://x.example") is None  # type: ignore[arg-type]
 
 
 def test_legacy_base_url_ignores_a_non_mapping_value() -> None:
