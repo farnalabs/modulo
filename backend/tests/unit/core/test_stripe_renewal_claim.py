@@ -15,6 +15,7 @@ tests pin the whole claim contract at the core seam:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from collections.abc import Generator
@@ -35,7 +36,7 @@ from modulo.core.license import (
     parse_and_verify,
     set_public_key,
 )
-from modulo.core.license_signing import generate_team_license
+from modulo.core.license_signing import LicenseSigningError, generate_team_license
 from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.core.stripe_fulfilment import (
     REASON_NO_EXPIRY,
@@ -44,7 +45,10 @@ from modulo.core.stripe_fulfilment import (
     REASON_ORG_MISMATCH,
     REASON_SAME_LICENCE,
     RenewalClaimRejectedError,
+    RenewalClaimUnavailableError,
+    _decode_claim_record,
     _renewal_claims,
+    _store_renewal_claim,
     claim_stacked_renewal,
 )
 from modulo.settings import Settings
@@ -459,3 +463,337 @@ class TestAutoRenewalEquivalence:
         assert datetime.fromisoformat(stacked.expires_at) == datetime.fromisoformat(auto.expires_at) + timedelta(
             days=60
         )
+
+
+class _FakeRedisClient:
+    """Minimal async Redis double for the claim's idempotency seam.
+
+    ``get_results`` is consumed in order so a test can model "nothing stored,
+    then a concurrent writer's record appears" without a real server.
+    """
+
+    def __init__(
+        self,
+        *,
+        get_results: list[str | None] | None = None,
+        get_error: BaseException | None = None,
+        set_result: bool = True,
+        set_error: BaseException | None = None,
+    ) -> None:
+        self._get_results = list(get_results or [])
+        self._get_error = get_error
+        self._set_result = set_result
+        self._set_error = set_error
+        self.set_calls: list[tuple[str, str, bool, int | None]] = []
+        self.closed = False
+
+    async def get(self, key: str) -> str | None:
+        if self._get_error is not None:
+            raise self._get_error
+        return self._get_results.pop(0) if self._get_results else None
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool:
+        self.set_calls.append((key, value, nx, ex))
+        if self._set_error is not None:
+            raise self._set_error
+        return self._set_result
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _redis_settings() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_admin_password="testpass",
+        modulo_license_private_key=_TEST_PRIV,
+        redis_url="redis://cache:6379/0",
+    )
+
+
+def _install_redis(monkeypatch: pytest.MonkeyPatch, client: Any) -> None:
+    class _Factory:
+        @staticmethod
+        def from_url(_url: str, **_kwargs: Any) -> Any:
+            return client
+
+    monkeypatch.setattr(fulfilment, "Redis", _Factory)
+
+
+def _stored_record(licence_id: str) -> dict[str, str]:
+    del licence_id
+    return {
+        "license_key": "stored-stacked-key",
+        "expires_at": "2028-05-09T12:00:00+00:00",
+        "previous_expires_at": "2027-05-09T12:00:00+00:00",
+    }
+
+
+def _licence_id_of(key: str) -> str:
+    data = parse_and_verify(key).license_data
+    assert data is not None
+    assert data.licence_id is not None
+    return data.licence_id
+
+
+class TestPurchaseKeyRejections:
+    async def test_a_perpetual_purchase_key_has_no_term_to_extend(self) -> None:
+        """A purchase key WITHOUT ``expires_at`` cannot be sized or extended."""
+        perpetual_purchase = _signed_key(
+            {
+                "tier": "team",
+                "features": ["sso"],
+                "expires_at": "",
+                "org_id": "org-perpetual",
+                "renewal_mode": "manual",
+                "term": 12,
+                "licence_id": "licence-perpetual-purchase",
+                "issued_at": _NOW.isoformat(),
+            }
+        )
+
+        with (
+            patch.object(fulfilment, "generate_team_license", wraps=generate_team_license) as mint,
+            pytest.raises(RenewalClaimRejectedError) as exc_info,
+        ):
+            await claim_stacked_renewal(_make_settings(), purchase_key=perpetual_purchase, presented_key=None)
+
+        mint.assert_not_called()
+        assert exc_info.value.reason == REASON_NO_EXPIRY
+        assert exc_info.value.purchase_expires_at is None
+        assert exc_info.value.purchase_verified is True
+
+
+class TestUnavailablePaths:
+    async def test_a_signing_failure_is_reported_as_unavailable(self) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+
+        def _no_signing_key(*_args: Any, **_kwargs: Any) -> str:
+            raise LicenseSigningError("no signing key configured")
+
+        with (
+            patch.object(fulfilment, "generate_team_license", _no_signing_key),
+            pytest.raises(RenewalClaimUnavailableError, match="cannot sign a replacement licence"),
+        ):
+            await claim_stacked_renewal(_make_settings(), purchase_key=purchase, presented_key=previous)
+
+        # Nothing was recorded, so a retry can still mint the real key.
+        assert _renewal_claims == {}
+
+    async def test_a_stacked_key_that_fails_our_own_verification_is_not_issued(self) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        purchase_data = parse_and_verify(purchase).license_data
+        assert purchase_data is not None
+        # A key from another authority: well-formed, but our anchor rejects it.
+        foreign_key = _signed_key(
+            _payload_of(purchase),
+            generate_keypair()["private_key"],
+        )
+
+        with (
+            patch.object(fulfilment, "generate_team_license", return_value=foreign_key),
+            pytest.raises(RenewalClaimUnavailableError, match="could not verify the replacement licence"),
+        ):
+            await claim_stacked_renewal(_make_settings(), purchase_key=purchase, presented_key=previous)
+
+        assert _renewal_claims == {}
+
+
+class TestClaimRecordIntegrity:
+    def test_a_valid_record_is_decoded_to_its_three_fields(self) -> None:
+        record = _stored_record("licence-1")
+
+        assert _decode_claim_record(json.dumps(record)) == record
+
+    def test_unreadable_json_fails_closed(self) -> None:
+        with pytest.raises(RenewalClaimUnavailableError, match="unreadable"):
+            _decode_claim_record("{not-json")
+
+    def test_a_non_object_record_fails_closed(self) -> None:
+        with pytest.raises(RenewalClaimUnavailableError, match="incomplete"):
+            _decode_claim_record(json.dumps(["not", "an", "object"]))
+
+    def test_a_record_missing_a_field_fails_closed(self) -> None:
+        incomplete = {"license_key": "key", "expires_at": "2028-01-01T00:00:00+00:00"}
+
+        with pytest.raises(RenewalClaimUnavailableError, match="incomplete"):
+            _decode_claim_record(json.dumps(incomplete))
+
+    def test_a_non_string_field_fails_closed(self) -> None:
+        corrupt = {"license_key": 1, "expires_at": "x", "previous_expires_at": "y"}
+
+        with pytest.raises(RenewalClaimUnavailableError, match="incomplete"):
+            _decode_claim_record(json.dumps(corrupt))
+
+    async def test_a_store_returns_the_first_record_when_one_already_exists(self) -> None:
+        """First-writer-wins: a later store publishes the record already held."""
+        first = _stored_record("licence-first")
+        second = _stored_record("licence-second")
+        settings = _make_settings()
+
+        assert await _store_renewal_claim(settings, "licence-race", first, 60) == first
+        assert await _store_renewal_claim(settings, "licence-race", second, 60) == first
+
+
+class TestRedisIdempotency:
+    async def test_a_record_stored_in_redis_is_read_back_and_replayed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        record = _stored_record(_licence_id_of(purchase))
+        client = _FakeRedisClient(get_results=[json.dumps(record)])
+        _install_redis(monkeypatch, client)
+
+        claim = await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+        assert claim.stacked is True
+        assert claim.repeated is True
+        assert claim.license_key == "stored-stacked-key"
+        assert claim.expires_at == record["expires_at"]
+        assert claim.previous_expires_at == record["previous_expires_at"]
+        assert client.closed is True
+
+    async def test_a_corrupt_redis_record_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        client = _FakeRedisClient(get_results=["{not-json"])
+        _install_redis(monkeypatch, client)
+
+        with pytest.raises(RenewalClaimUnavailableError, match="unreadable"):
+            await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+        assert client.closed is True
+
+    async def test_a_redis_read_failure_falls_back_to_the_local_record(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        licence_id = _licence_id_of(purchase)
+        record = _stored_record(licence_id)
+        _renewal_claims[licence_id] = record
+        client = _FakeRedisClient(get_error=RuntimeError("cache down"))
+        _install_redis(monkeypatch, client)
+
+        claim = await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+        assert claim.repeated is True
+        assert claim.license_key == record["license_key"]
+        assert client.closed is True
+
+    async def test_a_redis_connection_failure_falls_back_to_the_local_record(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        licence_id = _licence_id_of(purchase)
+        record = _stored_record(licence_id)
+        _renewal_claims[licence_id] = record
+
+        def _broken_from_url(_url: str, **_kwargs: Any) -> Any:
+            raise RuntimeError("cannot connect")
+
+        monkeypatch.setattr(fulfilment.Redis, "from_url", _broken_from_url)
+
+        claim = await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+        assert claim.repeated is True
+        assert claim.license_key == record["license_key"]
+
+    async def test_cancellation_is_never_swallowed_by_the_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        client = _FakeRedisClient(get_error=asyncio.CancelledError())
+        _install_redis(monkeypatch, client)
+
+        with pytest.raises(asyncio.CancelledError):
+            await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+    async def test_a_first_writer_stores_its_record_in_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        client = _FakeRedisClient(get_results=[None], set_result=True)
+        _install_redis(monkeypatch, client)
+
+        claim = await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+        assert claim.stacked is True
+        assert claim.repeated is False
+        assert len(client.set_calls) == 1
+        redis_key, raw, nx, ex = client.set_calls[0]
+        assert redis_key.endswith(_licence_id_of(purchase))
+        assert nx is True
+        assert ex == (12 + 2) * 31 * 24 * 3600
+        assert json.loads(raw)["license_key"] == claim.license_key
+        assert client.closed is True
+
+    async def test_a_concurrent_writer_record_is_published_instead(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        winner = _stored_record(_licence_id_of(purchase))
+        client = _FakeRedisClient(get_results=[None, json.dumps(winner)], set_result=False)
+        _install_redis(monkeypatch, client)
+
+        claim = await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+        assert claim.license_key == winner["license_key"]
+        assert claim.repeated is True
+        assert claim.expires_at == winner["expires_at"]
+
+    async def test_a_lost_concurrent_record_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        client = _FakeRedisClient(get_results=[None, None], set_result=False)
+        _install_redis(monkeypatch, client)
+
+        with pytest.raises(RenewalClaimUnavailableError, match="recorded its key at the same moment"):
+            await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+    async def test_a_redis_store_failure_falls_back_to_the_process_record(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        client = _FakeRedisClient(get_results=[None], set_error=RuntimeError("cache down"))
+        _install_redis(monkeypatch, client)
+
+        claim = await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+        assert claim.stacked is True
+        assert claim.repeated is False
+        assert _renewal_claims[_licence_id_of(purchase)]["license_key"] == claim.license_key
+        assert client.closed is True
+
+    async def test_cancellation_during_the_store_is_never_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        client = _FakeRedisClient(get_results=[None], set_error=asyncio.CancelledError())
+        _install_redis(monkeypatch, client)
+
+        with pytest.raises(asyncio.CancelledError):
+            await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+    async def test_a_store_connection_failure_falls_back_to_the_process_record(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        purchase = _purchase_key()
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+        client = _FakeRedisClient(get_results=[None])
+        calls = {"n": 0}
+
+        class _FlakyFactory:
+            @staticmethod
+            def from_url(_url: str, **_kwargs: Any) -> Any:
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return client
+                raise RuntimeError("cache went away")
+
+        monkeypatch.setattr(fulfilment, "Redis", _FlakyFactory)
+
+        claim = await claim_stacked_renewal(_redis_settings(), purchase_key=purchase, presented_key=previous)
+
+        assert claim.stacked is True
+        assert claim.repeated is False
+        assert _renewal_claims[_licence_id_of(purchase)]["license_key"] == claim.license_key

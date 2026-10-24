@@ -222,3 +222,23 @@ class TestIdempotency:
         assert second.status_code == 200
         assert second.json()["license_key"] == first.json()["license_key"]
         assert second.json()["repeated"] is True
+
+
+class TestUnavailableClaim:
+    def test_a_server_side_fault_is_a_500_with_a_machine_readable_code(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A server-side fault is NOT a 422: nothing is wrong with the keys."""
+        from modulo.api.routes import stripe_webhook as webhook_module
+        from modulo.core.stripe_fulfilment import RenewalClaimUnavailableError
+
+        async def _unavailable(*_args: Any, **_kwargs: Any) -> Any:
+            raise RenewalClaimUnavailableError("no signing key is configured")
+
+        monkeypatch.setattr(webhook_module, "claim_stacked_renewal", _unavailable)
+        purchase = _purchase_key()
+
+        resp = _post(client, purchase_key=purchase, presented_key=None)
+
+        assert resp.status_code == 500
+        assert resp.json()["code"] == "renewal_claim_unavailable"
