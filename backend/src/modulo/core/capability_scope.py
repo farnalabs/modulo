@@ -359,6 +359,74 @@ def filter_run_context_scope(run_context: dict[str, Any], context_scope: list[st
     return {k: v for k, v in run_context.items() if k in allowed or k in _CONTEXT_ALWAYS_KEPT}
 
 
+def _node_allowed_connectors(node: dict[str, Any]) -> Any:
+    """The RAW ``capability_scope.allowed_connectors`` on *node*, or ``None``.
+
+    ``None`` covers every shape that cannot carry a scope: an absent/falsy
+    ``capability_scope``, a non-dict one (reachable only through a raw-dict
+    writer), and a scope that simply omits the key. The RAW value is returned
+    deliberately — not a normalised entry set — because the caller must
+    distinguish "not narrowed" from "malformed", and only the raw value lets
+    :func:`_is_malformed_connector_scope` tell them apart.
+    """
+    cap_scope = node.get("capability_scope") or {}
+    if not isinstance(cap_scope, dict):
+        return None
+    return cap_scope.get("allowed_connectors")
+
+
+def _agent_grant_contribution(
+    node: dict[str, Any],
+    agent_connector_grants: dict[str, set[str]] | None,
+) -> set[str]:
+    """The connector TYPES *node*'s Agent grants, or the empty set.
+
+    A connector-unrestricted agent node has no static connector binding and
+    tool-calls the hub at runtime, so its grants must be fetched for its runtime
+    access to survive. This is WITHIN scope: an unrestricted agent node may use
+    everything its grant allows.
+
+    Returns the empty set when the node has no ``agent_id``, when no grants were
+    supplied, or when its Agent is granted nothing — letting the caller fall
+    through to the routed-binding arm instead of contributing nothing here.
+    """
+    agent_id = node.get("agent_id")
+    if agent_id is None or not agent_connector_grants:
+        return set()
+    return set(agent_connector_grants.get(str(agent_id)) or set())
+
+
+def _routed_binding_contribution(node: dict[str, Any]) -> set[str]:
+    """The connector instance-id *node*'s binding is ROUTED to, or the empty set.
+
+    The routed-binding arm (FAR-2089) exists because a ``connector`` /
+    ``dispatch`` node has no ``agent_id`` and usually no ``capability_scope`` —
+    without it such a node contributed NOTHING, the union came out empty, and
+    ``compute_run_fetch_scope`` returned ``None``, so the hub decrypted EVERY
+    active org connector for a run that needs exactly one. Contributing the
+    instance id keeps the union non-empty and narrows the fetch to the
+    connector the node actually names.
+
+    Consulted only after the agent-grant arm (see
+    :func:`_node_connector_contribution`), so every shape that contributed
+    before contributes the same set.
+    """
+    # Lazy import: this module is deliberately import-light (it is pulled in by
+    # the API layer and the node runner), and the routing predicate lives in the
+    # connectors layer.
+    from modulo.connectors.base import node_routes_binding_to_connector
+
+    if not node_routes_binding_to_connector(node):
+        return set()
+    binding = node.get("connector_binding") or {}
+    if not isinstance(binding, dict):
+        return set()
+    instance_id = binding.get("instance_id")
+    if not instance_id:
+        return set()
+    return {str(instance_id)}
+
+
 def _node_connector_contribution(
     node: Any,
     agent_connector_grants: dict[str, set[str]] | None,
@@ -366,11 +434,11 @@ def _node_connector_contribution(
     """Return the connector id/type strings ONE graph node contributes.
 
     A node-level ``capability_scope.allowed_connectors`` is authoritative and is
-    never widened with agent grants (FAR-418). A connector-unrestricted agent
-    node contributes its Agent's ``connector_type_refs`` grants; a node that
-    would otherwise contribute NOTHING but whose binding the engine ROUTES to a
-    connector contributes that binding's instance id; any other unrestricted
-    node contributes nothing (FAR-435 least-privilege tightening).
+    never widened with agent grants (FAR-418). Otherwise the arms are consulted
+    in a fixed order: the Agent's ``connector_type_refs`` grants
+    (:func:`_agent_grant_contribution`), then the connector the engine ROUTES the
+    node's binding to (:func:`_routed_binding_contribution`); any other
+    unrestricted node contributes nothing (FAR-435 least-privilege tightening).
 
     "Unrestricted" means the list is ``None``, EMPTY, or contains only blank /
     whitespace-only entries — a blank entry names no connector, so a blanks-only
@@ -382,20 +450,10 @@ def _node_connector_contribution(
     unrestricted: it contributes nothing and never falls through to the arms
     below, so it can never be widened with the Agent's grants (see
     :func:`_is_malformed_connector_scope`).
-
-    The routed-binding arm (FAR-2089) exists because a ``connector`` /
-    ``dispatch`` node has no ``agent_id`` and usually no ``capability_scope`` —
-    without it such a node contributed NOTHING, the union came out empty, and
-    ``compute_run_fetch_scope`` returned ``None``, so the hub decrypted EVERY
-    active org connector for a run that needs exactly one. Contributing the
-    instance id keeps the union non-empty and narrows the fetch to the
-    connector the node actually names. It is consulted only after the agent
-    grant arm, so every shape that contributed before contributes the same set.
     """
     if not isinstance(node, dict):
         return set()
-    cap_scope = node.get("capability_scope") or {}
-    allowed = cap_scope.get("allowed_connectors") if isinstance(cap_scope, dict) else None
+    allowed = _node_allowed_connectors(node)
     # Filter blanks BEFORE the truthiness test: `[""]` is truthy but narrows to
     # nothing, so it must behave like an absent list (unrestricted).
     narrowed = _non_blank_connector_entries(allowed)
@@ -406,22 +464,10 @@ def _node_connector_contribution(
         # with the Agent's grants (FAR-418) — the runtime allow-check denies the
         # node instead of the malformed value reading as unrestricted.
         return set()
-    agent_id = node.get("agent_id")
-    if agent_id is not None and agent_connector_grants:
-        granted = set(agent_connector_grants.get(str(agent_id)) or set())
-        if granted:
-            return granted
-    # Lazy import: this module is deliberately import-light (it is pulled in by
-    # the API layer and the node runner), and the routing predicate lives in the
-    # connectors layer.
-    from modulo.connectors.base import node_routes_binding_to_connector
-
-    if node_routes_binding_to_connector(node):
-        binding = node.get("connector_binding") or {}
-        instance_id = binding.get("instance_id") if isinstance(binding, dict) else None
-        if instance_id:
-            return {str(instance_id)}
-    return set()
+    granted = _agent_grant_contribution(node, agent_connector_grants)
+    if granted:
+        return granted
+    return _routed_binding_contribution(node)
 
 
 def compute_run_fetch_scope(
