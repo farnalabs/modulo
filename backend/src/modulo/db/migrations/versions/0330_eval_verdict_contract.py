@@ -1,7 +1,7 @@
 """Eval judge verdict contract: ``outcome``, error state, judge envelope (ADR 066 S1).
 
 Revision ID: 0330_eval_verdict_contract
-Revises: 0328_evidence_index_aggregate_indexes
+Revises: 0329_run_attempts
 Create Date: 2026-10-21
 
 Renumbered from ``0325_eval_verdict_contract`` when main independently landed
@@ -13,10 +13,11 @@ rather than leaving a second root. Renumbered once more from ``0328`` to ``0330`
 because open PR #2201 already claims the ``0328`` numeric prefix (its file is
 ``0328_evidence_index_aggregate_indexes.py``); ``0330`` is the next prefix not
 claimed by main or an open PR. ``down_revision`` follows main's head:
-``0328_evidence_index_aggregate_indexes`` landed on main after this branch was
-cut, so it now sits between ``0327_runs_execution_attempt_count`` and this
-revision (it previously pointed at ``0325_run_seam_coverage``, which forked the
-graph into two heads once main advanced).""
+``0329_run_attempts`` landed on main after this branch was cut (chained off
+``0328_evidence_index_aggregate_indexes``), so it now sits between ``0328`` and
+this revision; pointing at ``0328`` forked the graph into two heads once main
+advanced (it previously pointed at ``0325_run_seam_coverage``, which forked the
+graph the same way).""
 
 **EXPAND release — this migration deliberately does NOT set ``outcome`` NOT NULL
 and does NOT narrow the eval-type vocabulary.** Deploy ordering is
@@ -113,7 +114,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0330_eval_verdict_contract"
-down_revision: str | None = "0328_evidence_index_aggregate_indexes"
+down_revision: str | None = "0329_run_attempts"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
