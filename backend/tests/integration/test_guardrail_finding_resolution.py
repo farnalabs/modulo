@@ -18,6 +18,8 @@ from modulo.core.guardrails.finding_resolver import (
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
 
+pytestmark = pytest.mark.integration
+
 
 class TestGuardrailFindingResolutionIntegration:
     """Integration tests for guardrail finding resolution with real database."""
