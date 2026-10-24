@@ -16,12 +16,13 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
 import modulo.core.license as license_module
+import modulo.core.license_signing as license_signing_module
 from modulo.core.license import (
     DEFAULT_RENEWAL_MODE,
     RENEWAL_MODE_AUTO,
@@ -349,3 +350,124 @@ class TestInvalidClaimsFallBackSafely:
         key = _sign_payload({**_old_format_payload(), "licence_id": bad}, kp["private_key"])
 
         assert _parsed(key).licence_id is None
+
+
+# ---------------------------------------------------------------------------
+# 5. Stacking — an early renewal must never cost the customer days (FAR-2075)
+# ---------------------------------------------------------------------------
+
+#: Pinned "now" for the stacking tests. A fixed instant makes the boundary
+#: assertions EXACT ("2027-07-05T12:00:00+00:00") instead of tolerance-based —
+#: the behaviour under test is base-date selection, not month arithmetic.
+_FROZEN_NOW = datetime(2026, 6, 15, 12, 0, 0, tzinfo=UTC)
+
+
+class _FrozenDatetime(datetime):
+    """``datetime`` whose ``now()`` is pinned to :data:`_FROZEN_NOW`."""
+
+    @classmethod
+    def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+        return _FROZEN_NOW if tz is not None else _FROZEN_NOW.replace(tzinfo=None)
+
+
+@pytest.fixture
+def frozen_now(monkeypatch: pytest.MonkeyPatch) -> datetime:
+    """Pin ``license_signing``'s clock so every derived instant is exact."""
+    monkeypatch.setattr(license_signing_module, "datetime", _FrozenDatetime)
+    return _FROZEN_NOW
+
+
+class TestStackingBaseDate:
+    """``expires_from`` selects the base the term runs from.
+
+    The invariant is ``new_expiry = max(now, previous_expiry) + term``:
+    renewing early stacks onto the previous expiry (no lost days), renewing
+    after expiry starts a full term from today (no inherited lost days), and a
+    fresh licence simply expires ``now + term``.
+    """
+
+    def test_renewal_twenty_days_early_stacks_on_the_previous_expiry(self, frozen_now: datetime) -> None:
+        previous_expiry = frozen_now + timedelta(days=20)
+
+        payload = build_team_payload("Acme", term_months=12, expires_from=previous_expiry)
+
+        # 2026-07-05 + 12 months — the OLD expiry plus a full term.
+        assert payload["expires_at"] == "2027-07-05T12:00:00+00:00"
+        # And emphatically NOT the naive "now + term" that would burn 20 days.
+        assert payload["expires_at"] != "2027-06-15T12:00:00+00:00"
+
+    def test_early_renewal_extends_by_the_full_term_at_read_back(
+        self, kp: dict[str, str], frozen_now: datetime
+    ) -> None:
+        """The stacked expiry survives signing and verification, not just the dict."""
+        previous_expiry = frozen_now + timedelta(days=20)
+
+        key = generate_team_license(
+            "Acme",
+            term_months=12,
+            private_key_hex=kp["private_key"],
+            expires_from=previous_expiry,
+        )
+
+        data = _parsed(key)
+        assert data.expires_at == "2027-07-05T12:00:00+00:00"
+        assert datetime.fromisoformat(data.expires_at) - previous_expiry == timedelta(days=365)
+
+    def test_renewal_after_expiry_starts_from_now(self, frozen_now: datetime) -> None:
+        previous_expiry = frozen_now - timedelta(days=5)
+
+        payload = build_team_payload("Acme", term_months=12, expires_from=previous_expiry)
+
+        # The floor wins: a lapsed licence gets a FULL term from today.
+        assert payload["expires_at"] == "2027-06-15T12:00:00+00:00"
+        # Not "previous expiry + term", which would land 5 days in the past.
+        assert payload["expires_at"] != "2027-06-10T12:00:00+00:00"
+
+    def test_fresh_licence_expires_now_plus_term(self, frozen_now: datetime) -> None:
+        payload = build_team_payload("Acme", term_months=12)
+
+        assert payload["expires_at"] == "2027-06-15T12:00:00+00:00"
+
+    def test_one_second_past_the_boundary_renews_from_now(self, frozen_now: datetime) -> None:
+        payload = build_team_payload("Acme", term_months=12, expires_from=frozen_now - timedelta(seconds=1))
+
+        assert payload["expires_at"] == "2027-06-15T12:00:00+00:00"
+
+    def test_one_second_before_the_boundary_stacks_on_the_previous_expiry(self, frozen_now: datetime) -> None:
+        payload = build_team_payload("Acme", term_months=12, expires_from=frozen_now + timedelta(seconds=1))
+
+        assert payload["expires_at"] == "2027-06-15T12:00:01+00:00"
+
+    def test_stacking_does_not_move_issued_at(self, frozen_now: datetime) -> None:
+        """``issued_at`` is the TRUE mint time — stacking shifts only the expiry.
+
+        Passing a forged ``issued_at`` would have been the easy way to express
+        "start where the last key ended", and it would falsify the claim.
+        """
+        previous_expiry = frozen_now + timedelta(days=20)
+
+        payload = build_team_payload("Acme", term_months=12, expires_from=previous_expiry)
+
+        assert payload["issued_at"] == "2026-06-15T12:00:00+00:00"
+        assert payload["expires_at"] != payload["issued_at"]
+
+    def test_a_stacked_renewal_carries_its_own_term_and_auto_mode(
+        self, kp: dict[str, str], frozen_now: datetime
+    ) -> None:
+        """A renewal key states what it is, so the NEXT renewal can compute too."""
+        key = generate_team_license(
+            "Acme",
+            term_months=12,
+            private_key_hex=kp["private_key"],
+            renewal_mode=RENEWAL_MODE_AUTO,
+            expires_from=frozen_now + timedelta(days=20),
+        )
+
+        data = _parsed(key)
+        assert data.renewal_mode == RENEWAL_MODE_AUTO
+        assert data.term == 12
+        assert data.expires_at == "2027-07-05T12:00:00+00:00"
+
+    def test_a_naive_base_date_is_rejected_rather_than_assumed_utc(self) -> None:
+        with pytest.raises(LicenseSigningError, match="timezone-aware"):
+            build_team_payload("Acme", expires_from=datetime(2026, 6, 15, 12, 0, 0))
