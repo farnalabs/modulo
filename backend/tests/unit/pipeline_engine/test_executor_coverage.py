@@ -481,8 +481,41 @@ async def test_publish_mapped_stream_event_fires_node_lifecycle_callbacks():
 
     assert started == ["node-a"]
     assert completed == ["node-a"]
-    broker.publish.assert_any_call("node_started", {"node_id": "node-a"})
-    broker.publish.assert_any_call("node_completed", {"node_id": "node-a"})
+
+
+def test_publish_mapped_stream_event_preserves_synchronous_completion_hooks() -> None:
+    """Legacy synchronous completion hooks publish without an awaitable wrapper."""
+    executor = PipelineExecutor(MagicMock())
+    completed: list[str] = []
+    executor.on_node_completed = completed.append
+    broker = MagicMock()
+    ctx = SimpleNamespace(broker=broker)
+
+    result = executor._publish_mapped_stream_event(
+        ("node_completed", {"node_id": "node-sync"}),
+        _StreamState(),
+        ctx,
+    )
+
+    assert result is None
+    assert completed == ["node-sync"]
+    broker.publish.assert_called_once_with("node_completed", {"node_id": "node-sync"})
+
+
+def test_publish_mapped_stream_event_publishes_non_completion_events_without_hook() -> None:
+    """Non-completion lifecycle events retain the direct publish path."""
+    executor = PipelineExecutor(MagicMock())
+    broker = MagicMock()
+    ctx = SimpleNamespace(broker=broker)
+
+    result = executor._publish_mapped_stream_event(
+        ("node_started", {"node_id": "node-start"}),
+        _StreamState(),
+        ctx,
+    )
+
+    assert result is None
+    broker.publish.assert_called_once_with("node_started", {"node_id": "node-start"})
 
 
 # ---------------------------------------------------------------------------
