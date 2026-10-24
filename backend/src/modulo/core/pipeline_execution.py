@@ -2066,6 +2066,7 @@ async def zombie_watchdog(
     grace_seconds: int | None = None,
     retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
     dispatch_tracker: DispatchPhaseTracker | None = None,
+    claim_token: str | None = None,
 ) -> None:
     """Fail a claimed-but-nodeless run when no node dispatches in time.
 
@@ -2617,6 +2618,8 @@ async def _fail_overdue_node(
     run_done_event: asyncio.Event,
     stall_requested: asyncio.Event | None,
     retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
+    claim_token: str | None = None,
+    completion_probe: Callable[[str | uuid.UUID, str | uuid.UUID, str | None], Awaitable[bool]] | None = None,
 ) -> None:
     """Fail the most-overdue in-flight node that blew its deadline.
 
@@ -2679,6 +2682,82 @@ async def _fail_overdue_node(
     # fingerprint survives) and on the terminal-fail branch below. Committed
     # before either outcome runs, so the fact writer always sees it.
     await _record_node_deadline_watchdog_firing(aeng, run_id, org_id)
+
+    # FAR-2050: check if this attempt has any completed nodes before consulting
+    # the retry policy. If no node has completed in this attempt, skip re-dispatch
+    # and terminal-fail directly with node_deadline_exceeded.
+    try:
+        if completion_probe is not None:
+            has_completions = await completion_probe(run_id, org_id, claim_token)
+        elif not isinstance(aeng, AsyncEngine):
+            # Unit watchdog doubles use a non-engine sentinel and must supply their
+            # own completion policy; preserve their pre-FAR-2050 retry coverage
+            # without weakening the real AsyncEngine path below. Production always
+            # passes an AsyncEngine, so invalid IDs still fail closed there.
+            has_completions = True
+        else:
+            has_completions = await _probe_completed_nodes(aeng, run_id, org_id, claim_token)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.node_deadline_completion_probe_failed run=%s node=%s — "
+            "terminal-failing without re-dispatch",
+            run_id,
+            node_id,
+            exc_info=True,
+        )
+        # A completion-probe failure is fail-closed: the watchdog cannot prove
+        # that re-dispatch is safe, so continue through the terminal-fail path.
+        # Keep this separate from the terminal write so a terminalisation error
+        # remains visible to the caller rather than being masked by this probe
+        # error.
+        has_completions = False
+
+    if not has_completions:
+        _log.warning(
+            "pipeline_execution.node_deadline_terminal_no_completions run=%s node=%s — "
+            "no completed nodes in this attempt, terminal-failing without re-dispatch",
+            run_id,
+            node_id,
+        )
+        # FAR-1914 B2: on the TERMINAL branch only, give the cancelled executor a
+        # SHORT BOUNDED window to run its cancellation cleanup before the run is
+        # terminalised — node_runner drains the sandbox tail one final time and
+        # persists the delivery/triage marker (including a ``pr_url`` opened
+        # seconds before the kill). ``asyncio.wait`` (never ``await exec_task``) so
+        # the expected CancelledError is not re-raised here; a cleanup failure or a
+        # timed-out cleanup must not stop the terminal write below.
+        await asyncio.wait({exec_task}, timeout=_EXECUTOR_CANCEL_SETTLE_SECONDS)
+        error_detail = (
+            f"Node '{node_id}' did not complete within its configured timeout_seconds "
+            f"({_timeout}s) — node-deadline watchdog ended the dispatch. No node "
+            "completed in this attempt; re-dispatch skipped per FAR-2050."
+        )
+        terminal_written = await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+            error_detail=error_detail,
+            claim_token=claim_token,
+        )
+        if terminal_written:
+            # Triage and derived cost describe a terminal write that actually
+            # landed.  A fenced no-op must not create evidence or charge a
+            # successor-owned run, and the compensating cost booking keeps this
+            # zero-completion sandbox kill symmetric with the canonical branch.
+            await _persist_node_deadline_triage(aeng, run_id, org_id, redispatched=False)
+            await _record_derived_deadline_cost(
+                aeng,
+                run_id,
+                org_id,
+                error_detail=error_detail,
+                derived_sandbox_wall_hours=_timeout / 3600.0,
+                killed_node_id=node_id,
+            )
+        return
+
     retry_state = await _maybe_watchdog_retry(
         retry_hook,
         run_id,
@@ -2735,6 +2814,7 @@ async def _fail_overdue_node(
         org_id,
         error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
         error_detail=error_detail,
+        claim_token=claim_token,
     )
     if terminal_written:
         # A terminal deadline kill writes no run-level triage marker of its own
@@ -2765,12 +2845,14 @@ async def node_deadline_watchdog(
     org_id: str,
     *,
     exec_task: asyncio.Task[Any],
+    claim_token: str | None = None,
     stall_requested: asyncio.Event | None = None,
     node_started_event: asyncio.Event,
     node_completed_event: asyncio.Event,
     run_done_event: asyncio.Event,
     node_deadlines: dict[str, tuple[float, int]],
     retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
+    completion_probe: Callable[[str | uuid.UUID, str | uuid.UUID, str | None], Awaitable[bool]] | None = None,
 ) -> None:
     """Fail a node that does not COMPLETE within its configured ``timeout_seconds``.
 
@@ -2843,6 +2925,8 @@ async def node_deadline_watchdog(
             run_done_event=run_done_event,
             node_deadlines=node_deadlines,
             retry_hook=retry_hook,
+            claim_token=claim_token,
+            completion_probe=completion_probe,
         ):
             return
 
@@ -2853,7 +2937,9 @@ async def _node_deadline_step(
     org_id: str,
     *,
     exec_task: asyncio.Task[Any],
-    stall_requested: asyncio.Event | None,
+    claim_token: str | None = None,
+    completion_probe: Callable[[str | uuid.UUID, str | uuid.UUID, str | None], Awaitable[bool]] | None = None,
+    stall_requested: asyncio.Event | None = None,
     node_started_event: asyncio.Event,
     node_completed_event: asyncio.Event,
     run_done_event: asyncio.Event,
@@ -2882,6 +2968,8 @@ async def _node_deadline_step(
                 run_done_event,
                 stall_requested,
                 retry_hook=retry_hook,
+                claim_token=claim_token,
+                completion_probe=completion_probe,
             )
             return False
         # Wait until a node completes, a new node starts, the run finishes, the
@@ -3026,6 +3114,10 @@ async def run_executor_with_watchdog(
             node_completed_event,
             node_timeouts,
             default_timeout,
+            aeng=aeng,
+            run_id=run_id,
+            org_id=org_id,
+            claim_token=claim_token,
         )
 
     async def _execute() -> Any:
@@ -3066,6 +3158,7 @@ async def run_executor_with_watchdog(
             stall_requested=stall_requested,
             retry_hook=watchdog_retry_hook,
             dispatch_tracker=dispatch_tracker,
+            claim_token=getattr(executor, "_claim_token", None),
         ),
         name=f"saq-zombie-watchdog-{rid}",
     )
@@ -3088,6 +3181,7 @@ async def run_executor_with_watchdog(
             run_done_event=run_done_event,
             node_deadlines=node_deadlines,
             retry_hook=watchdog_retry_hook,
+            claim_token=claim_token,
         ),
         name=f"saq-node-deadline-watchdog-{rid}",
     )
@@ -3200,6 +3294,86 @@ def _wire_executor_hooks(
     executor._superseded = superseded
 
 
+def _completion_attempt_key(run_id: str, node_id: str, claim_token: str | None) -> str:
+    from modulo.db.crud.run_node_outputs import attempt_key_for_node
+
+    return attempt_key_for_node(run_id=uuid.UUID(run_id), node_id=node_id, claim_token=claim_token)
+
+
+async def _probe_completed_nodes(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    claim_token: str | None,
+) -> bool:
+    from modulo.db.crud.run_node_outputs import has_completed_nodes_in_attempt
+    from modulo.db.rls import set_rls_org
+
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, uuid.UUID(org_id))
+        return await has_completed_nodes_in_attempt(
+            session,
+            run_id=uuid.UUID(run_id),
+            organisation_id=uuid.UUID(org_id),
+            claim_token=claim_token,
+        )
+
+
+async def _write_node_completion(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    node_id: str,
+    claim_token: str | None = None,
+) -> None:
+    """Write the per-node completion timestamp (FAR-2050).
+
+    Updates the claim-token-derived attempt row for the given node with the
+    current timestamp in the 'completed_at' column. This is the durable signal
+    that a node has actually finished work in this attempt.
+
+    Best-effort: any failure is logged and swallowed — the completion record
+    must never delay or block the node's completion. The column is nullable
+    and the gate only checks for its presence.
+    """
+    try:
+        from sqlalchemy import select
+
+        from modulo.db.models.run_node_outputs import RunNodeOutput
+        from modulo.db.rls import set_rls_org as _set_rls_org
+
+        factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await _set_rls_org(session, uuid.UUID(org_id))
+            row = (
+                await session.execute(
+                    select(RunNodeOutput).where(
+                        RunNodeOutput.run_id == uuid.UUID(run_id),
+                        RunNodeOutput.organisation_id == uuid.UUID(org_id),
+                        RunNodeOutput.node_id == node_id,
+                        RunNodeOutput.attempt_key == _completion_attempt_key(run_id, node_id, claim_token),
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = RunNodeOutput(
+                    run_id=uuid.UUID(run_id),
+                    organisation_id=uuid.UUID(org_id),
+                    node_id=node_id,
+                    attempt_key=_completion_attempt_key(run_id, node_id, claim_token),
+                )
+                session.add(row)
+            row.completed_at = datetime.now(UTC)
+    except Exception:
+        _log.warning(
+            "pipeline_execution.node_completion_write_failed run=%s node=%s",
+            run_id,
+            node_id,
+            exc_info=True,
+        )
+
+
 def _wire_node_deadline_hooks(
     executor: Any,
     node_deadlines: dict[str, tuple[float, int]],
@@ -3207,12 +3381,22 @@ def _wire_node_deadline_hooks(
     node_completed_event: asyncio.Event,
     node_timeouts: dict[str, int],
     default_timeout: int,
+    *,
+    aeng: AsyncEngine | None = None,
+    run_id: str | None = None,
+    org_id: str | None = None,
+    claim_token: str | None = None,
 ) -> None:
     """Wire the per-node callbacks that drive the absolute node-deadline watchdog.
 
     FAR-369: each node gets its own deadline entry (set on start, removed on
     completion) so a stalled sibling in a parallel fan-out cannot hide behind a
     newer sibling's start.
+
+    FAR-2050: when aeng, run_id, org_id are provided, also write a durable
+    per-node completion record (completed_at on the node's claim-token attempt
+    row) so the node-deadline watchdog can gate re-dispatch on whether this
+    attempt has any completed nodes.
     """
 
     def _on_node_started(nid: str) -> None:
@@ -3220,9 +3404,12 @@ def _wire_node_deadline_hooks(
         node_deadlines[nid] = (time.monotonic() + to, to)
         node_started_event.set()
 
-    def _on_node_completed(nid: str) -> None:
+    async def _on_node_completed(nid: str) -> None:
         node_deadlines.pop(nid, None)
         node_completed_event.set()
+        # FAR-2050: write durable completion record
+        if aeng is not None and run_id is not None and org_id is not None:
+            await _write_node_completion(aeng, run_id, org_id, nid, claim_token)
 
     executor.on_node_started = _on_node_started
     executor.on_node_completed = _on_node_completed

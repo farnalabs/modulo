@@ -159,6 +159,50 @@ hang-death count is the `"likely hung"` marker in the detail of a
 
 ---
 
+## FAR-2050: Per-node completion record + deadline re-dispatch gate
+
+**Rule**: The node-deadline watchdog only re-dispatches a run when the current
+attempt has at least one completed node (durable `completed_at` on the node's
+claim-token-derived attempt row). If no node has completed in this attempt,
+the kill terminal-fails with `node_deadline_exceeded` directly — no retry
+policy consultation, no re-dispatch.
+
+**Why**: Without this gate, a node-deadline kill on a run that never made
+forward progress in this attempt would re-dispatch and re-execute the graph
+from the start, wasting budget on work that cannot succeed. The completion
+record provides a durable signal that forward progress was actually made.
+
+**Implementation**:
+1. **Schema**: `run_node_outputs.completed_at` (timestamptz, nullable) — written
+   once when a node finishes work on the node's claim-token-derived attempt row.
+2. **Writer**: Single chokepoint at `_on_node_completed` in
+   `pipeline_execution.py` — all node families (agent, connector, sandbox,
+   human/policy) write through this one path. The executor awaits both async and
+   synchronous-compatible callbacks.
+3. **Reader**: `has_completed_nodes_in_attempt()` in `crud.run_node_outputs`
+   — checks only rows whose attempt-key suffix matches the current claim token.
+4. **Gate**: In `_fail_overdue_node`, before consulting the retry policy, the
+   watchdog calls the reader. If no completions exist, it skips the retry hook
+   and terminal-fails immediately.
+
+**Troubleshooting**:
+
+| Symptom | Cause | Resolution |
+|---|---|---|
+| Run terminal-failed with `node_deadline_exceeded` but no re-dispatch even though `retry_policy` covers `timeout` | The current attempt has **no completed nodes** — the completion gate vetoed re-dispatch | This is correct behaviour: the attempt made zero forward progress. Investigate why the node timed out before any node could complete (e.g., sandbox provisioning failure, model backend unreachable, graph compile hang). |
+| Run re-dispatched on node deadline but `retry_policy` does NOT cover `timeout` | The attempt has completed nodes, so the gate passed, but the retry policy should have blocked re-dispatch | Check the pipeline's `retry_policy`: ensure `on` includes `timeout` or is absent (all-events). An explicit `on: []` or `max_retries: 0` blocks re-dispatch even with completions. |
+| `completed_at` is NULL for a node that should have finished | The node never reached the completion chokepoint (crashed before `on_node_completed` fired) | Check executor logs for the node — a pre-completion crash (OOM, SIGKILL, sandbox kill) leaves no completion record. This is expected: the gate correctly prevents re-dispatch of an attempt that never produced a durable completion. |
+
+**Log patterns**:
+- `pipeline_execution.node_deadline_terminal_no_completions run=<id> node=<name> — no completed nodes in this attempt, terminal-failing without re-dispatch` — the completion gate fired, terminal-fail without re-dispatch
+- `pipeline_execution.node_deadline_watchdog.exceeded run=<id> node=<name> exceeded timeout_seconds=<N>s — cancelling executor and failing run` — node deadline exceeded (normal watchdog fire)
+
+**Configuration**: No new configuration. The gate is unconditional — if an attempt has no durable completions, it cannot be re-dispatched on a node deadline. This is a safety boundary, not a tunable parameter.
+
+---
+
+---
+
 ## Native Single-Install Troubleshooting
 
 For the native bundle (`scripts/install.sh`, `modulo start --detach`).
