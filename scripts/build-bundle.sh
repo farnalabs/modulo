@@ -212,7 +212,9 @@ cd ..
 # Generate SBOM for the bundle
 # ---------------------------------------------------------------------------
 echo "Generating SBOM for bundle..."
-uv run --no-project --with pyyaml python backend/scripts/generate-sbom.py --output "build/SBOM.json"
+# --no-sync/--no-build + an exact pin (S8541/S8544): no dependency build
+# scripts run and the one dependency is a verified version.
+uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 python backend/scripts/generate-sbom.py --output "build/SBOM.json"
 
 # ---------------------------------------------------------------------------
 # Copy OpenAPI spec
@@ -220,7 +222,7 @@ uv run --no-project --with pyyaml python backend/scripts/generate-sbom.py --outp
 echo "Copying OpenAPI spec..."
 # Dump OpenAPI from backend
 cd backend
-uv run --no-project python - <<'PYEOF'
+uv run --no-project --no-sync --no-build python - <<'PYEOF'
 import os, json, sys
 sys.path.insert(0, "src")
 os.environ.setdefault("MODULO_DB", "sqlite")

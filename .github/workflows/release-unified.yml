@@ -70,9 +70,13 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build all images (no push)
+        # Mapped through the step env block (S7630): GitHub expressions inside a
+        # run block are interpolated before the shell parses the script, so
+        # values are data, never code.
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ inputs.version }}"
           for img in all-in-one backend frontend runner-opencode; do
             case "$img" in
               all-in-one)
@@ -114,8 +118,10 @@ jobs:
 
       - name: Verify SBOM generation
         run: |
-          uv run --no-project --with pyyaml python backend/scripts/generate-sbom.py --output sbom.json
-          uv run --no-project python - <<'PY'
+          # --no-sync/--no-build + an exact pin (S8541/S8544): no dependency
+          # build scripts run and the one dependency is a verified version.
+          uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 python backend/scripts/generate-sbom.py --output sbom.json
+          uv run --no-project --no-sync --no-build python - <<'PY'
           import json, sys
           with open("sbom.json", encoding="utf-8") as f:
               bom = json.load(f)
@@ -321,8 +327,13 @@ jobs:
       - name: Bump version in SoT files (cut only)
         id: bump
         if: inputs.mode == 'cut'
+        # Mapped through the step env block (S7630): GitHub expressions inside a
+        # run block are interpolated before the shell parses the script, so
+        # values are data, never code.
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          python3 scripts/bump-version.py --set "${{ inputs.version }}"
+          python3 scripts/bump-version.py --set "$VERSION"
 
       # -----------------------------------------------------------------------
       # Publish container images (cut and recut)
@@ -575,13 +586,15 @@ jobs:
           python-version: "3.12"
 
       - name: Generate the CycloneDX SBOM
-        run: uv run --no-project --with pyyaml python backend/scripts/generate-sbom.py --output sbom.json
+        # --no-sync/--no-build + an exact pin (S8541/S8544): no dependency
+        # build scripts run and the one dependency is a verified version.
+        run: uv run --no-project --no-sync --no-build --with pyyaml==6.0.3 python backend/scripts/generate-sbom.py --output sbom.json
 
       - name: Verify the SBOM is valid CycloneDX
         shell: bash
         run: |
           set -euo pipefail
-          uv run --no-project python - <<'PY'
+          uv run --no-project --no-sync --no-build python - <<'PY'
           import json, sys
           with open("sbom.json", encoding="utf-8") as handle:
               bom = json.load(handle)
