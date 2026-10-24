@@ -9,6 +9,9 @@ import pytest
 from modulo.core.library_service import copy_to_adapt
 from modulo.core.registry import (
     _BUILTIN_REGISTRY,
+    _DOWNLOAD_WEIGHT,
+    _RECENCY_WEIGHT,
+    _REVIEW_BONUS_MAX,
     PUBLISHER_TRUST_COMMUNITY,
     PUBLISHER_TRUST_REVOKED,
     PUBLISHER_TRUST_VERIFIED,
@@ -91,23 +94,25 @@ class TestPublisherTrust(_PreservePublishers):
 
 
 class TestSearchRanking:
-    def test_popularity_score_higher_with_more_downloads(self):
-        now = datetime.now(UTC)
+    @pytest.fixture
+    def now(self) -> datetime:
+        """Reference publish time shared by the popularity-score cases."""
+        return datetime.now(UTC)
+
+    def test_popularity_score_higher_with_more_downloads(self, now):
         low = compute_popularity_score(10, None, 0, now)
         high = compute_popularity_score(5000, None, 0, now)
         assert high > low
 
-    def test_popularity_score_higher_with_rating(self):
-        now = datetime.now(UTC)
+    def test_popularity_score_higher_with_rating(self, now):
         no_rating = compute_popularity_score(100, None, 0, now)
         with_rating = compute_popularity_score(100, 4.5, 10, now)
         assert with_rating > no_rating
 
-    def test_popularity_score_older_primitives_decay(self):
+    def test_popularity_score_older_primitives_decay(self, now):
         old = datetime(2020, 1, 1, tzinfo=UTC)
-        recent = datetime.now(UTC)
         old_score = compute_popularity_score(100, 3.0, 5, old)
-        recent_score = compute_popularity_score(100, 3.0, 5, recent)
+        recent_score = compute_popularity_score(100, 3.0, 5, now)
         assert recent_score > old_score
 
     def test_ranked_list_sorts_by_popularity(self):
@@ -141,39 +146,33 @@ class TestSearchRanking:
         assert scores == sorted(scores, reverse=True)
         assert "Unknown sort_by" in caplog.text
 
-    def test_popularity_score_clamps_negative_downloads(self):
-        now = datetime.now(UTC)
+    def test_popularity_score_clamps_negative_downloads(self, now):
         score = compute_popularity_score(-5, None, 0, now)
         assert score >= 0
 
-    def test_popularity_score_caps_downloads_at_scale(self):
-        now = datetime.now(UTC)
+    def test_popularity_score_caps_downloads_at_scale(self, now):
         capped = compute_popularity_score(10**9, None, 0, now)
-        below = compute_popularity_score(1000, None, 0, now)
-        assert capped <= 0.4 + 0.2 + 0.05  # download + max recency + review bonus
-        assert capped > below
+        at_cap = compute_popularity_score(10_000, None, 0, now)
+        assert capped == at_cap
+        assert capped <= _DOWNLOAD_WEIGHT + _RECENCY_WEIGHT + _REVIEW_BONUS_MAX
 
-    def test_popularity_score_clamps_negative_rating(self):
-        now = datetime.now(UTC)
+    def test_popularity_score_clamps_negative_rating(self, now):
         score = compute_popularity_score(100, -3.0, 0, now)
         assert score >= 0
 
-    def test_popularity_score_caps_rating_at_five(self):
-        now = datetime.now(UTC)
+    def test_popularity_score_caps_rating_at_five(self, now):
         over = compute_popularity_score(100, 99.0, 0, now)
         at_max = compute_popularity_score(100, 5.0, 0, now)
         assert over == at_max
 
-    def test_popularity_score_caps_review_bonus(self):
-        now = datetime.now(UTC)
+    def test_popularity_score_caps_review_bonus(self, now):
         many = compute_popularity_score(100, 4.0, 999, now)
         capped = compute_popularity_score(100, 4.0, 10, now)
         assert many == capped
 
-    def test_popularity_score_ancient_primitive_zero_recency(self):
+    def test_popularity_score_ancient_primitive_zero_recency(self, now):
         ancient = datetime(1900, 1, 1, tzinfo=UTC)
-        recent = datetime.now(UTC)
-        assert compute_popularity_score(100, 4.0, 5, ancient) < compute_popularity_score(100, 4.0, 5, recent)
+        assert compute_popularity_score(100, 4.0, 5, ancient) < compute_popularity_score(100, 4.0, 5, now)
 
 
 class TestDownloadTracking:
