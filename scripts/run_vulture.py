@@ -22,10 +22,11 @@ Gate semantics (FAR-252):
   through. At 60, unused functions/methods/classes block.
 - ``--ignore-decorators``: framework-registration decorators whose callers
   vulture cannot see (FastAPI ``@router.*`` route handlers, ``@mcp.tool`` /
-  ``@mcp.resource`` tools, Pydantic ``@field_validator`` / ``@model_validator``,
-  SQLAlchemy ``@compiles`` / ``@event.listens_for``, Click ``@cli.command`` /
-  ``@click.*``, the internal ``@_rls`` RLS wrapper). Empirically verified
-  against the tree — this is the minimal set that clears framework noise.
+  ``@mcp.resource`` tools, Pydantic ``@field_validator`` / ``@model_validator``
+  / ``@field_serializer``, SQLAlchemy ``@compiles`` / ``@event.listens_for``,
+  Click ``@cli.command`` / ``@click.*``, the internal ``@_rls`` RLS wrapper).
+  Empirically verified against the tree — this is the minimal set that clears
+  framework noise.
 - ``--ignore-names``: precise framework-interface names that vulture cannot
   resolve to a call site. Every entry is a load-bearing contract (LangChain
   ``on_*_*`` callback methods, the ``ConnectorType`` ABC interface
@@ -78,7 +79,7 @@ _GIT_STATE_ENV = {
 # at --min-confidence 60 and no wider.
 _IGNORE_DECORATORS = (
     "@router.*,@pipeline_triggers_router.*,@mcp.tool,@mcp.resource,"
-    "@field_validator,@model_validator,@compiles,@event.listens_for,"
+    "@field_validator,@model_validator,@field_serializer,@compiles,@event.listens_for,"
     "@cli.command,@click.*,@_rls"
 )
 
