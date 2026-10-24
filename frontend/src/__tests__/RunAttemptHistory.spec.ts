@@ -139,4 +139,71 @@ describe('RunAttemptHistory (FAR-2078)', () => {
 
     expect(wrapper.text()).toContain('Showing the first 2 of 5 attempts')
   })
+
+  it('tolerates a payload that omits items and total', async () => {
+    apiMocks.attempts.mockResolvedValue({ data: {}, error: undefined })
+    const wrapper = mount(RunAttemptHistory, { props: { runId: 'run-1' } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="run-attempt-history-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="run-attempt-history-table"]').exists()).toBe(false)
+  })
+
+  it('renders a dash for a duration it cannot derive, never a fabricated one', async () => {
+    const wrapper = await mountWith([
+      attempt({ started_at: null }),
+      attempt({ attempt_index: 1, started_at: 'not-a-date' }),
+      attempt({ attempt_index: 2, ended_at: '2026-10-24T09:00:00Z' }),
+    ])
+
+    const rows = wrapper.findAll('[data-testid="run-attempt-history-row"]')
+    expect(rows).toHaveLength(3)
+    for (const row of rows) {
+      expect(row.findAll('td')[1].text()).toBe('—')
+    }
+  })
+
+  it('renders a dash when an attempt carries no model', async () => {
+    const wrapper = await mountWith([attempt({ model_used: null })])
+
+    const row = wrapper.get('[data-testid="run-attempt-history-row"]')
+    expect(row.findAll('td')[3].text()).toBe('—')
+  })
+
+  it('ignores a stale success response when the run changes mid-flight', async () => {
+    let resolveFirst: (value: unknown) => void = () => {}
+    apiMocks.attempts
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+      .mockResolvedValueOnce({
+        data: { items: [attempt({ attempt_index: 3 })], total: 1 },
+        error: undefined,
+      })
+    const wrapper = mount(RunAttemptHistory, { props: { runId: 'run-1' } })
+    await wrapper.setProps({ runId: 'run-2' })
+    await flushPromises()
+
+    resolveFirst({ data: { items: [attempt({ attempt_index: 9 })], total: 9 }, error: undefined })
+    await flushPromises()
+
+    const rows = wrapper.findAll('[data-testid="run-attempt-history-row"]')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].find('th').text()).toBe('4')
+  })
+
+  it('ignores a stale rejection when the run changes mid-flight', async () => {
+    let rejectFirst: (reason: unknown) => void = () => {}
+    apiMocks.attempts
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject }))
+      .mockResolvedValueOnce({ data: { items: [attempt()], total: 1 }, error: undefined })
+    const wrapper = mount(RunAttemptHistory, { props: { runId: 'run-1' } })
+    await wrapper.setProps({ runId: 'run-2' })
+    await flushPromises()
+
+    rejectFirst(new Error('stale request failed'))
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="run-attempt-history-unavailable"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="run-attempt-history-loading"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="run-attempt-history-row"]')).toHaveLength(1)
+  })
 })
