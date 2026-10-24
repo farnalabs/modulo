@@ -162,8 +162,8 @@ hang-death count is the `"likely hung"` marker in the detail of a
 ## FAR-2050: Per-node completion record + deadline re-dispatch gate
 
 **Rule**: The node-deadline watchdog only re-dispatches a run when the current
-attempt has at least one completed node (durable `completed_at` on a
-`run_node_outputs.__final__` row). If no node has completed in this attempt,
+attempt has at least one completed node (durable `completed_at` on the node's
+claim-token-derived attempt row). If no node has completed in this attempt,
 the kill terminal-fails with `node_deadline_exceeded` directly — no retry
 policy consultation, no re-dispatch.
 
@@ -174,7 +174,7 @@ record provides a durable signal that forward progress was actually made.
 
 **Implementation**:
 1. **Schema**: `run_node_outputs.completed_at` (timestamptz, nullable) — written
-   once when a node finishes work on its claim-token-derived attempt row.
+   once when a node finishes work on the node's claim-token-derived attempt row.
 2. **Writer**: Single chokepoint at `_on_node_completed` in
    `pipeline_execution.py` — all node families (agent, connector, sandbox,
    human/policy) write through this one path. The executor awaits both async and

@@ -1624,6 +1624,44 @@ async def test_watchdog_redispatch_reraises_run_retry_policy_error():
     executor._fenced_pending_reset.assert_awaited_once()
 
 
+async def test_watchdog_wires_completion_hook_with_caller_claim_token() -> None:
+    """The production wrapper passes its claimed token before executor startup.
+
+    The executor only captures ``_claim_token`` inside ``execute``/``resume``;
+    reading that attribute during wrapper wiring would therefore bind the
+    completion writer to the wrong attempt suffix.
+    """
+    executor = MagicMock()
+    captured: dict[str, Any] = {}
+
+    def _wire(*_args: Any, **kwargs: Any) -> None:
+        captured["claim_token"] = kwargs["claim_token"]
+
+    async def _execute() -> SimpleNamespace:
+        executor._claim_token = "executor-set-too-late"
+        return SimpleNamespace(status="complete")
+
+    with (
+        patch("modulo.core.pipeline_execution._wire_node_deadline_hooks", side_effect=_wire) as wire,
+        patch("modulo.core.pipeline_execution.zombie_watchdog", new_callable=AsyncMock),
+        patch("modulo.core.pipeline_execution.node_deadline_watchdog", new_callable=AsyncMock),
+        patch("modulo.core.pipeline_execution.heartbeat_loop", new_callable=AsyncMock),
+    ):
+        result = await run_executor_with_watchdog(
+            MagicMock(),
+            run_id=str(uuid.uuid4()),
+            org_id=str(uuid.uuid4()),
+            executor=executor,
+            job=MagicMock(function="resume_run"),
+            execute_fn=_execute,
+            claim_token="caller-claim-token",
+        )
+
+    assert result == {"status": "complete"}
+    wire.assert_called_once()
+    assert captured["claim_token"] == "caller-claim-token"
+
+
 async def test_watchdog_no_coverage_still_terminal_fails_and_returns_failed():
     """Regression guard: with no policy coverage the wrapper returns the
     honest ``failed`` outcome and the watchdog terminal-fails exactly as

@@ -2515,15 +2515,27 @@ async def _fail_overdue_node(
             f"({_timeout}s) — node-deadline watchdog ended the dispatch. No node "
             "completed in this attempt; re-dispatch skipped per FAR-2050."
         )
-        await fail_run_terminal(
+        terminal_written = await fail_run_terminal(
             aeng,
             run_id,
             org_id,
             error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
             error_detail=error_detail,
         )
-        # Triage marker for terminal deadline kill with no completions
-        await _persist_node_deadline_triage(aeng, run_id, org_id, redispatched=False)
+        if terminal_written:
+            # Triage and derived cost describe a terminal write that actually
+            # landed.  A fenced no-op must not create evidence or charge a
+            # successor-owned run, and the compensating cost booking keeps this
+            # zero-completion sandbox kill symmetric with the canonical branch.
+            await _persist_node_deadline_triage(aeng, run_id, org_id, redispatched=False)
+            await _record_derived_deadline_cost(
+                aeng,
+                run_id,
+                org_id,
+                error_detail=error_detail,
+                derived_sandbox_wall_hours=_timeout / 3600.0,
+                killed_node_id=node_id,
+            )
         return
 
     retry_state = await _maybe_watchdog_retry(
@@ -2884,7 +2896,7 @@ async def run_executor_with_watchdog(
             aeng=aeng,
             run_id=run_id,
             org_id=org_id,
-            claim_token=getattr(executor, "_claim_token", None),
+            claim_token=claim_token,
         )
 
     async def _execute() -> Any:
@@ -3082,9 +3094,9 @@ async def _write_node_completion(
 ) -> None:
     """Write the per-node completion timestamp (FAR-2050).
 
-    Updates the '__final__' row for the given node with the current timestamp
-    in the 'completed_at' column. This is the durable signal that a node has
-    actually finished work in this attempt.
+    Updates the claim-token-derived attempt row for the given node with the
+    current timestamp in the 'completed_at' column. This is the durable signal
+    that a node has actually finished work in this attempt.
 
     Best-effort: any failure is logged and swallowed — the completion record
     must never delay or block the node's completion. The column is nullable
@@ -3147,9 +3159,9 @@ def _wire_node_deadline_hooks(
     newer sibling's start.
 
     FAR-2050: when aeng, run_id, org_id are provided, also write a durable
-    per-node completion record (completed_at on run_node_outputs.__final__ row)
-    so the node-deadline watchdog can gate re-dispatch on whether this attempt
-    has any completed nodes.
+    per-node completion record (completed_at on the node's claim-token attempt
+    row) so the node-deadline watchdog can gate re-dispatch on whether this
+    attempt has any completed nodes.
     """
 
     def _on_node_started(nid: str) -> None:

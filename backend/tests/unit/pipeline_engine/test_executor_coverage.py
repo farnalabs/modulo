@@ -422,6 +422,7 @@ async def test_stream_graph_awaits_async_completion_before_publishing_event():
 
     async def _completed(_node_id: str) -> None:
         persisted.set()
+        order.append("persisted")
         await asyncio.sleep(0)
 
     order: list[str] = []
@@ -455,7 +456,7 @@ async def test_stream_graph_awaits_async_completion_before_publishing_event():
     )
     assert result[0] == "complete"
     assert published.is_set()
-    assert order.index("publish:node_completed") >= 0
+    assert order.index("persisted") < order.index("publish:node_completed")
     assert persisted.is_set()
 
 

@@ -173,8 +173,9 @@ class RunNodeOutput(Base, TimestampMixin):
     schema_enforcement_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     # FAR-2050: per-node completion timestamp. Written once when a node actually
-    # finishes work (the '__final__' row for that node). NULL means the node has
-    # not yet completed in this attempt. Used by the node-deadline watchdog to
+    # finishes work (the claim-token-derived attempt row for that node). NULL
+    # means the node has not yet completed in this attempt. Used by the
+    # node-deadline watchdog to
     # gate re-dispatch: only re-dispatch when this attempt has at least one
     # completed node AND delivery veto has not fired; otherwise terminal-fail
     # with node_deadline_exceeded.

@@ -122,6 +122,7 @@ __all__ = [
     "RunBlobs",
     "assert_write_org",
     "attempt_key_for_node",
+    "claim_token_attempt_suffix",
     "dialect_insert",
     "has_completed_nodes_in_attempt",
     "marker_attempt_suffix",
@@ -1460,15 +1461,18 @@ async def persist_schema_enforcement_record(
 # ── FAR-2050: per-node completion reader ──────────────────────────────
 
 
-def attempt_key_for_node(*, run_id: uuid.UUID, node_id: str, claim_token: str | None) -> str:
-    """Return the attempt-scoped key used by node dispatch writers.
+def claim_token_attempt_suffix(claim_token: str | None) -> str:
+    """Return the shared attempt suffix derived from a claim token."""
+    return "claim-unknown" if not claim_token else hashlib.sha256(claim_token.encode("utf-8")).hexdigest()[:16]
 
-    Dispatch keys use the claim-token-derived suffix when a lease exists and
-    ``claim-unknown`` for the fail-open path. Completion rows use that same
-    suffix, so an earlier attempt cannot satisfy a later watchdog read.
+
+def attempt_key_for_node(*, run_id: uuid.UUID, node_id: str, claim_token: str | None) -> str:
+    """Return the claim-token-derived attempt key for a node completion row.
+
+    Dispatch and completion writers use the same suffix, so an earlier attempt
+    cannot satisfy a later watchdog read.
     """
-    suffix = "claim-unknown" if not claim_token else hashlib.sha256(claim_token.encode("utf-8")).hexdigest()[:16]
-    return f"run:{run_id}:node:{node_id}:{suffix}"
+    return f"run:{run_id}:node:{node_id}:{claim_token_attempt_suffix(claim_token)}"
 
 
 async def has_completed_nodes_in_attempt(
@@ -1496,7 +1500,7 @@ async def has_completed_nodes_in_attempt(
             run_id,
         )
         return False
-    attempt_suffix = hashlib.sha256(claim_token.encode("utf-8")).hexdigest()[:16]
+    attempt_suffix = claim_token_attempt_suffix(claim_token)
     attempt_keys = select(RunNodeOutput.attempt_key).where(
         RunNodeOutput.run_id == run_id,
         RunNodeOutput.node_id != META_NODE_ID,

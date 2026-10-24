@@ -8,7 +8,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -270,7 +270,8 @@ async def test_deadline_gate_terminal_fails_without_completion(
     try:
         with (
             patch("modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
-            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock),
+            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
+            patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
             patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
         ):
             await _fail_overdue_node(
@@ -285,6 +286,15 @@ async def test_deadline_gate_terminal_fails_without_completion(
             )
             fail.assert_awaited_once()
             assert "No node completed in this attempt" in fail.await_args.kwargs["error_detail"]
+            triage.assert_awaited_once_with(sqlite_engine, str(run_id), str(_ORG), redispatched=False)
+            derived.assert_awaited_once_with(
+                sqlite_engine,
+                str(run_id),
+                str(_ORG),
+                error_detail=ANY,
+                derived_sandbox_wall_hours=1 / 3600.0,
+                killed_node_id="sandbox",
+            )
     finally:
         exec_task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -292,6 +302,40 @@ async def test_deadline_gate_terminal_fails_without_completion(
 
 
 @pytest.mark.asyncio
+async def test_deadline_gate_skips_triage_and_cost_when_terminal_write_is_rejected(
+    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    run_id = uuid.uuid4()
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
+    exec_task = asyncio.create_task(asyncio.sleep(10))
+    try:
+        with (
+            patch(
+                "modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock, return_value=False
+            ) as fail,
+            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", new_callable=AsyncMock) as triage,
+            patch("modulo.core.pipeline_execution._record_derived_deadline_cost", new_callable=AsyncMock) as derived,
+            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+        ):
+            await _fail_overdue_node(
+                sqlite_engine,
+                str(run_id),
+                str(_ORG),
+                {"sandbox": (0.0, 1)},
+                exec_task,
+                asyncio.Event(),
+                asyncio.Event(),
+                claim_token="claim-a",
+            )
+        fail.assert_awaited_once()
+        triage.assert_not_awaited()
+        derived.assert_not_awaited()
+    finally:
+        exec_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await exec_task
+
+
 async def test_deadline_gate_allows_retry_after_completion(
     sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
