@@ -112,6 +112,11 @@ def _run_sync(fn: object, *args: object, **kwargs: object) -> object:
     return fn(*args, **kwargs)
 
 
+def _patch_to_thread() -> object:
+    """Run the email path's ``asyncio.to_thread`` work inline."""
+    return patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync)
+
+
 class TestEscapeHtml:
     def test_escapes_special_chars(self) -> None:
         assert _escape_html('<a href="x&y">') == "&lt;a href=&quot;x&amp;y&quot;&gt;"
@@ -220,7 +225,7 @@ class TestDispatchEmail:
         with (
             patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
             patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
-            patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
+            _patch_to_thread(),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
@@ -246,7 +251,7 @@ class TestDispatchEmail:
         with (
             patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
             patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
-            patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
+            _patch_to_thread(),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
@@ -316,7 +321,7 @@ class TestDispatchEmail:
                 "modulo.core.error_tracking.alert_dispatcher.send_email",
                 side_effect=EmailSendingError("smtp down"),
             ),
-            patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
+            _patch_to_thread(),
             patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
@@ -336,7 +341,7 @@ class TestDispatchEmail:
         with (
             patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
             patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=False),
-            patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
+            _patch_to_thread(),
             patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
             caplog.at_level("INFO", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
@@ -359,7 +364,7 @@ class TestDispatchEmail:
         with (
             patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
             patch("modulo.core.error_tracking.alert_dispatcher.send_email", side_effect=RuntimeError("boom")),
-            patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
+            _patch_to_thread(),
             caplog.at_level("ERROR", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
@@ -389,7 +394,7 @@ class TestDispatchEmail:
         with (
             patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
             patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
-            patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
+            _patch_to_thread(),
         ):
             await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 

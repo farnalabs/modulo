@@ -22,6 +22,16 @@ from modulo.db.models import Base, ErrorEvent, ErrorGroup, OrgScoped
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
+def _check_constraint(table: str, name: str) -> CheckConstraint:
+    """Return the named check constraint, failing with a readable message."""
+    match = next(
+        (c for c in Base.metadata.tables[table].constraints if isinstance(c, CheckConstraint) and c.name == name),
+        None,
+    )
+    assert match is not None, f"missing check constraint {name} on {table}"
+    return match
+
+
 class TestErrorEvent:
     def test_table_exists(self) -> None:
         assert "error_events" in Base.metadata.tables
@@ -46,80 +56,37 @@ class TestErrorEvent:
     def test_is_org_scoped(self) -> None:
         assert issubclass(ErrorEvent, OrgScoped)
 
-    def test_fingerprint_not_null(self) -> None:
-        col = Base.metadata.tables["error_events"].c["fingerprint"]
-        assert not col.nullable
+    @pytest.mark.parametrize("column", ["fingerprint", "level", "message", "source"])
+    def test_required_columns_are_not_null(self, column: str) -> None:
+        assert not Base.metadata.tables["error_events"].c[column].nullable
 
-    def test_level_not_null(self) -> None:
-        col = Base.metadata.tables["error_events"].c["level"]
-        assert not col.nullable
-
-    def test_message_not_null(self) -> None:
-        col = Base.metadata.tables["error_events"].c["message"]
-        assert not col.nullable
-
-    def test_source_not_null(self) -> None:
-        col = Base.metadata.tables["error_events"].c["source"]
-        assert not col.nullable
+    @pytest.mark.parametrize("column", ["stacktrace", "context_json", "resolved_at"])
+    def test_optional_columns_are_nullable(self, column: str) -> None:
+        assert Base.metadata.tables["error_events"].c[column].nullable
 
     def test_status_has_server_default(self) -> None:
         col = Base.metadata.tables["error_events"].c["status"]
         assert col.server_default is not None
         assert "new" in str(col.server_default.arg).lower()
 
-    def test_level_check_constraint_exists(self) -> None:
-        table = Base.metadata.tables["error_events"]
-        check = next(
-            (c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_error_events_level"),
-            None,
-        )
-        assert check is not None
+    @pytest.mark.parametrize(
+        "constraint",
+        ["ck_error_events_level", "ck_error_events_source", "ck_error_events_status"],
+    )
+    def test_check_constraint_exists(self, constraint: str) -> None:
+        assert _check_constraint("error_events", constraint) is not None
 
-    def test_level_check_allows_valid_levels(self) -> None:
-        table = Base.metadata.tables["error_events"]
-        check = next(
-            c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_error_events_level"
-        )
-        sql = str(check.sqltext)
-        for level in ("error", "warning", "critical"):
-            assert f"'{level}'" in sql
-
-    def test_source_check_constraint_exists(self) -> None:
-        table = Base.metadata.tables["error_events"]
-        check = next(
-            (c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_error_events_source"),
-            None,
-        )
-        assert check is not None
-
-    def test_source_check_allows_valid_sources(self) -> None:
-        table = Base.metadata.tables["error_events"]
-        check = next(
-            c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_error_events_source"
-        )
-        sql = str(check.sqltext)
-        for source in ("backend", "frontend", "celery", "saq"):
-            assert f"'{source}'" in sql
-
-    def test_status_check_constraint_exists(self) -> None:
-        table = Base.metadata.tables["error_events"]
-        check = next(
-            (c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_error_events_status"),
-            None,
-        )
-        assert check is not None
-
-    def test_stacktrace_nullable(self) -> None:
-        col = Base.metadata.tables["error_events"].c["stacktrace"]
-        assert col.nullable
-
-    def test_context_json_nullable(self) -> None:
-        col = Base.metadata.tables["error_events"].c["context_json"]
-        assert col.nullable
-
-    def test_resolved_at_nullable(self) -> None:
-        col = Base.metadata.tables["error_events"].c["resolved_at"]
-        assert col.nullable
+    @pytest.mark.parametrize(
+        ("constraint", "values"),
+        [
+            ("ck_error_events_level", ("error", "warning", "critical")),
+            ("ck_error_events_source", ("backend", "frontend", "celery", "saq")),
+        ],
+    )
+    def test_check_constraint_allows_expected_values(self, constraint: str, values: tuple[str, ...]) -> None:
+        sql = str(_check_constraint("error_events", constraint).sqltext)
+        for value in values:
+            assert f"'{value}'" in sql
 
 
 class TestErrorGroup:
@@ -145,8 +112,7 @@ class TestErrorGroup:
         assert issubclass(ErrorGroup, OrgScoped)
 
     def test_fingerprint_not_null(self) -> None:
-        col = Base.metadata.tables["error_groups"].c["fingerprint"]
-        assert not col.nullable
+        assert not Base.metadata.tables["error_groups"].c["fingerprint"].nullable
 
     def test_count_has_server_default(self) -> None:
         col = Base.metadata.tables["error_groups"].c["count"]
@@ -158,21 +124,24 @@ class TestErrorGroup:
         assert col.server_default is not None
         assert "error" in str(col.server_default.arg).lower()
 
-    def test_status_check_constraint_exists(self) -> None:
-        table = Base.metadata.tables["error_groups"]
-        check = next(
-            (c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_error_groups_status"),
-            None,
-        )
-        assert check is not None
+    @pytest.mark.parametrize(
+        "constraint",
+        ["ck_error_groups_status", "ck_error_groups_level_peak"],
+    )
+    def test_check_constraint_exists(self, constraint: str) -> None:
+        assert _check_constraint("error_groups", constraint) is not None
 
-    def test_level_peak_check_constraint_exists(self) -> None:
-        table = Base.metadata.tables["error_groups"]
-        check = next(
-            (c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_error_groups_level_peak"),
-            None,
-        )
-        assert check is not None
+    @pytest.mark.parametrize(
+        ("constraint", "values"),
+        [
+            ("ck_error_groups_status", ("new", "acknowledged", "resolved", "archived")),
+            ("ck_error_groups_level_peak", ("error", "warning", "critical")),
+        ],
+    )
+    def test_check_constraint_allows_expected_values(self, constraint: str, values: tuple[str, ...]) -> None:
+        sql = str(_check_constraint("error_groups", constraint).sqltext)
+        for value in values:
+            assert f"'{value}'" in sql
 
     def test_unique_fingerprint_per_org(self) -> None:
         table = Base.metadata.tables["error_groups"]
@@ -185,13 +154,9 @@ class TestErrorGroup:
         assert "organisation_id" in cols
         assert "fingerprint" in cols
 
-    def test_sample_event_id_nullable(self) -> None:
-        col = Base.metadata.tables["error_groups"].c["sample_event_id"]
-        assert col.nullable
-
-    def test_assigned_to_nullable(self) -> None:
-        col = Base.metadata.tables["error_groups"].c["assigned_to"]
-        assert col.nullable
+    @pytest.mark.parametrize("column", ["sample_event_id", "assigned_to"])
+    def test_optional_columns_are_nullable(self, column: str) -> None:
+        assert Base.metadata.tables["error_groups"].c[column].nullable
 
 
 class TestCreateErrorEvent:
@@ -321,7 +286,7 @@ class TestGetErrorGroups:
         result_mock.scalars.return_value.all.return_value = expected
         session.execute.return_value = result_mock
         result = await get_error_groups(session=session, org_id=_ORG_ID)
-        assert len(result) == 2
+        assert result == expected
 
 
 class TestGetErrorGroup:
@@ -498,29 +463,12 @@ class TestUpdateErrorGroup:
 
 
 class TestAppendOnly:
-    def test_update_listener_blocks(self) -> None:
-        """The registered before_update guard actually raises AppendOnlyViolationError."""
+    @pytest.mark.parametrize("operation", ["update", "delete"])
+    def test_listener_blocks(self, operation: str) -> None:
+        """The registered guard actually raises AppendOnlyViolationError."""
         from modulo.core.audit_logger.append_only import AppendOnlyViolationError, _make_blocker
 
-        blocker = _make_blocker(ErrorEvent, "error_events", "update")
-        event = ErrorEvent(
-            organisation_id=_ORG_ID,
-            fingerprint="abc",
-            level="error",
-            message="test",
-            source="backend",
-        )
-        event.id = uuid.uuid4()
-        with pytest.raises(AppendOnlyViolationError) as exc_info:
-            blocker(None, None, event)
-        assert "append-only" in str(exc_info.value).lower()
-        assert str(event.id) in str(exc_info.value)
-
-    def test_delete_listener_blocks(self) -> None:
-        """The registered before_delete guard actually raises AppendOnlyViolationError."""
-        from modulo.core.audit_logger.append_only import AppendOnlyViolationError, _make_blocker
-
-        blocker = _make_blocker(ErrorEvent, "error_events", "delete")
+        blocker = _make_blocker(ErrorEvent, "error_events", operation)
         event = ErrorEvent(
             organisation_id=_ORG_ID,
             fingerprint="abc",

@@ -8,7 +8,6 @@ request/HTTP failure paths in ``alert_dispatcher``.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -22,19 +21,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 
 
-@pytest.fixture(autouse=True)
-def _reset_metric_handles() -> Iterator[None]:
-    saved = (
-        metrics_mod._alert_delivery_failed_total,
-        metrics_mod._alerts_suppressed_total,
-    )
-    metrics_mod._alert_delivery_failed_total = None
-    metrics_mod._alerts_suppressed_total = None
-    yield
-    (
-        metrics_mod._alert_delivery_failed_total,
-        metrics_mod._alerts_suppressed_total,
-    ) = saved
+pytestmark = pytest.mark.usefixtures("reset_metric_handles")
 
 
 class TestRecordAlertDeliveryFailed:

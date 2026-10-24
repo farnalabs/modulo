@@ -14,6 +14,21 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import modulo.core.error_tracking.metrics as metrics_mod
+
+_METRIC_HANDLES = (
+    "_errors_total",
+    "_error_groups_active",
+    "_error_alerts_total",
+    "_runs_running_gauge",
+    "_runs_oldest_running_gauge",
+    "_runs_stall_reason_total",
+    "_runs_claim_count_histogram",
+    "_alerts_suppressed_total",
+    "_alert_delivery_failed_total",
+    "_connector_unknown_total",
+)
+
 
 @pytest.fixture
 def fake_otel() -> Iterator[tuple[MagicMock, MagicMock]]:
@@ -43,3 +58,16 @@ def fake_otel() -> Iterator[tuple[MagicMock, MagicMock]]:
         yield meter, fake_metrics
     finally:
         patcher.stop()
+
+
+@pytest.fixture
+def reset_metric_handles() -> Iterator[None]:
+    """Null the module-level metric handles around a test so lazy registration
+    starts from a clean slate and no test leaks a registered handle into the next.
+    """
+    saved = {name: getattr(metrics_mod, name) for name in _METRIC_HANDLES}
+    for name in _METRIC_HANDLES:
+        setattr(metrics_mod, name, None)
+    yield
+    for name, value in saved.items():
+        setattr(metrics_mod, name, value)
