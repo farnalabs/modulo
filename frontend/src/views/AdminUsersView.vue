@@ -138,13 +138,12 @@
       >
         {{ invitationsError }}
       </p>
-      <p
+      <EmptyState
         v-else-if="pendingInvitations.length === 0"
-        class="text-sm text-muted-foreground"
+        :title="$t('views.AdminUsersView.no_pending_invitations')"
+        :description="$t('views.AdminUsersView.no_pending_invitations_description')"
         data-testid="admin-invitations-empty"
-      >
-        {{ $t('views.AdminUsersView.no_pending_invitations') }}
-      </p>
+      />
       <div v-else class="table-wrapper overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
