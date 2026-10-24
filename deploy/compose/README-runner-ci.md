@@ -35,7 +35,7 @@ docker compose -f deploy/compose/runner-ci.yml --profile runner-ci port docker-s
 # -> 127.0.0.1:<port>  (same for the dind service)
 
 # from backend/, with MODULO_DOCKER_HOST=tcp://127.0.0.1:<proxy-port>
-uv run pytest tests/docker/test_bundled_runner_harness.py -m docker --tb=short -q --timeout=600
+uv run pytest tests/docker/test_bundled_runner_harness.py -m docker --tb=short -q --timeout=600 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
 
 docker compose -f deploy/compose/runner-ci.yml --profile runner-ci down -v --remove-orphans
 ```
@@ -45,7 +45,8 @@ docker compose -f deploy/compose/runner-ci.yml --profile runner-ci down -v --rem
 - `.github/workflows/ci.yml`'s path-filtered `runner-ci-harness` job calls the
   shared reusable `.github/workflows/runner-ci-harness.yml` (detect step
   filters on the Bundled Runner surface; `workflow_dispatch` runs
-  unconditionally).
+  unconditionally). The job runs **every** docker-marked module in
+  `backend/tests/docker/` (all four files), not just the rig-backed harness.
 - `.github/workflows/runner-ci-backstop.yml` is the weekly drift backstop
   (cron `23 3 * * 1`): it calls the SAME reusable workflow with `force=true`
   so the path filter is skipped. The schedule deliberately does NOT live on
@@ -58,14 +59,15 @@ docker compose -f deploy/compose/runner-ci.yml --profile runner-ci down -v --rem
 |---|---|
 | `compose up` (cold: proxy + dind pulls) | ~105 s |
 | `compose up` (warm) | ~5 s |
-| docker-marked harness suite (4 rig tests, warm) | ~75 s |
+| docker-marked suite, all four modules (warm) | ~154–180 s across two runs (~58 s for the original two files; measured 2026-10-23 on the Linux dev host) |
 | In-dind first `alpine:3.20` pull (first run only) | +~30 s |
-| **Full harness job (cold)** | **~5 min** |
-| Full harness job (warm) | ~3 min |
+| **Full harness job (cold)** | **~6.5–7 min** (was ~5 min with two files) |
+| Full harness job (warm) | ~4.5–5 min |
 
-CI job `timeout-minutes: 15` = **3x the measured local cold path**. The
-2-vCPU hosted-runner multiplier is UNMEASURED until the first CI run —
-revisit the budget after it (the local numbers come from a 4-CPU machine).
+CI job `timeout-minutes: 20` = **~3x the derived local cold path** (the suite
+grew by ~96–122 s when it went from two files to all four). The 2-vCPU
+hosted-runner multiplier is UNMEASURED until the first CI run — revisit the
+budget after it (the local numbers come from a 4-CPU machine).
 
 ## Deviations from the phase-0 spike
 

@@ -190,8 +190,9 @@ remote endpoint:
    mid-exec – the node must fail RETRYABLE, never as a completed run with a
    fabricated zero exit.
 4. The Docker-marked acceptance suite (`uv run pytest tests/docker -m
-   docker` from `backend/`) requires a live engine; run it against this
-   engine once the live validation is performed.
+   docker -W "error::pytest.PytestUnraisableExceptionWarning"
+   --disable-warnings` from `backend/`) requires a live engine; run it
+   against this engine once the live validation is performed.
 
 Record the outcome of steps 1–3 in the validation-status banner when this
 walkthrough is actually executed.
