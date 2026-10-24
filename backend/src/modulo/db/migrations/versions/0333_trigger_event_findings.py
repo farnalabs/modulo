@@ -80,6 +80,13 @@ def downgrade() -> None:
         return
     op.drop_table("trigger_event_findings")
     op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_trigger_events_id_organisation_id') THEN "
-        "ALTER TABLE public.trigger_events DROP CONSTRAINT uq_trigger_events_id_organisation_id; END IF; END $$;"
+        "DO $$ DECLARE constraint_table text; BEGIN "
+        "SELECT n.nspname || '.' || c.relname INTO constraint_table "
+        "FROM pg_constraint con "
+        "JOIN pg_class c ON c.oid = con.conrelid "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE con.conname = 'uq_trigger_events_id_organisation_id'; "
+        "IF constraint_table = 'public.trigger_events' THEN "
+        "ALTER TABLE public.trigger_events DROP CONSTRAINT uq_trigger_events_id_organisation_id; "
+        "END IF; END $$;"
     )

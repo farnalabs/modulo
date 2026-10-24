@@ -934,6 +934,18 @@ def test_update_mute_policy_endpoint_round_trips_patch_and_audit_wiring(
     assert body["eval_id"] == str(_EVAL_ID)
     assert body["mute_threshold"] == pytest.approx(0.7)
     assert body["mute_min_outcomes"] == 3
+    audit.assert_awaited_once_with(
+        session,
+        str(_EVAL_ID),
+        str(_ORG_ID),
+        "policy_updated",
+        acceptance_rate=eval_def.acceptance_rate,
+        threshold=eval_def.mute_threshold,
+        total_outcomes=None,
+        actor_id=str(_USER_ID),
+        actor_source="user",
+        automatic=False,
+    )
     apply_mute.assert_awaited_once_with(
         session,
         str(_EVAL_ID),
@@ -941,7 +953,18 @@ def test_update_mute_policy_endpoint_round_trips_patch_and_audit_wiring(
         muted_by=None,
         automatic=True,
     )
-    audit.assert_awaited_once()
+    audit.assert_awaited_once_with(
+        session,
+        str(_EVAL_ID),
+        str(_ORG_ID),
+        "policy_updated",
+        acceptance_rate=eval_def.acceptance_rate,
+        threshold=eval_def.mute_threshold,
+        total_outcomes=None,
+        actor_id=str(_USER_ID),
+        actor_source="user",
+        automatic=False,
+    )
 
 
 def test_unmute_endpoint_returns_updated_state_and_audits(client: tuple[TestClient, AsyncMock]) -> None:

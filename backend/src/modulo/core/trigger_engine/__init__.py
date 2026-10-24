@@ -1729,21 +1729,20 @@ class TriggerEngine:
                 outcome.block_message,
                 guardrail_name=outcome.blocking_eval_name,
             )
-        mechanism_results = [result for result in outcome.results if result.outcome == "error"]
-        if mechanism_results:
+        if outcome.results:
             evidence_event = await self._log_event(
                 session,
                 trigger=delivery.trigger,
                 org_id=delivery.org_id,
                 payload_hash=payload_hash,
                 result="accepted",
-                error_detail="pre-trigger guardrail mechanism evidence recorded",
+                error_detail="pre-trigger guardrail findings recorded",
             )
             await self._persist_pre_trigger_guardrail_evidence(
                 session,
                 org_id=delivery.org_id,
                 trigger_event_id=evidence_event.id,
-                guardrail_results=mechanism_results,
+                guardrail_results=outcome.results,
             )
         if is_replay:
             _log.info(

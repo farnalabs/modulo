@@ -3510,16 +3510,19 @@ async def update_mute_policy(
 
         await session.flush()
 
-        # Record audit event for mute policy change
+        # Record the user-authored policy mutation separately from any automatic
+        # mute transition emitted by apply_mute_policy above.
         await record_mute_audit_event(
             session,
             str(eval_id),
             str(principal.organisation_id),
-            "muted" if eval_def.is_muted else "unmuted",
+            "policy_updated",
             acceptance_rate=eval_def.acceptance_rate,
             threshold=eval_def.mute_threshold,
-            total_outcomes=None,  # Would need to compute if needed
+            total_outcomes=None,
             actor_id=str(principal.account_id),
+            actor_source="user",
+            automatic=False,
         )
 
     return MutePolicyConfigResponse(
