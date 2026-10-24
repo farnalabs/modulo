@@ -16068,6 +16068,26 @@ export interface components {
             expires_at?: string | null;
             /** Org Id */
             org_id?: string | null;
+            /**
+             * Renewal Mode
+             * @default manual
+             */
+            renewal_mode: string;
+            /** Term Months */
+            term_months?: number | null;
+            /** Licence Id */
+            licence_id?: string | null;
+            /** Issued At */
+            issued_at?: string | null;
+            /** Days Until Expiry */
+            days_until_expiry?: number | null;
+            /** Grace Ends At */
+            grace_ends_at?: string | null;
+            /**
+             * Licence State
+             * @default none
+             */
+            licence_state: string;
         };
         /** LicenseUploadRequest */
         LicenseUploadRequest: {

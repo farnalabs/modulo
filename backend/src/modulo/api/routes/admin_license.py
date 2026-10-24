@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Annotated
+import math
+from datetime import datetime, timedelta
+from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -20,6 +22,9 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.feature_flags import resolve_effective_license
 from modulo.core.license import (
+    DEFAULT_RENEWAL_MODE,
+    LICENCE_GRACE_DAYS,
+    REASON_EXPIRED,
     REASON_MALFORMED,
     REASON_SIGNATURE_MISMATCH,
     LicenseData,
@@ -42,9 +47,131 @@ _LICENSE_CACHE_KEY_PREFIX = "license:"
 #: TTL for the per-org licence-status cache, in seconds.
 _LICENSE_CACHE_TTL_SECONDS = 60
 
+# ---------------------------------------------------------------------------
+# Renewal state (FAR-2075)
+#
+# The BACKEND is the single source of truth for what state a licence is in.
+# The frontend maps :class:`LicenseStatusResponse.licence_state` to copy and
+# MUST NOT re-derive it from ``expires_at``: two implementations of the same
+# 14-day boundary will diverge, and the boundary is the whole feature.
+# ---------------------------------------------------------------------------
+
+#: No licence at all — the instance runs on the Community tier.
+LICENCE_STATE_NONE = "none"
+#: More than ``LICENCE_GRACE_DAYS`` before expiry.
+LICENCE_STATE_ACTIVE = "active"
+#: Within ``LICENCE_GRACE_DAYS`` before expiry — the renewal countdown.
+LICENCE_STATE_RENEWAL_DUE = "renewal_due"
+#: Past expiry but still inside the fixed delivery grace; capability is on.
+LICENCE_STATE_GRACE = "grace"
+#: Past expiry + grace; Team capability is off.
+LICENCE_STATE_LAPSED = "lapsed"
+
+#: The complete ``licence_state`` vocabulary. A consumer may branch on these
+#: five values only; an unrecognised value is a backend defect.
+LICENCE_STATES: frozenset[str] = frozenset(
+    {
+        LICENCE_STATE_NONE,
+        LICENCE_STATE_ACTIVE,
+        LICENCE_STATE_RENEWAL_DUE,
+        LICENCE_STATE_GRACE,
+        LICENCE_STATE_LAPSED,
+    }
+)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/license", tags=["admin-license"])
+
+
+def derive_licence_state(
+    expires_at: str | None,
+    *,
+    now: datetime | None = None,
+) -> tuple[int | None, str]:
+    """Return ``(days_until_expiry, licence_state)`` for a licence expiry.
+
+    The renewal countdown and the delivery grace are derived HERE, once:
+
+    - ``active``      — more than ``LICENCE_GRACE_DAYS`` before expiry
+    - ``renewal_due`` — within ``LICENCE_GRACE_DAYS`` before expiry, and at it
+    - ``grace``       — past expiry, still inside the delivery grace
+    - ``lapsed``      — past ``expires_at + LICENCE_GRACE_DAYS`` (capability off)
+
+    The state is derived from the exact ``timedelta``, never from the integer,
+    so a fractional day at a boundary cannot round the state the wrong way.
+
+    ``days_until_expiry`` is whole days rounded DOWN (``13`` when 13.9 days
+    remain), so it turns negative as soon as the licence is past its expiry.
+    It is DISPLAY ONLY — ``licence_state`` is authoritative at a boundary.
+
+    An absent/empty ``expires_at`` is a perpetual licence: ``(None, active)``.
+    An unparseable one cannot be counted down and its capability cannot be
+    established; it is logged and resolves to ``lapsed`` so the admin is told
+    to install a valid key rather than shown a silently reassuring "active".
+    A naive ``expires_at`` (no UTC offset) is read as LOCAL time — the same
+    convention core's ``_expiry_failure`` uses for this key — and never
+    subtracted from an aware instant, which raised ``TypeError``.
+    """
+    if not expires_at:
+        return None, LICENCE_STATE_ACTIVE
+
+    try:
+        expiry = datetime.fromisoformat(expires_at)
+    except ValueError:
+        logger.warning("license.expiry_unparseable value=%r", expires_at)
+        return None, LICENCE_STATE_LAPSED
+
+    # The reference MUST share the expiry's awareness: an aware ``now``
+    # subtracted from a naive ``expiry`` raises ``TypeError`` (a 500 on
+    # ``GET /api/v1/admin/license`` for a key whose ``expires_at`` carries no
+    # offset). ``datetime.now(expiry.tzinfo)`` is core's ``_expiry_failure``
+    # convention for the same key — a naive expiry means LOCAL time — so the
+    # two readers of one key cannot interpret it differently.
+    reference = now if now is not None else datetime.now(expiry.tzinfo)
+    remaining = expiry - reference
+    days_until_expiry = math.floor(remaining.total_seconds() / 86_400)
+
+    grace = timedelta(days=LICENCE_GRACE_DAYS)
+    if remaining > grace:
+        return days_until_expiry, LICENCE_STATE_ACTIVE
+    if remaining >= timedelta(0):
+        return days_until_expiry, LICENCE_STATE_RENEWAL_DUE
+    if remaining >= -grace:
+        return days_until_expiry, LICENCE_STATE_GRACE
+    return days_until_expiry, LICENCE_STATE_LAPSED
+
+
+def licence_grace_ends_at(expires_at: str | None) -> str | None:
+    """ISO timestamp at which the fixed delivery grace ends, or ``None``.
+
+    The UI renders this deadline instead of adding ``LICENCE_GRACE_DAYS`` to
+    ``expires_at`` itself — one implementation of the grace boundary.
+    """
+    if not expires_at:
+        return None
+    try:
+        expiry = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return None
+    return (expiry + timedelta(days=LICENCE_GRACE_DAYS)).isoformat()
+
+
+def _renewal_claims(data: LicenseData) -> dict[str, Any]:
+    """Read the signed renewal claims off a resolved licence, unmodified.
+
+    ``LicenseData`` carries the claims from the licence-payload slice of
+    FAR-2075 (PR #2244), which is the ONLY place they are parsed and validated
+    (``renewal_mode`` defaults to ``"manual"`` there for a key minted before
+    that slice). This route passes the typed values through so the admin view
+    cannot drift from the signed payload's meaning.
+    """
+    return {
+        "renewal_mode": data.renewal_mode,
+        "term_months": data.term,
+        "licence_id": data.licence_id,
+        "issued_at": data.issued_at,
+    }
 
 
 class LicenseStatusResponse(BaseModel):
@@ -53,6 +180,24 @@ class LicenseStatusResponse(BaseModel):
     features: list[str] = Field(default_factory=list)
     expires_at: str | None = None
     org_id: str | None = None
+    # -- FAR-2075 renewal surface (all backend-derived) ---------------------
+    #: ``"auto"`` when the signed key says Farnalabs mints the replacement,
+    #: otherwise ``"manual"`` (the signed-payload default for an older key —
+    #: ``auto`` is never assumed: it promises a key already on its way).
+    renewal_mode: str = DEFAULT_RENEWAL_MODE
+    #: Licence term in months; ``None`` for a key minted before FAR-2075.
+    term_months: int | None = None
+    #: Opaque stable licence identifier; ``None`` before FAR-2075.
+    licence_id: str | None = None
+    #: ISO 8601 issue timestamp; ``None`` before FAR-2075.
+    issued_at: str | None = None
+    #: Whole days to expiry (negative once past it); ``None`` with no expiry.
+    days_until_expiry: int | None = None
+    #: ISO timestamp at which the delivery grace ends (capability stops).
+    #: Backend-derived so the UI never adds ``LICENCE_GRACE_DAYS`` itself.
+    grace_ends_at: str | None = None
+    #: One of :data:`LICENCE_STATES` — the frontend renders this, never a date comparison.
+    licence_state: str = LICENCE_STATE_NONE
 
 
 class LicenseUploadRequest(BaseModel):
@@ -105,13 +250,45 @@ def _license_failure_body(validation: LicenseValidation) -> dict[str, object]:
 
 def _license_status(data: LicenseData, *, has_license: bool = True) -> LicenseStatusResponse:
     """Build a ``LicenseStatusResponse`` from a signed-license payload."""
+    days_until_expiry, licence_state = derive_licence_state(data.expires_at or None)
     return LicenseStatusResponse(
         has_license=has_license,
         tier=data.tier,
         features=data.features,
         expires_at=data.expires_at or None,
         org_id=data.org_id or None,
+        days_until_expiry=days_until_expiry,
+        grace_ends_at=licence_grace_ends_at(data.expires_at or None),
+        licence_state=licence_state,
+        **_renewal_claims(data),
     )
+
+
+def _lapsed_licence_present(settings: Settings, org: Organisation | None) -> bool:
+    """Whether a configured licence key exists but has outlived its capability.
+
+    Past ``expires_at + LICENCE_GRACE_DAYS`` every rung of the licence ladder
+    falls through (correctly — the instance must run on Community), which makes
+    the admin view indistinguishable from "never licensed". The operator still
+    has to be told that Team capability turned OFF, so this looks for the
+    remaining evidence: a configured key that VERIFIES but fails with
+    :data:`REASON_EXPIRED`. That is precisely the lapsed state; any other
+    failure (malformed, anchor mismatch) is not a lapsed licence.
+
+    The verified-but-expired classification is reused from
+    :func:`parse_and_verify` — no payload or signature logic is duplicated. A
+    system licence that lapsed in memory has already been cleared by
+    ``get_license`` and cannot be recovered here; the org and env keys are the
+    durable statements of what was licensed.
+    """
+    candidate_keys: list[str] = []
+    org_settings = getattr(org, "settings_json", None)
+    if isinstance(org_settings, dict) and org_settings.get("license_key"):
+        candidate_keys.append(str(org_settings["license_key"]))
+    configured_key = getattr(settings, "modulo_license_key", "") or ""
+    if configured_key:
+        candidate_keys.append(configured_key)
+    return any(parse_and_verify(key).reason == REASON_EXPIRED for key in candidate_keys)
 
 
 def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:
@@ -125,6 +302,15 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
     """
     data = resolve_effective_license(settings, org)
     if data is None:
+        # No rung grants capability. Distinguish "never licensed" from "the
+        # licence lapsed": the admin needs the second one explained, and the
+        # only difference is whether a verified-but-expired key still exists.
+        if _lapsed_licence_present(settings, org):
+            return LicenseStatusResponse(
+                has_license=False,
+                tier="community",
+                licence_state=LICENCE_STATE_LAPSED,
+            )
         return LicenseStatusResponse(has_license=False, tier="community")
     return _license_status(data)
 
