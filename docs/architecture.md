@@ -104,7 +104,7 @@ Post-node automated quality checks. Runs before any HITL gate check on the same 
 
 Each eval has a pass threshold and failure behaviour: `warn` (soft – run continues) or `block` (hard – run fails at this node). Eval results feed into the Feedback System.
 
-**Reviewer Independence Note (FAR-2031):** `llm_judge` evals may share a model backend with the node under evaluation — the `ModelBackendHub` decrypts credentials once per run and the same backend ID can be referenced by both the node and its eval. This is acceptable because `llm_judge` is explicitly a soft-signal eval (default `failure_behaviour: "warn"`), the evaluated content is wrapped with a guard instruction and delimiters to prevent prompt injection, and `human_set` evals provide the trustworthy correctness path. For correctness-critical gates, use `human_set` evals.
+**Reviewer Independence Note (FAR-2031):** `llm_judge` evals may share a model backend with the node under evaluation – the `ModelBackendHub` decrypts credentials once per run and the same backend ID can be referenced by both the node and its eval. This is acceptable because `llm_judge` is explicitly a soft-signal eval (default `failure_behaviour: "warn"`), the evaluated content is wrapped with a guard instruction and delimiters to prevent prompt injection, and `human_set` evals provide the trustworthy correctness path. For correctness-critical gates, use `human_set` evals.
 
 ### HITL Manager (`modulo/core/hitl_manager/`)
 
@@ -393,7 +393,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   and for any run the observation gate skips.
 - **Over-budget retry guard (FAR-2025):** a run-level retry re-executes the
   WHOLE run, so it is refused when the attempt that just ended had already
-  consumed the graph's node-budget allowance — the sum of its resolved
+  consumed the graph's node-budget allowance – the sum of its resolved
   per-node `timeout_seconds` (the pipeline-level `node_timeout_seconds` fills
   in any node that does not set one), less a 300 s window for provisioning,
   the post-run envelope, and a task's own end-of-budget reserve. Such an
@@ -470,7 +470,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
 
   1. **Age window (primary, fast path).** Default 3600s (`_CI_FAILURE_COALESCE_WINDOW_SECONDS`). Overridable per trigger via `config_json.ci_failure_coalesce_window_seconds`, clamped to a minimum of 1s and a maximum of 7 days (`_CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS`). A repeat delivery whose derived key already has a live entry in `webhook_dedup_hashes` (TTL = the window) is suppressed immediately. A `coalesced` TriggerEvent is recorded and `CiFailureCoalescedError` raised. The route commits the event inside its transaction and acks the sender with a handled 202.
 
-  2. **In-flight run (secondary).** When the age window has elapsed, a same-key delivery is STILL suppressed if any run for the same pipeline and derived key is non-terminal. Implemented in `has_in_flight_ci_failure_run` (called via the shared `_suppress_ci_failure` path). The check is pipeline-scoped, bounded by `CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS` (default 7200s), and limited to `COALESCE_CANDIDATE_LIMIT` recent candidates. Each candidate run's key is recomputed and compared against the key derived at entry: the engine-stamped key is authoritative, with derivation from the candidate's `input_payload` as the legacy/verbatim-payload fallback. Fail-open: an unreadable query logs `ci_failure_coalesce.inflight_check_failed` and falls through to the age decision — dispatch is never blocked.
+  2. **In-flight run (secondary).** When the age window has elapsed, a same-key delivery is STILL suppressed if any run for the same pipeline and derived key is non-terminal. Implemented in `has_in_flight_ci_failure_run` (called via the shared `_suppress_ci_failure` path). The check is pipeline-scoped, bounded by `CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS` (default 7200s), and limited to `COALESCE_CANDIDATE_LIMIT` recent candidates. Each candidate run's key is recomputed and compared against the key derived at entry: the engine-stamped key is authoritative, with derivation from the candidate's `input_payload` as the legacy/verbatim-payload fallback. Fail-open: an unreadable query logs `ci_failure_coalesce.inflight_check_failed` and falls through to the age decision – dispatch is never blocked.
 
   **Audit.** Both legs funnel through the same suppression point. The `coalesced` TriggerEvent and `CiFailureCoalescedError` carry the stable marker `ci_failure_coalesced:<key>` in `error_detail`. The log distinguishes the leg (`"inside the <window>s coalesce window"` vs `"a run for the same PR + head SHA is still in flight"`), but the event shape is identical.
 

@@ -64,7 +64,7 @@ neither is valid; see Behaviours.)
 Licence keys are Ed25519-signed, and verification uses exactly ONE anchor: the
 built-in public key in `core/license.py` unless `MODULO_LICENSE_PUBLIC_KEY`
 overrides it. The built-in key is the real public half of the DEVELOPMENT
-keypair — it is **not** the anchor production licences are signed with, so a
+keypair – it is **not** the anchor production licences are signed with, so a
 Farnalabs-issued production licence CANNOT verify against it.
 
 | Deployment | Anchor | What happens |
@@ -87,9 +87,9 @@ the deployment would reject.
       the production one. Outside debug, an API configured with
       `MODULO_LICENSE_KEY` but no `MODULO_LICENSE_PUBLIC_KEY` refuses to boot
       with an actionable error, and a licence upload that cannot verify
-      returns HTTP 422 with a structured body — `detail` prose plus a
+      returns HTTP 422 with a structured body – `detail` prose plus a
       machine-readable `reason` (`anchor_mismatch` / `signature_mismatch` /
-      `dev_anchor_not_trusted` / `malformed` / `expired`) — instead of only
+      `dev_anchor_not_trusted` / `malformed` / `expired`) – instead of only
       logging the failure. The signature is verified BEFORE the
       development-anchor refusal, so a production key presented to an
       anchor-less deployment is classified `anchor_mismatch` (not a generic
@@ -235,8 +235,8 @@ the deployment would reject.
 
 - 2026-10-23: **FAR-2091** - made the licence trust anchor honest and surfaced
   verification failure at install. The built-in public key in `core/license.py`
-  had the comment "This is the dev/test key — replace for production
-  deployments", which was ACCURATE: the vault holds two keypairs, and the
+  carried a comment marking it as the dev/test key to replace for production
+  deployments, which was ACCURATE: the vault holds two keypairs, and the
   built-in key's derived public half matches `license-signing-private-key-dev`,
   while production licences are signed by the separate
   `license-signing-private-key` whose public half is published as

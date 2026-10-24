@@ -187,7 +187,7 @@ See [`docs/product-map/configure/apply.md`](./product-map/configure/apply.md).
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_LICENSE_KEY` | No | – | Base64-encoded, Ed25519-signed JSON payload enabling Team-tier features. Verified against the configured trust anchor (`MODULO_LICENSE_PUBLIC_KEY`). Outside debug, configuring a licence key while only the built-in development key is available fails startup closed instead of silently running on Community. |
-| `MODULO_LICENSE_PUBLIC_KEY` | No | built-in development key | Ed25519 public key (hex, 64 chars) that verifies the licence signature — the production trust anchor. The default is the **development** keypair's public half, shipped so local and debug instances can exercise licensing; it is only trusted in debug and cannot verify a Farnalabs-issued production licence. Set it to the public key Farnalabs issued with your licence. |
+| `MODULO_LICENSE_PUBLIC_KEY` | No | built-in development key | Ed25519 public key (hex, 64 chars) that verifies the licence signature – the production trust anchor. The default is the **development** keypair's public half, shipped so local and debug instances can exercise licensing; it is only trusted in debug and cannot verify a Farnalabs-issued production licence. Set it to the public key Farnalabs issued with your licence. |
 | `MODULO_LICENSE_PRIVATE_KEY` | No | – | Ed25519 private key (hex) used to SIGN team license keys issued via the admin license-issue endpoint and Stripe purchase fulfilment. Empty disables issuance (signing fails closed). |
 
 ---
