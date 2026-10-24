@@ -548,39 +548,3 @@ export function validateTypedJudgeDraft(draft: TypedJudgeDraft): JudgingValidati
   validateBacking(draft, errors)
   return errors
 }
-
-/** Deepest key sets the wire schema allows (``extra="forbid"`` mirror). */
-export const TYPED_JUDGE_WIRE_KEYS = {
-  root: [
-    'answer_contract',
-    'field',
-    'context_fields',
-    'judge_whole_output',
-    'backing',
-    'questions',
-    'pass_rule',
-    'verdict_kind',
-    'cascade',
-    'timeouts',
-  ],
-  backingModelBackend: ['kind', 'model_backend_id'],
-  backingDecisionModel: ['kind', 'vendor', 'model_class'],
-  question: [
-    'id',
-    'type',
-    'instructions',
-    'criteria',
-    'weight',
-    'required',
-    'min_pass_confidence',
-    'options',
-    'passing_keys',
-    'option_scores',
-    'levels',
-    'pass_from',
-  ],
-  option: ['key', 'description'],
-  level: ['score', 'description'],
-  passRule: ['kind', 'threshold'],
-  timeouts: ['per_question_seconds', 'per_definition_seconds'],
-} as const
