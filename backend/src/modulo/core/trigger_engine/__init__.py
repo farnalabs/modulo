@@ -918,7 +918,7 @@ class TriggerEngine:
             # BEFORE the dedup insert so a guardrail-blocked delivery never
             # consumes a dedup slot. Reuses the T1 run-creation seam's engine
             # and row-loading semantics; detection is never reimplemented.
-            post_guardrail_payload, dedup_hash = await self._run_pre_trigger_guardrail(
+            post_guardrail_payload, dedup_hash, guardrail_results = await self._run_pre_trigger_guardrail(
                 session,
                 delivery,
                 payload_hash=payload_hash,
@@ -987,6 +987,12 @@ class TriggerEngine:
                 payload_hash=dedup_hash,
                 rate_limit=rate_limit,
                 ci_failure_coalesce_key=ci_failure_coalesce_key,
+            )
+            await self._persist_pre_trigger_guardrail_evidence(
+                session,
+                org_id=org_id,
+                trigger_event_id=trigger_event.id,
+                guardrail_results=guardrail_results,
             )
             _log.info("Webhook accepted for trigger %s → run %s", trigger_id, run.id)
 
@@ -1103,7 +1109,7 @@ class TriggerEngine:
             # A replay bypasses dedup but must still be guardrail-checked (the
             # payload may have been fixed since the original delivery). The
             # canonical POST-guardrail hash feeds the post-guardrail events.
-            post_guardrail_payload, payload_hash = await self._run_pre_trigger_guardrail(
+            post_guardrail_payload, payload_hash, guardrail_results = await self._run_pre_trigger_guardrail(
                 session,
                 delivery,
                 payload_hash=raw_body_hash,
@@ -1150,6 +1156,12 @@ class TriggerEngine:
                 rate_limit=rate_limit,
                 is_replay=True,
                 ci_failure_coalesce_key=ci_failure_coalesce_key,
+            )
+            await self._persist_pre_trigger_guardrail_evidence(
+                session,
+                org_id=org_id,
+                trigger_event_id=trigger_event.id,
+                guardrail_results=guardrail_results,
             )
 
             return run, trigger_event, input_payload
@@ -1679,7 +1691,7 @@ class TriggerEngine:
         *,
         payload_hash: str,
         is_replay: bool,
-    ) -> tuple[dict[str, Any], str]:
+    ) -> tuple[dict[str, Any], str, list[Any]]:
         """Run the pre-trigger guardrail pass; return (post-guardrail payload, canonical hash).
 
         A block outcome (webhook path only — replays are detection-only and
@@ -1729,21 +1741,6 @@ class TriggerEngine:
                 outcome.block_message,
                 guardrail_name=outcome.blocking_eval_name,
             )
-        if outcome.results:
-            evidence_event = await self._log_event(
-                session,
-                trigger=delivery.trigger,
-                org_id=delivery.org_id,
-                payload_hash=payload_hash,
-                result="accepted",
-                error_detail="pre-trigger guardrail findings recorded",
-            )
-            await self._persist_pre_trigger_guardrail_evidence(
-                session,
-                org_id=delivery.org_id,
-                trigger_event_id=evidence_event.id,
-                guardrail_results=outcome.results,
-            )
         if is_replay:
             _log.info(
                 "guardrails.pre_trigger replay detection evaluated=%d for trigger %s pipeline %s",
@@ -1759,7 +1756,7 @@ class TriggerEngine:
                 delivery.trigger.id,
                 delivery.trigger.pipeline_id,
             )
-        return outcome.payload, canonical_payload_hash(outcome.payload)
+        return outcome.payload, canonical_payload_hash(outcome.payload), outcome.results
 
     async def _resolve_rate_limit_state(
         self,

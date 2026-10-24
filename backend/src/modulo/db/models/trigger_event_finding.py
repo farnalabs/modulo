@@ -5,7 +5,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -41,7 +51,9 @@ class TriggerEventFinding(OrgScoped):
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     trigger_event_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     eval_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     passed: Mapped[bool] = mapped_column(nullable=False)

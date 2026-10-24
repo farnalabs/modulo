@@ -18,10 +18,14 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     if not str(op.get_bind().dialect.name).startswith("postgres"):
         return
-    op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_trigger_events_id_organisation_id') THEN "
-        "ALTER TABLE public.trigger_events ADD CONSTRAINT uq_trigger_events_id_organisation_id "
-        "UNIQUE (id, organisation_id); END IF; END $$;"
+    # This migration owns the composite key required by the tenant-scoped
+    # finding foreign key. Migration history has no earlier owner for it, so
+    # create and remove it as part of this migration rather than conditionally
+    # touching a constraint that may belong to another revision.
+    op.create_unique_constraint(
+        "uq_trigger_events_id_organisation_id",
+        "trigger_events",
+        ["id", "organisation_id"],
     )
     op.create_table(
         "trigger_event_findings",
@@ -79,14 +83,4 @@ def downgrade() -> None:
     if not str(op.get_bind().dialect.name).startswith("postgres"):
         return
     op.drop_table("trigger_event_findings")
-    op.execute(
-        "DO $$ DECLARE constraint_table text; BEGIN "
-        "SELECT n.nspname || '.' || c.relname INTO constraint_table "
-        "FROM pg_constraint con "
-        "JOIN pg_class c ON c.oid = con.conrelid "
-        "JOIN pg_namespace n ON n.oid = c.relnamespace "
-        "WHERE con.conname = 'uq_trigger_events_id_organisation_id'; "
-        "IF constraint_table = 'public.trigger_events' THEN "
-        "ALTER TABLE public.trigger_events DROP CONSTRAINT uq_trigger_events_id_organisation_id; "
-        "END IF; END $$;"
-    )
+    op.drop_constraint("uq_trigger_events_id_organisation_id", "trigger_events", type_="unique")

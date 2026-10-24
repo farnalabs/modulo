@@ -331,6 +331,51 @@ class TestGuardrailBlockAtIntake:
         assert run is not None
 
 
+class TestGuardrailAdvisoryFindingLinkage:
+    async def test_advisory_finding_attaches_to_single_accepted_event(
+        self,
+        db_engine: AsyncEngine,
+        test_user: uuid.UUID,
+        intake_rig: dict[str, uuid.UUID | str],
+    ) -> None:
+        await _seed_guardrail(
+            db_engine,
+            org_id=intake_rig["org_id"],
+            pipeline_id=intake_rig["pipeline_id"],
+            account_id=test_user,
+            name="advisory-secret",
+            action="warn",
+        )
+
+        _run, accepted_event, _ = await _deliver(
+            db_engine,
+            intake_rig,
+            body=b'{"body": "leak SECRET_ABC12345"}',
+            raw_payload={"body": "leak SECRET_ABC12345"},
+        )
+
+        async with db_engine.connect() as conn:
+            events = (
+                await conn.execute(
+                    text(
+                        "SELECT id, validation_result FROM trigger_events WHERE trigger_id = :tid ORDER BY received_at"
+                    ),
+                    {"tid": str(intake_rig["trigger_id"])},
+                )
+            ).fetchall()
+            findings = (
+                await conn.execute(
+                    text("SELECT trigger_event_id FROM trigger_event_findings WHERE trigger_event_id = :event_id"),
+                    {"event_id": str(accepted_event.id)},
+                )
+            ).fetchall()
+
+        assert len(events) == 1
+        assert events[0].validation_result == "accepted"
+        assert len(findings) == 1
+        assert findings[0].trigger_event_id == accepted_event.id
+
+
 class TestGuardrailRedactAtIntake:
     async def test_redact_masks_before_run_creation(
         self,
