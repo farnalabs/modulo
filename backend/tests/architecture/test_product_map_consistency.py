@@ -590,6 +590,7 @@ OWNED_PAGES = {
     ),
     "/runs/:id": (
         "frontend/src/views/RunDetailView.vue",
+        "frontend/src/components/runs/RunAttemptHistory.vue",
         "frontend/src/components/shared/JsonViewer.vue",
         "frontend/src/components/shared/ErrorAlert.vue",
         "frontend/src/components/hitl/HitlReviewCard.vue",

@@ -4334,6 +4334,33 @@ export default {
       "current_title": "Open the pipeline (this run has no recorded version)",
       "version_chip": "v{version}"
     },
+    "RunAttemptHistory": {
+      "title": "Attempt history",
+      "help": "Every execution attempt recorded for this run, in the order they happened.",
+      "loading": "Loading attempt history...",
+      "unavailable": "Attempt history is unavailable for this run. The rest of the run is unaffected.",
+      "retry": "Retry",
+      "empty": "No attempt history was recorded for this run. Attempts are only recorded from the point this feature shipped, so older runs show nothing here.",
+      "table_caption": "Execution attempts recorded for this run",
+      "column_attempt": "Attempt",
+      "column_started": "Started",
+      "column_duration": "Duration",
+      "column_terminal_reason": "Ended because",
+      "column_model": "Model",
+      "column_error_code": "Error code",
+      "running": "Running",
+      "truncated": "Showing the first {shown} of {total} attempts.",
+      "terminal_reason": {
+        "deadline": "Deadline exceeded",
+        "stall": "Stalled",
+        "guard_cap": "Retry limit reached",
+        "worker_lost": "Worker lost",
+        "provider_error": "Provider error",
+        "completed": "Completed",
+        "reset": "Reset",
+        "unknown": "Unknown"
+      }
+    },
     "ViewToggle": {
       "saved_views": "Saved Views",
       "select_a_saved_view": "Select a saved view..."
