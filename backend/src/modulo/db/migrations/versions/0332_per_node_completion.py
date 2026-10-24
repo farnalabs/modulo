@@ -69,7 +69,7 @@ def upgrade() -> None:
 
     with _autocommit_connection() as conn:
         conn.execute(sa.text(_ADD_COMPLETED_AT))
-        logger.info("0331_per_node_completion: added completed_at column to run_node_outputs")
+        logger.info("0332_per_node_completion: added completed_at column to run_node_outputs")
 
 
 def downgrade() -> None:
@@ -78,4 +78,4 @@ def downgrade() -> None:
 
     with _autocommit_connection() as conn:
         conn.execute(sa.text("ALTER TABLE run_node_outputs DROP COLUMN IF EXISTS completed_at"))
-        logger.info("0331_per_node_completion: dropped completed_at column from run_node_outputs")
+        logger.info("0332_per_node_completion: dropped completed_at column from run_node_outputs")

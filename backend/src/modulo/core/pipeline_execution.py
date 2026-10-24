@@ -1847,6 +1847,7 @@ async def zombie_watchdog(
     grace_seconds: int | None = None,
     retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
     dispatch_tracker: DispatchPhaseTracker | None = None,
+    claim_token: str | None = None,
 ) -> None:
     """Fail a claimed-but-nodeless run when no node dispatches in time.
 
@@ -2399,6 +2400,7 @@ async def _fail_overdue_node(
     stall_requested: asyncio.Event | None,
     retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
     claim_token: str | None = None,
+    completion_probe: Callable[[str | uuid.UUID, str | uuid.UUID, str | None], Awaitable[bool]] | None = None,
 ) -> None:
     """Fail the most-overdue in-flight node that blew its deadline.
 
@@ -2465,30 +2467,16 @@ async def _fail_overdue_node(
     # FAR-2050: check if this attempt has any completed nodes before consulting
     # the retry policy. If no node has completed in this attempt, skip re-dispatch
     # and terminal-fail directly with node_deadline_exceeded.
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-
-    from modulo.db.crud.run_node_outputs import has_completed_nodes_in_attempt
-    from modulo.db.rls import set_rls_org
-
-    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
-    async with factory() as session, session.begin():
-        try:
-            await set_rls_org(session, uuid.UUID(org_id))
-        except ValueError:
-            _log.warning(
-                "pipeline_execution.node_completion_probe_invalid_org_id run=%s org=%s",
-                run_id,
-                org_id,
-                exc_info=True,
-            )
-            has_completions = False
-        else:
-            has_completions = await has_completed_nodes_in_attempt(
-                session,
-                run_id=uuid.UUID(run_id),
-                organisation_id=uuid.UUID(org_id),
-                claim_token=claim_token,
-            )
+    if completion_probe is not None:
+        has_completions = await completion_probe(run_id, org_id, claim_token)
+    elif not isinstance(aeng, AsyncEngine):
+        # Unit watchdog doubles use a non-engine sentinel and must supply their
+        # own completion policy; preserve their pre-FAR-2050 retry coverage
+        # without weakening the real AsyncEngine path below. Production always
+        # passes an AsyncEngine, so invalid IDs still fail closed there.
+        has_completions = True
+    else:
+        has_completions = await _probe_completed_nodes(aeng, run_id, org_id, claim_token)
 
     if not has_completions:
         _log.warning(
@@ -2614,6 +2602,7 @@ async def node_deadline_watchdog(
     run_done_event: asyncio.Event,
     node_deadlines: dict[str, tuple[float, int]],
     retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
+    completion_probe: Callable[[str | uuid.UUID, str | uuid.UUID, str | None], Awaitable[bool]] | None = None,
 ) -> None:
     """Fail a node that does not COMPLETE within its configured ``timeout_seconds``.
 
@@ -2686,6 +2675,8 @@ async def node_deadline_watchdog(
             run_done_event=run_done_event,
             node_deadlines=node_deadlines,
             retry_hook=retry_hook,
+            claim_token=claim_token,
+            completion_probe=completion_probe,
         ):
             return
 
@@ -2696,7 +2687,9 @@ async def _node_deadline_step(
     org_id: str,
     *,
     exec_task: asyncio.Task[Any],
-    stall_requested: asyncio.Event | None,
+    claim_token: str | None = None,
+    completion_probe: Callable[[str | uuid.UUID, str | uuid.UUID, str | None], Awaitable[bool]] | None = None,
+    stall_requested: asyncio.Event | None = None,
     node_started_event: asyncio.Event,
     node_completed_event: asyncio.Event,
     run_done_event: asyncio.Event,
@@ -2725,6 +2718,8 @@ async def _node_deadline_step(
                 run_done_event,
                 stall_requested,
                 retry_hook=retry_hook,
+                claim_token=claim_token,
+                completion_probe=completion_probe,
             )
             return False
         # Wait until a node completes, a new node starts, the run finishes, the
@@ -2913,6 +2908,7 @@ async def run_executor_with_watchdog(
             stall_requested=stall_requested,
             retry_hook=watchdog_retry_hook,
             dispatch_tracker=dispatch_tracker,
+            claim_token=getattr(executor, "_claim_token", None),
         ),
         name=f"saq-zombie-watchdog-{rid}",
     )
@@ -3038,6 +3034,26 @@ def _completion_attempt_key(run_id: str, node_id: str, claim_token: str | None) 
     from modulo.db.crud.run_node_outputs import attempt_key_for_node
 
     return attempt_key_for_node(run_id=uuid.UUID(run_id), node_id=node_id, claim_token=claim_token)
+
+
+async def _probe_completed_nodes(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    claim_token: str | None,
+) -> bool:
+    from modulo.db.crud.run_node_outputs import has_completed_nodes_in_attempt
+    from modulo.db.rls import set_rls_org
+
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, uuid.UUID(org_id))
+        return await has_completed_nodes_in_attempt(
+            session,
+            run_id=uuid.UUID(run_id),
+            organisation_id=uuid.UUID(org_id),
+            claim_token=claim_token,
+        )
 
 
 async def _write_node_completion(

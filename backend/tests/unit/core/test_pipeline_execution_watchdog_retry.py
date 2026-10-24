@@ -834,6 +834,7 @@ async def test_zombie_watchdog_reset_timeout_defers_without_terminal_fail():
                 grace_seconds=0.01,
                 retry_hook=hook,
             )
+
     finally:
         exec_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -1241,6 +1242,8 @@ async def _drive_deadline_kill(
             asyncio.Event(),
             asyncio.Event(),
             retry_hook=hook,
+            claim_token=executor._claim_token,
+            completion_probe=AsyncMock(return_value=True),
         )
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
