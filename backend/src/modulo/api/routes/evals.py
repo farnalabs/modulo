@@ -132,9 +132,9 @@ _MSG_POLICY_GATE_LOCK_TIMEOUT = "Gate save is temporarily unavailable due to hig
 _CODE_EVAL_DEFINITION_UPDATE = "eval.definition.update"
 _CODE_EVAL_DEFINITION_DELETE = "eval.definition.delete"
 _CODE_EVAL_DEFINITION_CREATE = "eval.definition.create"
-_CODE_EVALS_RESOLVE_FINDING = "eval.definition.update"
+_CODE_EVALS_RESOLVE_FINDING = _CODE_EVAL_DEFINITION_UPDATE
 _CODE_EVALS_GET_ACCEPTANCE_RATE = "eval.list"
-_CODE_EVALS_MUTE_POLICY = "eval.definition.update"
+_CODE_EVALS_MUTE_POLICY = _CODE_EVAL_DEFINITION_UPDATE
 _VISIBILITY_PATTERN = "^(org|team)$"
 
 _MSG_POLICY_GATE_CASCADE_CONFLICT = (
