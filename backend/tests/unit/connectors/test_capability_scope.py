@@ -1118,8 +1118,8 @@ def test_non_dict_capability_scope_is_treated_as_absent():
     It is read as ABSENT (unrestricted), not as a malformed allowlist: the
     malformed check applies to ``allowed_connectors`` — the one value that can
     narrow the fetch — and there is none here. The node therefore falls through
-    to its Agent's grants. The assertion is sharp: a grants set of ``{"slack"}``
-    is contributed, so the ``"github"`` / ``["github"]`` / ``7`` scope value was
+    to its arms. The assertion is sharp: a grants set of ``{"slack"}`` is
+    contributed, so the ``"github"`` / ``["github"]`` / ``7`` scope value was
     demonstrably NOT read as an allowlist (which would have contributed
     ``"github"`` for the first two).
     """
@@ -1134,6 +1134,24 @@ def test_non_dict_capability_scope_is_treated_as_absent():
         # With no Agent grants to fall through to, the node still contributes
         # nothing — an uninterpretable scope never invents a contribution.
         assert compute_run_fetch_scope(graph) is None
+
+    # The connector-node fall-through, in ONE graph with an agent node: an
+    # uninterpretable scope must not stop a connector node reaching the
+    # routed-binding arm, so the connector its binding is routed to is fetched
+    # alongside the Agent's grant. Both arms must contribute together.
+    inst = str(uuid.uuid4())
+    mixed = {
+        "nodes": [
+            {"id": "agent", "node_type": "agent", "agent_id": agent_id, "capability_scope": "github"},
+            {
+                "id": "conn",
+                "node_type": "connector",
+                "capability_scope": ["nonsense"],
+                "connector_binding": {"type": "github", "instance_id": inst, "operation": "query"},
+            },
+        ]
+    }
+    assert compute_run_fetch_scope(mixed, {agent_id: {"github"}}) == sorted({inst, "github"})
 
 
 def test_scope_without_allowed_connectors_is_unrestricted():
@@ -1216,7 +1234,7 @@ def test_non_dict_routed_binding_contributes_nothing(monkeypatch):
     rather than an empty contribution.
     """
     monkeypatch.setattr("modulo.connectors.base.node_routes_binding_to_connector", lambda node: True)
-    for binding in ("not-a-dict", ["x"], 7):
+    for binding in ("github", "not-a-dict", ["x"], 7):
         graph = {"nodes": [{"id": "conn", "node_type": "connector", "connector_binding": binding}]}
         assert compute_run_fetch_scope(graph) is None
 
