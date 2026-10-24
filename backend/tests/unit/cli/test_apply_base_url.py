@@ -270,6 +270,65 @@ class TestUpdate:
         assert [e["name"] for e in report["unchanged"]] == ["local"]
         assert routes["backends_patch"].call_count == 0
 
+    def test_omitted_endpoint_patches_without_the_endpoint_or_credential(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An omitted endpoint is NOT written, even when another field changes.
+
+        This is the case where the unmanaged-omission gate can actually be
+        exercised: the entity is ``updated`` (display_name differs), so a PATCH
+        IS sent — and it must carry neither ``base_url`` nor ``api_key``. If the
+        ``manages_base_url`` gate is dropped, this PATCH sends a credential (and
+        can clear a live endpoint), which no call-count assertion would catch.
+        """
+        report, routes = _run(
+            _CONFIG_OMITTED.replace("display_name: Local gateway", "display_name: Renamed gateway"),
+            current=[_backend_item(base_url="https://old.internal/v1")],
+            monkeypatch=monkeypatch,
+            dry_run=False,
+        )
+        assert [e["name"] for e in report["updated"]] == ["local"]
+        payload = _payload(routes["backends_patch"])
+        assert payload["display_name"] == "Renamed gateway"
+        assert "base_url" not in payload
+        assert "api_key" not in payload
+
+    def test_https_with_the_flag_declared_has_no_drift(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The flag is not stored: hashing it raw would report permanent false drift.
+
+        The server accepts ``https`` + ``allow_insecure_http: true`` but cannot
+        echo the flag back (it stores only the endpoint), so the hash compares
+        the EFFECTIVE, scheme-derived value on both sides. Raw-flag hashing
+        would make this configuration drift forever.
+        """
+        config_text = _config_with(base_url="https://gateway.internal/v1").replace(
+            "      base_url: https://gateway.internal/v1\n",
+            "      base_url: https://gateway.internal/v1\n      allow_insecure_http: true\n",
+        )
+        report, routes = _run(
+            config_text,
+            current=[_backend_item(base_url="https://gateway.internal/v1")],
+            monkeypatch=monkeypatch,
+            dry_run=False,
+        )
+        assert [e["name"] for e in report["unchanged"]] == ["local"]
+        assert not report["updated"]
+        assert routes["backends_patch"].call_count == 0
+
+    def test_http_endpoint_against_a_live_https_drifts_on_both_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        config_text = _config_with(base_url="http://gateway.internal/v1").replace(
+            "      base_url: http://gateway.internal/v1\n",
+            "      base_url: http://gateway.internal/v1\n      allow_insecure_http: true\n",
+        )
+        report, _routes = _run(
+            config_text,
+            current=[_backend_item(base_url="https://gateway.internal/v1")],
+            monkeypatch=monkeypatch,
+            dry_run=False,
+            drift=True,
+        )
+        assert [e["name"] for e in report["updated"]] == ["local"]
+        fields = report["drift_detail"]["model_backend:local"]["fields"]
+        assert set(fields["modified"]) == {"base_url", "allow_insecure_http"}
+
     def test_omitted_endpoint_does_not_hash_against_a_live_endpoint(self) -> None:
         entity = ModelBackendEntity.model_validate(
             {
@@ -356,6 +415,11 @@ class TestPlanTimeValidation:
         assert blocked
         assert "did not report an endpoint" in blocked[0]["reason"]
         assert routes["backends_patch"].call_count == 0
+
+    def test_non_string_base_url_is_rejected_at_load(self) -> None:
+        """A non-string (e.g. YAML int) must fail at load, not reach the wire."""
+        with pytest.raises(ApplyLoadError, match="base_url must be a string"):
+            parse_apply_documents(_CONFIG.replace("{base_url}", "123"))
 
     def test_empty_base_url_is_rejected_at_load(self) -> None:
         with pytest.raises(ApplyLoadError, match="non-empty string"):
