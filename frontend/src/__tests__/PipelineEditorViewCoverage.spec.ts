@@ -1859,3 +1859,56 @@ describe('PipelineEditorView — coverage: edge slot + non-selected edge mapping
     wrapper.unmount()
   })
 })
+
+describe('PipelineEditorView — coverage: connector node slot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useApiFns.get.mockReset()
+    useApiFns.post.mockReset()
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    useApiFns.post.mockResolvedValue({})
+  })
+
+  it('renders the connector card with its label and falls back to the default label', async () => {
+    // The default mount stub renders only the unnamed slot, so the
+    // `#node-connector` template (and its `label || $t(...)` fallback) never ran.
+    // Invoke the scoped slot twice — once with a label, once without — to
+    // exercise both arms without depending on VueFlow's real node rendering.
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true }
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            render(this: { $slots: Record<string, any> }) {
+              const slot = this.$slots['node-connector']
+              return h('div', [
+                slot?.({ data: { label: 'Slack', description: 'Send a message' } }),
+                slot?.({ data: { label: '', description: 'No authored label' } }),
+              ])
+            },
+          },
+          Background: true,
+          Controls: true,
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // One card uses the authored label, the other the connector default.
+    expect(wrapper.text()).toContain('Slack')
+    expect(wrapper.text()).toContain('Connector')
+    wrapper.unmount()
+  })
+})

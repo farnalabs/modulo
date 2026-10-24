@@ -743,6 +743,38 @@ def test_unscoped_dispatch_node_narrows_the_fetch_too():
     assert compute_run_fetch_scope(graph) == [inst]
 
 
+def test_agent_node_whose_grant_entry_is_empty_contributes_nothing():
+    """FAR-2089: the agent-grant arm only contributes a NON-EMPTY grant set.
+
+    An agent node with no node-level scope whose grant entry is missing or empty
+    must fall through to the routed-binding arm (it has no binding, so it
+    contributes nothing) instead of being counted as a narrowed contribution.
+    """
+    agent_id = str(uuid.uuid4())
+    graph = {"nodes": [{"id": "agent", "node_type": "agent", "agent_id": agent_id}]}
+    assert compute_run_fetch_scope(graph, {agent_id: set()}) is None
+
+
+def test_routed_binding_without_an_instance_id_contributes_nothing():
+    """FAR-2089: a routed binding with no instance id cannot narrow the fetch.
+
+    ``node_routes_binding_to_connector`` is true for this node, but there is no
+    connector instance to fetch — the node contributes nothing, so the union
+    stays empty (the unrestricted default) rather than narrowing to a nameless
+    connector.
+    """
+    graph = {
+        "nodes": [
+            {
+                "id": "conn",
+                "node_type": "connector",
+                "connector_binding": {"type": "github", "operation": "query"},
+            }
+        ]
+    }
+    assert compute_run_fetch_scope(graph) is None
+
+
 # ---------------------------------------------------------------------------
 # Executor wiring — prove the run environment passes the computed fetch scope
 # through to ConnectorHub.initialise (FAR-418 prove-the-fix).
