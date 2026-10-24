@@ -44,36 +44,41 @@
         </div>
       </div>
 
-      <!-- License Key Management -->
-      <div class="rounded-lg border bg-card p-6 shadow-sm">
-        <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsLicenseView.license_key') }}</h2>
+      <!--
+        FAR-2104: two scopes, two audiences. The licence is an org-level object
+        (`org.license.manage`), so an org admin manages the organisation's own
+        key here; the instance-wide key stays a system-admin control
+        (`system.config.manage`). Both gates are the permissions the endpoints
+        enforce — see composables/useLicenceAccess.ts.
+      -->
 
-        <div v-if="licenseInfo.has_license" class="mb-6 rounded-lg bg-muted/50 p-4">
+      <!-- Organisation licence (org admin) -->
+      <div v-if="canManageOrgLicence && orgId" data-testid="licence-org-controls" class="rounded-lg border bg-card p-6 shadow-sm">
+        <h2 class="text-base font-semibold">{{ $t('views.SettingsLicenseView.org_license_title') }}</h2>
+        <p class="mt-1 text-sm text-muted-foreground">
+          {{ $t('views.SettingsLicenseView.org_license_scope') }}
+        </p>
+
+        <div v-if="licenseInfo.has_license" class="mt-4 rounded-lg bg-muted/50 p-4">
           <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">{{ $t('views.SettingsLicenseView.current_key') }}</p>
           <p class="mt-1 font-mono text-sm">{{ maskedKey }}</p>
         </div>
 
-        <div class="space-y-3">
-          <label for="settingslicenseview-field-1" class="block text-sm font-medium text-muted-foreground">{{ $t('views.SettingsLicenseView.new_license_key') }}</label>
-          <textarea id="settingslicenseview-field-1"
+        <div class="mt-4 space-y-3">
+          <label for="settingslicenseview-org-key" class="block text-sm font-medium text-muted-foreground">{{ $t('views.SettingsLicenseView.new_license_key') }}</label>
+          <textarea id="settingslicenseview-org-key"
             v-model="newLicenseKey"
             rows="4"
             data-testid="license-key-input"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none transition-all"
             :placeholder="$t('views.SettingsLicenseView.paste_your_modulolicensekey_value_here')"
           />
-          <p v-if="verifyResult" class="text-sm" :class="verifyResult.valid ? 'text-success-text' : 'text-destructive'">
-            {{ verifyResult.message }}
-          </p>
 
           <div class="flex flex-wrap items-center gap-3">
-            <Button data-testid="license-verify-btn" severity="secondary" outlined :disabled="!newLicenseKey.trim() || verifying" @click="verifyKey">
-              {{ verifying ? $t('views.SettingsLicenseView.verifying') : $t('views.SettingsLicenseView.verify_key') }}
-            </Button>
             <Button data-testid="license-apply-btn" :disabled="!newLicenseKey.trim() || applying" @click="openApplyDialog">
               {{ applying ? $t('views.SettingsLicenseView.applying') : $t('views.SettingsLicenseView.apply_key') }}
             </Button>
-            <Button v-if="licenseInfo.has_license" severity="danger" :disabled="removing" @click="openRemoveDialog">
+            <Button v-if="licenseInfo.has_license" data-testid="license-remove-btn" severity="danger" :disabled="removing" @click="openRemoveDialog">
               {{ removing ? $t('views.SettingsLicenseView.removing') : $t('views.SettingsLicenseView.remove_license') }}
             </Button>
           </div>
@@ -82,6 +87,46 @@
           </p>
         </div>
       </div>
+
+      <!-- System licence (system admin only) -->
+      <div v-if="canManageSystemLicence" data-testid="licence-system-controls" class="rounded-lg border bg-card p-6 shadow-sm">
+        <h2 class="text-base font-semibold">{{ $t('views.SettingsLicenseView.system_license_title') }}</h2>
+        <p class="mt-1 text-sm text-muted-foreground">
+          {{ $t('views.SettingsLicenseView.system_license_scope') }}
+        </p>
+
+        <div class="mt-4 space-y-3">
+          <label for="settingslicenseview-system-key" class="block text-sm font-medium text-muted-foreground">{{ $t('views.SettingsLicenseView.new_license_key') }}</label>
+          <textarea id="settingslicenseview-system-key"
+            v-model="newSystemLicenseKey"
+            rows="4"
+            data-testid="license-key-input-system"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm font-mono placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none transition-all"
+            :placeholder="$t('views.SettingsLicenseView.paste_your_modulolicensekey_value_here')"
+          />
+
+          <div class="flex flex-wrap items-center gap-3">
+            <Button data-testid="license-verify-btn" severity="secondary" outlined :disabled="!newSystemLicenseKey.trim() || verifying" @click="verifyKey">
+              {{ verifying ? $t('views.SettingsLicenseView.verifying') : $t('views.SettingsLicenseView.verify_key') }}
+            </Button>
+            <Button data-testid="license-apply-btn-system" :disabled="!newSystemLicenseKey.trim() || applying" @click="openSystemApplyDialog">
+              {{ applying ? $t('views.SettingsLicenseView.applying') : $t('views.SettingsLicenseView.install_system_license') }}
+            </Button>
+          </div>
+          <p class="text-xs text-muted-foreground">
+            {{ $t('views.SettingsLicenseView.restart_note') }}
+          </p>
+        </div>
+      </div>
+
+      <p
+        v-if="verifyResult"
+        class="text-sm"
+        :class="verifyResult.valid ? 'text-success-text' : 'text-destructive'"
+        aria-live="polite"
+      >
+        {{ verifyResult.message }}
+      </p>
     </template>
 
     <FormDialog
@@ -90,7 +135,7 @@
       :description="$t('views.SettingsLicenseView.apply_license_description')"
       :confirmText="$t('views.SettingsLicenseView.confirm_apply')"
       :loading="applying"
-      @confirm="applyKey"
+      @confirm="confirmApply"
     />
 
     <FormDialog
@@ -108,6 +153,8 @@
 import { ref, computed, inject, onMounted, type ComputedRef, type WritableComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
+import { useLicenceAccess } from '../composables/useLicenceAccess'
+import { useCurrentUser } from '../composables/useCurrentUser'
 import Button from 'primevue/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
@@ -124,6 +171,11 @@ import type { components } from '../lib/api/schema'
 
 const { t } = useI18n()
 const planStore = usePlanStore()
+
+// FAR-2104: the two licence scopes, each gated by the permission its
+// endpoints enforce (never a parallel role check).
+const { canManageOrgLicence, canManageSystemLicence } = useLicenceAccess()
+const { orgId } = useCurrentUser()
 
 // The wire shape is the generated OpenAPI type, never a hand-maintained copy:
 // a renamed backend field fails `vue-tsc` here instead of rendering `undefined`.
@@ -185,13 +237,19 @@ async function loadAll(): Promise<void> {
   await ownLicence.load()
 }
 
+/** The org-scoped write surface (`org.license.manage`, target-org admin). */
+const orgLicenceUrl = computed(() => `/api/v1/admin/orgs/${orgId.value}/license`)
+
 const newLicenseKey = ref('')
+const newSystemLicenseKey = ref('')
 
 const verifying = ref(false)
 const verifyResult = ref<{ valid: boolean; message: string } | null>(null)
 
 const applying = ref(false)
 const applyDialogOpen = ref(false)
+// Which scope the open confirmation dialog installs into.
+const applyScope = ref<'org' | 'system'>('org')
 
 const removing = ref(false)
 const removeDialogOpen = ref(false)
@@ -208,13 +266,18 @@ function formatDate(iso: string): string {
   }
 }
 
+/**
+ * System-scope verify. `POST /api/v1/admin/license` is the instance-wide
+ * install route (guarded by `system.config.manage`), so this control only
+ * renders for a system admin — the card says so explicitly.
+ */
 async function verifyKey() {
-  if (!newLicenseKey.value.trim()) return
+  if (!newSystemLicenseKey.value.trim()) return
   verifying.value = true
   verifyResult.value = null
   try {
     const { data, error: err } = await (api as any).POST('/api/v1/admin/license', {
-      body: { license_key: newLicenseKey.value.trim() },
+      body: { license_key: newSystemLicenseKey.value.trim() },
     })
     if (err) {
       // `err` is the response BODY (an object). `String(err)` rendered
@@ -239,14 +302,20 @@ async function verifyKey() {
 
 function openApplyDialog() {
   verifyResult.value = null
+  applyScope.value = 'org'
   applyDialogOpen.value = true
 }
 
+function confirmApply() {
+  return applyScope.value === 'system' ? applySystemKey() : applyKey()
+}
+
+/** Install the ORGANISATION's key — the org admin's own surface. */
 async function applyKey() {
-  if (!newLicenseKey.value.trim()) return
+  if (!newLicenseKey.value.trim() || !orgId.value) return
   applying.value = true
   try {
-    const { error: err } = await (api as any).POST('/api/v1/admin/license', {
+    const { error: err } = await (api as any).PUT(orgLicenceUrl.value, {
       body: { license_key: newLicenseKey.value.trim() },
     })
     if (err) {
@@ -265,14 +334,46 @@ async function applyKey() {
   }
 }
 
+function openSystemApplyDialog() {
+  verifyResult.value = null
+  applyScope.value = 'system'
+  applyDialogOpen.value = true
+}
+
+/** Install the INSTANCE-WIDE key — system admin only. */
+async function applySystemKey() {
+  if (!newSystemLicenseKey.value.trim()) return
+  applying.value = true
+  try {
+    const { error: err } = await (api as any).POST('/api/v1/admin/license', {
+      body: { license_key: newSystemLicenseKey.value.trim() },
+    })
+    if (err) {
+      verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(err)}` }
+    } else {
+      applyDialogOpen.value = false
+      verifyResult.value = null
+      newSystemLicenseKey.value = ''
+      await planStore.fetchPlan()
+      await loadAll()
+    }
+  } catch (e: unknown) {
+    verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(e)}` }
+  } finally {
+    applying.value = false
+  }
+}
+
 function openRemoveDialog() {
   removeDialogOpen.value = true
 }
 
+/** Clear the ORGANISATION's own key (falls back to the system licence). */
 async function removeLicense() {
+  if (!orgId.value) return
   removing.value = true
   try {
-    const { error: err } = await (api as any).DELETE('/api/v1/admin/license')
+    const { error: err } = await (api as any).DELETE(orgLicenceUrl.value)
     if (err) {
       verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}` }
     } else {

@@ -16,7 +16,11 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
-from modulo.api.dependencies import get_db_session, require_permission, require_system_permission
+from modulo.api.dependencies import (
+    get_db_session,
+    require_system_or_org_admin,
+    require_system_permission,
+)
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -393,7 +397,15 @@ async def invalidate_license_status_cache(settings: Settings, org_id: str | None
 async def get_license_status(
     settings: Annotated[Settings, Depends(get_settings)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    current_user: TenantPrincipal = require_permission(_CODE_ORG_LICENSE_MANAGE),
+    # FAR-2104: system OR org admin. The licence is an org-level object and an
+    # org admin manages it (PUT/DELETE /api/v1/admin/orgs/{org_id}/license),
+    # so the read must admit exactly the principals those writes admit — the
+    # org admin, plus a system admin (who bypasses the target-org role gate).
+    # A tenant-only ``require_permission`` here denied a system admin whose org
+    # role is below admin, contradicting ``GET /api/v1/auth/permissions``
+    # (which resolves a system admin at the admin floor) and making the
+    # frontend's permission-derived licence audience wrong for that principal.
+    current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_LICENSE_MANAGE),
 ) -> LicenseStatusResponse:
 
     org_id = current_user.organisation_id

@@ -32,10 +32,13 @@ vi.mock('vue-router', async () => {
 const mockManifest = vi.hoisted(() => ({
   sidebar_groups: {
     build: { label: 'BUILD', order: 1, default_expanded: true },
+    admin: { label: 'ADMIN', order: 5, default_expanded: false },
     system: { label: 'SYSTEM', order: 6, default_expanded: false, system_admin_only: true },
   },
   routes: {
-    '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'system', sidebar_order: 1, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
+    // FAR-2104: the licence is org-manageable, so it is NOT in the system group
+    // and is gated by the permission the licence endpoints enforce.
+    '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'admin', sidebar_order: 12, type: 'form_page', required_tier: 'community', required_roles: null, required_permissions: ['org.license.manage'] },
     '/admin/housekeeping': { name: 'admin-housekeeping', breadcrumb: 'Housekeeping', sidebar_group: 'system', sidebar_order: 6, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/admin/feature-flags': { name: 'admin-feature-flags', breadcrumb: 'Feature Flags', sidebar_group: 'system', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
     // Route-level system-admin gate with NO system-admin sidebar group — the
@@ -94,10 +97,11 @@ beforeEach(() => {
 
 describe('FAR-938: SYSTEM sidebar group system_admin_only guard', () => {
   describe('hydrateManifestMeta derives requiresSystemAdmin from manifest', () => {
-    it('sets requiresSystemAdmin=true for a system-group route', () => {
+    it('does NOT set requiresSystemAdmin for the license route (FAR-2104: org-manageable)', () => {
       const route = makeRoute('settings-license')
       hydrateManifestMeta(route)
-      expect(route.meta.requiresSystemAdmin).toBe(true)
+      expect(route.meta.requiresSystemAdmin).toBeUndefined()
+      expect(route.meta.requiredPermissions).toEqual(['org.license.manage'])
     })
 
     it('sets requiresSystemAdmin=true for housekeeping (was previously false)', () => {
@@ -135,7 +139,7 @@ describe('FAR-938: SYSTEM sidebar group system_admin_only guard', () => {
     it('redirects a system-group route when the token is not a system admin', async () => {
       decodeJwtPayload.mockReturnValue({ is_system_admin: false })
       const result = await enforceRoleTierVisibility(
-        makeRoute('settings-license', { requiresSystemAdmin: true }),
+        makeRoute('admin-feature-flags', { requiresSystemAdmin: true }),
         'tok',
       )
       expect(result).toEqual({ name: 'dashboard' })
@@ -144,7 +148,7 @@ describe('FAR-938: SYSTEM sidebar group system_admin_only guard', () => {
     it('allows a system-group route when the token is a system admin', async () => {
       decodeJwtPayload.mockReturnValue({ is_system_admin: true })
       const result = await enforceRoleTierVisibility(
-        makeRoute('settings-license', { requiresSystemAdmin: true }),
+        makeRoute('admin-feature-flags', { requiresSystemAdmin: true }),
         'tok',
       )
       expect(result).toBe(true)

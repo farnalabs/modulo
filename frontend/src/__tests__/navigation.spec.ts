@@ -42,7 +42,10 @@ const mockManifest = vi.hoisted(() => ({
     // FAR-1796: a route-ENTRY system_admin_only gate inside a NON-gated group.
     // The group is visible to everyone, so only the item-level flag can hide it.
     '/admin/secret-tool': { name: 'admin-secret-tool', breadcrumb: 'Secret Tool', sidebar_group: 'configure', sidebar_order: 99, system_admin_only: true, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
-    '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'system', sidebar_order: 1, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    // FAR-2104: the licence is an org-level object, so it lives in the ADMIN
+    // group and is gated by the permission the licence endpoints enforce —
+    // not by the system-admin-only SYSTEM group.
+    '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'admin', sidebar_order: 12, type: 'form_page', required_tier: 'community', required_roles: null, required_permissions: ['org.license.manage'] },
     '/settings/teams': { name: 'settings-teams', breadcrumb: 'Teams', sidebar_group: 'admin', sidebar_order: 2, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/sso': { name: 'settings-sso', breadcrumb: 'SSO', sidebar_group: 'admin', sidebar_order: 3, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/hitl-review': { name: 'settings-hitl-review', breadcrumb: 'HITL Review', sidebar_group: 'admin', sidebar_order: 4, type: 'page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'private_preview' },
@@ -372,11 +375,21 @@ describe('navigation.ts', () => {
     expect(configure.items.some(i => i.to === '/admin/costs')).toBe(true)
   })
 
-  it('admin group contains users, assistant etc (license moved to system)', () => {
+  it('admin group contains users, assistant, license etc (FAR-2104: license is org-manageable)', () => {
     const admin = navGroups.find((g) => g.id === 'admin')!
     expect(admin.items.length).toBeGreaterThanOrEqual(5)
     expect(admin.items.some(i => i.to === '/admin/users')).toBe(true)
     expect(admin.items.some(i => i.to === '/admin/assistant')).toBe(true)
+    expect(admin.items.some(i => i.to === '/settings/license')).toBe(true)
+  })
+
+  it('hides the license item from a principal without org.license.manage', () => {
+    const admin = navGroups.find((g) => g.id === 'admin')!
+    const license = admin.items.find(i => i.to === '/settings/license')!
+    expect(isNavItemVisible(license, visibilityContext({ userPermissions: [] }))).toBe(false)
+    expect(
+      isNavItemVisible(license, visibilityContext({ userPermissions: ['org.license.manage'] })),
+    ).toBe(true)
   })
 
   it('system group has systemAdminOnly set', () => {
@@ -384,9 +397,9 @@ describe('navigation.ts', () => {
     expect(system.systemAdminOnly).toBe(true)
   })
 
-  it('system group contains license, housekeeping, feature-flags, etc', () => {
+  it('system group contains housekeeping, feature-flags, etc (no longer the license)', () => {
     const system = navGroups.find((g) => g.id === 'system')!
-    expect(system.items.some(i => i.to === '/settings/license')).toBe(true)
+    expect(system.items.some(i => i.to === '/settings/license')).toBe(false)
     expect(system.items.some(i => i.to === '/admin/housekeeping')).toBe(true)
     expect(system.items.some(i => i.to === '/admin/feature-flags')).toBe(true)
     expect(system.items.some(i => i.to === '/admin/run-retention')).toBe(true)
