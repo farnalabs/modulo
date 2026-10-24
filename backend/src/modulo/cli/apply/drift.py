@@ -280,6 +280,14 @@ def _managed_current_view(
         return None
     if kind == KIND_TRIGGER:
         return _trigger_current_view(current, desired_view)
+    if kind == KIND_BACKEND:
+        # FAR-2105: the endpoint fields are managed only when declared, so the
+        # current view must be restricted to the desired key set exactly as
+        # ``plan_entity`` does — otherwise an unmanaged UI/API-set endpoint
+        # would render as a phantom ``modified`` field.
+        from modulo.cli.apply.plan import _backend_managed_current_view
+
+        return _backend_managed_current_view(current, desired_view)
     view_builder = _CURRENT_VIEWS.get(kind)
     if view_builder is None:
         return None

@@ -73,6 +73,45 @@ def _backend_current_view(current: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _effective_allow_insecure_http(base_url: Any) -> bool:
+    """Is the live endpoint plain ``http``? (the server-observable opt-in form)."""
+    return isinstance(base_url, str) and base_url.lower().startswith("http://")
+
+
+def _backend_managed_current_view(
+    current: dict[str, Any],
+    desired_view: dict[str, Any],
+) -> dict[str, Any]:
+    """Current view restricted to the DESIRED managed keys (FAR-2105).
+
+    The endpoint fields are managed ONLY when the config declares them, so a
+    UI/API-set ``base_url`` must not surface as drift against a config that
+    never mentions it — the current view is therefore restricted to the desired
+    key set (the ``env_profile_id`` / owner precedent, extended to a kind whose
+    baseline view was previously unconditional).
+
+    ``base_url`` compares verbatim (the API returns the trimmed stored value,
+    and the declared value is trimmed at load). ``allow_insecure_http`` has no
+    stored column and is not echoed by the API: it is a validation gate whose
+    persisted evidence is the endpoint's scheme, so the live side derives the
+    SAME observable value the desired side hashes
+    (``ModelBackendEntity.effective_allow_insecure_http``). A raw-flag
+    comparison would report permanent false drift for ``https`` +
+    ``allow_insecure_http``.
+    """
+    view: dict[str, Any] = {}
+    for key in desired_view:
+        if key == "base_url":
+            view[key] = current.get(key)
+        elif key == "allow_insecure_http":
+            view[key] = _effective_allow_insecure_http(current.get("base_url"))
+        elif key == "default_params":
+            view[key] = current.get(key) or {}
+        else:
+            view[key] = current.get(key)
+    return view
+
+
 def _pipeline_current_view(current: dict[str, Any], desired_view: dict[str, Any]) -> dict[str, Any]:
     """Current view restricted to the DESIRED managed keys.
 
@@ -229,7 +268,12 @@ def plan_entity(
                 current_hash=canonical_hash(_CURRENT_VIEWS[kind](current)),
             )
     current_view: dict[str, Any]
-    if kind == KIND_PIPELINE:
+    if kind == KIND_BACKEND:
+        # FAR-2105: the endpoint fields (base_url / allow_insecure_http) are
+        # managed only when declared, so the current side is restricted to the
+        # desired key set.
+        current_view = _backend_managed_current_view(current, desired_view)
+    elif kind == KIND_PIPELINE:
         current_view = _pipeline_current_view(current, desired_view)
     elif kind == KIND_TRIGGER:
         current_view = _trigger_current_view(current, desired_view)

@@ -153,6 +153,34 @@ class ModelBackendEntity(BaseModel):
     naming the key. ``credential_ref`` additionally fails at PLAN time when the
     key is not present in the org vault (never a silent pass). Inline secret
     values are forbidden.
+
+    Custom endpoint (FAR-2046/FAR-2105): ``base_url`` declares the
+    operator-supplied endpoint (a self-hosted / OpenAI-compatible gateway) and
+    ``allow_insecure_http`` opts in to plain ``http`` for an air-gapped
+    gateway. Both follow the engine's DECLARE-TO-MANAGE rule (the same
+    ``model_fields_set`` convention as ``circuit_breaker_threshold`` /
+    ``max_autonomy_level`` / ``environment_profile_id``):
+
+    - **omitted** — not managed: a UI/API-set endpoint (or flag) is neither
+      hashed nor written, so it survives an apply that never mentions it;
+    - **explicit ``null``** — clear the deployed endpoint (the server's own
+      ``ModelBackendUpdate`` semantics: an explicit null clears a stored
+      ``base_url``);
+    - a string — set/replace the endpoint.
+
+    ``allow_insecure_http`` is a validation gate, not stored state: the server
+    persists only the endpoint and a plain-``http`` endpoint is itself the
+    evidence of the opt-in (the FAR-2046 write path rejects ``http`` without
+    it and the audit fact is derived from the scheme). It therefore may only be
+    declared alongside ``base_url`` and is hashed as its EFFECTIVE value — the
+    scheme of the declared endpoint — which is exactly what the live side can
+    derive from the endpoint the API returns. Hashing the raw flag instead
+    would report permanent false drift for ``https`` + ``allow_insecure_http``
+    (a harmless declaration the server accepts but cannot echo back). The
+    ``base_url`` rules (scheme, metadata hosts, non-canonical IP literals,
+    query/fragment, ``http`` opt-in) are validated at PLAN time through the
+    shared ``core.model_backend_endpoints.validate_base_url`` — never a
+    private copy.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -165,9 +193,35 @@ class ModelBackendEntity(BaseModel):
     # FAR-1216: org-vault key reference — the declarative alternative to a
     # literal ``api_key``. Mutually exclusive with ``api_key``.
     credential_ref: str | None = Field(default=None, min_length=1)
+    # FAR-2105: opt-in managed endpoint (FAR-2046 shape). Omitted = not
+    # managed; null = clear; string = set. See the class docstring.
+    base_url: str | None = Field(default=None, max_length=2048)
+    allow_insecure_http: bool | None = None
     default_params: dict[str, Any] = Field(default_factory=dict)
     visibility: str = Field(default="org")
     tier: Literal["native", "preview", "in_dev"] = "native"
+
+    @field_validator("base_url", mode="before")
+    @classmethod
+    def _normalise_base_url(cls, value: Any) -> str | None:
+        """Trim the endpoint and reject an ambiguous empty string.
+
+        The server stores the trimmed URL (``validate_base_url`` returns it),
+        so an untrimmed declaration would hash permanently-false drift against
+        the value the API returns. An empty/whitespace value is neither "set"
+        nor an explicit clear — the explicit ``null`` is the clear — so it is
+        rejected at load rather than guessed at.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            msg = "base_url must be a string (or an explicit null to clear a deployed endpoint)"
+            raise ValueError(msg)
+        stripped = value.strip()
+        if not stripped:
+            msg = "base_url must be a non-empty string; use an explicit null to clear a deployed endpoint"
+            raise ValueError(msg)
+        return stripped
 
     @field_validator("api_key")
     @classmethod
@@ -204,6 +258,50 @@ class ModelBackendEntity(BaseModel):
             raise ValueError("exactly one of api_key or credential_ref is required")
         return self
 
+    @model_validator(mode="after")
+    def _allow_insecure_http_requires_an_endpoint(self) -> ModelBackendEntity:
+        """The opt-in is meaningless without an endpoint it applies to.
+
+        ``allow_insecure_http`` is only consulted while validating a declared
+        ``base_url``. Declaring it alone (or beside ``base_url: null``) would be
+        silently ignored, so it is rejected at load — the same "declared but
+        meaningless" rule ``run_enabled: null`` follows.
+        """
+        if self.manages_allow_insecure_http and (not self.manages_base_url or self.base_url is None):
+            raise ValueError(
+                "allow_insecure_http requires base_url to declare a non-null endpoint; "
+                "declare both (or neither) - the opt-in only applies to a declared endpoint"
+            )
+        return self
+
+    @property
+    def manages_base_url(self) -> bool:
+        """True when the config declares ``base_url`` (even as an explicit null).
+
+        Managed ONLY when declared: an omitted key is neither hashed nor
+        written, so a UI/API-set endpoint survives an apply that never mentions
+        it. A DECLARED null IS managed (it clears the endpoint) — the same
+        ``model_fields_set`` test ``PipelineEntity.manages_circuit_breaker`` /
+        ``manages_environment_profile`` use.
+        """
+        return "base_url" in self.model_fields_set
+
+    @property
+    def manages_allow_insecure_http(self) -> bool:
+        """True when the config declares ``allow_insecure_http`` (even as null)."""
+        return "allow_insecure_http" in self.model_fields_set
+
+    def effective_allow_insecure_http(self) -> bool:
+        """The observable form of the opt-in: is the declared endpoint plain http?
+
+        The server stores only the endpoint; a plain-``http`` endpoint is the
+        persisted evidence that the opt-in was given (the write path rejects
+        ``http`` without it). The desired side therefore hashes this derived
+        value, symmetrically with the live side (``plan._backend_current_view``
+        derives it from the endpoint the API returns).
+        """
+        return bool(self.base_url and self.base_url.lower().startswith("http://"))
+
     def env_ref_var(self) -> str | None:
         """Return the env var name when api_key is an ${env:...} ref, else None."""
         if self.api_key is None:
@@ -230,6 +328,15 @@ class ModelBackendEntity(BaseModel):
             "visibility": self.visibility,
             "tier": self.tier,
         }
+        # FAR-2105: the endpoint is managed ONLY when declared (declare =
+        # manage, omit = don't), like the circuit breaker / autonomy ceiling.
+        # Both keys enter the hash together so a changed endpoint shows as
+        # drift in --diff instead of a silent no-op. ``allow_insecure_http``
+        # hashes in its observable (scheme-derived) form — see
+        # ``effective_allow_insecure_http``.
+        if self.manages_base_url:
+            payload["base_url"] = self.base_url
+            payload["allow_insecure_http"] = self.effective_allow_insecure_http()
         if include_api_key:
             payload["api_key"] = self.api_key if self.api_key is not None else self.credential_reference()
         return payload
