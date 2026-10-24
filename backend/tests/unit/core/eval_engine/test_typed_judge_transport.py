@@ -403,10 +403,11 @@ class _BlockingBackend:
     async def invoke(self, messages: list[Any], **_: Any) -> AIMessage:
         if self.blocked:
             # Block the loop thread itself (not awaitable, so cancellation
-            # cannot interrupt it). threading.Event.wait is deliberate here:
-            # an asyncio.sleep would be cancellable and would not reproduce the
-            # uncancellable wedge this test exists to prove.
-            threading.Event().wait(0.4)
+            # cannot interrupt it). 2.5s is deliberately LONGER than the whole
+            # first+second-call deadline budget below: if the wedged loop were
+            # reused, the second call would time out too. This is what makes the
+            # test fail when retire-on-wedge is removed.
+            threading.Event().wait(2.5)
         return AIMessage(content=json.dumps({"answer": True, "probabilities": {"yes": 0.9, "no": 0.1}}))
 
 
