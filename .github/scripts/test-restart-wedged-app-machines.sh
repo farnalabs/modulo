@@ -42,6 +42,8 @@ case "${1:-}" in
     echo "$*" >> "${FLY_LOGS_LOG:?}"
     echo "boot log fetched"
     echo "DATABASE_URL fixed: postgresql://modulo_app:hunter2@db.internal:5432/modulo..."
+    echo "DATABASE_URL fixed: postgresql+asyncpg://staging_modulo:asyncpw@[fdaa:8b:fa9e:0:1::4]:5432/st..."
+    echo "MODULO_SYSTEM_DATABASE_URL fixed: postgresql+psycopg://modulo_system:psycopgsecret@db.internal:5432/st..."
     exit "${FLY_LOGS_EXIT:-0}"
     ;;
   machines)
@@ -135,6 +137,12 @@ assert_eq "captured log is written for the deploy artifact upload" "yes" \
   "$([ -f "${APP_LOG_DIR}/84e90ea2239e68.log" ] && echo yes || echo no)"
 assert_eq "named password redacted from the captured log" "0" \
   "$(grep -c 'hunter2' "${APP_LOG_DIR}/84e90ea2239e68.log" || true)"
+assert_eq "driver-qualified asyncpg password redacted from the captured log" "0" \
+  "$(grep -c 'asyncpw' "${APP_LOG_DIR}/84e90ea2239e68.log" || true)"
+assert_eq "driver-qualified psycopg password redacted from the captured log" "0" \
+  "$(grep -c 'psycopgsecret' "${APP_LOG_DIR}/84e90ea2239e68.log" || true)"
+assert_eq "redaction keeps the IPv6 host and database path" "1" \
+  "$(grep -c 'postgresql+asyncpg://staging_modulo:\*\*\*@\[fdaa:8b:fa9e:0:1::4\]:5432/st' "${APP_LOG_DIR}/84e90ea2239e68.log" || true)"
 assert_eq "redacted log keeps its diagnostic content" "1" \
   "$(grep -c 'boot log fetched' "${APP_LOG_DIR}/84e90ea2239e68.log" || true)"
 

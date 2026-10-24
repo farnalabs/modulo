@@ -121,8 +121,11 @@ while IFS= read -r MID; do
   LOG_FILE="${LOG_DIR}/${MID}.log"
   timeout 90 fly logs --app "${APP}" --machine "${MID}" --no-tail > "${LOG_FILE}" 2>&1 || true
   # The entrypoint prints the DATABASE_URL prefix, so redact the credential
-  # part before the log is echoed or persisted.
-  sed -i -E 's#(postgres(ql)?://[^:/@]+:)[^@]*@#\1***@#g; s#(redis(s)?://[^:/@]+:)[^@]*@#\1***@#g' "${LOG_FILE}" 2>/dev/null || true
+  # part before the log is echoed or persisted. Match on the `://user:pw@`
+  # shape rather than a bare `postgres(ql)://` prefix: driver-qualified schemes
+  # (postgresql+asyncpg://, postgresql+psycopg://) otherwise leak the password
+  # into this file and the deploy artifact (2026-10-23 outage).
+  sed -i -E 's#(://[^:/@]+:)[^@]*@#\1***@#g' "${LOG_FILE}" 2>/dev/null || true
   echo "::notice::Restarting wedged app machine ${MID} in ${APP} (app_liveness critical) so the next deploy attempt can make progress."
   if [ -s "${LOG_FILE}" ]; then
     echo "----- wedged machine ${MID} log (tail) -----"
