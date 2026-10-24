@@ -371,31 +371,43 @@ class ApplyExecutor:
         for entity in config.entities.model_backends:
             if entity.name in already_blocked or not entity.manages_base_url:
                 continue
-            declared = entity.base_url
-            if declared is not None:
-                try:
-                    validate_base_url(
-                        declared,
-                        allow_insecure_http=bool(entity.allow_insecure_http),
-                    )
-                except BaseUrlValidationError as exc:
-                    blocked.append((KIND_BACKEND, entity.name, f"invalid base_url: {exc}"))
-                    continue
-            current = current_backends.get(entity.name)
-            if current is None:
-                if declared is not None and _is_vault_credential(entity):
-                    blocked.append((KIND_BACKEND, entity.name, _ENDPOINT_CREATE_CREDENTIAL_REASON))
-                continue
-            if "base_url" not in current:
-                # The response shape predates the endpoint field (FAR-2046), so
-                # a declared endpoint would be PATCHed into a server that
-                # silently ignores it — a perpetual false-converged drift. Fail
-                # loudly instead of reporting a no-op.
-                blocked.append((KIND_BACKEND, entity.name, _ENDPOINT_UNSUPPORTED_REASON))
-                continue
-            if _declared_endpoint_change(entity, current) and _is_vault_credential(entity):
-                blocked.append((KIND_BACKEND, entity.name, _ENDPOINT_CHANGE_CREDENTIAL_REASON))
+            reason = self._unmanageable_endpoint_reason(entity, current_backends.get(entity.name))
+            if reason is not None:
+                blocked.append((KIND_BACKEND, entity.name, reason))
         return blocked
+
+    @staticmethod
+    def _unmanageable_endpoint_reason(
+        entity: ModelBackendEntity,
+        current: dict[str, Any] | None,
+    ) -> str | None:
+        """Return the plan-time blocker for one declared endpoint, or None.
+
+        Split from :meth:`_block_unmanageable_endpoints` so each FAR-2105
+        guarantee reads as its own linear check (Sonar S3776).
+        """
+        declared = entity.base_url
+        if declared is not None:
+            try:
+                validate_base_url(
+                    declared,
+                    allow_insecure_http=bool(entity.allow_insecure_http),
+                )
+            except BaseUrlValidationError as exc:
+                return f"invalid base_url: {exc}"
+        if current is None:
+            if declared is not None and _is_vault_credential(entity):
+                return _ENDPOINT_CREATE_CREDENTIAL_REASON
+            return None
+        if "base_url" not in current:
+            # The response shape predates the endpoint field (FAR-2046), so a
+            # declared endpoint would be PATCHed into a server that silently
+            # ignores it — a perpetual false-converged drift. Fail loudly
+            # instead of reporting a no-op.
+            return _ENDPOINT_UNSUPPORTED_REASON
+        if _declared_endpoint_change(entity, current) and _is_vault_credential(entity):
+            return _ENDPOINT_CHANGE_CREDENTIAL_REASON
+        return None
 
     # ------------------------------------------------------------------
     # HTTP helpers
