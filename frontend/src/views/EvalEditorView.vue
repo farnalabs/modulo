@@ -517,7 +517,6 @@
 
                   <div
                     v-if="!legacyMode && clientErrors.length > 0"
-                    role="alert"
                     aria-live="polite"
                     data-testid="eval-editor-client-errors"
                     class="mt-3 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive-text"
