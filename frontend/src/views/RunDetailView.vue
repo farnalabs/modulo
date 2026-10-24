@@ -552,6 +552,9 @@
         </div>
       </section>
 
+      <!-- FAR-2078: durable per-attempt history (self-contained child). -->
+      <RunAttemptHistory :run-id="run.run_id" />
+
       <!-- Per-Node Execution Trace -->
       <section class="space-y-4 rounded-lg border bg-card p-6">
         <div class="flex items-baseline justify-between gap-4">
@@ -1045,6 +1048,7 @@ import HitlReviewCard from '../components/hitl/HitlReviewCard.vue'
 import KnownFixesPanel from '../components/shared/KnownFixesPanel.vue'
 import AnalyzeRunButton from '../components/runs/AnalyzeRunButton.vue'
 import RunPipelineVersionLink from '../components/runs/RunPipelineVersionLink.vue'
+import RunAttemptHistory from '../components/runs/RunAttemptHistory.vue'
 import { isAnalyzableFailure, type AnalyzeRunInfo } from '../components/runs/analyzeRun'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'

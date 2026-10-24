@@ -4581,6 +4581,27 @@ elements:
       - testid: run-detail-worst-case-attempt
         type: element
         dynamic_testid: false
+      - testid: run-attempt-history
+        type: element
+        dynamic_testid: false
+      - testid: run-attempt-history-loading
+        type: element
+        dynamic_testid: false
+      - testid: run-attempt-history-unavailable
+        type: element
+        dynamic_testid: false
+      - testid: run-attempt-history-retry
+        type: button
+        dynamic_testid: false
+      - testid: run-attempt-history-empty
+        type: element
+        dynamic_testid: false
+      - testid: run-attempt-history-table
+        type: element
+        dynamic_testid: false
+      - testid: run-attempt-history-row
+        type: element
+        dynamic_testid: false
       - testid: hitl-gate-card
         type: element
         dynamic_testid: false
