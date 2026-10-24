@@ -519,19 +519,25 @@ async def _handback_org(
     async_engine: AsyncEngine,
     org_id: uuid.UUID,
     org_entries: list[InFlightRun],
-) -> tuple[int, int, list[tuple[InFlightRun, str]]]:
+) -> tuple[int, int, list[tuple[InFlightRun, str]], list[InFlightRun]]:
     """One org's RLS-scoped transaction: reads + resets, returning its totals.
 
     Row-lock bounded (FAR-1592/1584 pattern shared with the periodic sweeps): a
     55P03 row-lock-timeout expiry — or any other per-org failure — rolled the
     transaction back whole, so NONE of its runs moved. It is counted as skipped
     and the remaining orgs still run.
+
+    Returns ``(handed_back, skipped, terminals, handed_back_entries)``. The
+    entries handed back are returned so their FAR-2078 attempt rows can be
+    closed AFTER this transaction commits — closing them here would open a
+    second transaction while this one holds the run rows' locks.
     """
     from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
     handed_back = 0
     skipped = 0
     terminals: list[tuple[InFlightRun, str]] = []
+    handed_back_entries: list[InFlightRun] = []
     try:
         async with async_engine.connect() as conn, conn.begin():
             await set_mutation_row_lock_timeout(conn)
@@ -540,6 +546,8 @@ async def _handback_org(
                 entry_handed_back, entry_skipped, reason = await _handback_one_entry(conn, entry, org_id)
                 handed_back += entry_handed_back
                 skipped += entry_skipped
+                if entry_handed_back:
+                    handed_back_entries.append(entry)
                 if reason is not None:
                     terminals.append((entry, reason))
     except asyncio.CancelledError:
@@ -565,8 +573,36 @@ async def _handback_org(
                 org_id,
                 len(org_entries),
             )
-        return 0, len(org_entries), []
-    return handed_back, skipped, terminals
+        return 0, len(org_entries), [], []
+    return handed_back, skipped, terminals, handed_back_entries
+
+
+async def _close_handed_back_attempts(
+    async_engine: AsyncEngine,
+    entries: list[InFlightRun],
+) -> None:
+    """Close each handed-back run's open attempt as ``worker_lost`` (FAR-2078).
+
+    Runs AFTER the org transaction commits: the attempt rows are the durable
+    record of the attempt this reset just ended, and the reset erased the
+    reason from ``runs.error_code``. FAIL-OPEN — the handback already committed,
+    so a diagnostics write must never affect it (``record_attempt_close``
+    swallows and logs every failure).
+    """
+    if not entries:
+        return
+    from modulo.core.pipeline_execution import engine_session_factory, record_attempt_close
+    from modulo.db.models.run_attempt import ATTEMPT_TERMINAL_REASON_WORKER_LOST
+
+    factory = engine_session_factory(async_engine)
+    for entry in entries:
+        await record_attempt_close(
+            factory,
+            entry.run_id,
+            entry.org_id,
+            terminal_reason=ATTEMPT_TERMINAL_REASON_WORKER_LOST,
+            error_code=WORKER_LOST_ERROR_CODE,
+        )
 
 
 async def _terminalise_entry(
@@ -725,11 +761,16 @@ async def handback_inflight_runs(
     skipped = unobserved
     try:
         for org_id, org_entries in by_org.items():
-            org_handed_back, org_skipped, terminals = await _handback_org(async_engine, org_id, org_entries)
+            org_handed_back, org_skipped, terminals, handed_back_entries = await _handback_org(
+                async_engine, org_id, org_entries
+            )
             handed_back += org_handed_back
             skipped += org_skipped
-            # The org transaction COMMITTED — run the terminal arm for the
-            # rows the gate refused to re-queue.
+            # The org transaction COMMITTED — close the attempts it ended (the
+            # FAR-2078 per-attempt history; the reset erased the reason from
+            # ``runs.error_code``), then run the terminal arm for the rows the
+            # gate refused to re-queue.
+            await _close_handed_back_attempts(async_engine, handed_back_entries)
             org_terminalised, org_term_skipped = await _terminalise_org(async_engine, terminals)
             terminalised += org_terminalised
             skipped += org_term_skipped

@@ -69,6 +69,14 @@ def _begin_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-2078: the admission opens the per-attempt row inside a SAVEPOINT so a
+    # failed diagnostics write cannot abort the admission transaction. Model it
+    # as a real async context manager — an AsyncMock attribute would return an
+    # un-awaited coroutine instead.
+    savepoint_cm = MagicMock()
+    savepoint_cm.__aenter__ = AsyncMock(return_value=None)
+    savepoint_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=savepoint_cm)
     return session
 
 
@@ -95,6 +103,14 @@ def _make_session(org: Any) -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-2078: the admission opens the per-attempt row inside a SAVEPOINT so a
+    # failed diagnostics write cannot abort the admission transaction. Model it
+    # as a real async context manager — an AsyncMock attribute would return an
+    # un-awaited coroutine instead.
+    savepoint_cm = MagicMock()
+    savepoint_cm.__aenter__ = AsyncMock(return_value=None)
+    savepoint_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=savepoint_cm)
     return session
 
 
