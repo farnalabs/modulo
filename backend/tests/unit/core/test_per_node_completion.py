@@ -40,7 +40,10 @@ async def sqlite_engine() -> AsyncGenerator[AsyncEngine, None]:
     )
     async with engine.begin() as connection:
         await connection.run_sync(
-            lambda sync: Base.metadata.create_all(sync, tables=(Organisation.__table__, RunNodeOutput.__table__))
+            lambda sync: Base.metadata.create_all(
+                sync,
+                tables=(Organisation.__table__, RunNodeOutput.__table__),  # type: ignore[arg-type]
+            )
         )
     yield engine
     await engine.dispose()
@@ -285,6 +288,7 @@ async def test_deadline_gate_terminal_fails_without_completion(
                 claim_token="claim-a",
             )
             fail.assert_awaited_once()
+            assert fail.await_args is not None
             assert "No node completed in this attempt" in fail.await_args.kwargs["error_detail"]
             triage.assert_awaited_once_with(sqlite_engine, str(run_id), str(_ORG), redispatched=False)
             derived.assert_awaited_once_with(
@@ -295,6 +299,59 @@ async def test_deadline_gate_terminal_fails_without_completion(
                 derived_sandbox_wall_hours=1 / 3600.0,
                 killed_node_id="sandbox",
             )
+    finally:
+        exec_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await exec_task
+
+
+@pytest.mark.asyncio
+async def test_deadline_gate_fences_successor_reclamation_before_triage_and_cost(
+    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    run_id = uuid.uuid4()
+    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="sandbox", completed=False, claim_token="claim-a")
+    exec_task = asyncio.create_task(asyncio.sleep(10))
+    terminal_write = AsyncMock()
+    triage = AsyncMock()
+    derived = AsyncMock()
+    current_claim = "claim-a"
+
+    async def _successor_reclaims_then_rejects(*_args: object, **kwargs: object) -> bool:
+        nonlocal current_claim
+        assert kwargs["claim_token"] == "claim-a"
+        current_claim = "claim-b"
+        await _insert_output(
+            sqlite_sessionmaker,
+            run_id=run_id,
+            node_id="successor",
+            completed=False,
+            claim_token=current_claim,
+        )
+        return False
+
+    terminal_write.side_effect = _successor_reclaims_then_rejects
+    try:
+        with (
+            patch("modulo.core.pipeline_execution.fail_run_terminal", terminal_write),
+            patch("modulo.core.pipeline_execution._persist_node_deadline_triage", triage),
+            patch("modulo.core.pipeline_execution._record_derived_deadline_cost", derived),
+            patch("modulo.core.pipeline_execution._record_node_deadline_watchdog_firing", new_callable=AsyncMock),
+        ):
+            await _fail_overdue_node(
+                sqlite_engine,
+                str(run_id),
+                str(_ORG),
+                {"sandbox": (0.0, 1)},
+                exec_task,
+                asyncio.Event(),
+                asyncio.Event(),
+                claim_token="claim-a",
+            )
+
+        terminal_write.assert_awaited_once()
+        triage.assert_not_awaited()
+        derived.assert_not_awaited()
     finally:
         exec_task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -362,6 +419,7 @@ async def test_deadline_gate_allows_retry_after_completion(
                 claim_token="claim-a",
             )
             retry.assert_awaited_once()
+            assert retry.await_args is not None
             assert retry.await_args.kwargs["veto_if_delivered"] is True
     finally:
         exec_task.cancel()

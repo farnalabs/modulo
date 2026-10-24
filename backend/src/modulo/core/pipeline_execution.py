@@ -2521,6 +2521,7 @@ async def _fail_overdue_node(
             org_id,
             error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
             error_detail=error_detail,
+            claim_token=claim_token,
         )
         if terminal_written:
             # Triage and derived cost describe a terminal write that actually
@@ -2594,6 +2595,7 @@ async def _fail_overdue_node(
         org_id,
         error_code=NODE_DEADLINE_EXCEEDED_ERROR_CODE,
         error_detail=error_detail,
+        claim_token=claim_token,
     )
     if terminal_written:
         # A terminal deadline kill writes no run-level triage marker of its own
