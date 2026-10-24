@@ -270,6 +270,32 @@ class TestGuardrailBlockAtIntake:
             ).scalar_one()
         assert stored == 1
 
+        # Intake has no Run, so it must not manufacture an EvalResult row:
+        # eval_results requires exactly one run_id or suite_run_id. The finding
+        # is represented by the committed TriggerEvent plus generic evidence
+        # attached to that event.
+        async with db_engine.connect() as conn:
+            eval_result_count = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM eval_results er "
+                        "JOIN evals e ON e.id = er.eval_id "
+                        "WHERE e.pipeline_id = :pid"
+                    ),
+                    {"pid": str(intake_rig["pipeline_id"])},
+                )
+            ).scalar_one()
+            evidence = (
+                await conn.execute(
+                    text("SELECT value, subject_type, subject_id FROM evidence WHERE subject_type = 'trigger_event'")
+                )
+            ).fetchall()
+        assert eval_result_count == 0
+        assert len(evidence) == 1
+        assert evidence[0].subject_type == "trigger_event"
+        assert evidence[0].subject_id
+        assert evidence[0].value is True
+
     async def test_block_then_clean_delivery_creates_run(
         self,
         db_engine: AsyncEngine,
