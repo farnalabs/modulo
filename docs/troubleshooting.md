@@ -174,13 +174,12 @@ record provides a durable signal that forward progress was actually made.
 
 **Implementation**:
 1. **Schema**: `run_node_outputs.completed_at` (timestamptz, nullable) — written
-   once when a node finishes work on its claim-token-derived attempt row.
+   once when a node finishes work (the `__final__` row for that node).
 2. **Writer**: Single chokepoint at `_on_node_completed` in
    `pipeline_execution.py` — all node families (agent, connector, sandbox,
-   human/policy) write through this one path. The executor awaits both async and
-   synchronous-compatible callbacks.
+   human/policy) write through this one path.
 3. **Reader**: `has_completed_nodes_in_attempt()` in `crud.run_node_outputs`
-   — checks only rows whose attempt-key suffix matches the current claim token.
+   — checks for any `__final__` row with non-NULL `completed_at`.
 4. **Gate**: In `_fail_overdue_node`, before consulting the retry policy, the
    watchdog calls the reader. If no completions exist, it skips the retry hook
    and terminal-fails immediately.

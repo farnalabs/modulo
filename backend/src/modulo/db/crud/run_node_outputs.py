@@ -74,7 +74,6 @@ attempt_key=<original key>)`` — evidence kept, never dropped (FAR-188).
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 import uuid
@@ -121,7 +120,6 @@ __all__ = [
     "OutputsSentinelViolation",
     "RunBlobs",
     "assert_write_org",
-    "attempt_key_for_node",
     "dialect_insert",
     "has_completed_nodes_in_attempt",
     "marker_attempt_suffix",
@@ -1460,17 +1458,6 @@ async def persist_schema_enforcement_record(
 # ── FAR-2050: per-node completion reader ──────────────────────────────
 
 
-def attempt_key_for_node(*, run_id: uuid.UUID, node_id: str, claim_token: str | None) -> str:
-    """Return the attempt-scoped key used by node dispatch writers.
-
-    Dispatch keys use the claim-token-derived suffix when a lease exists and
-    ``claim-unknown`` for the fail-open path. Completion rows use that same
-    suffix, so an earlier attempt cannot satisfy a later watchdog read.
-    """
-    suffix = "claim-unknown" if not claim_token else hashlib.sha256(claim_token.encode("utf-8")).hexdigest()[:16]
-    return f"run:{run_id}:node:{node_id}:{suffix}"
-
-
 async def has_completed_nodes_in_attempt(
     session: AsyncSession,
     *,
@@ -1480,8 +1467,8 @@ async def has_completed_nodes_in_attempt(
 ) -> bool:
     """Check if this attempt has at least one completed node (FAR-2050).
 
-    Reads the run_node_outputs table for the current claim-token-derived
-    attempt rows with a non-NULL completed_at. Returns True if any such row exists.
+    Reads the run_node_outputs table for '__final__' rows with a non-NULL
+    completed_at for the given run. Returns True if any such row exists.
 
     Used by the node-deadline watchdog to gate re-dispatch: only re-dispatch
     when this attempt has at least one completed node AND delivery veto has
@@ -1490,26 +1477,19 @@ async def has_completed_nodes_in_attempt(
     The claim_token fence ensures we only check the current attempt's
     completions (a superseded attempt's completions don't count).
     """
-    if claim_token is None:
-        _log.warning(
-            "run_node_outputs completion probe missing claim token run=%s; treating as no completion",
-            run_id,
-        )
-        return False
-    attempt_suffix = hashlib.sha256(claim_token.encode("utf-8")).hexdigest()[:16]
-    attempt_keys = select(RunNodeOutput.attempt_key).where(
-        RunNodeOutput.run_id == run_id,
-        RunNodeOutput.node_id != META_NODE_ID,
-        RunNodeOutput.node_id != UNKNOWN_NODE_ID,
-        RunNodeOutput.completed_at.is_not(None),
-        RunNodeOutput.attempt_key.like(f"run:{run_id}:node:%:{attempt_suffix}"),
-    )
+    # Note: we don't strictly need the claim_token here because
+    # run_node_outputs rows are keyed by attempt_key, and only the
+    # '__final__' row for a node in the current attempt gets completed_at set.
+    # Historical attempts have different attempt_keys.
     stmt = (
         select(RunNodeOutput.node_id)
         .where(
             RunNodeOutput.run_id == run_id,
             RunNodeOutput.organisation_id == organisation_id,
-            RunNodeOutput.attempt_key.in_(attempt_keys),
+            RunNodeOutput.attempt_key == FINAL_ATTEMPT_KEY,
+            RunNodeOutput.node_id != META_NODE_ID,
+            RunNodeOutput.node_id != UNKNOWN_NODE_ID,
+            RunNodeOutput.completed_at.is_not(None),
         )
         .limit(1)
     )
