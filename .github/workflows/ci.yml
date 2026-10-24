@@ -415,7 +415,12 @@ jobs:
     # skipped with it - the run still concludes FAILURE because lint failed,
     # and notify-pr-failure's failure() sees the failed ancestor.
     needs: [backend-lint]
-    runs-on: ubicloud-standard-2
+    # FAR-2106: 4 vCPU / 16 GB. The unit coverage run peaks at ~9.8 GB RSS with
+    # 2 xdist workers, against standard-2's 8 GB - FAR-2081 had to shard the
+    # suite into two sequential halves to fit. 16 GB removes that ceiling, and
+    # 4 vCPU (so `-n auto` runs 4 workers) roughly halves the wall-clock at
+    # ~neutral absolute cost (2x the rate for ~half the minutes).
+    runs-on: ubicloud-standard-4
     defaults:
       run:
         working-directory: backend
