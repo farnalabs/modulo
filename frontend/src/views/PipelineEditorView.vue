@@ -927,9 +927,11 @@
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-rose-600 dark:text-rose-300">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_hitl_label') }}</div>
                   </div></template>
-          <!-- FAR-1141: dispatch nodes render with their own badge/colour so
-               they never fall back to the `agent` node rendering. Display
-               only — no config panel or palette entry in this slice. -->
+          <!-- FAR-1141: dispatch nodes render with their own badge/colour.
+               Reachable because CANVAS_TYPE_BY_BACKEND_TYPE maps 'dispatch'
+               to this canvas type; without that entry the node would be
+               emitted as an `agent` node and this slot would never render.
+               Display only — no config panel or palette entry in this slice. -->
           <template #node-dispatch="nodeProps"><div class="rounded-lg border-2 border-cyan-500/60 bg-cyan-500/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-cyan-700 dark:text-cyan-300">{{ $t('views.PipelineEditorView.node_dispatch_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label || $t('views.PipelineEditorView.node_dispatch_label') }}</div>
