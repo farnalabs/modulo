@@ -12,6 +12,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     Uuid,
     event,
     func,
@@ -52,6 +53,11 @@ class EvalResult(OrgScoped):
             "judge_confidence_kind IS NULL OR judge_confidence_kind IN "
             "('vendor_claimed_calibrated', 'model_self_reported', 'unavailable')",
             name="ck_eval_results_judge_confidence_kind",
+        ),
+        # FAR-2028: finding resolution vocabulary.
+        CheckConstraint(
+            "resolution IN ('accepted', 'dismissed', 'superseded', 'pending')",
+            name="ck_eval_results_resolution",
         ),
         # FAR-2055: the compliance evidence index counts
         # ``count(DISTINCT eval_id)`` over an org
@@ -118,6 +124,14 @@ class EvalResult(OrgScoped):
     observed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     evaluated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.current_timestamp(), nullable=False
+    )
+    # Finding resolution (FAR-2028): accepted / dismissed / superseded / pending.
+    # Applies to both eval and guardrail findings (guardrails are eval_type='guardrail').
+    resolution: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending", default="pending")
+    resolution_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
     )
 
     suite_run: Mapped["SuiteRun"] = relationship(back_populates="eval_results")

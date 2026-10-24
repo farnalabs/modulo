@@ -820,6 +820,94 @@ async def test_trigger(
     return trigger_id
 
 
+@pytest_asyncio.fixture(scope="session")
+async def test_run(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+    test_trigger: uuid.UUID,
+) -> uuid.UUID:
+    """Committed run row in test_org."""
+    run_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO runs ("
+                "id, organisation_id, pipeline_id, trigger_id, status, snapshot_id, "
+                "trigger_type, input_hash, created_at, started_at) "
+                "VALUES (:id, :oid, :pid, :tid, 'running', :sid, 'webhook', "
+                "'test_hash', now(), now())"
+            ),
+            {
+                "id": str(run_id),
+                "oid": str(test_org),
+                "pid": str(test_pipeline),
+                "tid": str(test_trigger),
+                "sid": str(test_snapshot),
+            },
+        )
+    return run_id
+
+
+@pytest_asyncio.fixture(scope="session")
+async def test_suite_run(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    test_pipeline: uuid.UUID,
+) -> uuid.UUID:
+    """Committed suite_run row in test_org."""
+    suite_run_id = uuid.uuid4()
+    # Need to create a test eval_suite and eval_dataset first
+    suite_id = uuid.uuid4()
+    dataset_id = uuid.uuid4()
+    model_backend_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO eval_suites (id, organisation_id, name, visibility, owner_team_id) "
+                "VALUES (:id, :oid, 'Test Suite', 'org', NULL)"
+            ),
+            {"id": str(suite_id), "oid": str(test_org)},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO eval_datasets (id, organisation_id, name, visibility, owner_team_id, version) "
+                "VALUES (:id, :oid, 'Test Dataset', 'org', NULL, 1)"
+            ),
+            {"id": str(dataset_id), "oid": str(test_org)},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO model_backends ("
+                "id, organisation_id, name, display_name, provider, model_id, "
+                "default_params, visibility, credentials_ciphertext, status, account_id) "
+                "VALUES (:id, :oid, 'Test Backend', 'Test Backend', 'opencode', "
+                "'test-model', '{}'::jsonb, 'org', '\\x00', 'active', :aid)"
+            ),
+            {"id": str(model_backend_id), "oid": str(test_org), "aid": str(test_user)},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO suite_runs ("
+                "id, organisation_id, suite_id, dataset_id, dataset_version, "
+                "definition_checksum, model_backend_id, state, total_cases, "
+                "passed_cases, failed_cases, excluded_case_count, created_at, completed_at) "
+                "VALUES (:id, :oid, :sid, :did, 1, 'checksum', :mbid, "
+                "'completed', 10, 7, 3, 0, now(), now())"
+            ),
+            {
+                "id": str(suite_run_id),
+                "oid": str(test_org),
+                "sid": str(suite_id),
+                "did": str(dataset_id),
+                "mbid": str(model_backend_id),
+            },
+        )
+    return suite_run_id
+
+
 # ---------------------------------------------------------------------------
 # Shared ASGI client fixture
 # ---------------------------------------------------------------------------
