@@ -159,6 +159,7 @@ async def _seed_snapshot_with_pins(
     session: AsyncSession,
     *,
     guardrail_defs: list[Eval],
+    fingerprint: str | None = None,
 ) -> None:
     session.add(
         PipelineSnapshot(
@@ -172,6 +173,7 @@ async def _seed_snapshot_with_pins(
             prompt_pins_json=[],
             model_backend_pins_json=[],
             guardrail_pins_json=[serialize_guardrail_pin(d) for d in guardrail_defs],
+            guardrail_pins_fingerprint=fingerprint,
             run_context_defaults={},
         )
     )
@@ -924,3 +926,30 @@ async def test_create_run_emits_guardrail_latency_metric(session: AsyncSession, 
     run = await _create(session, input_payload={"body": "clean"})
     assert run.status == "pending"
     assert any(r.message == "guardrails.interception_latency_ms" for r in caplog.records)
+
+
+async def test_create_run_replay_pin_fingerprint_mismatch_blocks(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
+    """A replay whose saved pin fingerprint disagrees with the pinned set fails
+    CLOSED at the pin check — before enforcement runs — and pages the gap.
+    """
+    notified: list[dict[str, Any]] = []
+
+    async def _fake_notify(org_id: uuid.UUID, event_type: str, payload: dict[str, Any], **kwargs: Any) -> None:
+        notified.append({"event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(guardrails_module, "notify_guardrail_event", _fake_notify)
+    await _seed(session)
+    pinned = await _seed_guardrail(session, name="pinned-block", action="block")
+    pinned_row = await _get_guardrail_row(session, pinned)
+    await _seed_snapshot_with_pins(session, guardrail_defs=[pinned_row], fingerprint="tampered-fingerprint")
+
+    run = await _create(session, input_payload={"body": "clean"}, is_replay=True)
+
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert any(
+        e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("reason") == "pin_fingerprint_mismatch"
+        for e in notified
+    )

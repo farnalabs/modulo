@@ -223,3 +223,32 @@ class TestRecordMuteAuditEvent:
             assert call_args.kwargs["event_type"] == "eval_definition_unmuted"
             assert call_args.kwargs["payload_json"]["action"] == "unmuted"
             assert call_args.kwargs["payload_json"]["actor_source"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_get_near_threshold_skips_zero_outcomes(self):
+        """A definition with no resolved outcomes is never "near" the threshold."""
+        mock_session = AsyncMock()
+        mock_eval = MagicMock()
+        mock_eval.id = "eval-123"
+        mock_eval.name = "Test Eval"
+        mock_eval.eval_type = "guardrail"
+        mock_eval.is_muted = False
+        mock_eval.mute_threshold = 0.5
+        mock_eval.mute_min_outcomes = 10
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [mock_eval]
+        mock_session.execute.return_value = mock_result
+
+        with patch("modulo.core.eval.mute_policy.evaluate_mute_policy") as mock_eval_policy:
+            mock_eval_policy.return_value = {
+                "should_mute": False,
+                "acceptance_rate": 0.5,
+                "total_outcomes": 0,
+                "threshold": 0.5,
+                "min_outcomes": 10,
+            }
+
+            result = await get_definitions_near_mute_threshold(mock_session, "org-123", margin=0.1)
+
+        assert result == []

@@ -1,5 +1,7 @@
 """Unit tests for eval/guardrail finding resolver (FAR-2028)."""
 
+import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,6 +11,7 @@ from modulo.core.eval.finding_resolver import (
     apply_mute_policy,
     compute_acceptance_rate,
     evaluate_mute_policy,
+    load_trigger_event_finding,
     resolve_finding,
     unmute_definition,
 )
@@ -447,5 +450,102 @@ class TestUnmuteDefinition:
         mock_session.execute.return_value = mock_result
 
         result = await unmute_definition(mock_session, "eval-123", "org-123")
+
+        assert result is None
+
+
+class TestResolutionBranches:
+    """Additional branch coverage for resolution/mute helpers (FAR-2028)."""
+
+    @pytest.mark.asyncio
+    async def test_resolve_finding_pending_clears_resolution_metadata(self):
+        """A 'pending' resolution must clear the actor and timestamp fields."""
+        mock_session = AsyncMock()
+        mock_finding = MagicMock()
+        mock_finding.resolution = "accepted"
+        mock_finding.resolved_at = datetime(2026, 1, 1, tzinfo=UTC)
+        mock_finding.resolved_by = uuid.UUID("550e8400-e29b-41d4-a716-446655440000")
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_finding
+        mock_session.execute.return_value = mock_result
+
+        finding = await resolve_finding(
+            mock_session,
+            "finding-123",
+            "pending",
+            "reopened for review",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "org-123",
+        )
+
+        assert finding.resolution == "pending"
+        assert finding.resolved_at is None
+        assert finding.resolved_by is None
+
+    @pytest.mark.asyncio
+    async def test_load_trigger_event_finding_returns_row(self):
+        """Load a runless finding by its public UUID within the organisation."""
+        mock_session = AsyncMock()
+        mock_row = MagicMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_row
+        mock_session.execute.return_value = mock_result
+
+        row = await load_trigger_event_finding(
+            mock_session,
+            "00000000-0000-0000-0000-000000000010",
+            "org-123",
+        )
+
+        assert row is mock_row
+        mock_session.execute.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_compute_acceptance_rate_applies_window_to_both_sources(self):
+        """A non-null window filters BOTH the eval-result and trigger-event legs."""
+        mock_session = AsyncMock()
+
+        total_result = MagicMock()
+        total_result.scalar.return_value = 4
+
+        accepted_result = MagicMock()
+        accepted_result.scalar.return_value = 3
+
+        mock_session.execute.side_effect = [total_result, accepted_result]
+
+        rate, total = await compute_acceptance_rate(
+            mock_session,
+            "eval-123",
+            "org-123",
+            window_days=30,
+        )
+
+        assert rate == pytest.approx(0.75)
+        assert total == 4
+
+    @pytest.mark.asyncio
+    async def test_evaluate_mute_policy_missing_definition(self):
+        """A missing definition is reported, never muted."""
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value = mock_result
+
+        result = await evaluate_mute_policy(mock_session, "eval-123", "org-123")
+
+        assert result["should_mute"] is False
+        assert result["total_outcomes"] == 0
+        assert result["reason"] == "Eval definition not found"
+
+    @pytest.mark.asyncio
+    async def test_apply_mute_policy_missing_definition_returns_none(self):
+        """Applying to a missing definition is a no-op."""
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value = mock_result
+
+        result = await apply_mute_policy(mock_session, "eval-123", "org-123")
 
         assert result is None

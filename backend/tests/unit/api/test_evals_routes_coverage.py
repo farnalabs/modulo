@@ -1244,3 +1244,104 @@ def test_create_eval_from_run_pipeline_missing_returns_404(client: tuple[TestCli
 
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Pipeline not found"
+
+
+# ---------------------------------------------------------------------------
+# Acceptance-rate / mute-policy happy + missing-eval branches (FAR-2028)
+# ---------------------------------------------------------------------------
+
+
+def test_acceptance_rate_endpoint_returns_window_and_totals(client: tuple[TestClient, AsyncMock]) -> None:
+    """The happy path forwards the window and echoes it in the response."""
+    http, session = client
+    session.get = AsyncMock(return_value=_configured_eval_row())
+
+    with patch(
+        "modulo.core.eval.finding_resolver.compute_acceptance_rate",
+        new_callable=AsyncMock,
+        return_value=(0.75, 8),
+    ) as compute:
+        response = http.get(f"/api/v1/evals/{_EVAL_ID}/acceptance-rate", params={"window_days": 30})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "eval_id": str(_EVAL_ID),
+        "acceptance_rate": 0.75,
+        "total_resolved": 8,
+        "window_days": 30,
+    }
+    compute.assert_awaited_once_with(session, str(_EVAL_ID), str(_ORG_ID), 30)
+
+
+def test_update_mute_policy_missing_eval_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    session.get = AsyncMock(return_value=None)
+
+    response = http.patch(f"/api/v1/evals/{_EVAL_ID}/mute-policy", json={"mute_min_outcomes": 5})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Eval definition not found"
+
+
+def test_update_mute_policy_endpoint_updates_min_outcomes_only(client: tuple[TestClient, AsyncMock]) -> None:
+    """A PATCH carrying only ``mute_min_outcomes`` updates that field alone."""
+    http, session = client
+    eval_def = _configured_eval_row()
+    session.get = AsyncMock(return_value=eval_def)
+
+    with (
+        patch("modulo.core.eval.finding_resolver.apply_mute_policy", new_callable=AsyncMock),
+        patch("modulo.core.eval.mute_policy.record_mute_audit_event", new_callable=AsyncMock),
+    ):
+        response = http.patch(f"/api/v1/evals/{_EVAL_ID}/mute-policy", json={"mute_min_outcomes": 25})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mute_min_outcomes"] == 25
+    assert body["mute_threshold"] == pytest.approx(0.5)
+
+
+def test_unmute_missing_eval_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    session.get = AsyncMock(return_value=None)
+
+    response = http.post(f"/api/v1/evals/{_EVAL_ID}/mute-policy/unmute")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Eval definition not found"
+
+
+def test_resolve_finding_reraises_http_exception(client: tuple[TestClient, AsyncMock]) -> None:
+    """An HTTPException raised inside the body propagates unchanged."""
+    from fastapi import HTTPException
+
+    http, _session = client
+    with patch(
+        "modulo.api.routes.evals._resolve_finding_record",
+        new_callable=AsyncMock,
+        side_effect=HTTPException(status_code=409, detail="finding state conflict"),
+    ):
+        response = http.post(
+            f"/api/v1/evals/findings/{uuid.uuid4()}/resolve",
+            json={"resolution": "accepted"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "finding state conflict"
+
+
+def test_resolve_finding_unexpected_error_returns_500(client: tuple[TestClient, AsyncMock]) -> None:
+    """An unexpected error maps to the route's generic 500, not a leaked detail."""
+    http, _session = client
+    with patch(
+        "modulo.api.routes.evals._resolve_finding_record",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("kaboom"),
+    ):
+        response = http.post(
+            f"/api/v1/evals/findings/{uuid.uuid4()}/resolve",
+            json={"resolution": "accepted"},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "An unexpected error occurred while resolving the finding."
