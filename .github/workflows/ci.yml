@@ -12,8 +12,16 @@ on:
   # runner-ci-harness.yml with force=true).
 
 env:
-  SECRET_KEY: ${{ secrets.SECRET_KEY }}
-  FERNET_KEY: ${{ secrets.FERNET_KEY }}
+  # Dependabot PR runs never receive repository secrets (GitHub withholds them
+  # for `dependabot[bot]`-authored pull_request events), so these two Settings
+  # fields would arrive empty and fail validation at import
+  # ("SECRET_KEY must be at least 32 bytes; got 0"), erroring every test module
+  # that constructs the app. The fallbacks are fixed, non-production test
+  # values - the same shape as the POSTGRES_PASSWORD fallback below - and are
+  # only ever used when the real secret is unavailable. FERNET_KEY must stay a
+  # valid 32-byte url-safe base64 key because cryptography.Fernet parses it.
+  SECRET_KEY: ${{ secrets.SECRET_KEY || 'ci-only-placeholder-secret-key-not-for-production' }}
+  FERNET_KEY: ${{ secrets.FERNET_KEY || 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }}
   # Authenticate GitHub git fetches so `uv sync --frozen` can resolve git-pinned
   # dependencies (e.g. pytest-bdd @ refs/pull/827/head) without an anonymous
   # fetch-by-SHA, which GitHub rejects from CI runners.
