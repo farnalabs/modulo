@@ -91,6 +91,7 @@ from modulo.core.audit_logger import append_audit_event, append_audit_event_isol
 from modulo.core.capability_scope import (
     ScopeViolationError,
     agent_granted_connector_types,
+    validate_allowed_connectors_not_blank,
     validate_allowed_connectors_subset,
     validate_no_self_tools,
 )
@@ -3138,6 +3139,12 @@ def _validate_capability_scopes(
     checked against the caller-scoped (``.self``) tool set — those tools are
     FORBIDDEN from node allowed_tools regardless of connector narrowing (a
     pipeline node is never the "caller" a ``.self`` tool operates on).
+
+    A blank / whitespace-only ``allowed_connectors`` entry is REFUSED for EVERY
+    scoped node (checked here, before the Agent reference is consulted): it
+    names no connector, and a blanks-only list is truthy — it stored a node
+    "narrowed" to nothing, so the run computed an empty fetch scope and decrypted
+    every active org connector while the node matched none of them at the hub.
     """
     for node in nodes:
         scope = node.capability_scope
@@ -3147,6 +3154,13 @@ def _validate_capability_scopes(
         # allowed_tools — checked for EVERY scoped node (independent of
         # connector narrowing, and of any Agent reference).
         validate_no_self_tools(node_id=str(node.id), allowed_tools=scope.allowed_tools)
+        # Blankness is a property of the list, not of the Agent's grants — so it
+        # is refused for every scoped node, including the connector/dispatch
+        # nodes the widen check skips below.
+        validate_allowed_connectors_not_blank(
+            node_id=str(node.id),
+            allowed_connectors=scope.allowed_connectors,
+        )
         if not scope.allowed_connectors:
             continue
         if node.agent_id is None:

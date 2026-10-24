@@ -128,6 +128,71 @@ def _looks_like_instance_id(value: str) -> bool:
         return False
 
 
+def _non_blank_connector_entries(allowed_connectors: Any) -> set[str]:
+    """The STRIPPED, non-blank entries of an ``allowed_connectors`` value.
+
+    ``capability_scope.allowed_connectors`` is documented as "``None`` or EMPTY
+    means connector-unrestricted", and a blank / whitespace-only entry can never
+    name a connector — it is only ever a placeholder (an empty form field, a
+    cleared list row). Returning them stripped has two consequences, both
+    required for the documented contract to hold:
+
+    * a list that is TRUTHY but contains only blanks normalises to the EMPTY
+      set, so it behaves exactly like an ABSENT list (unrestricted) instead of
+      silently narrowing the node to nothing (which made
+      ``_node_connector_contribution`` contribute NOTHING, drove
+      ``compute_run_fetch_scope`` to ``None``, and made the hub decrypt EVERY
+      active org connector — the over-exposure FAR-2089 fixed for the absent
+      case);
+    * a whitespace-padded entry normalises to the connector it names, so it can
+      never be contributed (or matched) verbatim as a scope string that matches
+      no connector at all.
+
+    A non-empty result stays AUTHORITATIVE — this helper never widens, so a node
+    that genuinely narrows to specific connectors still contributes exactly
+    those (the FAR-418 invariant).
+    """
+    if not allowed_connectors or isinstance(allowed_connectors, str):
+        return set()
+    entries: set[str] = set()
+    for entry in allowed_connectors:
+        text = str(entry).strip()
+        if text:
+            entries.add(text)
+    return entries
+
+
+def validate_allowed_connectors_not_blank(
+    *,
+    node_id: str,
+    allowed_connectors: list[str] | None,
+) -> None:
+    """Save-time guard: a blank / whitespace-only ``allowed_connectors`` entry is
+    REFUSED rather than silently stored.
+
+    Such an entry is meaningless (it can name no connector) and destructive: a
+    blanks-only list is truthy, so before this guard it stored a node that was
+    "narrowed" to nothing — the run computed an empty scope and fetched every
+    active org connector, while the node itself matched no connector at the hub.
+    The runtime treats blanks as unrestricted (see
+    :func:`_non_blank_connector_entries`) as a backstop for already-stored
+    graphs; refusing the write is the primary defence, so no new graph can carry
+    one.
+
+    Applies to EVERY scoped node (checked before the Agent reference is
+    consulted): blankness is a property of the list, independent of what the
+    node's Agent grants. ``None``/empty stays valid (unrestricted).
+    """
+    if not allowed_connectors:
+        return
+    for entry in allowed_connectors:
+        if not str(entry).strip():
+            # repr() so the offending entry is visible in the 422 detail: an
+            # empty string and a whitespace-only string are otherwise
+            # indistinguishable from a missing value.
+            raise ScopeViolationError(node_id=node_id, target=repr(entry), kind="connector")
+
+
 def validate_allowed_connectors_subset(
     *,
     node_id: str,
@@ -142,9 +207,14 @@ def validate_allowed_connectors_subset(
     compile time and enforced at run time by the deny-by-default fetch scope.
     A widen attempt raises ``ScopeViolationError`` so the graph save rejects it.
 
+    A blank / whitespace-only entry is rejected first (see
+    :func:`validate_allowed_connectors_not_blank`) — it is not a widen, it is a
+    meaningless entry that must never be persisted.
+
     When ``allowed_connectors`` is ``None``/empty the node is unrestricted
     (default), so nothing is rejected.
     """
+    validate_allowed_connectors_not_blank(node_id=node_id, allowed_connectors=allowed_connectors)
     if not allowed_connectors:
         return
     for entry in allowed_connectors:
@@ -200,14 +270,18 @@ def is_connector_allowed(
 ) -> bool:
     """Runtime allow-check for a single connector against a node's scope.
 
-    Unrestricted (``allowed_connectors`` is ``None`` or empty) -> always True,
-    matching the pre-scope default (a node may use everything the hub fetched).
-    Otherwise the connector must be named by instance-id OR type.
+    Unrestricted (``allowed_connectors`` is ``None``, empty, or blanks-only)
+    -> always True, matching the pre-scope default (a node may use everything
+    the hub fetched). Otherwise the connector must be named by instance-id OR
+    type. Blanks-only counts as unrestricted because a blank entry names no
+    connector: treating it as a deny-everything scope would fail a node whose
+    own binding the run fetch scope (correctly) included.
     """
-    if not allowed_connectors:
+    entries = _non_blank_connector_entries(allowed_connectors)
+    if not entries:
         return True
     id_str = str(connector_instance_id)
-    return any(entry in (id_str, connector_type) for entry in allowed_connectors)
+    return any(entry in (id_str, connector_type) for entry in entries)
 
 
 def filter_run_context_scope(run_context: dict[str, Any], context_scope: list[str] | None) -> dict[str, Any]:
@@ -237,6 +311,13 @@ def _node_connector_contribution(
     connector contributes that binding's instance id; any other unrestricted
     node contributes nothing (FAR-435 least-privilege tightening).
 
+    "Unrestricted" means the list is ``None``, EMPTY, or contains only blank /
+    whitespace-only entries — a blank entry names no connector, so a blanks-only
+    list is not a narrowing (see :func:`_non_blank_connector_entries`). It
+    falls through to the arms below instead of contributing the empty set,
+    which previously drove the run scope to ``None`` (fetch-everything) while
+    omitting the very connector the node names.
+
     The routed-binding arm (FAR-2089) exists because a ``connector`` /
     ``dispatch`` node has no ``agent_id`` and usually no ``capability_scope`` —
     without it such a node contributed NOTHING, the union came out empty, and
@@ -250,8 +331,11 @@ def _node_connector_contribution(
         return set()
     cap_scope = node.get("capability_scope") or {}
     allowed = cap_scope.get("allowed_connectors") if isinstance(cap_scope, dict) else None
-    if allowed:
-        return {str(entry) for entry in allowed if entry}
+    # Filter blanks BEFORE the truthiness test: `[""]` is truthy but narrows to
+    # nothing, so it must behave like an absent list (unrestricted).
+    narrowed = _non_blank_connector_entries(allowed)
+    if narrowed:
+        return narrowed
     agent_id = node.get("agent_id")
     if agent_id is not None and agent_connector_grants:
         granted = set(agent_connector_grants.get(str(agent_id)) or set())
@@ -284,19 +368,20 @@ def compute_run_fetch_scope(
     Per-node contribution (FAR-418: credentials outside a node's scope are never
     decrypted) lives in :func:`_node_connector_contribution`:
 
-    * A node that declares a non-empty ``capability_scope.allowed_connectors``
-      contributes EXACTLY those connectors. Its Agent's broader ``connector_type_refs``
-      grants are NOT unioned in — widening a narrowed node would be a FAR-418
-      regression, and any other (unrestricted) node that needs those grants
-      contributes them independently.
+    * A node that declares a non-blank (i.e. genuinely narrowing)
+      ``capability_scope.allowed_connectors`` contributes EXACTLY those
+      connectors. Its Agent's broader ``connector_type_refs`` grants are NOT
+      unioned in — widening a narrowed node would be a FAR-418 regression, and
+      any other (unrestricted) node that needs those grants contributes them
+      independently.
     * A node that is connector-unrestricted (no ``capability_scope``, or a scope
-      with an empty/absent ``allowed_connectors``) but is bound to an Agent
+      with an empty/absent/blanks-only ``allowed_connectors``) but is bound to an Agent
       contributes that Agent's ``connector_type_refs`` grants — an agent node has
       no static connector binding and tool-calls the hub at runtime, so its grants
       must be fetched for its runtime access to survive. This is WITHIN scope: an
       unrestricted agent node may use everything its grant allows.
     * A node that is connector-unrestricted (no ``capability_scope``, or a scope
-      with an empty/absent ``allowed_connectors``) but whose ``connector_binding``
+      with an empty/absent/blanks-only ``allowed_connectors``) but whose ``connector_binding``
       the engine ROUTES to a connector (a ``connector`` node, a ``dispatch``
       node) contributes that binding's ``instance_id`` — the run needs exactly
       the connector the node names, so it is fetched and nothing else is.
