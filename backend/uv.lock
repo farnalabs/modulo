@@ -14,6 +14,7 @@ constraints = [
     { name = "brotli", specifier = ">=1.2.1" },
     { name = "certifi", specifier = ">=2026.10.19" },
     { name = "pip", specifier = ">=26.2" },
+    { name = "virtualenv", specifier = ">=21.14.13" },
 ]
 
 [[package]]
