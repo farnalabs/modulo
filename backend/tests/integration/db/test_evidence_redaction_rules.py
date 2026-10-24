@@ -165,28 +165,28 @@ async def test_catch_all_seed_redacts_unclassified_key_for_viewer(
 async def test_upsert_then_resolve_reflects_rule(db_engine: AsyncEngine, db_session: AsyncSession) -> None:
     org_id = await _create_org(db_engine)
 
-    await _upsert_redaction_rule(db_session, org_id, "llm_judge.*", "viewer", ["sensitive_output"])
+    await _upsert_redaction_rule(db_session, org_id, "model_judge.*", "viewer", ["sensitive_output"])
     await db_session.commit()
 
-    matched = await _resolve_classes(db_session, org_id, "viewer", "llm_judge.grade")
+    matched = await _resolve_classes(db_session, org_id, "viewer", "model_judge.grade")
     assert matched == frozenset({"sensitive_output"})
 
     # Upserting the same (key_pattern, role) updates in place.
-    await _upsert_redaction_rule(db_session, org_id, "llm_judge.*", "viewer", ["internal_metadata"])
+    await _upsert_redaction_rule(db_session, org_id, "model_judge.*", "viewer", ["internal_metadata"])
     await db_session.commit()
 
-    updated = await _resolve_classes(db_session, org_id, "viewer", "llm_judge.grade")
+    updated = await _resolve_classes(db_session, org_id, "viewer", "model_judge.grade")
     assert updated == frozenset({"internal_metadata"})
 
     # A more specific pattern wins over the broader one.
-    await _upsert_redaction_rule(db_session, org_id, "llm_judge.grade", "viewer", ["sensitive_output"])
+    await _upsert_redaction_rule(db_session, org_id, "model_judge.grade", "viewer", ["sensitive_output"])
     await db_session.commit()
 
-    specific = await _resolve_classes(db_session, org_id, "viewer", "llm_judge.grade")
+    specific = await _resolve_classes(db_session, org_id, "viewer", "model_judge.grade")
     assert specific == frozenset({"sensitive_output"})
 
     # A different key under the broader pattern still uses the broader rule.
-    broader = await _resolve_classes(db_session, org_id, "viewer", "llm_judge.raw")
+    broader = await _resolve_classes(db_session, org_id, "viewer", "model_judge.raw")
     assert broader == frozenset({"internal_metadata"})
 
 

@@ -2138,6 +2138,46 @@ def _tool_sqlalchemy_error(exc: SQLAlchemyError, log_key: str) -> dict[str, Any]
     return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
 
 
+def _structured_http_error_detail(
+    exc: StarletteHTTPException,
+    error_code: str,
+    fallback_detail: str,
+) -> dict[str, Any] | None:
+    """Return a STRUCTURED 4xx detail payload, or ``None`` for a plain one.
+
+    The MCP surface is the only repair path for an agent, so the judge-write
+    freeze's ``{error, detail, hint}`` must reach the caller intact rather than
+    being replaced by a log constant (ADR 066 D8). ``detail["error"]`` is the
+    repo's machine-readable code convention (see ``api/models/problem.py``);
+    ``message`` is accepted for the older structured shape.
+    """
+    if not isinstance(exc.detail, dict):
+        return None
+    return {
+        "error": error_code,
+        "code": exc.detail.get("error") or exc.detail.get("code"),
+        "detail": exc.detail.get("detail") or exc.detail.get("message") or fallback_detail,
+        "hint": exc.detail.get("hint"),
+    }
+
+
+def _sqlalchemy_exception_response(
+    exc: SQLAlchemyError,
+    msg: str,
+    log_key: str,
+) -> dict[str, Any]:
+    """Classify a non-contract ``SQLAlchemyError`` into a branchable payload."""
+    if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
+        return contract_error
+    if (lock_timeout_error := _tool_lock_timeout_error(exc, log_key)) is not None:
+        return lock_timeout_error
+    if isinstance(exc, IntegrityError):
+        return _tool_error(msg, code="conflict")
+    if isinstance(exc, ProgrammingError):
+        return _tool_error(msg, code="migration_required")
+    return _tool_error(msg, code="database_unavailable")
+
+
 def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[str, Any]:
     """Map an exception that escaped a tool body to a SPECIFIC, branchable code.
 
@@ -2172,17 +2212,13 @@ def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[st
     if isinstance(exc, MCPAuthorizationError):
         return {"error": "insufficient_scope", "detail": str(exc)}
     if isinstance(exc, StarletteHTTPException):
-        return _tool_error(msg, code="validation_failed" if exc.status_code < 500 else "server_error")
+        error_code = "validation_failed" if exc.status_code < 500 else "server_error"
+        structured = _structured_http_error_detail(exc, error_code, msg)
+        if structured is not None:
+            return structured
+        return _tool_error(msg, code=error_code)
     if isinstance(exc, SQLAlchemyError):
-        if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
-            return contract_error
-        if (lock_timeout_error := _tool_lock_timeout_error(exc, log_key)) is not None:
-            return lock_timeout_error
-        if isinstance(exc, IntegrityError):
-            return _tool_error(msg, code="conflict")
-        if isinstance(exc, ProgrammingError):
-            return _tool_error(msg, code="migration_required")
-        return _tool_error(msg, code="database_unavailable")
+        return _sqlalchemy_exception_response(exc, msg, log_key)
     return _tool_error(msg, code="server_error")
 
 
@@ -2252,6 +2288,42 @@ def _db_shell_integrity_response(exc: IntegrityError, cfg: _DbShellConfig) -> di
     return {"error": "conflict", "detail": cfg.integrity_detail.format(orig=exc.orig)}
 
 
+def _db_shell_http_response(
+    exc: StarletteHTTPException,
+    cfg: _DbShellConfig,
+    log_key: str,
+) -> dict[str, Any]:
+    """Render the shell's ``StarletteHTTPException`` arm."""
+    if not cfg.handle_http_exception:
+        _log.exception(cfg.log_constant)
+        return _tool_exception_error(cfg.fallback, exc, log_key)
+    structured = _structured_http_error_detail(exc, "validation_failed", cfg.fallback)
+    if structured is not None:
+        return structured
+    return {"error": "validation_failed", "detail": str(exc.detail)}
+
+
+def _db_shell_sqlalchemy_response(
+    exc: SQLAlchemyError,
+    cfg: _DbShellConfig,
+    log_key: str,
+) -> dict[str, Any]:
+    """Render the shell's generic ``SQLAlchemyError`` arm.
+
+    Rendering only — the ``except SQLAlchemyError`` arm logs once, before this
+    helper runs, so every failure (including the session-contract branch) is
+    logged exactly once and no path can return this payload unlogged.
+    """
+    # FAR-1482: the session-contract guard must run BEFORE the
+    # db_errors_to_fallback split — a programming bug is not the generic
+    # "failed to <tool>" fallback either.
+    if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
+        return contract_error
+    if cfg.db_errors_to_fallback:
+        return _tool_error(cfg.fallback, code="database_unavailable")
+    return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+
+
 async def _run_db_shell[**TOOL_SHELL_P](
     fn: Callable[TOOL_SHELL_P, Awaitable[dict[str, Any]]],
     cfg: _DbShellConfig,
@@ -2302,26 +2374,18 @@ async def _run_db_shell[**TOOL_SHELL_P](
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except StarletteHTTPException as exc:
-        if cfg.handle_http_exception:
-            return {"error": "validation_failed", "detail": str(exc.detail)}
-        _log.exception(cfg.log_constant)
-        return _tool_exception_error(cfg.fallback, exc, log_key)
+        return _db_shell_http_response(exc, cfg, log_key)
     except IntegrityError as exc:
         return _db_shell_integrity_response(exc, cfg)
     except ProgrammingError:
         _log.exception(cfg.log_constant)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except SQLAlchemyError as exc:
-        # FAR-1482: the session-contract guard must run BEFORE the
-        # db_errors_to_fallback split — a programming bug is not the
-        # generic "failed to <tool>" fallback either.
-        if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
-            return contract_error
-        if cfg.db_errors_to_fallback:
-            _log.exception(cfg.log_constant)
-            return _tool_error(cfg.fallback, code="database_unavailable")
+        # Log in the ARM, not in the renderer: the renderer returns early for a
+        # session-contract violation, so a log inside it would leave that path
+        # silent (and a structural scanner cannot see through a helper anyway).
         _log.exception(cfg.log_constant)
-        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+        return _db_shell_sqlalchemy_response(exc, cfg, log_key)
     except Exception as exc:
         _log.exception(cfg.log_constant)
         return _tool_exception_error(cfg.fallback, exc, log_key)
@@ -5551,7 +5615,7 @@ def _assert_eval_type(eval_type: str) -> dict[str, Any] | None:
     if not re.fullmatch(_EVAL_TYPE_PATTERN, eval_type):
         return {
             "error": "invalid_eval_type",
-            "detail": "eval_type must be one of: llm_judge|regex|json_schema|custom_function|guardrail|human_set",
+            "detail": "eval_type must be one of: model_judge|regex|json_schema|custom_function|guardrail|human_set",
         }
     return None
 

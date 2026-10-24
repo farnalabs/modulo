@@ -3284,14 +3284,14 @@ class TestFireSuiteRunTriggerPersists:
         assert captured[0].extra["suite_ceiling"] is None
 
     @pytest.mark.asyncio
-    async def test_llm_judge_suite_reaches_build_at_fire_boundary(self) -> None:
-        """A ``run_kind='suite_run'`` trigger whose suite contains an ``llm_judge``
+    async def test_model_judge_suite_reaches_build_at_fire_boundary(self) -> None:
+        """A ``run_kind='suite_run'`` trigger whose suite contains an ``model_judge``
         definition must NOT be refused at the fire boundary (FAR-1742).
 
         FAR-1712 wired an org-scoped judge callable into the SAQ
         ``execute_suite_run`` job, but the former fire-time guard refused every
         judge suite before the run was ever built (skip reason
-        ``llm_judge_unsupported``), so the scheduled path never reached that
+        ``model_judge_unsupported``), so the scheduled path never reached that
         wired job. FAR-1742 narrows the guard: a judge suite whose org has an
         ACTIVE model backend now fires normally and reaches the wired job. The
         fire must proceed to ``build_suite_run`` and report ``fired``.
@@ -3318,9 +3318,9 @@ class TestFireSuiteRunTriggerPersists:
             "model_backend_id": str(model_backend_id),
         }
 
-        # EvalDefinitionRow-shaped double carrying an ``llm_judge`` eval_type.
-        llm_judge_def = MagicMock()
-        llm_judge_def.eval_type = "llm_judge"
+        # EvalDefinitionRow-shaped double carrying an ``model_judge`` eval_type.
+        model_judge_def = MagicMock()
+        model_judge_def.eval_type = "model_judge"
 
         built_run = MagicMock()
         built_run.id = run_id
@@ -3340,7 +3340,7 @@ class TestFireSuiteRunTriggerPersists:
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch(
                 "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
-                return_value=[llm_judge_def],
+                return_value=[model_judge_def],
             ) as load_defs,
             patch(
                 "modulo.core.eval_engine.execute_suite_run.build_suite_run",
@@ -3365,7 +3365,7 @@ class TestFireSuiteRunTriggerPersists:
 
 
 class TestSuiteRunLlmJudgeGuard:
-    """``_suite_run_llm_judge_guard`` narrows the former blanket judge refusal (FAR-1742).
+    """``_suite_run_model_judge_guard`` narrows the former blanket judge refusal (FAR-1742).
 
     FAR-1712 wired an org-scoped judge callable into ``execute_suite_run``, so a
     judge suite must now fire when the org has an ACTIVE model backend. The guard
@@ -3387,13 +3387,13 @@ class TestSuiteRunLlmJudgeGuard:
 
     @pytest.mark.asyncio
     async def test_non_judge_suite_proceeds_without_probing_backends(self) -> None:
-        """A suite with no ``llm_judge`` definition never queries model backends."""
+        """A suite with no ``model_judge`` definition never queries model backends."""
         session = _MockSession([self._backend_result(active=False)])
         with patch(
             "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
             return_value=[self._def("regex")],
         ):
-            result = await ch._suite_run_llm_judge_guard(session, ORG, uuid.uuid4())
+            result = await ch._suite_run_model_judge_guard(session, ORG, uuid.uuid4())
         assert result is None
         # The backend probe is skipped entirely for a non-judge suite.
         assert not session.executed
@@ -3404,9 +3404,9 @@ class TestSuiteRunLlmJudgeGuard:
         session = _MockSession([self._backend_result(active=True)])
         with patch(
             "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
-            return_value=[self._def("llm_judge")],
+            return_value=[self._def("model_judge")],
         ):
-            result = await ch._suite_run_llm_judge_guard(session, ORG, uuid.uuid4())
+            result = await ch._suite_run_model_judge_guard(session, ORG, uuid.uuid4())
         assert result is None
 
     @pytest.mark.asyncio
@@ -3416,12 +3416,12 @@ class TestSuiteRunLlmJudgeGuard:
         session = _MockSession([self._backend_result(active=False)])
         with patch(
             "modulo.core.eval_engine.execute_suite_run.load_suite_definitions",
-            return_value=[self._def("llm_judge")],
+            return_value=[self._def("model_judge")],
         ):
-            result = await ch._suite_run_llm_judge_guard(session, ORG, suite_id)
+            result = await ch._suite_run_model_judge_guard(session, ORG, suite_id)
         assert result == {
             "status": "skipped",
-            "reason": "llm_judge_backend_unavailable",
+            "reason": "model_judge_backend_unavailable",
             "suite_id": str(suite_id),
         }
 

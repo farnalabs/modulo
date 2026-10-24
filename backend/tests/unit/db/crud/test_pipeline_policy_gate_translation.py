@@ -123,7 +123,7 @@ async def _seed_eval(
         pipeline_id=pipeline_id,
         node_id=uuid.UUID(node_id) if node_id is not None else None,
         account_id=_ACCOUNT_ID,
-        eval_type="llm_judge",
+        eval_type="model_judge",
         config_json={},
         version=1,
     )

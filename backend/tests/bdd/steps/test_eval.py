@@ -11,7 +11,7 @@ eval_run.feature and eval_suite_crud.feature drive REAL product surfaces:
   fabricated endpoint).
 - The below-threshold scenario drives the real state transition
   (``_suite_run_transition``) and real completion pipeline
-  (``record_completion`` / ``suite_pass_rate``); the engine's llm_judge
+  (``record_completion`` / ``suite_pass_rate``); the engine's model_judge
   compute applies the suite threshold through a caller-injected judge
   callable, exactly as the suite-run runner does.
 - The results step drives the real ``GET /api/v1/runs/{run_id}/evals``
@@ -214,10 +214,10 @@ def eval_suite_with_threshold(threshold: float, ctx):
 
 @given(parsers.parse("an eval run whose case scored {score}"))
 def eval_run_case_scored(score: float, ctx):
-    """Score the case through the real llm_judge compute path.
+    """Score the case through the real model_judge compute path.
 
     The judge callable is the caller-injected decision boundary; this is
-    exactly what the suite-run runner does when executing an llm_judge
+    exactly what the suite-run runner does when executing an model_judge
     evaluation against a pinned model: the judge applies the suite's
     pass threshold to its rubric score.
     """
@@ -227,8 +227,11 @@ def eval_run_case_scored(score: float, ctx):
         id=uuid.uuid4(),
         org_id=ORG_ID,
         name="quality-check",
-        eval_type="llm_judge",
-        config={},
+        eval_type="model_judge",
+        # Explicit whole-output judging: the judge below reads output["score"]
+        # directly, and the guarded wrapper leaves the output untouched (a
+        # field-scoped config would replace that value with the fenced text).
+        config={"judge_whole_output": True},
         pass_threshold=ctx["pass_threshold"],
         failure_behaviour="warn",
     )
@@ -246,7 +249,7 @@ def eval_run_case_scored(score: float, ctx):
     result = EvalEngine().evaluate_result(
         {"score": float(score)},
         eval_def,
-        llm_judge_callable=judge,
+        model_judge_callable=judge,
     )
     ctx["case_result"] = result
     ctx["score"] = float(score)
@@ -359,6 +362,7 @@ def completed_eval_run_with_scores(ctx):
             suite_run_id=None,
             node_id=uuid.uuid4(),
             eval_id=eval_id,
+            outcome="pass" if passed else "fail",
             passed=passed,
             score=score,
             detail="rubric verdict",
@@ -458,8 +462,8 @@ def step_scorer_json_schema_criterion(eval_type, ctx):
 
 
 @given(parsers.parse('the criterion uses eval_type "{eval_type}" with rubric prompt "{rubric}"'))
-def step_scorer_llm_judge_criterion(eval_type, rubric, ctx):
-    """LLM judge criterion (eval_scorer.feature).
+def step_scorer_model_judge_criterion(eval_type, rubric, ctx):
+    """Model judge criterion (eval_scorer.feature).
 
     pytest-bdd matches the most specific step pattern regardless of
     registration order, so the rubric-prompt variant wins over the generic

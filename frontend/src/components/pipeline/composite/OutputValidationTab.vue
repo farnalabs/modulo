@@ -8,7 +8,7 @@ import Badge from 'primevue/badge'
 interface EvalConfig {
   id: string;
   name: string;
-  type: "regex" | "json_schema" | "llm_judge";
+  type: "regex" | "json_schema" | "model_judge";
   config: Record<string, unknown>;
   failure_behaviour: "retry" | "block" | "warn";
 }
@@ -136,7 +136,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
   @update:model-value="(val) => updateEval(evalDef.id, {type: val as EvalConfig['type']})"
   placeholder="Select type"
   class="h-8 w-full"
-  :options="[{ value: 'regex', label: $t('components.pipeline.composite.OutputValidationTab.regex') }, { value: 'json_schema', label: $t('components.pipeline.composite.OutputValidationTab.json_schema') }, { value: 'llm_judge', label: $t('components.pipeline.composite.OutputValidationTab.llm_judge') }]"
+  :options="[{ value: 'regex', label: $t('components.pipeline.composite.OutputValidationTab.regex') }, { value: 'json_schema', label: $t('components.pipeline.composite.OutputValidationTab.json_schema') }, { value: 'model_judge', label: $t('components.pipeline.composite.OutputValidationTab.model_judge') }]"
   option-label="label"
   option-value="value"
 >
@@ -216,7 +216,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
         </div>
       </template>
 
-      <template v-else-if="evalDef.type === 'llm_judge'">
+      <template v-else-if="evalDef.type === 'model_judge'">
         <div class="space-y-1">
           <label for="outputvalidationtab-field-2" class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.rubric') }}</label>
           <textarea id="outputvalidationtab-field-2"

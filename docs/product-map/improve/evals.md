@@ -45,7 +45,7 @@ bdd:
   - backend/tests/bdd/features/eval/eval_scorer.feature
   - backend/tests/bdd/features/eval/eval_suite_crud.feature
   - backend/tests/bdd/features/evals/eval_block.feature
-  - backend/tests/bdd/features/evals/eval_llm_judge.feature
+  - backend/tests/bdd/features/evals/eval_model_judge.feature
   - backend/tests/bdd/features/evals/eval_regex.feature
   - backend/tests/bdd/steps/test_eval.py
   - backend/tests/bdd/steps/test_eval_block_steps.py
@@ -270,7 +270,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
 
 - 2026-08-30: **product-map review pass** – closed the
   "no executing BDD surface for the `llm_judge` / `regex` scorer types" gap:
-  `evals/eval_llm_judge.feature` and `evals/eval_regex.feature` now execute
+  `evals/eval_model_judge.feature` and `evals/eval_regex.feature` now execute
   through the new step module `tests/bdd/steps/test_eval_scorer_gates.py`
   (14 scenarios, registered in CI alongside the repaired step-rot modules).
   The steps drive the real `EvalEngine` so they lock the scorer contracts:

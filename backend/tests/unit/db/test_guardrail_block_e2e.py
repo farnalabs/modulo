@@ -181,6 +181,9 @@ async def test_block_e2e_node_effect_prevented(session: AsyncSession):
     rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
     assert len(rows) == 1
     assert rows[0].passed is True  # regex matched = violation detected
+    # FAR-2040: the guardrail write path sets the NOT NULL outcome. A missing
+    # outcome aborts create_run entirely (no server default by design).
+    assert rows[0].outcome == "pass"
     assert "SECRET_ABC12345" not in (rows[0].detail or "")
 
 
@@ -198,6 +201,7 @@ async def test_block_e2e_clean_input_dispatches_normally(session: AsyncSession):
     # no violation) so the pass is observable but never blocks.
     assert len(rows) == 1
     assert rows[0].passed is False
+    assert rows[0].outcome == "fail"
 
 
 async def test_kill_switch_downgrades_block_to_observe(session: AsyncSession):

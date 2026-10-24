@@ -73,10 +73,10 @@
                 <Select
   :aria-label="$t('views.EvalEditorView.eval_type_aria')"
   v-model="form.eval_type"
-  :placeholder="$t('views.EvalEditorView.llm_judge')"
+  :placeholder="$t('views.EvalEditorView.model_judge')"
   data-testid="eval-editor-eval-type"
   class="w-full"
-  :options="[{ value: 'llm_judge', label: $t('views.EvalEditorView.llm_judge') }, { value: 'regex', label: $t('views.EvalEditorView.regex') }, { value: 'json_schema', label: $t('views.EvalEditorView.json_schema') }, { value: 'custom_function', label: $t('views.EvalEditorView.custom_function') }]"
+  :options="[{ value: 'model_judge', label: $t('views.EvalEditorView.model_judge') }, { value: 'regex', label: $t('views.EvalEditorView.regex') }, { value: 'json_schema', label: $t('views.EvalEditorView.json_schema') }, { value: 'custom_function', label: $t('views.EvalEditorView.custom_function') }]"
   option-label="label"
   option-value="value"
 >
@@ -487,6 +487,31 @@ interface EvalDefinition {
   created_by: string
 }
 
+// ADR 066 D8: a new model_judge definition must carry the typed dialect.
+// "Name it and save" must be a VALID create, not a guaranteed 422.
+const DEFAULT_MODEL_JUDGE_CONFIG = JSON.stringify(
+  {
+    field: 'output',
+    answer_contract: 'typed_questions',
+    backing: { kind: 'model_backend' },
+    questions: [
+      {
+        id: 'verdict',
+        type: 'noul',
+        instructions: 'Is the output acceptable?',
+        criteria: [],
+        weight: 1.0,
+        required: true,
+        min_pass_confidence: 0.5,
+      },
+    ],
+    pass_rule: { kind: 'weighted_score_at_least', threshold: 0.5 },
+    verdict_kind: 'assessment',
+  },
+  null,
+  2,
+)
+
 const selectedPipelineId = ref('__all__')
 const nodes = ref<GraphNode[]>([])
 const nodesLoading = ref(false)
@@ -497,8 +522,8 @@ const evalsError = ref<string | null>(null)
 const form = reactive({
   name: '',
   node_id: '__all__',
-  eval_type: 'llm_judge',
-  config_json: '{}',
+  eval_type: 'model_judge',
+  config_json: DEFAULT_MODEL_JUDGE_CONFIG,
   pass_threshold: 0.8,
 })
 
@@ -557,7 +582,7 @@ const configParseError = computed(() => {
 })
 
 const configPlaceholder = computed(() => {
-  return t(`views.EvalEditorView.configPlaceholder.${form.eval_type || 'llm_judge'}`)
+  return t(`views.EvalEditorView.configPlaceholder.${form.eval_type || 'model_judge'}`)
 })
 
 const canSave = computed(() => {
@@ -576,8 +601,8 @@ const isGateDirty = computed(() => policyGate.action !== gateSnapshot.action)
 function resetForm() {
   form.name = ''
   form.node_id = '__all__'
-  form.eval_type = 'llm_judge'
-  form.config_json = '{}'
+  form.eval_type = 'model_judge'
+  form.config_json = DEFAULT_MODEL_JUDGE_CONFIG
   form.pass_threshold = 0.8
   editingEvalId.value = null
   formError.value = null

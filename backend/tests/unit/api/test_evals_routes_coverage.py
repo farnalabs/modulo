@@ -224,12 +224,34 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 # ---------------------------------------------------------------------------
 
 
+def _typed_judge_config() -> dict:
+    """A structurally valid typed judge config (ADR 066 D8)."""
+    return {
+        "field": "output",
+        "answer_contract": "typed_questions",
+        "backing": {"kind": "model_backend", "model_backend_id": str(uuid.uuid4())},
+        "questions": [
+            {
+                "id": "verdict",
+                "type": "noul",
+                "instructions": "Is the output acceptable?",
+                "criteria": [],
+                "weight": 1.0,
+                "required": True,
+                "min_pass_confidence": 0.5,
+            }
+        ],
+        "pass_rule": {"kind": "weighted_score_at_least", "threshold": 0.5},
+        "verdict_kind": "assessment",
+    }
+
+
 def _create_payload(**overrides: object) -> dict:
     payload = {
         "pipeline_id": str(_PIPELINE_ID),
         "name": "my-eval",
-        "eval_type": "llm_judge",
-        "config_json": {},
+        "eval_type": "model_judge",
+        "config_json": _typed_judge_config(),
     }
     payload.update(overrides)
     return payload
@@ -307,7 +329,7 @@ def test_create_eval_returns_definition_dict(client: tuple[TestClient, AsyncMock
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["name"] == "my-eval"
-    assert body["eval_type"] == "llm_judge"
+    assert body["eval_type"] == "model_judge"
     assert body["version"] == 1
 
 

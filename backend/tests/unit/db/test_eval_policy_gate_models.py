@@ -75,7 +75,7 @@ class TestC15aPreVersionRaw:
 
 def _extract_check_vocabulary(sqltext: str) -> tuple[str, ...]:
     """Extract the IN-list values from a CHECK constraint like
-    ``eval_type IN ('llm_judge', 'regex', ...)``."""
+    ``eval_type IN ('model_judge', 'regex', ...)``."""
     match = re.search(r"IN\s*\(([^)]+)\)", sqltext)
     if match is None:
         msg = f"Could not extract IN-list from: {sqltext}"

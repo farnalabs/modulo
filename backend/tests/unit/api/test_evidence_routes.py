@@ -78,7 +78,7 @@ def _fake_evidence(**overrides: Any) -> MagicMock:
 def _fake_rule(**overrides: Any) -> MagicMock:
     rule = MagicMock()
     rule.id = overrides.get("id", _EVIDENCE_ID)
-    rule.key_pattern = overrides.get("key_pattern", "llm_judge.*")
+    rule.key_pattern = overrides.get("key_pattern", "model_judge.*")
     rule.role = overrides.get("role", "viewer")
     rule.redacted_fields = overrides.get("redacted_fields", ["sensitive_output"])
     rule.created_at = overrides.get("created_at", _NOW)
@@ -267,7 +267,7 @@ class TestRedactionRulesAdminSurface:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["key_pattern"] == "llm_judge.*"
+        assert data[0]["key_pattern"] == "model_judge.*"
         assert data[0]["role"] == "viewer"
 
     def test_list_rules_forbidden_for_viewer(self) -> None:
@@ -462,7 +462,7 @@ class TestUpsertRedactionRuleHelper:
         rule = await evidence_routes._upsert_redaction_rule(
             session,
             _ORG_ID,
-            "llm_judge.*",
+            "model_judge.*",
             "viewer",
             ["internal_metadata"],
         )
@@ -475,7 +475,7 @@ class TestUpsertRedactionRuleHelper:
         added = session.add.call_args.args[0]
         assert added is rule
         assert added.organisation_id == _ORG_ID
-        assert added.key_pattern == "llm_judge.*"
+        assert added.key_pattern == "model_judge.*"
         assert added.role == "viewer"
         assert added.redacted_fields == ["internal_metadata"]
         session.flush.assert_awaited_once()

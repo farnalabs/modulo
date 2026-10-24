@@ -597,7 +597,7 @@ class TestEvalFromRun:
         assert resp.status_code == 404
 
     def test_from_run_prepopulates_config_by_type(self, admin_client: TestClient) -> None:
-        for eval_type in ("regex", "json_schema", "llm_judge", "custom_function"):
+        for eval_type in ("regex", "json_schema", "model_judge", "custom_function"):
             mock_session = _make_mock_session()
 
             run = _make_row(
@@ -644,6 +644,11 @@ class TestEvalFromRun:
             data = resp.json()
             assert data["eval_type"] == eval_type
             assert "field" in data["config_json"]
+            if eval_type == "model_judge":
+                # ADR 066 D8: the from-run STUB must carry the typed dialect,
+                # not the old `{field, instructions}` blob.
+                assert data["config_json"]["answer_contract"] == "typed_questions"
+                assert data["config_json"]["questions"]
 
     def test_from_run_rejects_guardrail(self, admin_client: TestClient) -> None:
         # ``guardrail`` is deliberately absent from the from-run vocabulary: a

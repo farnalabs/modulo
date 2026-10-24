@@ -623,8 +623,11 @@ class TestDetectEvalGap:
         assert sample_record.eval_gap is True
 
     async def _fake_eval_result(self, passed: bool) -> MagicMock:
+        from modulo.core.eval_engine.typed_judge import JudgeOutcome
+
         result = MagicMock()
         result.passed = passed
+        result.outcome = JudgeOutcome.PASS if passed else JudgeOutcome.FAIL
         return result
 
     async def test_returns_false_when_eval_fails(
@@ -642,6 +645,94 @@ class TestDetectEvalGap:
         assert is_gap is False
         assert sample_record.eval_gap is None
         mock_eval_engine.evaluate.assert_called_once()
+
+    async def test_an_error_outcome_is_not_asserted_as_an_eval_gap(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """A judge that produced no verdict is not evidence of an eval gap.
+
+        ADR 066 D6/D18: an error is an instrument failure, excluded from the
+        decision — neither "the eval caught it" nor "the eval missed it".
+        """
+        from modulo.core.eval_engine.typed_judge import JudgeOutcome
+
+        error_result = MagicMock()
+        error_result.outcome = JudgeOutcome.ERROR
+        error_result.detail = "judge unavailable"
+        mock_eval_engine = MagicMock()
+        mock_eval_engine.evaluate = MagicMock(return_value=error_result)
+
+        is_gap = await mgr.detect_eval_gap(
+            sample_record,
+            eval_engine=mock_eval_engine,
+            eval_suite=[{"name": "judge"}],
+        )
+
+        assert is_gap is False
+        assert sample_record.eval_gap is None
+
+    async def test_real_engine_judge_without_a_hub_is_not_an_eval_gap(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """Drive the REAL engine: a model_judge with no hub is ``outcome=error``.
+
+        This is the discriminating version of the test above — a MagicMock
+        result cannot fail, so it could pass with or without the fix.
+        """
+        from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
+
+        dto = EvalDefinition(
+            id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            name="judge",
+            eval_type=EvalType.MODEL_JUDGE,
+            config={"field": "output", "model_backend_id": str(uuid.uuid4())},
+        )
+        with patch(
+            "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+            return_value=None,
+        ):
+            is_gap = await mgr.detect_eval_gap(
+                sample_record,
+                eval_engine=EvalEngine(),
+                eval_suite=[dto],
+            )
+
+        assert is_gap is False
+        assert sample_record.eval_gap is None
+
+    async def test_model_judge_resolves_the_shared_judge_callable(
+        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
+    ) -> None:
+        """The feedback path uses the SAME resolver as pipeline/suite runs."""
+        from modulo.core.eval_engine import EvalDefinition, EvalType
+        from modulo.core.eval_engine.typed_judge import JudgeOutcome
+
+        dto = EvalDefinition(
+            id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            name="judge",
+            eval_type=EvalType.MODEL_JUDGE,
+            config={"field": "output"},
+        )
+        ok_result = MagicMock()
+        ok_result.outcome = JudgeOutcome.PASS
+        ok_result.passed = True
+        mock_eval_engine = MagicMock()
+        mock_eval_engine.evaluate = MagicMock(return_value=ok_result)
+        sentinel = object()
+
+        with patch(
+            "modulo.core.pipeline_engine.llm_judge.resolve_model_judge_callable",
+            return_value=sentinel,
+        ):
+            await mgr.detect_eval_gap(
+                sample_record,
+                eval_engine=mock_eval_engine,
+                eval_suite=[dto],
+            )
+
+        assert mock_eval_engine.evaluate.call_args.kwargs["model_judge_callable"] is sentinel
 
     async def test_returns_true_when_eval_passes(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord

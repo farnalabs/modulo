@@ -105,7 +105,7 @@ describe('EvalEditorView', () => {
       expect(el.exists()).toBe(true)
       return el
     })
-    expect(textarea.attributes('placeholder')).toBe('views.EvalEditorView.configPlaceholder.llm_judge')
+    expect(textarea.attributes('placeholder')).toBe('views.EvalEditorView.configPlaceholder.model_judge')
 
     ;(wrapper.vm as any).form.eval_type = 'regex'
     await nextTick()
@@ -118,6 +118,12 @@ describe('EvalEditorView', () => {
     ;(wrapper.vm as any).form.eval_type = 'custom_function'
     await nextTick()
     expect(textarea.attributes('placeholder')).toBe('views.EvalEditorView.configPlaceholder.custom_function')
+
+    // An empty type must fall back to the model_judge placeholder, not render
+    // a dangling `configPlaceholder.` key.
+    ;(wrapper.vm as any).form.eval_type = ''
+    await nextTick()
+    expect(textarea.attributes('placeholder')).toBe('views.EvalEditorView.configPlaceholder.model_judge')
   })
 })
 
@@ -238,6 +244,27 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     })
   })
 
+  it('defaults a new model_judge config to a valid typed dialect', async () => {
+    const wrapper = mount(EvalEditorView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+
+    const form = (wrapper.vm as unknown as { form: { eval_type: string; config_json: string } }).form
+    expect(form.eval_type).toBe('model_judge')
+    const config = JSON.parse(form.config_json)
+    // ADR 066 D8: a default create must satisfy the real write validator.
+    expect(config.answer_contract).toBe('typed_questions')
+    expect(config.field).toBe('output')
+    expect(config.backing.kind).toBe('model_backend')
+    expect(config.questions[0].type).toBe('noul')
+    expect(config.pass_rule.kind).toBe('weighted_score_at_least')
+    expect(config.pass_rule.threshold).toBe(0.5)
+    expect(config.verdict_kind).toBe('assessment')
+  })
+
   it('save (create): POST body carries the parsed config, threshold; success message shown', async () => {
     const wrapper = mountView()
     await flush()
@@ -246,7 +273,9 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     await flush()
 
     await wrapper.find('[data-testid="eval-editor-name"]').setValue('Fresh Eval')
-    await wrapper.find('[data-testid="eval-editor-config"]').setValue('{"pattern":"abc"}')
+    const typedConfig = JSON.parse(
+      (wrapper.vm as unknown as { form: { config_json: string } }).form.config_json,
+    )
     await wrapper.find('[data-testid="eval-editor-pass-threshold"]').setValue('0.55')
     await nextTick()
 
@@ -262,8 +291,8 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
       pipeline_id: 'p1',
       node_id: null,
       name: 'Fresh Eval',
-      eval_type: 'llm_judge',
-      config_json: { pattern: 'abc' },
+      eval_type: 'model_judge',
+      config_json: typedConfig,
       pass_threshold: 0.55,
     })
     // FAR-631: the success flash now survives the form reset (reset runs

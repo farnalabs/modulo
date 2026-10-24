@@ -29,6 +29,7 @@ from modulo.compliance.evidence_index import (
     build_evidence_index,
 )
 from modulo.compliance.pack import load_mapping_pack
+from modulo.core.eval_engine import EvalType
 from modulo.db.models.account import Account
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.eval import Eval
@@ -116,7 +117,7 @@ async def _seed_org(session: AsyncSession, slug: str) -> dict[str, uuid.UUID]:
             organisation_id=org_id,
             pipeline_id=pipeline_id,
             account_id=account_id,
-            eval_type="llm_judge",
+            eval_type=EvalType.MODEL_JUDGE,
             config_json={},
         )
     )
@@ -129,6 +130,7 @@ async def _seed_org(session: AsyncSession, slug: str) -> dict[str, uuid.UUID]:
                 eval_id=eval_id,
                 run_id=run_id,
                 passed=passed,
+                outcome="pass" if passed else "fail",
                 observed=True,
                 evaluated_at=_BASE_TIME + timedelta(hours=index + 5),
             )

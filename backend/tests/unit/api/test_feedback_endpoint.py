@@ -1033,6 +1033,37 @@ class TestPublishEvalProposal:
         assert created.eval_type == "regex"
         assert created.config_json == {"pattern": "42", "field": "answer"}
 
+    def test_publish_rejects_a_legacy_judge_config(self, client: TestClient) -> None:
+        """The publish path shares the write chokepoint (ADR 066 D8)."""
+        pipeline_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_session = self._make_run_session(pipeline_id)
+        self._override_session(mock_session)
+
+        mock_record = _make_mock_record(eval_gap=True, feedback_status="pending")
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.set_rls_user_context"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.update_status") as mock_update,
+            patch("modulo.api.routes.feedback.append_audit_event_isolated", new=AsyncMock(return_value=MagicMock())),
+        ):
+            mock_get.return_value = mock_record
+            mock_update.return_value = _make_mock_record(feedback_status="resolved")
+
+            resp = client.post(
+                f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",
+                json={
+                    "name": "legacy-judge",
+                    "eval_type": "model_judge",
+                    "config": {"field": "output", "model_backend_id": str(uuid.uuid4())},
+                    "node_id": str(node_id),
+                },
+            )
+
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "judge_config_typed_required"
+
     def test_publishes_resolves_producing_node_id_as_uuid(self, client: TestClient) -> None:
         pipeline_id = uuid.uuid4()
         node_id = uuid.uuid4()

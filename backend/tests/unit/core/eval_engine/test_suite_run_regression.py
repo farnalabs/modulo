@@ -211,7 +211,7 @@ async def test_grouped_path_no_current_run_returns_empty() -> None:
 
 async def test_grouped_path_scoped_by_eval_type() -> None:
     # Mixed eval types partition — a regex regression must not be diluted by an
-    # llm_judge pass. Restricting to regex isolates the alert.
+    # model_judge pass. Restricting to regex isolates the alert.
     session = await _make_session(
         rows=[_row(eval_type="regex", current_total=5, current_passed=1, baseline_total=5, baseline_passed=5)]
     )

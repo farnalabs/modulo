@@ -91,7 +91,7 @@ class ReviewFeedbackRequest(BaseModel):
 
 class PublishEvalProposalRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
+    eval_type: str = Field(pattern=r"^(model_judge|regex|json_schema|custom_function)$")
     config: dict[str, Any] = Field(default_factory=dict)
     node_id: uuid.UUID | None = None
 

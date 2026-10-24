@@ -167,18 +167,18 @@ class TestAggregateLeaderboard:
         """A mixed eval_type axis must partition and rank on pass-rate (booleans).
 
         The trap the read-model must avoid: ranking by raw ``score``. Here the
-        ``llm_judge`` wins on any raw-score comparison but has ZERO passes while
+        ``model_judge`` wins on any raw-score comparison but has ZERO passes while
         the ``regex`` entries all pass — a score-based ranking would be wrong.
         The partition + pass/total counting must rank ``Pip B`` (0.9) above
         ``Pip A`` (0.5) and must NEVER surface a ``score`` key.
         """
         rows = [
-            # Pip A llm_judge: high raw score oracle but 0/10 pass.
-            _lb_row(key=_PIPELINE_1, label="Pip A", eval_type="llm_judge", passed=0, total=10, run_count=2),
+            # Pip A model_judge: high raw score oracle but 0/10 pass.
+            _lb_row(key=_PIPELINE_1, label="Pip A", eval_type="model_judge", passed=0, total=10, run_count=2),
             # Pip A regex: 10/10.
             _lb_row(key=_PIPELINE_1, label="Pip A", eval_type="regex", passed=10, total=10, run_count=3),
-            # Pip B llm_judge: 9/10.
-            _lb_row(key=_PIPELINE_2, label="Pip B", eval_type="llm_judge", passed=9, total=10, run_count=1),
+            # Pip B model_judge: 9/10.
+            _lb_row(key=_PIPELINE_2, label="Pip B", eval_type="model_judge", passed=9, total=10, run_count=1),
         ]
         entries = aggregate_eval_leaderboard(rows, group_by="pipeline")
 
@@ -188,12 +188,12 @@ class TestAggregateLeaderboard:
         assert entries[1]["key"] == str(_PIPELINE_1)
         assert entries[1]["pass_rate"] == pytest.approx(0.5)
 
-        # The type partition is preserved per axis — llm_judge is never diluted
+        # The type partition is preserved per axis — model_judge is never diluted
         # by regex passes and never merged into a single raw score.
         pip_a = entries[1]
-        assert pip_a["by_type"]["llm_judge"]["pass_rate"] == 0.0
+        assert pip_a["by_type"]["model_judge"]["pass_rate"] == 0.0
         assert pip_a["by_type"]["regex"]["pass_rate"] == 1.0
-        assert pip_a["by_type"]["llm_judge"]["total"] == 10
+        assert pip_a["by_type"]["model_judge"]["total"] == 10
         assert pip_a["by_type"]["regex"]["total"] == 10
 
         # Raw score must never leak into the read-model.
@@ -203,7 +203,7 @@ class TestAggregateLeaderboard:
     def test_rollup_counts_passes_across_types_not_scores(self) -> None:
         """The axis rollup is passed/total across partitions, not a score mean."""
         rows = [
-            _lb_row(key=_PIPELINE_1, label="Pip A", eval_type="llm_judge", passed=8, total=20, run_count=1),
+            _lb_row(key=_PIPELINE_1, label="Pip A", eval_type="model_judge", passed=8, total=20, run_count=1),
             _lb_row(key=_PIPELINE_1, label="Pip A", eval_type="regex", passed=2, total=5, run_count=1),
         ]
         entries = aggregate_eval_leaderboard(rows, group_by="pipeline")

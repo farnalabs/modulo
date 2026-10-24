@@ -277,9 +277,39 @@ const actionMessages = ref<Record<string, { type: string; text: string }>>({})
 // addition is a one-line change here instead of a silent drift. Option labels
 // stay i18n-driven: the locale key is `views.EvalProposalsQueueView.<value>`,
 // which matches each enum value by name.
-const EVAL_TYPES = ['llm_judge', 'regex', 'json_schema', 'custom_function'] as const
+const EVAL_TYPES = ['model_judge', 'regex', 'json_schema', 'custom_function'] as const
 type EvalType = (typeof EVAL_TYPES)[number]
 const DEFAULT_EVAL_TYPE: EvalType = EVAL_TYPES[0]
+
+// ADR 066 D8: a model_judge publish must carry the typed dialect, or the
+// write chokepoint rejects it with a guaranteed 422. Mirror the eval editor's
+// minimal valid question set.
+const DEFAULT_MODEL_JUDGE_CONFIG = JSON.stringify(
+  {
+    field: 'output',
+    answer_contract: 'typed_questions',
+    backing: { kind: 'model_backend' },
+    questions: [
+      {
+        id: 'verdict',
+        type: 'noul',
+        instructions: 'Is the output acceptable?',
+        criteria: [],
+        weight: 1.0,
+        required: true,
+        min_pass_confidence: 0.5,
+      },
+    ],
+    pass_rule: { kind: 'weighted_score_at_least', threshold: 0.5 },
+    verdict_kind: 'assessment',
+  },
+  null,
+  2,
+)
+
+function defaultConfigFor(type: EvalType): string {
+  return type === 'model_judge' ? DEFAULT_MODEL_JUDGE_CONFIG : '{}'
+}
 
 const publishDialogVisible = ref(false)
 const publishTarget = ref<EvalProposalItem | null>(null)
@@ -288,7 +318,7 @@ const publishDialogError = ref<string | null>(null)
 const publishForm = reactive<{ name: string; eval_type: EvalType; config_json: string }>({
   name: '',
   eval_type: DEFAULT_EVAL_TYPE,
-  config_json: '{}',
+  config_json: defaultConfigFor(DEFAULT_EVAL_TYPE),
 })
 
 const evalTypeOptions = computed(() =>
@@ -369,7 +399,7 @@ function openPublishDialog(p: EvalProposalItem) {
   publishTarget.value = p
   publishForm.name = ''
   publishForm.eval_type = DEFAULT_EVAL_TYPE
-  publishForm.config_json = '{}'
+  publishForm.config_json = defaultConfigFor(DEFAULT_EVAL_TYPE)
   publishDialogError.value = null
   publishDialogVisible.value = true
 }

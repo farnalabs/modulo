@@ -7,7 +7,7 @@ behaviour (``openai`` ignored ``creds.base_url`` entirely) rather than passing
 against a hand-shaped fake.
 
 The last test exercises the model-backed typed judge path
-(``build_org_model_backend_hub`` → ``build_suite_run_llm_judge_callable``) which
+(``build_org_model_backend_hub`` → ``build_suite_run_model_judge_callable``) which
 is the air-gapped use case ADR 066 depends on.
 """
 
@@ -26,7 +26,7 @@ import modulo.model_backends.module as openai_module
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.eval_engine.suite_run_judge import (
     build_org_model_backend_hub,
-    build_suite_run_llm_judge_callable,
+    build_suite_run_model_judge_callable,
 )
 from modulo.core.model_backend_hub import _build_backend
 
@@ -151,7 +151,7 @@ class _FakeRow:
 async def test_model_backed_typed_judge_uses_the_custom_base_url(
     transport: _CapturedTransport,
 ) -> None:
-    """An llm_judge eval resolves its backend and calls the custom endpoint."""
+    """An model_judge eval resolves its backend and calls the custom endpoint."""
     backend_id = uuid.uuid4()
     secrets_backend = _FakeSecretsBackend({"api_key": "test-key", "base_url": CUSTOM_BASE_URL})
     settings = type("Settings", (), {"fernet_key": "unused-in-this-test"})()
@@ -164,13 +164,13 @@ async def test_model_backed_typed_judge_uses_the_custom_base_url(
 
     assert hub is not None
     try:
-        judge = build_suite_run_llm_judge_callable(hub)
+        judge = build_suite_run_model_judge_callable(hub)
         eval_def = EvalDefinition(
             id=uuid.uuid4(),
             org_id=uuid.uuid4(),
             node_id="judge-node",
             name="judge-quality",
-            eval_type=EvalType.LLM_JUDGE,
+            eval_type=EvalType.MODEL_JUDGE,
             config={"field": "content", "model_backend_id": str(backend_id)},
         )
         result = judge({"content": "hello"}, eval_def)

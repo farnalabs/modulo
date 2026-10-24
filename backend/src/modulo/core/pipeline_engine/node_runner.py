@@ -142,7 +142,7 @@ from modulo.core.pipeline_engine.jmespath_eval import (
 )
 from modulo.core.pipeline_engine.llm_judge import (
     invoke_backend,
-    resolve_llm_judge_callable,
+    resolve_model_judge_callable,
     run_coroutine_sync,
 )
 from modulo.core.pipeline_engine.sandbox_errors import (
@@ -4925,7 +4925,7 @@ def _build_repair_invoke(model_backend_id_str: str) -> Any:
     ModelBackendHub and can re-invoke the same backend with the repair
     prompt. ``run_repair_loop`` calls this SYNCHRONOUSLY while the node
     coroutine is already on the event loop, so bridge to the async backend
-    with ``run_coroutine_sync`` (the same worker-loop bridge the LLM-judge
+    with ``run_coroutine_sync`` (the same worker-loop bridge the model-judge
     callable uses, bounded per FAR-1652). An async repair fn here would hand
     ``json.loads`` an un-awaited coroutine and crash the node instead of
     repairing it.
@@ -5963,7 +5963,7 @@ async def _run_gate_evals(
         org_id=org_id,
         session_factory=session_factory,
         node_id=review_id,
-        resolve_llm_judge=resolve_llm_judge_callable,
+        resolve_model_judge=resolve_model_judge_callable,
         on_eval_result=_on_gate_eval_result,
     )
 

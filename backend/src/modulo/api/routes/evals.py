@@ -118,7 +118,7 @@ _CODE_EVALS_POLICY_GATE_CREATE = "evals.policy_gate.create"
 _CODE_EVALS_POLICY_GATE_UPDATE = "evals.policy_gate.update"
 _CODE_EVALS_POLICY_GATE_DELETE = "evals.policy_gate.delete"
 _CODE_EVALS_POLICY_GATE_GET = "evals.policy_gate.get"
-_EVAL_TYPE_PATTERN = r"^(llm_judge|regex|json_schema|custom_function|guardrail|human_set)$"
+_EVAL_TYPE_PATTERN = r"^(model_judge|regex|json_schema|custom_function|guardrail|human_set)$"
 _POLICY_GATE_ACTION_PATTERN = r"^(warn|block)$"
 # FAR-939 chunk 12 — gate evaluation-mode vocabulary (migration 0316 CHECK).
 _POLICY_GATE_EVALUATION_MODE_PATTERN = r"^(automatic|human)$"
@@ -174,6 +174,9 @@ class EvalDefinitionResponse(BaseModel):
     version: int = 1
     pre_version_raw: dict[str, Any] | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
+    # ADR 066 §0: the judge's display string is composed in
+    # ``typed_judge.naming`` (never in a view).
+    judge: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +192,7 @@ def _eval_def_to_dict(
     Returns the public fields only; ``failure_behaviour`` is excluded from the
     response shape (it is an internal column, not exposed to callers).
     """
-    return {
+    out: dict[str, Any] = {
         "id": str(eval_row.id),
         "pipeline_id": str(eval_row.pipeline_id),
         "node_id": str(eval_row.node_id) if eval_row.node_id else None,
@@ -202,6 +205,27 @@ def _eval_def_to_dict(
         "version": getattr(eval_row, "version", 1),
         "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
     }
+    if eval_row.eval_type == "model_judge":
+        from modulo.core.eval_engine.typed_judge import (
+            backing_display,
+            is_typed_judge_config,
+            legacy_judge_display,
+        )
+
+        config = eval_row.config_json or {}
+        if is_typed_judge_config(config):
+            raw_backing = config.get("backing")
+            backing: dict[str, Any] = raw_backing if isinstance(raw_backing, dict) else {}
+            out["judge"] = {
+                "display": backing_display(
+                    kind=str(backing.get("kind") or "model_backend"),
+                    vendor=backing.get("vendor"),
+                    model=backing.get("model"),
+                )
+            }
+        else:
+            out["judge"] = {"display": legacy_judge_display()}
+    return out
 
 
 def _assert_eval_definition_write_role(principal: TenantPrincipal, action: str) -> None:
@@ -2987,9 +3011,12 @@ async def list_run_evals(
                 "run_id": str(r.run_id),
                 "node_id": str(r.node_id) if r.node_id else None,
                 "eval_id": str(r.eval_id),
+                "outcome": r.outcome,
                 "passed": r.passed,
                 "score": r.score,
                 "detail": r.detail,
+                "error_code": r.error_code,
+                "judge_confidence_kind": r.judge_confidence_kind,
                 "evaluated_at": r.evaluated_at.isoformat() if r.evaluated_at else None,
             }
             for r in rows
@@ -3018,7 +3045,7 @@ class CreateEvalFromRunRequest(BaseModel):
     # guardrail is a deny-rule (regex pattern / json_schema) that cannot be
     # derived from a sample, and a stub config would be silently-inert
     # (fail-open) for a data-safety control. Guardrails are authored directly.
-    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
+    eval_type: str = Field(pattern=r"^(model_judge|regex|json_schema|custom_function)$")
     name: str = Field(min_length=1, max_length=255)
 
 
@@ -3379,8 +3406,30 @@ def _build_eval_config_json(eval_type: str, sample_output: dict[str, Any]) -> di
         return {"field": field, "pattern": ""}
     if eval_type == "json_schema":
         return {"field": field, "schema": {}}
-    if eval_type == "llm_judge":
-        return {"field": field, "instructions": ""}
+    if eval_type == "model_judge":
+        # ADR 066 D8: new definitions must carry the typed dialect. This is the
+        # "create eval from run" stub, so it is a minimal one-question set the
+        # author then edits (the full builder lands in S2).
+        from modulo.core.eval_engine.typed_judge import TYPED_ANSWER_CONTRACT
+
+        return {
+            "field": field,
+            "answer_contract": TYPED_ANSWER_CONTRACT,
+            "backing": {"kind": "model_backend"},
+            "questions": [
+                {
+                    "id": "verdict",
+                    "type": "noul",
+                    "instructions": "",
+                    "criteria": [],
+                    "weight": 1.0,
+                    "required": True,
+                    "min_pass_confidence": 0.5,
+                }
+            ],
+            "pass_rule": {"kind": "weighted_score_at_least", "threshold": 0.5},
+            "verdict_kind": "assessment",
+        }
     if eval_type == "custom_function":
         return {"field": field, "function": ""}
     return {}

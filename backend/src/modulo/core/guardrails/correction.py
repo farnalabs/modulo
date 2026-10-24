@@ -16,9 +16,9 @@ Design invariants (binding, from plan-review-iterate):
     guardrail config or vault secrets. Input is PRE-REDACTED via a static+regex
     pattern set embedded in the correction definition (NOT vault-backed).
 3.  **Different-family re-validation** — the re-validation detector's family
-    (``regex`` / ``pii`` / ``llm_judge``) MUST differ from the fired guardrail's
+    (``regex`` / ``pii`` / ``model_judge``) MUST differ from the fired guardrail's
     detection family (guardrails only use ``regex``/``json_schema``). Never two
-    LLM-judges from the same backend.
+    model-judges from the same backend.
 4.  **Convergence check (strictly-worse ordering enforced)** — prior states
     are fingerprinted AND carry a persisted per-state violation metric; a
     previously-seen input/output state escalates to HITL immediately (no
@@ -65,7 +65,8 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType, LLMJudgeCallable
+from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult, EvalType, ModelJudgeCallable
+from modulo.core.eval_engine.typed_judge import TYPED_ANSWER_CONTRACT
 from modulo.core.guardrails import GUARDRAIL_DETECTION_TYPES, REDACTION_MASK, GuardrailAction
 
 _log = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ _PRIVILEGED_CAPABILITIES: frozenset[str] = frozenset(
 )
 
 # Re-validation detector families that differ from guardrail detection.
-CORRECTION_REVALIDATION_FAMILIES: frozenset[str] = frozenset({"regex", "pii", "llm_judge"})
+CORRECTION_REVALIDATION_FAMILIES: frozenset[str] = frozenset({"regex", "pii", "model_judge"})
 
 
 class CorrectionDetectorFamily(StrEnum):
@@ -105,7 +106,7 @@ class CorrectionDetectorFamily(StrEnum):
 
     REGEX = "regex"
     PII = "pii"
-    LLM_JUDGE = "llm_judge"
+    MODEL_JUDGE = "model_judge"
 
 
 class CorrectionVerdict(StrEnum):
@@ -179,24 +180,24 @@ def _config_declares_schema(config: Mapping[str, Any]) -> bool:
 
 
 def _revalidation_backend_error(defn: CorrectionDefinition) -> str | None:
-    """Return the config error message for an LLM-judge revalidation backend.
+    """Return the config error message for an model-judge revalidation backend.
 
-    The ``llm_judge`` family requires a re-validation model backend AND it must
-    differ from the correction backend (never two LLM-judges from the same
-    backend). ``None`` when the family is not ``llm_judge`` or the binding is
+    The ``model_judge`` family requires a re-validation model backend AND it must
+    differ from the correction backend (never two model-judges from the same
+    backend). ``None`` when the family is not ``model_judge`` or the binding is
     valid.
     """
-    if defn.revalidation_detector_family != CorrectionDetectorFamily.LLM_JUDGE:
+    if defn.revalidation_detector_family != CorrectionDetectorFamily.MODEL_JUDGE:
         return None
     if not defn.revalidation_model_backend_id:
         return (
-            "revalidation_detector_family='llm_judge' requires revalidation_model_backend_id "
-            "(never two LLM-judges from the same backend)"
+            "revalidation_detector_family='model_judge' requires revalidation_model_backend_id "
+            "(never two model-judges from the same backend)"
         )
     if defn.revalidation_model_backend_id == defn.model_backend_id:
         return (
-            "revalidation llm_judge must use a DIFFERENT backend than the correction backend "
-            "(never two LLM-judges from the same backend)"
+            "revalidation model_judge must use a DIFFERENT backend than the correction backend "
+            "(never two model-judges from the same backend)"
         )
     return None
 
@@ -702,23 +703,70 @@ def _revalidate_regex(
     return raw.model_copy(update={"passed": not raw.passed})
 
 
-def _revalidate_llm_judge(
+def _revalidation_judge_config(*, rubric: str, threshold: float, model_backend_id: str) -> dict[str, Any]:
+    """Build a single-question typed config that carries the rubric to the judge.
+
+    The pre-ADR-066 config was ``{rubric, threshold}``, which the judge silently
+    ignored (it only read ``field``) — the rubric never reached the model. The
+    rubric is now a declared ``noul`` question with the same threshold as both
+    its pass-confidence floor and the verdict's pass rule.
+    """
+    return {
+        # Whole-output judging is EXPLICIT (D16): a judge given an empty string
+        # cannot validate anything, and shipping the whole node output must never
+        # be the implicit fallback for an authored config.
+        "judge_whole_output": True,
+        "answer_contract": TYPED_ANSWER_CONTRACT,
+        "backing": {"kind": "model_backend", "model_backend_id": model_backend_id},
+        "questions": [
+            {
+                "id": "revalidation",
+                "type": "noul",
+                "instructions": rubric,
+                "criteria": [rubric],
+                "weight": 1.0,
+                "required": True,
+                "min_pass_confidence": threshold,
+            }
+        ],
+        "pass_rule": {"kind": "weighted_score_at_least", "threshold": threshold},
+        "verdict_kind": "assessment",
+    }
+
+
+def _revalidate_model_judge(
     engine: EvalEngine,
     produced_output: dict[str, Any],
     *,
-    judge_callable: LLMJudgeCallable | None,
+    judge_callable: ModelJudgeCallable | None,
     rubric: str,
+    threshold: float = 0.5,
+    model_backend_id: str | None = None,
 ) -> EvalResult:
-    """Re-validate with an LLM judge (DIFFERENT backend than the correction backend)."""
+    """Re-validate with a model judge (DIFFERENT backend than the correction backend).
+
+    The rubric is a programmatic typed question (never silently dropped). If it
+    cannot be represented — no re-validation backend is bound — this raises
+    loudly instead of judging with a default prompt.
+    """
+    if not model_backend_id:
+        raise ValueError(
+            "model_judge revalidation cannot be represented: no revalidation model "
+            "backend is bound (revalidation_model_backend_id is required)"
+        )
     eval_def = EvalDefinition(
         id=uuid.uuid4(),
         org_id=uuid.uuid4(),
-        name="correction_revalidation_llm_judge",
-        eval_type=EvalType.LLM_JUDGE,
-        config={"rubric": rubric, "threshold": 0.5},
+        name="correction_revalidation_model_judge",
+        eval_type=EvalType.MODEL_JUDGE,
+        config=_revalidation_judge_config(
+            rubric=rubric,
+            threshold=threshold,
+            model_backend_id=model_backend_id,
+        ),
         failure_behaviour="warn",
     )
-    return engine.evaluate(produced_output, eval_def, llm_judge_callable=judge_callable)
+    return engine.evaluate(produced_output, eval_def, model_judge_callable=judge_callable)
 
 
 def _revalidate_pii(produced_output: dict[str, Any]) -> EvalResult:
@@ -865,7 +913,7 @@ class _CorrectionRunContext:
     input_violation_metric: Mapping[str, Any]
     prior_states: Sequence[Mapping[str, Any]]
     revalidation_config: dict[str, Any] | None
-    judge_callable: LLMJudgeCallable | None
+    judge_callable: ModelJudgeCallable | None
 
 
 def _build_run_context(
@@ -879,7 +927,7 @@ def _build_run_context(
     idempotency_key: str | None,
     attempt: int,
     revalidation_config: dict[str, Any] | None,
-    judge_callable: LLMJudgeCallable | None,
+    judge_callable: ModelJudgeCallable | None,
     bound_guardrails: Sequence[EvalDefinition] | None,
 ) -> _CorrectionRunContext:
     """Pre-redact the input and pre-compute the shared correction state."""
@@ -1004,7 +1052,7 @@ async def run_single_node_correction(
     idempotency_key: str | None = None,
     attempt: int = 1,
     revalidation_config: dict[str, Any] | None = None,
-    judge_callable: LLMJudgeCallable | None = None,
+    judge_callable: ModelJudgeCallable | None = None,
     bound_guardrails: Sequence[EvalDefinition] | None = None,
 ) -> CorrectionOutcome:
     """Run ONE bounded single-node correction and return its verdict.
@@ -1143,7 +1191,7 @@ async def _run_different_family_revalidation(
     family: CorrectionDetectorFamily,
     correction: CorrectionDefinition,
     revalidation_config: dict[str, Any] | None,
-    judge_callable: LLMJudgeCallable | None,
+    judge_callable: ModelJudgeCallable | None,
 ) -> EvalResult:
     """Run the different-family re-validation detector over the produced output."""
     # The definition's ``revalidation_config`` (from the guardrail's correction
@@ -1159,12 +1207,16 @@ async def _run_different_family_revalidation(
                 pattern=str(config.get("pattern") or ""),
                 field=str(config.get("field") or ""),
             )
-        if family == CorrectionDetectorFamily.LLM_JUDGE:
-            return _revalidate_llm_judge(
+        if family == CorrectionDetectorFamily.MODEL_JUDGE:
+            return _revalidate_model_judge(
                 engine,
                 produced_output,
                 judge_callable=judge_callable,
                 rubric=str(config.get("rubric") or "does the corrected output still contain the guarded data?"),
+                threshold=float(config.get("threshold", 0.5)),
+                model_backend_id=(
+                    str(correction.revalidation_model_backend_id) if correction.revalidation_model_backend_id else None
+                ),
             )
         return _revalidate_pii(produced_output)
     except asyncio.CancelledError:
@@ -1242,7 +1294,7 @@ async def dispatch_single_node_correction(
     idempotency_key: str | None = None,
     attempt: int = 1,
     revalidation_config: dict[str, Any] | None = None,
-    judge_callable: LLMJudgeCallable | None = None,
+    judge_callable: ModelJudgeCallable | None = None,
     bound_guardrails: Sequence[EvalDefinition] | None = None,
 ) -> CorrectionOutcome:
     """Executor-facing single-node correction dispatch (reject→correction edge).
@@ -1311,7 +1363,7 @@ async def resume_interrupted_correction(
     engine: EvalEngine | None = None,
     state: Mapping[str, Any] | None = None,
     revalidation_config: dict[str, Any] | None = None,
-    judge_callable: LLMJudgeCallable | None = None,
+    judge_callable: ModelJudgeCallable | None = None,
 ) -> CorrectionOutcome:
     """Resume an interrupted correction WITHOUT re-running the LM.
 

@@ -252,7 +252,7 @@ class TestC1PersistThenDecideBlock:
                 await run_evals_persist_before_decide(
                     eval_defs=[eval_def_a],
                     resolve_eval_target=lambda ed: out,
-                    resolve_llm_judge=lambda _ed: None,
+                    resolve_model_judge=lambda _ed: None,
                     run_id=run_id,
                     org_id=org_id,
                     session_factory=factory,
@@ -288,7 +288,7 @@ class TestC1PersistThenDecideBlock:
                 await run_evals_persist_before_decide(
                     eval_defs=[eval_def_a],
                     resolve_eval_target=lambda ed: out,
-                    resolve_llm_judge=lambda _ed: None,
+                    resolve_model_judge=lambda _ed: None,
                     run_id=run_id,
                     org_id=org_id,
                     session_factory=factory,
@@ -329,7 +329,7 @@ class TestC2PersistThenDecideWarn:
             results = await run_evals_persist_before_decide(
                 eval_defs=[eval_def],
                 resolve_eval_target=lambda ed: out,
-                resolve_llm_judge=lambda _ed: None,
+                resolve_model_judge=lambda _ed: None,
                 run_id=run_id,
                 org_id=org_id,
                 session_factory=factory,
@@ -370,7 +370,7 @@ class TestC3BlockMidwayPreservesPriorSkipsLater:
                 await run_evals_persist_before_decide(
                     eval_defs=[eval_a, eval_b, eval_c],
                     resolve_eval_target=lambda ed: out,
-                    resolve_llm_judge=lambda _ed: None,
+                    resolve_model_judge=lambda _ed: None,
                     run_id=run_id,
                     org_id=org_id,
                     session_factory=factory,
@@ -411,7 +411,7 @@ class TestC4BlockFirstSkipsLater:
                 await run_evals_persist_before_decide(
                     eval_defs=[eval_a, eval_b],
                     resolve_eval_target=lambda ed: out,
-                    resolve_llm_judge=lambda _ed: None,
+                    resolve_model_judge=lambda _ed: None,
                     run_id=run_id,
                     org_id=org_id,
                     session_factory=factory,
@@ -450,7 +450,7 @@ class TestC5PersistenceFailureBlock:
                 await run_evals_persist_before_decide(
                     eval_defs=[eval_def],
                     resolve_eval_target=lambda ed: out,
-                    resolve_llm_judge=lambda _ed: None,
+                    resolve_model_judge=lambda _ed: None,
                     run_id=run_id,
                     org_id=org_id,
                     session_factory=factory,
@@ -487,7 +487,7 @@ class TestC5PersistenceFailureBlock:
                 await run_evals_persist_before_decide(
                     eval_defs=[eval_def],
                     resolve_eval_target=lambda ed: out,
-                    resolve_llm_judge=lambda _ed: None,
+                    resolve_model_judge=lambda _ed: None,
                     run_id=run_id,
                     org_id=org_id,
                     session_factory=factory,
@@ -531,7 +531,7 @@ class TestC6PersistenceFailureWarn:
             results = await run_evals_persist_before_decide(
                 eval_defs=[eval_a, eval_b],
                 resolve_eval_target=lambda ed: out,
-                resolve_llm_judge=lambda _ed: None,
+                resolve_model_judge=lambda _ed: None,
                 run_id=run_id,
                 org_id=org_id,
                 session_factory=factory,
@@ -578,7 +578,7 @@ class TestC7PartialPersistence:
                 await run_evals_persist_before_decide(
                     eval_defs=[eval_a, eval_b, eval_c],
                     resolve_eval_target=lambda ed: _output("fail"),
-                    resolve_llm_judge=lambda _ed: None,
+                    resolve_model_judge=lambda _ed: None,
                     run_id=run_id,
                     org_id=org_id,
                     session_factory=factory,
@@ -630,7 +630,7 @@ class TestC8NPasingEvals:
             results = await run_evals_persist_before_decide(
                 eval_defs=evals,
                 resolve_eval_target=lambda ed: out,
-                resolve_llm_judge=lambda _ed: None,
+                resolve_model_judge=lambda _ed: None,
                 run_id=run_id,
                 org_id=org_id,
                 session_factory=factory,
@@ -669,7 +669,7 @@ class TestC9BlockFirstExactlyOneRow:
                 await run_evals_persist_before_decide(
                     eval_defs=[eval_a, eval_b],
                     resolve_eval_target=lambda ed: out,
-                    resolve_llm_judge=lambda _ed: None,
+                    resolve_model_judge=lambda _ed: None,
                     run_id=run_id,
                     org_id=org_id,
                     session_factory=factory,
@@ -889,7 +889,7 @@ class TestC18PersistenceFailureHaltIdentity:
                 await run_evals_persist_before_decide(
                     eval_defs=[eval_def],
                     resolve_eval_target=lambda ed: out,
-                    resolve_llm_judge=lambda _ed: None,
+                    resolve_model_judge=lambda _ed: None,
                     run_id=run_id,
                     org_id=org_id,
                     session_factory=factory,
@@ -928,7 +928,7 @@ class TestPersistedResultCorrectValues:
             await run_evals_persist_before_decide(
                 eval_defs=[eval_def],
                 resolve_eval_target=lambda ed: out,
-                resolve_llm_judge=lambda _ed: None,
+                resolve_model_judge=lambda _ed: None,
                 run_id=run_id,
                 org_id=org_id,
                 session_factory=factory,
@@ -954,7 +954,7 @@ class TestNoSessionFactorySkipsPersistence:
         results = await run_evals_persist_before_decide(
             eval_defs=[eval_def],
             resolve_eval_target=lambda ed: _output("pass"),
-            resolve_llm_judge=lambda _ed: None,
+            resolve_model_judge=lambda _ed: None,
             run_id=uuid4(),
             org_id=uuid4(),
             session_factory=None,
@@ -983,7 +983,7 @@ class TestOnEvalResultCallback:
             await run_evals_persist_before_decide(
                 eval_defs=[eval_a, eval_b],
                 resolve_eval_target=lambda ed: _output("pass"),
-                resolve_llm_judge=lambda _ed: None,
+                resolve_model_judge=lambda _ed: None,
                 run_id=uuid4(),
                 org_id=uuid4(),
                 session_factory=factory,
@@ -1014,7 +1014,7 @@ class TestRLSContextResetPerTransaction:
             await run_evals_persist_before_decide(
                 eval_defs=[eval_a, eval_b],
                 resolve_eval_target=lambda ed: _output("pass"),
-                resolve_llm_judge=lambda _ed: None,
+                resolve_model_judge=lambda _ed: None,
                 run_id=run_id,
                 org_id=org_id,
                 session_factory=factory,
@@ -1133,7 +1133,7 @@ class TestOtelMetricsHelpers:
             await run_evals_persist_before_decide(
                 eval_defs=[eval_def],
                 resolve_eval_target=lambda ed: _output("pass"),
-                resolve_llm_judge=lambda _ed: None,
+                resolve_model_judge=lambda _ed: None,
                 run_id=uuid4(),
                 org_id=uuid4(),
                 session_factory=_cancelled_factory,

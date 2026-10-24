@@ -24,7 +24,9 @@ import pytest
 from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.api.routes.admin import _eval_by_type, _eval_summary
 from modulo.api.routes.dashboard import _eval_rate_window
+from modulo.api.routes.variant_batches import _batch_load_eval_stats
 from modulo.db.crud.eval_run import get_run_evals
 from modulo.db.models.account import Account
 from modulo.db.models.base import Base
@@ -113,13 +115,17 @@ async def _seed_eval_result(
     *,
     passed: bool,
     observed: bool = False,
+    outcome: str | None = None,
+    error_code: str | None = None,
 ) -> uuid.UUID:
     result = EvalResult(
         organisation_id=_ORG,
         run_id=run_id,
         node_id=None,
         eval_id=eval_id,
+        outcome=outcome if outcome is not None else ("pass" if passed else "fail"),
         passed=passed,
+        error_code=error_code,
         observed=observed,
     )
     session.add(result)
@@ -175,3 +181,102 @@ async def test_prompt_optimizer_feed_excludes_guardrail_rows(session: AsyncSessi
     # rows are excluded from the feed.
     assert str(guardrail_id) in defs_map
     assert str(normal_id) in defs_map
+
+
+# ---------------------------------------------------------------------------
+# ADR 066 D18 — an ``outcome='error'`` row produced NO verdict.
+#
+# It is the failed instrument, not a failed check, so every quality aggregate
+# must drop it from BOTH the numerator and the denominator. Each aggregate
+# below reads through ``non_guardrail_eval_results_clause`` (or, for the admin
+# by-type breakdown, applies the same predicate explicitly).
+# ---------------------------------------------------------------------------
+
+
+async def _seed_error_result(session: AsyncSession, run_id: uuid.UUID, eval_id: uuid.UUID) -> uuid.UUID:
+    """Persist a judge row that produced no verdict — ``passed`` projects False."""
+    return await _seed_eval_result(
+        session,
+        run_id,
+        eval_id,
+        passed=False,
+        outcome="error",
+        error_code="judge.timeout",
+    )
+
+
+async def test_get_run_evals_excludes_error_rows(session: AsyncSession):
+    run_id = await _seed_run(session)
+    normal_id = await _seed_eval_def(session, eval_type="regex")
+    await _seed_eval_result(session, run_id, normal_id, passed=True)
+    await _seed_error_result(session, run_id, normal_id)
+
+    evals = await get_run_evals(session, run_id)
+    # The verdict row survives; the no-verdict row is not a normal eval outcome.
+    assert [row.outcome for row in evals] == ["pass"]
+
+
+async def test_dashboard_eval_rate_window_excludes_error_rows(session: AsyncSession):
+    """An error row must not enter the denominator (nor the failed numerator)."""
+    run_id = await _seed_run(session)
+    normal_id = await _seed_eval_def(session, eval_type="regex")
+    await _seed_eval_result(session, run_id, normal_id, passed=True)
+    await _seed_error_result(session, run_id, normal_id)
+
+    now = datetime.now(UTC)
+    rate = await _eval_rate_window(session, _ORG, now - timedelta(days=1), now + timedelta(days=1))
+    # Both rows are in the window; only the verdict row counts → 100%, not 50%.
+    assert rate == 100.0
+
+
+async def test_admin_eval_summary_and_by_type_exclude_error_rows(session: AsyncSession):
+    run_id = await _seed_run(session)
+    normal_id = await _seed_eval_def(session, eval_type="regex")
+    await _seed_eval_result(session, run_id, normal_id, passed=True)
+    await _seed_eval_result(session, run_id, normal_id, passed=False)
+    await _seed_error_result(session, run_id, normal_id)
+
+    summary = await _eval_summary(session)
+    # Two verdicts (one pass, one fail); the error row is neither.
+    assert (summary.total_results, summary.passed, summary.failed) == (2, 1, 1)
+
+    by_type = await _eval_by_type(session, _ORG)
+    assert [(row.eval_type, row.total, row.passed, row.failed) for row in by_type] == [("regex", 2, 1, 1)]
+
+
+async def test_variant_batch_eval_stats_exclude_error_rows(session: AsyncSession):
+    run_id = await _seed_run(session)
+    normal_id = await _seed_eval_def(session, eval_type="regex")
+    await _seed_eval_result(session, run_id, normal_id, passed=True)
+    await _seed_eval_result(session, run_id, normal_id, passed=False)
+    await _seed_error_result(session, run_id, normal_id)
+
+    stats = await _batch_load_eval_stats(session, [run_id])
+    assert stats[run_id] == (2, 1)
+
+
+async def test_a_legacy_null_outcome_row_still_counts(session: AsyncSession):
+    """During the FAR-2040 expand rollout ``outcome`` is NULL on old rows.
+
+    ``outcome != 'error'`` evaluates to NULL for them and would silently drop
+    every legacy verdict from every pass rate; ``IS DISTINCT FROM`` keeps them.
+    A Core insert bypasses the ORM before_insert guard so the legacy shape can
+    be reproduced.
+    """
+    run_id = await _seed_run(session)
+    normal_id = await _seed_eval_def(session, eval_type="regex")
+    await session.execute(
+        EvalResult.__table__.insert().values(
+            organisation_id=_ORG,
+            run_id=run_id,
+            node_id=None,
+            eval_id=normal_id,
+            outcome=None,
+            passed=True,
+            observed=False,
+        )
+    )
+    await session.flush()
+
+    evals = await get_run_evals(session, run_id)
+    assert [row.outcome for row in evals] == [None]

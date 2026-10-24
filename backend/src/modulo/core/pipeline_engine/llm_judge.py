@@ -1,10 +1,10 @@
-"""Shared LLM-judge resolver and sync-to-async model-backend bridge (FAR-1652).
+"""Shared model-judge resolver and sync-to-async model-backend bridge (FAR-1652).
 
 The judge resolver used to live in ``node_runner``'s private namespace even
 though two call sites need it: the executor's post-node eval path (FAR-315)
 and the node-runner HITL-gate eval path (FAR-307).  Both hand it to
 :func:`modulo.core.pipeline_engine.eval_persist_order.run_evals_persist_before_decide`
-as the ``resolve_llm_judge`` callback, so it now lives here and both modules
+as the ``resolve_model_judge`` callback, so it now lives here and both modules
 import it.
 
 The module also owns the two bounds that keep one slow or hung judge from
@@ -28,7 +28,7 @@ was never judged must not pass.
 Type note (FAR-1652 review): the judge callables built below annotate their
 ``eval_def`` parameter as
 :class:`~modulo.core.eval_engine.EvalDefinition` because that is what the
-:class:`~modulo.core.eval_engine.LLMJudgeCallable` protocol declares, while
+:class:`~modulo.core.eval_engine.ModelJudgeCallable` protocol declares, while
 both call sites actually pass the duck-typed
 :class:`~modulo.core.pipeline_engine.eval_persist_order.EvalDefDTO` (FAR-1100
 cutover).  Only ``eval_def.config`` is read, and ``EvalDefDTO`` mirrors the
@@ -48,7 +48,16 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from modulo.core.eval_engine import EvalDefinition, EvalType, LLMJudgeCallable
+from modulo.core.eval_engine import EvalDefinition, EvalType, ModelJudgeCallable
+from modulo.core.eval_engine.typed_judge import (
+    TYPED_ANSWER_CONTRACT,
+    JudgeConfidenceKind,
+    JudgeErrorCode,
+    JudgeExecutionError,
+    JudgeIdentity,
+    build_typed_judge_prompt,
+    verdict_from_typed_response,
+)
 from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
 
 _log = logging.getLogger(__name__)
@@ -56,9 +65,9 @@ _log = logging.getLogger(__name__)
 __all__ = [
     "BACKEND_INVOKE_TIMEOUT_SECONDS",
     "SYNC_BRIDGE_TIMEOUT_SECONDS",
-    "build_llm_judge_callable",
+    "build_model_judge_callable",
     "invoke_backend",
-    "resolve_llm_judge_callable",
+    "resolve_model_judge_callable",
     "run_coroutine_sync",
 ]
 
@@ -78,13 +87,42 @@ SYNC_BRIDGE_TIMEOUT_SECONDS = 75.0
 
 
 def _timeout_detail() -> str:
-    """Fail-closed detail for a judge timeout (reads the bounds at call time)."""
+    """Coded detail for a judge timeout (reads the bounds at call time)."""
     return (
-        "LLM judge model backend call timed out "
+        "Model judge backend call timed out "
         f"(invoke bound {BACKEND_INVOKE_TIMEOUT_SECONDS:g}s, "
-        f"bridge bound {SYNC_BRIDGE_TIMEOUT_SECONDS:g}s); "
-        "failing closed with score 0.0"
+        f"bridge bound {SYNC_BRIDGE_TIMEOUT_SECONDS:g}s); no verdict was produced"
     )
+
+
+def _reject_json_constant(value: str) -> Any:
+    """NaN/Infinity in a judge response is malformed, never a verdict."""
+    raise JudgeExecutionError(
+        JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+        f"judge returned the non-finite JSON constant {value}",
+    )
+
+
+def _classify_provider_exception(exc: BaseException) -> JudgeErrorCode:
+    """Map a backend-bridge failure onto the judge error vocabulary.
+
+    ``provider.authentication`` / ``provider.billing`` are REUSED from the run
+    error taxonomy (the same refusal, whether it happens in a node or a judge).
+    Everything else means the judge produced no verdict.
+    """
+    if type(exc).__name__ == "BackendNotFoundError":
+        return JudgeErrorCode.JUDGE_CONFIGURATION
+    from modulo.core.pipeline_engine.model_backend_errors import non_retryable_provider_code
+
+    try:
+        code = non_retryable_provider_code(str(exc))
+    except Exception:
+        code = None
+    if code == "provider.authentication":
+        return JudgeErrorCode.PROVIDER_AUTHENTICATION
+    if code == "provider.billing":
+        return JudgeErrorCode.PROVIDER_BILLING
+    return JudgeErrorCode.JUDGE_UNAVAILABLE
 
 
 async def invoke_backend(
@@ -125,7 +163,7 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
 
     ``make_hitl_review_fn`` runs inside an already-running asyncio event loop,
     so ``asyncio.run`` and ``loop.run_until_complete`` both raise "This event
-    loop is already running". The LLMJudgeCallable protocol is synchronous, so
+    loop is already running". The ModelJudgeCallable protocol is synchronous, so
     we bridge sync -> async by executing the coroutine on a dedicated event
     loop in a worker thread and blocking on the result.
 
@@ -140,7 +178,7 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
     if _JUDGE_EXECUTOR is None:
         _JUDGE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
             max_workers=1,
-            thread_name_prefix="llm-judge",
+            thread_name_prefix="model-judge",
         )
 
     def _run() -> Any:
@@ -160,7 +198,7 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
             # Never started - close the coroutine so it does not warn on GC.
             coro.close()
         _log.error(
-            "llm_judge.bridge_timeout",
+            "model_judge.bridge_timeout",
             extra={
                 "timeout_seconds": SYNC_BRIDGE_TIMEOUT_SECONDS,
                 "detail": _timeout_detail(),
@@ -169,13 +207,231 @@ def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
         raise
 
 
-def build_llm_judge_callable(
+def _malformed_backend_id_judge(backend_id_str: str, detail: str) -> ModelJudgeCallable:
+    """Build the fail-closed judge for a non-UUID ``model_backend_id``."""
+    malformed_identity = JudgeIdentity(mechanism="model_backend", judge_backend_id=backend_id_str)
+
+    def _config_error_judge(
+        output: dict[str, Any],
+        eval_def: EvalDefinition,
+    ) -> dict[str, Any]:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_CONFIGURATION,
+            detail,
+            judge=malformed_identity,
+        )
+
+    return _config_error_judge
+
+
+def _judge_content(output: dict[str, Any], config: dict[str, Any]) -> Any:
+    """Return the content to judge.
+
+    ``config["_judge_content"]`` is a private, engine-owned key with exactly
+    one writer: :meth:`modulo.core.eval_engine.EvalEngine._build_safe_judge_input`
+    (``core/eval_engine/__init__.py``), which sets the delimited, length-bounded
+    content on a COPY of the definition's config. It is reached for both
+    ``EvalEngine.evaluate`` and ``EvalEngine.evaluate_result``, i.e. every
+    production path into this module: the pipeline executor, the eval suite
+    runner, the feedback-loop re-evaluation, and guardrail revalidation.
+
+    The only reader is :func:`_run_judge` below. So in production this returns
+    the guarded string and the ``field`` branch is never taken. The fallback
+    exists for a caller that invokes the judge callable with its own
+    ``EvalDefinition`` without going through the engine's guarded-input builder
+    (a direct/test caller): that config has no ``_judge_content`` and its own
+    ``field`` names the output key to judge. ``_judge_content`` wins whenever
+    both are present, so a guarded call can never silently fall back.
+    """
+    content = config.get("_judge_content")
+    if content is not None:
+        return content
+    field = config.get("field", "")
+    return output.get(field, "")
+
+
+def _legacy_guidance(config: dict[str, Any]) -> str:
+    """Render a legacy config's authored ``rubric``/``instructions`` for the prompt.
+
+    The pre-ADR-066 prompt read only ``field``, so a rubric authored in the
+    pipeline editor (``OutputValidationTab``) never reached the model — the same
+    silent drop this PR fixes in ``correction.py``. Both keys are carried into
+    the prompt when present so authored guidance is actually used; an absent or
+    blank value contributes nothing (no empty section).
+    """
+    sections: list[str] = []
+    instructions = config.get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        sections.append(f"Instructions:\n{instructions}")
+    rubric = config.get("rubric")
+    if isinstance(rubric, str) and rubric.strip():
+        sections.append(f"Rubric:\n{rubric}")
+    return "\n\n".join(sections)
+
+
+def _build_judge_prompt(config: dict[str, Any], content: Any) -> str:
+    if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
+        questions = config.get("questions") or []
+        return build_typed_judge_prompt(questions, config.get("pass_rule"), str(content))
+    guidance = _legacy_guidance(config)
+    guidance_block = f"{guidance}\n\n" if guidance else ""
+    return (
+        "Evaluate the following output and return JSON with keys passed "
+        "(bool), score (float 0-1), detail (str).\n\n"
+        f"{guidance_block}"
+        f"Output:\n{content}"
+    )
+
+
+def _backend_not_found_error(
+    backend_id: uuid.UUID,
+    identity: JudgeIdentity,
+) -> JudgeExecutionError:
+    detail = (
+        f"model_judge eval's model_backend_id {backend_id} is not an active "
+        "model backend for this organisation; fix the eval definition's "
+        "config['model_backend_id'] (or the typed backing)"
+    )
+    _log.error(
+        "model_judge.unknown_model_backend_id",
+        extra={"model_backend_id": str(backend_id), "detail": detail},
+    )
+    return JudgeExecutionError(JudgeErrorCode.JUDGE_CONFIGURATION, detail, judge=identity)
+
+
+def _provider_failure(
+    backend_id: uuid.UUID,
+    identity: JudgeIdentity,
+    exc: BaseException,
+) -> JudgeExecutionError:
+    code = _classify_provider_exception(exc)
+    _log.error(
+        "model_judge.provider_failure",
+        extra={
+            "model_backend_id": str(backend_id),
+            "error_code": code.value,
+            "exception_type": type(exc).__name__,
+        },
+    )
+    return JudgeExecutionError(
+        code,
+        f"model judge backend failed ({code.value}); no verdict was produced",
+        judge=identity,
+    )
+
+
+def _backend_failure(
+    backend_id: uuid.UUID,
+    identity: JudgeIdentity,
+    exc: BaseException,
+) -> JudgeExecutionError:
+    """Map a failed backend call onto the judge error vocabulary."""
+    from modulo.core.model_backend_hub import BackendNotFoundError
+
+    if isinstance(exc, BackendNotFoundError):
+        return _backend_not_found_error(backend_id, identity)
+    return _provider_failure(backend_id, identity, exc)
+
+
+def _invoke_judge(
+    hub: Any,
+    backend_id: uuid.UUID,
+    messages: list[Any],
+    identity: JudgeIdentity,
+) -> Any:
+    """Run the bounded backend call, mapping every failure to a coded error."""
+    try:
+        return run_coroutine_sync(invoke_backend(hub, backend_id, messages))
+    except TimeoutError as exc:
+        detail = _timeout_detail()
+        _log.error(
+            "model_judge.timeout",
+            extra={
+                "model_backend_id": str(backend_id),
+                "detail": detail,
+            },
+        )
+        raise JudgeExecutionError(JudgeErrorCode.JUDGE_TIMEOUT, detail, judge=identity) from exc
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        raise
+    except Exception as exc:
+        raise _backend_failure(backend_id, identity, exc) from exc
+
+
+def _response_text(response: Any) -> str:
+    return response.content if hasattr(response, "content") else str(response)
+
+
+def _parse_typed_judge_response(
+    text: str,
+    config: dict[str, Any],
+    identity: JudgeIdentity,
+) -> dict[str, Any]:
+    verdict = verdict_from_typed_response(
+        text,
+        questions=config.get("questions") or [],
+        pass_rule=config.get("pass_rule"),
+        judge=identity,
+        confidence_kind=JudgeConfidenceKind.MODEL_SELF_REPORTED,
+    )
+    return verdict.to_json()
+
+
+def _parse_legacy_judge_response(text: str, identity: JudgeIdentity) -> dict[str, Any]:
+    try:
+        parsed = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            "judge returned a non-JSON response; no verdict was produced",
+            judge=identity,
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            "judge returned a non-object JSON response; no verdict was produced",
+            judge=identity,
+        )
+    raw_passed = parsed.get("passed", False)
+    if not isinstance(raw_passed, bool):
+        # A string "false"/"no"/"0" is truthy in Python — never coerce.
+        raise JudgeExecutionError(
+            JudgeErrorCode.JUDGE_MALFORMED_RESPONSE,
+            f"judge returned a non-boolean 'passed' ({type(raw_passed).__name__})",
+            judge=identity,
+        )
+    detail = parsed.get("detail", "")
+    return {
+        "passed": raw_passed,
+        "score": parsed.get("score"),
+        "detail": str(detail) if detail is not None else "",
+    }
+
+
+def _run_judge(
+    output: dict[str, Any],
+    eval_def: EvalDefinition,
+    hub: Any,
+    backend_id: uuid.UUID,
+    identity: JudgeIdentity,
+) -> dict[str, Any]:
+    config = eval_def.config
+    content = _judge_content(output, config)
+    prompt = _build_judge_prompt(config, content)
+    response = _invoke_judge(hub, backend_id, [HumanMessage(content=prompt)], identity)
+    text = _response_text(response)
+    if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
+        return _parse_typed_judge_response(text, config, identity)
+    return _parse_legacy_judge_response(text, identity)
+
+
+def build_model_judge_callable(
     hub: Any,
     backend_id_str: str,
-) -> LLMJudgeCallable:
-    """Build a synchronous LLM judge callable backed by a model backend.
+) -> ModelJudgeCallable:
+    """Build a synchronous Model judge callable backed by a model backend.
 
-    The ``LLMJudgeCallable`` protocol is synchronous, but ``make_hitl_review_fn``
+    The ``ModelJudgeCallable`` protocol is synchronous, but ``make_hitl_review_fn``
     runs inside an already-running asyncio event loop. We bridge sync -> async
     by running the async backend invoke on a dedicated event loop in a worker
     thread via :func:`run_coroutine_sync`.
@@ -196,69 +452,53 @@ def build_llm_judge_callable(
         backend_id = uuid.UUID(backend_id_str)
     except (ValueError, TypeError) as exc:
         detail = (
-            f"llm_judge eval has a malformed model_backend_id {backend_id_str!r}: "
+            f"model_judge eval has a malformed model_backend_id {backend_id_str!r}: "
             f"not a valid UUID ({exc}); fix the eval definition's "
-            "config['model_backend_id']"
+            "config['model_backend_id'] or config['backing']['model_backend_id']"
         )
         _log.error(
-            "llm_judge.malformed_model_backend_id",
+            "model_judge.malformed_model_backend_id",
             extra={"model_backend_id": backend_id_str, "detail": detail},
         )
+        return _malformed_backend_id_judge(backend_id_str, detail)
 
-        def _fail_closed_judge(
-            output: dict[str, Any],
-            eval_def: EvalDefinition,
-        ) -> dict[str, Any]:
-            return {"passed": False, "score": 0.0, "detail": detail}
-
-        return _fail_closed_judge
+    identity = JudgeIdentity(mechanism="model_backend", judge_backend_id=str(backend_id))
 
     def _judge(
         output: dict[str, Any],
         eval_def: EvalDefinition,
     ) -> dict[str, Any]:
-        field = eval_def.config.get("field", "")
-        content = output.get(field, "")
-        prompt = (
-            "Evaluate the following output and return JSON with keys passed "
-            "(bool), score (float 0-1), detail (str).\n\n"
-            f"Output:\n{content}"
-        )
-        messages = [HumanMessage(content=prompt)]
-        try:
-            response = run_coroutine_sync(invoke_backend(hub, backend_id, messages))
-        except TimeoutError:
-            detail = _timeout_detail()
-            _log.error(
-                "llm_judge.timeout",
-                extra={
-                    "model_backend_id": str(backend_id),
-                    "detail": detail,
-                },
-            )
-            # Fail closed: an unjudged output must not pass a gate.
-            return {"passed": False, "score": 0.0, "detail": detail}
-        text = response.content if hasattr(response, "content") else str(response)
-        try:
-            parsed = json.loads(text)
-        except ValueError:
-            parsed = {"passed": False, "score": 0.0, "detail": text}
-        detail = parsed.get("detail", "")
-        return {
-            "passed": bool(parsed.get("passed", False)),
-            "score": parsed.get("score"),
-            "detail": str(detail) if detail is not None else "",
-        }
+        return _run_judge(output, eval_def, hub, backend_id, identity)
 
     return _judge
 
 
-def resolve_llm_judge_callable(eval_def: EvalDefDTO) -> LLMJudgeCallable | None:
-    """Resolve the LLM judge callable for an eval definition, if configured."""
-    if eval_def.eval_type == EvalType.LLM_JUDGE and eval_def.config.get("model_backend_id"):
-        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+def _judge_backend_id(config: dict[str, Any]) -> Any:
+    """Read the judge's backend id — ``backing.model_backend_id`` is the ONLY source.
 
-        hub = get_model_backend_hub()
-        if hub is not None:
-            return build_llm_judge_callable(hub, str(eval_def.config["model_backend_id"]))
+    A typed config's ``backing`` is authoritative in BOTH call sites; falling
+    back to a top-level ``model_backend_id`` made the same definition resolve a
+    different backend (egress/provenance) depending on the caller. Legacy
+    configs keep the historical flat key.
+    """
+    if config.get("answer_contract") == TYPED_ANSWER_CONTRACT:
+        backing = config.get("backing")
+        if isinstance(backing, dict):
+            return backing.get("model_backend_id")
+        return None
+    return config.get("model_backend_id")
+
+
+def resolve_model_judge_callable(eval_def: EvalDefDTO) -> ModelJudgeCallable | None:
+    """Resolve the model judge callable for an eval definition, if configured."""
+    if eval_def.eval_type != EvalType.MODEL_JUDGE:
+        return None
+    backend_id = _judge_backend_id(dict(eval_def.config or {}))
+    if not backend_id:
+        return None
+    from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+    hub = get_model_backend_hub()
+    if hub is not None:
+        return build_model_judge_callable(hub, str(backend_id))
     return None

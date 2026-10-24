@@ -697,7 +697,7 @@ class TestParseAnalyticsIds:
 
 class TestAssertEvalType:
     def test_valid(self) -> None:
-        assert _assert_eval_type("llm_judge") is None
+        assert _assert_eval_type("model_judge") is None
         assert _assert_eval_type("regex") is None
 
     def test_invalid(self) -> None:
@@ -812,6 +812,42 @@ class TestToolDbShell:
         result = await handler()
         assert result["error"] == "validation_failed"
 
+    async def test_starlette_http_with_a_structured_detail(self) -> None:
+        """The judge-write freeze's code + hint must reach the MCP caller."""
+        detail = {
+            "error": "judge_config_legacy_read_only",
+            "message": "frozen legacy config",
+            "hint": "migrate it",
+        }
+
+        @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail", handle_http_exception=True)
+        async def handler() -> dict[str, Any]:
+            raise StarletteHTTPException(status_code=422, detail=detail)
+
+        result = await handler()
+        assert result["error"] == "validation_failed"
+        assert result["code"] == "judge_config_legacy_read_only"
+        assert result["detail"] == "frozen legacy config"
+        assert result["hint"] == "migrate it"
+
+    async def test_starlette_http_structured_detail_accepts_the_code_key(self) -> None:
+        @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="failed", handle_http_exception=True)
+        async def handler() -> dict[str, Any]:
+            raise StarletteHTTPException(status_code=422, detail={"code": "legacy_read_only"})
+
+        result = await handler()
+        assert result["code"] == "legacy_read_only"
+        assert result["detail"] == "failed"
+
+    async def test_a_structured_detail_keeps_the_shells_validation_code(self) -> None:
+        @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="failed", handle_http_exception=True)
+        async def handler() -> dict[str, Any]:
+            raise StarletteHTTPException(status_code=500, detail={"error": "x", "detail": "boom"})
+
+        result = await handler()
+        assert result["error"] == "validation_failed"
+        assert result["code"] == "x"
+
     async def test_integrity_error_with_detail(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail="constraint violated: {orig}", fallback="fail")
         async def handler() -> dict[str, Any]:
@@ -900,6 +936,29 @@ class TestToolDbShell:
 
 
 # ─── Validate sandbox nodes ────────────────────────────────────────
+
+
+class TestToolExceptionError:
+    def test_a_structured_http_detail_is_preserved(self) -> None:
+        exc = StarletteHTTPException(
+            status_code=422,
+            detail={"error": "judge_config_legacy_read_only", "detail": "frozen", "hint": "migrate"},
+        )
+
+        result = ms._tool_exception_error("fallback", exc, "mcp.tool")
+
+        assert result["error"] == "validation_failed"
+        assert result["code"] == "judge_config_legacy_read_only"
+        assert result["detail"] == "frozen"
+        assert result["hint"] == "migrate"
+
+    def test_a_plain_http_detail_uses_the_tool_error(self) -> None:
+        exc = StarletteHTTPException(status_code=400, detail="plain")
+
+        result = ms._tool_exception_error("fallback", exc, "mcp.tool")
+
+        assert result["error"] == "validation_failed"
+        assert result["detail"] == "fallback"
 
 
 class TestValidateSandboxNodes:
@@ -1617,17 +1676,17 @@ class TestSanitizeCostBreakdownEntry:
 
 class TestAssertCreateEvalDefinitionParams:
     def test_empty_name(self) -> None:
-        err = _assert_create_eval_definition_params("", "llm_judge", None)
+        err = _assert_create_eval_definition_params("", "model_judge", None)
         assert err is not None
         assert err["error"] == "invalid_name"
 
     def test_whitespace_name(self) -> None:
-        err = _assert_create_eval_definition_params("   ", "llm_judge", None)
+        err = _assert_create_eval_definition_params("   ", "model_judge", None)
         assert err is not None
         assert err["error"] == "invalid_name"
 
     def test_name_too_long(self) -> None:
-        err = _assert_create_eval_definition_params("x" * 256, "llm_judge", None)
+        err = _assert_create_eval_definition_params("x" * 256, "model_judge", None)
         assert err is not None
         assert err["error"] == "invalid_name"
 
@@ -1640,15 +1699,15 @@ class TestAssertCreateEvalDefinitionParams:
         # Retired from the public surface (FAR-1103 chunk 5a): the parameter is
         # gone, so supplying it is a TypeError rather than an error dict.
         with pytest.raises(TypeError):
-            _assert_create_eval_definition_params("test", "llm_judge", "crash", None)  # type: ignore[call-arg]
+            _assert_create_eval_definition_params("test", "model_judge", "crash", None)  # type: ignore[call-arg]
 
     def test_bad_pass_threshold(self) -> None:
-        err = _assert_create_eval_definition_params("test", "llm_judge", 2.0)
+        err = _assert_create_eval_definition_params("test", "model_judge", 2.0)
         assert err is not None
         assert err["error"] == "invalid_pass_threshold"
 
     def test_all_valid(self) -> None:
-        assert _assert_create_eval_definition_params("my eval", "llm_judge", 0.5) is None
+        assert _assert_create_eval_definition_params("my eval", "model_judge", 0.5) is None
 
 
 class TestAssertUpdateEvalDefinitionParams:
@@ -1677,7 +1736,7 @@ class TestAssertUpdateEvalDefinitionParams:
         assert err["error"] == "invalid_name"
 
     def test_all_valid(self) -> None:
-        assert _assert_update_eval_definition_params("llm_judge", 0.8, "new name") is None
+        assert _assert_update_eval_definition_params("model_judge", 0.8, "new name") is None
 
     def test_all_none(self) -> None:
         assert _assert_update_eval_definition_params(None, None, None) is None
@@ -1690,14 +1749,14 @@ class TestCollectEvalDefinitionUpdates:
             node_id=str(nid),
             nid=nid,
             name="test",
-            eval_type="llm_judge",
+            eval_type="model_judge",
             config_json={"key": "val"},
             pass_threshold=0.5,
             suite_id="suite-1",
         )
         assert updates["node_id"] == nid
         assert updates["name"] == "test"
-        assert updates["eval_type"] == "llm_judge"
+        assert updates["eval_type"] == "model_judge"
         assert updates["pass_threshold"] == 0.5
         assert updates["suite_id"] == "suite-1"
 

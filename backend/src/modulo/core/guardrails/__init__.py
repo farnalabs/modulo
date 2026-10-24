@@ -3,7 +3,7 @@
 A guardrail is an :class:`~modulo.core.eval_engine.EvalDefinition` with
 ``eval_type="guardrail"``. Detection is DETERMINISTIC and PURE — only the
 ``regex`` and ``json_schema`` eval types may be used as guardrail detection;
-``llm_judge`` and ``custom_function`` are never guardrail detection (the
+``model_judge`` and ``custom_function`` are never guardrail detection (the
 engine raises on misrouting). T1 is vault/key-independent: no forensic
 capture, no HMAC key, no fallback redactor.
 

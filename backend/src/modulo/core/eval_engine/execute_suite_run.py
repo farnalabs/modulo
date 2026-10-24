@@ -67,6 +67,7 @@ from modulo.core.eval_engine.suite_run import (
     record_completion,
     suite_cumulative_exceeded,
 )
+from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeOutcome
 from modulo.db.models.eval import Eval as EvalRow
 from modulo.db.models.eval_dataset import EvalCase, EvalDataset
 from modulo.db.models.eval_result import EvalResult
@@ -83,7 +84,7 @@ from modulo.db.models.model_backend import ModelBackend
 _log = logging.getLogger(__name__)
 
 # Nominal cost charged to the per-suite ledger per evaluated case when the suite
-# contains an llm_judge definition and no explicit ``cost_per_case`` is given.
+# contains an model_judge definition and no explicit ``cost_per_case`` is given.
 # Deterministic evals cost nothing. This is an ESTIMATE — real per-token cost
 # accounting is the model backend's responsibility.
 _DEFAULT_COST_PER_LLM_CASE = Decimal("0.001")
@@ -341,41 +342,59 @@ def _case_results(
     case: EvalCase,
     definitions: Sequence[EvalDefinition],
     engine: EvalEngine,
-    llm_judge_callable: Any,
+    model_judge_callable: Any,
     scenario_inputs: dict[str, Any] | None,
     *,
     eval_definition_version: int,
 ) -> tuple[list[EvalResult], int]:
     """Evaluate one case against every suite definition.
 
-    Returns ``(results, errored_count)``. An ``llm_judge`` definition without a
-    provided judge callable returns a FAIL path (never a silent pass) — the
-    runner rejects it up front via ``_has_llm_judge``, so this is defensive. Every
-    result is stamped with ``suite_run_id`` and
-    ``extra['eval_definition_version']`` (FAR-382 stamp).
+    Returns ``(results, errored_count)``. **Every definition produces exactly
+    one row per case** (ADR 066 D13/§S1): an engine failure or a judge that
+    produced no verdict is persisted as ``outcome='error'`` with a NULL score,
+    never dropped and never recorded as a failure. ``errored_count`` counts
+    those rows so the case can be excluded from the pass-rate denominator.
+
+    Every result is stamped with ``suite_run_id`` and the definition version
+    (FAR-382 stamp).
     """
     output = _synthesise_output(case, scenario_inputs)
     results: list[EvalResult] = []
     errored = 0
     for definition in definitions:
         try:
-            result = engine.evaluate(
+            result = engine.evaluate_result(
                 output,
                 definition,
                 run_id=run.id,
-                llm_judge_callable=llm_judge_callable,
+                model_judge_callable=model_judge_callable,
             )
         except Exception as exc:
+            # An unexpected engine failure still produces its row, as an error.
             _log.warning("suite_run case eval errored case=%s definition=%s: %s", case.id, definition.id, exc)
+            result = EvalEngine.error_result(
+                definition,
+                run.id,
+                JudgeErrorCode.JUDGE_UNAVAILABLE,
+                f"eval execution failed ({type(exc).__name__}); no verdict was produced",
+            )
+        verdict = result.judge_verdict
+        is_error = result.outcome is JudgeOutcome.ERROR
+        if is_error:
             errored += 1
-            continue
         results.append(
             EvalResult(
                 organisation_id=run.organisation_id,
                 suite_run_id=run.id,
                 eval_id=definition.id,
+                outcome=result.outcome.value,
                 passed=bool(result.passed),
                 score=result.score,
+                judge_result_json=verdict.to_json() if verdict is not None else None,
+                judge_confidence_kind=(verdict.confidence_kind.value if verdict is not None and not is_error else None),
+                error_code=(
+                    verdict.error_code.value if verdict is not None and verdict.error_code is not None else None
+                ),
                 detail=(result.detail or "")[:2000],
                 observed=True,
                 eval_definition_version=eval_definition_version,
@@ -384,8 +403,8 @@ def _case_results(
     return results, errored
 
 
-def _has_llm_judge(definitions: Sequence[EvalDefinition]) -> bool:
-    return any(d.eval_type == EvalType.LLM_JUDGE for d in definitions)
+def _has_model_judge(definitions: Sequence[EvalDefinition]) -> bool:
+    return any(d.eval_type == EvalType.MODEL_JUDGE for d in definitions)
 
 
 async def _claim_case_cost(session: AsyncSession, run: SuiteRun, cost: Decimal, suite_ceiling: Decimal | None) -> None:
@@ -435,7 +454,7 @@ async def _run_suite_cases(
     cases: list[EvalCase],
     suite_defs: list[EvalDefinition],
     engine: EvalEngine,
-    llm_judge_callable: Any,
+    model_judge_callable: Any,
     scenario_inputs: dict[str, Any] | None,
     eval_definition_version: int,
     claims_llm: bool,
@@ -462,19 +481,19 @@ async def _run_suite_cases(
             case,
             suite_defs,
             engine,
-            llm_judge_callable,
+            model_judge_callable,
             scenario_inputs,
             eval_definition_version=eval_definition_version,
         )
         for result in results:
             session.add(result)
 
-        # ``all(passed_flags)`` is only reached when ``passed_flags`` is
-        # non-empty (guarded by ``bool``) — a case that resolved to zero
-        # results is never a silent pass. The flags are collected first so
-        # the ``all`` is evaluated on a concrete list, never an empty one.
-        passed_flags = [r.passed for r in results]
-        case_passed = errored == 0 and len(results) == len(suite_defs) and bool(passed_flags) and all(passed_flags)
+        # A case is EXCLUDED when any definition produced no verdict (error) —
+        # an instrument failure is not a defect escape (ADR 066 D18). Every
+        # non-error row is one definition, so the flags are never pooled with
+        # an error's fail-closed projection.
+        verdict_flags = [r.passed for r in results if r.outcome != JudgeOutcome.ERROR.value]
+        case_passed = bool(verdict_flags) and all(verdict_flags)
         if errored:
             excluded += 1
         elif case_passed:
@@ -500,7 +519,7 @@ async def execute_suite_run(
     session: AsyncSession,
     run: SuiteRun,
     *,
-    llm_judge_callable: Any = None,
+    model_judge_callable: Any = None,
     entity_thresholds: dict[str, Any] | None = None,
     suite_ceiling: Decimal | None = None,
     scenario_inputs: dict[str, Any] | None = None,
@@ -534,20 +553,19 @@ async def execute_suite_run(
         definitions, cases = await _load_suite_defs_and_cases(session, run)
         suite_defs = [_definition_dto(r, run.organisation_id) for r in definitions]
         engine = EvalEngine()
-        if _has_llm_judge(suite_defs) and llm_judge_callable is None:
-            raise SuiteRunExecutionError(
-                "suite contains llm_judge definitions but no judge callable was provided "
-                "(wire a ModelBackendHub-backed callable — deterministic evals need none)"
-            )
-
-        claims_llm = _has_llm_judge(suite_defs)
+        # A suite that contains judge definitions but has no callable is NOT
+        # refused up front: each judge row persists as outcome=error and the
+        # run terminalises honestly (all cases excluded -> failed). Refusing
+        # here would lose the per-definition rows the verdict contract exists
+        # to record.
+        claims_llm = _has_model_judge(suite_defs)
         passed, failed, excluded = await _run_suite_cases(
             session,
             run,
             cases=cases,
             suite_defs=suite_defs,
             engine=engine,
-            llm_judge_callable=llm_judge_callable,
+            model_judge_callable=model_judge_callable,
             scenario_inputs=scenario_inputs,
             eval_definition_version=eval_definition_version,
             claims_llm=claims_llm,
@@ -570,8 +588,14 @@ async def execute_suite_run(
         # ``partial`` means SOME CASES ERRORED (excluded). A run that executed
         # every case — even one where evals failed — is ``completed``; failed
         # evals are counted in ``failed_cases`` and feed the pass-rate, not the
-        # state machine. ``failed`` is reserved for an orchestration error.
-        target = SuiteRunState.PARTIAL if excluded else SuiteRunState.COMPLETED
+        # state machine. A run where EVERY case is excluded produced no verdict
+        # at all and terminalises ``failed``, never a misleading ``partial``.
+        if excluded and excluded == len(cases):
+            target = SuiteRunState.FAILED
+        elif excluded:
+            target = SuiteRunState.PARTIAL
+        else:
+            target = SuiteRunState.COMPLETED
 
         await _suite_run_transition(session, run, target)
         await session.flush()

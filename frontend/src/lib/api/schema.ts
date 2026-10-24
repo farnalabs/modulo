@@ -14491,6 +14491,10 @@ export interface components {
              * Format: uuid
              */
             created_by: string;
+            /** Judge */
+            judge?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * EvalSuiteAlertingRequest

@@ -132,7 +132,7 @@ def test_dump_round_trip_preserves_semantics():
 
 
 def test_bad_detection_type_rejected():
-    yaml_text = _REGEX_YAML.replace("type: regex", "type: llm_judge")
+    yaml_text = _REGEX_YAML.replace("type: regex", "type: model_judge")
     with pytest.raises(GuardrailConfigError):
         load_config_set(yaml_text)
 
@@ -516,7 +516,7 @@ def test_config_item_rebuild_does_not_downgrade_unknown_type():
     never be silently downgraded to regex as the old duplicated resolver did."""
     unknown_def = _envelope_definition(
         "bad-type",
-        {"interception_point": "input", "action": "observe", "type": "llm_judge"},
+        {"interception_point": "input", "action": "observe", "type": "model_judge"},
     )
     with pytest.raises(GuardrailConfigError, match="regex or json_schema"):
         config_item_from_engine_definition(unknown_def)

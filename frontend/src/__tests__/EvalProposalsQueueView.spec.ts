@@ -120,6 +120,34 @@ describe('EvalProposalsQueueView', () => {
     expect(wrapper.findComponent(PageTabs).exists()).toBe(false)
   })
 
+  const typedJudgeConfig = {
+    field: 'output',
+    answer_contract: 'typed_questions',
+    backing: { kind: 'model_backend' },
+    questions: [
+      {
+        id: 'verdict',
+        type: 'noul',
+        instructions: 'Is the output acceptable?',
+        criteria: [],
+        weight: 1,
+        required: true,
+        min_pass_confidence: 0.5,
+      },
+    ],
+    pass_rule: { kind: 'weighted_score_at_least', threshold: 0.5 },
+    verdict_kind: 'assessment',
+  }
+
+  it('seeds a plain JSON config for a non-judge eval type', async () => {
+    const wrapper = mountView()
+    await flush()
+    const vm = wrapper.vm as unknown as { defaultConfigFor: (type: string) => string }
+
+    expect(vm.defaultConfigFor('regex')).toBe('{}')
+    expect(vm.defaultConfigFor('model_judge')).toContain('typed_questions')
+  })
+
   it('POSTs the publish endpoint with snake_case body on submit', async () => {
     const wrapper = mountView()
     await flush()
@@ -129,7 +157,7 @@ describe('EvalProposalsQueueView', () => {
     expect(wrapper.find('[data-testid="publish-name"]').exists()).toBe(true)
 
     await wrapper.find('[data-testid="publish-name"]').setValue('Response quality check')
-    await wrapper.find('[data-testid="publish-config"]').setValue('{"criteria":["accurate"]}')
+    await wrapper.find('[data-testid="publish-config"]').setValue(JSON.stringify(typedJudgeConfig))
     await wrapper.find('[data-testid="publish-confirm"]').trigger('click')
     await flush()
 
@@ -139,8 +167,8 @@ describe('EvalProposalsQueueView', () => {
       params: { path: { record_id: 'rec-1' } },
       body: {
         name: 'Response quality check',
-        eval_type: 'llm_judge',
-        config: { criteria: ['accurate'] },
+        eval_type: 'model_judge',
+        config: typedJudgeConfig,
       },
     })
   })
@@ -154,7 +182,11 @@ describe('EvalProposalsQueueView', () => {
     await nextTick()
 
     await wrapper.find('[data-testid="publish-name"]').setValue('Schema check')
-    await wrapper.find('[data-testid="publish-config"]').setValue('{}')
+    // The dialog now seeds a VALID typed model_judge config by default.
+    const seeded = JSON.parse(
+      (wrapper.vm as unknown as { publishForm: { config_json: string } }).publishForm.config_json,
+    )
+    expect(seeded.answer_contract).toBe('typed_questions')
     await wrapper.find('[data-testid="publish-confirm"]').trigger('click')
     await flush()
 
@@ -162,8 +194,8 @@ describe('EvalProposalsQueueView', () => {
       params: { path: { record_id: 'rec-3' } },
       body: {
         name: 'Schema check',
-        eval_type: 'llm_judge',
-        config: {},
+        eval_type: 'model_judge',
+        config: seeded,
         node_id: '11111111-1111-1111-1111-111111111111',
       },
     })
@@ -201,24 +233,41 @@ describe('EvalProposalsQueueView', () => {
     expect(mockPost).not.toHaveBeenCalled()
   })
 
-  it('treats a blank config field as an empty object', async () => {
+  it('publishes a proposal with a valid typed judge config', async () => {
+    const typedConfig = {
+      field: 'output',
+      answer_contract: 'typed_questions',
+      backing: { kind: 'model_backend' },
+      questions: [
+        {
+          id: 'verdict',
+          type: 'noul',
+          instructions: 'Is the output acceptable?',
+          criteria: [],
+          weight: 1,
+          required: true,
+          min_pass_confidence: 0.5,
+        },
+      ],
+      pass_rule: { kind: 'weighted_score_at_least', threshold: 0.5 },
+      verdict_kind: 'assessment',
+    }
     const wrapper = mountView()
     await flush()
 
     await wrapper.find('[data-testid="proposal-publish"]').trigger('click')
     await nextTick()
-    await wrapper.find('[data-testid="publish-name"]').setValue('No config')
-    await wrapper.find('[data-testid="publish-config"]').setValue('   ')
+    await wrapper.find('[data-testid="publish-name"]').setValue('Typed judge')
+    await wrapper.find('[data-testid="publish-config"]').setValue(JSON.stringify(typedConfig))
     await nextTick()
 
-    // A blank config has no parse error and is submit-able.
     expect(wrapper.text()).not.toContain('views.EvalProposalsQueueView.config_invalid')
     await wrapper.find('[data-testid="publish-confirm"]').trigger('click')
     await flush()
 
     expect(mockPost).toHaveBeenCalledWith('/api/v1/feedback/proposals/{record_id}/publish', {
       params: { path: { record_id: 'rec-1' } },
-      body: { name: 'No config', eval_type: 'llm_judge', config: {} },
+      body: { name: 'Typed judge', eval_type: 'model_judge', config: typedConfig },
     })
   })
 

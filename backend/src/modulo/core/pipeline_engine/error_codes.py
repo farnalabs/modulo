@@ -898,6 +898,43 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Eval suite failed.",
     ),
+    # --- judge codes (ADR 066 D6) -----------------------------------------
+    # A judge that produced NO verdict. These are the failed instrument, not a
+    # failed check (ADR 066 D18): every quality aggregate excludes
+    # ``outcome='error'`` rows from both its denominator and its failure count
+    # through the shared ``non_guardrail_eval_results_clause`` (dashboard,
+    # admin eval dashboard, variant batches, quality report and the compliance
+    # evidence index), as do the suite-run pass rate and the feedback eval-gap
+    # view. The rows stay persisted with a coded reason and a NULL score so the
+    # instrument failure remains auditable (a policy gate still fails closed).
+    # They are registered here so the first canonicalising consumer renders a
+    # real guidance string instead of "Unknown error".
+    "judge.timeout": ErrorCodeSpec(
+        error_class="judge",
+        retryable=True,
+        alert_severity="warning",
+        guidance="The model judge did not answer before its bound; no verdict was produced.",
+    ),
+    "judge.malformed_response": ErrorCodeSpec(
+        error_class="judge",
+        retryable=False,
+        alert_severity="warning",
+        guidance="The model judge returned a response that is not a valid verdict; no verdict was produced.",
+    ),
+    "judge.unavailable": ErrorCodeSpec(
+        error_class="judge",
+        retryable=True,
+        alert_severity="warning",
+        guidance="No model judge was available to answer; no verdict was produced.",
+    ),
+    "judge.configuration": ErrorCodeSpec(
+        error_class="judge",
+        retryable=False,
+        alert_severity="critical",
+        guidance=(
+            "The judge definition is misconfigured (missing/unresolvable field or backend); no verdict was produced."
+        ),
+    ),
     # --- config codes ----------------------------------------------------
     "config.error": ErrorCodeSpec(
         error_class="config",

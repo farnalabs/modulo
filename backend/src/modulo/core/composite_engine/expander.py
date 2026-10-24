@@ -106,14 +106,14 @@ def _validate_validation_field(
 def run_output_validation(
     mapped_output: dict[str, Any],
     output_validation: OutputValidation,
-    llm_judge_callable: Any | None = None,
+    model_judge_callable: Any | None = None,
 ) -> ValidationResult:
     """Run eval definitions against the mapped composite output.
 
     Args:
         mapped_output: The output dict after field mapping.
         output_validation: The OutputValidation config with eval definitions.
-        llm_judge_callable: Optional callable for llm_judge type evals.
+        model_judge_callable: Optional callable for model_judge type evals.
             Must accept ``(output: dict, eval_config: dict)`` and return
             a dict with keys ``passed`` (bool) and ``detail`` (str).
 
@@ -133,8 +133,11 @@ def run_output_validation(
                 _validate_regex_eval(name, config, mapped_output, failures)
             case "json_schema":
                 _validate_json_schema_eval(name, config, mapped_output, failures)
-            case "llm_judge":
-                _validate_llm_judge_eval(name, config, mapped_output, llm_judge_callable, failures)
+            case "model_judge":
+                # ADR 066 D11: the composite engine is an EXPLICIT named
+                # exclusion. The helper raises a loud NotImplementedError rather
+                # than silently treating the eval as absent or incomparable.
+                _validate_model_judge_eval(name, config, mapped_output, model_judge_callable, failures)
             case _:
                 raise ValueError(f"Unknown eval type for output validation: {eval_def.type}")
 
@@ -193,28 +196,22 @@ def _validate_json_schema_eval(
         failures.append(_eval_fail(name, f"JSON Schema definition error: {exc.message}"))
 
 
-def _validate_llm_judge_eval(
+def _validate_model_judge_eval(
     name: str,
     config: dict[str, Any],
     mapped_output: dict[str, Any],
-    llm_judge_callable: Any | None,
+    model_judge_callable: Any | None,
     failures: list[str],
 ) -> None:
-    if llm_judge_callable is None:
-        failures.append(_eval_fail(name, "llm_judge requires a callable but none provided"))
-        return
-    try:
-        raw = llm_judge_callable(mapped_output, config)
-        if not isinstance(raw, dict):
-            failures.append(_eval_fail(name, "llm_judge returned non-dict result"))
-            return
-        if not raw.get("passed"):
-            detail = raw.get("detail", "llm_judge evaluated as failed")
-            failures.append(_eval_fail(name, detail))
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        failures.append(_eval_fail(name, f"llm_judge raised: {exc}"))
+    """Loudly unsupported — see ADR 066 D11 (explicit named exclusion).
+
+    Kept (rather than deleted) so a direct caller fails loudly too instead of
+    resurrecting the silently-incomparable path.
+    """
+    raise NotImplementedError(
+        f"model_judge output validation ({name!r}) is not supported by the composite "
+        "engine (ADR 066 D11: explicit named exclusion). Use a pipeline eval."
+    )
 
 
 async def execute_composite_with_retry(
@@ -223,7 +220,7 @@ async def execute_composite_with_retry(
     parameter_values: dict[str, Any] | None = None,
     input_payload: dict[str, Any] | None = None,
     output_validation: OutputValidation | None = None,
-    llm_judge_callable: Any | None = None,
+    model_judge_callable: Any | None = None,
 ) -> dict[str, Any]:
     """Execute a composite sub-pipeline with output validation and retry.
 
@@ -238,7 +235,7 @@ async def execute_composite_with_retry(
         input_payload: The input payload to pass through to the sub-pipeline.
         output_validation: Output validation configuration. If None,
             validation is skipped and the output is returned directly.
-        llm_judge_callable: Optional callable for llm_judge type evals.
+        model_judge_callable: Optional callable for model_judge type evals.
 
     Returns:
         The validated mapped output dict.
@@ -269,7 +266,7 @@ async def execute_composite_with_retry(
         if not output_validation.eval_definitions:
             return mapped_output
 
-        result = run_output_validation(mapped_output, output_validation, llm_judge_callable)
+        result = run_output_validation(mapped_output, output_validation, model_judge_callable)
 
         if result.passed:
             return mapped_output

@@ -37,15 +37,15 @@ def ctx():
 
 
 @given(
-    parsers.parse('node "{node_name}" has an llm_judge eval "{eval_name}"'),
+    parsers.parse('node "{node_name}" has an model_judge eval "{eval_name}"'),
 )
-def node_has_llm_judge_eval(node_name: str, eval_name: str, ctx):
+def node_has_model_judge_eval(node_name: str, eval_name: str, ctx):
     ctx["node_name"] = node_name
     ctx["eval_name"] = eval_name
     ctx["eval_def"] = {
         "id": uuid.uuid4(),
         "name": eval_name,
-        "eval_type": "llm_judge",
+        "eval_type": "model_judge",
         "config": {"field": "content"},
         "failure_behaviour": "warn",
     }
@@ -142,11 +142,11 @@ def node_outputs(output_json: str, ctx):
 
 
 @when(
-    parsers.parse("the llm_judge callable returns {result_json}"),
+    parsers.parse("the model_judge callable returns {result_json}"),
 )
-def llm_judge_returns(result_json: str, ctx):
+def model_judge_returns(result_json: str, ctx):
     result = json.loads(result_json)
-    ctx["llm_judge_result"] = result
+    ctx["model_judge_result"] = result
     ctx["state"]["score"] = result.get("score", 0.0)
 
 
@@ -362,9 +362,9 @@ def _evaluate_conditional_gate(ctx: dict[str, Any]) -> None:
     # Build eval definitions if present.
     eval_defs = _build_eval_defs(ctx)
 
-    # If a mock llm_judge result is provided, patch EvalEngine.evaluate
+    # If a mock model_judge result is provided, patch EvalEngine.evaluate
     # to return it instead of calling a real LLM.
-    mock_result = ctx.get("llm_judge_result")
+    mock_result = ctx.get("model_judge_result")
     if mock_result is not None:
         _patch_eval_engine(ctx, mock_result, state, gate_config, eval_defs)
         return
@@ -392,7 +392,7 @@ def _patch_mock_scores(
         if ms is not None:
             score_map[ed["name"]] = float(ms)
 
-    def _mock_evaluate_result(self, output, eval_def, *, run_id=None, llm_judge_callable=None):
+    def _mock_evaluate_result(self, output, eval_def, *, run_id=None, model_judge_callable=None):
         mock_score = score_map.get(eval_def.name)
         if mock_score is not None:
             _passed = mock_score >= 0.5
@@ -436,7 +436,7 @@ def _patch_eval_engine(
     _score = mock_result.get("score")
     _detail = mock_result.get("detail", "")
 
-    def _mock_evaluate_result(self, output, eval_def, *, run_id=None, llm_judge_callable=None):
+    def _mock_evaluate_result(self, output, eval_def, *, run_id=None, model_judge_callable=None):
         return EvalResult(
             id=uuid.uuid4(),
             run_id=uuid.uuid4(),

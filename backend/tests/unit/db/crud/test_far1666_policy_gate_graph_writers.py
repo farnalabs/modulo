@@ -184,7 +184,7 @@ async def _seed_eval(
         pipeline_id=_PIPELINE_ID,
         node_id=uuid.UUID(node_id),
         account_id=_ACCOUNT_ID,
-        eval_type="llm_judge",
+        eval_type="model_judge",
         config_json={},
         version=1,
     )

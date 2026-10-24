@@ -1,7 +1,7 @@
 Feature: Eval Scorer Dispatch
   As a pipeline author
   I want the eval engine to apply the correct scorer per criterion
-  So that different eval types (regex, LLM judge, JSON Schema, custom) work correctly
+  So that different eval types (regex, Model judge, JSON Schema, custom) work correctly
 
   Scenario: Regex scorer matches expected pattern
     Given an eval suite with multiple scorer types
@@ -47,8 +47,8 @@ Feature: Eval Scorer Dispatch
     When the eval engine scores using each scorer
     Then an error is raised for unknown eval type
 
-  Scenario: LLM judge scorer scores above threshold
+  Scenario: Model judge scorer scores above threshold
     Given an eval suite with multiple scorer types
-    And the criterion uses eval_type "llm_judge" with rubric prompt "quality"
+    And the criterion uses eval_type "model_judge" with rubric prompt "quality"
     When the eval engine scores using each scorer
     Then the correct scorer is applied per criterion

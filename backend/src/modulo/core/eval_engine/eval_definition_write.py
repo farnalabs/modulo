@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.eval_engine.policy_gate import (
     validate_binding,
 )
+from modulo.core.eval_engine.typed_judge import JudgeConfigWriteError, reject_legacy_judge_write
 
 if TYPE_CHECKING:
     from modulo.db.models.eval import Eval
@@ -150,6 +151,77 @@ def validate_guardrail_request(
     _reject_invalid_detection_type(config_json)
     _reject_invalid_detection_envelope(config_json)
     _reject_destroy_without_pepper(config_json)
+
+
+# ---------------------------------------------------------------------------
+# Judge config chokepoint (ADR 066 D8)
+# ---------------------------------------------------------------------------
+
+
+async def _enforce_judge_config_write(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    eval_type: str,
+    config_json: dict[str, Any],
+    existing_eval_id: uuid.UUID | None,
+) -> Eval | None:
+    """Require the typed dialect on create; freeze a stored legacy config.
+
+    ``create_or_update_eval`` is the single chokepoint for every write path, so
+    enforcing here covers REST, MCP, feedback publish and config-as-code at
+    once. No backfill: a stored legacy config stays byte-identical and is
+    executable as today; editing it is a typed 422 (ADR 066 D8).
+
+    Returns the ``Eval`` row loaded for ``existing_eval_id`` (or ``None`` when
+    there is no update id / no such row) so the caller reuses it for the update
+    rather than issuing the same SELECT twice.
+    """
+    stored_config: Any = None
+    stored_eval_type: str | None = None
+    existing_row: Eval | None = None
+    if existing_eval_id is not None:
+        from modulo.db.models.eval import Eval
+
+        existing_row = (
+            await session.execute(
+                select(Eval).where(
+                    Eval.id == existing_eval_id,
+                    Eval.organisation_id == org_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_row is not None:
+            stored_config = existing_row.config_json
+            stored_eval_type = existing_row.eval_type
+
+    # Run for a write that lands ``model_judge`` AND for one leaving a frozen
+    # legacy judge (changing its type away would otherwise discard the config
+    # without a migration).
+    if eval_type != "model_judge" and stored_eval_type != "model_judge":
+        return existing_row
+    try:
+        reject_legacy_judge_write(
+            config_json=config_json,
+            stored_config=stored_config,
+            stored_eval_type=stored_eval_type,
+            is_update=stored_config is not None,
+            new_eval_type=eval_type,
+        )
+    except JudgeConfigWriteError as exc:
+        # The repo's error contract surfaces ``detail["error"]`` as the RFC 9457
+        # ``code`` extension member (api/models/problem.py). Keep the hint in
+        # the human detail so REST callers see the remediation, and keep it as
+        # its own key for the MCP mapper (which does not go through RFC 9457).
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "error": exc.code,
+                "detail": f"{exc.message} {exc.hint}",
+                "hint": exc.hint,
+            },
+        ) from None
+    return existing_row
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +360,16 @@ async def create_or_update_eval(
     existing_eval_id = opts.existing_eval_id
     evaluation_mode = opts.evaluation_mode
 
+    # --- Judge dialect gate (ADR 066 D8) — every write path lands here ---
+
+    existing_row = await _enforce_judge_config_write(
+        session,
+        org_id=org_id,
+        eval_type=eval_type,
+        config_json=config_json,
+        existing_eval_id=existing_eval_id,
+    )
+
     # --- Branch on eval type BEFORE calling validate_binding ---
     pg_action = _resolve_pg_action(
         eval_type=eval_type,
@@ -312,6 +394,7 @@ async def create_or_update_eval(
         suite_id=suite_id,
         eval_suite_id=eval_suite_id,
         existing_eval_id=existing_eval_id,
+        existing_row=existing_row,
     )
 
     # --- PolicyGate persistence (branch 2 only) ---
@@ -381,19 +464,18 @@ async def _persist_eval_row(
     suite_id: str | None,
     eval_suite_id: uuid.UUID | None,
     existing_eval_id: uuid.UUID | None,
+    existing_row: Any = None,
 ) -> Any:
-    """Persist the Eval row (update path when ``existing_eval_id`` is given)."""
+    """Persist the Eval row (update path when ``existing_eval_id`` is given).
+
+    ``existing_row`` is the row the judge gate already loaded for this update
+    (``_enforce_judge_config_write``), so the update path reuses it instead of
+    issuing the same SELECT twice.
+    """
     from modulo.db.models.eval import Eval
 
     if existing_eval_id is not None:
-        existing = (
-            await session.execute(
-                select(Eval).where(
-                    Eval.id == existing_eval_id,
-                    Eval.organisation_id == org_id,
-                )
-            )
-        ).scalar_one_or_none()
+        existing = existing_row
         if existing is not None:
             _apply_eval_update(
                 existing,

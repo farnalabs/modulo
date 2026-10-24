@@ -28,6 +28,7 @@ from modulo.core.eval_engine.execute_suite_run import (
     EVAL_WATCH_EVENT_FAMILIES,
     SuiteRunEmptyDatasetError,
     SuiteRunExecutionError,
+    _case_results,
     _suite_run_transition,
     build_suite_run,
     build_suite_run_tuple,
@@ -38,6 +39,7 @@ from modulo.core.eval_engine.execute_suite_run import (
     suite_run_daily_spend_used,
     suite_run_daily_spend_used_for_trigger,
 )
+from modulo.core.eval_engine.typed_judge import JudgeErrorCode, JudgeExecutionError
 from modulo.db.models import Base
 from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.eval import Eval
@@ -195,35 +197,93 @@ async def test_execute_suite_run_rejects_empty_dataset(session) -> None:
         )
 
 
-async def test_failure_sink_transitions_run_to_failed(session) -> None:
-    """An orchestration failure sinks the run to ``failed`` + surfaces detail."""
+async def test_partial_run_keeps_one_row_per_definition_per_case(session) -> None:
+    """Some — not all — cases excluded is ``partial``, with no dropped rows."""
     org = await _org()
     suite, dataset, _, backend = await seed_suite(session, org)
-    await seed_cases(session, org, dataset, [{"category": "billing"}])
-    # Add an llm_judge definition with NO judge callable -> execute refuses.
-    llm_def = Eval(
+    await seed_cases(session, org, dataset, [{"category": "billing"}, {"category": "other"}])
+    judge_def = Eval(
         organisation_id=org,
         pipeline_id=uuid.uuid4(),
         name="judge",
-        eval_type="llm_judge",
-        config_json={"field": "output", "prompt": "grade"},
+        eval_type="model_judge",
+        config_json={"field": "output", "model_backend_id": str(uuid.uuid4())},
         eval_suite_id=suite.id,
         account_id=org,
     )
-    session.add(llm_def)
+    session.add(judge_def)
     await session.flush()
+    suite.eval_definition_ids = [*suite.eval_definition_ids, str(judge_def.id)]
+
+    def _judge(output: dict[str, Any], eval_def: Any) -> dict[str, Any]:
+        content = str(eval_def.config.get("_judge_content", ""))
+        if "'other'" in content:
+            raise JudgeExecutionError(JudgeErrorCode.JUDGE_UNAVAILABLE, "judge unavailable for this case")
+        return {"passed": True, "score": 1.0, "detail": "ok"}
 
     run = await build_suite_run(
         session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
     )
     await _suite_run_transition(session, run, SuiteRunState.RUNNING)
-    with pytest.raises(SuiteRunExecutionError, match="llm_judge"):
-        await execute_suite_run(session, run)
+    stats = await execute_suite_run(session, run, model_judge_callable=_judge)
+
+    assert stats["state"] == SuiteRunState.PARTIAL.value
+    assert stats["passed_cases"] == 1
+    assert stats["excluded_case_count"] == 1
+    rows = list((await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalars())
+    # 2 cases x 2 definitions, including the errored judge row.
+    assert len(rows) == 4
+    error_rows = [row for row in rows if row.outcome == "error"]
+    assert len(error_rows) == 1
+    assert error_rows[0].eval_id == judge_def.id
+    assert error_rows[0].score is None
+
+
+async def test_model_judge_without_callable_persists_error_and_fails_run(session) -> None:
+    """No judge callable is an ERROR outcome, not a silent refusal or a fail.
+
+    ADR 066 D6/D13: an eval that produced no verdict is still exactly ONE row
+    per definition per case (``outcome='error'``, NULL score, coded reason), the
+    case is excluded, and a run in which EVERY case is excluded terminalises
+    ``failed`` rather than ``partial``.
+    """
+    org = await _org()
+    suite, dataset, _, backend = await seed_suite(session, org)
+    await seed_cases(session, org, dataset, [{"category": "billing"}])
+    judge_def = Eval(
+        organisation_id=org,
+        pipeline_id=uuid.uuid4(),
+        name="judge",
+        eval_type="model_judge",
+        config_json={"field": "output", "prompt": "grade"},
+        eval_suite_id=suite.id,
+        account_id=org,
+    )
+    session.add(judge_def)
+    await session.flush()
+    suite.eval_definition_ids = [*suite.eval_definition_ids, str(judge_def.id)]
+
+    run = await build_suite_run(
+        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
+    )
+    await _suite_run_transition(session, run, SuiteRunState.RUNNING)
+    stats = await execute_suite_run(session, run)
+
     assert run.state == SuiteRunState.FAILED.value
-    assert "llm_judge" in (run.error_detail or "")
+    assert stats["state"] == SuiteRunState.FAILED.value
+    assert run.excluded_case_count == 1
+    rows = list((await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalars())
+    judge_rows = [row for row in rows if row.eval_id == judge_def.id]
+    assert len(judge_rows) == 1
+    judge_row = judge_rows[0]
+    assert judge_row.outcome == "error"
+    assert judge_row.score is None
+    assert judge_row.passed is False
+    assert judge_row.error_code == "judge.unavailable"
+    assert judge_row.judge_result_json is not None
 
 
-async def test_execute_suite_run_runs_llm_judge_when_callable_provided(session) -> None:
+async def test_execute_suite_run_runs_model_judge_when_callable_provided(session) -> None:
     """The counterpart to the refusal test: a wired callable runs the judge.
 
     Prove-the-fix (FAR-1712): the runner hard-refuses a judge-bearing suite when
@@ -238,7 +298,7 @@ async def test_execute_suite_run_runs_llm_judge_when_callable_provided(session) 
         organisation_id=org,
         pipeline_id=uuid.uuid4(),
         name="judge",
-        eval_type="llm_judge",
+        eval_type="model_judge",
         config_json={"field": "output", "model_backend_id": str(uuid.uuid4())},
         eval_suite_id=suite.id,
         account_id=org,
@@ -255,7 +315,7 @@ async def test_execute_suite_run_runs_llm_judge_when_callable_provided(session) 
     run = await build_suite_run(
         session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
     )
-    stats = await execute_suite_run(session, run, llm_judge_callable=_callable)
+    stats = await execute_suite_run(session, run, model_judge_callable=_callable)
     await session.flush()
 
     assert stats["state"] == SuiteRunState.COMPLETED.value
@@ -840,3 +900,30 @@ class TestFar1729SuiteLoaderSourcePin:
         compiled = captured[0]
         assert "evals" in compiled, f"loader must read the evals table, got: {compiled}"
         assert "eval_definitions" not in compiled, f"loader must not read the frozen table, got: {compiled}"
+
+
+def test_an_unexpected_engine_failure_still_produces_an_error_row() -> None:
+    """Every definition produces exactly one row; a crash is an error row."""
+    run = SimpleNamespace(id=uuid.uuid4(), organisation_id=uuid.uuid4())
+    case = SimpleNamespace(id=uuid.uuid4(), input_payload={"output": "x"})
+    definition = SimpleNamespace(id=uuid.uuid4(), node_id="")
+
+    class _RaisingEngine:
+        def evaluate_result(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("engine boom")
+
+    results, errored = _case_results(
+        run,
+        case,
+        [definition],
+        _RaisingEngine(),
+        None,
+        None,
+        eval_definition_version=1,
+    )
+
+    assert len(results) == 1
+    assert errored == 1
+    assert results[0].outcome == "error"
+    assert results[0].error_code == "judge.unavailable"
+    assert results[0].score is None

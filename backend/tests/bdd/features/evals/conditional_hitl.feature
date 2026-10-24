@@ -7,21 +7,21 @@ Feature: Conditional HITL Gating
     Given I am authenticated as an admin in org "acme"
 
   Scenario: Eval score below threshold triggers HITL interrupt
-    Given node "content-generator" has an llm_judge eval "quality-check"
+    Given node "content-generator" has an model_judge eval "quality-check"
     And the edge after "content-generator" has a HITL review
     And the gate condition references eval "quality-check" with threshold 0.8 operator "lt"
     When the node outputs {"content": "Draft document"}
-    And the llm_judge callable returns {"passed": false, "score": 0.45, "detail": "Poor quality"}
+    And the model_judge callable returns {"passed": false, "score": 0.45, "detail": "Poor quality"}
     Then the gate condition evaluates to true
     And a NodeInterrupt is raised
     And the run transitions to "awaiting_human"
 
   Scenario: Eval score above threshold skips the HITL review
-    Given node "content-generator" has an llm_judge eval "quality-check"
+    Given node "content-generator" has an model_judge eval "quality-check"
     And the edge after "content-generator" has a HITL review
     And the gate condition references eval "quality-check" with threshold 0.8 operator "lt"
     When the node outputs {"content": "Well-written document"}
-    And the llm_judge callable returns {"passed": true, "score": 0.92, "detail": "High quality"}
+    And the model_judge callable returns {"passed": true, "score": 0.92, "detail": "High quality"}
     Then the gate condition evaluates to false
     And execution continues without interrupting
     And the gate artifact contains "condition_skipped"
@@ -48,12 +48,12 @@ Feature: Conditional HITL Gating
     And the gate proceeds to eval checks
 
   Scenario: Eval block failure takes priority over HITL interrupt
-    Given node "content-generator" has an llm_judge eval "quality-check"
+    Given node "content-generator" has an model_judge eval "quality-check"
     And the eval has failure_behaviour "block"
     And the edge after "content-generator" has a HITL review
     And the gate condition references eval "quality-check" with threshold 0.8 operator "lt"
     When the node outputs {"content": "Insecure content"}
-    And the llm_judge callable returns {"passed": false, "score": 0.1, "detail": "Security violation"}
+    And the model_judge callable returns {"passed": false, "score": 0.1, "detail": "Security violation"}
     Then EvalBlockedError is raised
     And the run transitions to "eval_failed"
     And no HITL interrupt is raised
@@ -77,7 +77,7 @@ Feature: Conditional HITL Gating
     And a NodeInterrupt is raised
 
   Scenario: Reject routing from conditional HITL review
-    Given node "content-generator" has an llm_judge eval "quality-check"
+    Given node "content-generator" has an model_judge eval "quality-check"
     And the edge after "content-generator" has a HITL review
     And the gate condition references eval "quality-check" with threshold 0.8 operator "lt"
     And the gate has reject_target "human-fix-node"

@@ -2297,6 +2297,28 @@ class TestTriggerPipelinePaths(_AuthContext):
 # ---------------------------------------------------------------------------
 
 
+def _typed_judge_config() -> dict:
+    """A structurally valid typed judge config (ADR 066 D8)."""
+    return {
+        "field": "output",
+        "answer_contract": "typed_questions",
+        "backing": {"kind": "model_backend", "model_backend_id": str(uuid.uuid4())},
+        "questions": [
+            {
+                "id": "verdict",
+                "type": "noul",
+                "instructions": "Is the output acceptable?",
+                "criteria": [],
+                "weight": 1.0,
+                "required": True,
+                "min_pass_confidence": 0.5,
+            }
+        ],
+        "pass_rule": {"kind": "weighted_score_at_least", "threshold": 0.5},
+        "verdict_kind": "assessment",
+    }
+
+
 class TestEvalDefinitionTools(_AdminContext):
     def test_assert_failure_behaviour_rejects_unknown(self) -> None:
         # FAR-1103 chunk 5a retired the helper; the symbol must not reappear
@@ -2308,12 +2330,12 @@ class TestEvalDefinitionTools(_AdminContext):
 
     async def test_create_auth_expired(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=False)):
-            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge")
         assert result["error"] == "auth_expired"
 
     async def test_create_rejects_blank_name(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
-            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="  ", eval_type="llm_judge")
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="  ", eval_type="model_judge")
         assert result["error"] == "invalid_name"
 
     async def test_create_rejects_bad_failure_behaviour(self) -> None:
@@ -2322,26 +2344,26 @@ class TestEvalDefinitionTools(_AdminContext):
         # silently applying an unvalidated behaviour.
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
             result = await create_eval_definition(
-                pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge", failure_behaviour="retry"
+                pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge", failure_behaviour="retry"
             )
         assert result.get("error"), result
 
     async def test_create_rejects_bad_pass_threshold(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
             result = await create_eval_definition(
-                pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge", pass_threshold=2.0
+                pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge", pass_threshold=2.0
             )
         assert result["error"] == "invalid_pass_threshold"
 
     async def test_create_rejects_invalid_pipeline_id(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
-            result = await create_eval_definition(pipeline_id="nope", name="n", eval_type="llm_judge")
+            result = await create_eval_definition(pipeline_id="nope", name="n", eval_type="model_judge")
         assert result["error"] == "invalid_id"
 
     async def test_create_rejects_invalid_node_id(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
             result = await create_eval_definition(
-                pipeline_id=str(uuid.uuid4()), node_id="nope", name="n", eval_type="llm_judge"
+                pipeline_id=str(uuid.uuid4()), node_id="nope", name="n", eval_type="model_judge"
             )
         assert result["error"] == "invalid_id"
 
@@ -2366,7 +2388,7 @@ class TestEvalDefinitionTools(_AdminContext):
             patch("modulo.api.routes.evals._validate_guardrail_request", return_value=None),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
-            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge")
         assert result["error"] == "pipeline_not_found"
 
     @pytest.mark.parametrize(
@@ -2392,7 +2414,12 @@ class TestEvalDefinitionTools(_AdminContext):
             patch("modulo.api.routes.evals._eval_def_to_dict", return_value={"id": "x"}),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
-            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
+            result = await create_eval_definition(
+                pipeline_id=str(uuid.uuid4()),
+                name="n",
+                eval_type="model_judge",
+                config_json=_typed_judge_config(),
+            )
         assert result["error"] == expected
 
     async def test_create_outer_http_exception(self) -> None:
@@ -2408,7 +2435,7 @@ class TestEvalDefinitionTools(_AdminContext):
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
-            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge")
         assert result["error"] == "validation_failed"
 
     async def test_create_policy_gate_binding_violation(self) -> None:
@@ -2424,7 +2451,7 @@ class TestEvalDefinitionTools(_AdminContext):
             ),
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
-            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="llm_judge")
+            result = await create_eval_definition(pipeline_id=str(uuid.uuid4()), name="n", eval_type="model_judge")
         assert result["error"] == "validation_failed"
         assert "PolicyGate binding violation" in result["detail"]
 
@@ -2437,7 +2464,7 @@ class TestEvalDefinitionTools(_AdminContext):
         """A binding violation from the shared helper maps to the MCP
         ``validation_failed`` envelope on the update path."""
         eval_def = MagicMock()
-        eval_def.eval_type = "llm_judge"
+        eval_def.eval_type = "model_judge"
         eval_def.failure_behaviour = "warn"
         eval_def.config_json = {}
         session = _mock_session()
@@ -2502,9 +2529,9 @@ class TestEvalDefinitionTools(_AdminContext):
 
     async def test_update_full_success(self) -> None:
         eval_def = MagicMock()
-        eval_def.eval_type = "llm_judge"
+        eval_def.eval_type = "model_judge"
         eval_def.failure_behaviour = "warn"
-        eval_def.config_json = {}
+        eval_def.config_json = _typed_judge_config()
         eval_def.version = 1
         session = _mock_session()
         session.execute.return_value = _make_execute_result(scalar_one_or_none=eval_def)
@@ -2518,13 +2545,67 @@ class TestEvalDefinitionTools(_AdminContext):
                 eval_id=str(uuid.uuid4()),
                 node_id=str(uuid.uuid4()),
                 name="new-name",
-                eval_type="llm_judge",
-                config_json={"k": "v"},
+                eval_type="model_judge",
+                config_json=_typed_judge_config(),
                 pass_threshold=0.5,
                 suite_id="suite-1",
             )
         assert result == {"id": "x"}
         assert eval_def.version == 2
+
+    async def test_create_rejects_a_legacy_judge_config_and_surfaces_the_code(self) -> None:
+        """MCP must return the D8 code + remediation, not a log constant."""
+        legacy = {"field": "output", "model_backend_id": str(uuid.uuid4())}
+        session = _mock_session()
+        pipeline = MagicMock()
+        session.execute.return_value = _make_execute_result(scalar_one_or_none=pipeline)
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await create_eval_definition(
+                pipeline_id=str(uuid.uuid4()),
+                name="legacy-judge",
+                eval_type="model_judge",
+                config_json=legacy,
+            )
+
+        assert result["error"] == "validation_failed"
+        assert result["code"] == "judge_config_typed_required"
+        assert result["hint"]
+
+    async def test_update_rejects_a_legacy_judge_edit_and_surfaces_the_code(self) -> None:
+        legacy = {"field": "output", "model_backend_id": str(uuid.uuid4())}
+        eval_def = MagicMock()
+        eval_def.id = uuid.uuid4()
+        eval_def.pipeline_id = uuid.uuid4()
+        eval_def.account_id = uuid.uuid4()
+        eval_def.node_id = None
+        eval_def.name = "legacy-judge"
+        eval_def.eval_type = "model_judge"
+        eval_def.config_json = legacy
+        eval_def.version = 1
+        eval_def.pass_threshold = None
+        eval_def.suite_id = None
+        eval_def.eval_suite_id = None
+        session = _mock_session()
+        session.execute.side_effect = [
+            _make_execute_result(scalar_one_or_none=eval_def),  # _load_eval_def
+            _make_execute_result(scalar_one_or_none=None),  # PolicyGate lookup
+            _make_execute_result(scalar_one_or_none=eval_def),  # judge chokepoint: stored row
+        ]
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+        ):
+            result = await update_eval_definition(
+                eval_id=str(uuid.uuid4()),
+                config_json={**legacy, "instructions": "changed"},
+            )
+
+        assert result["error"] == "validation_failed"
+        assert result["code"] == "judge_config_legacy_read_only"
+        assert result["hint"]
 
     async def test_update_guardrail_validation_failure(self) -> None:
         eval_def = MagicMock()
@@ -2546,7 +2627,7 @@ class TestEvalDefinitionTools(_AdminContext):
 
     async def test_update_outer_http_exception(self) -> None:
         eval_def = MagicMock()
-        eval_def.eval_type = "llm_judge"
+        eval_def.eval_type = "model_judge"
         eval_def.failure_behaviour = "warn"
         eval_def.config_json = {}
         session = _mock_session()
