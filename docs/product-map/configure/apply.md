@@ -26,6 +26,7 @@ unit-tests:
   - backend/tests/unit/cli/test_apply_git_content.py
   - backend/tests/unit/cli/test_apply_run_enabled.py
   - backend/tests/unit/cli/test_apply_credential_ref.py
+  - backend/tests/unit/cli/test_apply_base_url.py
   - backend/tests/unit/core/test_git_content.py
   - backend/tests/unit/pipeline_engine/test_sandbox_git_content.py
   - backend/tests/unit/graph_validator/test_edges_and_sandbox_validation.py
@@ -91,6 +92,27 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       (`cli/apply/models.py` `credential_reference()` /
       `_exactly_one_credential`, `cli/apply/executor.py`
       `_block_missing_credential_refs`, `test_apply_credential_ref.py`)
+- [x] A model backend may declare the custom endpoint FAR-2046 introduced:
+      `base_url` (a self-hosted / OpenAI-compatible gateway) plus
+      `allow_insecure_http` for a plain-`http` air-gapped gateway. Both follow
+      the engine's declare-to-manage rule: **omitting the key leaves a
+      UI/API-set endpoint untouched** (never hashed, never written), an
+      **explicit `null` clears** it, and a string sets/replaces it. Declaring
+      `allow_insecure_http` without a non-null `base_url` is a load error (the
+      opt-in is meaningless without an endpoint). The endpoint is part of the
+      canonical drift hash, so a changed `base_url` shows as drift in `--diff`
+      and PATCHes on apply; `allow_insecure_http` hashes in its observable
+      (scheme-derived) form because the server stores only the endpoint; a
+      raw-flag comparison would report permanent false drift on `https`.
+      A declared `base_url` is validated at PLAN time through the shared
+      `core/model_backend_endpoints.validate_base_url` (metadata hosts,
+      non-canonical IP literals, query/fragment, `http` without the opt-in),
+      and the FAR-2046 credential-binding rule is surfaced at PLAN time too: a
+      custom/new destination, or a change of destination, requires a **literal**
+      `api_key`, so a `credential_ref` / `secretref://` config is blocked with
+      the cause named instead of 422-ing halfway through an apply
+      (`cli/apply/models.py`, `cli/apply/plan.py`, `cli/apply/executor.py`,
+      `test_apply_base_url.py`)
 - [x] Planning is name-based upsert scoped to the org (the HTTP transport is
       the operator's `MODULO_URL` + `MODULO_API_KEY` bearer org key):
       per-entity decisions `created` / `updated` / `unchanged` / `blocked`,
