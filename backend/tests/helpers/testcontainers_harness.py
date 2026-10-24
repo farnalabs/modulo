@@ -35,7 +35,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -176,12 +176,28 @@ def is_transient_start_error(exc: Exception) -> bool:
     itself returned 200, PR #2275). Connection resets and 429/5xx API errors
     are the same class of failure. A genuinely missing tag also raises
     ``ImageNotFound`` and fails identically on every attempt, so it is still
-    reported loudly after the last one.
+    reported loudly after the last one. The classification inspects the
+    whole ``__cause__``/``__context__`` chain, so a transient failure wrapped
+    by an outer exception is still retried.
     """
-    if isinstance(exc, (ImageNotFound, requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+    return any(_is_transient_start_error(err) for err in _exception_chain(exc))
+
+
+def _exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    """Yield *exc* and every exception it wraps (``__cause__`` / ``__context__``)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _is_transient_start_error(err: BaseException) -> bool:
+    if isinstance(err, (ImageNotFound, requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
         return True
-    if isinstance(exc, APIError):
-        response = getattr(exc, "response", None)
+    if isinstance(err, APIError):
+        response = getattr(err, "response", None)
         status = getattr(response, "status_code", None) if response is not None else None
         return status is None or status == 429 or status >= 500
     return False
