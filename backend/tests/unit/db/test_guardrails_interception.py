@@ -93,6 +93,32 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
         yield s
 
 
+async def _raise_mechanism_error(*args: Any, **kwargs: Any) -> Any:
+    raise RuntimeError("eval backend unavailable")
+
+
+async def _recording_interception_pass(*args: Any, **kwargs: Any) -> Any:
+    guardrail_defs = args[1]
+    payload = args[2]
+    assert kwargs["detection_only"] is True
+    return guardrails_module.GuardrailInterceptionOutcome(
+        payload=payload,
+        results=[
+            guardrails_module.EvalResult(
+                run_id=uuid.uuid4(),
+                node_id=definition.node_id or "",
+                eval_id=definition.id,
+                passed=True,
+                score=1.0,
+                detail="detected",
+            )
+            for definition in guardrail_defs
+            if definition.is_muted
+        ],
+        skipped=list(kwargs["skipped"]),
+    )
+
+
 async def _seed(session: AsyncSession) -> None:
     session.add(Organisation(id=_ORG, name="test org", slug="test-org"))
     session.add(Account(id=_ACCOUNT, email="admin@example.com", display_name="admin"))
@@ -158,6 +184,7 @@ async def _seed_guardrail(
     name: str,
     action: str,
     config: dict[str, Any] | None = None,
+    is_muted: bool = False,
 ) -> uuid.UUID:
     cfg: dict[str, Any] = {
         "action": action,
@@ -179,6 +206,7 @@ async def _seed_guardrail(
         eval_type="guardrail",
         config_json=cfg,
         account_id=_ACCOUNT,
+        is_muted=is_muted,
     )
     session.add(eval_row)
     await session.flush()
@@ -667,6 +695,82 @@ async def test_create_run_conformance_non_conformant_block_fails_closed(session:
     assert run.status == "eval_failed"
     assert run.error_code == "eval_blocked"
     assert "non-conformant" in (run.error_detail or "")
+
+
+async def test_create_run_muted_only_mechanism_error_does_not_block_and_preserves_evidence(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
+    await _seed(session)
+    guardrail_id = await _seed_guardrail(session, name="muted-block", action="block", is_muted=True)
+    monkeypatch.setattr(guardrails_module, "run_interception_pass_async", _raise_mechanism_error)
+
+    run = await _create(session, input_payload={"body": "clean"})
+
+    assert run.status == "pending"
+    rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].eval_id == guardrail_id
+    assert "mechanism error" in (rows[0].detail or "")
+
+
+@pytest.mark.parametrize("action", ["block", "redact"])
+async def test_create_run_active_mechanism_error_fails_closed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, action: str
+):
+    await _seed(session)
+    await _seed_guardrail(session, name=f"active-{action}", action=action)
+    monkeypatch.setattr(guardrails_module, "run_interception_pass_async", _raise_mechanism_error)
+
+    run = await _create(session, input_payload={"body": "clean"})
+
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert "mechanism error" in (run.error_detail or "")
+
+
+async def test_create_run_mixed_conformance_block_uses_detection_only_pass(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
+    await _seed(session)
+    muted_id = await _seed_guardrail(session, name="muted-sibling", action="block", is_muted=True)
+    await _seed_guardrail(
+        session,
+        name="needs-docker",
+        action="block",
+        config={"required_capabilities": ["docker"]},
+    )
+    monkeypatch.setattr(guardrails_module, "run_interception_pass_async", _recording_interception_pass)
+
+    run = await _create(session, input_payload={"body": "clean"})
+
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].eval_id == muted_id
+    assert rows[0].passed is True
+
+
+async def test_create_run_conformance_block_preserves_normal_muted_evidence(session: AsyncSession):
+    await _seed(session)
+    muted_id = await _seed_guardrail(session, name="muted-sibling", action="block", is_muted=True)
+    await _seed_guardrail(
+        session,
+        name="needs-docker",
+        action="block",
+        config={"required_capabilities": ["docker"]},
+    )
+
+    run = await _create(session, input_payload={"body": "leak SECRET_ABC12345"})
+
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
+    assert len(rows) == 2
+    muted_rows = [row for row in rows if row.eval_id == muted_id]
+    assert len(muted_rows) == 1
+    assert muted_rows[0].passed is True
+    assert "mechanism error" not in (muted_rows[0].detail or "")
 
 
 async def test_create_run_conformance_satisfied_passes(session: AsyncSession):

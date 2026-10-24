@@ -53,7 +53,7 @@ _ITERATIONS = 100
 _SEAM_TIMEOUT_SECONDS = 30.0
 
 
-def _canary_definition(*, action: str) -> EvalDefinition:
+def _canary_definition(*, action: str, is_muted: bool = False) -> EvalDefinition:
     """A deterministic canary guardrail row (org-level, block/observe action)."""
     return EvalDefinition(
         id=uuid.uuid4(),
@@ -69,6 +69,7 @@ def _canary_definition(*, action: str) -> EvalDefinition:
             "pattern": _CANARY_PATTERN,
         },
         failure_behaviour="warn",
+        is_muted=is_muted,
     )
 
 
@@ -90,6 +91,21 @@ async def _pass_once(action: str, payload: dict[str, Any]) -> bool:
         return outcome.blocked
     # observe: the regex ``passed`` result means the pattern MATCHED = violation.
     return any(r.passed for r in outcome.results)
+
+
+@pytest.mark.asyncio
+async def test_muted_guardrail_records_detection_without_blocking():
+    """Muted guardrails retain finding evidence while suppressing interruption."""
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [_canary_definition(action=GuardrailAction.BLOCK.value, is_muted=True)],
+        {"body": f"leak {_CANARY_MARKER} here"},
+        timeout_seconds=_SEAM_TIMEOUT_SECONDS,
+    )
+
+    assert outcome.blocked is False
+    assert len(outcome.results) == 1
+    assert outcome.results[0].passed is True
 
 
 @pytest.mark.asyncio

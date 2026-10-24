@@ -714,9 +714,11 @@ def evaluate_guardrails(
 
         gate_row = (policy_gates or {}).get(eval_def.id)
         if gate_row is not None:
-            _record_gated_violation(eval_def, result, gate_row, violations)
+            if not eval_def.is_muted:
+                _record_gated_violation(eval_def, result, gate_row, violations)
+            continue
         # No gate row — fall back to direct config_json.action check.
-        elif eval_def.config.get("action") == GuardrailAction.BLOCK:
+        if not eval_def.is_muted and eval_def.config.get("action") == GuardrailAction.BLOCK:
             violations.append((eval_def, result))
 
     if violations and raise_on_block:
@@ -867,7 +869,11 @@ def _detect_block(
     """
     for eval_def, result in zip(definitions, results, strict=True):
         detection_type, _ = _resolve_detection(eval_def)
-        if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
+        if (
+            not eval_def.is_muted
+            and _interpret_violation(detection_type, result)
+            and eval_def.config.get("action") == GuardrailAction.BLOCK
+        ):
             return BlockDecision(
                 blocked=True,
                 block_message=f"Guardrail {eval_def.name!r} blocked: {result.detail}",
@@ -908,7 +914,7 @@ def _apply_redaction_phase(
                 extra={"guardrail": eval_def.name},
             )
             continue
-        if cfg.action != GuardrailAction.REDACT or not cfg.redaction:
+        if eval_def.is_muted or cfg.action != GuardrailAction.REDACT or not cfg.redaction:
             continue
         detection_type, effective_config = _resolve_detection(eval_def)
         detection_pattern = effective_config.get("pattern") if detection_type == str(EvalType.REGEX) else None
@@ -933,17 +939,20 @@ def _apply_redaction_phase(
 
 
 def _mechanism_fail_result(eval_def: EvalDefinition, reason: str) -> EvalResult:
-    """A synthetic failed eval result for a log-and-continue mechanism error.
+    """A synthetic failed eval result for a mechanism error.
 
     Never a raw payload in the detail — only descriptive text (the no-raw
-    persist contract).
+    persist contract). The DTO keeps a generated run id for compatibility with
+    the run-scoped evidence seam; runless intake persistence uses only its
+    ``eval_id``, ``passed``, ``score`` and ``detail`` fields.
     """
     return EvalResult(
         run_id=uuid.uuid4(),
         node_id=eval_def.node_id or "",
         eval_id=eval_def.id,
         passed=False,
-        score=0.0,
+        outcome="error",
+        score=None,
         detail=f"guardrail {eval_def.name!r} mechanism error: {reason}",
     )
 
@@ -1242,11 +1251,16 @@ def _over_budget_enforcement_outcome(
     seam: str,
 ) -> GuardrailInterceptionOutcome:
     """Fail-closed outcome for an over-budget payload under enforcement guardrails."""
-    any_guarding = any(_resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
+    any_guarding = any(
+        not d.is_muted and _resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions
+    )
     if any_guarding:
         _log.warning("guardrails.payload_over_budget", extra={"reason": reason, "seam": seam})
         return GuardrailInterceptionOutcome(
             payload=copy.deepcopy(payload),
+            # Muted definitions still run detection and retain evidence even
+            # when an active guardrail fails closed on the same payload.
+            results=[_mechanism_fail_result(d, reason) for d in definitions if d.is_muted],
             skipped=list(skipped),
             blocked=True,
             block_message=f"guardrail mechanism error at {seam}",
@@ -1333,7 +1347,7 @@ async def _run_detection_loop(
     decision = BlockDecision()
     for eval_def in definitions:
         action = _resolve_action(eval_def)
-        guarding = action in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
+        guarding = not eval_def.is_muted and action in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
         try:
             # NOTE — known trade-off (runaway thread): ``wait_for`` only bounds
             # how long WE wait; the worker thread started by ``to_thread`` keeps
@@ -1512,7 +1526,7 @@ def non_conformant_blocking_guardrails(
     canonical_registered = _bare_registered_capability_map(registered)
     out: list[tuple[EvalDefinition, ConformanceDerivation]] = []
     for eval_def in definitions:
-        if _resolve_action(eval_def) != GuardrailAction.BLOCK:
+        if eval_def.is_muted or _resolve_action(eval_def) != GuardrailAction.BLOCK:
             continue
         required = eval_def.config.get("required_capabilities") or []
         if not required:
@@ -1820,6 +1834,19 @@ async def alert_unexpected_guardrail_skip(
 # ---------------------------------------------------------------------------
 
 
+def _coerce_is_muted(value: Any) -> bool:
+    """Read the persisted mute flag without trusting mock-like sentinels.
+
+    ORM rows and snapshot pins carry a real boolean.  Test doubles and legacy
+    row-shaped objects may not define the new column, in which case the safe
+    compatibility value is the historical unmuted state rather than the
+    truthiness of an arbitrary sentinel object.  Coercing truthy non-booleans
+    would silently suppress a guardrail's enforcement action, so only a real
+    ``bool`` may turn enforcement off.
+    """
+    return value if isinstance(value, bool) else False
+
+
 def serialize_guardrail_pin(db_row: Any) -> dict[str, Any]:
     """Serialize a DB guardrail row into a snapshot pin.
 
@@ -1842,6 +1869,7 @@ def serialize_guardrail_pin(db_row: Any) -> dict[str, Any]:
         "failure_behaviour": getattr(db_row, "failure_behaviour", None) or "warn",
         "pass_threshold": str(db_row.pass_threshold) if db_row.pass_threshold is not None else None,
         "suite_id": db_row.suite_id,
+        "is_muted": _coerce_is_muted(getattr(db_row, "is_muted", False)),
     }
 
 
@@ -1888,6 +1916,7 @@ def to_engine_definition_from_pin(entry: dict[str, Any]) -> EvalDefinition:
         failure_behaviour=str(entry.get("failure_behaviour") or "warn"),
         pass_threshold=float(entry["pass_threshold"]) if entry.get("pass_threshold") else None,
         suite_id=entry.get("suite_id"),
+        is_muted=_coerce_is_muted(entry.get("is_muted", False)),
     )
 
 
@@ -1915,6 +1944,7 @@ def to_engine_definition(db_row: Any) -> EvalDefinition:
         failure_behaviour=getattr(db_row, "failure_behaviour", None) or "warn",
         pass_threshold=float(db_row.pass_threshold) if db_row.pass_threshold is not None else None,
         suite_id=db_row.suite_id,
+        is_muted=_coerce_is_muted(getattr(db_row, "is_muted", False)),
     )
 
 

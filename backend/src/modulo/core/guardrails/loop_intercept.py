@@ -401,7 +401,7 @@ def _redaction_policies(definitions: Sequence[EvalDefinition]) -> tuple[list[Any
     policies: list[Any] = []
     names: list[str] = []
     for eval_def in definitions:
-        if _resolve_action(eval_def) != GuardrailAction.REDACT:
+        if eval_def.is_muted or _resolve_action(eval_def) != GuardrailAction.REDACT:
             continue
         names.append(eval_def.name)
         for raw in eval_def.config.get("redaction", []) or []:
@@ -472,19 +472,33 @@ async def run_loop_interception(
     if mechanism_error:
         return _bridge_failure_outcome(tool_name, direction, latency_ms, mechanism_error)
 
-    blocking = [eval_def for eval_def, _ in fired if _resolve_action(eval_def) == GuardrailAction.BLOCK]
+    blocking = [
+        eval_def
+        for eval_def, _ in fired
+        if not eval_def.is_muted and _resolve_action(eval_def) == GuardrailAction.BLOCK
+    ]
+    muted_records = _muted_finding_records(tool_name, direction, fired)
     if blocking:
-        return _blocking_outcome(tool_name, direction, latency_ms, blocking[0], config)
+        outcome, records = _blocking_outcome(tool_name, direction, latency_ms, blocking[0], config)
+        return outcome, [*muted_records, *records]
 
     redaction_outcome = _redaction_outcome(tool_name, direction, args, payload, definitions, latency_ms, config)
     if redaction_outcome is not None:
-        return redaction_outcome
+        outcome, records = redaction_outcome
+        return outcome, [*muted_records, *records]
 
-    warned = sorted({eval_def.name for eval_def, _ in fired if _resolve_action(eval_def) == GuardrailAction.WARN})
+    warned = sorted(
+        {
+            eval_def.name
+            for eval_def, _ in fired
+            if not eval_def.is_muted and _resolve_action(eval_def) == GuardrailAction.WARN
+        }
+    )
     if warned:
-        return _warn_outcome(tool_name, direction, latency_ms, warned)
+        outcome, records = _warn_outcome(tool_name, direction, latency_ms, warned)
+        return outcome, [*muted_records, *records]
 
-    return _pass_outcome(tool_name, direction, start), []
+    return _pass_outcome(tool_name, direction, start), muted_records
 
 
 def _pass_outcome(
@@ -673,6 +687,28 @@ def _redaction_applied_outcome(
             )
         ],
     )
+
+
+def _muted_finding_records(
+    tool_name: str,
+    direction: str,
+    fired: Sequence[tuple[EvalDefinition, EvalResult]],
+) -> list[LoopInterceptAuditRecord]:
+    """Record muted violations as evidence without applying their actions."""
+    return [
+        LoopInterceptAuditRecord(
+            "guardrail.loop_detected",
+            {
+                "actor": SYSTEM_ACTOR,
+                "summary": f'Loop detected a muted guardrail finding for tool "{tool_name}" ({direction})',
+                "tool": tool_name,
+                "direction": direction,
+                "guardrail": eval_def.name,
+            },
+        )
+        for eval_def, _ in fired
+        if eval_def.is_muted
+    ]
 
 
 def _warn_outcome(

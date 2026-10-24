@@ -8178,6 +8178,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evals/findings/{finding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Finding
+         * @description Read an eval result or runless trigger-event guardrail finding.
+         */
+        get: operations["get_finding_api_v1_evals_findings__finding_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evals/findings/{finding_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Finding
+         * @description Resolve an eval/guardrail finding.
+         *
+         *     Marks a finding as accepted, dismissed, superseded, or pending with an
+         *     optional reason. Triggers mute policy evaluation for the associated
+         *     eval/guardrail definition and records an explicit audit event.
+         */
+        post: operations["resolve_finding_api_v1_evals_findings__finding_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evals/{eval_id}/acceptance-rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Acceptance Rate
+         * @description Get the acceptance rate for an eval/guardrail definition.
+         *
+         *     Returns the percentage of findings resolved as 'accepted' out of all
+         *     findings with a non-pending resolution. Optional window_days parameter
+         *     limits the calculation to a recent time window.
+         */
+        get: operations["get_acceptance_rate_api_v1_evals__eval_id__acceptance_rate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evals/{eval_id}/mute-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Mute Policy
+         * @description Get the mute policy evaluation for an eval/guardrail definition.
+         *
+         *     Returns whether the definition should be muted based on its acceptance
+         *     rate and configured threshold, along with the current mute status.
+         */
+        get: operations["get_mute_policy_api_v1_evals__eval_id__mute_policy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Mute Policy
+         * @description Update the mute policy configuration for an eval/guardrail definition.
+         *
+         *     Sets the acceptance rate threshold and minimum outcomes required before
+         *     auto-mute is evaluated. Setting either to null disables auto-mute.
+         */
+        patch: operations["update_mute_policy_api_v1_evals__eval_id__mute_policy_patch"];
+        trace?: never;
+    };
+    "/api/v1/evals/{eval_id}/mute-policy/unmute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unmute Definition Endpoint
+         * @description Manually unmute an eval/guardrail definition.
+         *
+         *     Clears the mute status and recomputes the acceptance rate.
+         */
+        post: operations["unmute_definition_endpoint_api_v1_evals__eval_id__mute_policy_unmute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/evals/compare": {
         parameters: {
             query?: never;
@@ -11118,6 +11238,20 @@ export interface components {
              * @default false
              */
             existing_account: boolean;
+        };
+        /** AcceptanceRateResponse */
+        AcceptanceRateResponse: {
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
+            /** Acceptance Rate */
+            acceptance_rate: number;
+            /** Total Resolved */
+            total_resolved: number;
+            /** Window Days */
+            window_days?: number | null;
         };
         /** AccessList */
         AccessList: {
@@ -16958,6 +17092,55 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** MutePolicyConfigRequest */
+        MutePolicyConfigRequest: {
+            /** Mute Threshold */
+            mute_threshold?: number | null;
+            /** Mute Min Outcomes */
+            mute_min_outcomes?: number | null;
+        };
+        /** MutePolicyConfigResponse */
+        MutePolicyConfigResponse: {
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
+            /** Is Muted */
+            is_muted: boolean;
+            /** Mute Threshold */
+            mute_threshold?: number | null;
+            /** Mute Min Outcomes */
+            mute_min_outcomes?: number | null;
+            /** Acceptance Rate */
+            acceptance_rate?: number | null;
+            /** Muted At */
+            muted_at?: string | null;
+            /** Muted By */
+            muted_by?: string | null;
+        };
+        /** MutePolicyEvaluationResponse */
+        MutePolicyEvaluationResponse: {
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
+            /** Should Mute */
+            should_mute: boolean;
+            /** Acceptance Rate */
+            acceptance_rate: number;
+            /** Total Outcomes */
+            total_outcomes: number;
+            /** Threshold */
+            threshold?: number | null;
+            /** Min Outcomes */
+            min_outcomes?: number | null;
+            /** Reason */
+            reason: string;
+            /** Is Muted */
+            is_muted: boolean;
+        };
         /** MyTeamResponse */
         MyTeamResponse: {
             /** Team Id */
@@ -19610,6 +19793,29 @@ export interface components {
             schedule_type: string;
             /** Created At */
             created_at: string;
+        };
+        /** ResolveFindingRequest */
+        ResolveFindingRequest: {
+            /** Resolution */
+            resolution: string;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** ResolveFindingResponse */
+        ResolveFindingResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Resolution */
+            resolution: string;
+            /** Resolution Reason */
+            resolution_reason?: string | null;
+            /** Resolved At */
+            resolved_at?: string | null;
+            /** Resolved By */
+            resolved_by?: string | null;
         };
         /** RetentionCandidate */
         RetentionCandidate: {
@@ -40279,6 +40485,391 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
                 };
+            };
+        };
+    };
+    get_finding_api_v1_evals_findings__finding_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Finding not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    resolve_finding_api_v1_evals_findings__finding_id__resolve_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveFindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveFindingResponse"];
+                };
+            };
+            /** @description Invalid resolution value */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Finding not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_acceptance_rate_api_v1_evals__eval_id__acceptance_rate_get: {
+        parameters: {
+            query?: {
+                window_days?: number | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptanceRateResponse"];
+                };
+            };
+            /** @description Eval definition not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_mute_policy_api_v1_evals__eval_id__mute_policy_get: {
+        parameters: {
+            query?: {
+                window_days?: number | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutePolicyEvaluationResponse"];
+                };
+            };
+            /** @description Eval definition not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_mute_policy_api_v1_evals__eval_id__mute_policy_patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MutePolicyConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutePolicyConfigResponse"];
+                };
+            };
+            /** @description Eval definition not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    unmute_definition_endpoint_api_v1_evals__eval_id__mute_policy_unmute_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutePolicyConfigResponse"];
+                };
+            };
+            /** @description Eval definition not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

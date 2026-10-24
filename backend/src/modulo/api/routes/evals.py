@@ -59,6 +59,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.eval.finding_resolver import load_trigger_event_finding
 from modulo.core.eval_engine.author_warnings import check_author_warnings
 from modulo.core.eval_engine.coverage_gap import (
     DEFAULT_DIVERGENCE_THRESHOLD,
@@ -95,6 +96,7 @@ from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import Run
+from modulo.db.models.trigger_event_finding import TriggerEventFinding
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.db.sqlstates import sqlstate_of
@@ -130,6 +132,9 @@ _MSG_POLICY_GATE_LOCK_TIMEOUT = "Gate save is temporarily unavailable due to hig
 _CODE_EVAL_DEFINITION_UPDATE = "eval.definition.update"
 _CODE_EVAL_DEFINITION_DELETE = "eval.definition.delete"
 _CODE_EVAL_DEFINITION_CREATE = "eval.definition.create"
+_CODE_EVALS_RESOLVE_FINDING = "eval.definition.update"
+_CODE_EVALS_GET_ACCEPTANCE_RATE = "eval.list"
+_CODE_EVALS_MUTE_POLICY = "eval.definition.update"
 _VISIBILITY_PATTERN = "^(org|team)$"
 
 _MSG_POLICY_GATE_CASCADE_CONFLICT = (
@@ -137,6 +142,7 @@ _MSG_POLICY_GATE_CASCADE_CONFLICT = (
     "Remove the associated pipeline run(s) or wait for decision retention "
     "cleanup before deleting."
 )
+_RESOLUTION_PATTERN = r"^(accepted|dismissed|superseded|pending)$"
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["evals"])
@@ -3018,6 +3024,11 @@ async def list_run_evals(
                 "error_code": r.error_code,
                 "judge_confidence_kind": r.judge_confidence_kind,
                 "evaluated_at": r.evaluated_at.isoformat() if r.evaluated_at else None,
+                # FAR-2028: Finding resolution fields
+                "resolution": r.resolution,
+                "resolution_reason": r.resolution_reason,
+                "resolved_at": r.resolved_at.isoformat() if r.resolved_at else None,
+                "resolved_by": str(r.resolved_by) if r.resolved_by else None,
             }
             for r in rows
         ],
@@ -3047,6 +3058,574 @@ class CreateEvalFromRunRequest(BaseModel):
     # (fail-open) for a data-safety control. Guardrails are authored directly.
     eval_type: str = Field(pattern=r"^(model_judge|regex|json_schema|custom_function)$")
     name: str = Field(min_length=1, max_length=255)
+
+
+# ---------------------------------------------------------------------------
+# Finding resolution schemas (FAR-2028)
+# ---------------------------------------------------------------------------
+
+
+class ResolveFindingRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    resolution: str = Field(pattern=_RESOLUTION_PATTERN)
+    reason: str | None = Field(None, max_length=2000)
+
+
+class ResolveFindingResponse(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    id: uuid.UUID
+    resolution: str
+    resolution_reason: str | None = None
+    resolved_at: str | None = None
+    resolved_by: uuid.UUID | None = None
+
+
+class AcceptanceRateResponse(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    eval_id: uuid.UUID
+    acceptance_rate: float
+    total_resolved: int
+    window_days: int | None = None
+
+
+class MutePolicyEvaluationResponse(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    eval_id: uuid.UUID
+    should_mute: bool
+    acceptance_rate: float
+    total_outcomes: int
+    threshold: float | None = None
+    min_outcomes: int | None = None
+    reason: str
+    is_muted: bool
+
+
+class MutePolicyConfigRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    mute_threshold: float | None = Field(None, ge=0.0, le=1.0)
+    mute_min_outcomes: int | None = Field(None, ge=1)
+
+
+class MutePolicyConfigResponse(BaseModel):
+    model_config = {"populate_by_name": True}
+
+    eval_id: uuid.UUID
+    is_muted: bool
+    mute_threshold: float | None = None
+    mute_min_outcomes: int | None = None
+    acceptance_rate: float | None = None
+    muted_at: str | None = None
+    muted_by: uuid.UUID | None = None
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/evals/findings/{finding_id}/resolve
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/evals/findings/{finding_id}",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Finding not found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_RESOLVE_FINDING)
+async def get_finding(
+    finding_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVAL_LIST),
+) -> dict[str, Any]:
+    """Read an eval result or runless trigger-event guardrail finding."""
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+        eval_res = (
+            await session.execute(
+                select(EvalResult).where(
+                    EvalResult.id == finding_id,
+                    EvalResult.organisation_id == principal.organisation_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if eval_res is not None:
+            return {
+                "id": str(eval_res.id),
+                "finding_id": str(eval_res.id),
+                "finding_type": "eval_result",
+                "eval_id": str(eval_res.eval_id),
+                "resolution": eval_res.resolution,
+                "resolution_reason": eval_res.resolution_reason,
+                "resolved_at": eval_res.resolved_at.isoformat() if eval_res.resolved_at else None,
+                "resolved_by": str(eval_res.resolved_by) if eval_res.resolved_by else None,
+                "detail": eval_res.detail,
+                "passed": eval_res.passed,
+                "outcome": eval_res.outcome,
+            }
+
+        te_finding = await load_trigger_event_finding(
+            session,
+            str(finding_id),
+            str(principal.organisation_id),
+        )
+        if te_finding is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finding not found")
+
+        trigger_event_id, eval_id, passed, error_detail = te_finding
+        finding = (
+            await session.execute(
+                select(TriggerEventFinding).where(
+                    TriggerEventFinding.trigger_event_id == trigger_event_id,
+                    TriggerEventFinding.eval_id == eval_id,
+                    TriggerEventFinding.organisation_id == principal.organisation_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        return {
+            "id": str(finding_id),
+            "finding_id": str(finding_id),
+            "finding_type": "trigger_event",
+            "eval_id": str(eval_id),
+            "resolution": finding.resolution if finding else "pending",
+            "resolution_reason": finding.resolution_reason if finding else None,
+            "resolved_at": finding.resolved_at.isoformat() if finding and finding.resolved_at else None,
+            "resolved_by": str(finding.resolved_by) if finding and finding.resolved_by else None,
+            "detail": error_detail,
+            "passed": passed,
+            "outcome": "pass" if passed else "fail",
+        }
+
+
+@router.post(
+    "/evals/findings/{finding_id}/resolve",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("api_access_post", "eval_finding", principal_dep=get_current_tenant_user)),
+    ],
+    responses={
+        400: {"description": "Invalid resolution value"},
+        404: {"description": "Finding not found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_RESOLVE_FINDING)
+async def resolve_finding(
+    finding_id: uuid.UUID,
+    req: ResolveFindingRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVALS_RESOLVE_FINDING),
+) -> ResolveFindingResponse:
+    """Resolve an eval/guardrail finding.
+
+    Marks a finding as accepted, dismissed, superseded, or pending with an
+    optional reason. Triggers mute policy evaluation for the associated
+    eval/guardrail definition and records an explicit audit event.
+    """
+    from modulo.core.eval.finding_resolver import (
+        FindingResolutionError,
+        apply_mute_policy,
+    )
+    from modulo.core.eval.finding_resolver import resolve_finding as resolve_finding_core
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            finding: Any
+            eval_id: uuid.UUID
+            try:
+                finding = await resolve_finding_core(
+                    session,
+                    str(finding_id),
+                    req.resolution,
+                    req.reason,
+                    str(principal.account_id),
+                    str(principal.organisation_id),
+                )
+                eval_id = finding.eval_id
+            except FindingResolutionError as resolution_error:
+                if str(resolution_error) != "Finding not found":
+                    raise
+                te_finding = await load_trigger_event_finding(
+                    session,
+                    str(finding_id),
+                    str(principal.organisation_id),
+                )
+                if te_finding is None:
+                    raise FindingResolutionError("Finding not found") from None
+
+                trigger_event_id, eval_id, passed, _error_detail = te_finding
+                existing_runless = (
+                    await session.execute(
+                        select(TriggerEventFinding).where(
+                            TriggerEventFinding.trigger_event_id == trigger_event_id,
+                            TriggerEventFinding.eval_id == eval_id,
+                            TriggerEventFinding.organisation_id == principal.organisation_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                now = datetime.now(UTC)
+                if existing_runless is None:
+                    finding = TriggerEventFinding(
+                        organisation_id=principal.organisation_id,
+                        trigger_event_id=trigger_event_id,
+                        eval_id=eval_id,
+                        passed=passed,
+                        outcome="pass" if passed else "fail",
+                        score=1.0 if passed else 0.0,
+                        detail=f"intake_evidence:{trigger_event_id}_{eval_id}",
+                        resolution=req.resolution,
+                        resolution_reason=req.reason,
+                        resolved_at=now,
+                        resolved_by=principal.account_id,
+                    )
+                    session.add(finding)
+                    await session.flush()
+                else:
+                    existing_runless.resolution = req.resolution
+                    existing_runless.resolution_reason = req.reason
+                    existing_runless.resolved_at = now
+                    existing_runless.resolved_by = principal.account_id
+                    await session.flush()
+                    finding = existing_runless
+
+            await append_audit_event(
+                session,
+                org_id=principal.organisation_id,
+                event_type="eval_finding_resolved",
+                actor_user_id=principal.account_id,
+                resource_type="eval_finding",
+                resource_id=finding_id,
+                payload_json={
+                    "finding_id": str(finding_id),
+                    "eval_id": str(eval_id),
+                    "resolution": req.resolution,
+                    "reason": req.reason,
+                },
+            )
+
+            await apply_mute_policy(
+                session,
+                str(eval_id),
+                str(principal.organisation_id),
+                muted_by=None,
+                automatic=True,
+            )
+
+        return ResolveFindingResponse(
+            id=finding_id,
+            resolution=finding.resolution,
+            resolution_reason=finding.resolution_reason,
+            resolved_at=finding.resolved_at.isoformat() if finding.resolved_at else None,
+            resolved_by=finding.resolved_by,
+        )
+    except FindingResolutionError as e:
+        if str(e) == "Finding not found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("evals.resolve_finding_error", extra={"org_id": str(principal.organisation_id)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while resolving the finding.",
+        ) from None
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/evals/{eval_id}/acceptance-rate
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/evals/{eval_id}/acceptance-rate",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Eval definition not found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_GET_ACCEPTANCE_RATE)
+async def get_acceptance_rate(
+    eval_id: uuid.UUID,
+    window_days: int | None = Query(None, ge=1, le=365),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVALS_GET_ACCEPTANCE_RATE),
+) -> AcceptanceRateResponse:
+    """Get the acceptance rate for an eval/guardrail definition.
+
+    Returns the percentage of findings resolved as 'accepted' out of all
+    findings with a non-pending resolution. Optional window_days parameter
+    limits the calculation to a recent time window.
+    """
+    from modulo.core.eval.finding_resolver import compute_acceptance_rate
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+        # Verify the eval definition exists
+        eval_def = await session.get(Eval, eval_id)
+        if eval_def is None or eval_def.organisation_id != principal.organisation_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
+
+        acceptance_rate, total_resolved = await compute_acceptance_rate(
+            session,
+            str(eval_id),
+            str(principal.organisation_id),
+            window_days,
+        )
+
+    return AcceptanceRateResponse(
+        eval_id=eval_id,
+        acceptance_rate=acceptance_rate,
+        total_resolved=total_resolved,
+        window_days=window_days,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/evals/{eval_id}/mute-policy
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/evals/{eval_id}/mute-policy",
+    status_code=status.HTTP_200_OK,
+    responses={
+        404: {"description": "Eval definition not found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_MUTE_POLICY)
+async def get_mute_policy(
+    eval_id: uuid.UUID,
+    window_days: int | None = Query(None, ge=1, le=365),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVALS_MUTE_POLICY),
+) -> MutePolicyEvaluationResponse:
+    """Get the mute policy evaluation for an eval/guardrail definition.
+
+    Returns whether the definition should be muted based on its acceptance
+    rate and configured threshold, along with the current mute status.
+    """
+    from modulo.core.eval.finding_resolver import evaluate_mute_policy
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+        # Verify the eval definition exists
+        eval_def = await session.get(Eval, eval_id)
+        if eval_def is None or eval_def.organisation_id != principal.organisation_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
+
+        mute_eval = await evaluate_mute_policy(
+            session,
+            str(eval_id),
+            str(principal.organisation_id),
+            window_days,
+        )
+
+    return MutePolicyEvaluationResponse(
+        eval_id=eval_id,
+        should_mute=mute_eval["should_mute"],
+        acceptance_rate=mute_eval["acceptance_rate"],
+        total_outcomes=mute_eval["total_outcomes"],
+        threshold=mute_eval["threshold"],
+        min_outcomes=mute_eval["min_outcomes"],
+        reason=mute_eval["reason"],
+        is_muted=eval_def.is_muted,
+    )
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/v1/evals/{eval_id}/mute-policy
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/evals/{eval_id}/mute-policy",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("eval_mute_policy_updated", "eval_definition", principal_dep=get_current_tenant_user)),
+    ],
+    responses={
+        404: {"description": "Eval definition not found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_MUTE_POLICY)
+async def update_mute_policy(
+    eval_id: uuid.UUID,
+    req: MutePolicyConfigRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVALS_MUTE_POLICY),
+) -> MutePolicyConfigResponse:
+    """Update the mute policy configuration for an eval/guardrail definition.
+
+    Sets the acceptance rate threshold and minimum outcomes required before
+    auto-mute is evaluated. Setting either to null disables auto-mute.
+    """
+    from modulo.core.eval.finding_resolver import apply_mute_policy
+    from modulo.core.eval.mute_policy import record_mute_audit_event
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+        eval_def = await session.get(Eval, eval_id)
+        if eval_def is None or eval_def.organisation_id != principal.organisation_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
+
+        # PATCH semantics: omitted fields retain their existing configuration.
+        # Explicit null remains the documented way to clear one field and disable
+        # auto-mute, so distinguish it from a field that was not sent.
+        if "mute_threshold" in req.model_fields_set:
+            eval_def.mute_threshold = req.mute_threshold
+        if "mute_min_outcomes" in req.model_fields_set:
+            eval_def.mute_min_outcomes = req.mute_min_outcomes
+
+        # If unmuting by explicitly setting threshold/min_outcomes to null, also
+        # clear mute status. An omitted field must not trigger this branch.
+        if any(
+            field in req.model_fields_set and getattr(req, field) is None
+            for field in ("mute_threshold", "mute_min_outcomes")
+        ):
+            eval_def.is_muted = False
+            eval_def.muted_at = None
+            eval_def.muted_by = None
+
+        # Re-evaluate mute policy if still configured. The automatic transition
+        # path records a system-sourced audit event with the measured outcome.
+        if eval_def.mute_threshold is not None and eval_def.mute_min_outcomes is not None:
+            await apply_mute_policy(
+                session,
+                str(eval_id),
+                str(principal.organisation_id),
+                muted_by=None,
+                automatic=True,
+            )
+
+        await session.flush()
+
+        # Record audit event for mute policy change
+        await record_mute_audit_event(
+            session,
+            str(eval_id),
+            str(principal.organisation_id),
+            "muted" if eval_def.is_muted else "unmuted",
+            acceptance_rate=eval_def.acceptance_rate,
+            threshold=eval_def.mute_threshold,
+            total_outcomes=None,  # Would need to compute if needed
+            actor_id=str(principal.account_id),
+        )
+
+    return MutePolicyConfigResponse(
+        eval_id=eval_id,
+        is_muted=eval_def.is_muted,
+        mute_threshold=eval_def.mute_threshold,
+        mute_min_outcomes=eval_def.mute_min_outcomes,
+        acceptance_rate=eval_def.acceptance_rate,
+        muted_at=eval_def.muted_at.isoformat() if eval_def.muted_at else None,
+        muted_by=eval_def.muted_by,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/evals/{eval_id}/mute-policy/unmute
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/evals/{eval_id}/mute-policy/unmute",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("eval_mute_policy_unmuted", "eval_definition", principal_dep=get_current_tenant_user)),
+    ],
+    responses={
+        404: {"description": "Eval definition not found"},
+        500: {"description": "Internal Server Error"},
+        501: {"description": "Not Implemented"},
+        503: {"description": "Service Unavailable"},
+    },
+)
+@handle_db_errors(_CODE_EVALS_MUTE_POLICY)
+async def unmute_definition_endpoint(
+    eval_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_EVALS_MUTE_POLICY),
+) -> MutePolicyConfigResponse:
+    """Manually unmute an eval/guardrail definition.
+
+    Clears the mute status and recomputes the acceptance rate.
+    """
+    from modulo.core.eval.finding_resolver import unmute_definition
+    from modulo.core.eval.mute_policy import record_mute_audit_event
+
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+        eval_def = await session.get(Eval, eval_id)
+        if eval_def is None or eval_def.organisation_id != principal.organisation_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
+
+        if not eval_def.is_muted:
+            # Already unmuted, just return current state
+            return MutePolicyConfigResponse(
+                eval_id=eval_id,
+                is_muted=eval_def.is_muted,
+                mute_threshold=eval_def.mute_threshold,
+                mute_min_outcomes=eval_def.mute_min_outcomes,
+                acceptance_rate=eval_def.acceptance_rate,
+                muted_at=eval_def.muted_at.isoformat() if eval_def.muted_at else None,
+                muted_by=eval_def.muted_by,
+            )
+
+        await unmute_definition(session, str(eval_id), str(principal.organisation_id))
+
+        # Record audit event
+        await record_mute_audit_event(
+            session,
+            str(eval_id),
+            str(principal.organisation_id),
+            "unmuted",
+            acceptance_rate=eval_def.acceptance_rate,
+            threshold=eval_def.mute_threshold,
+            actor_id=str(principal.account_id),
+        )
+
+    return MutePolicyConfigResponse(
+        eval_id=eval_id,
+        is_muted=eval_def.is_muted,
+        mute_threshold=eval_def.mute_threshold,
+        mute_min_outcomes=eval_def.mute_min_outcomes,
+        acceptance_rate=eval_def.acceptance_rate,
+        muted_at=eval_def.muted_at.isoformat() if eval_def.muted_at else None,
+        muted_by=eval_def.muted_by,
+    )
 
 
 # ---------------------------------------------------------------------------
