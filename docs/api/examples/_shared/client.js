@@ -38,7 +38,11 @@ async function api(path, options = {}) {
 }
 
 function logSafe(value, max = 200) {
-  return String(value ?? "").replace(/[\r\n]+/g, " ").slice(0, max);
+  return String(value ?? "")
+    .replaceAll("\r\n", " ")
+    .replaceAll("\r", " ")
+    .replaceAll("\n", " ")
+    .slice(0, max);
 }
 
 function auth(token) {
