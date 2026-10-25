@@ -137,6 +137,13 @@ def _run_pytest(test_paths: list[str], timeout: int = 120) -> int:
         "--tb=short",
         "-q",
         f"--timeout={timeout}",
+        # Defence in depth for the gated-suite warning gate installed by
+        # tests/conftest.py::pytest_runtest_setup (the suites selected here are
+        # all gated trees). Byte-identical to every CI command; pinned by
+        # tests/architecture/test_ci_pytest_commands_carry_the_warning_gate.py.
+        "-W",
+        "error::pytest.PytestUnraisableExceptionWarning",
+        "--disable-warnings",
         *test_paths,
     ]
     print(f"running: {' '.join(cmd)}", file=sys.stderr)
