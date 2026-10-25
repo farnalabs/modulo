@@ -39,14 +39,13 @@ rules:
         - "**/backend/src/modulo/connectors/rest/**"
         # FAR-526C honest-scope residual (see the scope note in core/ssrf.py):
         # these support modules build their own clients toward operator-config /
-        # multi-host endpoints (notification forwarders can reach per-org
-        # endpoints; library_sync already validate-then-connects). They are
-        # excluded so this gate stays green while they remain un-migrated, but
-        # they are documented residual — NOT accepted raw egress. A new raw
-        # construction anywhere else in the tree is still caught.
+        # multi-host endpoints (library_sync already validate-then-connects).
+        # They are excluded so this gate stays green while they remain
+        # un-migrated, but they are documented residual — NOT accepted raw
+        # egress. A new raw construction anywhere else in the tree is still
+        # caught.
         - "**/backend/src/modulo/core/error_tracking/**"
         - "**/backend/src/modulo/core/product_analytics/**"
-        - "**/backend/src/modulo/core/notifier/**"
         - "**/backend/src/modulo/core/watchdog/**"
         - "**/backend/src/modulo/core/library_sync/**"
         - "**/backend/src/modulo/core/reports/**"

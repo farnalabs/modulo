@@ -335,16 +335,6 @@ class Notifier:
             self._fernet = Fernet(fernet_key.encode())
         except (ValueError, TypeError) as exc:
             raise ValueError(f"Invalid Fernet key: {exc}") from exc
-        self._http_client: httpx.AsyncClient | None = None
-        self._http_client_lock = asyncio.Lock()
-
-    async def _get_client(self) -> httpx.AsyncClient:
-        async with self._http_client_lock:
-            if self._http_client is None or self._http_client.is_closed:
-                self._http_client = httpx.AsyncClient(
-                    timeout=httpx.Timeout(connect=10.0, read=25.0, write=25.0, pool=30.0)
-                )
-        return self._http_client
 
     async def dispatch_event(
         self,
@@ -1018,13 +1008,3 @@ class Notifier:
                 "notifier.reset_dead_letter_failed",
                 extra={"endpoint_id": str(endpoint.id)},
             )
-
-    async def close(self) -> None:
-        """Close the underlying HTTP client, if one was created."""
-        client: httpx.AsyncClient | None = None
-        async with self._http_client_lock:
-            if self._http_client is not None and not self._http_client.is_closed:
-                client = self._http_client
-                self._http_client = None
-        if client is not None:
-            await client.aclose()
