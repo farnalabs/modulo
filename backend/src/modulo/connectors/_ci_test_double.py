@@ -36,7 +36,7 @@ class CITestDoubleMixin(ABC):
     _status: CIRunStatus
 
     @abstractmethod
-    def _record_triggered_run(self, run: CIRun, variables: dict[str, str] | None) -> None:
+    def _record_triggered_run(self, _run: CIRun, _variables: dict[str, str] | None) -> None:
         """Append *run* to the double's own triggered-run record list."""
 
     def _double_trigger_id(self, pipeline_id: str) -> str:

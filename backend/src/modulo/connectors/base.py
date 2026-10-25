@@ -1070,15 +1070,15 @@ class ConnectorBase(ABC):
         """Verify connectivity and credential validity."""
 
     @abstractmethod
-    async def query(self, q: ConnectorQuery) -> ConnectorResult:
+    async def query(self, _q: ConnectorQuery) -> ConnectorResult:
         """Read data from the external tool."""
 
     @abstractmethod
-    async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+    async def write(self, _payload: ConnectorPayload) -> dict[str, Any]:
         """Write data to the external tool. Returns the created/updated resource."""
 
-    def on_unknown_for(self, resource: str) -> str:
-        """Effective ``on_unknown`` mode for a connector write to *resource*
+    def on_unknown_for(self, _resource: str) -> str:
+        """Effective ``on_unknown`` mode for a connector write to *_resource*
         (FAR-458).
 
         Governs the FAR-458 connector-write idempotency gate's AMBIGUOUS-case
@@ -1098,7 +1098,7 @@ class ConnectorBase(ABC):
         """
         return DEFAULT_ON_UNKNOWN
 
-    def write_reported_failure(self, result: Any) -> bool:
+    def write_reported_failure(self, _result: Any) -> bool:
         """Did a NON-RAISING ``write()`` result report an upstream failure?
 
         FAR-531 (AC6): some connectors report a failed write in their RETURN
@@ -1117,10 +1117,10 @@ class ConnectorBase(ABC):
 
     async def compensate(
         self,
-        operation: CompensationOperation,
+        operation: CompensationOperation,  # NOSONAR S1172 - public compensation hook keyword contract
         *,
-        context: CompensationContext,
-        error: str,
+        context: CompensationContext,  # NOSONAR S1172 - public compensation hook keyword contract
+        error: str,  # NOSONAR S1172 - public compensation hook keyword contract
     ) -> CompensationResult:
         """Best-effort inverse of a performed connector operation (FAR-213).
 
