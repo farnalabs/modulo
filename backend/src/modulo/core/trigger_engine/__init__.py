@@ -820,6 +820,191 @@ class TriggerEngine:
         )
         raise ConcurrentRunLimitError(trigger.id, trigger.max_concurrent_runs)
 
+    async def _acquire_trigger_lock(self, session: AsyncSession, trigger_id: uuid.UUID) -> None:
+        """Acquire advisory lock for trigger. Raises TriggerBusyError if lock not acquired."""
+        key1, key2 = _uuid_to_lock_keys(trigger_id)
+        lock_result = await session.execute(
+            text("SELECT pg_try_advisory_lock(:key1, :key2)"),
+            {"key1": key1, "key2": key2},
+        )
+        if not lock_result.scalar_one():
+            raise TriggerBusyError(trigger_id)
+
+    async def _release_trigger_lock(self, session: AsyncSession, trigger_id: uuid.UUID) -> None:
+        """Release advisory lock for trigger."""
+        key1, key2 = _uuid_to_lock_keys(trigger_id)
+        await session.execute(
+            text("SELECT pg_advisory_unlock(:key1, :key2)"),
+            {"key1": key1, "key2": key2},
+        )
+
+    async def _validate_webhook_delivery(
+        self,
+        session: AsyncSession,
+        delivery: _WebhookDelivery,
+        *,
+        modulo_timestamp: str | None,
+        hmac_signature: str | None,
+    ) -> tuple[int, str, dict[str, Any], str, list[Any]]:
+        """Run pre-dedup validation steps for webhook delivery.
+
+        Returns (ts, payload_hash, post_guardrail_payload, dedup_hash, guardrail_results).
+        """
+        payload_hash = sha256_hex(delivery.raw_body)
+
+        # X-Modulo-Timestamp replay window check
+        ts = await self._verify_webhook_timestamp(
+            session,
+            trigger=delivery.trigger,
+            org_id=delivery.org_id,
+            trigger_id=delivery.trigger.id,
+            modulo_timestamp=modulo_timestamp,
+            payload_hash=payload_hash,
+        )
+
+        # HMAC validation (only if secret is configured)
+        cfg = delivery.trigger.config_json or {}
+        _warn_unrecognised_config_keys(delivery.trigger.id, cfg)
+        hmac_secret = await self._resolve_webhook_hmac_secret(
+            session,
+            trigger_id=delivery.trigger.id,
+            org_id=delivery.org_id,
+            cfg=cfg,
+        )
+        await self._verify_hmac_or_reject(
+            session,
+            trigger=delivery.trigger,
+            org_id=delivery.org_id,
+            trigger_id=delivery.trigger.id,
+            payload_hash=payload_hash,
+            raw_body=delivery.raw_body,
+            hmac_secret=hmac_secret,
+            hmac_signature=hmac_signature,
+            ts=ts,
+        )
+
+        # Org-wide pause kill-switch. Checked AFTER timestamp+HMAC
+        # validation (an unauthenticated delivery still gets its typed
+        # error) but BEFORE the dedup insert — a paused delivery must not
+        # consume a dedup slot. The engine writes NO TriggerEvent here; the
+        # route's in-transaction catch is the single writer of the
+        # ``paused`` event. Read failures propagate (never fabricate).
+        await ensure_triggers_resumable(
+            session, delivery.org_id, trigger_id=delivery.trigger.id, trigger_type="webhook"
+        )
+
+        # Event type + value filtering — skip the delivery unless it
+        # satisfies the trigger's accepted-events presence check and any
+        # configured dotted-path value filters.
+        await self._enforce_event_acceptance(
+            session,
+            delivery,
+            payload_hash=payload_hash,
+            log_prefix="Webhook",
+            payload_subject="webhook",
+            use_dot_notation=False,
+        )
+
+        # Pre-trigger guardrail pass (FAR-214) — at the trigger boundary,
+        # BEFORE the dedup insert so a guardrail-blocked delivery never
+        # consumes a dedup slot. Reuses the T1 run-creation seam's engine
+        # and row-loading semantics; detection is never reimplemented.
+        post_guardrail_payload, dedup_hash, guardrail_results = await self._run_pre_trigger_guardrail(
+            session,
+            delivery,
+            payload_hash=payload_hash,
+            is_replay=False,
+        )
+
+        return ts, payload_hash, post_guardrail_payload, dedup_hash, guardrail_results
+
+    async def _process_webhook_after_dedup(
+        self,
+        session: AsyncSession,
+        delivery: _WebhookDelivery,
+        *,
+        cfg: dict[str, Any],
+        post_guardrail_payload: dict[str, Any],
+        dedup_hash: str,
+        guardrail_results: list[Any],
+    ) -> tuple[Run, TriggerEvent, dict[str, Any]]:
+        """Process webhook after dedup validation passes.
+
+        Returns (run, trigger_event, input_payload).
+        """
+        # Deduplication
+        is_new = await self._try_insert_dedup(session, delivery.trigger.id, delivery.org_id, dedup_hash)
+        if not is_new:
+            await self._reject_duplicate_webhook(
+                session,
+                trigger=delivery.trigger,
+                org_id=delivery.org_id,
+                dedup_hash=dedup_hash,
+                trigger_id=delivery.trigger.id,
+            )
+
+        # FAR-1034 CI-failure coalescing — a repeat CI-failure event for the
+        # SAME PR + head SHA within the window is a no-op (no new run)
+        # instead of launching another full Branch Fixer run.
+        await self._coalesce_ci_failure(
+            session,
+            trigger=delivery.trigger,
+            org_id=delivery.org_id,
+            cfg=cfg,
+            post_guardrail_payload=post_guardrail_payload,
+            dedup_hash=dedup_hash,
+            trigger_id=delivery.trigger.id,
+        )
+
+        # Flood / concurrency protection (FAR-1863) — REFUSE at the run-
+        # creation site instead of queuing an unbounded run: the declared
+        # ``max_concurrent_runs`` bounds execution, and the refusal is
+        # recorded + raised exactly as ``replay_event`` does.
+        await self._enforce_concurrency_limit(
+            session,
+            trigger=delivery.trigger,
+            org_id=delivery.org_id,
+            dedup_hash=dedup_hash,
+            trigger_id=delivery.trigger.id,
+        )
+
+        # Payload mapping — derived from the POST-guardrail payload so a
+        # redact-action guardrail's masks are reflected in the mapped input.
+        mapping: dict[str, str] = cfg.get("payload_mapping", {})
+        input_payload = _apply_payload_mapping(post_guardrail_payload, mapping)
+        # FAR-1034: derive the CI-failure key from the PRE-mapping payload and
+        # stamp it on the run, so the in-flight suppression leg can still match
+        # after a non-empty ``payload_mapping`` has replaced the stored payload
+        # wholesale (dropping/renaming ``prNumber`` / ``headSha``).
+        ci_failure_coalesce_key = derive_ci_failure_coalesce_key(post_guardrail_payload)
+
+        # Rate limit check
+        rate_limit = await self._resolve_rate_limit_state(
+            session,
+            delivery,
+            input_payload=input_payload,
+            payload_hash=dedup_hash,
+        )
+
+        # Create run + audit + store payload for replay
+        run, trigger_event = await self._create_webhook_run(
+            session,
+            delivery,
+            input_payload=input_payload,
+            payload_hash=dedup_hash,
+            rate_limit=rate_limit,
+            ci_failure_coalesce_key=ci_failure_coalesce_key,
+        )
+        await self._persist_pre_trigger_guardrail_evidence(
+            session,
+            org_id=delivery.org_id,
+            trigger_event_id=trigger_event.id,
+            guardrail_results=guardrail_results,
+        )
+        _log.info("Webhook accepted for trigger %s → run %s", delivery.trigger.id, run.id)
+
+        return run, trigger_event, input_payload
+
     async def handle_webhook(
         self,
         session: AsyncSession,
@@ -841,13 +1026,7 @@ class TriggerEngine:
         first — the caller must keep the transaction so they survive the 4xx).
         The caller must have already set RLS context on the session.
         """
-        key1, key2 = _uuid_to_lock_keys(trigger_id)
-        lock_result = await session.execute(
-            text("SELECT pg_try_advisory_lock(:key1, :key2)"),
-            {"key1": key1, "key2": key2},
-        )
-        if not lock_result.scalar_one():
-            raise TriggerBusyError(trigger_id)
+        await self._acquire_trigger_lock(session, trigger_id)
         try:
             trigger = await self._load_trigger(session, trigger_id, org_id)
             delivery = _WebhookDelivery(
@@ -857,151 +1036,34 @@ class TriggerEngine:
                 raw_payload=raw_payload,
                 snapshot_id=snapshot_id,
             )
-            # Pre-guardrail failure events (timestamp, HMAC, event filters) are
-            # about the RAW delivery — they record the raw-body hash. The DEDUP
-            # hash is computed after the pre-trigger guardrail pass below
-            # (canonical POST-guardrail payload hash, FAR-214).
-            payload_hash = sha256_hex(raw_body)
 
-            # X-Modulo-Timestamp replay window check
-            ts = await self._verify_webhook_timestamp(
+            # Run pre-dedup validation steps
+            (
+                _ts,
+                _payload_hash,
+                post_guardrail_payload,
+                dedup_hash,
+                guardrail_results,
+            ) = await self._validate_webhook_delivery(
                 session,
-                trigger=trigger,
-                org_id=org_id,
-                trigger_id=trigger_id,
+                delivery,
                 modulo_timestamp=modulo_timestamp,
-                payload_hash=payload_hash,
-            )
-
-            # HMAC validation (only if secret is configured)
-            cfg = trigger.config_json or {}
-            _warn_unrecognised_config_keys(trigger.id, cfg)
-            hmac_secret = await self._resolve_webhook_hmac_secret(
-                session,
-                trigger_id=trigger_id,
-                org_id=org_id,
-                cfg=cfg,
-            )
-            await self._verify_hmac_or_reject(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                trigger_id=trigger_id,
-                payload_hash=payload_hash,
-                raw_body=raw_body,
-                hmac_secret=hmac_secret,
                 hmac_signature=hmac_signature,
-                ts=ts,
             )
 
-            # Org-wide pause kill-switch. Checked AFTER timestamp+HMAC
-            # validation (an unauthenticated delivery still gets its typed
-            # error) but BEFORE the dedup insert — a paused delivery must not
-            # consume a dedup slot. The engine writes NO TriggerEvent here; the
-            # route's in-transaction catch is the single writer of the
-            # ``paused`` event. Read failures propagate (never fabricate).
-            await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
+            cfg = trigger.config_json or {}
 
-            # Event type + value filtering — skip the delivery unless it
-            # satisfies the trigger's accepted-events presence check and any
-            # configured dotted-path value filters.
-            await self._enforce_event_acceptance(
+            # Process after dedup validation
+            return await self._process_webhook_after_dedup(
                 session,
                 delivery,
-                payload_hash=payload_hash,
-                log_prefix="Webhook",
-                payload_subject="webhook",
-                use_dot_notation=False,
-            )
-
-            # Pre-trigger guardrail pass (FAR-214) — at the trigger boundary,
-            # BEFORE the dedup insert so a guardrail-blocked delivery never
-            # consumes a dedup slot. Reuses the T1 run-creation seam's engine
-            # and row-loading semantics; detection is never reimplemented.
-            post_guardrail_payload, dedup_hash, guardrail_results = await self._run_pre_trigger_guardrail(
-                session,
-                delivery,
-                payload_hash=payload_hash,
-                is_replay=False,
-            )
-
-            # Deduplication
-            is_new = await self._try_insert_dedup(session, trigger_id, org_id, dedup_hash)
-            if not is_new:
-                await self._reject_duplicate_webhook(
-                    session,
-                    trigger=trigger,
-                    org_id=org_id,
-                    dedup_hash=dedup_hash,
-                    trigger_id=trigger_id,
-                )
-
-            # FAR-1034 CI-failure coalescing — a repeat CI-failure event for the
-            # SAME PR + head SHA within the window is a no-op (no new run)
-            # instead of launching another full Branch Fixer run.
-            await self._coalesce_ci_failure(
-                session,
-                trigger=trigger,
-                org_id=org_id,
                 cfg=cfg,
                 post_guardrail_payload=post_guardrail_payload,
                 dedup_hash=dedup_hash,
-                trigger_id=trigger_id,
-            )
-
-            # Flood / concurrency protection (FAR-1863) — REFUSE at the run-
-            # creation site instead of queuing an unbounded run: the declared
-            # ``max_concurrent_runs`` bounds execution, and the refusal is
-            # recorded + raised exactly as ``replay_event`` does.
-            await self._enforce_concurrency_limit(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                dedup_hash=dedup_hash,
-                trigger_id=trigger_id,
-            )
-
-            # Payload mapping — derived from the POST-guardrail payload so a
-            # redact-action guardrail's masks are reflected in the mapped input.
-            mapping: dict[str, str] = cfg.get("payload_mapping", {})
-            input_payload = _apply_payload_mapping(post_guardrail_payload, mapping)
-            # FAR-1034: derive the CI-failure key from the PRE-mapping payload and
-            # stamp it on the run, so the in-flight suppression leg can still match
-            # after a non-empty ``payload_mapping`` has replaced the stored payload
-            # wholesale (dropping/renaming ``prNumber`` / ``headSha``).
-            ci_failure_coalesce_key = derive_ci_failure_coalesce_key(post_guardrail_payload)
-
-            # Rate limit check
-            rate_limit = await self._resolve_rate_limit_state(
-                session,
-                delivery,
-                input_payload=input_payload,
-                payload_hash=dedup_hash,
-            )
-
-            # Create run + audit + store payload for replay
-            run, trigger_event = await self._create_webhook_run(
-                session,
-                delivery,
-                input_payload=input_payload,
-                payload_hash=dedup_hash,
-                rate_limit=rate_limit,
-                ci_failure_coalesce_key=ci_failure_coalesce_key,
-            )
-            await self._persist_pre_trigger_guardrail_evidence(
-                session,
-                org_id=org_id,
-                trigger_event_id=trigger_event.id,
                 guardrail_results=guardrail_results,
             )
-            _log.info("Webhook accepted for trigger %s → run %s", trigger_id, run.id)
-
-            return run, trigger_event, input_payload
         finally:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(:key1, :key2)"),
-                {"key1": key1, "key2": key2},
-            )
+            await self._release_trigger_lock(session, trigger_id)
 
     async def replay_event(
         self,
