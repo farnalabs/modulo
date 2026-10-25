@@ -32,12 +32,13 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Callable, Sequence, TypeAlias
+from typing import Any
 
 DEFAULT_TARGET_REF = "main"
-GhRunner: TypeAlias = Callable[..., tuple[int, str, str]]
-PullRequest: TypeAlias = dict[str, Any]
+type GhRunner = Callable[..., tuple[int, str, str]]
+type PullRequest = dict[str, Any]
 
 
 class GhError(RuntimeError):
