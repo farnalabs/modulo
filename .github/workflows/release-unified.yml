@@ -712,13 +712,13 @@ jobs:
           rm -rf dist
           uv build
           test -n "$(find dist -maxdepth 1 -type f -print -quit)"
-          uvx --from twine twine check dist/*
+          uvx --no-build --from twine==7.0.0 twine check dist/*
 
       - name: Verify package metadata
         working-directory: backend
         run: |
           set -euo pipefail
-          uv run --no-project --no-sync python - <<'PY'
+          uv run --no-project --no-sync --no-build python - <<'PY'
           import email, glob, zipfile
 
           wheel = glob.glob("dist/*.whl")
