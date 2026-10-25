@@ -61,6 +61,10 @@
 set -euo pipefail
 
 APP="${1:?usage: restart-wedged-app-machines.sh <app>}"
+LOG_CAPTURE_TIMEOUT_SECONDS=90
+export PROCESS_GROUP="app"
+export LIVENESS_CHECK_NAME="app_liveness"
+export CRITICAL_CHECK_STATUS="critical"
 
 if ! command -v fly >/dev/null 2>&1; then
   echo "::warning::flyctl not on PATH - cannot check ${APP} for a wedged app machine; continuing to the next deploy attempt."
@@ -77,7 +81,11 @@ fi
 # app_liveness check is critical. A parse failure is treated as "unknown"
 # (warn, no action) rather than "healthy".
 WEDGED_IDS="$(printf '%s' "${MACHINES_JSON}" | python3 -c '
-import json, sys
+import json, os, sys
+
+PROCESS_GROUP = os.environ["PROCESS_GROUP"]
+LIVENESS_CHECK_NAME = os.environ["LIVENESS_CHECK_NAME"]
+CRITICAL_CHECK_STATUS = os.environ["CRITICAL_CHECK_STATUS"]
 
 try:
     machines = json.load(sys.stdin)
@@ -90,10 +98,14 @@ for machine in machines or []:
         continue
     config = machine.get("config") or {}
     group = (config.get("metadata") or {}).get("fly_process_group") or config.get("env", {}).get("FLY_PROCESS_GROUP") or ""
-    if str(group) != "app":
+    if str(group) != PROCESS_GROUP:
         continue
     checks = machine.get("checks") or []
-    if any(str(c.get("name", "")) == "app_liveness" and str(c.get("status", "")) == "critical" for c in checks):
+    if any(
+        str(c.get("name", "")) == LIVENESS_CHECK_NAME
+        and str(c.get("status", "")) == CRITICAL_CHECK_STATUS
+        for c in checks
+    ):
         print(machine.get("id", ""))
 ')" || {
   echo "::warning::could not parse the flyctl machines output for ${APP} - machine state unknown; skipping wedge recovery."
@@ -119,7 +131,7 @@ while IFS= read -r MID; do
   # Bounded and best-effort: capturing the log must never delay or fail the
   # recovery it precedes.
   LOG_FILE="${LOG_DIR}/${MID}.log"
-  timeout 90 fly logs --app "${APP}" --machine "${MID}" --no-tail > "${LOG_FILE}" 2>&1 || true
+  timeout "${LOG_CAPTURE_TIMEOUT_SECONDS}" fly logs --app "${APP}" --machine "${MID}" --no-tail > "${LOG_FILE}" 2>&1 || true
   # The entrypoint prints the DATABASE_URL prefix, so redact the credential
   # part before the log is echoed or persisted. Match on the `://user:pw@`
   # shape rather than a bare `postgres(ql)://` prefix: driver-qualified schemes

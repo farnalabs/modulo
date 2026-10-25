@@ -33,6 +33,7 @@ from modulo.core.license import (
     REASON_EXPIRED,
     REASON_MALFORMED,
     REASON_SIGNATURE_MISMATCH,
+    RENEWAL_MODE_AUTO,
     parse_and_verify,
     set_public_key,
 )
@@ -189,6 +190,30 @@ class TestEarlyRenewalStacks:
         assert stacked_data.term == purchase_data.term
         assert stacked_data.renewal_mode == purchase_data.renewal_mode
         assert stacked_data.expires_at == claim.expires_at
+
+    async def test_stacked_key_preserves_an_auto_renewal_mode(self) -> None:
+        """FAR-2136: the claim carries the purchase key's mode forward unchanged.
+
+        A subscription purchase mints ``auto``; stacking its early renewal must
+        not downgrade the corrected licence to ``manual`` (which would offer a
+        purchase path to a customer who is already paying).
+        """
+        purchase = generate_team_license(
+            "Acme",
+            term_months=12,
+            private_key_hex=_TEST_PRIV,
+            renewal_mode=RENEWAL_MODE_AUTO,
+        )
+        previous = _previous_key(purchase, expires_at=_NOW + timedelta(days=60))
+
+        claim = await claim_stacked_renewal(_make_settings(), purchase_key=purchase, presented_key=previous)
+
+        purchase_data = parse_and_verify(purchase).license_data
+        stacked_data = parse_and_verify(claim.license_key).license_data
+        assert purchase_data is not None
+        assert stacked_data is not None
+        assert purchase_data.renewal_mode == RENEWAL_MODE_AUTO
+        assert stacked_data.renewal_mode == RENEWAL_MODE_AUTO
 
     async def test_the_early_renewal_adds_the_full_term_to_what_was_left(self) -> None:
         purchase = _purchase_key()

@@ -841,7 +841,8 @@ export default {
       "hitl_email_override_off": "Off",
       "hitl_email_select_aria": "HITL email preference for pipeline {name}",
       "hitl_email_saved": "HITL email preferences saved.",
-      "hitl_email_no_pipelines": "No pipelines available."
+      "hitl_email_no_pipelines": "No pipelines available.",
+      "hitl_email_pipelines_load_failed": "Could not load pipelines for HITL email overrides."
     },
     "ForceChangePasswordView": {
       "change_your_password": "Set a new password",

@@ -2,7 +2,19 @@
   <div class="p-6 max-w-2xl mx-auto space-y-6">
     <PageHeader :title="$t('views.MyProfileView.my_profile')" :subtitle="$t('views.MyProfileView.manage_your_account_settings_and_password')" />
 
-    <div class="card p-6 space-y-6">
+    <div
+      v-if="profileLoadError"
+      role="alert"
+      aria-live="assertive"
+      class="my-profile-profile-error"
+    >
+      <ErrorAlert
+        :message="profileLoadError"
+        :on-retry="loadProfile"
+      />
+    </div>
+
+    <div v-else class="card p-6 space-y-6">
       <div class="flex items-center gap-4 pb-4 border-b border-border">
         <div class="flex h-14 w-14 items-center justify-center rounded-full bg-primary text-xl font-bold text-primary-foreground" aria-hidden="true">
           {{ userInitial }}
@@ -30,9 +42,17 @@
             <SkeletonBlock v-for="n in 2" :key="'my-team-skeleton-' + n" height-class="h-10 w-full" />
           </div>
         </div>
-        <div v-else-if="myTeamsError" class="py-2 text-sm text-destructive">
-          {{ myTeamsError }}
-          <button type="button" class="ml-2 underline" data-testid="my-profile-my-teams-retry" @click="loadMyTeams">{{ $t('views.SettingsTeamsView.retry') }}</button>
+        <div
+          v-else-if="myTeamsError"
+          role="alert"
+          aria-live="assertive"
+          class="my-profile-my-teams-error"
+        >
+          <ErrorAlert
+            :message="myTeamsError"
+            :on-retry="loadMyTeams"
+            data-testid="my-profile-my-teams-retry"
+          />
         </div>
         <EmptyState
           v-else-if="myTeams.length === 0"
@@ -59,10 +79,19 @@
           <SkeletonBlock height-class="h-9 w-28" />
         </div>
       </div>
-      <div v-else-if="hitlPrefsLoadError" class="py-2 text-sm text-destructive" data-testid="my-profile-hitl-email-load-error">
-        {{ hitlPrefsLoadError }}
-        <button type="button" class="ml-2 underline" data-testid="my-profile-hitl-email-retry" @click="loadHitlEmailPrefs">{{ $t('views.SettingsTeamsView.retry') }}</button>
-      </div>
+       <div
+         v-else-if="hitlPrefsLoadError"
+          role="alert"
+          aria-live="assertive"
+           data-testid="my-profile-hitl-email-load-error"
+           class="my-profile-hitl-email-load-error"
+        >
+          <ErrorAlert
+            :message="hitlPrefsLoadError"
+            :on-retry="loadHitlEmailPrefs"
+            data-testid="my-profile-hitl-email-retry"
+          />
+       </div>
       <div v-else class="space-y-4">
         <div>
           <label for="my-profile-hitl-email-default" class="flex items-center gap-2 text-sm font-medium">
@@ -81,8 +110,19 @@
         <div>
           <h3 class="text-sm font-medium mb-1">{{ $t('views.MyProfileView.hitl_email_per_pipeline') }}</h3>
           <p class="text-xs text-muted-foreground mb-2">{{ $t('views.MyProfileView.hitl_email_overrides_help') }}</p>
-          <p v-if="hitlPipelines.length === 0" class="py-2 text-sm text-muted-foreground">{{ $t('views.MyProfileView.hitl_email_no_pipelines') }}</p>
-          <div v-else class="space-y-2">
+            <div
+              v-if="hitlPipelinesLoadError"
+              role="alert"
+              aria-live="assertive"
+              class="my-profile-hitl-email-pipelines-error"
+            >
+              <ErrorAlert
+                :message="hitlPipelinesLoadError"
+                :on-retry="loadHitlPipelines"
+              />
+            </div>
+           <p v-else-if="hitlPipelines.length === 0" class="py-2 text-sm text-muted-foreground">{{ $t('views.MyProfileView.hitl_email_no_pipelines') }}</p>
+           <div v-else class="space-y-2">
             <div v-for="pipeline in hitlPipelines" :key="pipeline.id" class="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-2" data-testid="my-profile-hitl-email-pipeline">
               <span class="font-medium">{{ pipeline.name }}</span>
               <select
@@ -100,7 +140,13 @@
           </div>
         </div>
 
-        <p v-if="hitlSaveError" class="text-sm text-destructive" data-testid="my-profile-hitl-email-error">{{ hitlSaveError }}</p>
+        <p
+          v-if="hitlSaveError"
+          role="alert"
+          aria-live="assertive"
+          class="text-sm text-destructive"
+          data-testid="my-profile-hitl-email-error"
+        >{{ hitlSaveError }}</p>
         <p v-if="hitlSaveSuccess" class="text-sm text-success-text" aria-live="polite" data-testid="my-profile-hitl-email-success">{{ $t('views.MyProfileView.hitl_email_saved') }}</p>
 
         <Button type="button" :disabled="hitlSaving" class="border border-primary/30 w-full sm:w-auto" data-testid="my-profile-hitl-email-save" @click="saveHitlEmailPrefs">
@@ -123,6 +169,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import ChangePasswordForm from '../components/shared/ChangePasswordForm.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import Button from 'primevue/button'
 import { api } from '../lib/api/client'
@@ -136,7 +183,8 @@ type PipelineItem = components['schemas']['PipelineResponse']
 
 const EMPTY_PROFILE: Profile = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '', is_system_admin: false, must_change_password: false }
 
-const profile = ref<Profile>(EMPTY_PROFILE)
+const profile = ref<Profile>({ ...EMPTY_PROFILE })
+const profileLoadError = ref('')
 
 const myTeams = ref<MyTeam[]>([])
 const myTeamsLoading = ref(false)
@@ -183,18 +231,18 @@ function teamRoleLabel(role: string): string {
 }
 
 async function loadProfile() {
+  profileLoadError.value = ''
   try {
     const { data, error } = await api.GET('/api/v1/auth/me')
     if (error) {
-      profile.value = { ...EMPTY_PROFILE }
+      profileLoadError.value = formatApiError(error)
       return
     }
     if (data) {
       profile.value = { ...EMPTY_PROFILE, ...data }
     }
   } catch (e) {
-    console.warn('Failed to load profile', e)
-    profile.value = { ...EMPTY_PROFILE }
+    profileLoadError.value = formatApiError(e)
   }
 }
 
@@ -208,6 +256,7 @@ const hitlSaving = ref(false)
 const hitlSaveError = ref('')
 const hitlSaveSuccess = ref(false)
 const hitlPipelines = ref<PipelineItem[]>([])
+const hitlPipelinesLoadError = ref('')
 
 function hitlOverrideChoice(pipelineId: string): 'default' | 'on' | 'off' {
   if (pipelineId in hitlOverrides.value) return hitlOverrides.value[pipelineId] ? 'on' : 'off'
@@ -247,15 +296,20 @@ async function loadHitlEmailPrefs() {
 }
 
 async function loadHitlPipelines() {
+  hitlPipelinesLoadError.value = ''
   try {
     const { data, error } = await api.GET('/api/v1/pipelines')
-    if (error || !data) {
-      hitlPipelines.value = []
+    if (error) {
+      hitlPipelinesLoadError.value = formatApiError(error)
+      return
+    }
+    if (!data) {
+      hitlPipelinesLoadError.value = t('views.MyProfileView.hitl_email_pipelines_load_failed')
       return
     }
     hitlPipelines.value = data.items ?? []
-  } catch {
-    hitlPipelines.value = []
+  } catch (e) {
+    hitlPipelinesLoadError.value = formatApiError(e)
   }
 }
 

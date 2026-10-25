@@ -4779,7 +4779,7 @@ def _apply_node_connector_binding(
 )
 @mcp_audited("pipeline_node_connector_bound", "pipeline", fail_closed=False)
 @_RETRY_DB
-async def bind_connector_to_node(
+async def bind_connector_to_node(  # NOSONAR S3776 - orchestration endpoint delegates validation/persistence helpers
     pipeline_id: str,
     node_id: str,
     connector_type: str,
@@ -10147,16 +10147,14 @@ async def list_feature_flags() -> dict[str, Any]:
             # verified rungs gives an identical answer in every case.
             license_valid = resolve_effective_license(settings, org) is not None
             # has_license_key is NOT the ladder and must not be unified with
-            # it: it mirrors the REST route's registry input
-            # (admin_feature_flags._build_registry) — a verified env key or
-            # the in-memory licence, plus an org key counted on PRESENCE
-            # alone. It answers "is a key configured", where is_valid answers
-            # "is it valid" (both pinned in test_mcp_governance_read_tools:
-            # an invalid org key counts for has_license_key but not is_valid).
+            # it: it mirrors the REST route's registry input — each configured
+            # key source counts only after canonical verification. It answers
+            # "is a valid key configured", where is_valid answers "did the
+            # effective ladder resolve one".
             has_key = (
                 verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
                 or get_license() is not None
-                or bool(org_key)
+                or verify_license_key(str(org_key)) is not None
             )
             registry = await FeatureFlagRegistry.from_db(s, plan_ctx.tier(), has_license_key=has_key)
 
@@ -10591,9 +10589,16 @@ async def list_plugins() -> dict[str, Any]:
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_plugins")
 
-        from modulo.core.plugin_registry import get_plugin_registry
+        org_id = _ctx_org_id_val()  # fail closed when no authenticated org context
+        # Plan gate parity with GET /api/v1/plugins: the plugin registry is the
+        # ``plugin_management`` entitlement, enforced there by
+        # ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "plugin_management")
+        if feat_err:
+            return feat_err
 
-        _ctx_org_id_val()  # fail closed when no authenticated org context
+        from modulo.core.plugin_registry import get_plugin_registry
 
         registry = get_plugin_registry()
         health_results = registry.health_check()
@@ -10642,6 +10647,13 @@ async def list_sso_providers() -> dict[str, Any]:
         from modulo.db.crud.sso_provider import list_providers
 
         org_id = _ctx_org_id_val()
+        # Plan gate parity with GET /api/v1/admin/sso/providers: SSO
+        # configuration is the ``sso`` entitlement, enforced there by
+        # ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "sso")
+        if feat_err:
+            return feat_err
 
         async with _session(org_id) as s:
             providers = await list_providers(s, org_id=org_id)
@@ -10812,6 +10824,14 @@ async def get_schema_versions(
         from modulo.db.crud.schema import get_schema, list_schema_versions
 
         org_id = _ctx_org_id_val()
+        # Plan gate parity with GET /api/v1/schemas/{schema_id}/versions:
+        # version history is the ``schema_version_history`` entitlement, enforced
+        # there by ``require_feature``. MCP must enforce it too rather than stay
+        # an unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "schema_version_history")
+        if feat_err:
+            return feat_err
+
         schid, schid_err = _parse_uuid_param(schema_id, "schema_id")
         if schid_err:
             return schid_err
@@ -11396,6 +11416,14 @@ async def list_environment_profiles(
         from modulo.db.crud.environment_profile import list_environment_profiles as db_list_environment_profiles
 
         org_id = _ctx_org_id_val()
+        # Plan gate parity with GET /api/v1/environment-profiles: environment
+        # profiles are the ``environment_profiles`` entitlement, enforced there
+        # by ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "environment_profiles")
+        if feat_err:
+            return feat_err
+
         lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
@@ -13055,11 +13083,18 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     denied = _resource_node_scope_error("get_schema_versions")
     if denied is not None:
         return denied
+    # FAR-2129: same plan-feature parity as the tool and the REST route it
+    # mirrors (GET /api/v1/schemas/{schema_id}/versions/{version}, gated
+    # require_feature("schema_version_history")). Without it the resource would
+    # remain an unentitled way to read the same version payload.
+    org_id = _ctx_org_id_val()
+    feat_err = await _require_plan_feature(org_id, get_settings(), "schema_version_history")
+    if feat_err:
+        return f"error: {feat_err['error']}: {feat_err['detail']}"
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema, SchemaVersion
 
-    org_id = _ctx_org_id_val()
     sid, sid_err = _parse_uuid_param(schema_id, "schema_id")
     if sid_err:
         return f"error: Invalid UUID format: {schema_id}"

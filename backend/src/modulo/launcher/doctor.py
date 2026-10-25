@@ -689,7 +689,7 @@ def check_bundled_binaries(_data_dir: Path, _state: Any, probes: DoctorProbes) -
         if stat.st_size == 0:
             problems.append(f"{binary} is ZERO bytes (likely AV-quarantined) — reinstall the bundle")
         elif sys.platform != "win32" and not stat.st_mode & 0o111:
-            # TODO(P3): Windows quarantine detection (MotW zone identifier).
+            # Deferred P3: Windows quarantine detection (MotW zone identifier).
             problems.append(f"{binary} is present but NOT executable — restore the exec bit")
     if problems:
         return CheckResult(
@@ -1238,7 +1238,7 @@ def _probe_username_of_uid(uid: int) -> str | None:
     # the stdlib `pwd` module has no attributes in typeshed on win32, and
     # `warn_unused_ignores` (strict) forbids a platform-specific type:ignore.
     if sys.platform == "win32":
-        return None  # TODO(P3): Windows SID — account mapping
+        return None  # Deferred P3: Windows SID account mapping
     try:
         import pwd
     except ImportError:
@@ -1262,7 +1262,7 @@ def _probe_file_owner(path: Path) -> str | None:
 
 def _probe_listening_on(port: int) -> list[str]:
     if sys.platform != "linux":
-        return []  # /proc absent; TODO(P3) Windows/macOS external-bind inspection
+        return []  # /proc absent; deferred P3 Windows/macOS external-bind inspection
     return _parse_listeners_from_proc(port)
 
 

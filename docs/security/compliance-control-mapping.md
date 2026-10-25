@@ -119,7 +119,7 @@ response:
 
 | Artefact type | Source in the instance | Provenance |
 |---|---|---|
-| `audit_chain` | `audit_events` + `audit_chain_heads`; browse and verify endpoints (the signed export is separately gated) | observed |
+| `audit_chain` | `audit_events` + `audit_chain_heads`; events are recorded on every tier, while the browse, verify, export, scan and evidence-pack routes need the Team-tier `audit_viewer` feature plus `audit.manage` | observed |
 | `run_snapshot` | `pipeline_snapshots` joined to `runs` | observed |
 | `hitl_decision` | decided `hitl_claims`, counting `human_only` gates separately | observed |
 | `eval_result` | `eval_results`, with pass/fail counts and definition count | observed |
@@ -168,10 +168,12 @@ single rule (`human_only_effective`): an omitted, `null` or non-dict
 `human_only` key means **true**, so legacy and raw-JSON gates are counted as
 human oversight rather than skipped.
 
-A `present` `audit_chain` entry means the trail exists **in this instance**. It
-does not assert that the offline-verifiable evidence-pack export is available
-here: that export additionally needs the Team-tier `audit_viewer` feature and a
-configured `MODULO_EVIDENCE_SIGNING_KEY`, and the index does not probe either.
+A `present` `audit_chain` entry means the trail exists **in this instance** -
+recording is not licence-gated, so a Community install produces one too. It does
+not assert that the trail can be browsed, verified or exported here: those admin
+routes need the Team-tier `audit_viewer` feature plus `audit.manage`, and the
+signed evidence pack additionally needs a configured
+`MODULO_EVIDENCE_SIGNING_KEY`. The index does not probe either condition.
 
 ### Missing artefacts are loud, never dropped
 
@@ -207,9 +209,11 @@ deployed at the time.
 ## Using it in an audit
 
 1. Deploy the release under audit and record `GET /api/v1/deployment`.
-2. Prove the audit chain in place with `GET /api/v1/admin/audit/verify`. The
-   endpoint accepts no query parameters and is not period-scoped: it checks the
-   first **10,000** events in created-at order and returns `truncated: true`
+2. Prove the audit chain in place with `GET /api/v1/admin/audit/verify`. This
+   route, like every audit read route, needs the Team-tier `audit_viewer`
+   feature plus `audit.manage` (HTTP 402 on an unlicensed Community install).
+   The endpoint accepts no query parameters and is not period-scoped: it checks
+   the first **10,000** events in created-at order and returns `truncated: true`
    with `valid: false` when the organisation's trail is larger. That is an
    incomplete check, not evidence of tampering. Where the trail exceeds that
    cap, verify through the chain export instead (step 3), which carries the
@@ -218,8 +222,11 @@ deployed at the time.
 3. If the export is required, license the Team tier (`audit_viewer`) and
    configure `MODULO_EVIDENCE_SIGNING_KEY`, then take the evidence pack
    (`GET /api/v1/admin/audit/evidence-pack`) and the verification key
-   (`GET /api/v1/admin/audit/verification-key`). Without both, both routes
-   answer 402/503; the in-instance chain remains browsable and verifiable.
+   (`GET /api/v1/admin/audit/verification-key`). Without the feature the audit
+   routes answer 402; without the signing key the pack and key routes answer
+   503. On a Community install the events are still recorded and hash-chained in
+   the customer's database, but the product offers no admin route to browse or
+   verify them.
 4. Generate the evidence index (`GET /api/v1/compliance/evidence-index`) and
    retain it with the pack. Treat any entry with `status: absent` as a finding
    to explain, not a blank to fill in.
@@ -239,12 +246,15 @@ deployed at the time.
   10,000 in created-at order, and reports `valid: false` when it truncates. It
   takes no date range, so there is no date-bounded verification to fall back on.
   A `false` therefore means "not proven complete", not "tampered".
-- The offline-verifiable export is not on by default. It needs the Team-tier
-  `audit_viewer` feature (`GET /api/v1/admin/audit/evidence-pack` and
-  `/verification-key` answer 402 without it) and a configured
-  `MODULO_EVIDENCE_SIGNING_KEY` (503 without it). On a Community install the
-  trail is browsable and verifiable in place but cannot be exported in a form
-  that survives leaving the instance.
+- Reading the audit trail is Team-tier. Recording is not licence-gated, so a
+  Community install still writes a hash-chained trail; the browse, verify,
+  export and scan routes carry the `audit_viewer` feature plus `audit.manage`
+  and answer 402 without a Team licence. The offline-verifiable export is also
+  not on by default: `GET /api/v1/admin/audit/evidence-pack` and
+  `/verification-key` additionally need a configured `MODULO_EVIDENCE_SIGNING_KEY`
+  (503 without it). On a Community install the events exist in the customer's
+  database, but the product gives the operator no admin route through which to
+  browse or verify them, and no signed export.
 - Run-retention configuration is the Team-tier `admin_run_retention` feature.
   Evidence retention is admin-only and not plan-gated. Do not describe the two
   as one setting.

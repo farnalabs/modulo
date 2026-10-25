@@ -768,20 +768,21 @@ routes:
          sidebar_order:
          type: page
          <<: *community
-         required_roles: [admin]
-         deprecated: false
+         required_permissions: [compliance.evidence_index.read]
+         deprecated: true
 
     /admin/compliance/evidence-index:
-        name: admin-compliance-evidence-index
-        breadcrumb: Compliance Evidence Index
-        parent: /
-        product_map: [feat-evidence]
-        sidebar_group: monitor
-        sidebar_order: 10
-        type: page
-        <<: *community
-        required_permissions: [compliance.evidence_index.read]
-        deprecated: false
+         name: admin-compliance-evidence-index
+         breadcrumb: Compliance Evidence Index
+         parent: /
+         product_map: [feat-evidence]
+         sidebar_group: monitor
+         sidebar_order: 10
+         type: page
+         <<: *community
+         required_permissions: [compliance.evidence_index.read]
+         deprecated: false
+
 
 
     /admin/errors:
@@ -5725,6 +5726,9 @@ elements:
       - testid: license-apply-btn-system
         type: button
         dynamic_testid: false
+      - testid: license-remove-btn-system
+        type: button
+        dynamic_testid: false
       - testid: licence-claim-link
         type: element
         dynamic_testid: false
@@ -6821,7 +6825,7 @@ features:
             - "[x] The /evidence route renders under the MONITOR sidebar group; EvidenceView.vue fetches the already-redacted payload and renders it as-is with NO client-side redaction or conditional field hiding, with i18n-backed strings and role=status/aria-live status regions (frontend/src/views/EvidenceView.vue, frontend/src/manifest.yaml)"
             - "[x] The /admin/evidence-redaction route (ADMIN sidebar group) renders AdminEvidenceRedactionView.vue, which lists the org's rules and creates/edits them through the PUT /api/v1/evidence/redaction-rules upsert keyed on (key_pattern, role): creating needs an unused pair and at least one redacted class (both rejected inline before any request), editing keeps key_pattern/role immutable and changes only redacted_fields, and the page has no delete surface; redacted_fields is limited to the backend REDACTION_CLASS_FIELDS vocabulary (an unrecognised stored class stays visible so it can be removed, and an unrecognised stored role is shown read-only with Save disabled). The seeded '*' / viewer catch-all is shown as mandatory, and the page explains the per-role fail-closed default — it configures the SERVER boundary only and never redacts or hides evidence values client-side (frontend/src/views/AdminEvidenceRedactionView.vue, frontend/src/manifest.yaml)"
             - "[x] The /admin/compliance/evidence-index route fetches GET /api/v1/compliance/evidence-index with the compliance.evidence_index.read permission, renders pack metadata, framework coverage counts, present/absent/customer-supplied artefacts, identifiers/locations/provenance/mapping row IDs, missing artefact warnings and the human-only lower-bound warning; customer-responsibility rows are explained as customer-owned records because the API intentionally omits them (frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
-            - "[x] The /admin/evidence route renders the operator/admin evidence index from GET /api/v1/compliance/evidence-index, showing pack metadata, completeness, missing artefact types, and each indexed artefact's status, provenance, record count, and location (frontend/src/views/EvidenceIndexView.vue, frontend/src/stores/evidence.ts)"
+            - "[x] The canonical /admin/compliance/evidence-index route renders ComplianceEvidenceIndexView.vue for the compliance evidence index, and the deprecated /admin/evidence route remains a compatibility alias to that same view; both routes use GET /api/v1/compliance/evidence-index to show pack metadata, completeness, missing artefact types, and each indexed artefact's status, provenance, record count, and location (frontend/src/router/index.ts, frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
         deferrals:
             - "Risk/Assessment (sub-scope B, FAR-941) is a separate ticket and is not part of this entry; the decision-record NULL-duplicate grouping (acceptance criteria 12-14) belongs to the decision-record read path and is not implemented here"
     feat-governance-stack:
@@ -6971,6 +6975,7 @@ features:
             - "[x] Plan/license-based gating is wired at the composition root (require_feature / get_plan_context): the Team-tier licensed surfaces (SSO administration, /api/v1/teams, audit export, admin spend limits) return 402 naming the gated feature without a valid Team license and pass with one; SSO AUTHENTICATION entry points are exempt from that 402 when NO license resolves at all, so a lapse never locks an administrator out of the licence screen (env-var SAML availability/config are configuration-only; FAR-2059/FAR-2060); the license resolves from the org settings with a system-license fallback (team_gates.feature, test_sso_licence_admin_invariant.py, docs/product-map/licensing/license.md)"
             - "[x] The authenticated shell surfaces a backend-derived renewal state (FAR-2075): GET /api/v1/admin/license returns `licence_state` (none | active | renewal_due | grace | lapsed), `days_until_expiry` and `grace_ends_at`, derived once from `expires_at` + `LICENCE_GRACE_DAYS` in `derive_licence_state`; the shell reads that status once per session for org admins and renders the notice on EVERY authenticated route (not only the licence page) without comparing dates itself — `renewal_due` shows a countdown banner that offers a purchase path ONLY for a manual renewal (an auto-renewing licence is never invited to buy again), `grace` shows a dismissible dialog that returns on the next visit until the licence is renewed, with two equally-weighted actions (install a key the customer may never have received, or buy a new licence), and `lapsed` explains that Team capability is off and where to install a key; the licence page reuses the same query instead of issuing a second read (backend/src/modulo/api/routes/admin_license.py, frontend/src/components/AppLayout.vue, frontend/src/components/licence/LicenceRenewalNotice.vue, backend/tests/unit/api/test_admin_license.py, frontend/src/__tests__/LicenceRenewalNotice.spec.ts, frontend/src/__tests__/components/AppLayoutLicenceBanner.spec.ts)"
             - "[x] The licence screen's audience is ONE permission, not a parallel role check (FAR-2104): /settings/license sits in the ADMIN group with `required_permissions: [org.license.manage]` and a community tier floor, so an org admin — and a deployment whose licence has lapsed — can reach the page and install a key; the authenticated shell derives the renewal notice's audience from the same permission (frontend/src/composables/useLicenceAccess.ts → the server-resolved GET /api/v1/auth/permissions list) instead of an `orgRole === admin` check; the page splits the scopes — an org admin installs/removes the organisation's key via PUT/DELETE /api/v1/admin/orgs/{org_id}/license, while the instance-wide POST /api/v1/admin/license controls render only for a system admin (system.config.manage); GET /api/v1/admin/license is require_system_or_org_admin so the read admits exactly the principals those writes admit, and backend/tests/unit/api/test_admin_license_permission_agreement.py pins the agreement so the surfaces cannot drift apart again"
+            - "[x] The INSTANCE-WIDE licence can be removed without a restart (FAR-2110): DELETE /api/v1/admin/license (guarded by the strict system-admin `system.config.manage`, so an org admin gets 403) clears the in-memory system licence and busts every cached `license:{org_id}` status entry, so GET /api/v1/admin/license immediately reports has_license false / licence_state none for an org falling back to the system key and Team-gated routes return 402; the system card renders a Remove control only for a caller holding system.config.manage (frontend/src/composables/useLicenceAccess.ts), and the removal is audited as license_removed on resource license (backend/tests/unit/api/test_admin_license.py, frontend/src/__tests__/SettingsLicenseView.spec.ts)"
             - "[x] Early-renewal claim is reachable by a customer without a session (FAR-2114): the public /licence/claim page (meta.public, rendered outside the authenticated shell) posts the purchase key plus an optional previous licence to POST /api/v1/webhooks/stripe/renewal-claim; a stacked response shows the new key (copyable) with the new expiry, the previous expiry and the days carried over, an unstacked response is presented as a legitimate success (no time added, purchase key unchanged, re-submit with the previous licence) rather than an error, and every rejection reason (malformed / signature_mismatch / anchor_mismatch / expired / org_mismatch / same_licence / not_a_purchase_key / no_expiry / no_presented_key) renders an actionable message; the renewal banner and the License page link to it (frontend/src/views/LicenceClaimView.vue, frontend/src/router/index.ts, frontend/src/views/SettingsLicenseView.vue, frontend/src/components/licence/LicenceRenewalNotice.vue, backend/src/modulo/api/routes/stripe_webhook.py)"
             - "[ ] License-driven gating is not applied to EVERY registered feat-* surface — gating targets the licensed Team-tier surfaces, not the whole feature registry"
         deferrals:
@@ -7130,6 +7135,7 @@ features:
         behaviours:
             - "[x] The plugin registry lists installed plugins and their entry point groups"
             - "[x] Plugins support connector, model-backend, eval, and schema-type entry points"
+            - "[x] Plugin discovery fails soft when the metadata provider or an individual entry-point object raises: the error is logged, the broken plugin is represented as unhealthy, and healthy siblings remain discoverable (core/plugin_registry.py)"
             - "[ ] Plugin lifecycle management (install, enable, disable, uninstall) is not exposed through the registry API — the registry is read-only (importlib.metadata discovery at startup) and plugin installation/removal/upgrade is deliberately left to pip"
         deferrals:
             - "Plugin lifecycle management via the registry API is tracked under feat-plugins (install/enable/disable/uninstall stay pip-managed today); the /admin/plugins UI is a private_preview surface"

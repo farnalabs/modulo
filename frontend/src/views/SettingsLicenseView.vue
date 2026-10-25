@@ -78,7 +78,7 @@
             <Button data-testid="license-apply-btn" :disabled="!newLicenseKey.trim() || applying" @click="openApplyDialog">
               {{ applying ? $t('views.SettingsLicenseView.applying') : $t('views.SettingsLicenseView.apply_key') }}
             </Button>
-            <Button v-if="licenseInfo.has_license" data-testid="license-remove-btn" severity="danger" :disabled="removing" @click="openRemoveDialog">
+            <Button v-if="licenseInfo.has_license" data-testid="license-remove-btn" severity="danger" :disabled="removing" @click="openRemoveDialog('org')">
               {{ removing ? $t('views.SettingsLicenseView.removing') : $t('views.SettingsLicenseView.remove_license') }}
             </Button>
           </div>
@@ -123,6 +123,10 @@
             <Button data-testid="license-apply-btn-system" :disabled="!newSystemLicenseKey.trim() || applying" @click="openSystemApplyDialog">
               {{ applying ? $t('views.SettingsLicenseView.applying') : $t('views.SettingsLicenseView.install_system_license') }}
             </Button>
+            <!-- FAR-2110: remove the INSTANCE-WIDE licence (system scope). -->
+            <Button v-if="licenseInfo.has_license" data-testid="license-remove-btn-system" severity="danger" :disabled="removing" @click="openRemoveDialog('system')">
+              {{ removing ? $t('views.SettingsLicenseView.removing') : $t('views.SettingsLicenseView.remove_license') }}
+            </Button>
           </div>
           <p class="text-xs text-muted-foreground">
             {{ $t('views.SettingsLicenseView.restart_note') }}
@@ -155,7 +159,7 @@
       :description="$t('views.SettingsLicenseView.remove_license_description')"
       :confirmText="$t('views.SettingsLicenseView.confirm_remove')"
       :loading="removing"
-      @confirm="removeLicense"
+      @confirm="confirmRemove"
     />
   </div>
 </template>
@@ -264,6 +268,8 @@ const applyScope = ref<'org' | 'system'>('org')
 
 const removing = ref(false)
 const removeDialogOpen = ref(false)
+// Which scope the open remove confirmation clears (FAR-2110).
+const removeScope = ref<'org' | 'system'>('org')
 
 const maskedKey = computed(() => {
   return licenseInfo.value.has_license ? t('views.SettingsLicenseView.team_license_key_active') : '—'
@@ -375,8 +381,13 @@ async function applySystemKey() {
   }
 }
 
-function openRemoveDialog() {
+function openRemoveDialog(scope: 'org' | 'system') {
+  removeScope.value = scope
   removeDialogOpen.value = true
+}
+
+function confirmRemove() {
+  return removeScope.value === 'system' ? removeSystemLicense() : removeLicense()
 }
 
 /** Clear the ORGANISATION's own key (falls back to the system licence). */
@@ -385,6 +396,32 @@ async function removeLicense() {
   removing.value = true
   try {
     const { error: err } = await (api as any).DELETE(orgLicenceUrl.value)
+    if (err) {
+      verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}` }
+    } else {
+      removeDialogOpen.value = false
+      await planStore.fetchPlan()
+      await loadAll()
+    }
+  } catch (e: unknown) {
+    verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(e)}` }
+  } finally {
+    removing.value = false
+  }
+}
+
+/**
+ * Clear the INSTANCE-WIDE key — system admin only (FAR-2110).
+ *
+ * `DELETE /api/v1/admin/license` clears the in-memory system licence and
+ * busts every cached licence status server-side, so the deployment degrades
+ * without a restart. Reloading the plan and the status is what the operator
+ * sees change immediately.
+ */
+async function removeSystemLicense() {
+  removing.value = true
+  try {
+    const { error: err } = await api.DELETE('/api/v1/admin/license')
     if (err) {
       verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}` }
     } else {

@@ -47,7 +47,6 @@
 {"constant": "_CODE_EVAL_DEFINITION_CREATE", "modules": ["api/routes/evals.py", "api/routes/guardrail_config.py"], "value": "eval.definition.create"}
 {"constant": "_CODE_GUARDRAIL_MANAGE", "modules": ["api/routes/guardrail_config.py", "api/routes/pipelines.py"], "value": "guardrail.manage"}
 {"constant": "_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING", "modules": ["api/routes/admin_notifications.py", "api/routes/notifications.py"], "value": "notifications.endpoint_table_missing"}
-{"constant": "_CODE_SYSTEM_CONFIG_MANAGE", "modules": ["api/routes/admin_feature_flags.py", "api/routes/admin_system_config.py"], "value": "system.config.manage"}
 {"constant": "_DEFAULT_IMAGE", "modules": ["core/runtime_provider/docker.py", "core/runtime_provider/k8s.py"], "value": "python:3.13-slim"}
 {"constant": "_DEPLOYMENT_IDENTITY_ENV", "modules": ["core/runtime_provider/docker.py", "core/runtime_provider/e2b.py", "core/runtime_provider/k8s.py"], "value": "MODULO_RUNNER_MACHINE_ID"}
 {"constant": "_ERR_DATABASE_UNAVAILABLE", "modules": ["core/analytics/guardrails.py", "core/analytics/service.py"], "value": "Database temporarily unavailable."}
