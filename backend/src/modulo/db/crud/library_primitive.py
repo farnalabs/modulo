@@ -229,20 +229,25 @@ async def create_library_primitive(
     version: str,
     tags: list[str],
     content_json: dict[str, Any],
-    source_url: str | None,
-    forked_from: uuid.UUID | None,
-    checksum: str | None,
-    ed25519_signature: str | None,
-    verified: bool | None,
-    download_count: int | None,
-    average_rating: float | None,
-    review_count: int | None,
-    owner_team_id: uuid.UUID | None,
-    visibility: str,
     account_id: uuid.UUID | None,
-    auto_update: bool = True,
-    tier: str = "native",
+    **options: Any,
 ) -> LibraryPrimitive:
+    """Create a library primitive while grouping optional metadata."""
+    source_url = options.pop("source_url", None)
+    forked_from = options.pop("forked_from", None)
+    checksum = options.pop("checksum", None)
+    ed25519_signature = options.pop("ed25519_signature", None)
+    verified = options.pop("verified", None)
+    download_count = options.pop("download_count", None)
+    average_rating = options.pop("average_rating", None)
+    review_count = options.pop("review_count", None)
+    owner_team_id = options.pop("owner_team_id", None)
+    visibility = options.pop("visibility", "org")
+    auto_update = options.pop("auto_update", True)
+    tier = options.pop("tier", "native")
+    if options:
+        raise TypeError(f"unexpected create_library_primitive options: {sorted(options)}")
+
     primitive = LibraryPrimitive(
         organisation_id=org_id,
         source=source,

@@ -48,18 +48,23 @@ async def create_environment_profile(
     org_id: uuid.UUID,
     name: str,
     account_id: uuid.UUID,
-    description: str | None = None,
     provider_type: str,
-    image_ref: str | None = None,
-    capabilities: list[str] | None = None,
-    config_json: dict[str, Any] | None = None,
-    network_policy: str = "outbound",
-    initialisation_strategy: str = "git_clone",
-    secret_refs: list[str] | None = None,
-    persistence_policy: str = "ephemeral",
-    owner_team_id: uuid.UUID | None = None,
-    visibility: str = "org",
+    **options: Any,
 ) -> EnvironmentProfile:
+    """Create an environment profile while preserving keyword-only options."""
+    description = options.pop("description", None)
+    image_ref = options.pop("image_ref", None)
+    capabilities = options.pop("capabilities", None)
+    config_json = options.pop("config_json", None)
+    network_policy = options.pop("network_policy", "outbound")
+    initialisation_strategy = options.pop("initialisation_strategy", "git_clone")
+    secret_refs = options.pop("secret_refs", None)
+    persistence_policy = options.pop("persistence_policy", "ephemeral")
+    owner_team_id = options.pop("owner_team_id", None)
+    visibility = options.pop("visibility", "org")
+    if options:
+        raise TypeError(f"unexpected create_environment_profile options: {sorted(options)}")
+
     validate_runner_docker_persistence(provider_type, persistence_policy)
     validate_profile_workspace_network(config_json)
     profile = EnvironmentProfile(

@@ -287,11 +287,9 @@ def _migrate_config_keys(*, forward: bool) -> None:
         op.execute(_CONFIG_FORWARD_PG if forward else _CONFIG_REVERSE_PG)
         return
     inspector = sa.inspect(bind)
-    config_columns = (
-        {column["name"] for column in inspector.get_columns("system_config")}
-        if inspector.has_table("system_config")
-        else set()
-    )
+    if not inspector.has_table("system_config"):
+        return
+    config_columns = {column["name"] for column in inspector.get_columns("system_config")}
     if "key" in config_columns:
         op.execute(_CONFIG_UPDATE_FORWARD if forward else _CONFIG_UPDATE_REVERSE)
 

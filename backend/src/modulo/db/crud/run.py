@@ -2255,24 +2255,28 @@ async def create_run(
     snapshot_id: uuid.UUID,
     trigger_type: str,
     input_payload: dict[str, Any],
-    account_id: uuid.UUID | None = None,
-    trigger_id: uuid.UUID | None = None,
-    owner_team_id: uuid.UUID | None = None,
-    parent_run_id: uuid.UUID | None = None,
-    rate_limit_key: str | None = None,
-    work_item_id: uuid.UUID | None = None,
-    work_item_refs: list[dict[str, Any]] | None = None,
-    is_replay: bool | None = None,
-    variant_group_id: uuid.UUID | None = None,
-    batch_id: uuid.UUID | None = None,
-    variant_config_snapshot: dict[str, Any] | None = None,
-    feedback_correction: dict[str, Any] | None = None,
-    coalesce_key: str | None = None,
-    ci_failure_coalesce_key: str | None = None,
-    run_group_id: uuid.UUID | None = None,
-    run_group_kind: str | None = None,
-    thread_id: str | None = None,
+    **options: Any,
 ) -> Run:
+    """Create a run; optional run metadata is accepted as named options."""
+    account_id = options.pop("account_id", None)
+    trigger_id = options.pop("trigger_id", None)
+    owner_team_id = options.pop("owner_team_id", None)
+    parent_run_id = options.pop("parent_run_id", None)
+    rate_limit_key = options.pop("rate_limit_key", None)
+    work_item_id = options.pop("work_item_id", None)
+    work_item_refs = options.pop("work_item_refs", None)
+    is_replay = options.pop("is_replay", None)
+    variant_group_id = options.pop("variant_group_id", None)
+    batch_id = options.pop("batch_id", None)
+    variant_config_snapshot = options.pop("variant_config_snapshot", None)
+    feedback_correction = options.pop("feedback_correction", None)
+    coalesce_key = options.pop("coalesce_key", None)
+    ci_failure_coalesce_key = options.pop("ci_failure_coalesce_key", None)
+    run_group_id = options.pop("run_group_id", None)
+    run_group_kind = options.pop("run_group_kind", None)
+    thread_id = options.pop("thread_id", None)
+    if options:
+        raise TypeError(f"unexpected create_run options: {sorted(options)}")
     # FAR-153 / §15.1 — validate the grouping kwargs at the persist boundary
     # BEFORE any DB write (the ``run_idempotency_key`` fail-loud pattern).
     # Extracted into ``_validate_run_grouping_kwargs`` to keep this function's
@@ -3147,7 +3151,11 @@ async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
 #: ``search()`` match verbatim as the marker's canonical ``pr_url``, so a
 #: case-variant agent-prose mention would otherwise win ahead of ``gh``'s
 #: lowercase echo and be recorded as THE delivery URL.
-_PR_URL_PATTERN = re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+", re.IGNORECASE)
+# The exact grammar is pinned against the runtime extractor and sandbox policy;
+# retain ``\d`` in the class because those copies are an intentional contract.
+_PR_URL_PATTERN = re.compile(  # NOSONAR S5869 — pinned cross-module regex contract
+    r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+", re.IGNORECASE
+)
 
 #: A line carrying a JSON ``"url":`` key is a ``gh pr list --json ...,url``
 #: LISTING of pre-existing open PRs (the delivery prompt's own pre-check),
@@ -3750,22 +3758,25 @@ async def update_run_status(
     session: AsyncSession,
     run_id: uuid.UUID,
     status: str,
-    *,
-    error_code: str | None = None,
-    error_detail: str | None = None,
-    total_tokens: int | None = None,
-    total_cost_usd: Decimal | None = None,
-    cost_breakdown: Any = _COST_BREAKDOWN_SENTINEL,
-    node_token_usage: dict[str, Any] | None = None,
-    outputs_json: dict[str, Any] | None = None,
-    node_telemetry_json: dict[str, Any] | None = None,
-    claimed_by: str | None = None,
-    clear_error_code: bool = False,
-    claim_token: str | None = None,
-    from_status: str | None = None,
-    not_status: str | None = None,
-    refund_claim_count: bool = False,
+    **options: Any,
 ) -> Run | None:
+    """Write a run status and its optional update fields."""
+    error_code = options.pop("error_code", None)
+    error_detail = options.pop("error_detail", None)
+    total_tokens = options.pop("total_tokens", None)
+    total_cost_usd = options.pop("total_cost_usd", None)
+    cost_breakdown = options.pop("cost_breakdown", _COST_BREAKDOWN_SENTINEL)
+    node_token_usage = options.pop("node_token_usage", None)
+    outputs_json = options.pop("outputs_json", None)
+    node_telemetry_json = options.pop("node_telemetry_json", None)
+    claimed_by = options.pop("claimed_by", None)
+    clear_error_code = options.pop("clear_error_code", False)
+    claim_token = options.pop("claim_token", None)
+    from_status = options.pop("from_status", None)
+    not_status = options.pop("not_status", None)
+    refund_claim_count = options.pop("refund_claim_count", False)
+    if options:
+        raise TypeError(f"unexpected update_run_status options: {sorted(options)}")
     """Write a run's status (optionally + blobs) — the FAR-583 store-write
     chokepoint.
 

@@ -29,26 +29,31 @@ async def create_agent(
     org_id: uuid.UUID,
     name: str,
     account_id: uuid.UUID,
-    is_executable: bool = True,
-    input_schema_id: uuid.UUID | None = None,
-    input_schema_version: str = "latest",
-    output_schema_id: uuid.UUID | None = None,
-    output_schema_version: str = "latest",
     prompt_template: str,
-    model_backend_id: uuid.UUID | None = None,
-    description: str | None = None,
-    connector_type_refs: list[dict[str, Any]] | None = None,
-    evals: list[dict[str, Any]] | None = None,
-    retry_policy: dict[str, Any] | None = None,
-    token_budget: int | None = None,
-    max_input_length: int | None = None,
-    library_id: uuid.UUID | None = None,
-    template_id: str | None = None,
-    agent_commands: list[str] | None = None,
-    prompt_always_visible: bool = False,
-    required_environment_capabilities: list[str] | None = None,
-    schema_profile: str | None = None,
+    **options: Any,
 ) -> Agent:
+    """Create an agent while keeping the public keyword contract extensible."""
+    is_executable = options.pop("is_executable", True)
+    input_schema_id = options.pop("input_schema_id", None)
+    input_schema_version = options.pop("input_schema_version", "latest")
+    output_schema_id = options.pop("output_schema_id", None)
+    output_schema_version = options.pop("output_schema_version", "latest")
+    model_backend_id = options.pop("model_backend_id", None)
+    description = options.pop("description", None)
+    connector_type_refs = options.pop("connector_type_refs", None)
+    evals = options.pop("evals", None)
+    retry_policy = options.pop("retry_policy", None)
+    token_budget = options.pop("token_budget", None)
+    max_input_length = options.pop("max_input_length", None)
+    library_id = options.pop("library_id", None)
+    template_id = options.pop("template_id", None)
+    agent_commands = options.pop("agent_commands", None)
+    prompt_always_visible = options.pop("prompt_always_visible", False)
+    required_environment_capabilities = options.pop("required_environment_capabilities", None)
+    schema_profile = options.pop("schema_profile", None)
+    if options:
+        raise TypeError(f"unexpected create_agent options: {sorted(options)}")
+
     agent = Agent(
         organisation_id=org_id,
         name=name,
