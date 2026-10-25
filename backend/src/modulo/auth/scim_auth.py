@@ -55,7 +55,11 @@ async def get_scim_principal(
             detail="SCIM is not configured — set MODULO_SCIM_TOKEN",
         )
 
-    if not hmac.compare_digest(credentials.credentials, scim_token):
+    # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. The bearer credential is
+    # attacker-controlled (Starlette decodes the header as latin-1), so a
+    # non-ASCII token must produce a clean 401, never an uncaught 500.
+    if not hmac.compare_digest(credentials.credentials.encode("utf-8"), scim_token.encode("utf-8")):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid SCIM token",

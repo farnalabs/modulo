@@ -168,7 +168,7 @@ def _minted_key(mock_send: MagicMock) -> str:
     return match.group(1)
 
 
-def _post(client: TestClient, body: bytes, signature: str | None) -> object:
+def _post(client: TestClient, body: bytes, signature: str | bytes | None) -> object:
     headers = {"Stripe-Signature": signature} if signature is not None else {}
     return client.post("/api/v1/webhooks/stripe", content=body, headers=headers)
 
@@ -217,6 +217,21 @@ class TestSignatureVerification:
         body = json.dumps(_invoice_event()).encode()
         with patch(_FULFIL_MODULE, new=AsyncMock()) as mock_fulfil:
             resp = _post(client, body, "not-a-stripe-signature")
+        assert resp.status_code == 400
+        mock_fulfil.assert_not_awaited()
+
+    def test_non_ascii_signature_header_rejected_without_raising(self, client: TestClient) -> None:
+        """A latin-1-decoded non-ASCII signature must be a 400, not a 500.
+
+        ``hmac.compare_digest`` raises TypeError on str operands containing
+        non-ASCII characters. The header bytes are sent raw so Starlette
+        decodes 0xE9 to 'é' exactly as it would from a real client.
+        """
+        body = json.dumps(_invoice_event()).encode()
+        timestamp = str(int(time.time())).encode()
+        signature = b"t=" + timestamp + b",v1=\xe9"
+        with patch(_FULFIL_MODULE, new=AsyncMock()) as mock_fulfil:
+            resp = _post(client, body, signature)
         assert resp.status_code == 400
         mock_fulfil.assert_not_awaited()
 

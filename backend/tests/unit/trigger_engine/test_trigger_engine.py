@@ -428,6 +428,21 @@ def test_verify_hmac(secret, body, sig_maker, expected) -> None:
     assert verify_hmac(body, secret, sig, timestamp=ts) is expected
 
 
+def test_verify_hmac_rejects_non_ascii_signature_without_raising() -> None:
+    """A latin-1-decoded non-ASCII signature header must reject, never raise.
+
+    ``hmac.compare_digest`` raises TypeError on str operands containing
+    non-ASCII characters. Starlette decodes header bytes as latin-1, so a
+    single high byte in an attacker-supplied signature (e.g. 0xE9 -> 'é')
+    would otherwise escape as an uncaught 500 instead of a clean rejection.
+    """
+    ts = int(time.time())
+    valid_sig = _sha256_sig(b"payload", "my-secret", timestamp=ts)
+
+    assert verify_hmac(b"payload", "my-secret", "sha256=é", timestamp=ts) is False
+    assert verify_hmac(b"payload", "my-secret", valid_sig + "é", timestamp=ts) is False
+
+
 @pytest.mark.parametrize(
     ("data", "field_path", "expected"),
     [
@@ -913,6 +928,25 @@ async def test_handle_webhook_verifies_hmac_after_secret_resync() -> None:
         )
 
     assert run is run_mock
+
+
+async def test_handle_webhook_non_ascii_signature_rejects_as_hmac_validation_error() -> None:
+    """A non-ASCII signature header on the webhook surface must be a clean
+    rejection (HmacValidationError), not an uncaught TypeError/500."""
+    trigger = _make_trigger(hmac_secret="test-secret")
+    session = _make_session(trigger=trigger, active_run_count=0)
+
+    with pytest.raises(HmacValidationError):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature="sha256=é",
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
 
 
 async def test_handle_webhook_applies_payload_mapping() -> None:

@@ -122,6 +122,20 @@ class TestVerifySlackSignature:
         sig = _slack_sig(body, _SIGNING_SECRET, ts)
         assert verify_slack_signature(body, "", ts, sig) is False
 
+    def test_non_ascii_signature_rejected_without_raising(self) -> None:
+        """A latin-1-decoded non-ASCII signature header must reject, never raise.
+
+        ``hmac.compare_digest`` raises TypeError on str operands containing
+        non-ASCII characters, so a high byte in the header (0xE9 -> 'é') would
+        otherwise escape as an uncaught 500 instead of a clean rejection.
+        """
+        body = b"payload"
+        ts = str(int(time.time()))
+        valid_sig = _slack_sig(body, _SIGNING_SECRET, ts)
+
+        assert verify_slack_signature(body, _SIGNING_SECRET, ts, "v0=é") is False
+        assert verify_slack_signature(body, _SIGNING_SECRET, ts, valid_sig + "é") is False
+
     def test_uses_constant_time_compare(self, monkeypatch: pytest.MonkeyPatch) -> None:
         body = b"payload"
         ts = str(int(time.time()))
