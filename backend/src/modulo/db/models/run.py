@@ -56,6 +56,18 @@ TERMINAL_STATUSES: frozenset[str] = frozenset(
     }
 )
 
+# The terminal statuses that represent a DELIVERED run — the single source of
+# truth for "did this run succeed", so consumer code never spells its own
+# ``status == "complete"`` test (enforced by the ``raw-status-complete`` semgrep
+# rule). It is deliberately a vocabulary entry here, where the status literals
+# live, rather than a predicate duplicated across consumers.
+#
+# FAR-146 (accept-as-complete) will WIDEN this set (an accepted outcome becomes
+# success) and every consumer that reads it follows automatically. Until then
+# it is exactly ``complete``, matching ``analytics/builder.py``'s
+# ``_COMPLETE_STATUS`` filter, which is what /analytics' success_rate counts.
+SUCCESS_STATUSES: frozenset[str] = frozenset({"complete"})
+
 # Non-terminal (active) run statuses — a run that still holds a slot. A pending
 # run is active but does not hold capacity (see crud.run._active_run_statuses).
 # ``unknown`` (adopted from FAR-410) is a NON-TERMINAL recovery status: the run's
@@ -336,6 +348,38 @@ class Run(OrgScoped):
                 "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
                 "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
                 "AND workspace_inputs_drift_detected IS NULL"
+            ),
+        ),
+        # FAR-2116 — pipeline-decay alerting (core/pipeline_decay_alerts.py).
+        # The sweep runs on EVERY reconcile tick (60s) and reads a 2-hour
+        # rolling window of webhook-triggered terminal runs, grouped by
+        # pipeline. Without a supporting index that is a full scan of ``runs``
+        # (the largest table) once a minute, forever. The partial predicate is
+        # the sweep's OWN static filter verbatim (``trigger_type`` + the
+        # terminal-status list), so only webhook runs that reached a terminal
+        # state ever enter the index — a small, self-pruning slice — and
+        # ``completed_at`` (the range key) makes the window a bounded index
+        # scan. The INCLUDE columns make the aggregate index-only.
+        # Migration 0334; the predicate/status-vocabulary parity is guarded by
+        # tests/unit/db/test_migration_0334_runs_webhook_decay_sweep_index.py.
+        Index(
+            "ix_runs_webhook_decay_sweep",
+            "completed_at",
+            postgresql_include=[
+                "organisation_id",
+                "pipeline_id",
+                "status",
+                "node_deadline_watchdog_fired_count",
+            ],
+            postgresql_where=text(
+                "trigger_type = 'webhook' AND status IN ('budget_exceeded', 'cancelled', "
+                "'compensation_failed', 'complete', 'cost_ceiling_exceeded', 'eval_failed', "
+                "'failed', 'rejected', 'router_no_match', 'stalled')"
+            ),
+            sqlite_where=text(
+                "trigger_type = 'webhook' AND status IN ('budget_exceeded', 'cancelled', "
+                "'compensation_failed', 'complete', 'cost_ceiling_exceeded', 'eval_failed', "
+                "'failed', 'rejected', 'router_no_match', 'stalled')"
             ),
         ),
         # FAR-153 / §15.1 — the two partial unique indexes that REPLACE the

@@ -34,6 +34,8 @@ from modulo.core.notifier import (
     EVENT_CAPACITY_SATURATION,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
     EVENT_HITL_DEADLINE_WARNING,
+    EVENT_PIPELINE_DECAY,
+    EVENT_PIPELINE_DECAY_RECOVERED,
     EVENT_PROVIDER_FAILURE,
     EVENT_QUEUE_PRESSURE_CRITICAL,
     EVENT_QUEUE_PRESSURE_NOTICE,
@@ -91,6 +93,12 @@ AVAILABLE_EVENTS = [
     EVENT_CAPACITY_SATURATION,
     EVENT_CAPACITY_RECOVERED,
     EVENT_CAPACITY_REDIS_PRESSURE,
+    # FAR-2116 — pipeline-decay alerting. Both are real dispatch_event types
+    # (core/pipeline_decay_alerts.py), so the subscription surface accepts
+    # them: an operator can wire a pager to "my webhook pipeline is failing
+    # most of the time" without reading the Actions tab.
+    EVENT_PIPELINE_DECAY,
+    EVENT_PIPELINE_DECAY_RECOVERED,
 ]
 
 

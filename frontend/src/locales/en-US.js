@@ -796,6 +796,10 @@ export default {
           "gate_removed": "HITL gate removed",
           "overdue": "HITL overdue"
         },
+        "pipeline": {
+          "decay": "Pipeline success rate degraded",
+          "decay_recovered": "Pipeline success rate recovered"
+        },
         "provider": {
           "failure": "Model provider authentication or billing failure"
         },
@@ -2798,6 +2802,8 @@ export default {
       "capacity_saturation": "Capacity Saturation",
       "capacity_recovered": "Capacity Recovered",
       "capacity_redis_pressure": "Queue Store Memory Pressure",
+      "pipeline_decay": "Pipeline Degraded",
+      "pipeline_decay_recovered": "Pipeline Recovered",
       "response_body": "Response Body",
       "admin_view_of_all_webhook_notification_deliveries": "Admin view of all webhook notification deliveries",
       "failed_to_load_delivery_logs": "Failed to load delivery logs:",
@@ -5058,7 +5064,9 @@ export default {
       "capacity_backpressure": "Capacity Backpressure",
       "capacity_saturation": "Capacity Saturation",
       "capacity_recovered": "Capacity Recovered",
-      "capacity_redis_pressure": "Queue Store Memory Pressure"
+      "capacity_redis_pressure": "Queue Store Memory Pressure",
+      "pipeline_decay": "Pipeline Degraded",
+      "pipeline_decay_recovered": "Pipeline Recovered"
     },
     "NotificationBell": {
       "notifications": "Notifications",
