@@ -45,6 +45,73 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 _PORT_CHANGE_KIND_NODE_SIGNATURE = "node_signature"
 _PORT_CHANGE_KIND_EDGE_PORT = "edge_port"
 
+# Fields from the authoritative PipelineGraphNode model that can alter graph
+# execution, security, runtime policy, or node behaviour. Identity, labels,
+# editor position, and port declarations are handled separately below.
+_BEHAVIOUR_NODE_FIELDS = (
+    "agent_id",
+    "label",
+    "node_type",
+    "connector_binding",
+    "environment_binding",
+    "input_schema_pin",
+    "output_schema_pin",
+    "output_schema_id",
+    "capability_scope",
+    "idempotent",
+    "composite_ref",
+    "composite_parameter_values",
+    "composite_input_mapping",
+    "composite_output_mapping",
+    "parameter_set_id",
+    "parameter_overrides",
+    "template_id",
+    "mode",
+    "agent_commands",
+    "commands_concatenation_string",
+    "agent_prompt",
+    "script_command",
+    "model_class",
+    "egress_policy",
+    "egress_allowlist",
+    "resource_limits",
+    "read_only",
+    "git_credentials",
+    "wallclock_budget_seconds",
+    "delivery_sentinel",
+    "single_pr_per_run",
+    "env_vars",
+    "context_files",
+    "timeout_seconds",
+    "output_schema_json",
+    "schema_profile",
+    "stall_timeout_seconds",
+    "enable_heartbeat",
+    "watch_log_path",
+    "stdout_percentage_delta",
+    "watch_globs",
+    "router_config",
+    "hitl_config",
+    "policy_gate",
+    "fan_out",
+    "collect",
+    "aggregate",
+    "join_partial_policy",
+    "workspace_inputs",
+    "await_completion",
+    "wait_timeout",
+    "stdout_retention_mode",
+    "stdout_max_bytes",
+)
+
+
+def _normalise_edge_type(edge: dict[str, Any]) -> str:
+    """Return the canonical edge type, accepting historic ``type`` data."""
+    value = edge.get("edge_type")
+    if value is None:
+        value = edge.get("type")
+    return str(value or "normal")
+
 
 async def delete_snapshot(
     session: AsyncSession,
@@ -544,32 +611,13 @@ def _compute_node_changes(na: dict[str, Any], nb: dict[str, Any]) -> dict[str, A
     version pair that behaves differently.
     """
     changes: dict[str, Any] = {}
-    for key in (
-        "agent_id",
-        "label",
-        "node_type",
-        # FAR-402 node-level HITL gate. A gate added, removed or retargeted on
-        # a node changes who must approve the run — the single most important
-        # thing a pre-rollback summary must never miss.
-        "hitl_config",
-        # Execution bounds / template / model class / isolation flag: each
-        # changes what the run does without touching the node's identity.
-        "timeout_seconds",
-        "template_id",
-        "model_class",
-        "single_pr_per_run",
-    ):
+    for key in _BEHAVIOUR_NODE_FIELDS:
         if na.get(key) != nb.get(key):
             changes[key] = {"old": na.get(key), "new": nb.get(key)}
-    for key in ("output_schema_id",):
-        if na.get(key) != nb.get(key):
-            changes["schema_id"] = {"old": na.get(key), "new": nb.get(key)}
-    for key in ("connector_binding", "environment_binding"):
-        if na.get(key) != nb.get(key):
-            changes[key] = {
-                "old": na.get(key),
-                "new": nb.get(key),
-            }
+    # ``schema_id`` is the public diff vocabulary retained for compatibility;
+    # the graph model's authoritative field is ``output_schema_id``.
+    if "output_schema_id" in changes:
+        changes["schema_id"] = changes.pop("output_schema_id")
     # FAR-402 P6: surface PORT-SIGNATURE deltas (inputs/outputs port names +
     # schema_refs) alongside the scalar field changes.
     port_changes = diff_node_ports(na, nb)
@@ -581,9 +629,10 @@ def _compute_node_changes(na: dict[str, Any], nb: dict[str, Any]) -> dict[str, A
 def _compute_edge_changes(ea: dict[str, Any], eb: dict[str, Any]) -> dict[str, Any]:
     """Compute per-field changes between two edge dicts (parallel to :func:`_compute_node_changes`)."""
     changes: dict[str, Any] = {}
-    for ekey in ("edge_type", "type"):
-        if ea.get(ekey) != eb.get(ekey):
-            changes["edge_type"] = {"old": ea.get(ekey), "new": eb.get(ekey)}
+    edge_type_a = _normalise_edge_type(ea)
+    edge_type_b = _normalise_edge_type(eb)
+    if edge_type_a != edge_type_b:
+        changes["edge_type"] = {"old": edge_type_a, "new": edge_type_b}
     if ea.get("hitl_review_config") != eb.get("hitl_review_config"):
         changes["hitl_review_config"] = {
             "old": ea.get("hitl_review_config"),
@@ -752,7 +801,7 @@ def _rebuild_graph(snapshot: PipelineSnapshot) -> dict[str, Any]:
                 "id": e.get("id"),
                 "source_node_id": e.get("source") or e.get("source_node_id", ""),
                 "target_node_id": e.get("target") or e.get("target_node_id", ""),
-                "edge_type": e.get("edge_type", e.get("type", "normal")),
+                "edge_type": _normalise_edge_type(e),
                 "hitl_review_config": e.get("hitl_review_config"),
                 "condition_expression": e.get("condition_expression") or e.get("condition"),
                 "source_port": e.get("source_port"),

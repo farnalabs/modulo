@@ -4,7 +4,7 @@
        changed on K -> these J downstream nodes are impacted"), NOT a wall of
        JSON. The backend semantic layer (breaking_changes + impacted_nodes) is
        presented FIRST; the raw JSON diff is the LAST thing and is behind a
-       toggle that is OFF by default. No backend endpoint is added or changed —
+       toggle that is OFF by default. The existing backend diff endpoint supplies this compare data —
        this binds to the existing POST /snapshots/diff response. -->
   <section
     class="flex h-full flex-col gap-4 p-4"

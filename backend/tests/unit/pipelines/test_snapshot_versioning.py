@@ -520,6 +520,13 @@ class TestComputeEdgeChanges:
         )
         assert "edge_type" in changes
 
+    def test_edge_type_aliases_are_equivalent(self):
+        changes = _compute_edge_changes(
+            {"source": "a", "target": "b", "type": "conditional"},
+            {"source": "a", "target": "b", "edge_type": "conditional"},
+        )
+        assert "edge_type" not in changes
+
 
 class TestComputeNodeChangesExecutionSemantics:
     """A node differing only in behaviour-bearing config is MODIFIED, not equal."""
@@ -561,6 +568,38 @@ class TestComputeNodeChangesExecutionSemantics:
         assert changes["template_id"] == {"old": "tpl-1", "new": "tpl-2"}
         assert changes["model_class"] == {"old": "builder", "new": "reviewer"}
         assert changes["single_pr_per_run"] == {"old": False, "new": True}
+
+    def test_behaviour_fields_are_reported(self):
+        node_a = {
+            "id": "a",
+            "agent_commands": ["python old.py"],
+            "agent_prompt": "old prompt",
+            "capability_scope": {"allowed_tools": ["read"]},
+            "egress_policy": "default",
+            "resource_limits": {"cpu": 1},
+            "policy_gate": {"action": "warn", "eval_id": "old"},
+        }
+        node_b = {
+            "id": "a",
+            "agent_commands": ["python new.py"],
+            "agent_prompt": "new prompt",
+            "capability_scope": {"allowed_tools": ["write"]},
+            "egress_policy": "deny_all",
+            "resource_limits": {"cpu": 2},
+            "policy_gate": {"action": "block", "eval_id": "new"},
+        }
+
+        changes = _compute_node_changes(node_a, node_b)
+
+        for field in (
+            "agent_commands",
+            "agent_prompt",
+            "capability_scope",
+            "egress_policy",
+            "resource_limits",
+            "policy_gate",
+        ):
+            assert field in changes
 
     def test_absent_execution_fields_are_not_a_change(self):
         """Both sides omitting a field is equal - only a real difference is reported."""
