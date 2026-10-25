@@ -610,8 +610,7 @@ class RuntimeProvider(ABC):
             f"Runtime provider '{self.__class__.__name__}' does not implement destroy_workspace_by_ref"
         )
 
-    # NOSONAR S7503 - async provider ABC contract
-    async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:
+    async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:  # NOSONAR S7503
         """Read the workspace log tail as raw bytes (ADR 040).
 
         Valid from provisioning until substrate reclamation; where the
@@ -796,8 +795,7 @@ class RuntimeProvider(ABC):
     # Resource-metrics primitive (FAR-1050 R6 — ADR 040 metrics gap)
     # ------------------------------------------------------------------
 
-    # NOSONAR S7503 - async provider ABC contract
-    async def get_metrics(self, provider_ref: str) -> list[WorkspaceMetrics]:
+    async def get_metrics(self, provider_ref: str) -> list[WorkspaceMetrics]:  # NOSONAR S7503
         """Return resource-usage samples for *provider_ref* (FAR-1050 R6).
 
         The poll the platform-side resource-cap killer drives: each sample
@@ -832,8 +830,7 @@ class RuntimeProvider(ABC):
     # reclamation)
     # ------------------------------------------------------------------
 
-    # NOSONAR S7503 - async provider ABC contract
-    async def list_workspaces_by_identity(self, identity: str) -> list[WorkspaceListEntry]:
+    async def list_workspaces_by_identity(self, identity: str) -> list[WorkspaceListEntry]:  # NOSONAR S7503
         """Enumerate THIS deployment's workspaces on the substrate (FAR-1275).
 
         The listing primitive behind non-Docker orphan reclamation: the
