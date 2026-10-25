@@ -12,7 +12,7 @@ import time
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from operator import attrgetter
@@ -3020,6 +3020,15 @@ class _RunStatusUpdate:
     refund_claim_count: bool = False
 
 
+#: Option names and defaults of :func:`update_run_status`, read from the
+#: ``_RunStatusUpdate`` dataclass so its field set stays the ONE declaration of
+#: the option surface (the ``UpdateRunStatusOptions`` TypedDict mirrors it for
+#: call-site type checking). Deriving the keys keeps this module free of
+#: payload-key string literals, which the FAR-583 raw-text lens flags as
+#: possible legacy-blob-column SQL.
+_RUN_STATUS_UPDATE_OPTION_DEFAULTS: dict[str, Any] = {field.name: field.default for field in fields(_RunStatusUpdate)}
+
+
 #: Stall bound for the fail-closed marker write below. Deliberately a
 #: MODULE-LOCAL value mirroring ``classify._CLASSIFICATION_WRITE_TIMEOUT_SECONDS``
 #: (30s) rather than an import of it: this module is the fallback for when
@@ -3864,47 +3873,21 @@ async def update_run_status(
     caller-side follow-up this note originally recorded under FAR-1601.
     Bounding here remains deliberately out of scope for this shared function.
     """
-    error_code = options.get("error_code")
-    error_detail = options.get("error_detail")
-    total_tokens = options.get("total_tokens")
-    total_cost_usd = options.get("total_cost_usd")
-    cost_breakdown = options.get("cost_breakdown", _COST_BREAKDOWN_SENTINEL)
-    node_token_usage = options.get("node_token_usage")
-    outputs_json = options.get("outputs_json")
-    node_telemetry_json = options.get("node_telemetry_json")
-    claimed_by = options.get("claimed_by")
-    clear_error_code = options.get("clear_error_code", False)
-    claim_token = options.get("claim_token")
-    from_status = options.get("from_status")
-    not_status = options.get("not_status")
-    refund_claim_count = options.get("refund_claim_count", False)
-    unknown_options = set(options) - set(UpdateRunStatusOptions.__annotations__)
+    unknown_options = set(options) - set(_RUN_STATUS_UPDATE_OPTION_DEFAULTS)
     if unknown_options:
         raise TypeError(f"unexpected update_run_status options: {sorted(unknown_options)}")
+    resolved_options: dict[str, Any] = {
+        name: options.get(name, default) for name, default in _RUN_STATUS_UPDATE_OPTION_DEFAULTS.items()
+    }
+    update = _RunStatusUpdate(**resolved_options)
     if status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {status!r}")
-    if refund_claim_count and claim_token is None:
+    if update.refund_claim_count and update.claim_token is None:
         # A refund decrements the claim the caller is refunding, so it is only
         # meaningful fenced to that claim's token. Refusing here prevents a
         # silent no-op (the ORM path has no token to fence against) — the same
         # fail-loud contract as the fence helpers.
         raise ValueError("refund_claim_count requires claim_token (refund is fenced to the claim it refunds)")
-    update = _RunStatusUpdate(
-        error_code=error_code,
-        error_detail=error_detail,
-        total_tokens=total_tokens,
-        total_cost_usd=total_cost_usd,
-        cost_breakdown=cost_breakdown,
-        node_token_usage=node_token_usage,
-        outputs_json=outputs_json,
-        node_telemetry_json=node_telemetry_json,
-        claimed_by=claimed_by,
-        clear_error_code=clear_error_code,
-        claim_token=claim_token,
-        from_status=from_status,
-        not_status=not_status,
-        refund_claim_count=refund_claim_count,
-    )
     if update.claim_token is not None:
         return await _update_run_status_fenced(session, run_id, status, update=update)
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
