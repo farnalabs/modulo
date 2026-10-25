@@ -522,7 +522,7 @@ class RuntimeProvider(ABC):
     provider_aliases: frozenset[str] = frozenset()
 
     @abstractmethod
-    async def create_workspace(self, spec: WorkspaceSpec) -> str:
+    async def create_workspace(self, spec: WorkspaceSpec) -> str:  # NOSONAR S7503 - async provider ABC contract
         """Provision a new workspace and return its provider-specific reference.
 
         WorkspaceSpec semantics every implementation must honour (FAR-595):
@@ -541,7 +541,7 @@ class RuntimeProvider(ABC):
         ...
 
     @abstractmethod
-    async def exec_command(
+    async def exec_command(  # NOSONAR S7503 - async provider ABC contract
         self,
         provider_ref: str,
         command: list[str],
@@ -551,7 +551,7 @@ class RuntimeProvider(ABC):
         """Run a command inside an existing workspace (collect-then-return)."""
         ...
 
-    async def exec_command_stream(
+    async def exec_command_stream(  # NOSONAR S7503 - async provider ABC contract
         self,
         provider_ref: str,
         command: list[str],
@@ -575,11 +575,11 @@ class RuntimeProvider(ABC):
         )
 
     @abstractmethod
-    async def destroy_workspace(self, provider_ref: str) -> None:
+    async def destroy_workspace(self, provider_ref: str) -> None:  # NOSONAR S7503 - async provider ABC contract
         """Tear down a workspace and release all associated resources."""
         ...
 
-    async def destroy_workspace_by_ref(self, provider_ref: str) -> bool:
+    async def destroy_workspace_by_ref(self, provider_ref: str) -> bool:  # NOSONAR S7503 - async provider ABC contract
         """Destroy a workspace using only its provider reference (ADR 040).
 
         Substrate-level destroy for reclamation paths: the caller supplies a
@@ -610,6 +610,7 @@ class RuntimeProvider(ABC):
             f"Runtime provider '{self.__class__.__name__}' does not implement destroy_workspace_by_ref"
         )
 
+    # NOSONAR S7503 - async provider ABC contract
     async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:
         """Read the workspace log tail as raw bytes (ADR 040).
 
@@ -633,7 +634,7 @@ class RuntimeProvider(ABC):
             f"Runtime provider '{self.__class__.__name__}' does not implement read_log_tail"
         )
 
-    async def apply_isolation(
+    async def apply_isolation(  # NOSONAR S7503 - async provider ABC contract
         self,
         provider_ref: str,
         spec: WorkspaceSpec,
@@ -795,6 +796,7 @@ class RuntimeProvider(ABC):
     # Resource-metrics primitive (FAR-1050 R6 — ADR 040 metrics gap)
     # ------------------------------------------------------------------
 
+    # NOSONAR S7503 - async provider ABC contract
     async def get_metrics(self, provider_ref: str) -> list[WorkspaceMetrics]:
         """Return resource-usage samples for *provider_ref* (FAR-1050 R6).
 
@@ -830,6 +832,7 @@ class RuntimeProvider(ABC):
     # reclamation)
     # ------------------------------------------------------------------
 
+    # NOSONAR S7503 - async provider ABC contract
     async def list_workspaces_by_identity(self, identity: str) -> list[WorkspaceListEntry]:
         """Enumerate THIS deployment's workspaces on the substrate (FAR-1275).
 
@@ -872,7 +875,7 @@ class RuntimeProvider(ABC):
         )
 
     @abstractmethod
-    async def get_workspace_status(self, provider_ref: str) -> str:
+    async def get_workspace_status(self, provider_ref: str) -> str:  # NOSONAR S7503 - async provider ABC contract
         """Return the current status string for the workspace."""
         ...
 
@@ -881,7 +884,7 @@ class RuntimeProvider(ABC):
         normalized = provider_type.strip().lower()
         return bool(normalized) and normalized in {self.provider_id, *self.provider_aliases}
 
-    async def close(self) -> None:
+    async def close(self) -> None:  # NOSONAR S7503 - async provider lifecycle contract
         """Destroy provider-tracked live workspaces best-effort, then release owned clients.
 
         Invoked by :meth:`RuntimeProviderHub.aclose` (hub-aclose disposal,
