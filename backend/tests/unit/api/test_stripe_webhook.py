@@ -8,6 +8,7 @@ through the actual endpoint — no mock bypasses signature verification.
 import hashlib
 import hmac
 import json
+import re
 import time
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
@@ -17,6 +18,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.main import app
+from modulo.core.license import (
+    _LICENSE_PUBLIC_KEY_HEX,
+    RENEWAL_MODE_AUTO,
+    RENEWAL_MODE_MANUAL,
+    parse_and_verify,
+    set_public_key,
+)
+from modulo.core.registry.crypto import generate_keypair
+from modulo.core.stripe_fulfilment import _processed_event_ids
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -24,6 +34,9 @@ _VALID_32 = "a" * 32
 _TEST_SECRET = "whsec_test_123"
 
 _FULFIL_MODULE = "modulo.api.routes.stripe_webhook.fulfil_team_purchase"
+
+_KP = generate_keypair()
+_LICENSE_KEY_PATTERN = re.compile(r"MODULO_LICENSE_KEY=(\S+)")
 
 
 @pytest.fixture(autouse=True)
@@ -44,7 +57,18 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
-def _make_stripe_settings(secret_key: str = "sk_test_123", webhook_secret: str = _TEST_SECRET) -> Settings:
+def _make_stripe_settings(
+    secret_key: str = "sk_test_123",
+    webhook_secret: str = _TEST_SECRET,
+    *,
+    license_private_key: str | None = None,
+    redis_url: str | None = None,
+) -> Settings:
+    overrides: dict[str, str] = {}
+    if license_private_key is not None:
+        overrides["modulo_license_private_key"] = license_private_key
+    if redis_url is not None:
+        overrides["redis_url"] = redis_url
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key=_VALID_32,
@@ -52,6 +76,7 @@ def _make_stripe_settings(secret_key: str = "sk_test_123", webhook_secret: str =
         modulo_admin_password="testpass",
         stripe_secret_key=secret_key,
         stripe_webhook_secret=webhook_secret,
+        **overrides,
     )
 
 
@@ -86,6 +111,17 @@ def _invoice_event(event_id: str = "evt_inv_paid", *, email: str = "bob@acme.com
     }
 
 
+def _invoice_event_with_subscription(event_id: str, subscription: str | None) -> dict:
+    """An ``invoice.paid`` event carrying Stripe's ``Invoice.subscription``.
+
+    That field is the id of the subscription the invoice was raised for, or
+    ``null`` for a one-off invoice — the signal FAR-2136 reads.
+    """
+    event = _invoice_event(event_id)
+    event["data"]["object"]["subscription"] = subscription
+    return event
+
+
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_stripe_settings
@@ -98,6 +134,38 @@ def disabled_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = lambda: _make_stripe_settings(secret_key="", webhook_secret="")
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def fulfilment_client() -> Generator[TestClient, None, None]:
+    """A client whose webhook runs the REAL fulfilment path (FAR-2136).
+
+    Only ``get_settings`` is overridden: the signing key and the trust anchor
+    are a matching test keypair, and the idempotency fallback is used
+    (``redis_url=""``) so no Redis is needed. Outbound email is patched per
+    test, so the key the test parses is one that was actually signed and
+    emailed through ``fulfil_team_purchase``.
+    """
+    app.dependency_overrides[get_settings] = lambda: _make_stripe_settings(
+        license_private_key=_KP["private_key"],
+        redis_url="",
+    )
+    _processed_event_ids.clear()
+    set_public_key(_KP["public_key"])
+    try:
+        yield TestClient(app)
+    finally:
+        _processed_event_ids.clear()
+        set_public_key(_LICENSE_PUBLIC_KEY_HEX)
+        app.dependency_overrides.clear()
+
+
+def _minted_key(mock_send: MagicMock) -> str:
+    """The licence key carried by the email the fulfilment sent."""
+    body_text = mock_send.call_args.args[4]
+    match = _LICENSE_KEY_PATTERN.search(body_text)
+    assert match is not None, "the fulfilment email carried no MODULO_LICENSE_KEY"
+    return match.group(1)
 
 
 def _post(client: TestClient, body: bytes, signature: str | None) -> object:
@@ -217,6 +285,46 @@ class TestFulfilmentDispatch:
             resp = _post(client, body, _sign(body))
         assert resp.status_code == 200
         mock_fulfil.assert_not_awaited()
+
+
+class TestRenewalModeFromEvent:
+    """FAR-2136 — the minted key's ``renewal_mode`` comes from the event.
+
+    These drive the REAL route and the REAL ``fulfil_team_purchase`` (only the
+    outbound email seam is patched), so the mode is asserted on a key that was
+    actually signed and emailed — not on a stubbed signer's arguments.
+    """
+
+    def _fulfil(self, client: TestClient, event: dict) -> str:
+        body = json.dumps(event).encode()
+        with patch(
+            "modulo.core.stripe_fulfilment.send_email",
+            new=MagicMock(return_value=True),
+        ) as mock_send:
+            resp = _post(client, body, _sign(body))
+        assert resp.status_code == 200
+        mock_send.assert_called_once()
+        return _minted_key(mock_send)
+
+    def test_subscription_invoice_mints_auto_renewal(self, fulfilment_client: TestClient) -> None:
+        license_key = self._fulfil(
+            fulfilment_client,
+            _invoice_event_with_subscription("evt_subscription", "sub_123"),
+        )
+
+        data = parse_and_verify(license_key).license_data
+        assert data is not None
+        assert data.renewal_mode == RENEWAL_MODE_AUTO
+
+    def test_one_off_invoice_mints_manual_renewal(self, fulfilment_client: TestClient) -> None:
+        license_key = self._fulfil(
+            fulfilment_client,
+            _invoice_event_with_subscription("evt_one_off", None),
+        )
+
+        data = parse_and_verify(license_key).license_data
+        assert data is not None
+        assert data.renewal_mode == RENEWAL_MODE_MANUAL
 
 
 class TestWebhookDisabled:

@@ -49,6 +49,7 @@ from redis.asyncio import Redis
 
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.core.license import (
+    DEFAULT_RENEWAL_MODE,
     REASON_MALFORMED,
     LicenseData,
     LicenseValidation,
@@ -230,8 +231,15 @@ async def fulfil_team_purchase(
     org_name: str,
     term_months: int = 12,
     send_key_email: bool = True,
+    renewal_mode: str = DEFAULT_RENEWAL_MODE,
 ) -> str | None:
     """Idempotently fulfil a Stripe purchase: generate + email a team license.
+
+    ``renewal_mode`` is the mode the emitted key will carry (FAR-2136). The
+    caller derives it from the Stripe event: a subscription invoice mints
+    ``"auto"``, a one-off mints ``"manual"``. The default stays ``"manual"`` so
+    a caller that does not state the mode can never promise a renewal that was
+    not bought.
 
     Ordering (FAR-180): duplicate-check -> generate -> email -> claim. The event
     id is claimed ONLY AFTER a successful email send, so a transient SMTP
@@ -251,6 +259,7 @@ async def fulfil_team_purchase(
             org_name,
             term_months=term_months,
             private_key_hex=settings.modulo_license_private_key or None,
+            renewal_mode=renewal_mode,
         )
     except ValueError:
         _log.exception("stripe.fulfilment.license_generation_failed event_id=%s", event_id)
