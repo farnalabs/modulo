@@ -594,6 +594,17 @@ class TestRiskAssessmentDegradationRealPath:
         # The first failing action short-circuits the rest.
         assert session.execute.await_count == 1
 
+    async def test_count_by_action_reraises_unrelated_programming_error(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        unrelated = ProgrammingError("stmt", "params", "syntax error")
+        unrelated.orig = MagicMock(sqlstate="42601")
+        session.execute = AsyncMock(side_effect=unrelated)
+
+        with pytest.raises(ProgrammingError):
+            await mod._count_risk_assessment_by_action(session, _ORG_ID)
+
     async def test_count_by_action_success(self) -> None:
         from modulo.api.routes import evidence as mod
 
@@ -726,6 +737,18 @@ class TestRiskAssessmentRowActions:
 
         assert resolved == {}
         assert degraded is True
+
+    async def test_reraises_unrelated_programming_error(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        row = _fake_evidence()
+        session = _make_mock_session()
+        unrelated = ProgrammingError("stmt", "params", "syntax error")
+        unrelated.orig = MagicMock(sqlstate="42601")
+        session.execute = AsyncMock(side_effect=unrelated)
+
+        with pytest.raises(ProgrammingError):
+            await mod._load_risk_assessment_row_actions(session, _ORG_ID, [row])
 
     async def test_malformed_subjects_are_skipped(self) -> None:
         from modulo.api.routes import evidence as mod
