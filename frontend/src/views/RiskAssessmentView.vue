@@ -83,7 +83,7 @@ async function loadPipelines(): Promise<void> {
       throw new Error(t('views.RiskAssessmentView.pipelines_load_failed'))
     }
     pipelines.value = data?.items ?? []
-  } catch (err) {
+  } catch {
     // Non-fatal: the projection still loads, but the operator must know the
     // pipeline facet is empty because its source failed (never a silent warn).
     pipelinesError.value = t('views.RiskAssessmentView.pipelines_load_failed')

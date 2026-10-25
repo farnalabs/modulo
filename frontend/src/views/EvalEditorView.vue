@@ -975,8 +975,8 @@ interface PipelineItem {
 interface GraphNode {
   id: string
   node_type: string
-  label: string | null
-  agent_id: string | null
+  label?: string | null
+  agent_id?: string | null
   position: { x: number; y: number }
 }
 
@@ -991,8 +991,8 @@ interface EvalDefinition {
   name: string
   eval_type: string
   config_json: Record<string, unknown>
-  pass_threshold: number | null
-  suite_id: string | null
+  pass_threshold?: number | null
+  suite_id?: string | null
   created_by: string
   judge?: EvalJudgeDisplay | null
 }
@@ -1376,7 +1376,7 @@ function resetForm() {
 const { loading, error: pageError, data: pipelinesResp, load: loadAll } = useDataFetch(
   async () => {
     const { data } = await api.GET('/api/v1/pipelines')
-    return { data: (data as any)?.items ?? [], error: undefined }
+    return { data: data?.items ?? [], error: undefined }
   },
   { initialValue: [] as PipelineItem[] },
 )
@@ -1394,7 +1394,7 @@ async function loadNodes() {
     const { data } = await api.GET('/api/v1/pipelines/{pipeline_id}/graph', {
       params: { path: { pipeline_id: selectedPipelineId.value } },
     })
-    nodes.value = (data as any)?.nodes ?? []
+    nodes.value = data?.nodes ?? []
   } catch (e) {
     nodes.value = []
     nodesError.value = t('views.EvalEditorView.failed_to_load_nodes')
@@ -1413,9 +1413,9 @@ async function loadEvals() {
   evalsError.value = null
   try {
     const { data } = await api.GET('/api/v1/evals', {
-      params: { query: { pipeline_id: selectedPipelineId.value } as any },
+      params: { query: { pipeline_id: selectedPipelineId.value } },
     })
-    evals.value = (data as any)?.items ?? []
+    evals.value = data?.items ?? []
     // Fetch gate actions for badge display (§6.1 / criterion 16)
     await loadGateBadges()
   } catch {
@@ -1434,8 +1434,8 @@ async function loadGateBadges() {
         const { data } = await api.GET('/api/v1/evals/{eval_id}/policy-gate', {
           params: { path: { eval_id: ev.id } },
         })
-        if (data && (data as any).action) {
-          actions[ev.id] = (data as any).action
+        if (data?.action) {
+          actions[ev.id] = data.action
         }
       } catch {
         // 404 means no gate — skip silently
@@ -1448,14 +1448,21 @@ async function loadGateBadges() {
 async function fetchPolicyGate(evalId: string) {
   gateError.value = false
   gatePendingEvalId.value = null
-  let gate: { action?: string; id?: string; version?: number; enabled?: boolean; enabled_at?: string | null; disabled_at?: string | null } | null = null
+  let gate: {
+    action?: string
+    id?: string
+    version?: number
+    enabled?: boolean
+    enabled_at?: string | null
+    disabled_at?: string | null
+  } | null = null
   try {
     const res = await api.GET('/api/v1/evals/{eval_id}/policy-gate', {
       params: { path: { eval_id: evalId } },
     })
     // openapi-fetch resolves non-2xx as { data: undefined, error } — it never
     // throws, so the envelope error (404 etc.) must be handled here, not in a catch.
-    gate = (res.data as { action?: string; id?: string; version?: number; enabled?: boolean; enabled_at?: string | null; disabled_at?: string | null } | null) ?? null
+    gate = res.data ?? null
   } catch {
     // Network-level failure only — treat as "no gate known".
     gate = null
@@ -1569,7 +1576,7 @@ async function persistEval(configParsed: Record<string, unknown>): Promise<Persi
       handleEvalWriteError(error)
       return { ok: false }
     }
-    const createdId = (created as any)?.id ?? null
+    const createdId = typeof created?.id === 'string' ? created.id : null
     if (createdId) {
       track(ANALYTICS_EVENTS.EVAL_CREATED, { eval_id: createdId })
     }
@@ -1589,7 +1596,7 @@ async function updatePolicyGate(evalId: string): Promise<boolean> {
   // openapi-fetch resolves non-2xx as { data: undefined, error } — it never
   // throws, so the envelope error must be checked here.
   if (res.error || !res.data) return false
-  const d = res.data as any
+  const d = res.data
   policyGate.id = d.id ?? policyGate.id
   policyGate.version = d.version ?? policyGate.version + 1
   gateSnapshot.action = policyGate.action
@@ -1603,7 +1610,7 @@ async function createPolicyGate(evalId: string): Promise<boolean> {
     body: { action: policyGate.action },
   })
   if (res.error || !res.data) return false
-  const d = res.data as any
+  const d = res.data
   policyGate.id = d.id ?? null
   policyGate.exists = true
   policyGate.version = d.version ?? 1
@@ -1929,7 +1936,7 @@ async function retryPolicyGate() {
     // openapi-fetch resolves non-2xx as { data: undefined, error } — a failed
     // retry keeps the error state available (§3.3 — no backoff/circuit breaker).
     if (res.error || !res.data) return
-    const d = res.data as any
+    const d = res.data
     policyGate.id = d.id ?? policyGate.id
     policyGate.exists = true
     policyGate.version = d.version ?? policyGate.version + 1
