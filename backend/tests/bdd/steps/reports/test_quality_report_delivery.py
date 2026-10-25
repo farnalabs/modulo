@@ -7,7 +7,6 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.core.reports.quality_report import _format_trend_section, deliver_quality_report
@@ -91,18 +90,18 @@ def deliver_report(request) -> None:
     }
     recipient_config: dict[str, Any] = request.node._recipient_config
 
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=_mock_resp())
+    pinned_factory = AsyncMock(return_value=mock_client)
+
     with (
         patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-        patch.object(httpx, "AsyncClient") as mock_client_cls,
+        patch(f"{_SCHEDULER_PATH}.pinned_async_client", new=pinned_factory),
     ):
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_client.post = AsyncMock(return_value=_mock_resp())
-
         asyncio.run(deliver_quality_report(report, recipient_config))
 
         request.node._delivery_client = mock_client
-        request.node._delivery_client_cls = mock_client_cls
+        request.node._delivery_client_cls = pinned_factory
 
 
 @when("I format the weekly trend section")

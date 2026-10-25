@@ -388,8 +388,11 @@ def test_webhook_create_accepts_run_stalled() -> None:
     """An org can subscribe a webhook to run_stalled without a 422."""
     from modulo.api.routes.admin_notifications import WebhookCreate
 
-    model = WebhookCreate(
-        url="https://hooks.example.com/notify",
-        events=["run_stalled"],
-    )
+    # The model's URL validator resolves DNS; this test is about the event
+    # vocabulary, so stub the SSRF floor for its example host.
+    with patch("modulo.api.routes.admin_notifications.validate_outbound_url"):
+        model = WebhookCreate(
+            url="https://hooks.example.com/notify",
+            events=["run_stalled"],
+        )
     assert model.events == ["run_stalled"]
