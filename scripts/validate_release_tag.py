@@ -30,8 +30,13 @@ def _version(tag: str) -> tuple[int, int, int]:
 
 
 def _load_json(path: Path) -> Any:
+    # ``path`` is a CLI argument supplied by the calling workflow
+    # (.github/workflows/native-release-smoke.yml writes the ``gh api``
+    # response to fixed paths such as release.json / release-pages.json); it is
+    # never user- or model-supplied, so this S8707 taint flow is a false
+    # positive.
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))  # NOSONAR pythonsecurity:S8707
     except (OSError, json.JSONDecodeError) as exc:
         raise ReleaseValidationError(f"cannot read GitHub API JSON from {path}: {exc}") from exc
 
