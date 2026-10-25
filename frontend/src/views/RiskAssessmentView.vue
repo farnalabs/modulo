@@ -43,9 +43,9 @@ import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import RiskAssessmentSummaryCard from './risk-assessment/RiskAssessmentSummaryCard.vue'
-import RiskAssessmentTable from './risk-assessment/RiskAssessmentTable.vue'
-import RiskAssessmentFacets from './risk-assessment/RiskAssessmentFacets.vue'
+import RiskAssessmentSummaryCard from '../components/risk-assessment/RiskAssessmentSummaryCard.vue'
+import RiskAssessmentTable from '../components/risk-assessment/RiskAssessmentTable.vue'
+import RiskAssessmentFacets from '../components/risk-assessment/RiskAssessmentFacets.vue'
 import { useRiskAssessmentStore } from '../stores/riskAssessment'
 
 interface Pipeline {

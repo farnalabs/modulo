@@ -10705,6 +10705,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evidence/risk-assessment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Risk Assessment Endpoint
+         * @description Return a filtered, faceted projection of evidence rows for risk/assessment.
+         *
+         *     This is a read-only derived view over the evidence store (chunk 7) — no new
+         *     storage, no schema change, no data migration.
+         *
+         *     Filters:
+         *     - key_prefix: evidence keys starting with this prefix (e.g. "risk." or "assessment.")
+         *     - pipeline_id: filter to evidence from runs belonging to this pipeline
+         *     - days: rolling time window on evidence.created_at (default 7, max 365)
+         *     - action: gate action parsed from subject_id via policy_gate_decisions
+         *       (best-effort; requires policy_gate_decisions.run_id column; ignored if absent)
+         *
+         *     The action facet degrades to absent when the run_id column does not exist
+         *     on policy_gate_decisions — the response includes "facet_degraded": true
+         *     and the UI should hide the action facet control.
+         *
+         *     No outcome facet — the evidence table has no outcome column. Outcome facet
+         *     returns with the predicate unit.
+         */
+        get: operations["risk_assessment_endpoint_api_v1_evidence_risk_assessment_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/evidence/{evidence_id}": {
         parameters: {
             query?: never;
@@ -19945,6 +19982,32 @@ export interface components {
              * @default false
              */
             claimed_by_me: boolean;
+        };
+        /**
+         * RiskAssessmentResponse
+         * @description Risk/assessment projection response.
+         */
+        RiskAssessmentResponse: {
+            summary: components["schemas"]["RiskAssessmentSummary"];
+            /** Rows */
+            rows: components["schemas"]["EvidenceRowResponse"][];
+        };
+        /**
+         * RiskAssessmentSummary
+         * @description Summary counts for the risk/assessment view.
+         */
+        RiskAssessmentSummary: {
+            /** Total Rows */
+            total_rows: number;
+            /** Action Counts */
+            action_counts: {
+                [key: string]: number;
+            };
+            /**
+             * Facet Degraded
+             * @default false
+             */
+            facet_degraded: boolean;
         };
         /** RotateKeyRequest */
         RotateKeyRequest: {
@@ -46661,6 +46724,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RedactionRuleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    risk_assessment_endpoint_api_v1_evidence_risk_assessment_get: {
+        parameters: {
+            query?: {
+                /** @description Optional evidence key prefix filter (e.g. 'risk.' or 'assessment.') */
+                key_prefix?: string | null;
+                /** @description Optional pipeline id filter */
+                pipeline_id?: string | null;
+                /** @description Rolling time window in days (default 7) */
+                days?: number;
+                /** @description Optional gate action filter (continue, warn, block, escalate) */
+                action?: string | null;
+                /** @description Maximum rows to return (default 100) */
+                limit?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskAssessmentResponse"];
                 };
             };
             /** @description Validation Error */
