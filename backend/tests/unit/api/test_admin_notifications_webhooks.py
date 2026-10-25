@@ -315,6 +315,31 @@ def test_update_webhook_omitting_team_id_keeps_existing_scope(client: TestClient
     assert resp.json()["team_id"] == str(_TEAM_ID)
 
 
+def test_update_webhook_accepts_explicit_null_url_and_events(client: TestClient) -> None:
+    """An explicit JSON null means "leave unchanged" and must not be rejected."""
+    with patch("modulo.api.routes.admin_notifications.set_rls_org"):
+        session = _make_session_with_team(team_present=True)
+        ep = _make_mock_endpoint()
+        session.get = AsyncMock(return_value=ep)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        try:
+            resp = client.put(
+                f"/api/v1/admin/notifications/{_WEBHOOK_ID}",
+                json={"url": None, "events": None, "description": "renamed"},
+            )
+        finally:
+            client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+    assert resp.status_code == 200
+    assert ep.url == "https://hooks.example.com/notify"
+    assert ep.events == '["hitl_awaiting"]'
+    assert ep.description == "renamed"
+
+
 # ── GET /api/v1/admin/notifications ───────────────────────────────────
 
 
