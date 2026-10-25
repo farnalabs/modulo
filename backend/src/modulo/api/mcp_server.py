@@ -10147,16 +10147,14 @@ async def list_feature_flags() -> dict[str, Any]:
             # verified rungs gives an identical answer in every case.
             license_valid = resolve_effective_license(settings, org) is not None
             # has_license_key is NOT the ladder and must not be unified with
-            # it: it mirrors the REST route's registry input
-            # (admin_feature_flags._build_registry) — a verified env key or
-            # the in-memory licence, plus an org key counted on PRESENCE
-            # alone. It answers "is a key configured", where is_valid answers
-            # "is it valid" (both pinned in test_mcp_governance_read_tools:
-            # an invalid org key counts for has_license_key but not is_valid).
+            # it: it mirrors the REST route's registry input — each configured
+            # key source counts only after canonical verification. It answers
+            # "is a valid key configured", where is_valid answers "did the
+            # effective ladder resolve one".
             has_key = (
                 verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
                 or get_license() is not None
-                or bool(org_key)
+                or verify_license_key(str(org_key)) is not None
             )
             registry = await FeatureFlagRegistry.from_db(s, plan_ctx.tier(), has_license_key=has_key)
 
