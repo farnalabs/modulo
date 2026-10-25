@@ -99,19 +99,16 @@ Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-i
 
 ## Not implemented yet
 
-`release-unified.yml` today covers the RC/GA lifecycle and the rehearsal. The remaining publish steps are **deliberate, visible stubs** rather than silent gaps - each carries a comment naming its tracking ticket. They are gated so they can never execute.
+`release-unified.yml` covers the RC/GA lifecycle, RC publication, GA publication and the rehearsal. Only the explicitly listed future publication surfaces remain out of scope; they are not executable release steps and must not be described as active stubs.
 
-| Stub job | Ticket | Will own |
-|----------|--------|----------|
-| `publish-images` | FAR-1869 | Publishing the built images to GHCR (folding in `publish-images.yml`, including its smoke checks) |
-| `publish-release-bundle` | FAR-1869 | The release bundle, GitHub Release assets and Helm chart |
-| `dispatch-rc-soak` | FAR-1870 | Dispatching the RC soak run |
+| Future surface | Ticket | Scope |
+|----------------|--------|-------|
 | `publish-pypi` | FAR-1871 | Publishing the Python package |
 | `pin-release-docs` | FAR-1872 | Pinning the released version in the docs |
 
-SBOM production and file-artefact attestation are **no longer stubs** (FAR-1868). `produce-sbom` runs for every action, dry-run included, and uploads a validated CycloneDX SBOM as the `sbom-cyclonedx` artefact. `attest-artefacts` runs for every action except `dry-run` and creates SLSA build provenance with `actions/attest-build-provenance`; it is the producer for the fail-closed `gh attestation verify` gate in `native-release-smoke.yml`. Container-image and release-bundle attestation remain FAR-1869 work: both sets are produced by that slice's still-stubbed publish jobs, and attesting an image needs a registry digest that does not exist yet - nothing fabricates a subject for an artefact that was not produced.
+SBOM production and file-artefact attestation are **no longer stubs** (FAR-1868). `produce-sbom` runs for every action, dry-run included, and uploads a validated CycloneDX SBOM as the `sbom-cyclonedx` artefact. `attest-artefacts` runs for every action except `dry-run` and creates SLSA build provenance with `actions/attest-build-provenance`; it is the producer for the fail-closed `gh attestation verify` gate in `native-release-smoke.yml`. Container-image attestation remains future work: attesting an image needs a registry digest, so nothing fabricates a subject for an artefact that was not produced.
 
-Until those land, a GA release still gets its tag, its GitHub Release and its CHANGELOG section - it just does not yet publish new images, bundles, packages or version-pinned docs through this workflow. It does produce an SBOM for the run, plus an attestation for it on non-`dry-run` actions.
+Until those land, a GA release still gets its tag, its GitHub Release, its CHANGELOG section, stable container/chart publication and the release bundle. It also produces an SBOM for the run, plus an attestation for it on non-`dry-run` actions.
 
 ## Attestation scope: `gh attestation verify`, not cosign
 
