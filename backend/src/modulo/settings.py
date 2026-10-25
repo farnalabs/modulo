@@ -829,6 +829,15 @@ class Settings(BaseSettings):
     dispatcher_reconcile_max_rows_per_tick: int = Field(
         default=500, alias="DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK", ge=50, le=10000
     )
+    # FAR-2122: recency window in which a ``run_node_outputs`` write counts as
+    # live progress for the mid-graph age gate. A node output inside this window
+    # is durable evidence the executor is still advancing, so the age gate must
+    # not stamp the run ``no_progress``. Bound as a param into the age-gate SQL
+    # (never a literal), threaded through ``ReconcileTuning``. Default 15 min
+    # matches the historical hard-coded window.
+    dispatcher_reconcile_node_output_progress_seconds: int = Field(
+        default=900, alias="DISPATCHER_RECONCILE_NODE_OUTPUT_PROGRESS_SECONDS", ge=60, le=86400
+    )
     # FAR-1525: per-ORG TIME bound inside the tick. The row budget (FAR-904 /
     # FAR-1425) bounds ROWS, not time — a single org whose pass hangs on a
     # wedged await consumed the ENTIRE inner budget at stage
