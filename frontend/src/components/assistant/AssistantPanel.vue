@@ -600,11 +600,16 @@ onUnmounted(() => {
   @apply fixed z-40 flex flex-col border rounded-lg shadow-2xl overflow-hidden;
   background-color: hsl(var(--background));
   border-color: hsl(var(--border));
-  transition:
-    width 150ms ease,
-    height 150ms ease,
-    left 150ms ease,
-    top 150ms ease;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .assistant-panel {
+    transition:
+      width 150ms ease,
+      height 150ms ease,
+      left 150ms ease,
+      top 150ms ease;
+  }
 }
 .assistant-floating {
   border-radius: var(--radius-lg);
@@ -636,7 +641,7 @@ onUnmounted(() => {
   cursor: grabbing;
 }
 .assistant-titlebar-btn {
-  @apply flex items-center justify-center rounded p-1 transition-colors;
+  @apply flex items-center justify-center rounded p-1 transition-colors motion-reduce:transition-none;
   color: hsl(var(--muted-foreground));
 }
 .assistant-titlebar-btn:hover {
@@ -665,7 +670,7 @@ onUnmounted(() => {
   @apply flex flex-1 overflow-hidden;
 }
 .assistant-sidebar {
-  @apply w-64 border-r overflow-auto shrink-0 transition-transform;
+  @apply w-64 border-r overflow-auto shrink-0 transition-transform motion-reduce:transition-none;
   background-color: hsl(var(--card));
   border-color: hsl(var(--border));
 }
@@ -679,7 +684,7 @@ onUnmounted(() => {
   background-color: hsl(var(--card));
 }
 .assistant-tab {
-  @apply px-3 py-2 text-xs font-medium transition-colors border-b-2 border-transparent;
+  @apply px-3 py-2 text-xs font-medium transition-colors motion-reduce:transition-none border-b-2 border-transparent;
   color: hsl(var(--muted-foreground));
 }
 .assistant-tab:hover {
@@ -690,7 +695,7 @@ onUnmounted(() => {
   border-bottom-color: hsl(var(--primary));
 }
 .assistant-floating-btn {
-  @apply fixed bottom-6 right-6 z-50 flex items-center justify-center rounded-full shadow-lg transition-all;
+  @apply fixed bottom-6 right-6 z-50 flex items-center justify-center rounded-full shadow-lg transition-all motion-reduce:transition-none;
   width: 48px;
   height: 48px;
   background-color: hsl(var(--primary));
