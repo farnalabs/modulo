@@ -76,7 +76,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for the full secur
   - Pipeline performance
   - HITL review activity
   - Cost tracking
-- [ ] **Audit log chain** integrity is verified (`GET /api/v1/admin/audit/verify`; requires `audit.manage`, no CLI wrapper)
+- [ ] **Audit log chain** integrity is verified (`GET /api/v1/admin/audit/verify`; requires the Team-tier `audit_viewer` feature plus `audit.manage`, no CLI wrapper). The chain is recorded on every tier; on Community the product offers no route to verify it
 - [ ] **Log retention** is configured:
   - Application logs: 30 days minimum
   - Audit logs: append-only table (`audit_events`); not purged automatically

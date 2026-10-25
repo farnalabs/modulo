@@ -109,10 +109,11 @@ the deployment would reject.
       `has_license: false`; after storage it reports tier / features / org / expires_at
       with `has_license: true` (`license_management.feature`)
 - [x] Non-admins are denied license management (403) (`license_management.feature`)
-- [x] Team gating: without a Team license, SSO providers, `/api/v1/teams`, audit export
-      and admin spend limits all return 402 naming the gated feature; they pass (200) with
-      a valid license; expiry degrades those surfaces back to community; community
-      features stay accessible without a license (`team_gates.feature`)
+- [x] Team gating: without a Team license, SSO providers, `/api/v1/teams`, the audit read
+      surfaces (browse, verify, export, scan and evidence-pack) and admin spend limits all
+      return 402 naming the gated feature; they pass (200) with a valid license; expiry
+      degrades those surfaces back to community; community features stay accessible without
+      a license (`team_gates.feature`)
 - [x] Feature-flag inspection returns the `license` object plus the active `flags` array,
       supports per-flag detail and override toggles, and 404s unknown flags
       (`test_admin_feature_flags.py` + `feature_flag_inspection.feature`)
@@ -222,8 +223,9 @@ the deployment would reject.
 
 - **License-driven gating is not applied to EVERY registered `feat-*` surface**
   - `require_feature` / `get_plan_context` gate the licensed Team-tier surfaces
-  (SSO providers, `/api/v1/teams`, audit export, admin spend limits), not the
-  whole feature registry (tracked as the manifest `feat-license` unchecked
+  (SSO providers, `/api/v1/teams`, the audit read surfaces - browse, verify,
+  export, scan, evidence pack - and admin spend limits), not the whole feature
+  registry (tracked as the manifest `feat-license` unchecked
   deferral). The previously-tracked "`stripe_webhook.py` and `admin_tiers.py`
   are cited as adjacents but not behaviour-covered" gap was closed by the
   2026-09-23 product-map walk - the tier catalogue now has executing BDD
