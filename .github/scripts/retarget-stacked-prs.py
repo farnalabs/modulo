@@ -33,8 +33,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, Callable, Sequence, TypeAlias
 
 DEFAULT_TARGET_REF = "main"
+GhRunner: TypeAlias = Callable[..., tuple[int, str, str]]
+PullRequest: TypeAlias = dict[str, Any]
 
 
 class GhError(RuntimeError):
@@ -48,13 +51,13 @@ class GhError(RuntimeError):
         super().__init__(f"`gh {' '.join(args)}` failed (exit {returncode}){detail}")
 
 
-def _run_gh(*args: str):
+def _run_gh(*args: str) -> tuple[int, str, str]:
     """Run a gh CLI command, returning (returncode, stdout, stderr)."""
     proc = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
     return proc.returncode, proc.stdout.strip(), (proc.stderr or "").strip()
 
 
-def gh_checked(run_gh, *args: str) -> str:
+def gh_checked(run_gh: GhRunner, *args: str) -> str:
     """Run gh and return stdout, raising GhError on any non-zero exit.
 
     Propagating the return code is the whole point: the previous helper
@@ -67,7 +70,7 @@ def gh_checked(run_gh, *args: str) -> str:
     return out
 
 
-def parse_concatenated(text: str) -> list:
+def parse_concatenated(text: str) -> list[PullRequest]:
     """Parse `gh api --paginate` output (one JSON document per page, concatenated).
 
     `gh api --paginate` emits each page as a separate top-level JSON array with
@@ -75,7 +78,7 @@ def parse_concatenated(text: str) -> list:
     the first page. Walk the text with ``raw_decode`` and flatten every page.
     """
     decoder = json.JSONDecoder()
-    items: list = []
+    items: list[PullRequest] = []
     idx, n = 0, len(text)
     while idx < n:
         while idx < n and text[idx] in " \t\r\n":
@@ -91,7 +94,7 @@ def parse_concatenated(text: str) -> list:
     return items
 
 
-def fetch_open_prs(run_gh) -> list[dict]:
+def fetch_open_prs(run_gh: GhRunner) -> list[PullRequest]:
     """Return EVERY open PR, fully paginated (never truncated at 100).
 
     Uses ``gh api --paginate`` rather than ``gh pr list --limit 100`` so a repo
@@ -125,19 +128,19 @@ def fetch_open_prs(run_gh) -> list[dict]:
     return prs
 
 
-def retarget_pr(run_gh, pr_num: int, target_ref: str):
+def retarget_pr(run_gh: GhRunner, pr_num: int, target_ref: str) -> tuple[bool, str]:
     """Attempt to retarget a PR. Returns (ok, detail); never raises on failure."""
     rc, out, err = run_gh("pr", "edit", str(pr_num), "--base", target_ref)
     return rc == 0, (err or out).strip()
 
 
-def comment_pr(run_gh, pr_num: int, body: str) -> bool:
+def comment_pr(run_gh: GhRunner, pr_num: int, body: str) -> bool:
     """Post a comment. Best-effort: a comment failure never changes protection."""
     rc, _out, _err = run_gh("pr", "comment", str(pr_num), "--body", body)
     return rc == 0
 
 
-def is_empty_diff(run_gh, head_ref: str, target_ref: str) -> bool:
+def is_empty_diff(run_gh: GhRunner, head_ref: str, target_ref: str) -> bool:
     """Best-effort: True when `head_ref` adds no commits over `target_ref`.
 
     Advisory only -- used to enrich the retarget comment. Any error returns
@@ -188,7 +191,12 @@ def _protection_comment(base: str, target_ref: str, pr_num: int) -> str:
     )
 
 
-def decide(branches_to_check, open_prs, target_ref, run_gh):
+def decide(
+    branches_to_check: Sequence[str],
+    open_prs: Sequence[PullRequest],
+    target_ref: str,
+    run_gh: GhRunner,
+) -> tuple[set[str], list[int]]:
     """Retarget every open child PR; protect any base we could not retarget.
 
     Returns (protected_branches, retargeted_prs).
@@ -221,7 +229,7 @@ def decide(branches_to_check, open_prs, target_ref, run_gh):
     return protected, retargeted
 
 
-def parse_args(argv):
+def parse_args(argv: Sequence[str]) -> tuple[list[str], str]:
     """Return (branches_to_check, target_ref) from a full argv (argv[0] = prog)."""
     args = [a for a in argv[1:] if a]
     target_ref = DEFAULT_TARGET_REF
@@ -232,7 +240,11 @@ def parse_args(argv):
     return args, target_ref
 
 
-def write_outputs(github_output, protected, retargeted) -> None:
+def write_outputs(
+    github_output: str | None,
+    protected: set[str],
+    retargeted: Sequence[int],
+) -> None:
     """Write the step outputs. Called on EVERY path so downstream never sees ''."""
     if github_output:
         protected_str = " ".join(sorted(protected))
@@ -242,7 +254,11 @@ def write_outputs(github_output, protected, retargeted) -> None:
             fh.write(f"retargeted_prs={retargeted_str}\n")
 
 
-def run(argv, run_gh=_run_gh, github_output=None) -> int:
+def run(
+    argv: Sequence[str],
+    run_gh: GhRunner = _run_gh,
+    github_output: str | None = None,
+) -> int:
     """Guard logic. Returns an exit code; all failure paths fail SAFE."""
     branches_to_check, target_ref = parse_args(argv)
 
@@ -278,7 +294,7 @@ def run(argv, run_gh=_run_gh, github_output=None) -> int:
     return 0
 
 
-def main(argv) -> int:
+def main(argv: Sequence[str]) -> int:
     return run(argv, run_gh=_run_gh, github_output=os.environ.get("GITHUB_OUTPUT"))
 
 
