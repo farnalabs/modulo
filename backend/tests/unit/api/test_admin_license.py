@@ -1017,3 +1017,217 @@ class TestLicenseCacheInvalidationSystemChange:
         assert resp.status_code == 200
         # The batched flush plus the trailing check cleared every seeded entry.
         assert probe.exists(*seeded) == 0
+
+
+class TestRemoveSystemLicense:
+    """FAR-2110: the instance-wide licence can be removed without a restart.
+
+    ``POST /api/v1/admin/license`` installs a verified key into the in-memory
+    store; before this route there was no way to undo it (the admin page's
+    "Remove License" control called a system endpoint that did not exist), so
+    an operator who installed a key by mistake — or wanted to return the
+    deployment to Community — had to restart the process.
+    """
+
+    URL = "/api/v1/admin/license"
+
+    def _install(self, client: TestClient) -> str:
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        resp = client.post(self.URL, json={"license_key": key})
+        assert resp.status_code == 200
+        assert get_license() is not None
+        return key
+
+    def test_system_admin_removes_the_instance_licence_without_a_restart(self, client: TestClient) -> None:
+        self._install(client)
+
+        resp = client.delete(self.URL)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["has_license"] is False
+        assert body["tier"] == "community"
+        assert body["licence_state"] == "none"
+        # The in-memory store is empty immediately — no process restart.
+        assert get_license() is None
+        # ...and the status endpoint the operator reads agrees.
+        org = _mock_org(settings_json={})
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            status = client.get(self.URL)
+        assert status.status_code == 200
+        assert status.json()["has_license"] is False
+        assert status.json()["tier"] == "community"
+        assert status.json()["licence_state"] == "none"
+
+    def test_removal_is_audited(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.core.audit_coverage import audit_session
+
+        self._install(client)
+        emitted: list[dict[str, Any]] = []
+
+        async def _capture_audit(_session: Any, _principal: Any, **kwargs: Any) -> None:
+            emitted.append(kwargs)
+
+        monkeypatch.setattr("modulo.core.audit_coverage.append_audit_event_isolated", _capture_audit)
+        app.dependency_overrides[audit_session] = lambda: _make_mock_session()
+        try:
+            resp = client.delete(self.URL)
+        finally:
+            app.dependency_overrides.pop(audit_session, None)
+
+        assert resp.status_code == 200
+        removal_events = [e for e in emitted if e.get("event_type") == "license_removed"]
+        assert removal_events, f"expected the audited licence removal event, got {emitted!r}"
+        event = removal_events[-1]
+        assert event["resource_type"] == "license"
+        assert event["payload"]["outcome"] == "success"
+
+    def test_an_org_admin_cannot_remove_the_instance_licence(self, org_admin_client: TestClient) -> None:
+        """The removal is strict system-admin — an org admin's licence stays put."""
+        result = parse_and_verify(_sign_license_payload(_make_valid_payload()))
+        assert result.license_data is not None
+        store_license("installed", result.license_data)
+
+        resp = org_admin_client.delete(self.URL)
+
+        assert resp.status_code == 403
+        assert get_license() is not None
+
+    def test_removal_requires_auth(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.delete(self.URL)
+        assert resp.status_code in (401, 403)
+
+    def test_a_tenantless_system_admin_can_remove_the_instance_licence(self) -> None:
+        """An instance-wide control must not require an org membership.
+
+        The route authenticates through ``require_system_permission`` (system
+        admin only), and its audit principal resolver must never turn the audit
+        wrapper into an access gate ahead of that check.
+        """
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_db_session] = _make_mock_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="sysadmin",
+            organisation_id=None,
+            account_id=_TEST_ACCOUNT_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        result = parse_and_verify(_sign_license_payload(_make_valid_payload()))
+        assert result.license_data is not None
+        store_license("installed", result.license_data)
+        try:
+            client = TestClient(app)
+            resp = client.delete(self.URL)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["has_license"] is False
+        assert get_license() is None
+
+    def test_removal_busts_the_cached_status_without_a_restart(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A stale ``license:{org_id}`` entry must not outlive the removal.
+
+        The status cache holds the RESOLVED effective licence for 60s. A GET
+        after installing the key caches ``team``; without a sweep the GET
+        following the DELETE would keep serving that cached team status.
+        """
+        server = FakeServer()
+
+        def _from_url(_url: str, **kwargs: Any) -> FakeAsyncRedis:
+            kwargs.pop("socket_connect_timeout", None)
+            kwargs.pop("socket_timeout", None)
+            return FakeAsyncRedis.from_url(str(_url), server=server, **kwargs)
+
+        fake_redis = MagicMock()
+        fake_redis.from_url = _from_url
+        monkeypatch.setattr(admin_license, "Redis", fake_redis)
+
+        def _settings() -> Settings:
+            return Settings(
+                database_url="postgresql+asyncpg://localhost/test",
+                secret_key=_VALID_32,
+                fernet_key=_VALID_32,
+                modulo_admin_password="testpass",
+                redis_url="redis://localhost:6379/0",
+            )
+
+        app.dependency_overrides[get_settings] = _settings
+        app.dependency_overrides[get_db_session] = _make_mock_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_TEST_ORG_ID,
+            account_id=_TEST_ACCOUNT_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        probe = FakeRedis.from_url("redis://localhost:6379/0", server=server, decode_responses=True)
+        try:
+            client = TestClient(app)
+            self._install(client)
+            org = _mock_org(settings_json={})
+            with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+                cached = client.get(self.URL)
+            assert cached.status_code == 200
+            assert cached.json()["tier"] == "team"
+            self_key = f"license:{_TEST_ORG_ID}"
+            assert probe.get(self_key) is not None
+
+            assert client.delete(self.URL).status_code == 200
+
+            with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+                after = client.get(self.URL)
+            assert after.status_code == 200
+            assert after.json()["has_license"] is False
+            assert after.json()["tier"] == "community"
+            assert after.json()["licence_state"] == "none"
+        finally:
+            app.dependency_overrides.clear()
+            probe.flushall()
+
+    def test_team_gated_route_returns_402_after_removal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Composed proof: removal flips a real Team-gated route to 402.
+
+        The plan context is derived from the SAME in-memory licence the remove
+        endpoint clears (``_plan_from_licence``), so this drives the whole
+        chain — removal -> empty licence store -> Community plan -> feature
+        gate — through the real route and gate rather than a mocked context.
+        """
+        from modulo.core.feature_flags import CommunityTier, LicenseKeyTier, PlanContext
+
+        def _plan_from_licence() -> PlanContext:
+            licensed = get_license()
+            return LicenseKeyTier(licensed) if licensed is not None else CommunityTier()
+
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_db_session] = _make_mock_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_TEST_ORG_ID,
+            account_id=_TEST_ACCOUNT_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        app.dependency_overrides[get_plan_context] = _plan_from_licence
+        monkeypatch.setattr("modulo.api.routes.audit.export_chain", AsyncMock(return_value={"events": []}))
+        try:
+            client = TestClient(app)
+            self._install(client)
+            before = client.get("/api/v1/admin/audit/export")
+            assert before.status_code == 200, before.text
+
+            assert client.delete(self.URL).status_code == 200
+
+            after = client.get("/api/v1/admin/audit/export")
+            assert after.status_code == 402, after.text
+            assert "audit_viewer" in after.text
+        finally:
+            app.dependency_overrides.clear()

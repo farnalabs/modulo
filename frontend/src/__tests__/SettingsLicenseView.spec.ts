@@ -208,6 +208,8 @@ describe('SettingsLicenseView', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="licence-org-controls"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="licence-system-controls"]').exists()).toBe(false)
+    // FAR-2110: the instance-wide Remove control is the system admin's alone.
+    expect(wrapper.find('[data-testid="license-remove-btn-system"]').exists()).toBe(false)
     expect(wrapper.find('textarea').exists()).toBe(true)
     expect(wrapper.text()).toContain('Apply Key')
     expect(wrapper.text()).toContain('Organisation License')
@@ -226,6 +228,7 @@ describe('SettingsLicenseView', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="licence-system-controls"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="licence-org-controls"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="license-remove-btn-system"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Verify Key')
     expect(wrapper.text()).toContain('Install System License')
   })
@@ -337,6 +340,37 @@ describe('SettingsLicenseView', () => {
     expect(api.POST).toHaveBeenCalledWith('/api/v1/admin/license', {
       body: { license_key: 'system-key' },
     })
+  })
+
+  it('a system admin removes the INSTANCE-WIDE key through the system endpoint', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+    ;(api.DELETE as any).mockResolvedValue({ error: undefined })
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    await wrapper.find('[data-testid="license-remove-btn-system"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    expect(api.DELETE).toHaveBeenCalledWith('/api/v1/admin/license')
+    // The org-scoped route is NOT touched by the system control.
+    expect(api.DELETE).not.toHaveBeenCalledWith('/api/v1/admin/orgs/org-1/license')
+  })
+
+  it('a system admin sees the system Remove control only when a licence is installed', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseFree, mockFlagsFree, SYSTEM_PERMISSIONS)
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: dialogStubs },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    expect(wrapper.find('[data-testid="licence-system-controls"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="license-remove-btn-system"]').exists()).toBe(false)
   })
 
   it('applyKey surfaces an error when the API returns an error', async () => {

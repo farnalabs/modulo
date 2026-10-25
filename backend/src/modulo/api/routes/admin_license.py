@@ -20,6 +20,7 @@ from modulo.api.dependencies import (
     get_db_session,
     require_system_or_org_admin,
     require_system_permission,
+    resolve_audit_principal,
 )
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -34,6 +35,7 @@ from modulo.core.license import (
     LicenseData,
     LicenseError,
     LicenseValidation,
+    clear_license,
     parse_and_verify,
     store_license,
 )
@@ -494,6 +496,58 @@ async def upload_license(
         expires_at=data.expires_at or None,
         org_id=data.org_id or None,
     )
+
+
+@router.delete(
+    "",
+    dependencies=[Depends(audited("license_removed", "license", principal_dep=resolve_audit_principal))],
+    status_code=status.HTTP_200_OK,
+    response_model=LicenseStatusResponse,
+)
+async def remove_license(
+    settings: Annotated[Settings, Depends(get_settings)],
+    _: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+) -> LicenseStatusResponse:
+    """Remove the instance-wide (system-scope) licence (FAR-2110).
+
+    The counterpart of :func:`upload_license`: ``POST`` stores a verified key
+    in the process-wide in-memory licence store, and this route clears it, so
+    an operator who installed a key by mistake (or wants to return the
+    deployment to Community) no longer has to restart the process.
+
+    Two mutations are required for the change to be visible immediately:
+
+    1. ``clear_license()`` empties the in-memory store — the rung
+       ``core.feature_flags.resolve_effective_license`` reads on every plan
+       resolution, so every subsequent resolution falls through to Community.
+    2. ``invalidate_license_status_cache`` deletes every cached
+       ``license:{org_id}`` status entry. The admin status cache holds the
+       RESOLVED effective licence for each org (60s TTL), and any org without
+       its own key was caching the system licence, so a removal without the
+       sweep would keep serving the removed licence for up to a minute.
+
+    The response is the post-removal instance-wide resolution rather than a
+    hard-coded "no licence": ``MODULO_LICENSE_KEY`` is deployment configuration
+    (rung 3 of the same ladder), so a deployment licensed by the env var still
+    resolves to Team after the installed key is cleared. Reporting Community
+    there would be false; the caller can tell the two apart from ``has_license``.
+
+    Audit: ``license_removed`` on resource ``license`` — the same coarse
+    vocabulary as the ``license_uploaded`` install event, recorded by the
+    ``audited()`` dependency for both success and failure outcomes. The
+    principal resolver is ``resolve_audit_principal``, not
+    ``get_current_tenant_user``: this is a ``require_system_permission`` route,
+    and a tenantless system admin must be admitted by the route's own gate —
+    the audit wrapper never becomes a stricter access gate ahead of it (an
+    absent tenant is attributed to the instance partition).
+    """
+    clear_license()
+    # A system-licence change can flip the effective resolution of EVERY org
+    # that falls back to the system licence, so bust every cached entry. The
+    # removal already took effect in memory; a cache failure must not turn it
+    # into a 500 (best-effort inside the helper, FAR-1719).
+    await invalidate_license_status_cache(settings)
+    return _resolve_effective_license(settings)
 
 
 @router.post(
