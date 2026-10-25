@@ -105,12 +105,10 @@ class EvalResult(OrgScoped):
     # ``passed`` is the compatibility projection of ``outcome`` (ADR 066 D5),
     # never the truth. ``error`` projects to False so a block gate fails closed.
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    # EXPAND release (FAR-2040): nullable at the DB layer while the OLD image
-    # is still serving during the rollout (it has no such column). "Every
-    # writer sets outcome" is enforced by the ``before_insert`` guard below.
-    # STAGE 2 flips this to NOT NULL (no server default) once the new image is
-    # fully rolled out; see migration 0330's docstring.
-    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # FAR-2058 stage 2: the rollout window is closed, so the database owns the
+    # invariant. There is deliberately no server default: a writer that omits
+    # the verdict must fail rather than silently record a failure.
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Schema-versioned verdict envelope (ADR 066 D5). Physical jsonb; the
     # shared JSONB_COL alias keeps SQLite/MariaDB parity.
