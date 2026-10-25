@@ -1109,7 +1109,15 @@ async def test_sweep_far1808_reclaims_node_started_leak_frees_slot(
     ``updated_at`` is deliberately left at its insert default (FRESH): the fix
     keys liveness on the heartbeat, so a fresh ``updated_at`` must NOT keep a
     dead executor alive. Before the fix this row was kept live (row_fresh),
-    so the leak assertion fails without the change."""
+    so the leak assertion fails without the change.
+
+    ``dispatcher='saq'`` is the FAR-1808 production shape: the leaked row was
+    created by an e2b sandbox dispatch, and ``dispatch_run`` stamps the SAQ
+    dispatcher identity. The sweep's recoverability check must therefore not
+    treat it as recoverable. A DISPATCHERLESS node-started row
+    (``dispatcher IS NULL``) is a different class — FAR-2122 resumes it from
+    its checkpoint — so seeding no dispatcher would test that class instead
+    (its marker is correctly kept for the reconciler)."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1125,6 +1133,7 @@ async def test_sweep_far1808_reclaims_node_started_leak_frees_slot(
         snap,
         status="running",
         marker=_node_started_marker(10),
+        dispatcher="saq",
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
         # updated_at intentionally NOT backdated — it is the static insert
@@ -1158,6 +1167,47 @@ async def test_sweep_far1808_reclaims_node_started_leak_frees_slot(
         provider="e2b",
     )
     assert slot.status == "acquired"
+
+
+async def test_sweep_far2122_keeps_dispatcherless_node_started_marker(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DISPATCHERLESS node-started class is NOT the FAR-1808 leak.
+
+    FAR-2122 resumes a ``running`` + ``first_node_dispatched`` row with no SAQ
+    dispatcher identity from its checkpoint (never re-executing the started
+    node), so the sweep's recoverability check must keep its marker: parity by
+    construction — a row the reconciler would recover can never have its
+    dispatch marker swept. Only the ``dispatcher='saq'`` shape (the e2b
+    sandbox dispatch FAR-1808 reclaimed) is terminalised by the 2h bound.
+    """
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=True)
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far2122Dispatchless", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar2122Dispatchless", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+    marker = _node_started_marker(10)
+
+    run_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="running",
+        marker=marker,
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+        heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
+    )
+
+    result = await _sweep(db_engine)
+    assert result["transitioned"] == 0, "FAR-2122's resume class must not be terminalised"
+
+    row = await _run_row(db_engine, org_id, run_id)
+    assert row["status"] == "running"
+    assert row["marker"] == marker, "the recoverable row's marker must survive the sweep"
 
 
 async def test_sweep_far1808_protects_live_node_started_run(
@@ -1239,7 +1289,12 @@ async def test_sweep_far1808_watchdog_write_noops_after_reclaim(
 ) -> None:
     """Watchdog race: after the sweep reclaims the run, a claim-fenced,
     ``status='running'``-guarded terminal write on the same row no-ops (0 rows)
-    — the dead executor can never resurrect or overwrite the terminal state."""
+    — the dead executor can never resurrect or overwrite the terminal state.
+
+    Seeds ``dispatcher='saq'`` for the same FAR-1808 reason as
+    :func:`test_sweep_far1808_reclaims_node_started_leak_frees_slot`: the
+    dispatcherless node-started class belongs to FAR-2122's checkpoint-resume
+    recovery, so its marker is NOT swept."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1257,6 +1312,7 @@ async def test_sweep_far1808_watchdog_write_noops_after_reclaim(
         status="running",
         marker=_node_started_marker(10),
         claim_token=claim,
+        dispatcher="saq",
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
     )
