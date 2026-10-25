@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from modulo.core.library_sync.manifest import verify_manifest
-from modulo.core.ssrf import validate_outbound_url_async
+from modulo.core.ssrf import pinned_async_client
 
 __all__ = ["LibraryClient"]
 
@@ -42,7 +42,7 @@ class LibraryClient:
     async def _get_client(self) -> httpx.AsyncClient:
         async with self._http_client_lock:
             if self._http_client is None or self._http_client.is_closed:
-                self._http_client = httpx.AsyncClient(timeout=self._timeout)
+                self._http_client = await pinned_async_client(self._endpoint, timeout=self._timeout)
         return self._http_client
 
     async def close(self) -> None:
@@ -57,24 +57,15 @@ class LibraryClient:
     def _url(self, path: str) -> str:
         return f"{self._endpoint}{path}"
 
-    async def _validate(self, url: str) -> bool:
-        """SSRF-check the endpoint URL. Fail-closed: a rejected URL aborts the request."""
+    async def _get_validated(self, path: str) -> httpx.Response | None:
+        """GET ``path`` through the request-time pinned SSRF boundary."""
+        url = self._url(path)
         try:
-            await validate_outbound_url_async(url)
+            client = await self._get_client()
+            resp = await client.get(url)
         except ValueError as exc:
             _log.warning("library_sync.client.ssrf_rejected", extra={"url": url, "reason": str(exc)})
-            return False
-        return True
-
-    async def _get_validated(self, path: str) -> httpx.Response | None:
-        """GET ``path`` after an SSRF check, returning ``None`` on any transport
-        or HTTP error (never raises, fail-open)."""
-        url = self._url(path)
-        if not await self._validate(url):
             return None
-        client = await self._get_client()
-        try:
-            resp = await client.get(url)
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
             _log.warning("library_sync.client.fetch_failed", extra={"url": url, "reason": str(exc)})
             return None

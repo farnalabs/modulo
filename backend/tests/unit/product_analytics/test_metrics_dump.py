@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from modulo.core.product_analytics.consent import apply_consent_action, default_consent_state
@@ -743,8 +744,32 @@ class TestSystemSessionFactory:
 
 
 class TestVendorClient:
+    @pytest.fixture(autouse=True)
+    def _stub_pinned_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _build(_url: str, **kwargs: object) -> httpx.AsyncClient:
+            return httpx.AsyncClient(**kwargs)
+
+        monkeypatch.setattr("modulo.core.product_analytics.vendor_client.pinned_async_client", _build)
+
     def test_retry_delays_count(self) -> None:
         assert len(RETRY_DELAYS) == MAX_ATTEMPTS - 1
+
+    @pytest.mark.asyncio
+    async def test_post_batch_rejects_blocked_endpoint_without_contacting_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _reject(_url: str, **_kwargs: object) -> httpx.AsyncClient:
+            raise ValueError("blocked internal address")
+
+        monkeypatch.setattr("modulo.core.product_analytics.vendor_client.pinned_async_client", _reject)
+        client = VendorClient("http://169.254.169.254", "test-secret")
+
+        success, code, error = await client.post_batch(b'{"test":1}', 100.0, 1)
+
+        assert success is False
+        assert code is None
+        assert error == "RequestError: blocked internal address"
+        assert client._http_client is None
 
     @pytest.mark.asyncio
     async def test_post_batch_returns_success(self) -> None:
