@@ -92,7 +92,7 @@ _ORG_SCOPED_TABLES = (_COLLECTION_INSTALL,)
 
 
 def _apply_org_isolation(
-    bind: sa.Connection,
+    _bind: sa.Connection,
     table: str,
     scope: str,
     app_role: bool,
