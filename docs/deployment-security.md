@@ -495,14 +495,21 @@ of the previous entry, forming a tamper-evident chain:
 }
 ```
 
+Recording is not licence-gated: the append-only triggers and hash chaining are
+always active, so a Community install records the chain too. Reading it through
+the product is Team-tier.
+
 **Verify chain integrity:**
 
-`GET /api/v1/admin/audit/verify` (`audit.manage` permission required). There is
-no CLI wrapper for audit verification.
+`GET /api/v1/admin/audit/verify` (Team-tier `audit_viewer` feature plus the
+`audit.manage` permission; HTTP 402 on an unlicensed Community install). There is
+no CLI wrapper for audit verification, and on Community the events are recorded
+but the product gives no admin route to verify them.
 
 **Configuration:**
 - Export audit events as paginated JSON via `GET /api/v1/admin/audit/export`
-  (paginate to cover the window).
+  (Team-tier `audit_viewer` feature plus `audit.manage`; paginate to cover the
+  window).
 - Audit events are **not** sent to OTel by default to avoid mixing
   tamper-evident logs with general telemetry.
 
@@ -539,7 +546,7 @@ Configure alerts for these events in your monitoring system:
 | Event | Signal | Severity | Channel |
 |-------|--------|----------|---------|
 | Rate limit threshold crossed | 429 responses > 5% of total | Warning | Ops channel |
-| Audit chain integrity failure | `audit verify` exit code != 0 | Critical | Security on-call |
+| Audit chain integrity failure | `GET /api/v1/admin/audit/verify` reports `valid: false` (Team tier) | Critical | Security on-call |
 | Failed login rate spike | Auth 401s > 10/min per IP | High | Security on-call |
 | Migration failure | Backend crash loop on startup | Critical | Ops channel |
 | CSRF token mismatch | 403 on state-changing endpoint | Medium | Ops channel |
@@ -681,7 +688,7 @@ before marking a production deployment as complete.
 
 ### Logging & Monitoring
 
-- [ ] Audit log chain integrity verified: `GET /api/v1/admin/audit/verify`
+- [ ] Audit log chain integrity verified: `GET /api/v1/admin/audit/verify` (Team-tier `audit_viewer` feature plus `audit.manage`; on Community the chain is still recorded, but the product offers no route to verify it)
 - [ ] Security alerts configured (rate limit threshold, failed login spike, audit chain failure)
 - [ ] Log retention set to at least 30 days for application logs; audit log is append-only (no automated purge)
 - [ ] OTel exporter (if enabled) is correctly scoped – no secrets in spans
