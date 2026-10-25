@@ -21,12 +21,10 @@ the two conditions can never be swapped silently:
 - a REPORTED per-rule timeout (JSON ``Timeout`` payload, and the anchored text
   signature) — including through the real ``_run_windows`` code path — returns
   non-zero;
-- a WALL-CLOCK KILL (``subprocess.TimeoutExpired``) returns **0** with a loud
-  warning ONLY when the killed process's captured output holds no per-rule skip —
-  it is then a machine-load / changed-file-count condition, not a detected skip,
-  and CI (Linux) is the authoritative full scan. A kill that follows a REPORTED
-  skip (the skip is present in the captured ``exc.stdout``/``exc.stderr``)
-  returns **1** instead (FAR-1933 T4);
+- a WALL-CLOCK KILL (``subprocess.TimeoutExpired``) returns **1** with an
+  ``INCOMPLETE_SCAN`` marker because the process produced no completion result.
+  A kill that follows a REPORTED skip (the skip is present in the captured
+  ``exc.stdout``/``exc.stderr``) also returns **1** (FAR-1933 T4);
 - a genuine tool error (missing binary, spawn failure) returns 0 with a warning.
 
 The module is loaded from the repo-root ``scripts/`` directory (not a package)
@@ -343,8 +341,8 @@ def _completed(returncode: int, stdout: str = "", stderr: str = "") -> subproces
     return subprocess.CompletedProcess(args=["semgrep"], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
-def test_run_windows_wall_clock_kill_warns_and_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
-    """A process kill is environmental: exit 0, but LOUDLY not silently."""
+def test_run_windows_wall_clock_kill_fails_with_incomplete_marker(capsys: pytest.CaptureFixture[str]) -> None:
+    """A killed process has no completion result and must fail loudly."""
     with (
         mock.patch.object(mod, "_get_changed_py_files", return_value=(_CHANGED, None)),
         mock.patch.object(
@@ -355,11 +353,10 @@ def test_run_windows_wall_clock_kill_warns_and_exits_zero(capsys: pytest.Capture
     ):
         rc = mod._run_windows()
     captured = capsys.readouterr()
-    assert rc == 0
+    assert rc == 1
+    assert "INCOMPLETE_SCAN" in captured.err
     assert "did NOT complete on Windows" in captured.err
-    assert "No per-rule timeout skip was found in the output semgrep emitted before" in captured.err
     assert "CI (Linux)" in captured.err
-    # It must be a warning, never reported as a hard FAILURE.
     assert "reported as a FAILURE" not in captured.err
 
 
@@ -424,14 +421,14 @@ def test_as_text_normalises_bytes_str_and_none() -> None:
     assert "semgrep" in mod._as_text(b"\xff\xfe semgrep timeout")
 
 
-def test_run_windows_wall_clock_kill_with_captured_non_skip_stays_open(
+def test_run_windows_wall_clock_kill_with_captured_non_skip_is_incomplete(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A kill whose captured output holds only a FINDING excerpt (no skip) stays open.
+    """A kill remains incomplete even when captured output contains no skip.
 
     The captured output is scanned with the same anchored detector, so a finding
-    that merely quotes the timeout phrase cannot turn an environmental kill into
-    a false FAILURE.
+    that merely quotes the timeout phrase cannot change the reason, but the
+    process kill itself still fails closed because no completion result exists.
     """
     exc = subprocess.TimeoutExpired(
         cmd="semgrep",
@@ -444,7 +441,8 @@ def test_run_windows_wall_clock_kill_with_captured_non_skip_stays_open(
     ):
         rc = mod._run_windows()
     captured = capsys.readouterr()
-    assert rc == 0
+    assert rc == 1
+    assert "INCOMPLETE_SCAN" in captured.err
     assert "reported as a FAILURE" not in captured.err
 
 

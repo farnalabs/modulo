@@ -36,13 +36,11 @@ DIFFERENT shape, and the two paths treat it differently:
    bound across all of them. It can fire from machine load or a large change
    WITHOUT semgrep reporting any per-rule timeout. The killed process's captured
    output (``exc.stdout``/``exc.stderr``) is inspected with the same detector
-   first: a skip reported before the kill still fails CLOSED, but a kill with no
-   skip in the captured output is an environmental condition — not a defect in
-   the change and not a detected skip — so the Windows path then fails OPEN with
-   a loud warning: the changed files were not fully checked locally, and CI
-   (Linux) remains the authoritative full scan. It never reports a misleading
-   "incomplete scan" FAILURE for a condition the developer cannot fix (which
-   would only push them toward ``--no-verify``).
+   first: a skip reported before the kill still fails CLOSED, and a kill with no
+   skip is also an incomplete scan because the process did not produce a
+   completion result. Both cases emit ``INCOMPLETE_SCAN`` and return non-zero.
+   CI (Linux) remains the authoritative full scan, but the local hook must not
+   report a killed scan as clean.
 
 3. Genuine tool errors (missing binary, spawn failure, unexpected exception)
    keep the fail-open-with-warning behaviour above.
@@ -145,7 +143,7 @@ run_semgrep.py WARNING: semgrep did NOT complete on Windows.
 
 _SEMGREP_INCOMPLETE = """\
 ========================================================================
-run_semgrep.py: semgrep scan is INCOMPLETE — reported as a FAILURE.
+run_semgrep.py INCOMPLETE_SCAN: semgrep scan is incomplete — reported as a FAILURE.
 
   One or more files were NOT fully checked, so a clean result cannot be
   trusted. This is not a tool error and is NOT fail-open — fix the cause
@@ -154,21 +152,15 @@ run_semgrep.py: semgrep scan is INCOMPLETE — reported as a FAILURE.
   Reason: {reason}
 ========================================================================"""
 
-_SEMGREP_WALLCLOCK_WARN = """\
+_SEMGREP_WALLCLOCK_INCOMPLETE = """\
 =======================================================================
-run_semgrep.py WARNING: semgrep scan did NOT complete on Windows — the
-process wall-clock kill fired.
+run_semgrep.py INCOMPLETE_SCAN: semgrep scan did NOT complete on Windows —
+the process wall-clock kill fired.
 
-  No per-rule timeout skip was found in the output semgrep emitted before
-  the kill, so this is NOT a skipped file and NOT a finding. The kill is a
-  function of machine load and the number of changed files, not of your
-  change, so it is treated as an environmental condition on this
-  convenience path. (A skip reported before the kill is a different case
-  and fails CLOSED.)
-
-  Your changed files were NOT fully checked locally. CI (Linux) runs the
-  authoritative full scan on push — do NOT claim lint-clean on the
-  strength of this run.
+  The process was killed before it produced a completion result, so a clean
+  result cannot be trusted. This is an incomplete scan, not a tool-missing
+  condition and not a Semgrep finding. CI (Linux) runs the authoritative full
+  scan on push.
 
   Detail: {detail}
 ======================================================================="""
@@ -424,18 +416,16 @@ def _run_windows() -> int:
                 file=sys.stderr,
             )
             return 1
-        # No skip was found in the captured output. This is then an environmental
-        # condition on this convenience path — a function of machine load and the
-        # number of changed files — NOT evidence of a defect in the change and NOT
-        # a reported skip. Fail OPEN with a loud warning; the authoritative full
-        # scan runs in CI (Linux).
+        # No per-rule skip was found, but the process still did not produce a
+        # completion result. This is an incomplete scan, not a genuinely missing
+        # tool, so fail loudly rather than reporting a clean local security scan.
         print(
-            _SEMGREP_WALLCLOCK_WARN.format(
+            _SEMGREP_WALLCLOCK_INCOMPLETE.format(
                 detail=f"process killed after {_SEMGREP_TIMEOUT}s scanning {len(changed)} file(s)"
             ),
             file=sys.stderr,
         )
-        return 0
+        return 1
     except FileNotFoundError:
         print(
             _SEMGREP_WARN.format(reason="semgrep or uv not found on PATH"),
