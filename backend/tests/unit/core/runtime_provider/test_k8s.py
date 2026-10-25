@@ -301,12 +301,12 @@ class TestRegistration:
 
 
 class TestCreateWorkspace:
-    async def test_egress_none_refuses_with_typed_capability_error(self) -> None:
-        """An egress 'none' claim this tier cannot enforce fails closed at provision."""
+    async def test_egress_selected_refuses_with_typed_capability_error(self) -> None:
+        """An egress 'selected' claim this tier cannot enforce fails closed at provision."""
         provider = _provider(core=AsyncMock())
 
         with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
-            await provider.create_workspace(_spec(egress_policy="none"))
+            await provider.create_workspace(_spec(egress_policy="selected"))
 
     async def test_create_builds_hardened_pod_and_returns_tracked_ref(self) -> None:
         core = AsyncMock()
@@ -996,11 +996,11 @@ class TestApplyIsolation:
         with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
             await provider.apply_isolation("modulo-ws-abc", _spec(), policy)
 
-    async def test_egress_none_is_refused(self) -> None:
+    async def test_egress_selected_is_refused(self) -> None:
         provider = _provider(core=AsyncMock())
 
         with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
-            await provider.apply_isolation("modulo-ws-abc", _spec(), IsolationPolicy(egress_policy="none"))
+            await provider.apply_isolation("modulo-ws-abc", _spec(), IsolationPolicy(egress_policy="selected"))
 
     async def test_git_scope_and_read_only_seal_run_in_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
         provider = _provider()

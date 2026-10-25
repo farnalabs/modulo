@@ -157,15 +157,12 @@ _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
     # namespace isolation).  Refusing default would make the local fallback
     # tier impossible to run for zero security gain.
     "local": {"default": True, "deny_all": False, "selected": False},
-    # Kubernetes (FAR-1051): the pod's network is owned by the cluster CNI and
-    # bounded egress is deliberately NOT ours — it is the CUSTOMER's
-    # NetworkPolicy on the workspace namespace (opt-in, needs an enforcing
-    # CNI).  The provider therefore enforces nothing itself: only the
-    # unrestricted provider-default posture is supportable, and ``deny_all`` /
-    # ``selected`` return a NAMED refusal here (never a silent downgrade),
-    # matching KubernetesRuntimeProvider's typed
-    # ``ProviderCapabilityUnsupportedError`` for the same two requests.
-    "kubernetes": {"default": True, "deny_all": False, "selected": False},
+    # Kubernetes (FAR-1051, FAR-2068): the pod's network is owned by the cluster
+    # CNI. The provider authors the NetworkPolicy manifest (declared posture) for
+    # deny_all; selected remains refused as the manifest cannot express a
+    # host:port allowlist without a higher-level controller. The customer's CNI
+    # enforces the authored policy; Modulo observes nothing.
+    "kubernetes": {"default": True, "deny_all": True, "selected": False},
 }
 
 # Per-tier remediation appended to a capability refusal, where the fix is not
@@ -174,9 +171,9 @@ _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
 # lives. Tiers not listed here keep the historical message unchanged.
 _TIER_REFUSAL_NOTES: dict[str, str] = {
     "kubernetes": (
-        "on Kubernetes, bounded egress is the customer's NetworkPolicy on the workspace "
-        "namespace (opt-in, requires an enforcing CNI) — the provider deliberately "
-        "enforces nothing inside the pod"
+        "on Kubernetes, selected-mode egress is the customer's NetworkPolicy on the "
+        "workspace namespace (opt-in, requires an enforcing CNI) — the provider "
+        "authors deny_all as a declared NetworkPolicy; selected cannot be expressed"
     ),
 }
 

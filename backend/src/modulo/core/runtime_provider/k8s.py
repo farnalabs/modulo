@@ -1,4 +1,4 @@
-"""Kubernetes RuntimeProvider — long-lived workspace pods (FAR-1051).
+"""Kubernetes RuntimeProvider — long-lived workspace pods (FAR-1051, FAR-2068).
 
 Shape (settled by four rounds of adversarial review; ADR 040 contract frozen):
 ONE long-lived Pod per workspace, kept alive by a POSIX-sh wait loop;
@@ -10,7 +10,7 @@ registering the ``kubernetes`` provider type (vocabulary + env-gated hub
 registration + CHECK-widening migration).
 
 Security posture (the reason this tier exists)
------------------------------------------------
+----------------------------------------------
 - The control plane holds a NAMESPACED ServiceAccount credential scoped to
   the workspace namespace — never the host-root-equivalent Docker Engine
   API socket. The workspace pod itself does NOT automount an API token
@@ -22,16 +22,17 @@ Security posture (the reason this tier exists)
   ``readOnlyRootFilesystem``, all capabilities dropped, RuntimeDefault
   seccomp). A customer admission policy can reject any spec we build —
   infrastructure we cannot bypass even if our code is wrong.
-- Egress is deliberately NOT ours. Bounded egress is the CUSTOMER's
-  NetworkPolicy on the workspace namespace (opt-in; requires a CNI that
-  enforces NetworkPolicy). There is deliberately NO bespoke egress gateway
-  in this module: an ``egress_policy`` of ``none`` at provision time, or a
-  selected-mode allowlist / ``none`` request at isolation time, is refused
-  with the typed :class:`ProviderCapabilityUnsupportedError` naming
-  NetworkPolicy as the remediation — never a silent downgrade.
+- Egress deny_all is authored as a Helm-rendered NetworkPolicy manifest
+  (declared posture, FAR-2068). The customer's CNI enforces it; Modulo
+  observes nothing. Selected-mode egress is refused (the manifest cannot
+  express a host:port allowlist without a higher-level controller).
+  An ``egress_policy`` of ``none`` at provision time is now ACCEPTED and
+  mapped to the declared NetworkPolicy; a selected-mode request at isolation
+  time is refused with the typed :class:`ProviderCapabilityUnsupportedError`
+  naming NetworkPolicy as the remediation — never a silent downgrade.
 
 Auth and config
----------------
+--------------
 In-cluster ServiceAccount configuration when ``KUBERNETES_SERVICE_HOST`` is
 set (the pod's own mounted token), otherwise the standard kubeconfig chain
 (``KUBECONFIG`` / default path). Client configuration is loaded lazily on
@@ -60,7 +61,8 @@ WorkspaceSpec mapping
 - ``timeout_seconds`` -> bounds the provision wait (pod reaching Running);
   falls back to 120s when unset/zero. Direct callers are themselves
   wrapped by the dispatch provisioning watchdog.
-- ``egress_policy`` -> ``none`` refused (see security posture).
+- ``egress_policy`` -> ``none`` accepted as declared posture (Helm-rendered
+  NetworkPolicy); ``selected`` refused (see security posture).
 - ``persistence_policy`` -> NOT honoured on this tier: every workspace pod
   uses an ephemeral ``emptyDir`` and ``restart_policy=Never``, so
   ``retained`` / ``cache`` do not survive the workspace and are never
@@ -536,11 +538,16 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         best-effort before re-raising, so a failed create never leaks one.
         """
         egress = (spec.egress_policy or "").strip().lower()
-        if egress == "none":
+        # FAR-2068: egress_policy "none" (deny_all) is now ACCEPTED as declared
+        # posture — the Helm-rendered NetworkPolicy is the enforcement layer.
+        # Selected remains refused (see apply_isolation).
+        if egress == "selected":
             raise ProviderCapabilityUnsupportedError(
-                "The Kubernetes tier cannot enforce an egress 'none' workspace: pod networking is "
-                "owned by the cluster CNI. Express deny-all as a customer NetworkPolicy on the "
-                "workspace namespace (FAR-1051) and use a profile this tier can enforce."
+                "The Kubernetes tier cannot enforce a selected-mode egress claim inside "
+                "the workspace pod: bounded egress on this tier is the customer's "
+                "NetworkPolicy on the workspace namespace (opt-in, requires a CNI that "
+                "enforces NetworkPolicy; FAR-1051). Configure it there and use a policy "
+                "this tier can enforce."
             )
 
         core = await self._get_core()
@@ -1147,21 +1154,21 @@ class KubernetesRuntimeProvider(RuntimeProvider):
           - ``command_timeout`` bounds every step.
 
         Control this tier CANNOT enforce: any ``selected``-mode egress claim
-        (with or without an allowlist) and an egress ``none`` claim. Bounded egress on Kubernetes is the
-        CUSTOMER's NetworkPolicy (opt-in; needs an enforcing CNI) — there is
-        deliberately no in-pod egress mechanism here, so those requests raise
-        the typed :class:`ProviderCapabilityUnsupportedError` naming the
+        (with or without an allowlist). Bounded egress deny_all on Kubernetes
+        is authored as a Helm-rendered NetworkPolicy manifest (declared posture,
+        FAR-2068) — the customer's CNI enforces it; Modulo observes nothing.
+        A selected-mode request raises the typed
+        :class:`ProviderCapabilityUnsupportedError` naming NetworkPolicy as the
         remediation. Never a silent downgrade.
         """
         egress = (policy.egress_policy or "").strip().lower()
-        if egress in ("none", "selected"):
+        if egress == "selected":
             raise ProviderCapabilityUnsupportedError(
-                "The Kubernetes tier cannot enforce "
-                + ("an egress 'none' claim" if egress == "none" else "a selected-mode egress claim")
-                + " inside the workspace pod: bounded egress on this tier is the customer's "
-                "NetworkPolicy on the workspace namespace (opt-in, requires a CNI that enforces "
-                "NetworkPolicy; FAR-1051). Configure it there and use a policy this tier can "
-                "enforce."
+                "The Kubernetes tier cannot enforce a selected-mode egress claim inside "
+                "the workspace pod: bounded egress on this tier is the customer's "
+                "NetworkPolicy on the workspace namespace (opt-in, requires a CNI that "
+                "enforces NetworkPolicy; FAR-1051). Configure it there and use a policy "
+                "this tier can enforce."
             )
 
         # Lazy import (house convention): sandbox_policy is dependency-free,

@@ -187,15 +187,18 @@ The full setup — provider env vars, the least-privilege Role/RoleBinding, and
 the workspace-pod ServiceAccount — is in the
 [Kubernetes guide](https://modulo.run/docs/kubernetes).
 
-### Workspace Egress NetworkPolicy (FAR-1690)
+### Workspace Egress NetworkPolicy (FAR-1690, FAR-2068)
 
-On the Kubernetes (T3) tier the runtime provider runs agent workspaces as pods
-and **deliberately does not enforce egress inside them** — the pod's network is
-owned by the cluster CNI, and an in-pod `deny_all`/`selected` request is
-refused with a typed error naming NetworkPolicy as the remediation. The chart
-closes that loop by **authoring** the policy: an optional, namespace-scoped
-`NetworkPolicy` selecting the workspace pods (`modulo.provider: kubernetes`)
-with a deny-by-default egress rule plus an exact-target (CIDR + port) allowlist.
+On the Kubernetes (T3) tier the runtime provider runs agent workspaces as pods.
+Egress `deny_all` (profile `network_policy: none`) is now **accepted** and resolves
+to a **`declared`** egress posture: the chart authors a `NetworkPolicy` selecting
+the workspace pods (`modulo.provider: kubernetes`) with a deny-by-default egress
+rule plus an exact-target (CIDR + port) allowlist. The cluster CNI enforces this
+policy; Modulo records the posture as declared (never an observation — Modulo
+does not see network traffic). A `selected`-mode egress claim (with or without
+an allowlist) remains **refused** with a typed error naming NetworkPolicy as the
+remediation — the manifest cannot express a host:port allowlist without a
+higher-level controller.
 
 ```yaml
 workspaceNetworkPolicy:

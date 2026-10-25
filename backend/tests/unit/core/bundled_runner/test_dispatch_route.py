@@ -416,12 +416,12 @@ def test_workspace_spec_selected_egress_refused_on_docker_tier() -> None:
 
 
 def test_workspace_spec_kubernetes_tier_refuses_unenforceable_egress() -> None:
-    """FAR-1051: the tier follows the profile's resolved provider instead of
-    the historical hardcoded docker tier. A kubernetes profile with
-    network_policy='none' (canonical deny_all) is refused HERE by name — the
-    Kubernetes tier cannot enforce it — instead of resolving on the docker
-    tier and certifying an enforcement Kubernetes never performs."""
-    profile = _profile("kubernetes", network_policy="none")
+    """FAR-1051, FAR-2068: the tier follows the profile's resolved provider.
+    A kubernetes profile with network_policy='selected' is refused — the
+    Kubernetes tier cannot express a host:port allowlist via NetworkPolicy
+    without a higher-level controller. deny_all (network_policy='none') is
+    now accepted as DECLARED posture (Helm-rendered NetworkPolicy)."""
+    profile = _profile("kubernetes", network_policy="selected")
     with pytest.raises(SandboxTierRefusedError, match="egress refused on Kubernetes tier"):
         _workspace_spec_for_dispatch(
             profile,
