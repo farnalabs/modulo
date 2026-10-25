@@ -653,7 +653,12 @@ onUnmounted(() => {
   height: 8px;
   border-radius: 50%;
   background-color: hsl(var(--primary));
-  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .assistant-pulse-dot {
+    animation: pulse-dot 1.5s ease-in-out infinite;
+  }
 }
 @keyframes pulse-dot {
   0%,

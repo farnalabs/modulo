@@ -280,7 +280,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount, toRaw } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
@@ -781,7 +781,7 @@ async function modifyAndApprove() {
   // Shape-preserving reconstruction: clone the parent, replace only the
   // subject leaf.  JSON round-trip gives a deep plain-object copy — safe
   // because the backend already serialised the parent to JSON at capture time.
-  const reconstructedOutput = { ...JSON.parse(JSON.stringify(parent)), [leafKey]: modifiedSubject.value }
+  const reconstructedOutput = { ...structuredClone(toRaw(parent)), [leafKey]: modifiedSubject.value }
   try {
     const { error: err } = await api.POST(
       '/api/v1/runs/{run_id}/hitl/{review_id}/approve-with-modification',
