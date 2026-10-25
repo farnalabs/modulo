@@ -5710,6 +5710,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/webhooks/stripe/renewal-claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stripe Renewal Claim
+         * @description Stack an early renewal onto a customer-presented previous licence.
+         *
+         *     The expiry is read only from a signature-verified key — never from the
+         *     request body — and there is no start-date parameter, so backdating cannot be
+         *     expressed: the rule is ``max(now, presented_expiry) + term``, implemented
+         *     once in ``license_signing.build_team_payload``'s ``expires_from`` seam.
+         *
+         *     A rejected claim RAISES (it never returns a failure-shaped response) so the
+         *     ``audited_system`` event is recorded with ``outcome="error"``.
+         */
+        post: operations["stripe_renewal_claim_api_v1_webhooks_stripe_renewal_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/views": {
         parameters: {
             query?: never;
@@ -19776,6 +19804,39 @@ export interface components {
         RenameSessionRequest: {
             /** Name */
             name: string;
+        };
+        /**
+         * RenewalClaimRequest
+         * @description A purchase key plus the previous licence whose remaining term to add.
+         */
+        RenewalClaimRequest: {
+            /** Purchase Key */
+            purchase_key: string;
+            /** Presented Key */
+            presented_key?: string | null;
+        };
+        /** RenewalClaimResponse */
+        RenewalClaimResponse: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "stacked" | "unstacked";
+            /** License Key */
+            license_key: string;
+            /** Expires At */
+            expires_at: string;
+            /** Previous Expires At */
+            previous_expires_at?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Detail */
+            detail: string;
+            /**
+             * Repeated
+             * @default false
+             */
+            repeated: boolean;
         };
         /** ReportResponse */
         ReportResponse: {
@@ -35268,6 +35329,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StripeWebhookResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    stripe_renewal_claim_api_v1_webhooks_stripe_renewal_claim_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenewalClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenewalClaimResponse"];
                 };
             };
             /** @description Validation Error */
