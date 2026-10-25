@@ -158,8 +158,10 @@ jobs:
           for spec in "postgresql-16.deb:${PG_DEB_VERSION}" "postgresql-client-16.deb:${PG_DEB_VERSION}" "redis-server.deb:${REDIS_DEB_VERSION}" "redis-tools.deb:${REDIS_DEB_VERSION}"; do
             deb="${spec%%:*}"
             want="${spec#*:}"
-            got="$(dpkg-deb -f "downloads/${deb}" Version)"
-            if [ "$got" != "$want" ]; then
+             got="$(dpkg-deb -f "downloads/${deb}" Version)"
+             got="${got#*:}"
+             if [ "$got" != "$want" ]; then
+
               echo "::error::${deb} Version field is '${got}' but the pin is '${want}' -- refusing to ship a mismatched package"
               exit 1
             fi
