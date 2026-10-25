@@ -114,7 +114,11 @@ def verify_slack_signature(
         return False
     base = f"{_SLACK_SIGNATURE_VERSION}:{ts}:".encode() + raw_body
     expected = f"{_SLACK_SIGNATURE_VERSION}=" + hmac.new(signing_secret.encode(), base, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature_header)
+    # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. The signature header is
+    # attacker-controlled and arrives latin-1-decoded, so a high byte must fail
+    # closed with False rather than escaping as an uncaught 500.
+    return hmac.compare_digest(expected.encode("utf-8"), signature_header.encode("utf-8"))
 
 
 def verify_slack_timestamp(timestamp_header: str | None) -> int:

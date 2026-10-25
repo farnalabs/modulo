@@ -356,7 +356,11 @@ class SessionKeyStore:
         if key is None:
             return False
         expected = hmac.new(key.encode(), body, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected, signature)
+        # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on
+        # str operands containing non-ASCII characters. ``signature`` is supplied
+        # by the error-reporting client, so a non-ASCII value must fail closed
+        # with False rather than escaping as an uncaught 500.
+        return hmac.compare_digest(expected.encode("utf-8"), signature.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------

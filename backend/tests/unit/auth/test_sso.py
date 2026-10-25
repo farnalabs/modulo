@@ -302,6 +302,17 @@ class TestStateSigning:
     def test_verify_malformed_returns_none(self) -> None:
         assert verify_state("no-colon", _VALID_32) is None
 
+    def test_verify_non_ascii_signature_returns_none_without_raising(self) -> None:
+        """A non-ASCII signature must fail closed with None, not raise TypeError.
+
+        ``sig`` is attacker-derived (the OIDC ``state`` query param or SAML
+        ``RelayState``), and ``hmac.compare_digest`` raises TypeError on str
+        operands containing non-ASCII characters.
+        """
+        signed = sign_state("test-state", _VALID_32)
+        state, _sig = signed.rsplit(":", 1)
+        assert verify_state(f"{state}:é", _VALID_32) is None
+
     def test_verify_empty_returns_none(self) -> None:
         assert verify_state("", _VALID_32) is None
 

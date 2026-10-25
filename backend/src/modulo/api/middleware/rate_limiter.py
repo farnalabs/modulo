@@ -132,7 +132,11 @@ def _matches_bypass_token(token: str, bypass_token: str) -> bool:
     """
     if not token or not bypass_token:
         return False
-    return hmac.compare_digest(token, bypass_token)
+    # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. ``token`` is the attacker-controlled
+    # bypass header (Starlette decodes header bytes as latin-1), so a high byte must
+    # fail closed with False instead of escaping as an uncaught 500 from middleware.
+    return hmac.compare_digest(token.encode("utf-8"), bypass_token.encode("utf-8"))
 
 
 def _create_registry(settings: Settings) -> RateLimiterRegistry | _NoopRateLimiter:

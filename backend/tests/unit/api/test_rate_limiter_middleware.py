@@ -144,8 +144,12 @@ class TestBypassTokenComparison:
     """Bypass token is a shared secret — comparison must be constant-time."""
 
     def test_uses_hmac_compare_digest(self, monkeypatch):
-        """The helper must delegate to hmac.compare_digest (not ==)."""
-        calls: list[tuple[str, str]] = []
+        """The helper must delegate to hmac.compare_digest (not ==).
+
+        Both operands are UTF-8 encoded before comparison so that non-ASCII
+        values fail closed with ``False`` instead of raising ``TypeError``.
+        """
+        calls: list[tuple[bytes, bytes]] = []
         monkeypatch.setattr(
             rate_limiter_module.hmac,
             "compare_digest",
@@ -153,7 +157,7 @@ class TestBypassTokenComparison:
         )
         assert _matches_bypass_token("secret", "secret") is True
         assert _matches_bypass_token("secret", "other") is False
-        assert calls == [("secret", "secret"), ("secret", "other")]
+        assert calls == [(b"secret", b"secret"), (b"secret", b"other")]
 
     def test_empty_token_or_secret_is_never_a_match(self):
         assert _matches_bypass_token("", "secret") is False
