@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 
@@ -7,7 +7,16 @@ import RiskAssessmentTable from '../components/risk-assessment/RiskAssessmentTab
 import RiskAssessmentFacets from '../components/risk-assessment/RiskAssessmentFacets.vue'
 import RiskAssessmentSummaryCard from '../components/risk-assessment/RiskAssessmentSummaryCard.vue'
 import SortIcon from '../components/risk-assessment/SortIcon.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import PageHeader from '../components/shared/PageHeader.vue'
 import enUS from '../locales/en-US.js'
+import {
+  formatApiError,
+  getProblemTypeLabel,
+  isProblemDetail,
+  toProblemDetail,
+} from '../lib/api/formatError'
+import { formatDateFilename, formatDateShort, formatDateShortWithTime, formatRelativeTime } from '../lib/formatDate'
 import {
   RISK_ACTIONS,
   defaultRiskAssessmentFilters,
@@ -41,6 +50,75 @@ function row(overrides: Partial<EvidenceRow> = {}): EvidenceRow {
 function mountWithI18n(component: unknown, options: Record<string, unknown> = {}) {
   return mount(component as never, { global: { plugins: [i18n] }, ...options })
 }
+
+describe('shared formatting used by the risk assessment surface', () => {
+  it('covers date formatter fallbacks and valid formats', () => {
+    expect(formatDateShort(null)).toBe('—')
+    expect(formatDateShort('2026-01-01T00:00:00Z')).toBe('Jan 1, 2026')
+    expect(formatDateShortWithTime('invalid')).toBe('—')
+    expect(formatDateFilename('2026-01-02T00:00:00Z')).toBe('2026-01-02')
+    expect(formatRelativeTime(undefined)).toBe('—')
+  })
+
+  it('formats problem details, validation errors, primitives and circular objects', () => {
+    const problem = {
+      type: 'urn:problem:modulo:forbidden',
+      title: 'Forbidden',
+      status: 403,
+      detail: 'No access',
+    }
+    expect(isProblemDetail(problem)).toBe(true)
+    expect(formatApiError(problem)).toBe('No access')
+    expect(getProblemTypeLabel('urn:problem:modulo:forbidden')).toBe('Forbidden')
+    expect(getProblemTypeLabel('urn:problem:modulo:unknown')).toBe('Error')
+    expect(toProblemDetail(problem)).toBe(problem)
+    expect(formatApiError({ detail: [{ msg: 'bad input' }, { msg: 'missing' }] })).toBe('bad input; missing')
+    expect(formatApiError({ message: 'message' })).toBe('message')
+    expect(formatApiError({ error: 'error' })).toBe('error')
+    expect(formatApiError({ title: 'title' })).toBe('title')
+    expect(formatApiError(42)).toBe('42')
+    expect(formatApiError(true)).toBe('true')
+    expect(formatApiError(null)).toBe('Unknown error')
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    expect(formatApiError(circular)).toBe('Unknown error')
+    expect(toProblemDetail('plain').detail).toBe('plain')
+  })
+
+  it('renders PageHeader optional back link and right slot', () => {
+    const wrapper = mountWithI18n(PageHeader, {
+      props: { title: 'Risk', subtitle: 'Assessment', backLink: '/runs' },
+      slots: { right: '<button>Action</button>' },
+      global: {
+        plugins: [i18n],
+        mocks: { $router: { push: vi.fn() } },
+      },
+    })
+
+    expect(wrapper.find('h1').text()).toBe('Risk')
+    expect(wrapper.find('p').text()).toBe('Assessment')
+    expect(wrapper.findAll('button').at(-1)?.text()).toBe('Action')
+  })
+
+  it('renders ErrorAlert problem, retry and both dismiss variants', async () => {
+    const retry = vi.fn()
+    const dismiss = vi.fn()
+    const problemWrapper = mountWithI18n(ErrorAlert, {
+      props: { message: { type: 'x', title: 'Problem', status: 400, detail: 'Bad' }, onRetry: retry, onDismiss: dismiss, dismissLabel: 'Close', dismissIcon: true },
+    })
+    await problemWrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+    await problemWrapper.find('[data-testid="error-alert-dismiss"]').trigger('click')
+    expect(problemWrapper.text()).toContain('Problem: Bad')
+    expect(retry).toHaveBeenCalledOnce()
+    expect(dismiss).toHaveBeenCalledOnce()
+
+    const textWrapper = mountWithI18n(ErrorAlert, {
+      props: { message: 'Plain', onDismiss: dismiss, dismissLabel: 'Close' },
+    })
+    expect(textWrapper.text()).toContain('Plain')
+    expect(textWrapper.find('[data-testid="error-alert-dismiss"]').element.tagName).toBe('BUTTON')
+  })
+})
 
 describe('ActionBadge', () => {
   it.each([
@@ -176,6 +254,26 @@ describe('RiskAssessmentTable', () => {
     expect(values[1]).toContain('"a": 1')
     expect(values[2]).toBe('[object Object]')
     expect(values[3]).toBe('undefined')
+  })
+
+  it('covers all table sort comparison directions and invalid dates', async () => {
+    const wrapper = mountWithI18n(RiskAssessmentTable, {
+      props: {
+        rows: [
+          row({ id: 'a', key: 'a.key', action: 'continue', subject_id: 'subject-a', created_at: 'invalid' }),
+          row({ id: 'b', key: 'b.key', action: 'block', subject_id: 'subject-b', created_at: '2026-01-02T00:00:00Z' }),
+          row({ id: 'c', key: 'c.key', action: 'warn', subject_id: 'subject-c', created_at: '2026-01-01T00:00:00Z' }),
+        ],
+      },
+    })
+
+    const keys = () => wrapper.findAll('[data-testid="risk-assessment-row"]').map((r) => r.findAll('td')[1].text())
+    await wrapper.find('[data-testid="risk-assessment-sort-key"]').trigger('click')
+    expect(keys()).toEqual(['c.key', 'b.key', 'a.key'])
+    await wrapper.find('[data-testid="risk-assessment-sort-action"]').trigger('click')
+    expect(keys()).toEqual(['c.key', 'a.key', 'b.key'])
+    await wrapper.find('[data-testid="risk-assessment-sort-subject"]').trigger('click')
+    expect(keys()).toEqual(['c.key', 'b.key', 'a.key'])
   })
 })
 

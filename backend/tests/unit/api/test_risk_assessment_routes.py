@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
@@ -805,3 +806,115 @@ class TestRiskAssessmentRowActionInResponse:
 
         assert resp.status_code == 200
         assert resp.json()["summary"]["facet_degraded"] is True
+
+
+class TestRiskAssessmentSupportingEvidenceHelpers:
+    """Cover the shared evidence and redaction paths used by this projection."""
+
+    async def test_load_evidence_rows_supports_run_node_and_exact_key_filters(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_rows_result([]))
+
+        await mod._load_evidence_rows(session, _ORG_ID, _RUN_ID, None, None)
+        run_stmt = str(session.execute.await_args.args[0])
+        assert "subject_type" in run_stmt
+        assert "subject_id" in run_stmt
+
+        await mod._load_evidence_rows(session, _ORG_ID, _RUN_ID, "node-1", "risk.api_call")
+        node_stmt = str(session.execute.await_args.args[0])
+        assert "subject_type" in node_stmt
+        assert "evidence.key =" in node_stmt
+
+    async def test_load_single_row_and_rules_return_scalar_and_list(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        row = _fake_evidence()
+        rule = _fake_rule()
+        session = _make_mock_session()
+        session.execute = AsyncMock(side_effect=[_scalar_result(row), _rows_result([rule])])
+
+        assert await mod._load_evidence_row(session, _ORG_ID, _EVIDENCE_ID) is row
+        assert await mod._load_redaction_rules(session, _ORG_ID) == [rule]
+
+    async def test_upsert_redaction_rule_creates_and_restores_existing_rule(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        new_rule = _fake_rule()
+        session = _make_mock_session()
+        session.execute = AsyncMock(side_effect=[_scalar_result(None), _scalar_result(new_rule)])
+
+        created = await mod._upsert_redaction_rule(session, _ORG_ID, "risk.*", "viewer", ["sensitive_output"])
+        assert created is not None
+        session.add.assert_called_once()
+        session.flush.assert_awaited()
+
+        existing = _fake_rule(redacted_fields=[], role="viewer")
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_scalar_result(existing))
+        restored = await mod._upsert_redaction_rule(session, _ORG_ID, "risk.*", "viewer", ["sensitive_output"])
+        assert restored is existing
+        assert existing.redacted_fields == ["sensitive_output"]
+        assert existing.deleted_at is None
+        session.add.assert_not_called()
+
+    def test_redaction_rule_validator_rejects_unknown_and_deduplicates(self) -> None:
+        from pydantic import ValidationError
+
+        from modulo.api.routes.evidence import RedactionRuleUpsert
+
+        with pytest.raises(ValidationError, match="Unknown redaction class"):
+            RedactionRuleUpsert(
+                key_pattern="risk.*",
+                role="viewer",
+                redacted_fields=["unknown_class"],
+            )
+
+        rule = RedactionRuleUpsert(
+            key_pattern="risk.*",
+            role="viewer",
+            redacted_fields=["sensitive_output", "sensitive_output"],
+        )
+        assert rule.redacted_fields == ["sensitive_output"]
+
+    def test_redaction_rule_endpoints_and_plain_evidence_reads(self) -> None:
+        row = _fake_evidence()
+        rule = _fake_rule()
+        with (
+            _client("admin") as client,
+            patch(f"{_ROUTES}._load_redaction_rules", new=AsyncMock(return_value=[rule])),
+            patch(f"{_ROUTES}._upsert_redaction_rule", new=AsyncMock(return_value=rule)),
+            patch(f"{_ROUTES}._load_evidence_row", new=AsyncMock(return_value=row)),
+            patch(f"{_ROUTES}._load_evidence_rows", new=AsyncMock(return_value=[row])),
+            patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[])),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+        ):
+            rules_response = client.get("/api/v1/evidence/redaction-rules")
+            upsert_response = client.put(
+                "/api/v1/evidence/redaction-rules",
+                json={"key_pattern": "risk.*", "role": "viewer", "redacted_fields": []},
+            )
+            get_response = client.get(f"/api/v1/evidence/{_EVIDENCE_ID}")
+            list_response = client.get(f"/api/v1/evidence?run_id={_RUN_ID}")
+
+        assert rules_response.status_code == 200
+        assert len(rules_response.json()) == 1
+        assert upsert_response.status_code == 200
+        assert get_response.status_code == 200
+        assert get_response.json()["action"] is None
+        assert list_response.status_code == 200
+        assert len(list_response.json()) == 1
+
+    def test_get_evidence_returns_404_for_missing_row(self) -> None:
+        with (
+            _client("viewer") as client,
+            patch(f"{_ROUTES}._load_evidence_row", new=AsyncMock(return_value=None)),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+        ):
+            response = client.get(f"/api/v1/evidence/{_EVIDENCE_ID}")
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Evidence row not found"

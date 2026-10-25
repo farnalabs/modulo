@@ -186,20 +186,29 @@ describe('RiskAssessmentView', () => {
   })
 
   it('renders the error alert and retries via the shared apply path', async () => {
+    let projectionAttempts = 0
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/pipelines') return Promise.resolve(ok(pipelinesResponse()))
-      return Promise.resolve({
-        data: undefined,
-        error: { detail: 'Projection failed' },
-        response: { ok: false, status: 500 },
-      })
+      projectionAttempts += 1
+      if (projectionAttempts === 1) {
+        return Promise.resolve({
+          data: undefined,
+          error: { detail: 'Projection failed' },
+          response: { ok: false, status: 500 },
+        })
+      }
+      return Promise.resolve(ok(projectionResponse()))
     })
     setRouteQuery()
 
     const wrapper = await mountView()
 
     expect(wrapper.find('[data-testid="risk-assessment-error"]').text()).toContain('Projection failed')
-    expect(wrapper.find('[data-testid="risk-assessment-summary-card"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(projectionAttempts).toBe(2)
+    expect(wrapper.find('[data-testid="risk-assessment-summary-card"]').exists()).toBe(true)
   })
 
   it('shows the loading region while the projection is in flight', async () => {
