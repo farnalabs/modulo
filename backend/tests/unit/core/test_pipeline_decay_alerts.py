@@ -16,9 +16,12 @@ returns pre-built rows, and the dedup state by an in-memory Redis double.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock
 
@@ -484,3 +487,228 @@ def test_health_query_filters_to_webhook_terminal_runs_in_the_window() -> None:
     assert "runs.status IN ('complete')" in sql
     assert "GROUP BY runs.organisation_id, runs.pipeline_id, pipelines.name" in sql
     assert "LIMIT 200" in sql
+
+
+# ---------------------------------------------------------------------------
+# Defensive edges: the sweep must survive anything the store or clock does
+# ---------------------------------------------------------------------------
+
+
+def _summary() -> dict[str, Any]:
+    return {
+        "alerts": 0,
+        "recoveries": 0,
+        "dispatched": 0,
+        "notify_failed": 0,
+    }
+
+
+def _open_state(label: str | None = "Branch Fixer") -> dict[str, Any]:
+    state: dict[str, Any] = {"rung": decay._DEGRADED_RUNG, "reason": "success_rate"}
+    if label is not None:
+        state["label"] = label
+    return state
+
+
+def test_parse_state_key_rejects_malformed_keys() -> None:
+    """A key with the wrong shape or a non-UUID id is unparseable, not fatal."""
+    assert decay._parse_state_key(f"{decay._STATE_KEY_PREFIX}:{_ORG}:{_PIPELINE}") == (_ORG, _PIPELINE)
+    assert decay._parse_state_key(f"{decay._STATE_KEY_PREFIX}:{_ORG}") is None
+    assert decay._parse_state_key(f"other:prefix:{_ORG}:{_PIPELINE}") is None
+    assert decay._parse_state_key(f"{decay._STATE_KEY_PREFIX}:{_ORG}:not-a-uuid") is None
+
+
+def test_label_prefers_the_live_name_then_the_state_label_then_unknown() -> None:
+    unnamed = decay.PipelineHealth(
+        organisation_id=_ORG,
+        pipeline_id=_PIPELINE,
+        pipeline_name=None,
+        runs_total=5,
+        runs_complete=5,
+        watchdog_firings=0,
+    )
+
+    assert decay._label(None, unnamed) == str(_PIPELINE)
+    assert decay._label({"label": "Branch Fixer"}, None) == "Branch Fixer"
+    assert decay._label(None, None) == "unknown pipeline"
+    assert decay._label({"label": ""}, None) == "unknown pipeline"
+    assert decay._label({"label": 42}, None) == "unknown pipeline"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_times_out_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hung notifier is a counted failure, never an exception into the sweep."""
+
+    async def hang(*_args: object, **_kwargs: object) -> None:
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(decay, "_NOTIFY_TIMEOUT_SECONDS", 0.01)
+    summary = _summary()
+
+    delivered = await decay._dispatch(
+        SimpleNamespace(dispatch_event=hang),
+        org_id=_ORG,
+        event_type="pipeline_decay",
+        payload={},
+        summary=summary,
+    )
+
+    assert delivered is False
+    assert summary["notify_failed"] == 1
+    assert summary["dispatched"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_propagates_cancellation() -> None:
+    """Cancellation is not a delivery failure: it must not be swallowed."""
+    notifier = SimpleNamespace(dispatch_event=AsyncMock(side_effect=asyncio.CancelledError))
+
+    with pytest.raises(asyncio.CancelledError):
+        await decay._dispatch(
+            notifier,
+            org_id=_ORG,
+            event_type="pipeline_decay",
+            payload={},
+            summary=_summary(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_failed_recovery_dispatch_keeps_the_state_open() -> None:
+    """A closure that could not be delivered is retried, never silently dropped."""
+    redis_client = FakeRedis()
+    key = decay._state_key(_ORG, _PIPELINE)
+    redis_client.kv[key] = json.dumps(_open_state())
+    notifier = FakeNotifier()
+    notifier.dispatch_event = AsyncMock(side_effect=RuntimeError("notifier down"))  # type: ignore[method-assign]
+
+    summary = await _sweep(FakeFactory([]), redis_client, notifier)
+
+    assert summary["recoveries"] == 1
+    assert summary["notify_failed"] == 1
+    assert key in redis_client.kv
+
+
+@pytest.mark.asyncio
+async def test_state_resolving_clear_without_a_recovery_edge_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale state that resolves to 'clear' is retired, not left to expire."""
+    redis_client = FakeRedis()
+    key = decay._state_key(_ORG, _PIPELINE)
+    redis_client.kv[key] = json.dumps(_open_state())
+    monkeypatch.setattr(decay, "resolve_alert_action", lambda _prev, _rung: ("hold", None))
+
+    action = await decay._apply(
+        redis_client,
+        FakeNotifier(),
+        org_id=_ORG,
+        pipeline_id=_PIPELINE,
+        health=_health(total=20, complete=20),
+        state=_open_state(),
+        summary=_summary(),
+        now=_NOW,
+    )
+
+    assert action == "hold"
+    assert key not in redis_client.kv
+
+
+class _CancellingScanRedis(FakeRedis):
+    """A store whose scan raises CancelledError mid-shutdown."""
+
+    async def scan_iter(self, match: str = "*") -> AsyncIterator[str]:
+        raise asyncio.CancelledError
+        yield  # pragma: no cover - makes this an async generator
+
+
+class _FailingScanRedis(FakeRedis):
+    """A store whose scan fails for a non-cancellation reason."""
+
+    async def scan_iter(self, match: str = "*") -> AsyncIterator[str]:
+        raise RuntimeError("scan failed")
+        yield  # pragma: no cover - makes this an async generator
+
+
+class _CancellingFactory:
+    def __call__(self) -> Any:
+        raise asyncio.CancelledError
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_the_read_propagates() -> None:
+    with pytest.raises(asyncio.CancelledError):
+        await _sweep(_CancellingFactory(), FakeRedis(), FakeNotifier())
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_the_state_scan_propagates() -> None:
+    with pytest.raises(asyncio.CancelledError):
+        await _sweep(FakeFactory([_Row(runs_total=20, runs_complete=12)]), _CancellingScanRedis())
+
+
+@pytest.mark.asyncio
+async def test_state_scan_failure_skips_the_tick_without_alerting() -> None:
+    """An unreadable state store must not manufacture alerts from nothing."""
+    notifier = FakeNotifier()
+
+    summary = await _sweep(FakeFactory([_Row(runs_total=20, runs_complete=0)]), _FailingScanRedis(), notifier)
+
+    assert summary["state_unavailable"] == 1
+    assert not notifier.events
+
+
+@pytest.mark.asyncio
+async def test_unparseable_state_key_is_skipped_and_the_rest_still_evaluates() -> None:
+    redis_client = FakeRedis()
+    redis_client.kv[f"{decay._STATE_KEY_PREFIX}:not-a-uuid"] = json.dumps(_open_state())
+
+    summary = await _sweep(FakeFactory([_Row(runs_total=20, runs_complete=12)]), redis_client)
+
+    assert summary["alerts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_hard_timeout_is_reported_not_raised() -> None:
+    """The wall-clock bound ends the tick with a counter, never an exception."""
+    summary = await decay.evaluate_pipeline_decay_alerts(
+        factory=FakeFactory([_Row(runs_total=20, runs_complete=12)]),
+        redis_client=FakeRedis(),
+        notifier=FakeNotifier(),
+        now=_NOW,
+        budget_seconds=-60.0,
+    )
+
+    assert summary["budget_exhausted"] is True
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_between_open_states_stops_the_tick() -> None:
+    redis_client = FakeRedis()
+    redis_client.kv[decay._state_key(_ORG, _PIPELINE)] = json.dumps(_open_state())
+
+    summary = await decay.evaluate_pipeline_decay_alerts(
+        factory=FakeFactory([_Row(runs_total=20, runs_complete=12)]),
+        redis_client=redis_client,
+        notifier=FakeNotifier(),
+        now=_NOW,
+        budget_seconds=0.0,
+    )
+
+    assert summary["budget_exhausted"] is True
+    assert summary["alerts"] == 0
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_before_a_measured_pipeline_stops_the_tick() -> None:
+    summary = await decay.evaluate_pipeline_decay_alerts(
+        factory=FakeFactory([_Row(runs_total=20, runs_complete=12)]),
+        redis_client=FakeRedis(),
+        notifier=FakeNotifier(),
+        now=_NOW,
+        budget_seconds=0.0,
+    )
+
+    assert summary["budget_exhausted"] is True
+    assert summary["pipelines_measured"] == 1
+    assert summary["alerts"] == 0

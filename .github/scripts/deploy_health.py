@@ -203,6 +203,38 @@ def _latest_failure(runs: Sequence[dict[str, Any]]) -> dict[str, str]:
     return {}
 
 
+def _staleness(
+    main_sha: str,
+    prod_sha: str,
+    prod_ts: str,
+    *,
+    now: datetime,
+    grace_hours: int,
+) -> tuple[bool, int | None, bool]:
+    """``(stale, age_hours, evaluated)`` for the prod-vs-main comparison.
+
+    ``evaluated`` is False when either SHA is missing, so the caller can keep
+    the verdict UNKNOWN rather than inventing a healthy/stale answer.
+    """
+    evaluated = bool(main_sha and prod_sha)
+    if not evaluated or main_sha == prod_sha:
+        return False, None, evaluated
+    built = _parse_timestamp(prod_ts)
+    if built is None:
+        # Prod IS behind main and we cannot say by how much: fail loud
+        # rather than silently skip (the FAR-910 precedent).
+        return True, None, True
+    age_hours = int((now - built) / timedelta(hours=1))
+    return age_hours >= grace_hours, age_hours, True
+
+
+def _overall_healthy(*, staleness_evaluated: bool, runs_evaluated: bool, stale: bool, failing: bool) -> bool | None:
+    """``None`` when nothing was readable at all, else "not stale and not failing"."""
+    if not staleness_evaluated and not runs_evaluated:
+        return None
+    return not (stale or failing)
+
+
 def evaluate(
     *,
     main: dict[str, Any] | None,
@@ -223,29 +255,19 @@ def evaluate(
     prod_sha = _short(str((prod or {}).get("git_sha") or ""))
     prod_ts = str((prod or {}).get("build_timestamp") or "")
 
-    stale = False
-    age_hours: int | None = None
-    staleness_evaluated = bool(main_sha and prod_sha)
-    if staleness_evaluated and main_sha != prod_sha:
-        built = _parse_timestamp(prod_ts)
-        if built is None:
-            # Prod IS behind main and we cannot say by how much: fail loud
-            # rather than silently skip (the FAR-910 precedent).
-            stale = True
-        else:
-            delta = now - built
-            age_hours = int(delta / timedelta(hours=1))
-            stale = age_hours >= grace_hours
+    stale, age_hours, staleness_evaluated = _staleness(main_sha, prod_sha, prod_ts, now=now, grace_hours=grace_hours)
 
     runs_evaluated = deploy_runs is not None
     completed = _completed_runs(list(deploy_runs or []))
     streak = consecutive_failures(completed)
     failing = runs_evaluated and streak >= failure_threshold
 
-    if not staleness_evaluated and not runs_evaluated:
-        healthy: bool | None = None
-    else:
-        healthy = not (stale or failing)
+    healthy = _overall_healthy(
+        staleness_evaluated=staleness_evaluated,
+        runs_evaluated=runs_evaluated,
+        stale=stale,
+        failing=failing,
+    )
 
     return Verdict(
         healthy=healthy,
@@ -267,6 +289,16 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 
+def _verdict_from_step(step: dict[str, Any]) -> str:
+    """Map one verdict step's conclusion onto a previous-verdict value."""
+    conclusion = str(step.get("conclusion") or "").lower()
+    if conclusion == "failure":
+        return UNHEALTHY
+    if conclusion == "skipped":
+        return HEALTHY
+    return UNKNOWN
+
+
 def parse_previous_verdict(jobs_payload: dict[str, Any] | None) -> str:
     """The previous run's verdict, from the verdict step's conclusion.
 
@@ -276,14 +308,8 @@ def parse_previous_verdict(jobs_payload: dict[str, Any] | None) -> str:
     """
     for job in (jobs_payload or {}).get("jobs") or []:
         for step in job.get("steps") or []:
-            if step.get("name") != VERDICT_STEP_NAME:
-                continue
-            conclusion = str(step.get("conclusion") or "").lower()
-            if conclusion == "failure":
-                return UNHEALTHY
-            if conclusion == "skipped":
-                return HEALTHY
-            return UNKNOWN
+            if step.get("name") == VERDICT_STEP_NAME:
+                return _verdict_from_step(step)
     return UNKNOWN
 
 
