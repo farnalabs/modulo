@@ -76,6 +76,32 @@ describe('router permission navigation guard', () => {
     expect(planStore.fetchPermissions).toHaveBeenCalled()
   })
 
+  it('maps both evidence-index URLs to the same permission and view', () => {
+    const canonical = router.getRoutes().find((route) => route.name === 'admin-compliance-evidence-index')
+    const legacy = router.getRoutes().find((route) => route.name === 'admin-evidence-index')
+
+    expect(canonical?.path).toBe('/admin/compliance/evidence-index')
+    expect(legacy?.path).toBe('/admin/evidence')
+    expect(canonical?.components?.default).toBeTruthy()
+    expect(legacy?.components?.default).toBeTruthy()
+    expect(canonical?.meta).toBeDefined()
+    expect(legacy?.meta).toBeDefined()
+
+    const manifest = yaml.load(
+      readFileSync(resolve(__dirname, '../manifest.yaml'), 'utf-8'),
+    ) as {
+      routes: Record<string, { deprecated?: boolean }>
+      features: Record<string, { behaviours?: string[] }>
+    }
+    expect(manifest.routes['/admin/evidence'].deprecated).toBe(true)
+
+    const evidenceBehaviour = manifest.features['feat-evidence'].behaviours?.find(
+      (behaviour) => behaviour.includes('deprecated /admin/evidence route'),
+    )
+    expect(evidenceBehaviour).toContain('ComplianceEvidenceIndexView.vue')
+    expect(evidenceBehaviour).toContain('compatibility alias')
+  })
+
   it('redirects the compliance evidence index route when its permission is missing', async () => {
     setAccessToken(adminToken())
     planStore.userPermissions = []
