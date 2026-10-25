@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -106,6 +107,43 @@ def _sanitize_route_template(route: str | None, templates: set[str]) -> str:
     return route if route in templates else "unknown"
 
 
+def _validated_identifier(value: Any, _templates: set[str]) -> str | None:
+    """Return *value* as a canonical UUID string, or None when it is not one."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
+
+
+def _validated_route(value: Any, templates: set[str]) -> str | None:
+    """Return a matched route template, or None when *value* is not a bounded route."""
+    if not isinstance(value, str):
+        return None
+    if len(value) > 256:
+        return None
+    return _sanitize_route_template(value, templates)
+
+
+def _validated_http_status(value: Any, _templates: set[str]) -> int | None:
+    """Return *value* when it is an HTTP status code, or None otherwise."""
+    if isinstance(value, bool):
+        return None
+    if not isinstance(value, int):
+        return None
+    if 100 <= value <= 599:
+        return value
+    return None
+
+
+_PAYLOAD_VALUE_VALIDATORS: dict[str, Callable[[Any, set[str]], Any | None]] = {
+    "uuid": _validated_identifier,
+    "route": _validated_route,
+    "http_status": _validated_http_status,
+}
+
+
 def _validated_payload(event: MetricsEventItem, registered_templates: set[str]) -> dict[str, Any]:
     """Return only payload values that satisfy the event-specific contract.
 
@@ -116,21 +154,10 @@ def _validated_payload(event: MetricsEventItem, registered_templates: set[str]) 
     payload: dict[str, Any] = {}
     value_types = EVENT_PAYLOAD_VALUE_TYPES[event.event_type]
     for key in EVENT_PAYLOAD_FIELDS[event.event_type]:
-        value = event.payload.get(key)
-        value_type = value_types[key]
-        if value_type == "uuid":
-            try:
-                parsed = uuid.UUID(value) if isinstance(value, str) else None
-            except ValueError:
-                parsed = None
-            if parsed is not None:
-                payload[key] = str(parsed)
-        elif value_type == "route":
-            if isinstance(value, str) and len(value) <= 256:
-                payload[key] = _sanitize_route_template(value, registered_templates)
-        elif value_type == "http_status":
-            if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599:
-                payload[key] = value
+        validator = _PAYLOAD_VALUE_VALIDATORS[value_types[key]]
+        validated = validator(event.payload.get(key), registered_templates)
+        if validated is not None:
+            payload[key] = validated
     return payload
 
 

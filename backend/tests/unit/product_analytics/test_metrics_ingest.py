@@ -364,6 +364,42 @@ class TestPayloadPrivacyBoundary:
         assert resp.status_code == 204
         assert not _inserted_payload(mock_session)
 
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            ({"route": 123, "status": 500}, {"status": 500}),
+            ({"route": {"nested": "object"}, "status": 200}, {"status": 200}),
+            ({"route": "/some/unknown/path", "status": True}, {"route": "unknown"}),
+            ({"route": "/some/unknown/path", "status": 99}, {"route": "unknown"}),
+            ({"route": "/some/unknown/path", "status": 600}, {"route": "unknown"}),
+            ({"route": "/some/unknown/path", "status": 204}, {"route": "unknown", "status": 204}),
+        ],
+    )
+    @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
+    @patch("modulo.api.routes.metrics_ingest.get_organisation")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    def test_api_error_values_reject_invalid_scalars(
+        self,
+        mock_rls: MagicMock,
+        mock_user_ctx: MagicMock,
+        mock_get_org: MagicMock,
+        mock_count: MagicMock,
+        payload: dict,
+        expected: dict,
+        client: TestClient,
+        mock_session: AsyncMock,
+    ) -> None:
+        mock_get_org.return_value = _consented_org()
+        mock_count.return_value = 0
+        event = _valid_event("evt-api-error", "api_error")
+        event["payload"] = payload
+
+        resp = _post_events(client, [event])
+
+        assert resp.status_code == 204
+        assert _inserted_payload(mock_session) == expected
+
 
 class TestRouteSanitizer:
     @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
