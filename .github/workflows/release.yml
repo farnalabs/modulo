@@ -3,7 +3,8 @@ name: "Release: Legacy Entry Point (Retired)"
 # RETIRED: Release: Unified Pipeline is the sole executable release path.
 #
 # This workflow remains only so an old bookmark or automation call fails loudly
-# with migration instructions. It deliberately has no checkout, write
+# with migration instructions. It deliberately has no checkout, mutation, or
+# dispatch logic, and has no write
 # permissions, tags, releases, freeze changes, dispatches, publishes, changelog
 # writes, or environments. Do not add release logic here.
 

@@ -19,14 +19,14 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 
 | Mode | What it does | Publishes? |
 |------|--------------|------------|
-| `cut` | Tags `vX.Y.Z-rcN` at the current `main` HEAD, pushes the `release-freeze` tag (which suspends the merge queue), and dispatches `rc-validate.yml` | Yes - RC tag + freeze |
-| `recut` | After a fix has been manually merged to `main`: tags the *next* RC and re-freezes | Yes - RC tag + freeze |
-| `release` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, lifts the freeze, then updates `CHANGELOG.md` and creates the GitHub Release | Yes - GA tag + Release |
+| `cut` | Establishes the freeze before mutating `main`, commits the version bump, then tags the exact resulting commit as `vX.Y.Z-rcN`, publishes only RC-qualified artefacts, and dispatches `rc-validate.yml` | Yes - RC tag, freeze, RC artefacts |
+| `recut` | Establishes the freeze, asserts `main` stayed at the frozen identity, then tags the exact current commit as the next RC and publishes only RC-qualified artefacts | Yes - RC tag, freeze, RC artefacts |
+| `promote` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, publishes stable GA artefacts, lifts the freeze, then updates `CHANGELOG.md` and creates the GitHub Release | Yes - GA tag, stable artefacts, Release |
 | `dry-run` | Builds everything and resolves what a `cut` would have done, then stops | **No - nothing at all** |
 
 ### The freeze
 
-`cut` and `recut` push a tag named `release-freeze`. The merge queue checks for that tag and does not merge while it is present, so `main` is held still against the RC under validation. A cut chooses the first free `vX.Y.Z-rcN`; a recut always chooses the next free RC number and tags the current `main` commit, so it cannot accidentally republish an older RC after a fix has landed. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` with `force_deploy=true`, and the deploy workflow's normal staging, E2E and production gates remain in force. `release` / `promote` deletes the tag, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
+`cut` and `recut` push a tag named `release-freeze` before creating the release commit or RC tag. The merge queue checks for that tag and does not merge while it is present. Each mode fetches `origin/main` again after freezing and before tagging; if the identity changed, it fails closed without tagging or dispatching. A cut chooses the first free `vX.Y.Z-rcN`; a recut chooses the next free RC number and tags the exact frozen `main` commit. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` with `force_deploy=true`, and the deploy workflow's normal staging, E2E and production gates remain in force. `promote` deletes the tag only after the validated RC and `origin/main` SHA checks pass. Do not add release-freeze awareness to `deploy.yml`.
 
 ### Recut runbook
 
@@ -35,14 +35,14 @@ The unified workflow is the canonical entry point. Its `recut` mode publishes fr
 Use `recut` after a fix has been merged to `main` while the release freeze is active:
 
 1. Confirm the fix is on `main` and the previous RC remains identifiable.
-2. Dispatch `recut` for the same `X.Y.Z` version. The workflow selects the next free `vX.Y.Z-rcN`, tags the current `main` commit with it, and force-moves `release-freeze` to that new RC commit.
+2. Dispatch `recut` for the same `X.Y.Z` version. The workflow establishes `release-freeze`, asserts that `origin/main` remains the frozen identity, selects the next free `vX.Y.Z-rcN`, tags that exact commit, and keeps the freeze on it.
 3. The workflow then dispatches `Deploy: Staging + Prod` with `force_deploy=true`, so the freeze cannot throttle the soak deployment. It dispatches `rc-validate.yml` for the new RC only after the deploy dispatch is accepted.
 4. `rc-validate.yml` waits for `/api/v1/deployment` to report the new RC commit, runs the read-only Schemathesis checks, and pushes `validated/vX.Y.Z-rcN` at the RC commit only on success.
 5. Promote only after the validation marker exists and points at the latest RC commit. If validation fails, fix the issue on `main` and repeat this recut sequence; do not move the marker by hand.
 
-## What `release` requires (the four promote invariants)
+## What `promote` requires (the four promote invariants)
 
-Promotion is the irreversible step, so the `release` job refuses to run unless all four of these hold. Each is a separate, loud `::error::` and a non-zero exit:
+Promotion is the irreversible step, so the `promote` path refuses to run unless all four of these hold. Each is a separate, loud `::error::` and a non-zero exit:
 
 1. **A freeze is active.** The `release-freeze` tag must exist - you cannot promote out of nothing.
 2. **The GA tag does not already exist.** `vX.Y.Z` must not be present; a release is never overwritten.
@@ -53,7 +53,7 @@ Only when all four pass does the job create and push the annotated GA tag.
 
 ### After the tag
 
-The GA tag is the release identity, so it is created and pushed before anything else. The following step updates `CHANGELOG.md` (via `scripts/generate_changelog.py`) and creates the GitHub Release. Its failure handling is deliberate:
+The GA tag is the release identity, so it is created and pushed only after the validated RC, `origin/main`, and SHA checks pass. Stable container and chart identifiers are likewise created only by the promote path. The following step updates `CHANGELOG.md` (via `scripts/generate_changelog.py`) and creates the GitHub Release. Its failure handling is deliberate:
 
 - A failed CHANGELOG commit/push turns the job **red** - it is a required deliverable.
 - Failed release-notes generation or a failed `gh release create` is a **warning only**, because the tag already exists and is intact.
@@ -93,7 +93,7 @@ Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-i
 
 `publish-images.yml` triggers on a `push` of a version tag (`v*`) - but a release's own tag push does NOT run it, so image publishing is owned by the unified workflow directly rather than by the tag trigger:
 
-- **The unified workflow's `release` job tag push does not trigger the workflow.** The job pushes its `vX.Y.Z-rc*` and `vX.Y.Z` tags with the default `github.token` (`GH_TOKEN: ${{ github.token }}`). GitHub deliberately suppresses workflow runs for events caused by that token, so the tag push triggers no workflow at all - which is also why the same job reaches `rc-validate.yml` by running `gh workflow run` rather than relying on the tag. A release therefore does not publish container images through the tag trigger; the unified workflow's publish job (FAR-1869) is the piece that will own publishing them directly.
+- **The unified workflow's release job tag push does not trigger the workflow.** The job pushes its `vX.Y.Z-rc*` and `vX.Y.Z` tags with the default `github.token` (`GH_TOKEN: ${{ github.token }}`). GitHub deliberately suppresses workflow runs for events caused by that token, so the tag push triggers no workflow at all - which is also why the same job reaches `rc-validate.yml` by running `gh workflow run` rather than relying on the tag. A release therefore does not publish container images through the tag trigger; the unified workflow's publish job (FAR-1869) is the piece that will own publishing them directly.
 - **The dry-run's "no tag at all" rule stays correct.** It is conservative for the right reason: a HUMAN pushing a version-shaped tag - or any push made with a credential other than `github.token` - WOULD trigger `publish-images.yml` and publish images. The rationale above is unchanged; what is added here is that a WORKFLOW-initiated push behaves differently from a human one.
 - **The CHANGELOG commit's push to `main` triggers no CI either.** The same `github.token` pushes it, so `main`'s HEAD after a release is not CI-validated. That is observed behaviour, recorded here rather than changed.
 
