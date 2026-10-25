@@ -121,7 +121,11 @@ def verify_state(signed: str, secret_key: str) -> str | None:
         return None
     state, sig = parts
     expected = hmac.new(secret_key.encode(), state.encode(), "sha256").hexdigest()[:16]
-    if not hmac.compare_digest(expected, sig):
+    # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. ``sig`` is attacker-derived (the
+    # OIDC ``state`` query param / SAML ``RelayState``), so a non-ASCII value must
+    # fail closed with None instead of escaping as an uncaught 500.
+    if not hmac.compare_digest(expected.encode("utf-8"), sig.encode("utf-8")):
         return None
     return state
 
