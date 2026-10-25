@@ -609,6 +609,7 @@ function modifiedEdgeText(modified: SnapshotModifiedEdge): string {
 const FIELD_LABEL_KEYS: Record<string, string> = {
   agent_id: 'components.PipelineSnapshotCompare.field_agent',
   label: 'components.PipelineSnapshotCompare.field_label',
+  role: 'components.PipelineSnapshotCompare.field_role',
   node_type: 'components.PipelineSnapshotCompare.field_node_type',
   schema_id: 'components.PipelineSnapshotCompare.field_schema',
   connector_binding: 'components.PipelineSnapshotCompare.field_connector',

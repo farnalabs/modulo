@@ -5173,6 +5173,7 @@ export default {
       "field_changed": "{field}: {old} → {new}",
       "field_agent": "Agent",
       "field_label": "Label",
+      "field_role": "Role",
       "field_node_type": "Node type",
       "field_schema": "Output schema",
       "field_connector": "Connector",

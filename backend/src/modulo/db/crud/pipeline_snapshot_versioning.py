@@ -51,6 +51,7 @@ _PORT_CHANGE_KIND_EDGE_PORT = "edge_port"
 _BEHAVIOUR_NODE_FIELDS = (
     "agent_id",
     "label",
+    "role",
     "node_type",
     "connector_binding",
     "environment_binding",
@@ -786,6 +787,7 @@ def _rebuild_graph(snapshot: PipelineSnapshot) -> dict[str, Any]:
                 "id": n["id"],
                 "agent_id": n.get("agent_id"),
                 "label": n.get("label"),
+                "role": n.get("role"),
                 "node_type": n.get("node_type", "agent"),
                 "position": n.get("position", {"x": 0, "y": 0}),
                 "output_schema_id": n.get("output_schema_id"),

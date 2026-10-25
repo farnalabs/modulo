@@ -129,8 +129,8 @@ centralized authorization cleanup.
       node-level `hitl_config` gate (a gate added, removed or retargeted changes
       who must approve the run), `timeout_seconds`, `template_id`,
       `model_class` and `single_pr_per_run` alongside the identity fields
-      (`agent_id` / `label` / `node_type` / schema / connector / environment
-      bindings) and the port signature — so the restore dialog's embedded
+      (`agent_id` / `label` / `role` / `node_type` / schema / connector /
+      environment bindings) and the port signature — so the restore dialog's embedded
       change summary cannot tell an operator a version pair is identical when
       the two graphs behave differently
       (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py::_compute_node_changes`,

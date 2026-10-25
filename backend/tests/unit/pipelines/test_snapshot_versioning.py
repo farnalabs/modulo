@@ -538,6 +538,13 @@ class TestComputeNodeChangesExecutionSemantics:
         )
         assert changes["hitl_config"] == {"old": {"human_only": True}, "new": {"human_only": False}}
 
+    def test_role_only_change_is_reported(self):
+        changes = _compute_node_changes(
+            {"id": "a", "role": "context_setter"},
+            {"id": "a", "role": "agent"},
+        )
+        assert changes == {"role": {"old": "context_setter", "new": "agent"}}
+
     def test_hitl_gate_removal_is_reported(self):
         """Removing a node-level gate must never read as "no differences"."""
         changes = _compute_node_changes(
