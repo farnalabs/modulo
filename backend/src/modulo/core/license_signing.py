@@ -95,6 +95,7 @@ def build_team_payload(
     licence_id: str | None = None,
     issued_at: datetime | None = None,
     expires_from: datetime | None = None,
+    starts_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Build the signed license payload for a team customer.
 
@@ -136,6 +137,25 @@ def build_team_payload(
     An explicit ``renewal_mode`` outside the vocabulary raises
     :class:`LicenseSigningError` rather than silently minting the default: a
     typo must not quietly downgrade an auto-renewal licence to manual.
+
+    ``starts_at`` is the customer-chosen start of the licence window
+    (FAR-2146): the signed ``starts_at`` claim is emitted and the term runs
+    from there, so ``expires_at = starts_at + term_months``. When it is
+    OMITTED no claim is emitted and the term starts at ``issued_at`` — the
+    behaviour of every key minted before FAR-2146.
+
+    It is mutually exclusive with ``expires_from``: that seam expresses
+    "continue where the previous licence ended" (``max(now, expires_from)``),
+    while ``starts_at`` states the window the customer chose. Combining them
+    would make one of the two silently win. ``starts_at`` must be
+    timezone-aware for the same reason as ``expires_from``.
+
+    The signer does NOT floor ``starts_at`` at ``now`` (unlike
+    ``expires_from``): flooring would silently move a legitimately chosen
+    same-day start into the future. Future-only is enforced where the date
+    enters the system — the Stripe fulfilment boundary
+    (``core.stripe_fulfilment.resolve_starts_at``) rejects a past date and one
+    more than 90 days ahead rather than clamping either.
     """
     if not isinstance(renewal_mode, str) or renewal_mode not in RENEWAL_MODES:
         raise LicenseSigningError(f"renewal_mode must be one of {sorted(RENEWAL_MODES)}, got {renewal_mode!r}")
@@ -144,26 +164,44 @@ def build_team_payload(
             "expires_from must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an "
             "offset); a naive datetime would be compared against an aware now"
         )
+    if starts_at is not None and starts_at.tzinfo is None:
+        raise LicenseSigningError(
+            "starts_at must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an "
+            "offset); the signed claim is read against an aware now"
+        )
+    if starts_at is not None and expires_from is not None:
+        raise LicenseSigningError(
+            "starts_at and expires_from are mutually exclusive: starts_at states the chosen licence window, "
+            "expires_from continues a previous licence's window — supplying both would make one silently win"
+        )
     resolved_org_id = org_id or str(uuid.uuid5(uuid.NAMESPACE_DNS, f"modulo:{org_name}"))
     issued = issued_at or datetime.now(UTC)
-    if expires_from is None:
+    if starts_at is not None:
+        # The customer chose the window: the term runs from the chosen start.
+        base = starts_at
+    elif expires_from is None:
         base = issued
     else:
         # Stacking: a renewal starts at the LATER of now and the previous
         # expiry. See the docstring for why the floor is load-bearing.
         now = datetime.now(UTC)
         base = max(now, expires_from)
-    expires_at = _add_months(base, term_months).isoformat()
-    return {
+    expiry = _add_months(base, term_months)
+    if expiry <= base:
+        raise LicenseSigningError(f"term_months must advance the expiry beyond starts_at, got {term_months}")
+    payload: dict[str, Any] = {
         "tier": LICENSE_TIER,
         "features": list(features if features is not None else TEAM_FEATURES),
-        "expires_at": expires_at,
+        "expires_at": expiry.isoformat(),
         "org_id": resolved_org_id,
         "renewal_mode": renewal_mode,
         "term": term_months,
         "licence_id": licence_id or str(uuid.uuid4()),
         "issued_at": issued.isoformat(),
     }
+    if starts_at is not None:
+        payload["starts_at"] = starts_at.isoformat()
+    return payload
 
 
 def generate_team_license(
@@ -177,6 +215,7 @@ def generate_team_license(
     licence_id: str | None = None,
     issued_at: datetime | None = None,
     expires_from: datetime | None = None,
+    starts_at: datetime | None = None,
 ) -> str:
     """Generate an Ed25519-signed team license key for *org_name*.
 
@@ -192,6 +231,10 @@ def generate_team_license(
     licence's expiry and the new key starts there (never before now). It does
     NOT touch ``issued_at``, which stays the true mint time — passing a forged
     ``issued_at`` to shift the expiry would falsify that claim.
+
+    ``starts_at`` is the customer-chosen start of the licence window
+    (FAR-2146) and is likewise independent of ``issued_at``: the key is minted
+    now, carries the real ``issued_at``, and becomes active at ``starts_at``.
     """
     key = _resolve_private_key(private_key_hex)
     payload = build_team_payload(
@@ -203,5 +246,6 @@ def generate_team_license(
         licence_id=licence_id,
         issued_at=issued_at,
         expires_from=expires_from,
+        starts_at=starts_at,
     )
     return encode_license_key(payload, key)

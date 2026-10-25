@@ -21,6 +21,17 @@ Events handled (all idempotent, keyed on the Stripe event id):
 The heavy work (license generation + email) runs as a FastAPI BackgroundTask so
 the response returns 200 immediately; Stripe treats a 2xx as delivered.
 
+Chosen licence start (FAR-2146)
+-------------------------------
+A purchase may state when its licence should begin, as ``starts_at`` in the
+checkout/subscription metadata (an ISO 8601 date such as ``2027-03-12``). The
+value is validated HERE, before the background task is queued: a past date, one
+more than 90 days ahead, or an unparseable value is rejected with 422 and a
+machine-readable ``error`` code (``starts_at_in_past`` /
+``starts_at_too_far_ahead`` / ``starts_at_malformed``), never silently clamped.
+The job is left unclaimed, so the rejection is visible in Stripe's webhook log
+rather than becoming a licence that begins on the wrong day.
+
 Early-renewal claim (FAR-2109)
 ------------------------------
 ``POST /api/v1/webhooks/stripe/renewal-claim`` is the post-purchase step for an
@@ -53,8 +64,10 @@ from modulo.core.license import DEFAULT_RENEWAL_MODE, RENEWAL_MODE_AUTO
 from modulo.core.stripe_fulfilment import (
     RenewalClaimRejectedError,
     RenewalClaimUnavailableError,
+    StartsAtRejectedError,
     claim_stacked_renewal,
     fulfil_team_purchase,
+    resolve_starts_at,
 )
 from modulo.core.trigger_engine import TimestampExpiredError, verify_timestamp
 from modulo.db.models.organisation import SYSTEM_ORG_ID
@@ -136,6 +149,39 @@ def _renewal_mode_for(event: dict[str, Any]) -> str:
     for a case that flow already handles.
     """
     return RENEWAL_MODE_AUTO if _event_object(event).get("subscription") else DEFAULT_RENEWAL_MODE
+
+
+def _extract_starts_at(event: dict[str, Any]) -> str | None:
+    """Read the chosen licence start from the event's metadata (FAR-2146).
+
+    Stripe carries metadata on several objects and which one holds it depends
+    on how the purchase was created, so every location an invoice can carry it
+    is checked, in order:
+
+    1. the invoice's own ``metadata``;
+    2. ``subscription_details.metadata`` (the subscription's metadata, as
+       copied onto the invoice);
+    3. ``parent.subscription_details.metadata`` (the newer Invoice API shape).
+
+    Returns the first non-blank ``starts_at`` string, or ``None`` when no
+    object states one — which mints from now, exactly as before FAR-2146.
+    """
+    obj = _event_object(event)
+    candidates: list[Any] = [obj.get("metadata")]
+    subscription_details = obj.get("subscription_details")
+    if isinstance(subscription_details, dict):
+        candidates.append(subscription_details.get("metadata"))
+    parent = obj.get("parent")
+    if isinstance(parent, dict):
+        parent_subscription_details = parent.get("subscription_details")
+        if isinstance(parent_subscription_details, dict):
+            candidates.append(parent_subscription_details.get("metadata"))
+    for metadata in candidates:
+        if isinstance(metadata, dict):
+            raw = metadata.get("starts_at")
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+    return None
 
 
 def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
@@ -229,11 +275,33 @@ async def stripe_webhook(
         customer_email, org_name = _extract_customer(event)
         if customer_email:
             renewal_mode = _renewal_mode_for(event)
+            starts_at = _extract_starts_at(event)
+            # Validate the customer-chosen start AT THE BOUNDARY (FAR-2146), so
+            # a bad date is reported synchronously to the caller instead of
+            # disappearing into a background task. Nothing is minted and the
+            # event is not claimed: the rejection is explicit rather than a
+            # silent clamp to "now" or to the 90-day horizon.
+            try:
+                resolve_starts_at(starts_at)
+            except StartsAtRejectedError as exc:
+                _log.error(
+                    "stripe.webhook.starts_at_rejected event=%s event_id=%s reason=%s value=%r detail=%s",
+                    event_type,
+                    event["id"],
+                    exc.reason,
+                    exc.value,
+                    exc.detail,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail={"error": exc.reason, "detail": exc.detail},
+                ) from exc
             _log.info(
-                "stripe.webhook.fulfilling event=%s event_id=%s renewal_mode=%s",
+                "stripe.webhook.fulfilling event=%s event_id=%s renewal_mode=%s starts_at=%s",
                 event_type,
                 event["id"],
                 renewal_mode,
+                starts_at,
             )
             background_tasks.add_task(
                 fulfil_team_purchase,
@@ -242,6 +310,7 @@ async def stripe_webhook(
                 customer_email=customer_email,
                 org_name=org_name,
                 renewal_mode=renewal_mode,
+                starts_at=starts_at,
             )
         else:
             _log.warning(

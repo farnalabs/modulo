@@ -1231,3 +1231,191 @@ class TestRemoveSystemLicense:
             assert "audit_viewer" in after.text
         finally:
             app.dependency_overrides.clear()
+
+
+# ── FAR-2146 chosen licence start / parked successor ─────────────────────
+
+
+class TestLicenceStartsAtStatus:
+    """The admin surface must say WHEN a parked successor begins.
+
+    ``licence_state`` keeps its existing five-value meaning (it describes the
+    ACTIVE licence); the successor is a separate field, so "valid but not yet
+    active" is never conflated with "active" or with "lapsed".
+    """
+
+    URL = "/api/v1/admin/license"
+
+    def _get(self, client: TestClient, org: Any) -> dict[str, Any]:
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def _store(self, payload: Mapping[str, object]) -> Any:
+        key = _sign_license_payload(payload)
+        result = parse_and_verify(key)
+        assert result.license_data is not None
+        store_license(key, result.license_data)
+        return result.license_data
+
+    def _parked_payload(
+        self,
+        days_ahead: int,
+        licence_id: str,
+        *,
+        base: datetime | None = None,
+    ) -> dict[str, object]:
+        start = (base or datetime.now(UTC)) + timedelta(days=days_ahead)
+        return _make_valid_payload(
+            starts_at=start.isoformat(),
+            expires_at=(start + timedelta(days=365)).isoformat(),
+            term=12,
+            licence_id=licence_id,
+        )
+
+    def test_an_old_key_reports_no_start_and_no_successor(self, client: TestClient) -> None:
+        self._store(_make_valid_payload())
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        assert data["starts_at"] is None
+        assert data["successor"] is None
+        assert data["licence_state"] == admin_license.LICENCE_STATE_ACTIVE
+
+    def test_an_active_licence_reports_its_own_start_date(self, client: TestClient) -> None:
+        starts_at = (datetime.now(UTC) - timedelta(days=30)).isoformat()
+        self._store(_make_valid_payload(starts_at=starts_at))
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        assert data["starts_at"] == starts_at
+        assert data["successor"] is None
+
+    def test_a_parked_successor_is_reported_without_displacing_the_active_licence(self, client: TestClient) -> None:
+        base = datetime.now(UTC)
+        active = self._store(
+            _make_valid_payload(
+                expires_at=(base + timedelta(days=20)).isoformat(),
+                licence_id="lic-active",
+            )
+        )
+        parked = self._store(self._parked_payload(days_ahead=40, licence_id="lic-successor", base=base))
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        # The ACTIVE licence is still the one reported as active...
+        assert data["licence_id"] == active.licence_id
+        assert data["expires_at"] == active.expires_at
+        assert data["licence_state"] == admin_license.LICENCE_STATE_ACTIVE
+        # ...and the successor is reported separately, with its chosen window.
+        assert data["successor"] == {
+            "starts_at": parked.starts_at,
+            "expires_at": parked.expires_at,
+            # now + 40d starts 20 days after now + 20d ends: a coverage gap.
+            "gap_days": 20,
+        }
+
+    def test_a_parked_licence_alone_reports_no_active_licence_but_names_the_successor(self, client: TestClient) -> None:
+        parked = self._store(self._parked_payload(days_ahead=40, licence_id="lic-successor"))
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        assert data["has_license"] is False
+        assert data["tier"] == "community"
+        assert data["licence_state"] == admin_license.LICENCE_STATE_NONE
+        assert data["successor"]["starts_at"] == parked.starts_at
+        assert data["successor"]["expires_at"] == parked.expires_at
+        # Nothing is active, so the gap concept does not apply.
+        assert data["successor"]["gap_days"] is None
+
+    def test_no_gap_is_reported_when_the_windows_meet(self, client: TestClient) -> None:
+        now = datetime.now(UTC)
+        expiry = now + timedelta(days=40)
+        self._store(_make_valid_payload(expires_at=expiry.isoformat(), licence_id="lic-active"))
+        self._store(
+            _make_valid_payload(
+                starts_at=expiry.isoformat(),
+                expires_at=(expiry + timedelta(days=365)).isoformat(),
+                licence_id="lic-successor",
+            )
+        )
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        assert data["successor"]["gap_days"] is None
+
+    def test_a_due_successor_becomes_active_through_the_status_surface(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No operator action: reading the status after the start promotes it."""
+        now = datetime.now(UTC)
+        start = now + timedelta(days=1)
+        self._store(_make_valid_payload(licence_id="lic-active"))
+        self._store(
+            _make_valid_payload(
+                starts_at=start.isoformat(),
+                expires_at=(start + timedelta(days=365)).isoformat(),
+                licence_id="lic-successor",
+            )
+        )
+
+        class _AtStart(datetime):
+            @classmethod
+            def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+                return start + timedelta(seconds=1) if tz is not None else start.replace(tzinfo=None)
+
+        monkeypatch.setattr("modulo.core.license.datetime", _AtStart)
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        assert data["licence_id"] == "lic-successor"
+        assert data["successor"] is None
+
+
+class TestUploadReportsParked:
+    URL = "/api/v1/admin/license"
+
+    def test_a_future_dated_key_is_installed_as_a_parked_successor(self, client: TestClient) -> None:
+        start = datetime.now(UTC) + timedelta(days=30)
+        key = _sign_license_payload(
+            _make_valid_payload(
+                starts_at=start.isoformat(),
+                expires_at=(start + timedelta(days=365)).isoformat(),
+            )
+        )
+
+        resp = client.post(self.URL, json={"license_key": key})
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["parked"] is True
+        assert body["starts_at"] == start.isoformat()
+
+    def test_an_immediate_key_is_installed_as_active(self, client: TestClient) -> None:
+        resp = client.post(self.URL, json={"license_key": _sign_license_payload(_make_valid_payload())})
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["parked"] is False
+        assert body["starts_at"] is None
+
+    def test_a_future_dated_configured_key_is_reported_as_the_successor(self) -> None:
+        """An env-var/org successor has no park slot, so the status finds it."""
+        start = datetime.now(UTC) + timedelta(days=30)
+        key = _sign_license_payload(
+            _make_valid_payload(
+                starts_at=start.isoformat(),
+                expires_at=(start + timedelta(days=365)).isoformat(),
+                licence_id="lic-configured-successor",
+            )
+        )
+        settings = _make_settings()
+        settings.modulo_license_key = key
+
+        response = admin_license._resolve_effective_license(settings, _mock_org(settings_json={}))
+
+        assert response.has_license is False
+        assert response.successor is not None
+        assert response.successor.starts_at == start.isoformat()
+        assert response.successor.expires_at == (start + timedelta(days=365)).isoformat()
