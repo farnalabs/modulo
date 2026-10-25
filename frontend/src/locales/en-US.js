@@ -796,6 +796,10 @@ export default {
           "gate_removed": "HITL gate removed",
           "overdue": "HITL overdue"
         },
+        "pipeline": {
+          "decay": "Pipeline success rate degraded",
+          "decay_recovered": "Pipeline success rate recovered"
+        },
         "provider": {
           "failure": "Model provider authentication or billing failure"
         },
