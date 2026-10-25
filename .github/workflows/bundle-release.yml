@@ -87,8 +87,12 @@ jobs:
     name: Bundle linux-${{ matrix.arch }}
     needs: version-parity
     runs-on: ubuntu-latest
+    # The caller supplies the workflow token, but this reusable job only checks
+    # out the requested ref and uploads workflow artefacts. It never creates a
+    # tag, pushes a ref, or calls a repository-write API, so read is sufficient
+    # and keeps the reusable contract valid for the unified dry-run caller.
     permissions:
-      contents: write
+      contents: read
     timeout-minutes: 45
     strategy:
       fail-fast: false
