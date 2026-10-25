@@ -21,6 +21,7 @@ from modulo.core.eval_engine import (
     EvalResult,
     EvalType,
     UnknownEvalTypeError,
+    _has_nested_quantifier,
     _result_from_judge_dict,
 )
 from modulo.core.eval_engine.typed_judge import (
@@ -489,6 +490,27 @@ class TestReDoSProtection:
         assert result.passed is expected_passed
         if not expected_passed:
             assert "nested quantifier" in result.detail.lower()
+
+
+class TestNestedQuantifierDetection:
+    @pytest.mark.parametrize(
+        ("pattern", "expected"),
+        [
+            (r"(\d+)+", True),
+            (r"(a*)*", True),
+            (r"((a+)+)+", True),
+            (r"(a|b)+", False),
+            (r"(ab)+", False),
+            (r"(a+)", False),
+            (r"(a+", False),
+            (r"a)+", False),
+            (r"a+b*", False),
+            (r"(+()+", True),
+            ("", False),
+        ],
+    )
+    def test_detects_nested_quantifiers(self, pattern: str, expected: bool) -> None:
+        assert _has_nested_quantifier(pattern) is expected
 
 
 class TestRegexErrorHandling:
