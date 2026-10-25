@@ -26,6 +26,7 @@ overrides:
   "@tanstack/query-core": "5.104.5"
   "@tanstack/vue-query": "5.104.5"
   zod: ">=4.6.6"
+  fast-uri: ">=3.1.9"
 minimumReleaseAgeExclude:
   - '@rollup/rollup-android-arm-eabi@4.63.0'
   - '@rollup/rollup-android-arm64@4.63.0'
