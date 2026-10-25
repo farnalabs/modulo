@@ -234,7 +234,7 @@ async def _persist_decision_row(
         if failure_class == "referential":
             from modulo.db.crud.policy_gate_decision import _extract_constraint_name
 
-            _log.error(
+            _log.exception(
                 "policy_gate_decision.persist_failed_referential",
                 extra={
                     "policy_gate_id": str(snapshot.policy_gate.id),
@@ -283,6 +283,10 @@ SessionFactory = Callable[[], Any]
 # ---------------------------------------------------------------------------
 
 
+#: Sentinel for "no pre-resolved judge was supplied".
+_UNRESOLVED: Any = object()
+
+
 def _compute_eval_result(
     eval_def: EvalDefDTO,
     *,
@@ -291,9 +295,10 @@ def _compute_eval_result(
     resolve_eval_target: Callable[[EvalDefDTO], Any],
     resolve_model_judge: Callable[[EvalDefDTO], ModelJudgeCallable | None],
     on_eval_result: Callable[[EvalDefDTO, EngineEvalResult], None] | None,
+    resolved_judge: Any = _UNRESOLVED,
 ) -> EngineEvalResult:
     """Phase 1 — compute the eval result (never raises ``EvalBlockedError``)."""
-    judge = resolve_model_judge(eval_def)
+    judge = resolve_model_judge(eval_def) if resolved_judge is _UNRESOLVED else resolved_judge
     eval_target = resolve_eval_target(eval_def)
     eval_result = engine.evaluate_result(
         eval_target,
@@ -302,6 +307,33 @@ def _compute_eval_result(
         model_judge_callable=judge,
     )
     # Per-eval structured log callback (Defect 3 fix).
+    if on_eval_result is not None:
+        on_eval_result(eval_def, eval_result)
+    return eval_result
+
+
+async def _compute_eval_result_async(
+    eval_def: EvalDefDTO,
+    *,
+    engine: EvalEngine,
+    compute_run_id: uuid.UUID,
+    resolve_eval_target: Callable[[EvalDefDTO], Any],
+    judge: Any,
+    on_eval_result: Callable[[EvalDefDTO, EngineEvalResult], None] | None,
+) -> EngineEvalResult:
+    """Phase 1 for an async-capable judge — awaited on the caller's own loop.
+
+    The pipeline post-node and HITL gate loops both run inside ``asyncio``, so
+    an async judge needs no sync bridge and no worker thread. A judge without
+    ``ajudge`` never reaches here (the loop keeps the sync path).
+    """
+    eval_target = resolve_eval_target(eval_def)
+    eval_result = await engine.evaluate_result_async(
+        eval_target,
+        eval_def,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
+        run_id=compute_run_id,
+        model_judge_callable=judge,
+    )
     if on_eval_result is not None:
         on_eval_result(eval_def, eval_result)
     return eval_result
@@ -590,14 +622,28 @@ async def run_evals_persist_before_decide(
             continue
 
         # --- 1. Compute (never raises EvalBlockedError) ----------------
-        eval_result = _compute_eval_result(
-            eval_def,
-            engine=engine,
-            compute_run_id=compute_run_id,
-            resolve_eval_target=resolve_eval_target,
-            resolve_model_judge=resolve_model_judge,
-            on_eval_result=on_eval_result,
-        )
+        # An async-capable judge is awaited on this loop (ADR 066 D10); a sync
+        # judge keeps the historical path unchanged.
+        resolved_judge = resolve_model_judge(eval_def)
+        if hasattr(resolved_judge, "ajudge"):
+            eval_result = await _compute_eval_result_async(
+                eval_def,
+                engine=engine,
+                compute_run_id=compute_run_id,
+                resolve_eval_target=resolve_eval_target,
+                judge=resolved_judge,
+                on_eval_result=on_eval_result,
+            )
+        else:
+            eval_result = _compute_eval_result(
+                eval_def,
+                engine=engine,
+                compute_run_id=compute_run_id,
+                resolve_eval_target=resolve_eval_target,
+                resolve_model_judge=resolve_model_judge,
+                on_eval_result=on_eval_result,
+                resolved_judge=resolved_judge,
+            )
         results[eval_def.name] = eval_result
 
         # --- 2. Persist (own transaction, per-eval commit) -------------

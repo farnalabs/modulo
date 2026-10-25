@@ -1112,6 +1112,19 @@ class _InterceptionRequest:
     guardrails_kill_switch: bool
 
 
+@dataclass
+class _GuardrailPassRequest:
+    """Inputs for one guardrail interception pass."""
+
+    org_id: uuid.UUID
+    guardrail_defs: list[Any]
+    payload: dict[str, Any]
+    is_replay: bool | None
+    skipped_guardrails: list[Any]
+    any_guarding: bool
+    detection_only: bool
+
+
 def _has_guardrail_work(
     guardrail_rows: list[Any],
     pinned_defs: list[Any],
@@ -1407,15 +1420,7 @@ def _downgrade_guardrails_to_observe(guardrail_defs: list[Any]) -> list[Any]:
 
 
 async def _run_guardrail_interception_pass(
-    *,
-    org_id: uuid.UUID,
-    _run_id: uuid.UUID,
-    guardrail_defs: list[Any],
-    payload: dict[str, Any],
-    is_replay: bool | None,
-    skipped_guardrails: list[Any],
-    any_guarding: bool,
-    detection_only: bool,
+    request: _GuardrailPassRequest,
 ) -> tuple[dict[str, Any], list[Any], list[Any], bool, str, list[Any], str]:
     """Execute the interception pass and return every mutated run state field.
 
@@ -1432,7 +1437,12 @@ async def _run_guardrail_interception_pass(
     from modulo.core.guardrails import _mechanism_fail_result, run_interception_pass_async
 
     start_wall = time.perf_counter()
-    is_detection_only = detection_only or bool(is_replay)
+    org_id = request.org_id
+    guardrail_defs = request.guardrail_defs
+    payload = request.payload
+    skipped_guardrails = request.skipped_guardrails
+    any_guarding = request.any_guarding
+    is_detection_only = request.detection_only or bool(request.is_replay)
     try:
         outcome = await run_interception_pass_async(
             EvalEngine(),
@@ -1696,11 +1706,6 @@ async def _run_guardrail_gate(
             _log.warning("guardrails.kill_switch_active", extra={"org_id": str(org_id)})
 
         observed_by_eval = {d.id: d.config.get("action") == GuardrailAction.OBSERVE for d in guardrail_defs}
-        any_guarding = any(
-            not d.is_muted and d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
-            for d in guardrail_defs
-        )
-
         # Conformance enforcement (FAR-223 item 7 "Plus"): a block-action
         # guardrail carrying required_capabilities that the org cannot
         # satisfy blocks (fail closed — absent AND unknown) and fires a
@@ -1727,28 +1732,33 @@ async def _run_guardrail_gate(
                 skipped_guardrails,
                 blocking_eval_name,
             ) = await _run_guardrail_interception_pass(
-                org_id=org_id,
-                _run_id=run_id,
-                guardrail_defs=guardrail_defs,
-                payload=payload,
-                is_replay=request.is_replay,
-                skipped_guardrails=skipped_guardrails,
-                any_guarding=any_guarding,
-                detection_only=False,
+                _GuardrailPassRequest(
+                    org_id=org_id,
+                    guardrail_defs=guardrail_defs,
+                    payload=payload,
+                    is_replay=request.is_replay,
+                    skipped_guardrails=skipped_guardrails,
+                    any_guarding=any(
+                        not d.is_muted and d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
+                        for d in guardrail_defs
+                    ),
+                    detection_only=False,
+                )
             )
         elif conformance_blocked:
             # A conformance block is decided before enforcement. Still run every
             # definition in detection-only mode so muted siblings retain their
             # evidence, without allowing detection to clear or weaken the block.
             _, results, redactions, _, _, skipped_guardrails, _ = await _run_guardrail_interception_pass(
-                org_id=org_id,
-                _run_id=run_id,
-                guardrail_defs=guardrail_defs,
-                payload=payload,
-                is_replay=request.is_replay,
-                skipped_guardrails=skipped_guardrails,
-                any_guarding=False,
-                detection_only=True,
+                _GuardrailPassRequest(
+                    org_id=org_id,
+                    guardrail_defs=guardrail_defs,
+                    payload=payload,
+                    is_replay=request.is_replay,
+                    skipped_guardrails=skipped_guardrails,
+                    any_guarding=False,
+                    detection_only=True,
+                )
             )
         # NOTE (item 10 invariant): a conformance block (``blocked`` True via
         # the block above) must NOT clear the accumulated pin-skips collected
@@ -2259,21 +2269,6 @@ async def create_run(
     feedback_correction: dict[str, Any] | None = None,
     coalesce_key: str | None = None,
     ci_failure_coalesce_key: str | None = None,
-    # FAR-153 / §15.1 — run grouping (retry/resume attempts) + the
-    # resume-as-child thread override:
-    #
-    # * ``run_group_id``   — the ROOT run id of the group this row belongs
-    #   to (stored; NULL for roots / signal / correction / work-item
-    #   children / un-backfilled legacy rows). Required whenever
-    #   ``run_group_kind`` is set: a grouped attempt without its group id is
-    #   invisible to every group query.
-    # * ``run_group_kind`` — 'retry' | 'resume' | NULL, the closed
-    #   vocabulary in ``models.run.RUN_GROUP_KIND_VALUES``.
-    # * ``thread_id``      — langgraph thread OVERRIDE. The resume path
-    #   passes the parent's thread string so the child CONTINUES the
-    #   parent's checkpoint; every other path leaves it unset and gets the
-    #   default fresh ``f"{org}:{run_id}"`` thread (retry runs the graph
-    #   CLEAN on its own thread).
     run_group_id: uuid.UUID | None = None,
     run_group_kind: str | None = None,
     thread_id: str | None = None,

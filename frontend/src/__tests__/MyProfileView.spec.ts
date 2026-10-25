@@ -150,7 +150,7 @@ describe('MyProfileView', () => {
 
     expect(wrapper.find('[data-testid="feature-gate-disabled"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('Failed to load teams')
-    expect(wrapper.find('[data-testid="my-profile-my-teams-retry"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="error-alert-retry"]').length).toBe(1)
   })
 
   it('shows error when passwords do not match', async () => {
@@ -448,12 +448,89 @@ describe('MyProfileView HITL email alerts', () => {
     const wrapper = mount(MyProfileView)
 
     await vi.waitFor(() => {
-      expect(wrapper.find('[data-testid="my-profile-hitl-email-load-error"]').exists()).toBe(true)
+      expect(wrapper.findAll('[data-testid="error-alert-retry"]').length).toBe(1)
     })
 
     expect(wrapper.text()).toContain('Failed to load preferences')
-    expect(wrapper.find('[data-testid="my-profile-hitl-email-retry"]').exists()).toBe(true)
+    const preferenceError = wrapper.find('[data-testid="my-profile-hitl-email-section"] > div.my-profile-hitl-email-load-error')
+    expect(preferenceError.attributes('role')).toBe('alert')
+    expect(preferenceError.attributes('aria-live')).toBe('assertive')
+    expect(preferenceError.findAll('[data-testid="error-alert-retry"]').length).toBe(1)
+    expect(preferenceError.find('[data-testid="my-profile-hitl-email-retry"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="my-profile-hitl-email-save"]').exists()).toBe(false)
+  })
+
+  it('shows an actionable error and recovers when pipelines fail to load', async () => {
+    let pipelineAttempts = 0
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+      }
+      if (url === '/api/v1/pipelines') {
+        pipelineAttempts += 1
+        if (pipelineAttempts === 1) return Promise.resolve({ data: undefined, error: { detail: 'Failed to load pipelines' } })
+        return Promise.resolve({ data: PIPELINES, error: undefined })
+      }
+      return Promise.resolve({ data: PROFILE, error: undefined })
+    })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Failed to load pipelines')
+    })
+
+    expect(wrapper.text()).toContain('Failed to load pipelines')
+    expect(wrapper.text()).not.toContain('No pipelines available.')
+    const pipelinesError = wrapper.find('.my-profile-hitl-email-pipelines-error')
+    expect(pipelinesError.attributes('role')).toBe('alert')
+    expect(pipelinesError.attributes('aria-live')).toBe('assertive')
+    await pipelinesError.find('[data-testid="error-alert-retry"]').trigger('click')
+
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('[data-testid="my-profile-hitl-email-pipeline"]').length).toBe(2)
+    })
+    expect(pipelineAttempts).toBe(2)
+  })
+
+  it('shows an actionable error when the pipelines response carries no data', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+      }
+      if (url === '/api/v1/pipelines') return Promise.resolve({ data: undefined, error: undefined })
+      return Promise.resolve({ data: PROFILE, error: undefined })
+    })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Could not load pipelines for HITL email overrides.')
+    })
+
+    const pipelinesError = wrapper.find('.my-profile-hitl-email-pipelines-error')
+    expect(pipelinesError.exists()).toBe(true)
+    expect(pipelinesError.attributes('role')).toBe('alert')
+    expect(pipelinesError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('No pipelines available.')
+  })
+
+  it('shows an actionable error when the pipelines request throws', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+      }
+      if (url === '/api/v1/pipelines') return Promise.reject(new Error('Pipeline network error'))
+      return Promise.resolve({ data: PROFILE, error: undefined })
+    })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Pipeline network error')
+    })
+
+    const pipelinesError = wrapper.find('.my-profile-hitl-email-pipelines-error')
+    expect(pipelinesError.exists()).toBe(true)
+    expect(pipelinesError.attributes('role')).toBe('alert')
+    expect(pipelinesError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
   })
 
   it('shows an error and re-enables the save button when saving fails', async () => {
@@ -469,7 +546,10 @@ describe('MyProfileView HITL email alerts', () => {
     await wrapper.find('[data-testid="my-profile-hitl-email-save"]').trigger('click')
     await nextTick()
 
-    expect(wrapper.find('[data-testid="my-profile-hitl-email-error"]').text()).toContain('Save failed')
+    const saveError = wrapper.find('[data-testid="my-profile-hitl-email-error"]')
+    expect(saveError.text()).toContain('Save failed')
+    expect(saveError.attributes('role')).toBe('alert')
+    expect(saveError.attributes('aria-live')).toBe('assertive')
     expect(wrapper.text()).not.toContain('HITL email preferences saved.')
     const save = wrapper.find('[data-testid="my-profile-hitl-email-save"]')
     expect(save.attributes('disabled')).toBeUndefined()
@@ -529,6 +609,66 @@ describe('MyProfileView loading placeholders and fallbacks', () => {
     expect(hitlOutput.attributes('aria-busy')).toBeUndefined()
     expect(teamsLoading.find('[aria-busy="true"]').exists()).toBe(true)
     expect(hitlLoading.find('[aria-busy="true"]').exists()).toBe(true)
+  })
+
+  it('shows an actionable error and recovers when profile loading fails', async () => {
+    usePlanStore().currentTier = 'team'
+    let profileAttempts = 0
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/auth/me') {
+        profileAttempts += 1
+        if (profileAttempts === 1) return Promise.resolve({ data: undefined, error: { detail: 'Failed to load profile' } })
+        return Promise.resolve({ data: PROFILE, error: undefined })
+      }
+      if (url === '/api/v1/teams/my') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Failed to load profile')
+    })
+
+    expect(wrapper.text()).toContain('Failed to load profile')
+    const profileError = wrapper.find('.my-profile-profile-error')
+    expect(profileError.attributes('role')).toBe('alert')
+    expect(profileError.attributes('aria-live')).toBe('assertive')
+    expect(profileError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.find('.card p.text-lg').exists()).toBe(false)
+    expect(wrapper.text()).toContain('HITL email alerts')
+
+    await profileError.find('[data-testid="error-alert-retry"]').trigger('click')
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.card p.text-lg').text()).toContain('Test User')
+    })
+    expect(profileAttempts).toBe(2)
+  })
+
+  it('shows an actionable error when the profile request throws', async () => {
+    usePlanStore().currentTier = 'team'
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/auth/me') return Promise.reject(new Error('Profile network error'))
+      if (url === '/api/v1/teams/my') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Profile network error')
+    })
+
+    const profileError = wrapper.find('.my-profile-profile-error')
+    expect(profileError.exists()).toBe(true)
+    expect(profileError.attributes('role')).toBe('alert')
+    expect(profileError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.find('.card p.text-lg').exists()).toBe(false)
   })
 
   it('falls back to an em dash when org_role is missing', async () => {

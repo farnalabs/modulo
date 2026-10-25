@@ -124,12 +124,22 @@ Medium / Low incident detected
 
 ### 3.1 Preparation
 
+**Audit-log access prerequisite.** Recording is not licence-gated: the
+append-only, hash-chained audit trail is written on every tier. Reading it
+through the product is Team-tier: the browse, verify, export and scan routes all
+need the `audit_viewer` feature plus the `audit.manage` permission, and answer
+402 on an unlicensed Community install. The steps below that read or export the
+audit log therefore assume a Team licence. On a Community install the events are
+still recorded and hash-chained in the operator's database, but there is no
+product route to browse, verify or export them; preserve the database snapshot
+instead.
+
 **Always-in-place readiness:**
 
 - [ ] On-call rota published and current
 - [ ] PagerDuty integration tested monthly (simulated Critical alert)
 - [ ] Monitoring dashboards cover all alert signals from `docs/deployment-security.md` §6.4
-- [ ] Audit log chain integrity verified weekly: call `GET /api/v1/admin/audit/verify` (requires the `audit.manage` permission; there is no CLI wrapper)
+- [ ] Audit log chain integrity verified weekly: call `GET /api/v1/admin/audit/verify` (requires the Team-tier `audit_viewer` feature plus the `audit.manage` permission; there is no CLI wrapper). On a Community install the chain is still recorded and hash-chained, but this route answers 402, so integrity checking is the operator's own database procedure
 - [ ] Backup encryption passphrase accessible to on-call (separate from prod secrets)
 - [ ] Access to cloud provider console, deployment hosts, and DB read-replica documented in `docs/operations/break-glass-admin-recovery-runbook.md`
 - [ ] Incident channel Slack workflow tested quarterly
@@ -142,7 +152,7 @@ Medium / Low incident detected
 
 | Signal | Source | Possible Incident |
 |--------|--------|-------------------|
-| Audit chain integrity failure | `GET /api/v1/admin/audit/verify` | Log tampering, DB compromise |
+| Audit chain integrity failure | `GET /api/v1/admin/audit/verify` (Team tier) | Log tampering, DB compromise |
 | Failed login rate spike (>10/min per IP) | Backend logs / OTel | Credential stuffing, SSO probe |
 | 429 rate limit threshold crossed | Reverse proxy logs | DoS, brute force |
 | Unexpected outbound connection | Network policy logs | Data exfiltration, C2 beacon |
@@ -159,11 +169,11 @@ Medium / Low incident detected
 4. **Snapshot** current state:
    - `docker compose -f deploy/compose/docker-compose.prod.yml ps`
    - `docker compose -f deploy/compose/docker-compose.prod.yml logs modulo --tail=200`
-   - `GET /api/v1/admin/audit/verify` (audit chain integrity)
+   - `GET /api/v1/admin/audit/verify` (audit chain integrity; Team tier)
    - `GET /healthz/ready` (readiness)
 5. **Preserve** evidence before any remediation:
    - Export affected container logs: `docker compose -f deploy/compose/docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
-   - Snapshot audit log window: `GET /api/v1/admin/audit/export?page=... > incident-YYYYMMDD-audit.jsonl` (audit viewer feature; paginate to cover the window)
+   - Snapshot audit log window: `GET /api/v1/admin/audit/export?page=... > incident-YYYYMMDD-audit.jsonl` (Team-tier `audit_viewer` feature plus `audit.manage`; paginate to cover the window). On a Community install the events are still recorded, but there is no product route to export them - preserve the database snapshot instead
    - Capture Postgres connection state: `SELECT * FROM pg_stat_activity;`
    - If container compromise suspected: `docker compose -f deploy/compose/docker-compose.prod.yml exec modulo cat /proc/1/cmdline`
 6. **Determine scope:**
@@ -244,7 +254,7 @@ Medium / Low incident detected
 2. **Verify eradication:**
    - Run affected test suite: `uv run pytest backend/tests/ -k <related> -v`.
    - Run security-specific tests: `uv run pytest backend/tests/integration/ -k "rls or audit" -v` (RLS/audit coverage lives in `backend/tests/integration/`, e.g. `test_api_key_audit_rls.py`, `test_audit_append_only.py`).
-   - Confirm audit chain integrity: `GET /api/v1/admin/audit/verify`.
+   - Confirm audit chain integrity: `GET /api/v1/admin/audit/verify` (Team tier; see §3.1 for the Community-install limitation).
    - Confirm no residual access: test with revoked credentials.
 3. **Scan for secondary compromise:**
    - Check for cronjobs, scheduled tasks, or webhooks added during the window.
@@ -647,7 +657,7 @@ Once confirmed, contact security@modulo.run to re-enable SSO.
 ### 8.3 Evidence Preservation Checklist
 
 - [ ] Container logs exported: `docker compose -f deploy/compose/docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
-- [ ] Audit log window exported: `GET /api/v1/admin/audit/export` (paginated; there is no audit CLI)
+- [ ] Audit log window exported: `GET /api/v1/admin/audit/export` (Team-tier `audit_viewer` feature plus `audit.manage`; paginated; there is no audit CLI). On a Community install the events are still recorded, but there is no product route to export them - preserve the database snapshot instead
 - [ ] Database snapshot: `pg_dump -Fc modulo > incident-YYYYMMDD.dump`
 - [ ] Container image digest recorded: `docker image inspect ghcr.io/farnalabs/modulo:${TAG} | jq '.[0].RepoDigests'` (the production compose service uses the image pinned in `deploy/compose/docker-compose.prod.yml`; substitute your own registry prefix if you mirror the image)
 - [ ] Network logs captured from cloud provider (VPC flow logs, host firewall logs)

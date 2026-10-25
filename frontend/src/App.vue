@@ -51,7 +51,10 @@ const isBareRoute = computed(() => route.meta.bare === true)
 // otherwise always see LoginView — on a multi-org instance that re-renders the
 // slug step forever, so the credential form is unreachable. The bare /login
 // route keeps rendering LoginView directly.
-const ROUTE_VIEW_PUBLIC_ROUTES = new Set(['org-login', 'accept-invite', 'oauth-authorize', 'auth-callback'])
+// FAR-2114: ``licence-claim`` is public for the same reason as the invite —
+// the customer may have no account on this deployment at all, and the endpoint
+// is admitted by the signed licence keys, not a browser session.
+const ROUTE_VIEW_PUBLIC_ROUTES = new Set(['org-login', 'accept-invite', 'oauth-authorize', 'auth-callback', 'licence-claim'])
 const showsPublicRouteView = computed(
   () => !isAuthenticated.value && ROUTE_VIEW_PUBLIC_ROUTES.has(route.name as string),
 )

@@ -1,12 +1,19 @@
 """Tests for modulo.core.stripe_fulfilment — idempotent purchase fulfilment."""
 
 from collections.abc import Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from modulo.core.email_service import EmailSendingError
-from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, REASON_SIGNATURE_MISMATCH, parse_and_verify, set_public_key
+from modulo.core.license import (
+    _LICENSE_PUBLIC_KEY_HEX,
+    REASON_SIGNATURE_MISMATCH,
+    RENEWAL_MODE_AUTO,
+    RENEWAL_MODE_MANUAL,
+    parse_and_verify,
+    set_public_key,
+)
 from modulo.core.license_signing import LicenseSigningError
 from modulo.core.registry.crypto import generate_keypair
 from modulo.core.stripe_fulfilment import (
@@ -225,3 +232,61 @@ class TestFulfilTeamPurchase:
             )
         assert license_key is not None
         mock_send.assert_not_called()
+
+    async def test_claim_race_after_email_returns_none(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A concurrent delivery can win the post-email claim after this
+        delivery's pre-email duplicate check passed. The losing delivery must
+        not report success: it returns ``None`` (the winner owns fulfilment)
+        and logs the duplicate, while the email has already been sent once."""
+        settings = _make_settings()
+        with (
+            patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send,
+            patch("modulo.core.stripe_fulfilment._is_event_claimed", new=AsyncMock(return_value=False)),
+            patch("modulo.core.stripe_fulfilment._claim_event_id", new=AsyncMock(return_value=False)),
+            caplog.at_level("INFO", logger="modulo.core.stripe_fulfilment"),
+        ):
+            result = await fulfil_team_purchase(
+                settings,
+                event_id="evt_claim_race",
+                customer_email="bob@acme.com",
+                org_name="Acme",
+            )
+        assert result is None
+        mock_send.assert_called_once()
+        assert "duplicate_event" in caplog.text
+        assert "evt_claim_race" in caplog.text
+
+    async def test_subscription_purchase_mints_auto_renewal(self) -> None:
+        """FAR-2136: a subscription purchase's key says ``auto``, so the shell's
+        renewal notice states the renewal date and offers no purchase path."""
+        settings = _make_settings()
+        with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)):
+            license_key = await fulfil_team_purchase(
+                settings,
+                event_id="evt_sub_auto",
+                customer_email="bob@acme.com",
+                org_name="Acme",
+                renewal_mode=RENEWAL_MODE_AUTO,
+            )
+        assert license_key is not None
+        validation = parse_and_verify(license_key)
+        assert validation.license_data is not None
+        assert validation.license_data.renewal_mode == RENEWAL_MODE_AUTO
+
+    async def test_default_fulfilment_mints_manual_renewal(self) -> None:
+        """A caller that does not state the mode can never promise a renewal."""
+        settings = _make_settings()
+        with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)):
+            license_key = await fulfil_team_purchase(
+                settings,
+                event_id="evt_default_manual",
+                customer_email="bob@acme.com",
+                org_name="Acme",
+            )
+        assert license_key is not None
+        validation = parse_and_verify(license_key)
+        assert validation.license_data is not None
+        assert validation.license_data.renewal_mode == RENEWAL_MODE_MANUAL

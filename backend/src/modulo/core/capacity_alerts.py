@@ -74,6 +74,7 @@ from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modulo.core.alert_dispatch import build_notifier, read_alert_state
 from modulo.core.analytics.capacity import CapacityParams, read_capacity_report
 from modulo.core.notifier import (
     EVENT_CAPACITY_BACKPRESSURE,
@@ -400,17 +401,14 @@ def _decode(raw: Any) -> str:
 
 
 async def _read_state(redis_client: AsyncRedis, key: str) -> dict[str, Any] | None:
-    raw = await redis_client.get(key)
-    if raw is None:
-        return None
-    try:
-        parsed = json.loads(_decode(raw))
-    except (json.JSONDecodeError, TypeError):
-        # A corrupt state blob is treated as absent so the subject can re-alert
-        # (never as "an alert is open", which would silence it forever).
-        _log.warning("capacity_alerts.state_unreadable key=%s", key)
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    # FAR-2116: the state read is shared with the pipeline-decay sweep so the
+    # "corrupt blob means absent" decision cannot drift between the two.
+    return await read_alert_state(
+        redis_client,
+        key,
+        logger=_log,
+        event="capacity_alerts",
+    )
 
 
 async def _write_state(redis_client: AsyncRedis, key: str, *, rung: int, label: str, now: datetime) -> None:
@@ -604,11 +602,8 @@ def _recovered_payload(*, subject_label: str, previous_rung: int) -> dict[str, A
 
 
 def _build_notifier(settings: Settings) -> Any:
-    """Build the shared Notifier (lazy imports keep the cron graph light)."""
-    from modulo.core.cron_helpers import _get_engine
-    from modulo.core.notifier import Notifier
-
-    return Notifier(_get_engine(), settings.fernet_key)
+    """Build the shared Notifier (one definition, shared with decay alerts)."""
+    return build_notifier(settings)
 
 
 async def _dispatch(

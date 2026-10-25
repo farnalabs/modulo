@@ -426,9 +426,11 @@ class TestPendingLegRedispatchesTheFencedResetRow:
         # NOT ``is_replay``, which webhook/manual replay also set).
         # FAR-1803 adds the THIRD binding: its own POSITIVE match (the
         # node-started / executor-lost leg — counted, never re-dispatched).
-        # A fourth binding would mean yet another leg started binding the
-        # phase — inspect before relaxing this.
-        assert len(phase_params) == 3
+        # FAR-2122 adds the FOURTH: its own POSITIVE match for the NON-SAQ
+        # node-started class (checkpoint resume, never re-execution). A fifth
+        # binding would mean yet another leg started binding the phase —
+        # inspect before relaxing this.
+        assert len(phase_params) == 4
 
     async def test_pending_node_started_reset_row_is_redispatched(self, monkeypatch: Any) -> None:
         """The REGRESSION test: a pending + dispatcher='saq' + old-

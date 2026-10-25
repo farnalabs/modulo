@@ -143,6 +143,16 @@ EXEMPT: dict[tuple[str, str], str] = {
     # Stripe: Stripe-Signature (HMAC-SHA256 of the raw body with the webhook
     # secret) is the authorization (exempt channel, mirrors the trigger webhook).
     ("POST", "/api/v1/webhooks/stripe"): "Stripe-Signature HMAC channel",
+    # FAR-2109: the post-purchase early-renewal claim. Admission is the
+    # Ed25519 signature of BOTH licence keys presented in the body (the
+    # purchase key and the previous licence), verified against the configured
+    # anchor. The caller is a purchaser with no account on this deployment, so
+    # there is no principal to permission-tag; nothing is minted unless both
+    # keys verify.
+    (
+        "POST",
+        "/api/v1/webhooks/stripe/renewal-claim",
+    ): "Ed25519-signed licence-key pair is the admission basis (no principal)",
     (
         "POST",
         "/api/v1/triggers/{trigger_id}/webhook/replay/{event_id}",

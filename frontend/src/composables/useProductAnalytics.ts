@@ -21,6 +21,9 @@ import { randomId } from '../lib/randomId'
  * `productAnalyticsEvents.ts`.
  *
  * No PII is captured: no names, emails, user IDs, IPs, URLs, query strings.
+ * The backend applies the event-type payload allowlist again at the ingest
+ * boundary; client payloads therefore remain curated even if a caller passes
+ * extra fields.
  * `event_id` is a per-session prefix plus a monotonic counter, serialised as a
  * string. A bare counter is not unique: the backend dedups on
  * (organisation_id, event_id), so a counter restarting at 1 on every page load

@@ -557,6 +557,44 @@ per-trigger `config_json` values (`max_no_delivery_streak`,
 
 ---
 
+## Pipeline Health Alerts (pipeline decay)
+
+Readiness checks answer "is the app up". They do not answer "is a pipeline still
+doing its job": a webhook-triggered pipeline can run constantly, fail most of
+the time, and never make the instance unhealthy (observed: a pipeline at a 35%
+success rate for five days while every readiness probe stayed green).
+
+The pipeline-decay sweep (`core/pipeline_decay_alerts.py`, wired into the same
+60-second `dispatcher_reconcile` tick as the capacity sweep) measures every
+**webhook-triggered** pipeline over a rolling **2-hour** window and raises a
+`pipeline_decay` in-app notification / webhook event when either condition
+holds:
+
+| Condition | Threshold | Notes |
+|-----------|-----------|-------|
+| Rolling success rate | **below 80%** of terminal runs, with at least **5** terminal runs in the window | The rate counts `cancelled` in the denominator (the same numerator/denominator shape `/analytics` publishes). A single failed run is exactly 80% of five and never alerts |
+| Node-deadline watchdog firings | **5 or more** firings in the 2-hour window | `runs.node_deadline_watchdog_fired_count` summed over the window's runs — repeated killing of nodes that blew their per-attempt deadline |
+
+Noise control: **one alert per pipeline per incident**. The open state is kept
+in Redis (7-day TTL backstop) so a sustained degradation notifies once; a
+`pipeline_decay_recovered` event closes it when the rate recovers to 90% or
+above (80–90% holds the alert rather than flapping it), when the watchdog
+count drops to 2 or fewer, or when the pipeline leaves the window. Deduplication
+state is the noise guard, so if Redis is unavailable the sweep **skips**
+dispatch rather than risk a storm, and reports `state_unavailable` plus a
+WARNING.
+
+Both events are subscribable on the admin notification endpoints (see
+`GET /api/v1/admin/notifications/available-events`), so a pager can be wired to
+them. Nothing here gates or refuses admission — it is signal, not enforcement.
+
+The sweep's aggregate is served by the partial index
+`ix_runs_webhook_decay_sweep` (migration 0334): only webhook-triggered terminal
+runs enter it, keyed on `completed_at`, so the per-minute window read is a
+bounded index scan rather than a scan of `runs`.
+
+---
+
 ## Organisation Settings (`settings_json`)
 
 Per-organisation configuration is stored in the `settings_json` column of the

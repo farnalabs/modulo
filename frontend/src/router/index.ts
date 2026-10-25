@@ -85,7 +85,6 @@ const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
 const EvidenceView = () => import('../views/EvidenceView.vue')
 const RiskAssessmentView = () => import('../views/RiskAssessmentView.vue')
-const EvidenceIndexView = () => import('../views/EvidenceIndexView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
 const AdminFeatureFlagsView = () => import('../views/AdminFeatureFlagsView.vue')
 const AdminPluginsView = () => import('../views/AdminPluginsView.vue')
@@ -141,6 +140,7 @@ const ParameterSchemasView = () => import('../views/ParameterSchemasView.vue')
 const OAuthConsentView = () => import('../views/OAuthConsentView.vue')
 const DemoView = () => import('../views/DemoView.vue')
 const AcceptInviteView = () => import('../views/AcceptInviteView.vue')
+const LicenceClaimView = () => import('../views/LicenceClaimView.vue')
 const AssistantOnlyView = () => import('../views/AssistantOnlyView.vue')
 
 const router = createRouter({
@@ -203,6 +203,17 @@ const router = createRouter({
       name: 'accept-invite',
       component: AcceptInviteView,
       meta: { public: true, breadcrumb: 'Accept Invitation' },
+    },
+    {
+      // Early-renewal claim (FAR-2114): the post-purchase step for a customer
+      // who renewed BEFORE their previous licence expired. Public by design —
+      // the endpoint is admitted by the signed purchase key plus the presented
+      // previous licence, and the customer may have no account on this
+      // deployment. Reachable from the renewal banner and the License page.
+      path: '/licence/claim',
+      name: 'licence-claim',
+      component: LicenceClaimView,
+      meta: { public: true, breadcrumb: 'Add Your Remaining Days' },
     },
     {
       path: '/',
@@ -468,7 +479,7 @@ const router = createRouter({
     {
       path: '/admin/evidence',
       name: 'admin-evidence-index',
-      component: EvidenceIndexView,
+      component: ComplianceEvidenceIndexView,
     },
     {
       path: '/admin/model-backends',

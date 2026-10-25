@@ -2,12 +2,18 @@ import { test as base, expect, type Page } from '@playwright/test'
 import { startCoverage, stopCoverage } from './coverage'
 import { getTestEnv, type TestEnv } from './env'
 import { loginThroughUi } from './login'
+import { installTeamTierNavigationGuard } from './target-tier'
 
 export const test = base.extend<{ env: TestEnv }>({
   env: async ({}, use) => {
     await use(getTestEnv())
   },
-  page: async ({ page }, use) => {
+  page: async ({ page, env }, use, testInfo) => {
+    // Staging is the CI-only Community-tier E2E environment; a team-tier page
+    // can only redirect to the dashboard there. Skip such a navigation with a
+    // clear reason instead of failing the heading assertion (see
+    // setup/target-tier.ts). Inert on local / a Team-licensed target.
+    installTeamTierNavigationGuard(page, env, (reason) => testInfo.skip(true, reason))
     const enabled = process.env.VITE_COVERAGE === 'true'
     if (enabled) await startCoverage(page)
     await use(page)

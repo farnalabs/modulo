@@ -72,6 +72,22 @@ routes:
         deprecated: false
         exact: true
 
+    # FAR-2114: public post-purchase surface (no session, no sidebar). The
+    # endpoint is admitted by the signed licence keys, so the page is listed
+    # here for the product map / Assistant index and registered in App.vue's
+    # public-route-view set — not in the authenticated sidebar.
+    /licence/claim:
+        name: licence-claim
+        breadcrumb: Add Your Remaining Days
+        parent:
+        product_map: [feat-license]
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+        exact: true
+
     /onboarding:
         name: onboarding
         breadcrumb: Onboarding
@@ -763,8 +779,8 @@ routes:
          sidebar_order:
          type: page
          <<: *community
-         required_roles: [admin]
-         deprecated: false
+         required_permissions: [compliance.evidence_index.read]
+         deprecated: true
 
     /admin/compliance/evidence-index:
         name: admin-compliance-evidence-index
@@ -1129,6 +1145,61 @@ elements:
         dynamic_testid: false
       - testid: accept-invite-success
         type: element
+        dynamic_testid: false
+    /licence/claim:
+      - testid: licence-claim-title
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-purchase-key
+        type: textarea
+        dynamic_testid: false
+      - testid: licence-claim-previous-key
+        type: textarea
+        dynamic_testid: false
+      - testid: licence-claim-error
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-error-detail
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-submit
+        type: button
+        dynamic_testid: false
+      - testid: licence-claim-stacked
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-stacked-title
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-unstacked
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-unstacked-title
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-key-value
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-copy
+        type: button
+        dynamic_testid: false
+      - testid: licence-claim-copy-error
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-expiry
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-previous-expiry
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-days-kept
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-detail
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-again
+        type: button
         dynamic_testid: false
     /admin/audit:
       - testid: admin-audit-verify-chain
@@ -3241,6 +3312,129 @@ elements:
         dynamic_testid: false
       - testid: eval-editor-config
         type: textarea
+        dynamic_testid: false
+      - testid: eval-editor-judging
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-deterministic-type
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-backing-kind
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-backing-model
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-backing-vendor
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-backing-model-class
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-backing-preview
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-verdict-kind
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-derivation-warning
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-field
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-judge-whole-output
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-context-fields
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-add
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-question-remove
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-id
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-type
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-question-instructions
+        type: textarea
+        dynamic_testid: false
+      - testid: eval-editor-question-criteria
+        type: textarea
+        dynamic_testid: false
+      - testid: eval-editor-question-weight
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-min-confidence
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-required
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-add-option
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-option-key
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-option-description
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-option-passing
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-option-score
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-remove-option
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-add-level
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-level-score
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-level-description
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-remove-level
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-pass-from
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-pass-rule-threshold
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-timeout-question
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-timeout-definition
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-client-errors
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-server-error
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-legacy-notice
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-migrate-legacy
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-judge-display
+        type: element
         dynamic_testid: false
       - testid: eval-editor-pass-threshold
         type: input
@@ -5643,6 +5837,12 @@ elements:
       - testid: license-apply-btn-system
         type: button
         dynamic_testid: false
+      - testid: license-remove-btn-system
+        type: button
+        dynamic_testid: false
+      - testid: licence-claim-link
+        type: element
+        dynamic_testid: false
       - testid: licence-renewal-banner
         type: element
         dynamic_testid: false
@@ -5651,6 +5851,9 @@ elements:
         dynamic_testid: false
       - testid: licence-renewal-install-action
         type: button
+        dynamic_testid: false
+      - testid: licence-renewal-claim-link
+        type: link
         dynamic_testid: false
       - testid: licence-grace-dialog
         type: element
@@ -6733,7 +6936,7 @@ features:
             - "[x] The /evidence route renders under the MONITOR sidebar group; EvidenceView.vue fetches the already-redacted payload and renders it as-is with NO client-side redaction or conditional field hiding, with i18n-backed strings and role=status/aria-live status regions (frontend/src/views/EvidenceView.vue, frontend/src/manifest.yaml)"
             - "[x] The /admin/evidence-redaction route (ADMIN sidebar group) renders AdminEvidenceRedactionView.vue, which lists the org's rules and creates/edits them through the PUT /api/v1/evidence/redaction-rules upsert keyed on (key_pattern, role): creating needs an unused pair and at least one redacted class (both rejected inline before any request), editing keeps key_pattern/role immutable and changes only redacted_fields, and the page has no delete surface; redacted_fields is limited to the backend REDACTION_CLASS_FIELDS vocabulary (an unrecognised stored class stays visible so it can be removed, and an unrecognised stored role is shown read-only with Save disabled). The seeded '*' / viewer catch-all is shown as mandatory, and the page explains the per-role fail-closed default — it configures the SERVER boundary only and never redacts or hides evidence values client-side (frontend/src/views/AdminEvidenceRedactionView.vue, frontend/src/manifest.yaml)"
             - "[x] The /admin/compliance/evidence-index route fetches GET /api/v1/compliance/evidence-index with the compliance.evidence_index.read permission, renders pack metadata, framework coverage counts, present/absent/customer-supplied artefacts, identifiers/locations/provenance/mapping row IDs, missing artefact warnings and the human-only lower-bound warning; customer-responsibility rows are explained as customer-owned records because the API intentionally omits them (frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
-            - "[x] The /admin/evidence route renders the operator/admin evidence index from GET /api/v1/compliance/evidence-index, showing pack metadata, completeness, missing artefact types, and each indexed artefact's status, provenance, record count, and location (frontend/src/views/EvidenceIndexView.vue, frontend/src/stores/evidence.ts)"
+            - "[x] The canonical /admin/compliance/evidence-index route renders ComplianceEvidenceIndexView.vue for the compliance evidence index, and the deprecated /admin/evidence route remains a compatibility alias to that same view; both routes use GET /api/v1/compliance/evidence-index to show pack metadata, completeness, missing artefact types, and each indexed artefact's status, provenance, record count, and location (frontend/src/router/index.ts, frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
         deferrals:
             - "Risk/Assessment (sub-scope B, FAR-941) is a separate ticket and is not part of this entry; the decision-record NULL-duplicate grouping (acceptance criteria 12-14) belongs to the decision-record read path and is not implemented here"
     feat-risk-assessment:
@@ -6783,6 +6986,7 @@ features:
         status: covered
         behaviours:
             - "[x] The eval editor creates, configures, and deletes evaluation definitions per pipeline node"
+            - "[x] The eval editor's free-form config textarea is a typed-question builder behind a two-axis Judging control (ADR 066 D4/D19): the mechanism axis offers only Typed questions or Deterministic (never a flat list mixing a deterministic eval_type with a backing); a typed judge declares a backing (a model backend, displayed as the model via its provider with 'LLM, self-reported confidence', or a decision model whose class label comes from the single locale 'System One model' value — no view composes that phrase), and each question is edited as noul (instructions, criteria, weight, required, min_pass_confidence), choice (2–255 unique option keys with descriptions, passing keys, optional 0–1 option_scores) or score (2–10 ordered levels, pass_from), with a per-question dotted field, top-level context_fields, pass_rule.threshold and timeouts; the emitted config_json is exactly the server's TypedJudgeConfig wire shape (snake_case, no extra keys, no pass_threshold), the editor mirrors the server's bounds client-side, the server's typed 422 codes (judge_config_invalid / judge_verdict_kind_unsupported / judge_backend_*) render inline, verdict_kind=derivation is blocked with an explanation because typed judges are weaker where the verdict must be derived, and a stored legacy prompt judge stays read-only until explicitly migrated (frontend/src/views/EvalEditorView.vue, frontend/src/components/eval/typedJudge.ts, frontend/src/__tests__/EvalEditorView.spec.ts, frontend/src/__tests__/EvalEditorViewTypedJudge.spec.ts, backend/src/modulo/core/eval_engine/typed_judge/config.py)"
             - "[x] The proposal queue surfaces eval proposals for review and supports publish / dismiss (the API publish endpoint creates a live eval definition; the /evals/proposals view's publish currently marks the proposal resolved)"
             - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
             - "[x] Eval policy-gate binding (POST/PUT /api/v1/evals/{eval_id}/policy-gate) runs the FAR-957 advisory author-warning checks for the eval's evidence_key and the PolicyGateResponse carries non-blocking warnings (no_producer / temporal_ordering / recent_undefined) — warning on the safe direction so a racy or indeterminate evidence key is surfaced without ever preventing binding (backend/src/modulo/core/eval_engine/author_warnings.py, backend/tests/unit/core/evidence/test_author_warnings.py, docs/product-map/core/evidence-store.md)"
@@ -6890,6 +7094,8 @@ features:
             - "[x] Plan/license-based gating is wired at the composition root (require_feature / get_plan_context): the Team-tier licensed surfaces (SSO administration, /api/v1/teams, audit export, admin spend limits) return 402 naming the gated feature without a valid Team license and pass with one; SSO AUTHENTICATION entry points are exempt from that 402 when NO license resolves at all, so a lapse never locks an administrator out of the licence screen (env-var SAML availability/config are configuration-only; FAR-2059/FAR-2060); the license resolves from the org settings with a system-license fallback (team_gates.feature, test_sso_licence_admin_invariant.py, docs/product-map/licensing/license.md)"
             - "[x] The authenticated shell surfaces a backend-derived renewal state (FAR-2075): GET /api/v1/admin/license returns `licence_state` (none | active | renewal_due | grace | lapsed), `days_until_expiry` and `grace_ends_at`, derived once from `expires_at` + `LICENCE_GRACE_DAYS` in `derive_licence_state`; the shell reads that status once per session for org admins and renders the notice on EVERY authenticated route (not only the licence page) without comparing dates itself — `renewal_due` shows a countdown banner that offers a purchase path ONLY for a manual renewal (an auto-renewing licence is never invited to buy again), `grace` shows a dismissible dialog that returns on the next visit until the licence is renewed, with two equally-weighted actions (install a key the customer may never have received, or buy a new licence), and `lapsed` explains that Team capability is off and where to install a key; the licence page reuses the same query instead of issuing a second read (backend/src/modulo/api/routes/admin_license.py, frontend/src/components/AppLayout.vue, frontend/src/components/licence/LicenceRenewalNotice.vue, backend/tests/unit/api/test_admin_license.py, frontend/src/__tests__/LicenceRenewalNotice.spec.ts, frontend/src/__tests__/components/AppLayoutLicenceBanner.spec.ts)"
             - "[x] The licence screen's audience is ONE permission, not a parallel role check (FAR-2104): /settings/license sits in the ADMIN group with `required_permissions: [org.license.manage]` and a community tier floor, so an org admin — and a deployment whose licence has lapsed — can reach the page and install a key; the authenticated shell derives the renewal notice's audience from the same permission (frontend/src/composables/useLicenceAccess.ts → the server-resolved GET /api/v1/auth/permissions list) instead of an `orgRole === admin` check; the page splits the scopes — an org admin installs/removes the organisation's key via PUT/DELETE /api/v1/admin/orgs/{org_id}/license, while the instance-wide POST /api/v1/admin/license controls render only for a system admin (system.config.manage); GET /api/v1/admin/license is require_system_or_org_admin so the read admits exactly the principals those writes admit, and backend/tests/unit/api/test_admin_license_permission_agreement.py pins the agreement so the surfaces cannot drift apart again"
+            - "[x] The INSTANCE-WIDE licence can be removed without a restart (FAR-2110): DELETE /api/v1/admin/license (guarded by the strict system-admin `system.config.manage`, so an org admin gets 403) clears the in-memory system licence and busts every cached `license:{org_id}` status entry, so GET /api/v1/admin/license immediately reports has_license false / licence_state none for an org falling back to the system key and Team-gated routes return 402; the system card renders a Remove control only for a caller holding system.config.manage (frontend/src/composables/useLicenceAccess.ts), and the removal is audited as license_removed on resource license (backend/tests/unit/api/test_admin_license.py, frontend/src/__tests__/SettingsLicenseView.spec.ts)"
+            - "[x] Early-renewal claim is reachable by a customer without a session (FAR-2114): the public /licence/claim page (meta.public, rendered outside the authenticated shell) posts the purchase key plus an optional previous licence to POST /api/v1/webhooks/stripe/renewal-claim; a stacked response shows the new key (copyable) with the new expiry, the previous expiry and the days carried over, an unstacked response is presented as a legitimate success (no time added, purchase key unchanged, re-submit with the previous licence) rather than an error, and every rejection reason (malformed / signature_mismatch / anchor_mismatch / expired / org_mismatch / same_licence / not_a_purchase_key / no_expiry / no_presented_key) renders an actionable message; the renewal banner and the License page link to it (frontend/src/views/LicenceClaimView.vue, frontend/src/router/index.ts, frontend/src/views/SettingsLicenseView.vue, frontend/src/components/licence/LicenceRenewalNotice.vue, backend/src/modulo/api/routes/stripe_webhook.py)"
             - "[ ] License-driven gating is not applied to EVERY registered feat-* surface — gating targets the licensed Team-tier surfaces, not the whole feature registry"
         deferrals:
             - "Universal license gating of every registered feature is tracked under feat-license"
@@ -7048,6 +7254,7 @@ features:
         behaviours:
             - "[x] The plugin registry lists installed plugins and their entry point groups"
             - "[x] Plugins support connector, model-backend, eval, and schema-type entry points"
+            - "[x] Plugin discovery fails soft when the metadata provider or an individual entry-point object raises: the error is logged, the broken plugin is represented as unhealthy, and healthy siblings remain discoverable (core/plugin_registry.py)"
             - "[ ] Plugin lifecycle management (install, enable, disable, uninstall) is not exposed through the registry API — the registry is read-only (importlib.metadata discovery at startup) and plugin installation/removal/upgrade is deliberately left to pip"
         deferrals:
             - "Plugin lifecycle management via the registry API is tracked under feat-plugins (install/enable/disable/uninstall stay pip-managed today); the /admin/plugins UI is a private_preview surface"
@@ -7119,6 +7326,10 @@ features:
             # Run -> pipeline-version link (FAR-1813)
             - "[x] The runs list row and the run detail render the pipeline NAME as a real focusable link to the version that run executed (/pipelines/{pipeline_id}/editor?snapshot={snapshot_id}), built ONLY from that run's own snapshot_id so a rerun links to the source snapshot it re-executed and never to the pipeline head; a legacy run with snapshot_id NULL links to the live editor with a title stating the run has no recorded version, a deleted pipeline (pipeline_name NULL) renders plain text instead of a dead link, and the list row keeps a separate 'View run' link so run detail stays reachable now the name opens the version (frontend/src/components/runs/RunPipelineVersionLink.vue, RunsListView.vue, RunDetailView.vue, RunPipelineVersionLink.spec.ts)"
             - "[x] The same run surfaces show WHICH pipeline version the run executed as a compact `v{n}` chip beside the pipeline name (RunResponse.snapshot_version, forwarded by RunsListView/RunDetailView): the chip renders only for a positive integer version (a bool, numeric string, non-integer, NaN/Infinity or 0 renders no chip; a legacy run with snapshot_version NULL renders NO chip at all — absence, never `v0`/`vnull`/placeholder), and it sits INSIDE the pipeline link when a link target exists so the pipeline-name control (name + chip, not the whole row) stays ONE tab stop with ONE accessible name ('my-pipeline v3'), while a deleted pipeline (no link target) still shows the chip as plain non-interactive content because the version describes the RUN — never a second focusable element and never a dead link; label/tooltip are locale keys under components.RunPipelineVersionLink (frontend/src/components/runs/RunPipelineVersionLink.vue, RunsListView.vue, RunDetailView.vue, locales/en-US.js, RunPipelineVersionLink.spec.ts, RunsListView.spec.ts, RunDetailView.spec.ts)"
+            # Durable per-attempt execution history (FAR-2078)
+            - "[x] Every execution ATTEMPT of a run is recorded durably, not only the final one (FAR-2078): run_attempts (migration 0329, org-scoped with the rls_org_isolation policy, run_id + organisation_id FKs ON DELETE CASCADE so retention inherits the parent run — no separate sweep) carries a 0-based, per-run contiguous and monotonic attempt_index (unique with run_id; the COALESCE(MAX, -1) + 1 allocator is serialised on Postgres by a transaction-scoped per-run advisory lock so concurrent starters cannot collide), started_at, nullable ended_at, model_used, error_code and a CLOSED terminal_reason vocabulary (deadline / stall / guard_cap / worker_lost / provider_error / completed / reset — NULL means the attempt is OPEN, enforced by ck_run_attempts_terminal_reason and rejected pre-write by the closer); the executor opens a row on admission (a demoted claim or a fence-rejected budget bump opens none, and an attempt-row write failure never fails admission) and closes the latest open row on a terminal outcome — an awaiting-human attempt stays OPEN, a retry/watchdog re-dispatch and a handed-back worker loss close as reset, and a fenced-out terminal write closes nothing — so the intermediate attempts that previously left no durable record are diagnosable (backend/src/modulo/db/models/run_attempt.py, backend/src/modulo/db/crud/run_attempts.py, backend/src/modulo/db/migrations/versions/0329_run_attempts.py, backend/src/modulo/core/pipeline_execution.py, backend/src/modulo/core/pipeline_engine/executor.py, test_run_attempts.py, test_migration_0329_run_attempts.py, test_far2078_attempt_instrumentation.py)"
+            - "[x] GET /api/v1/runs/{run_id}/attempts returns the run's attempt history ordered by attempt_index ascending, gated on the SAME viewer-level run.status permission as run detail (require_permission_any_credential, so JWT and org API-key callers both work, deliberately not a new permission key): the run is loaded org-scoped behind set_rls_org, so a missing run AND another organisation's run both answer 404 — never an empty list, which would leak existence semantics; items is capped at 100 while total carries the run's true attempt count so a truncated page is visible rather than silently reported as complete, and the route follows the shared database-error convention (backend/src/modulo/api/routes/runs.py, test_run_attempts_endpoint.py)"
+            - "[x] The run detail page renders the attempt history (RunAttemptHistory.vue) as a STATIC record, deliberately NOT an aria-live region: 1-based attempt numbers over the 0-based wire index, started time, duration (an OPEN attempt reads as running and an unparseable interval as a dash, never a fabricated duration), terminal reason translated from the closed vocabulary (an unrecognised value reads as a translated Unknown, never the raw enum), model and error code; loading, empty (older runs with no recorded attempts) and an inline unavailable + Retry state are all handled without breaking the rest of the page (a 404 or generic fetch failure degrades to unavailable), a monotonic request id discards a stale response when the run id changes mid-flight, and a truncation note appears when total exceeds the returned items (frontend/src/components/runs/RunAttemptHistory.vue, frontend/src/views/RunDetailView.vue, frontend/src/__tests__/RunAttemptHistory.spec.ts)"
     feat-runtime:
         description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
         status: covered

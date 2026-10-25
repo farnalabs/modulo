@@ -760,6 +760,42 @@ class TestFireOngoingTrigger:
         assert "runs.dispatched_at IS NULL" in sql
         assert "'pending'" in sql, "the recovery predicate must admit pending runs"
 
+    def test_node_started_visibility_leg_can_be_excluded(self) -> None:
+        """FAR-1803's leg only makes the node-started/dead-executor class
+        VISIBLE (``dispatcher_reconcile`` counts it and returns without
+        re-dispatching), so the D8 sweep asks for the predicate WITHOUT it —
+        otherwise that row is judged recoverable and FAR-1808's bounded reclaim
+        never runs. The leg's ``IS NOT true`` guardrail predicate is the
+        discriminator: the FAR-1728 resume leg uses a positive ``IS true``."""
+        from sqlalchemy.dialects import postgresql
+
+        kwargs = {
+            "reenqueue_window": 300,
+            "stale_window": 600,
+            "capacity_redispatch_seconds": 120,
+            "nodeless_window": 20,
+            "early_detect_minutes": None,
+        }
+
+        def _compiled(*, include: bool | None) -> str:
+            extra = {} if include is None else {"include_node_started_executor_lost": include}
+            predicate = ch.reconciler_recovery_predicate(**kwargs, **extra)
+            return str(
+                predicate.compile(
+                    dialect=postgresql.dialect(),
+                    compile_kwargs={"literal_binds": True},
+                )
+            )
+
+        assert "IS NOT true" in _compiled(include=True)
+        assert "IS NOT true" not in _compiled(include=False)
+        assert _compiled(include=False) != _compiled(include=True)
+        # Excluding the visibility leg must not drop a real recovery branch.
+        assert "runs.dispatched_at IS NULL" in _compiled(include=False)
+        # Default keeps the reconciler scan's leg (it must still COUNT the
+        # class) — the sweep opts out explicitly.
+        assert "IS NOT true" in _compiled(include=None)
+
 
 # ---------------------------------------------------------------------------
 # _advance_ongoing_next_fire — scan cadence advance

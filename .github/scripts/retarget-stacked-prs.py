@@ -234,13 +234,12 @@ def parse_args(argv):
 
 def write_outputs(github_output, protected, retargeted) -> None:
     """Write the step outputs. Called on EVERY path so downstream never sees ''."""
-    if not github_output:
-        return
-    protected_str = " ".join(sorted(protected))
-    retargeted_str = " ".join(str(n) for n in retargeted)
-    with Path(github_output).open("a", encoding="utf-8") as fh:
-        fh.write(f"protected_branches={protected_str}\n")
-        fh.write(f"retargeted_prs={retargeted_str}\n")
+    if github_output:
+        protected_str = " ".join(sorted(protected))
+        retargeted_str = " ".join(str(n) for n in retargeted)
+        with Path(github_output).open("a", encoding="utf-8") as fh:
+            fh.write(f"protected_branches={protected_str}\n")
+            fh.write(f"retargeted_prs={retargeted_str}\n")
 
 
 def run(argv, run_gh=_run_gh, github_output=None) -> int:

@@ -30,6 +30,7 @@ from modulo.core.eval_engine.typed_judge import (
 )
 from modulo.db.models import Base
 from modulo.db.models.eval import Eval
+from modulo.db.models.model_backend import ModelBackend
 
 _LEGACY_CONFIG = {"field": "output", "model_backend_id": str(uuid.uuid4()), "instructions": "grade it"}
 
@@ -59,7 +60,7 @@ def _typed_config() -> dict:
 async def session():
     engine = create_async_engine("sqlite+aiosqlite://")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=[Eval.__table__])
+        await conn.run_sync(Base.metadata.create_all, tables=[Eval.__table__, ModelBackend.__table__])
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:
         yield s
@@ -302,6 +303,26 @@ class TestChokepoint:
 
     async def test_update_path_allows_a_typed_config(self, session) -> None:
         org = uuid.uuid4()
+        new_config = _typed_config()
+        # A typed write now also resolves its referenced backend (ADR 066 D4),
+        # so the fixture seeds one that the write may legitimately use.
+        session.add(
+            ModelBackend(
+                id=uuid.UUID(new_config["backing"]["model_backend_id"]),
+                organisation_id=org,
+                name="judge-backend",
+                display_name="Judge backend",
+                provider="openai",
+                model_id="gpt-4o-mini",
+                credentials_ciphertext=b"ciphertext",
+                status="active",
+                account_id=org,
+                visibility="org",
+                tier="native",
+                cost_tracking="enabled",
+                currency="USD",
+            )
+        )
         row = Eval(
             organisation_id=org,
             pipeline_id=uuid.uuid4(),
@@ -322,7 +343,7 @@ class TestChokepoint:
             node_id=None,
             name="judge",
             eval_type="model_judge",
-            config_json=_typed_config(),
+            config_json=new_config,
             failure_behaviour="warn",
             pass_threshold=None,
             suite_id=None,

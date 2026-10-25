@@ -19,7 +19,9 @@
       data-testid="admin-users-loading"
     />
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadUsers" />
+    <div v-else-if="error" aria-live="assertive">
+      <ErrorAlert :message="error" :on-retry="loadUsers" />
+    </div>
 
     <EmptyState
       v-else-if="users.length === 0"
@@ -131,13 +133,9 @@
         :aria-label="$t('common.loading')"
         data-testid="admin-invitations-loading"
       />
-      <p
-        v-else-if="invitationsError"
-        class="text-sm text-destructive"
-        data-testid="admin-invitations-error"
-      >
-        {{ invitationsError }}
-      </p>
+      <div v-else-if="invitationsError" aria-live="assertive" data-testid="admin-invitations-error">
+        <ErrorAlert :message="invitationsError" :on-retry="loadInvitations" />
+      </div>
       <EmptyState
         v-else-if="pendingInvitations.length === 0"
         :title="$t('views.AdminUsersView.no_pending_invitations')"
@@ -422,6 +420,7 @@ const { data: invitationsResp, loading: invitationsLoading, error: invitationsEr
   () => get<InvitationListResponse>('/api/v1/admin/users/invitations?page=1&page_size=100').then(d => ({ data: d })),
   { initialValue: { items: [] as InvitationItem[], total: 0, page: 1, page_size: 100 } as InvitationListResponse }
 )
+
 const pendingInvitations = computed(() => invitationsResp.value?.items ?? [])
 
 // ── Create / invite dialog ───────────────────────────────────

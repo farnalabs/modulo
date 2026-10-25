@@ -59,6 +59,12 @@ API surface ships and is gated by the `plugin_management` feature and the
       where an escaping raise made the whole instance unbootable because of one
       broken third-party package
       (`test_plugin_registry.py::test_unreadable_distribution_metadata_*`)
+- [x] Unexpected failures from the entry-point provider or malformed entry-point
+      objects are fail-soft: discovery logs the provider error and returns an
+      empty discovery result, while a broken entry point is surfaced as an
+      unhealthy `unknown-entry-point` record and healthy siblings continue
+      scanning (`test_plugin_registry.py::test_discover_plugins_swallows_unexpected_entry_point_query_error`,
+      `test_unreadable_entry_point_attributes_do_not_abort_discovery`)
 - [x] Builders are only known to be *callable*, so `build_connector` /
       `build_model_backend` label a failing builder safely: a callable object, a
       `functools.partial` or any other `__name__`-less callable still yields the
@@ -93,6 +99,15 @@ API surface ships and is gated by the `plugin_management` feature and the
 - The `/admin/plugins` UI is deferred from the MVP nav (private preview).
 
 ## QA History
+
+- 2026-10-25: **Improve Architecture product-map walk** - found that the
+  startup discovery guard handled common metadata exceptions but still allowed
+  an unexpected entry-point provider failure, or an exception while reading an
+  entry-point object's own `name` / `dist` attributes, to escape. Discovery now
+  logs these failures, preserves healthy siblings, and records malformed
+  entry-point objects under an explicit unhealthy placeholder id. Added focused
+  regression tests for both failure shapes; lifecycle management remains an
+  intentional pip-managed gap.
 
 - 2026-10-14: **Improve Architecture product-map walk (index 400)** - two
   MAJOR findings fixed, both on the "a broken third-party plugin must never take

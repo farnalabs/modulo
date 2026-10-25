@@ -1,13 +1,38 @@
 """Unit tests for the modulo://schemas/{id}@{version} MCP resource."""
 
 import uuid
+from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from modulo.api.mcp_server import resource_schema_detail
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
 _SCHEMA_ID = uuid.uuid4()
+
+
+class _EnabledPlan:
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+
+class _DisabledPlan:
+    def feature_enabled(self, name: str) -> bool:
+        return False
+
+
+def _patch_plan(plan: object) -> tuple:
+    """Patch org lookup + plan resolution so the resource's feature gate is on/off."""
+    return (
+        patch(
+            "modulo.db.crud.organisation.get_organisation",
+            new=AsyncMock(return_value=MagicMock(settings_json={})),
+        ),
+        patch("modulo.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan)),
+        patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
+    )
 
 
 def _make_mock_schema(*, name: str = "Test Schema") -> MagicMock:
@@ -94,6 +119,13 @@ class TestResourceSchemaDetailSuccess:
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
         _ctx_auth_type.set(None)
+
+    @pytest.fixture(autouse=True)
+    def _plan_enabled(self) -> Generator[None, None, None]:
+        """FAR-2129: the resource mirrors a ``schema_version_history``-gated route."""
+        org_patch, plan_patch, settings_patch = _patch_plan(_EnabledPlan())
+        with org_patch, plan_patch, settings_patch:
+            yield
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -269,3 +301,23 @@ class TestResourceSchemaDetailSuccess:
 
         assert "error" in result.lower()
         assert "Invalid UUID" in result
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_feature_gate_off_returns_feature_required(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-2129: Community plan is refused before the version row is read."""
+        session = _make_mock_session()
+        session.get = AsyncMock(return_value=_make_mock_schema())
+        mock_session.return_value.__aenter__.return_value = session
+
+        org_patch, plan_patch, settings_patch = _patch_plan(_DisabledPlan())
+        with org_patch, plan_patch, settings_patch:
+            result = await resource_schema_detail(schema_id=str(_SCHEMA_ID), version="latest")
+
+        assert "error: feature_required" in result
+        assert "schema_version_history" in result
+        session.get.assert_not_awaited()

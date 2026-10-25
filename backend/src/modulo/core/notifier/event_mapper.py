@@ -33,6 +33,11 @@ the webhook-subscribable subset is ``AVAILABLE_EVENTS`` in
   - capacity_saturation → level: warning, scope: admin (FAR-1344)
   - capacity_recovered → level: info, scope: org (FAR-1344)
   - capacity_redis_pressure → level: warning, scope: admin (FAR-2002)
+  - pipeline_decay → level: warning, scope: org (FAR-2116; one alert per
+                     webhook pipeline whose 2h rolling success rate collapses
+                     or whose node-deadline watchdog keeps firing)
+  - pipeline_decay_recovered → level: info, scope: org (FAR-2116, the closure
+                     edge — an operator is never left with a stale alert)
 """
 
 from __future__ import annotations
@@ -63,6 +68,8 @@ from modulo.core.notifier import (
     EVENT_HITL_DEADLINE_WARNING,
     EVENT_HITL_OVERDUE,
     EVENT_ORG_TRIGGERS_AUTO_PAUSED,
+    EVENT_PIPELINE_DECAY,
+    EVENT_PIPELINE_DECAY_RECOVERED,
     EVENT_PROVIDER_FAILURE,
     EVENT_QUEUE_PRESSURE_CRITICAL,
     EVENT_QUEUE_PRESSURE_NOTICE,
@@ -360,6 +367,27 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismissible_at_scope": True,
         "ttl_hours": 72,
     },
+    # FAR-2116 — pipeline health. ORG scope: the pipeline's owner acts on it
+    # (investigate the failures / the node-deadline kills), so the whole org
+    # should see it rather than only admins. TTL is long enough (72h) that an
+    # unreviewed degradation outlives a weekend; the sweep's recovery event is
+    # what retires it early.
+    EVENT_PIPELINE_DECAY: {
+        "level": "warning",
+        "scope": "org",
+        "category": "pipeline.decay",
+        "dismiss_strategy": "org_admin",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
+    },
+    EVENT_PIPELINE_DECAY_RECOVERED: {
+        "level": "info",
+        "scope": "org",
+        "category": "pipeline.decay_recovered",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 24,
+    },
 }
 
 _TITLE_TEMPLATES: dict[str, str] = {
@@ -392,6 +420,8 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_CAPACITY_SATURATION: "Capacity saturation — {limit_label} fully held",
     EVENT_CAPACITY_RECOVERED: "Capacity recovered — {subject_label}",
     EVENT_CAPACITY_REDIS_PRESSURE: "Queue store at memory bound — {used_percent}% used",
+    EVENT_PIPELINE_DECAY: "Pipeline degraded — {pipeline_name}",
+    EVENT_PIPELINE_DECAY_RECOVERED: "Pipeline recovered — {pipeline_name}",
 }
 
 _BODY_TEMPLATES: dict[str, str] = {
@@ -486,6 +516,20 @@ _BODY_TEMPLATES: dict[str, str] = {
         "hashes are being evicted/shed and re-dispatched by the reconciler — raise "
         "REDIS_MAXMEMORY (or the Redis tier's memory) before the bound starts refusing enqueues."
     ),
+    # FAR-2116 — pipeline health. Every placeholder is always present in the
+    # sweep's payload (it fills "n/a" defaults), so the render never falls back
+    # to "[unknown]". The body names the failing measure, its figure, the
+    # threshold and the window so the alert is actionable without a lookup.
+    EVENT_PIPELINE_DECAY: (
+        'Webhook-triggered pipeline "{pipeline_name}" is degraded: {reason_label}. '
+        "Window: last {window_minutes} minutes. Success rate {success_rate_percent}% "
+        "({runs_complete} of {runs_total} terminal runs completed); node-deadline watchdog "
+        "fired {watchdog_firings} time(s)."
+    ),
+    EVENT_PIPELINE_DECAY_RECOVERED: (
+        'Webhook-triggered pipeline "{pipeline_name}" has recovered: {reason_label} '
+        "(window: last {window_minutes} minutes). The degradation alert is cleared."
+    ),
 }
 
 _ACTION_URL_TEMPLATES: dict[str, str | None] = {
@@ -522,6 +566,11 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_CAPACITY_SATURATION: _CAPACITY_PANEL_URL,
     EVENT_CAPACITY_RECOVERED: _CAPACITY_PANEL_URL,
     EVENT_CAPACITY_REDIS_PRESSURE: _CAPACITY_PANEL_URL,
+    # FAR-2116 — the pipeline-decay figures are the /analytics success rate;
+    # deep-link the panel pre-filtered to the pipeline so the operator can
+    # reproduce the number the alert quotes.
+    EVENT_PIPELINE_DECAY: "/analytics?pipeline_id={pipeline_id}",
+    EVENT_PIPELINE_DECAY_RECOVERED: "/analytics?pipeline_id={pipeline_id}",
 }
 
 # FAR-1410 — payload-driven wording overrides, selected from the payload's

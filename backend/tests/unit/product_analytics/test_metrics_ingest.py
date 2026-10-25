@@ -22,6 +22,7 @@ from tests.unit.api.mock_session import configure_mock_session
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+_PIPELINE_ID = "00000000-0000-0000-0000-000000000003"
 
 
 def _insert_calls(mock_session: AsyncMock) -> list:
@@ -95,7 +96,8 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
 
 def _valid_event(event_id: str = "evt-1", event_type: str = "pipeline_created") -> dict:
-    return {"event_id": event_id, "event_type": event_type, "payload": {"name": "test"}}
+    payload = {"pipeline_id": _PIPELINE_ID} if event_type == "pipeline_created" else {}
+    return {"event_id": event_id, "event_type": event_type, "payload": payload}
 
 
 def _post_events(client: TestClient, events: list[dict]) -> Any:
@@ -280,6 +282,123 @@ class TestApiErrorDailyCap:
         # ``>=``), all 5 events must be staged. If the cap guard is broken, fewer
         # inserts would be produced.
         assert len(_insert_calls(mock_session)) == 5, "all 5 api_error events under the cap must be staged"
+
+
+class TestPayloadPrivacyBoundary:
+    @patch("modulo.api.routes.metrics_ingest.get_organisation")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    def test_unknown_payload_fields_are_dropped(
+        self,
+        mock_rls: MagicMock,
+        mock_user_ctx: MagicMock,
+        mock_get_org: MagicMock,
+        client: TestClient,
+        mock_session: AsyncMock,
+    ) -> None:
+        mock_get_org.return_value = _consented_org()
+        event = _valid_event("evt-private")
+        event["payload"] = {
+            "pipeline_id": _PIPELINE_ID,
+            "email": "secret@example.com",
+            "nested": {"token": "secret"},
+        }
+
+        resp = _post_events(client, [event])
+
+        assert resp.status_code == 204
+        payload = _inserted_payload(mock_session)
+        assert payload == {"pipeline_id": _PIPELINE_ID}
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("not-a-uuid", {}),
+            ("person@example.com", {}),
+            ({"nested": "object"}, {}),
+            (_PIPELINE_ID, {"pipeline_id": _PIPELINE_ID}),
+        ],
+    )
+    @patch("modulo.api.routes.metrics_ingest.get_organisation")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    def test_identifier_values_are_opaque_uuids_only(
+        self,
+        mock_rls: MagicMock,
+        mock_user_ctx: MagicMock,
+        mock_get_org: MagicMock,
+        value: Any,
+        expected: dict,
+        client: TestClient,
+        mock_session: AsyncMock,
+    ) -> None:
+        mock_get_org.return_value = _consented_org()
+        event = _valid_event("evt-identifier")
+        event["payload"] = {"pipeline_id": value}
+
+        resp = _post_events(client, [event])
+
+        assert resp.status_code == 204
+        assert _inserted_payload(mock_session) == expected
+
+    @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
+    @patch("modulo.api.routes.metrics_ingest.get_organisation")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    def test_api_error_values_are_bounded_scalars(
+        self,
+        mock_rls: MagicMock,
+        mock_user_ctx: MagicMock,
+        mock_get_org: MagicMock,
+        mock_count: MagicMock,
+        client: TestClient,
+        mock_session: AsyncMock,
+    ) -> None:
+        mock_get_org.return_value = _consented_org()
+        mock_count.return_value = 0
+        event = _valid_event("evt-api-error", "api_error")
+        event["payload"] = {"route": "x" * 257, "status": {"code": 500}}
+
+        resp = _post_events(client, [event])
+
+        assert resp.status_code == 204
+        assert not _inserted_payload(mock_session)
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            ({"route": 123, "status": 500}, {"status": 500}),
+            ({"route": {"nested": "object"}, "status": 200}, {"status": 200}),
+            ({"route": "/some/unknown/path", "status": True}, {"route": "unknown"}),
+            ({"route": "/some/unknown/path", "status": 99}, {"route": "unknown"}),
+            ({"route": "/some/unknown/path", "status": 600}, {"route": "unknown"}),
+            ({"route": "/some/unknown/path", "status": 204}, {"route": "unknown", "status": 204}),
+        ],
+    )
+    @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
+    @patch("modulo.api.routes.metrics_ingest.get_organisation")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    def test_api_error_values_reject_invalid_scalars(
+        self,
+        mock_rls: MagicMock,
+        mock_user_ctx: MagicMock,
+        mock_get_org: MagicMock,
+        mock_count: MagicMock,
+        payload: dict,
+        expected: dict,
+        client: TestClient,
+        mock_session: AsyncMock,
+    ) -> None:
+        mock_get_org.return_value = _consented_org()
+        mock_count.return_value = 0
+        event = _valid_event("evt-api-error", "api_error")
+        event["payload"] = payload
+
+        resp = _post_events(client, [event])
+
+        assert resp.status_code == 204
+        assert _inserted_payload(mock_session) == expected
 
 
 class TestRouteSanitizer:
