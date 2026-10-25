@@ -132,7 +132,7 @@ gh workflow run "Release: Unified Pipeline" -f mode=recut -f version=0.4.0
 gh workflow run "Release: Unified Pipeline" -f mode=promote -f version=0.4.0
 ```
 
-The deprecated `Release: Cut / Recut / Promote` workflow still accepts the same arguments under its `action` input, but every run now fails closed with an instruction to re-run here; it performs no release action.
+The deprecated `Release: Legacy Entry Point (Deprecated)` workflow still accepts the same arguments under its `action` input, but every run now fails closed with an instruction to re-run here; it performs no release action.
 
 ## Version numbering
 

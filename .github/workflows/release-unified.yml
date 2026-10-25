@@ -738,7 +738,7 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
-          python -m venv /tmp/modulo-pypi-smoke
+          python3 -m venv /tmp/modulo-pypi-smoke
           /tmp/modulo-pypi-smoke/bin/python -m pip install --disable-pip-version-check --no-cache-dir dist/*.whl
           /tmp/modulo-pypi-smoke/bin/modulo apply --help
 
