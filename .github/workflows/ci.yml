@@ -805,9 +805,9 @@ jobs:
         env:
           E2E_TARGET: local
         run: |
-          FILES="$(node scripts/e2e-visual-slice.mjs --list)"
-          echo "visual/token e2e slice: ${FILES}"
-          pnpm exec playwright test ${FILES} --grep "@regression" --workers=1 --reporter=line
+          read -r -a FILES <<< "$(node scripts/e2e-visual-slice.mjs --list)"
+          echo "visual/token e2e slice: ${FILES[*]}"
+          pnpm exec playwright test "${FILES[@]}" --grep "@regression" --workers=1 --reporter=line
       - name: Run unit tests (vitest)
         if: needs.changes.outputs.frontend == 'true'
         # The suite includes src/__tests__/stylesheets-parse.spec.ts (FAR-1995),

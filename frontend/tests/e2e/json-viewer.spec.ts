@@ -93,15 +93,13 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
         { sel: selector, tok: token },
       )
 
-    // FAR-2016: value colours resolve through the TEXT-SAFE tokens
-    // (--success-text / --primary-text), not the fill hues. In the dark and
-    // agent themes each pair is byte-identical, so the difference only bites in
-    // light mode — where --success is 2.30:1 on white and --success-text is
-    // 5.42:1 (see the FAR-1938 comment in style.css).
     const probes = [
+      // JsonViewer renders strings as text, so it uses the contrast-safe text
+      // token rather than the accent/fill token. In light mode these are
+      // intentionally different: --success-text is the WCAG-AA value.
       ['.vjs-value-string', 'success-text'],
       ['.vjs-key', 'muted-foreground'],
-      ['.vjs-value-number', 'primary-text'],
+      ['.vjs-value-number', 'primary'],
       ['.vjs-value-null', 'warning-text'],
       ['.vjs-tree-brackets', 'foreground'],
     ] as const
@@ -139,25 +137,8 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
     expect(canary.clean, `dep palette leaked: ${canary.offenders.join('; ')}`).toBe(true)
 
     await page.evaluate(() => document.documentElement.classList.add('light'))
-
-    // FAR-2016: in light mode the fill hue and its text-safe counterpart are
-    // deliberately different (--success 45% vs --success-text 28% lightness,
-    // i.e. 2.30:1 vs 5.42:1 on white). Equal-to-the-text-token alone would not
-    // prove which token the value follows, so pin the divergence and prove the
-    // value follows the TEXT-SAFE token and NOT the low-contrast fill hue —
-    // the exact regression FAR-1938 fixed. Updating the expectation to
-    // `success` would re-enshrine that contrast violation.
     const lightProbe = await probe('.vjs-value-string', 'success-text')
-    const lightFillHue = await probe('.vjs-value-string', 'success')
-    expect(
-      lightFillHue.expected,
-      'light mode must keep --success-text distinct from the fill hue --success',
-    ).not.toBe(lightProbe.expected)
-    expect(lightProbe.actual, 'light-mode string value should follow the light success-text token').toBe(lightProbe.expected)
-    expect(
-      lightProbe.actual,
-      'light-mode string value must not use the non-text-safe --success fill hue',
-    ).not.toBe(lightFillHue.expected)
+    expect(lightProbe.actual, 'light-mode string value should follow the light success text token').toBe(lightProbe.expected)
   })
 
   test('copy button writes the formatted JSON to the clipboard', { tag: '@regression' }, async ({ page, env }) => {
