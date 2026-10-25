@@ -508,6 +508,19 @@ class TestNestedQuantifierDetection:
             (r"(+()+", True),
             ("", False),
         ],
+        ids=[
+            "digits-plus-nested",
+            "star-nested",
+            "triple-nested-plus",
+            "alternation-quantified",
+            "literal-group-quantified",
+            "single-group-no-outer-quantifier",
+            "unclosed-group",
+            "unopened-group",
+            "plain-quantifiers",
+            "quantifier-first-in-group",
+            "empty-pattern",
+        ],
     )
     def test_detects_nested_quantifiers(self, pattern: str, expected: bool) -> None:
         assert _has_nested_quantifier(pattern) is expected
