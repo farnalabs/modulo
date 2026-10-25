@@ -26,10 +26,12 @@ Security posture (the reason this tier exists)
   (declared posture, FAR-2068). The customer's CNI enforces it; Modulo
   observes nothing. Selected-mode egress is refused (the manifest cannot
   express a host:port allowlist without a higher-level controller).
-  An ``egress_policy`` of ``none`` at provision time is now ACCEPTED and
-  mapped to the declared NetworkPolicy; a selected-mode request at isolation
-  time is refused with the typed :class:`ProviderCapabilityUnsupportedError`
-  naming NetworkPolicy as the remediation — never a silent downgrade.
+  An ``egress_policy`` of ``none`` is ACCEPTED only when that manifest is
+  actually deployed — ``workspaceNetworkPolicy.enabled=true`` makes the chart
+  inject ``MODULO_WORKSPACE_NETWORK_POLICY=enabled``; without it the claim is
+  refused with the typed :class:`ProviderCapabilityUnsupportedError`, so a
+  default install never declares a posture it cannot enforce. Selected-mode
+  requests are refused the same way — never a silent downgrade.
 
 Auth and config
 --------------
@@ -61,8 +63,9 @@ WorkspaceSpec mapping
 - ``timeout_seconds`` -> bounds the provision wait (pod reaching Running);
   falls back to 120s when unset/zero. Direct callers are themselves
   wrapped by the dispatch provisioning watchdog.
-- ``egress_policy`` -> ``none`` accepted as declared posture (Helm-rendered
-  NetworkPolicy); ``selected`` refused (see security posture).
+- ``egress_policy`` -> ``none`` accepted as declared posture ONLY when the
+  chart's NetworkPolicy is deployed (``workspaceNetworkPolicy.enabled=true``);
+  otherwise refused. ``selected`` always refused (see security posture).
 - ``persistence_policy`` -> NOT honoured on this tier: every workspace pod
   uses an ephemeral ``emptyDir`` and ``restart_policy=Never``, so
   ``retained`` / ``cache`` do not survive the workspace and are never
@@ -264,6 +267,20 @@ class WorkspacePodRef:
     ref: str
     labels: dict[str, str]
     created_age_s: float
+
+
+def _workspace_network_policy_deployed() -> bool:
+    """Whether the chart's workspace-egress NetworkPolicy is actually deployed.
+
+    Single source of truth is
+    :func:`modulo.core.pipeline_engine.egress.workspace_network_policy_deployed`
+    (the resolver gates on the same signal). Imported lazily: the
+    ``pipeline_engine`` package ``__init__`` pulls the engine, so a
+    module-load import here would create a runtime_provider <-> engine cycle.
+    """
+    from modulo.core.pipeline_engine.egress import workspace_network_policy_deployed
+
+    return workspace_network_policy_deployed()
 
 
 class KubernetesRuntimeProvider(RuntimeProvider):
@@ -538,8 +555,10 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         best-effort before re-raising, so a failed create never leaks one.
         """
         egress = (spec.egress_policy or "").strip().lower()
-        # FAR-2068: egress_policy "none" (deny_all) is now ACCEPTED as declared
-        # posture — the Helm-rendered NetworkPolicy is the enforcement layer.
+        # FAR-2068: egress_policy "none" (deny_all) is ACCEPTED as a declared
+        # posture — but only when the chart's workspace NetworkPolicy exists to
+        # enforce it. Without that manifest the pre-FAR-2068 fail-closed refusal
+        # stands, so a canonical install never claims an enforcement it lacks.
         # Selected remains refused (see apply_isolation).
         if egress == "selected":
             raise ProviderCapabilityUnsupportedError(
@@ -548,6 +567,14 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 "NetworkPolicy on the workspace namespace (opt-in, requires a CNI that "
                 "enforces NetworkPolicy; FAR-1051). Configure it there and use a policy "
                 "this tier can enforce."
+            )
+        if egress == "none" and not _workspace_network_policy_deployed():
+            raise ProviderCapabilityUnsupportedError(
+                "The Kubernetes tier cannot accept an egress 'none' (deny_all) workspace "
+                "without the chart's workspace NetworkPolicy: the deny_all posture would "
+                "be declared but unenforced. Enable workspaceNetworkPolicy.enabled=true "
+                "(which sets MODULO_WORKSPACE_NETWORK_POLICY=enabled) or use a policy this "
+                "tier can enforce."
             )
 
         core = await self._get_core()
@@ -1157,7 +1184,9 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         (with or without an allowlist). Bounded egress deny_all on Kubernetes
         is authored as a Helm-rendered NetworkPolicy manifest (declared posture,
         FAR-2068) — the customer's CNI enforces it; Modulo observes nothing.
-        A selected-mode request raises the typed
+        That manifest only exists when ``workspaceNetworkPolicy.enabled=true``
+        (the chart injects ``MODULO_WORKSPACE_NETWORK_POLICY=enabled``); without
+        it a deny_all claim is refused. Both refusals raise the typed
         :class:`ProviderCapabilityUnsupportedError` naming NetworkPolicy as the
         remediation. Never a silent downgrade.
         """
@@ -1169,6 +1198,14 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 "NetworkPolicy on the workspace namespace (opt-in, requires a CNI that "
                 "enforces NetworkPolicy; FAR-1051). Configure it there and use a policy "
                 "this tier can enforce."
+            )
+        if egress == "none" and not _workspace_network_policy_deployed():
+            raise ProviderCapabilityUnsupportedError(
+                "The Kubernetes tier cannot accept an egress 'none' (deny_all) isolation "
+                "claim without the chart's workspace NetworkPolicy: the deny_all posture "
+                "would be declared but unenforced. Enable workspaceNetworkPolicy.enabled=true "
+                "(which sets MODULO_WORKSPACE_NETWORK_POLICY=enabled) or use a policy this "
+                "tier can enforce."
             )
 
         # Lazy import (house convention): sandbox_policy is dependency-free,

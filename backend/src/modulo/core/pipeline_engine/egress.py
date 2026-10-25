@@ -16,6 +16,7 @@ pipeline-engine or DB modules.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -89,12 +90,11 @@ class EgressPosture(StrEnum):
 _TIER_RESTRICTIVE_POSTURE: dict[str, EgressPosture] = {
     "e2b": EgressPosture.ENFORCED_BY_SUBSTRATE,
     "docker": EgressPosture.ENFORCED_BY_SUBSTRATE,
-    # T3 / Kubernetes: Modulo authors the NetworkPolicy manifest (declared);
-    # the customer's CNI enforces it and Modulo observes nothing. Today the
-    # resolver still REFUSES a restrictive Kubernetes policy (the FAR-1690
-    # K8s-authoring slice and its ADR amendment flip this to a declared
-    # resolution); the mapping is recorded so the posture vocabulary is
-    # complete and the upcoming flip is a one-line change here.
+    # T3 / Kubernetes: the chart authors the NetworkPolicy manifest (declared);
+    # the customer's CNI enforces it and Modulo observes nothing. Kubernetes
+    # deny_all only reaches this posture when the chart's manifest is actually
+    # deployed (FAR-2068, see ``workspace_network_policy_deployed``); otherwise
+    # the resolver refuses before a posture is assigned.
     "t3": EgressPosture.DECLARED,
     "kubernetes": EgressPosture.DECLARED,
     "local": EgressPosture.NONE,
@@ -142,6 +142,33 @@ def spec_egress_for_canonical(policy: str | None) -> str:
     return "none"
 
 
+# --- Workspace NetworkPolicy deployment signal (FAR-2068) -----------------
+
+WORKSPACE_NETWORK_POLICY_ENV: str = "MODULO_WORKSPACE_NETWORK_POLICY"
+"""Env var the T3 Helm chart sets when it renders the workspace NetworkPolicy.
+
+The chart sets it to ``"enabled"`` only when
+``workspaceNetworkPolicy.enabled=true`` — i.e. only when the deny-by-default
+manifest that a Kubernetes ``deny_all`` DECLARED posture rests on actually
+exists. Absent (the chart default) means Kubernetes ``deny_all`` stays
+fail-closed: no posture may be declared without an enforcing manifest.
+"""
+
+_WORKSPACE_NETWORK_POLICY_ENABLED_VALUE = "enabled"
+
+
+def workspace_network_policy_deployed() -> bool:
+    """Whether the T3 chart's workspace-egress NetworkPolicy is deployed.
+
+    Read at call time (never cached at import) so a chart rollout followed by
+    a process restart cannot leave a stale claim. Only the exact value the
+    chart injects counts; any other (or an absent) value keeps Kubernetes
+    ``deny_all`` fail-closed.
+    """
+    value = (os.environ.get(WORKSPACE_NETWORK_POLICY_ENV) or "").strip().lower()
+    return value == _WORKSPACE_NETWORK_POLICY_ENABLED_VALUE
+
+
 # --- Tier capability matrix (declare once) --------------------------------
 
 # Each tier declares which *canonical* egress policies it can enforce.
@@ -158,10 +185,12 @@ _TIER_ENFORCEMENT: dict[str, dict[str, bool]] = {
     # tier impossible to run for zero security gain.
     "local": {"default": True, "deny_all": False, "selected": False},
     # Kubernetes (FAR-1051, FAR-2068): the pod's network is owned by the cluster
-    # CNI. The provider authors the NetworkPolicy manifest (declared posture) for
-    # deny_all; selected remains refused as the manifest cannot express a
+    # CNI. The CHART authors the NetworkPolicy manifest for deny_all (declared
+    # posture); selected remains refused as the manifest cannot express a
     # host:port allowlist without a higher-level controller. The customer's CNI
-    # enforces the authored policy; Modulo observes nothing.
+    # enforces the authored policy; Modulo observes nothing. deny_all is only
+    # enforceable when that manifest exists — see
+    # ``workspace_network_policy_deployed`` and ``_tier_refusal``.
     "kubernetes": {"default": True, "deny_all": True, "selected": False},
 }
 
@@ -306,16 +335,32 @@ def _selected_allowlist(
 
 
 def _tier_refusal(tier: str, effective: str | None) -> str | None:
-    """Return a refusal reason when the tier cannot enforce the resolved policy."""
+    """Return a refusal reason when the tier cannot enforce the resolved policy.
+
+    Kubernetes ``deny_all`` is additionally gated on the chart's workspace
+    NetworkPolicy actually being deployed: the resolver may only report a
+    DECLARED posture when the manifest it declares exists (FAR-2068). Without
+    the chart's signal the pre-FAR-2068 fail-closed refusal applies.
+    """
     tier_caps = _TIER_ENFORCEMENT.get(tier)
     if tier_caps is None:
         return f"unknown tier {tier!r}; cannot determine enforcement capability"
-    if not tier_caps.get(effective if effective is not None else "default", False):
+    key = effective if effective is not None else "default"
+    if not tier_caps.get(key, False):
         note = _TIER_REFUSAL_NOTES.get(tier)
         return (
             f"tier {tier!r} cannot enforce egress policy {effective!r}; "
             f"available enforcement on this tier: "
             f"{[k for k, v in tier_caps.items() if v]}" + (f"; {note}" if note else "")
+        )
+    if tier == "kubernetes" and key == "deny_all" and not workspace_network_policy_deployed():
+        return (
+            "tier 'kubernetes' cannot establish an egress 'deny_all' (profile "
+            "network_policy 'none') posture: the chart's workspace NetworkPolicy is not "
+            "deployed (workspaceNetworkPolicy.enabled=false, so "
+            f"{WORKSPACE_NETWORK_POLICY_ENV} is unset), and a DECLARED posture must have an "
+            "enforcing manifest. Enable workspaceNetworkPolicy or use a policy this tier can "
+            "enforce."
         )
     return None
 

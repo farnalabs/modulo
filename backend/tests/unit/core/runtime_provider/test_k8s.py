@@ -308,6 +308,34 @@ class TestCreateWorkspace:
         with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
             await provider.create_workspace(_spec(egress_policy="selected"))
 
+    async def test_egress_none_accepted_when_chart_network_policy_is_deployed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-2068: deny_all is accepted once the chart's workspace NetworkPolicy
+        exists (the chart injects MODULO_WORKSPACE_NETWORK_POLICY=enabled).
+
+        Pins the newly-accepted positive path at the provider level — the
+        egress-resolution table alone does not prove create_workspace provisions.
+        """
+        monkeypatch.setenv("MODULO_WORKSPACE_NETWORK_POLICY", "enabled")
+        core = AsyncMock()
+        core.read_namespaced_pod.return_value = _pod("Running")
+        provider = _provider(core=core)
+
+        ref = await provider.create_workspace(_spec(egress_policy="none"))
+
+        assert ref.startswith("modulo-ws-")
+        core.create_namespaced_pod.assert_awaited_once()
+
+    async def test_egress_none_refused_without_chart_network_policy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-2068 fail-closed guard: without the chart signal (manifest absent),
+        a deny_all claim is refused instead of being certified as declared."""
+        monkeypatch.delenv("MODULO_WORKSPACE_NETWORK_POLICY", raising=False)
+        provider = _provider(core=AsyncMock())
+
+        with pytest.raises(ProviderCapabilityUnsupportedError, match="workspaceNetworkPolicy"):
+            await provider.create_workspace(_spec(egress_policy="none"))
+
     async def test_create_builds_hardened_pod_and_returns_tracked_ref(self) -> None:
         core = AsyncMock()
         core.read_namespaced_pod.return_value = _pod("Running")
@@ -1001,6 +1029,27 @@ class TestApplyIsolation:
 
         with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):
             await provider.apply_isolation("modulo-ws-abc", _spec(), IsolationPolicy(egress_policy="selected"))
+
+    async def test_egress_none_accepted_when_chart_network_policy_is_deployed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-2068: a deny_all isolation claim is accepted (no in-pod step) once
+        the chart's workspace NetworkPolicy is deployed."""
+        monkeypatch.setenv("MODULO_WORKSPACE_NETWORK_POLICY", "enabled")
+        provider = _provider(core=AsyncMock())
+
+        result = await provider.apply_isolation("modulo-ws-abc", _spec(), IsolationPolicy(egress_policy="none"))
+
+        assert result is None
+
+    async def test_egress_none_refused_without_chart_network_policy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-2068 fail-closed guard: without the chart signal a deny_all
+        isolation claim is refused, never silently accepted."""
+        monkeypatch.delenv("MODULO_WORKSPACE_NETWORK_POLICY", raising=False)
+        provider = _provider(core=AsyncMock())
+
+        with pytest.raises(ProviderCapabilityUnsupportedError, match="workspaceNetworkPolicy"):
+            await provider.apply_isolation("modulo-ws-abc", _spec(), IsolationPolicy(egress_policy="none"))
 
     async def test_git_scope_and_read_only_seal_run_in_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
         provider = _provider()

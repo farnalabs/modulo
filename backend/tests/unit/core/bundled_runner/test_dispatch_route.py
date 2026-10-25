@@ -432,6 +432,43 @@ def test_workspace_spec_kubernetes_tier_refuses_unenforceable_egress() -> None:
         )
 
 
+def test_workspace_spec_kubernetes_deny_all_accepted_when_chart_policy_deployed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2068: with the chart's workspace NetworkPolicy deployed (the chart
+    injects the signal), a kubernetes deny_all profile maps to the spec's
+    'none' egress and records the DECLARED posture metadata."""
+    monkeypatch.setenv("MODULO_WORKSPACE_NETWORK_POLICY", "enabled")
+    profile = _profile("kubernetes", network_policy="none")
+    spec = _workspace_spec_for_dispatch(
+        profile,
+        org_id=_ORG,
+        run_id="run-123",
+        node_id="node-9",
+        run_uuid=uuid.uuid4(),
+    )
+    assert spec.egress_policy == "none"
+    assert spec.workspace_metadata["modulo.egress.posture"] == "declared"
+
+
+def test_workspace_spec_kubernetes_deny_all_refused_without_chart_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-2068 fail-closed default: with no workspace NetworkPolicy deployed,
+    the chart injects no signal and a deny_all profile is refused at dispatch
+    instead of certifying an enforcement nothing performs."""
+    monkeypatch.delenv("MODULO_WORKSPACE_NETWORK_POLICY", raising=False)
+    profile = _profile("kubernetes", network_policy="none")
+    with pytest.raises(SandboxTierRefusedError, match="workspace NetworkPolicy"):
+        _workspace_spec_for_dispatch(
+            profile,
+            org_id=_ORG,
+            run_id="run-123",
+            node_id="node-9",
+            run_uuid=uuid.uuid4(),
+        )
+
+
 def test_workspace_spec_kubernetes_tier_allows_provider_default_egress() -> None:
     """The same kubernetes profile on the provider-default posture resolves
     normally — only the unenforceable policy is refused, never the dispatch."""
