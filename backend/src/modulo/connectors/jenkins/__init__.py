@@ -250,6 +250,10 @@ class JenkinsConnector(ConnectorBase):
     async def trigger_run(
         self,
         pipeline_id: str,
+        # NOSONAR S1172 - CIRunnerBase.trigger_run contract parameter: the dispatch
+        # layer calls this BY KEYWORD (branch=...), so the name is load-bearing.
+        # Jenkins has no per-build branch selection — the job definition owns the
+        # branch — so it is accepted for contract parity and deliberately unused.
         branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
