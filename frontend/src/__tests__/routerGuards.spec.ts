@@ -89,8 +89,17 @@ describe('router permission navigation guard', () => {
 
     const manifest = yaml.load(
       readFileSync(resolve(__dirname, '../manifest.yaml'), 'utf-8'),
-    ) as { routes: Record<string, { deprecated?: boolean }> }
+    ) as {
+      routes: Record<string, { deprecated?: boolean }>
+      features: Record<string, { behaviours?: string[] }>
+    }
     expect(manifest.routes['/admin/evidence'].deprecated).toBe(true)
+
+    const evidenceBehaviour = manifest.features['feat-evidence'].behaviours?.find(
+      (behaviour) => behaviour.includes('deprecated /admin/evidence route'),
+    )
+    expect(evidenceBehaviour).toContain('ComplianceEvidenceIndexView.vue')
+    expect(evidenceBehaviour).toContain('compatibility alias')
   })
 
   it('redirects the compliance evidence index route when its permission is missing', async () => {
