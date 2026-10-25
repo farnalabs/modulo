@@ -6,14 +6,14 @@ How we cut, validate and promote a release of Modulo - and how to rehearse the w
 
 ## The single entry point
 
-Every release action runs through the unified workflow, `.github/workflows/release-unified.yml` ("Release: Unified Pipeline"). The legacy `.github/workflows/release.yml` remains a compatibility entry point with the same cut/recut RC semantics. Both are `workflow_dispatch` only - they never run on a push - and take a version plus a mode/action input:
+Every release action runs through `.github/workflows/release-unified.yml` ("Release: Unified Pipeline"). This is the only executable release entry point. It is `workflow_dispatch` only - it never runs on a push - and takes a version plus a mode input:
 
 | Input | Meaning |
 |-------|---------|
-| `mode` / `action` | Unified workflow uses `cut`, `recut`, `promote`, `dry-run`; legacy workflow uses `cut`, `recut`, `release`, `dry-run` |
+| `mode` | `cut`, `recut`, `promote`, or `dry-run` |
 | `version` | The plain numeric version being released, e.g. `0.4.0` |
 
-The workflow defaults to workflow-level `permissions: contents: read`, with write scopes granted only on the job that needs them: the `release` job carries `contents: write` (push tags and the CHANGELOG commit, create the GitHub Release) and `actions: write` (`gh workflow run rc-validate.yml`). The `dry-run` and build jobs are read-only. A `release-process` concurrency group with `cancel-in-progress: false` ensures two release actions can never interleave.
+The workflow defaults to workflow-level `permissions: contents: read`, with write scopes granted only on the job that needs them: the `release` job carries `contents: write` (push tags and the CHANGELOG commit, create the GitHub Release) and `actions: write` (`gh workflow run rc-validate.yml`). The `dry-run` and build jobs are read-only. A `release-unified-${{ github.ref }}` concurrency group with `cancel-in-progress: false` ensures two release actions can never interleave.
 
 ## The four modes
 
@@ -73,7 +73,7 @@ It does **not** publish anything. It does not create a tag of any kind - not the
 
 A tag push is not a private act: `.github/workflows/publish-images.yml` triggers on `push: tags: ["v*"]`. Pushing *any* version-shaped tag - including an RC - immediately publishes container images to GHCR. So the dry-run path takes no tag action whatsoever rather than "a harmless local tag".
 
-The rule that keeps this true as the workflow grows: **any job added to `release.yml` that publishes something must be explicitly gated so it cannot run under `dry-run`.** Publish-shaped work is expected to carry `if: inputs.action != 'dry-run'` (matching the existing publish jobs). This is documented in the workflow header so the next author cannot miss it.
+The rule that keeps this true as the workflow grows: **any job added to `release-unified.yml` that publishes something must be explicitly gated so it cannot run under `dry-run`.** Publish-shaped work is expected to carry `if: inputs.mode != 'dry-run'` (matching the existing publish jobs). This is documented in the workflow header so the next author cannot miss it.
 
 ## Container images and platform scope
 
@@ -91,15 +91,15 @@ Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-i
 
 ### How images are actually published
 
-`publish-images.yml` triggers on a `push` of a version tag (`v*`) - but a release's own tag push does NOT run it, so image publishing is owned by `release.yml` directly rather than by the tag trigger:
+`publish-images.yml` triggers on a `push` of a version tag (`v*`) - but a release's own tag push does NOT run it, so image publishing is owned by the unified workflow directly rather than by the tag trigger:
 
-- **The release job's tag push does not trigger the workflow.** The `release` job pushes its `vX.Y.Z-rc*` and `vX.Y.Z` tags with the default `github.token` (`GH_TOKEN: ${{ github.token }}`). GitHub deliberately suppresses workflow runs for events caused by that token, so the tag push triggers no workflow at all - which is also why the same job reaches `rc-validate.yml` by running `gh workflow run` rather than relying on the tag. A release therefore does not publish container images through the tag trigger; the `publish-images` job (FAR-1869) is the piece that will own publishing them directly.
+- **The unified workflow's `release` job tag push does not trigger the workflow.** The job pushes its `vX.Y.Z-rc*` and `vX.Y.Z` tags with the default `github.token` (`GH_TOKEN: ${{ github.token }}`). GitHub deliberately suppresses workflow runs for events caused by that token, so the tag push triggers no workflow at all - which is also why the same job reaches `rc-validate.yml` by running `gh workflow run` rather than relying on the tag. A release therefore does not publish container images through the tag trigger; the unified workflow's publish job (FAR-1869) is the piece that will own publishing them directly.
 - **The dry-run's "no tag at all" rule stays correct.** It is conservative for the right reason: a HUMAN pushing a version-shaped tag - or any push made with a credential other than `github.token` - WOULD trigger `publish-images.yml` and publish images. The rationale above is unchanged; what is added here is that a WORKFLOW-initiated push behaves differently from a human one.
 - **The CHANGELOG commit's push to `main` triggers no CI either.** The same `github.token` pushes it, so `main`'s HEAD after a release is not CI-validated. That is observed behaviour, recorded here rather than changed.
 
 ## Not implemented yet
 
-`release.yml` today covers the RC/GA lifecycle and the rehearsal. The remaining publish steps are **deliberate, visible stubs** rather than silent gaps - each carries a comment naming its tracking ticket. They are gated so they can never execute.
+`release-unified.yml` today covers the RC/GA lifecycle and the rehearsal. The remaining publish steps are **deliberate, visible stubs** rather than silent gaps - each carries a comment naming its tracking ticket. They are gated so they can never execute.
 
 | Stub job | Ticket | Will own |
 |----------|--------|----------|
@@ -121,16 +121,16 @@ The repository enforces build provenance with `gh attestation verify`, fail-clos
 
 ```bash
 # Rehearse first - builds everything, publishes nothing.
-gh workflow run "Release: Cut / Recut / Promote" -f action=dry-run -f version=0.4.0
+gh workflow run "Release: Unified Pipeline" -f mode=dry-run -f version=0.4.0
 
 # Cut an RC and freeze.
-gh workflow run "Release: Cut / Recut / Promote" -f action=cut -f version=0.4.0
+gh workflow run "Release: Unified Pipeline" -f mode=cut -f version=0.4.0
 
 # After a fix has been merged to main, cut the next RC and re-run the soak.
-gh workflow run "Release: Cut / Recut / Promote" -f action=recut -f version=0.4.0
+gh workflow run "Release: Unified Pipeline" -f mode=recut -f version=0.4.0
 
 # Once the RC has validated, promote to GA.
-gh workflow run "Release: Cut / Recut / Promote" -f action=release -f version=0.4.0
+gh workflow run "Release: Unified Pipeline" -f mode=promote -f version=0.4.0
 ```
 
 ## Version numbering
