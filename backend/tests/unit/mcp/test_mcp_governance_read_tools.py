@@ -8,9 +8,10 @@ get_schema_versions, get_pipeline_diff.
 Authz: every tool maps to the same permission key as the corresponding REST
 route and is gated through ``_check_agent_tool_scope``; list_feature_flags
 additionally enforces the strict system-admin gate REST's
-``require_system_permission`` applies. list_teams also carries a REST-parity
+``require_system_permission`` applies. ``list_teams`` carries a REST-parity
 plan-feature gate (``team_rbac`` — the same feature ``require_feature``
-enforces on the REST route). The pipeline-diff tool must mask
+enforces on the REST route), and ``get_audit_log`` carries the matching
+``audit_viewer`` gate (FAR-2119). The pipeline-diff tool must mask
 credential-bearing node fields (FAR-1181 parity with the REST route), and the
 SSO listing must never surface client secrets.
 """
@@ -435,13 +436,15 @@ class TestGetAuditLog(AuthContext):
         mock_session.return_value = make_session_context(make_session_scope())
 
         actor = str(uuid.uuid4())
-        result = await get_audit_log(
-            limit=50,
-            event_type="pipeline.created",
-            actor_user_id=actor,
-            from_date="2026-01-01T00:00:00+00:00",
-            to_date="2026-12-31T23:59:59+00:00",
-        )
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log(
+                limit=50,
+                event_type="pipeline.created",
+                actor_user_id=actor,
+                from_date="2026-01-01T00:00:00+00:00",
+                to_date="2026-12-31T23:59:59+00:00",
+            )
 
         assert result["total"] == 1
         assert mock_events.await_args.args[1] == ORG_ID
@@ -450,9 +453,63 @@ class TestGetAuditLog(AuthContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.audit_logger.list_audit_events", new_callable=AsyncMock)
+    async def test_feature_gate_off_returns_feature_required(
+        self,
+        mock_events: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """Community tier: no audit_viewer entitlement, so MCP refuses.
+
+        FAR-2119 — the MCP surface must produce the same ``feature_required``
+        shape as the other gated MCP tools, and must refuse BEFORE reading any
+        events.
+        """
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log()
+
+        assert result["error"] == "feature_required"
+        assert "audit_viewer" in result["detail"]
+        mock_events.assert_not_awaited()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.audit_logger.list_audit_events", new_callable=AsyncMock)
+    async def test_team_tier_returns_events(
+        self,
+        mock_events: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """Team tier: audit_viewer is licensed, so the events surface as before."""
+        event = {"id": str(uuid.uuid4()), "event_type": "run.completed"}
+        mock_events.return_value = {
+            "items": [event],
+            "total": 1,
+            "next_cursor": None,
+            "limit": 50,
+        }
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log()
+
+        assert result["total"] == 1
+        assert result["items"] == [event]
+        mock_events.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
     async def test_invalid_actor_uuid_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await get_audit_log(actor_user_id="not-a-uuid")
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log(actor_user_id="not-a-uuid")
         assert result["error"] == "invalid_id"
         assert result["field"] == "actor_user_id"
 
@@ -460,7 +517,9 @@ class TestGetAuditLog(AuthContext):
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_from_date_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await get_audit_log(from_date="yesterday")
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log(from_date="yesterday")
         assert result["error"] == "validation_failed"
         assert result["field"] == "from_date"
 
@@ -1474,7 +1533,9 @@ class TestGetAuditLogErrorArms(AuthContext):
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_to_date_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await get_audit_log(to_date="nope")
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log(to_date="nope")
         assert result["error"] == "validation_failed"
         assert result["field"] == "to_date"
 
@@ -1490,7 +1551,9 @@ class TestGetAuditLogErrorArms(AuthContext):
         # from_date=None / to_date=None exercise the False arms of both date guards.
         mock_events.return_value = {"items": [], "total": 0, "next_cursor": None, "limit": 50}
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await get_audit_log()
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log()
         assert result["total"] == 0
         assert mock_events.await_args.kwargs["from_date"] is None
         assert mock_events.await_args.kwargs["to_date"] is None
@@ -1516,7 +1579,13 @@ class TestGetAuditLogErrorArms(AuthContext):
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        with patch("modulo.core.audit_logger.list_audit_events", new=_boom(_programming_error())):
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch("modulo.core.audit_logger.list_audit_events", new=_boom(_programming_error())),
+        ):
             result = await get_audit_log()
         assert result["error"] == "migration_required"
 
@@ -1526,7 +1595,13 @@ class TestGetAuditLogErrorArms(AuthContext):
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        with patch("modulo.core.audit_logger.list_audit_events", new=_boom(RuntimeError("boom"))):
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch("modulo.core.audit_logger.list_audit_events", new=_boom(RuntimeError("boom"))),
+        ):
             result = await get_audit_log()
         assert result["error"] == "server_error"
 

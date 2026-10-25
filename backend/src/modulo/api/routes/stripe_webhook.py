@@ -255,11 +255,11 @@ class RenewalClaimResponse(BaseModel):
     repeated: bool = False
 
 
-# Deliberately NOT in the OpenAPI document: publishing this route changes the
-# generated `frontend/src/lib/api/schema.ts`, which this delivery is scoped not
-# to touch (no frontend change). The route is exercised directly by its tests;
-# the delivery that adds the customer-facing claim UI should drop this flag and
-# regenerate the schema in the same change.
+# Published in the OpenAPI document (FAR-2114): the customer-facing claim page
+# consumes the generated `frontend/src/lib/api/schema.ts` types, so this route
+# must appear there. Publishing it is also what makes the endpoint discoverable
+# to the public claim surface; the caller is admitted by the signed keys, not a
+# session (see the module docstring).
 @router.post(
     "/stripe/renewal-claim",
     dependencies=[
@@ -272,7 +272,7 @@ class RenewalClaimResponse(BaseModel):
         )
     ],
     response_model=RenewalClaimResponse,
-    include_in_schema=False,
+    include_in_schema=True,
 )
 async def stripe_renewal_claim(
     req: RenewalClaimRequest,

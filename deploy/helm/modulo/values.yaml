@@ -71,6 +71,14 @@ podSecurity:
 # Off by default. Requires a CNI that enforces NetworkPolicy (e.g. Calico,
 # Cilium) — kindnet does not. Modulo records this posture as `declared` (it
 # authors the policy; it never observes network traffic).
+#
+# Enforcement contract (FAR-2068): `enabled: true` also injects
+# MODULO_WORKSPACE_NETWORK_POLICY=enabled into the control-plane workloads.
+# The backend only resolves a Kubernetes egress `deny_all` profile to a
+# `declared` posture — and only accepts an egress 'none' workspace — when that
+# signal is present. With the default `false` the manifest does not exist, so
+# deny_all stays fail-closed (refused) instead of certifying an enforcement
+# nothing performs.
 workspaceNetworkPolicy:
   enabled: false
   # Permit cluster DNS (UDP/TCP 53) so deny-by-default does not break name

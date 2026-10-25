@@ -108,6 +108,14 @@ const DEACTIVATED_ROUTES: Record<string, string> = {
   // staging dev-mode flag is turned off again they must come back.
   // --- feature_flag inactive for the staging e2e identity ---
   '/admin/notification-delivery': "feature_flag 'webhook_notification_log' inactive for the staging e2e identity and the local mock",
+  // --- permission-gated (FAR-2104 moved /settings/license out of the FAR-938
+  // SYSTEM group into the ADMIN group behind `org.license.manage`) ---
+  // The staging e2e org admin HOLDS that permission, so the route renders there
+  // and every check runs (this entry only licenses the redirect it causes
+  // locally). The local mock's catch-all answers GET /api/v1/auth/permissions
+  // without a `permissions` array, so the router's permission gate fails closed
+  // and bounces to the dashboard.
+  '/settings/license': 'permission-gated — org.license.manage absent from the local mock permission list (the staging org admin holds it and the route renders there)',
 }
 
 const DEACTIVATED_ROUTES_SET = new Set(Object.keys(DEACTIVATED_ROUTES))

@@ -85,6 +85,17 @@
           <p class="text-xs text-muted-foreground">
             {{ $t('views.SettingsLicenseView.restart_note') }}
           </p>
+          <!--
+            FAR-2114: the early-renewal claim lives on its own PUBLIC page.
+            Renewing early issues a fresh key; the days left on the old licence
+            are only added when the customer presents both keys, which is what
+            this link leads to.
+          -->
+          <p class="text-xs text-muted-foreground">
+            <a href="/licence/claim" class="underline hover:text-foreground" data-testid="licence-claim-link">
+              {{ $t('views.SettingsLicenseView.renewed_early_link') }}
+            </a>
+          </p>
         </div>
       </div>
 

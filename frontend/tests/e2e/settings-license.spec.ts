@@ -1,3 +1,4 @@
+
 ﻿import { test, expect, loginAsAdmin, systemAdminJwt } from './setup/fixtures'
 
 test.describe('Settings License', { tag: "@regression" }, () => {
@@ -20,9 +21,16 @@ test.describe('Settings License', { tag: "@regression" }, () => {
 
     if (env.name === 'local') {
       // Registered after login so they are not shadowed by setupLocalMockApi's
-      // catch-all (Playwright matches the last registered route first). The
-      // mock permission read answers `{}` in the catch-all, which would hide a
-      // `required_permissions` route even from an admin.
+      // catch-all (Playwright matches the last registered route first).
+      //
+      // FAR-2104: /settings/license sits in the ADMIN group behind the
+      // `org.license.manage` permission (an org-admin permission, no longer the
+      // FAR-938 SYSTEM group). The local mock's catch-all answers the
+      // caller-scoped GET /api/v1/auth/permissions with `{items: [], total: 0}`
+      // — no `permissions` array — which leaves the router's permission gate
+      // fail-closed and bounces the page to the dashboard. Supply the same
+      // permission the staging e2e org admin holds, so both targets exercise
+      // the shipped gate instead of a mock gap.
       await page.route('**/api/v1/auth/permissions*', (route) => {
         route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ permissions: ['org.license.manage'] }) })
       })
@@ -42,6 +50,9 @@ test.describe('Settings License', { tag: "@regression" }, () => {
     // org-scoped controls it may act on. The instance-wide controls are
     // system-admin-only and must NOT render for them.
     await page.goto('/settings/license')
+    // FAR-2104: the licence is an org-level object, so an org admin — the
+    // staging/prod e2e identity — reaches this screen and it renders. The old
+    // FAR-938 SYSTEM-group assertion (redirect to the dashboard) is stale.
     await expect(page).toHaveURL(/\/settings\/license$/)
     await expect(page.locator('h1')).toContainText('License')
     await expect(page.getByTestId('license-title')).toBeVisible()
