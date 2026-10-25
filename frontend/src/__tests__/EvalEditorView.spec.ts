@@ -93,22 +93,22 @@ describe('EvalEditorView', () => {
     expect(wrapper.findComponent(PageTabs).exists()).toBe(false)
   })
 
-  it('renders a per-type config placeholder on the textarea', async () => {
+  it('renders a per-type config placeholder on the deterministic JSON textarea', async () => {
     const wrapper = mount(EvalEditorView, {
       global: {
         stubs: { FeatureGate: { template: '<div><slot /></div>' } },
         mocks: { $t: (key: string) => key },
       },
     })
+    // The typed mechanism renders the builder; the JSON textarea is the
+    // deterministic sub-axis (ADR 066 D19), so switch the mechanism first.
+    ;(wrapper.vm as any).form.eval_type = 'regex'
+    await nextTick()
     const textarea = await vi.waitFor(() => {
-      const el = wrapper.find('[data-testid="eval-editor-config"]')
+      const el = wrapper.find('textarea[data-testid="eval-editor-config"]')
       expect(el.exists()).toBe(true)
       return el
     })
-    expect(textarea.attributes('placeholder')).toBe('views.EvalEditorView.configPlaceholder.model_judge')
-
-    ;(wrapper.vm as any).form.eval_type = 'regex'
-    await nextTick()
     expect(textarea.attributes('placeholder')).toBe('views.EvalEditorView.configPlaceholder.regex')
 
     ;(wrapper.vm as any).form.eval_type = 'json_schema'
@@ -252,17 +252,21 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
       },
     })
 
-    const form = (wrapper.vm as unknown as { form: { eval_type: string; config_json: string } }).form
-    expect(form.eval_type).toBe('model_judge')
-    const config = JSON.parse(form.config_json)
+    const vm = wrapper.vm as unknown as {
+      form: { eval_type: string }
+      buildConfigForSave: () => Record<string, unknown>
+    }
+    expect(vm.form.eval_type).toBe('model_judge')
+    const config = vm.buildConfigForSave()
     // ADR 066 D8: a default create must satisfy the real write validator.
     expect(config.answer_contract).toBe('typed_questions')
     expect(config.field).toBe('output')
-    expect(config.backing.kind).toBe('model_backend')
-    expect(config.questions[0].type).toBe('noul')
-    expect(config.pass_rule.kind).toBe('weighted_score_at_least')
-    expect(config.pass_rule.threshold).toBe(0.5)
+    expect(config.backing).toEqual({ kind: 'model_backend' })
+    expect((config.questions as Record<string, unknown>[])[0].type).toBe('noul')
+    expect(config.pass_rule).toEqual({ kind: 'weighted_score_at_least', threshold: 0.5 })
     expect(config.verdict_kind).toBe('assessment')
+    // The config's cut is pass_rule.threshold, never Eval.pass_threshold.
+    expect(config).not.toHaveProperty('pass_threshold')
   })
 
   it('save (create): POST body carries the parsed config, threshold; success message shown', async () => {
@@ -273,9 +277,9 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     await flush()
 
     await wrapper.find('[data-testid="eval-editor-name"]').setValue('Fresh Eval')
-    const typedConfig = JSON.parse(
-      (wrapper.vm as unknown as { form: { config_json: string } }).form.config_json,
-    )
+    const typedConfig = (
+      wrapper.vm as unknown as { buildConfigForSave: () => Record<string, unknown> }
+    ).buildConfigForSave()
     await wrapper.find('[data-testid="eval-editor-pass-threshold"]').setValue('0.55')
     await nextTick()
 
@@ -332,7 +336,12 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
 
     await selectPipeline(wrapper, 'p1')
     await wrapper.find('[data-testid="eval-editor-name"]').setValue('Broken')
-    await wrapper.find('[data-testid="eval-editor-config"]').setValue('{not json')
+    // The JSON textarea belongs to the deterministic mechanism (ADR 066 D19).
+    ;(wrapper.vm as unknown as { onMechanismChange: (value: string) => void }).onMechanismChange(
+      'deterministic',
+    )
+    await nextTick()
+    await wrapper.find('textarea[data-testid="eval-editor-config"]').setValue('{not json')
     await nextTick()
 
     expect(wrapper.find('[data-testid="eval-editor-save"]').attributes('disabled')).toBeDefined()

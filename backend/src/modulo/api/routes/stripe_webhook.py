@@ -20,6 +20,20 @@ Events handled (all idempotent, keyed on the Stripe event id):
 
 The heavy work (license generation + email) runs as a FastAPI BackgroundTask so
 the response returns 200 immediately; Stripe treats a 2xx as delivered.
+
+Early-renewal claim (FAR-2109)
+------------------------------
+``POST /api/v1/webhooks/stripe/renewal-claim`` is the post-purchase step for an
+EARLY renewal. The purchase surface here has no pre-payment input: a customer
+buys through Stripe and the key arrives by email (this module plus
+``core.stripe_fulfilment``), so there is nowhere to collect the previous key at
+checkout. The customer therefore presents it afterwards, together with the key
+just issued for the purchase. Both are signature-verified — the purchase key is
+the record of the purchase and its signed ``licence_id`` anchors idempotency —
+so the call needs no session and no tenant at the request boundary. It lives on
+this router because it is the purchase flow's ingress and because the
+``/api/v1/webhooks`` prefix is CSRF-exempt by default (the call carries no
+cookie; its admission basis is the signed keys, not a browser session).
 """
 
 from __future__ import annotations
@@ -28,14 +42,20 @@ import hashlib
 import hmac
 import json
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from modulo.api.constants import MSG_NOT_FOUND
 from modulo.core.audit_coverage import audited_system, bind_audit_org
-from modulo.core.stripe_fulfilment import fulfil_team_purchase
+from modulo.core.license import DEFAULT_RENEWAL_MODE, RENEWAL_MODE_AUTO
+from modulo.core.stripe_fulfilment import (
+    RenewalClaimRejectedError,
+    RenewalClaimUnavailableError,
+    claim_stacked_renewal,
+    fulfil_team_purchase,
+)
 from modulo.core.trigger_engine import TimestampExpiredError, verify_timestamp
 from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.settings import Settings, get_settings
@@ -95,6 +115,27 @@ def _event_object(event: dict[str, Any]) -> dict[str, Any]:
     data = event.get("data")
     obj = data.get("object") if isinstance(data, dict) else None
     return obj if isinstance(obj, dict) else {}
+
+
+def _renewal_mode_for(event: dict[str, Any]) -> str:
+    """Return the ``renewal_mode`` the purchase's licence must carry (FAR-2136).
+
+    Stripe's Invoice object already answers this in the event: ``subscription``
+    holds the subscription id (or the expanded subscription object) for an
+    invoice raised by a subscription, and is ``null`` for a one-off invoice.
+    That single field is the whole signal — no Stripe API call and no
+    seller-side record of what a customer bought.
+
+    Staleness is accepted deliberately, not engineered around: a subscription
+    cancelled AFTER this purchase leaves the minted key claiming ``"auto"``,
+    and a self-hosted instance has no phone-home to learn otherwise. The
+    consequence is mild and already covered — the customer does not renew, the
+    licence lapses into the delivery grace window, and the grace dialog offers
+    BOTH the renew path and the buy-a-new-licence path. Tracking cancellation
+    would add seller-side state (and a callback the instance cannot receive)
+    for a case that flow already handles.
+    """
+    return RENEWAL_MODE_AUTO if _event_object(event).get("subscription") else DEFAULT_RENEWAL_MODE
 
 
 def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
@@ -187,13 +228,20 @@ async def stripe_webhook(
     if event_type in _FULFILMENT_EVENTS:
         customer_email, org_name = _extract_customer(event)
         if customer_email:
-            _log.info("stripe.webhook.fulfilling event=%s event_id=%s", event_type, event["id"])
+            renewal_mode = _renewal_mode_for(event)
+            _log.info(
+                "stripe.webhook.fulfilling event=%s event_id=%s renewal_mode=%s",
+                event_type,
+                event["id"],
+                renewal_mode,
+            )
             background_tasks.add_task(
                 fulfil_team_purchase,
                 settings,
                 event_id=event["id"],
                 customer_email=customer_email,
                 org_name=org_name,
+                renewal_mode=renewal_mode,
             )
         else:
             _log.warning(
@@ -205,3 +253,110 @@ async def stripe_webhook(
         _log.info("stripe.webhook.unhandled_event event=%s event_id=%s", event_type, event["id"])
 
     return StripeWebhookResponse(received=True, event_id=event["id"])
+
+
+class RenewalClaimRequest(BaseModel):
+    """A purchase key plus the previous licence whose remaining term to add."""
+
+    #: The key issued for the purchase. Required: it is the proof that a licence
+    #: was bought and the anchor for idempotency (its signed ``licence_id``).
+    purchase_key: str = Field(min_length=1)
+    #: The previous licence. Optional: omitting it is a valid outcome that
+    #: returns the purchase key unchanged WITH an explanation (never silent).
+    presented_key: str | None = None
+
+
+class RenewalClaimResponse(BaseModel):
+    #: ``stacked`` when the previous term was applied; ``unstacked`` when the
+    #: purchase key was returned unchanged (``reason`` says why).
+    status: Literal["stacked", "unstacked"]
+    #: The licence the customer should install.
+    license_key: str
+    expires_at: str
+    #: The presented licence's expiry that the new term started from, if stacked.
+    previous_expires_at: str | None = None
+    #: Machine-readable outcome when ``status`` is ``unstacked``.
+    reason: str | None = None
+    #: Plain-English explanation of what happened and what it cost.
+    detail: str
+    #: True when an earlier claim for this purchase already produced this key
+    #: (a retry, not a second extension).
+    repeated: bool = False
+
+
+# Published in the OpenAPI document (FAR-2114): the customer-facing claim page
+# consumes the generated `frontend/src/lib/api/schema.ts` types, so this route
+# must appear there. Publishing it is also what makes the endpoint discoverable
+# to the public claim surface; the caller is admitted by the signed keys, not a
+# session (see the module docstring).
+@router.post(
+    "/stripe/renewal-claim",
+    dependencies=[
+        Depends(
+            audited_system(
+                "license_renewal_claimed",
+                "license",
+                actor_source="license_signature_verified",
+            )
+        )
+    ],
+    response_model=RenewalClaimResponse,
+    include_in_schema=True,
+)
+async def stripe_renewal_claim(
+    req: RenewalClaimRequest,
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RenewalClaimResponse:
+    """Stack an early renewal onto a customer-presented previous licence.
+
+    The expiry is read only from a signature-verified key — never from the
+    request body — and there is no start-date parameter, so backdating cannot be
+    expressed: the rule is ``max(now, presented_expiry) + term``, implemented
+    once in ``license_signing.build_team_payload``'s ``expires_from`` seam.
+
+    A rejected claim RAISES (it never returns a failure-shaped response) so the
+    ``audited_system`` event is recorded with ``outcome="error"``.
+    """
+    try:
+        claim = await claim_stacked_renewal(
+            settings,
+            purchase_key=req.purchase_key,
+            presented_key=req.presented_key,
+        )
+    except RenewalClaimRejectedError as exc:
+        if exc.purchase_verified:
+            # The purchase key verified, so the attempt is attributable enough
+            # to record. The purchaser has no account on this deployment, so
+            # there is no tenant org to bind — use the system sentinel.
+            bind_audit_org(request, SYSTEM_ORG_ID)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            # House error shape: ``error`` becomes the RFC 9457 ``code`` and
+            # ``detail`` the human prose, so a client discriminates on the
+            # machine-readable reason instead of substring-matching prose.
+            detail={
+                "error": exc.reason,
+                "detail": exc.detail,
+            },
+        ) from exc
+    except RenewalClaimUnavailableError as exc:
+        bind_audit_org(request, SYSTEM_ORG_ID)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "renewal_claim_unavailable",
+                "detail": str(exc),
+            },
+        ) from exc
+
+    bind_audit_org(request, SYSTEM_ORG_ID)
+    return RenewalClaimResponse(
+        status="stacked" if claim.stacked else "unstacked",
+        license_key=claim.license_key,
+        expires_at=claim.expires_at,
+        previous_expires_at=claim.previous_expires_at,
+        reason=claim.reason,
+        detail=claim.detail,
+        repeated=claim.repeated,
+    )

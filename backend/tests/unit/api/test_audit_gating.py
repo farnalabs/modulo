@@ -142,27 +142,33 @@ def _assert_feature_402(resp):
 
 
 class TestAuditGating:
-    def test_list_events_is_community_tier_when_disabled(self, client_no_audit: TestClient) -> None:
-        """Per PRD: read-only recent-events listing is community tier, not gated."""
-        from unittest.mock import patch
+    def test_list_events_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
+        """FAR-2062: the audit log is a Team capability — its list route is gated.
 
-        with patch("modulo.api.routes.audit.list_audit_events", return_value={"items": [], "total": 0}):
-            resp = client_no_audit.get("/api/v1/admin/audit")
-        assert resp.status_code == 200, f"Expected free-tier access, got {resp.status_code}"
+        The UI, export, scan and evidence-pack all required ``audit_viewer``, so
+        leaving the list route open let a Community admin read the same events
+        over the API.
+        """
+        _assert_feature_402(client_no_audit.get("/api/v1/admin/audit"))
 
     def test_batch_detail_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
         _assert_feature_402(client_no_audit.post("/api/v1/admin/audit/batch-detail", json={"event_ids": []}))
 
-    def test_verify_chain_is_community_tier(self, client_no_audit: TestClient) -> None:
-        """Per PRD: chain verification is community tier."""
-        from unittest.mock import patch
-
-        with patch("modulo.api.routes.audit.verify_chain", return_value={"valid": True}):
-            resp = client_no_audit.get("/api/v1/admin/audit/verify")
-        assert resp.status_code == 200, f"Expected free-tier access, got {resp.status_code}"
+    def test_verify_chain_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
+        """FAR-2062 sweep: chain verification is an audit read path and is gated."""
+        _assert_feature_402(client_no_audit.get("/api/v1/admin/audit/verify"))
 
     def test_export_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
         _assert_feature_402(client_no_audit.get("/api/v1/admin/audit/export"))
+
+    def test_scan_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
+        _assert_feature_402(client_no_audit.get("/api/v1/admin/audit/scan"))
+
+    def test_evidence_pack_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
+        _assert_feature_402(client_no_audit.get("/api/v1/admin/audit/evidence-pack"))
+
+    def test_verification_key_returns_402_when_disabled(self, client_no_audit: TestClient) -> None:
+        _assert_feature_402(client_no_audit.get("/api/v1/admin/audit/verification-key"))
 
 
 # ── Audit endpoints succeed when feature enabled ──

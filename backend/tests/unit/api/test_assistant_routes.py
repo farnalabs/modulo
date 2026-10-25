@@ -1085,12 +1085,12 @@ def test_reconstruct_messages_converts_rows() -> None:
     assert isinstance(messages[1], AIMessage)
 
 
-def test_is_ui_driving_enabled_defaults_true_on_registry_failure() -> None:
+def test_is_ui_driving_enabled_defaults_false_on_registry_failure() -> None:
     failing_registry = MagicMock()
     failing_registry.resolve_flag = AsyncMock(side_effect=RuntimeError("registry down"))
     with patch("modulo.api.routes.assistant.get_registry", return_value=failing_registry):
         enabled = asyncio.run(assistant_routes._is_ui_driving_enabled(_ORG_ID))
-    assert enabled is True
+    assert enabled is False
 
 
 def test_is_set_and_clear_session_approvals_in_memory() -> None:

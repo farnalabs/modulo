@@ -889,7 +889,7 @@ class RuntimeProvider(ABC):
         failures; the hub is itself best-effort per provider and owns no
         live state after this returns.
         """
-        return
+        _log.debug("Runtime provider close has no base cleanup")
 
 
 def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:

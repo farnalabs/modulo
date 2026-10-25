@@ -383,6 +383,83 @@ class EvalEngine:
             )
         return result
 
+    async def evaluate_result_async(
+        self,
+        output: dict[str, Any],
+        eval_def: EvalDefinition,
+        *,
+        run_id: UUID | None = None,
+        model_judge_callable: Any = None,
+    ) -> EvalResult:
+        """Compute-only async twin of :meth:`evaluate_result`.
+
+        Used by the two high-volume call sites when the resolved judge exposes
+        ``ajudge``: the judge awaits on the caller's own event loop, so there is
+        no sync bridge, no worker thread and no foreign-loop client. Every
+        non-judge eval type delegates to the sync path unchanged.
+        """
+        run_id = run_id or uuid4()
+        if eval_def.eval_type == EvalType.MODEL_JUDGE:
+            result = await self._evaluate_model_judge_async(output, eval_def, run_id, model_judge_callable)
+        else:
+            result = self._compute_result(output, eval_def, run_id, None)
+        if result.outcome is not JudgeOutcome.PASS:
+            _log.warning(
+                "Eval %s %s: %s",
+                eval_def.name,
+                "errored" if result.outcome is JudgeOutcome.ERROR else "failed",
+                result.detail,
+            )
+        return result
+
+    async def _evaluate_model_judge_async(
+        self,
+        output: dict[str, Any],
+        eval_def: EvalDefinition,
+        run_id: UUID,
+        model_judge_callable: Any,
+    ) -> EvalResult:
+        """Async judge path with the same no-verdict-is-an-error policy."""
+        if is_legacy_judge_config(eval_def.config):
+            record_legacy_execution(eval_id=eval_def.id, eval_name=eval_def.name)
+        if model_judge_callable is None:
+            detail = "Model judge callable not provided; no verdict was produced"
+            _log.warning("Model judge eval %s callable not provided", eval_def.id)
+            return _error_result(
+                run_id,
+                eval_def.node_id or "",
+                eval_def.id,
+                JudgeErrorCode.JUDGE_UNAVAILABLE,
+                detail,
+            )
+        try:
+            safe_output, safe_eval_def = self._build_safe_judge_input(output, eval_def)
+        except ContentTooLongError as exc:
+            _log.warning("Model judge eval %s content too long", eval_def.id)
+            return _error_result(
+                run_id,
+                eval_def.node_id or "",
+                eval_def.id,
+                JudgeErrorCode.JUDGE_CONFIGURATION,
+                str(exc),
+            )
+        except JudgeExecutionError as exc:
+            _log.warning("Model judge eval %s payload unresolvable (%s)", eval_def.id, exc.code.value)
+            return _error_result(
+                run_id,
+                eval_def.node_id or "",
+                eval_def.id,
+                exc.code,
+                exc.detail,
+                judge_verdict=exc.as_verdict(),
+            )
+        return await self._arun_model_judge_and_parse(
+            model_judge_callable.ajudge,
+            (safe_output, safe_eval_def),
+            eval_def=eval_def,
+            run_id=run_id,
+        )
+
     _RE_FLAG_MAP: ClassVar[dict[str, int]] = {
         "i": re.IGNORECASE,
         "m": re.MULTILINE,
@@ -609,26 +686,14 @@ class EvalEngine:
             )
 
     @staticmethod
-    def _run_model_judge_and_parse(
-        callable_fn: Any,
-        callable_args: tuple[Any, ...],
+    def _judge_failure_result(
+        exc: BaseException,
         *,
         eval_def: EvalDefinition,
         run_id: UUID,
-        judge_verdict: JudgeVerdict | None = None,
     ) -> EvalResult:
-        """Call a judge and produce a typed verdict — never an inferred failure.
-
-        Any exception from a judge means no verdict was produced, so the result
-        is ``outcome=error`` with a coded reason. A malformed response is
-        likewise an error (ADR 066 D5/D6); only a well-formed verdict becomes
-        ``pass``/``fail``.
-        """
-        try:
-            raw = callable_fn(*callable_args)
-        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
-            raise
-        except JudgeExecutionError as exc:
+        """Turn a judge exception into an ``error`` result — never a failure."""
+        if isinstance(exc, JudgeExecutionError):
             _log.warning(
                 "Model judge eval %s produced no verdict (%s): %s",
                 eval_def.id,
@@ -643,22 +708,31 @@ class EvalEngine:
                 exc.detail,
                 judge_verdict=exc.as_verdict(),
             )
-        except Exception as exc:
-            detail = f"judge callable raised {type(exc).__name__}; no verdict was produced"
-            # Log the TYPE only: the exception text can carry model output or
-            # credential-bearing URLs, and a traceback is not needed here.
-            _log.warning(
-                "Model judge eval %s raised %s; no verdict was produced",
-                eval_def.id,
-                type(exc).__name__,
-            )
-            return _error_result(
-                run_id,
-                eval_def.node_id or "",
-                eval_def.id,
-                JudgeErrorCode.JUDGE_UNAVAILABLE,
-                detail,
-            )
+        detail = f"judge callable raised {type(exc).__name__}; no verdict was produced"
+        # Log the TYPE only: the exception text can carry model output or
+        # credential-bearing URLs, and a traceback is not needed here.
+        _log.warning(
+            "Model judge eval %s raised %s; no verdict was produced",
+            eval_def.id,
+            type(exc).__name__,
+        )
+        return _error_result(
+            run_id,
+            eval_def.node_id or "",
+            eval_def.id,
+            JudgeErrorCode.JUDGE_UNAVAILABLE,
+            detail,
+        )
+
+    @staticmethod
+    def _finalize_judge_result(
+        raw: Any,
+        *,
+        eval_def: EvalDefinition,
+        run_id: UUID,
+        judge_verdict: JudgeVerdict | None = None,
+    ) -> EvalResult:
+        """Normalise a judge's returned dict; a malformed one is an error."""
         try:
             return _result_from_judge_dict(
                 raw,
@@ -680,6 +754,58 @@ class EvalEngine:
                 exc.code,
                 exc.detail,
             )
+
+    @staticmethod
+    def _run_model_judge_and_parse(
+        callable_fn: Any,
+        callable_args: tuple[Any, ...],
+        *,
+        eval_def: EvalDefinition,
+        run_id: UUID,
+        judge_verdict: JudgeVerdict | None = None,
+    ) -> EvalResult:
+        """Call a judge and produce a typed verdict — never an inferred failure.
+
+        Any exception from a judge means no verdict was produced, so the result
+        is ``outcome=error`` with a coded reason. A malformed response is
+        likewise an error (ADR 066 D5/D6); only a well-formed verdict becomes
+        ``pass``/``fail``.
+        """
+        try:
+            raw = callable_fn(*callable_args)
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            raise
+        except Exception as exc:
+            return EvalEngine._judge_failure_result(exc, eval_def=eval_def, run_id=run_id)
+        return EvalEngine._finalize_judge_result(
+            raw,
+            eval_def=eval_def,
+            run_id=run_id,
+            judge_verdict=judge_verdict,
+        )
+
+    @staticmethod
+    async def _arun_model_judge_and_parse(
+        callable_fn: Any,
+        callable_args: tuple[Any, ...],
+        *,
+        eval_def: EvalDefinition,
+        run_id: UUID,
+        judge_verdict: JudgeVerdict | None = None,
+    ) -> EvalResult:
+        """The async twin: await on the caller's own loop (ADR 066 D10)."""
+        try:
+            raw = await callable_fn(*callable_args)
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            raise
+        except Exception as exc:
+            return EvalEngine._judge_failure_result(exc, eval_def=eval_def, run_id=run_id)
+        return EvalEngine._finalize_judge_result(
+            raw,
+            eval_def=eval_def,
+            run_id=run_id,
+            judge_verdict=judge_verdict,
+        )
 
     def _evaluate_custom(
         self,
@@ -724,47 +850,32 @@ class EvalEngine:
         )
 
     @staticmethod
-    def _build_safe_judge_input(
-        output: dict[str, Any],
-        eval_def: EvalDefinition,
-    ) -> tuple[dict[str, Any], EvalDefinition]:
-        """Wrap the evaluated content in the guarded delimiters (100k bound).
+    def _render_judge_field(value: Any, *, structured_as_json: bool = False) -> str:
+        """Render one referenced field as judged text.
 
-        A configured ``field`` behaves exactly as today: the field's value is
-        replaced in a copy of the output. With NO field (the guardrail
-        revalidation path), the whole output is the evaluated content — a judge
-        given an empty string can never validate anything, which silently
-        ignored the guardrail rubric. The guarded string is also exposed on
-        ``config["_judge_content"]`` so the caller need not re-derive it.
+        The SINGLE-field path keeps the historical ``str()`` rendering
+        byte-for-byte (S1's contract). The MULTI-field union renders a
+        structured value as JSON with deterministic key order: a large nested
+        structure must reach the judge as the data it is, and must be measured
+        for the bound in its real serialised form.
         """
-        field = eval_def.config.get("field", "")
-        whole_output = eval_def.config.get("judge_whole_output") is True
-        if whole_output:
-            raw_content = json.dumps(output, sort_keys=True, default=str)
-        elif not field:
-            # No field and no explicit whole-output flag is a configuration
-            # error, never an empty judgement.
-            raise JudgeExecutionError(
-                JudgeErrorCode.JUDGE_CONFIGURATION,
-                "judge config has no 'field'; whole-output judging requires judge_whole_output=true",
-            )
-        else:
-            # Dotted resolution (the ADR's own example uses scenario.input).
-            found, raw_value = EvalEngine._resolve_output_field(output, field)
-            if not found:
-                raise JudgeExecutionError(
-                    JudgeErrorCode.JUDGE_CONFIGURATION,
-                    f"judge field {field!r} does not resolve in the output; no verdict was produced",
-                )
-            raw_content = raw_value
-        content = "" if raw_content is None else str(raw_content)
+        if value is None:
+            return ""
+        if structured_as_json and isinstance(value, (dict, list)):
+            return json.dumps(value, sort_keys=True, default=str)
+        return str(value)
 
-        cleaned = _DELIMITER_STRIP_PATTERN.sub("", content)
+    @staticmethod
+    def _reject_if_over_bound(length: int) -> None:
+        """Raise the bounded-content error for a too-large judged payload."""
+        if length > _MAX_JUDGE_CONTENT_LENGTH:
+            raise ContentTooLongError(length)
 
-        if len(cleaned) > _MAX_JUDGE_CONTENT_LENGTH:
-            raise ContentTooLongError(len(cleaned))
-
-        safe_content = (
+    @staticmethod
+    def _guard_wrap(text: str) -> str:
+        """Wrap one payload in the injection guard, stripping forged fences."""
+        cleaned = _DELIMITER_STRIP_PATTERN.sub("", text)
+        return (
             f"{_OUTER_DELIMITER}\n"
             f"{_GUARD_INSTRUCTION}\n"
             f"{_INNER_DELIMITER}\n"
@@ -775,16 +886,109 @@ class EvalEngine:
             f"{_OUTER_DELIMITER}"
         )
 
+    @staticmethod
+    def _judged_field_paths(config: dict[str, Any]) -> list[str]:
+        """The union of every field the judge must see, primary field first.
+
+        ADR 066 D16: the guarded payload is built from the UNION of all
+        referenced fields, not one flat ``field``. ``context_fields`` is the
+        typed dialect's way to reference evidence the verdict depends on.
+        """
+        field = config.get("field", "")
+        context = config.get("context_fields") or []
+        if not isinstance(context, list) or any(not isinstance(item, str) for item in context):
+            raise JudgeExecutionError(
+                JudgeErrorCode.JUDGE_CONFIGURATION,
+                "judge config 'context_fields' must be a list of dotted paths",
+            )
+        paths = [field] if isinstance(field, str) and field else []
+        for path in context:
+            if path and path not in paths:
+                paths.append(path)
+        return paths
+
+    @staticmethod
+    def _build_safe_judge_input(
+        output: dict[str, Any],
+        eval_def: EvalDefinition,
+    ) -> tuple[dict[str, Any], EvalDefinition]:
+        """Wrap the evaluated content in the guarded delimiters (100k bound).
+
+        Single-field behaviour is unchanged: the field's value is replaced in a
+        copy of the output. The typed dialect adds ``context_fields``, and every
+        referenced field is resolved, rendered, delimited individually and
+        included in the union payload exposed on ``config["_judge_content"]``.
+        An unresolvable field is a configuration error — never an empty
+        judgment.
+        """
+        config = eval_def.config
+        whole_output = config.get("judge_whole_output") is True
+        field = config.get("field", "")
+        if whole_output:
+            raw_content = json.dumps(output, sort_keys=True, default=str)
+            # The whole-output branch is a live path (guardrail correction sets
+            # judge_whole_output), so it carries the same 100k bound as a field.
+            EvalEngine._reject_if_over_bound(len(raw_content))
+            safe_content = EvalEngine._guard_wrap(raw_content)
+            paths: list[str] = []
+        else:
+            paths = EvalEngine._judged_field_paths(config)
+            if not paths:
+                # No field and no explicit whole-output flag is a configuration
+                # error, never an empty judgement.
+                raise JudgeExecutionError(
+                    JudgeErrorCode.JUDGE_CONFIGURATION,
+                    "judge config has no 'field'; whole-output judging requires judge_whole_output=true",
+                )
+            resolved: list[tuple[str, str]] = []
+            for path in paths:
+                found, raw_value = EvalEngine._resolve_output_field(output, path)
+                if not found:
+                    raise JudgeExecutionError(
+                        JudgeErrorCode.JUDGE_CONFIGURATION,
+                        f"judge field {path!r} does not resolve in the output; no verdict was produced",
+                    )
+                resolved.append((path, EvalEngine._render_judge_field(raw_value, structured_as_json=len(paths) > 1)))
+            if len(resolved) == 1:
+                # A single field is bounded by its CONTENT, so a field of exactly
+                # the maximum still passes (the historical contract) despite the
+                # fixed wrapper.
+                EvalEngine._reject_if_over_bound(len(resolved[0][1]))
+                safe_content = EvalEngine._guard_wrap(resolved[0][1])
+            else:
+                # Multi-field: each field carries its own label and ~400-char
+                # guard wrapper, so the bound must be measured on the assembled,
+                # transported payload — otherwise thousands of short paths push
+                # the request to megabytes while every field is tiny.
+                safe_content = "\n".join(EvalEngine._guard_wrap(f"FIELD: {path}\n{text}") for path, text in resolved)
+                EvalEngine._reject_if_over_bound(len(safe_content))
+
         safe_output = dict(output)
-        if field:
+        if isinstance(field, str) and field:
+            # Preserve the S1 contract: a caller reading the primary field from
+            # the guarded copy sees the whole guarded payload.
             safe_output[field] = safe_content
 
-        safe_config = dict(eval_def.config)
+        safe_config = dict(config)
         safe_config["_judge_guard_instruction"] = _GUARD_INSTRUCTION
         safe_config["_judge_content"] = safe_content
-        safe_eval_def = eval_def.model_copy(update={"config": safe_config})
+        safe_eval_def = EvalEngine._copy_def_with_config(eval_def, safe_config)
 
         return safe_output, safe_eval_def
+
+    @staticmethod
+    def _copy_def_with_config(eval_def: Any, config: dict[str, Any]) -> Any:
+        """Copy a definition with a replaced config.
+
+        The engine accepts both the Pydantic ``EvalDefinition`` and the
+        duck-typed ``EvalDefDTO`` dataclass used by the pipeline loops, so the
+        copy has to support both. ``model_copy`` is Pydantic-only.
+        """
+        if hasattr(eval_def, "model_copy"):
+            return eval_def.model_copy(update={"config": config})
+        import dataclasses
+
+        return dataclasses.replace(eval_def, config=config)
 
     def _evaluate_model_judge(
         self,

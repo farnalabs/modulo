@@ -74,7 +74,7 @@ class BatchDetailRequest(BaseModel):
     event_ids: list[str]
 
 
-@router.get("")
+@router.get("", dependencies=[require_feature("audit_viewer")])
 @handle_db_errors("audit.list_audit_events_endpoint")
 async def list_audit_events_endpoint(
     cursor: str | None = Query(None, max_length=256, description="Cursor: JSON {c:created_at, i:id}"),
@@ -188,7 +188,7 @@ async def batch_detail_endpoint(
     return result
 
 
-@router.get("/verify")
+@router.get("/verify", dependencies=[require_feature("audit_viewer")])
 @handle_db_errors("audit.verify_chain_endpoint")
 async def verify_chain_endpoint(
     session: AsyncSession = Depends(get_db_session),

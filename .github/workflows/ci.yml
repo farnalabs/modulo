@@ -780,8 +780,14 @@ jobs:
         run: pnpm exec playwright test mobile-nav-flash mobile-nav-usable
       - name: Run unit tests (vitest)
         if: needs.changes.outputs.frontend == 'true'
+        # The suite includes src/__tests__/stylesheets-parse.spec.ts (FAR-1995),
+        # the explicit PostCSS/@vue/compiler-sfc gate for standalone CSS and Vue
+        # SFC <style> blocks. ESLint and vue-tsc do not validate CSS contents.
+        # Keep this test in the existing frontend unit gate rather than adding a
+        # second CSS-specific tool or dependency.
         # FAR-101: ubicloud-standard-2 is 2 vCPU. package.json's `test:unit`
         # script hardcodes --maxWorkers=4, which saturates both cores with 4
+
         # concurrently-loading jsdom environments (Vue SFC + ECharts/reka-ui/
         # vue-query) and starves setImmediate (flushPromises) by 10+s. Cap the
         # runner at 2 workers — matches actual CPU capacity, not a race-hiding

@@ -927,3 +927,27 @@ def test_an_unexpected_engine_failure_still_produces_an_error_row() -> None:
     assert results[0].outcome == "error"
     assert results[0].error_code == "judge.unavailable"
     assert results[0].score is None
+
+
+async def test_judging_budget_exhaustion_terminalises_honestly(session) -> None:
+    """A spent run budget records error rows and fails the run — never a hang."""
+    org = await _org()
+    suite, dataset, _, backend = await seed_suite(session, org)
+    await seed_cases(session, org, dataset, [{"category": "billing"}])
+    run = await build_suite_run(
+        session,
+        org_id=org,
+        suite_id=suite.id,
+        dataset_id=dataset.id,
+        model_backend_id=backend.id,
+    )
+    await _suite_run_transition(session, run, SuiteRunState.RUNNING)
+
+    stats = await execute_suite_run(session, run, judging_budget_seconds=1e-9)
+
+    assert stats["state"] == SuiteRunState.FAILED.value
+    assert stats["excluded_case_count"] == 1
+    rows = list((await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalars())
+    assert len(rows) == 1
+    assert rows[0].outcome == "error"
+    assert rows[0].error_code == "judge.timeout"

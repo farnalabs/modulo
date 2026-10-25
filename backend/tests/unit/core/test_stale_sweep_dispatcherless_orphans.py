@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
@@ -318,7 +318,13 @@ class TestSweepEntryPoint:
         monkeypatch.setattr(
             pe,
             "get_settings",
-            lambda: MagicMock(saq_never_dispatched_window=300, saq_worker_lost_window=WL_WINDOW),
+            lambda: MagicMock(
+                saq_never_dispatched_window=300,
+                saq_worker_lost_window=WL_WINDOW,
+                # FAR-2122: the orphan cutoff defers one reconcile tick past the
+                # reconcile stale window (2 * SAQ_JOB_HEARTBEAT).
+                saq_job_heartbeat=300,
+            ),
         )
         advanced = AsyncMock()
         monkeypatch.setattr(pe, "_advance_terminalised_run", advanced)
@@ -348,6 +354,40 @@ class TestSweepEntryPoint:
         # Advanced as a FAILED terminal run (never as the queue-expiry
         # ``rejected`` supersession).
         assert advanced.await_args_list[0].kwargs.get("status", "failed") == "failed"
+
+    async def test_sweep_defers_to_the_reconcile_resume_arm_for_one_tick(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-2122 precedence: the orphan cutoff extends one dispatcher_reconcile
+        tick past the reconcile stale window (2*SAQ_JOB_HEARTBEAT = 600s), so the
+        checkpoint-resume arm in ``dispatcher_reconcile`` gets a deterministic
+        chance to resume a checkpoint-bearing row before this terminaliser acts.
+
+        A row 610s stale is inside the 660s grace: NOT terminalised. A row 720s
+        stale is past it: terminalised. Without the grace both are swept on the
+        same tick, racing the reconcile arm.
+        """
+        real_now = datetime.now(UTC)
+        inside_grace = _seed_run(
+            name="-inside-grace",
+            started_at=real_now - timedelta(seconds=WL_WINDOW + 10),
+            run_number=1,
+        )
+        past_grace = _seed_run(
+            name="-past-grace",
+            started_at=real_now - timedelta(seconds=WL_WINDOW + 120),
+            run_number=2,
+        )
+        db_session.add_all([inside_grace, past_grace])
+        await db_session.commit()
+
+        result, _advanced, _conn = await self._run_sweep(db_session, monkeypatch)
+
+        assert result["worker_orphaned_swept"] == 1
+        await db_session.refresh(inside_grace)
+        await db_session.refresh(past_grace)
+        assert inside_grace.status == "running"
+        assert past_grace.status == "failed"
 
     async def test_sweep_leaves_an_owned_run_running(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch

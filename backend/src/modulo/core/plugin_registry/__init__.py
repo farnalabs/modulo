@@ -151,8 +151,14 @@ class PluginRegistry:
             # side_effects) surfaces here as StopIteration — propagate it so the
             # real cause is not masked as a silent discovery failure.
             raise
-        except (ImportError, importlib.metadata.PackageNotFoundError, ValueError):
+        except (ImportError, ValueError):
             logger.exception("Failed to query entry points during plugin discovery")
+            return discovered
+        except Exception:
+            # A third-party metadata provider can fail with errors other than
+            # the standard import/metadata exceptions. Discovery runs during
+            # startup, so those failures must not make the instance unbootable.
+            logger.exception("Unexpected failure querying entry points during plugin discovery")
             return discovered
 
         for group, ep in entries:
@@ -173,11 +179,40 @@ class PluginRegistry:
 
         Returns a ``PluginManifest`` or ``None`` if the module could not be imported.
         """
-        dist = ep.dist
-        if dist is None:
-            self._record_unhealthy(ep.name, ep.name, "", "0.0.0", _HLTH_MISSING_METADATA)
+        entry_point_name = "unknown-entry-point"
+        try:
+            entry_point_name = ep.name
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to read entry-point metadata")
+            self._record_unhealthy(
+                entry_point_name,
+                entry_point_name,
+                "",
+                "0.0.0",
+                f"{_HLTH_UNREADABLE_METADATA} {entry_point_name}",
+            )
             return None
-        metadata_fields = self._read_distribution_metadata(dist, ep.name)
+
+        try:
+            dist = ep.dist
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to read entry-point metadata for %s", entry_point_name)
+            self._record_unhealthy(
+                entry_point_name,
+                entry_point_name,
+                "",
+                "0.0.0",
+                f"{_HLTH_UNREADABLE_METADATA} {entry_point_name}",
+            )
+            return None
+        if dist is None:
+            self._record_unhealthy(entry_point_name, entry_point_name, "", "0.0.0", _HLTH_MISSING_METADATA)
+            return None
+        metadata_fields = self._read_distribution_metadata(dist, entry_point_name)
         if metadata_fields is None:
             return None
         plugin_id, display_name, description, version = metadata_fields
@@ -195,8 +230,8 @@ class PluginRegistry:
             # would make the whole instance unbootable because of one broken
             # third-party plugin. Record it unhealthy under the same
             # "Failed to load entry point …" surface and keep scanning.
-            logger.exception("Failed to load entry point %s from package %s", ep.name, plugin_id)
-            detail = f"Failed to load entry point {ep.name}"
+            logger.exception("Failed to load entry point %s from package %s", entry_point_name, plugin_id)
+            detail = f"Failed to load entry point {entry_point_name}"
             self._record_unhealthy(plugin_id, display_name, description, version, detail)
             return None
 
@@ -214,21 +249,21 @@ class PluginRegistry:
                 )
 
             if group == _ENTRY_POINT_CONNECTORS:
-                self._connector_builders[ep.name] = builder
+                self._connector_builders[entry_point_name] = builder
                 manifest.capabilities.add(_CAP_CONNECTOR)
-                logger.debug("Registered connector type '%s' from plugin %s", ep.name, plugin_id)
+                logger.debug("Registered connector type '%s' from plugin %s", entry_point_name, plugin_id)
             elif group == _ENTRY_POINT_MODEL_BACKENDS:
-                self._backend_builders[ep.name] = builder
+                self._backend_builders[entry_point_name] = builder
                 manifest.capabilities.add(_CAP_MODEL_BACKEND)
-                logger.debug("Registered model backend '%s' from plugin %s", ep.name, plugin_id)
+                logger.debug("Registered model backend '%s' from plugin %s", entry_point_name, plugin_id)
             elif group == _ENTRY_POINT_EVALS:
-                self._eval_builders[ep.name] = builder
+                self._eval_builders[entry_point_name] = builder
                 manifest.capabilities.add(_CAP_EVAL)
-                logger.debug("Registered eval function '%s' from plugin %s", ep.name, plugin_id)
+                logger.debug("Registered eval function '%s' from plugin %s", entry_point_name, plugin_id)
             elif group == _ENTRY_POINT_SCHEMA_TYPES:
-                self._schema_type_builders[ep.name] = builder
+                self._schema_type_builders[entry_point_name] = builder
                 manifest.capabilities.add(_CAP_SCHEMA_TYPE)
-                logger.debug("Registered schema type '%s' from plugin %s", ep.name, plugin_id)
+                logger.debug("Registered schema type '%s' from plugin %s", entry_point_name, plugin_id)
 
             self._plugins[plugin_id] = manifest
             self._health[plugin_id] = PluginHealth(ok=True, detail=_HLTH_LOADED)

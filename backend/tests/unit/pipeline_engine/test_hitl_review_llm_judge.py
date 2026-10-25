@@ -107,13 +107,24 @@ def _run_gate_fn_capturing_results(
     """Run the gate fn and capture every engine result it computed."""
     captured: list[Any] = []
     real = EvalEngine.evaluate_result
+    real_async = EvalEngine.evaluate_result_async
 
     def _spy(self: EvalEngine, *args: Any, **kwargs: Any) -> Any:
         result = real(self, *args, **kwargs)
         captured.append(result)
         return result
 
-    with patch.object(EvalEngine, "evaluate_result", _spy):
+    async def _async_spy(self: EvalEngine, *args: Any, **kwargs: Any) -> Any:
+        result = await real_async(self, *args, **kwargs)
+        captured.append(result)
+        return result
+
+    # The judge path is async on this call site (ADR 066 D10), so instrument
+    # BOTH entry points; the assertions below stay identical.
+    with (
+        patch.object(EvalEngine, "evaluate_result", _spy),
+        patch.object(EvalEngine, "evaluate_result_async", _async_spy),
+    ):
         interrupted = _run_gate_fn(gate_config, state, eval_defs)
     return interrupted, captured
 

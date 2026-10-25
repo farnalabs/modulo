@@ -594,7 +594,8 @@ class TestQuestionScoringEdges:
         assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
         assert "'?'" in exc_info.value.detail
 
-    def test_a_non_primitive_answer_is_not_recorded(self) -> None:
+    def test_a_non_primitive_choice_answer_is_malformed(self) -> None:
+        """An answer outside the declared vocabulary is no verdict (D6), not a fail."""
         questions = [
             {
                 "id": "tone",
@@ -605,9 +606,10 @@ class TestQuestionScoringEdges:
             }
         ]
 
-        verdicts, _, _ = self._aggregate(questions, {"tone": ("a",)})
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(questions, {"tone": ("a",)})
 
-        assert verdicts[0].answer is None
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
 
     def test_a_null_weight_is_a_configuration_error(self) -> None:
         questions = [{"id": "optional", "type": "noul", "weight": None}]

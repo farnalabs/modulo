@@ -295,7 +295,7 @@ async def _run_bootstrap(settings: Settings) -> None:
             logger.warning("startup.role_bootstrap_failed", exc_info=True)
 
 
-async def _run_break_glass_watchdog(settings: Settings) -> None:
+async def _run_break_glass_watchdog(settings: Settings) -> None:  # NOSONAR S7503 - async lifespan seam
     """Boot-time break-glass watchdog (deliverable B).
 
     The allow-list / role-posture assertions from ``bootstrap_role.py`` run
@@ -1031,7 +1031,7 @@ def _register_shutdown_manager(settings: Settings) -> None:
     try:
         di_engine = get_or_create_engine(settings)
 
-        async def shutdown_otel_async() -> None:
+        async def shutdown_otel_async() -> None:  # NOSONAR S7503 - async shutdown callback contract
             shutdown_otel()
 
         _shutdown_manager.register("otel", shutdown_otel_async)

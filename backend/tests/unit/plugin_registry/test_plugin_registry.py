@@ -540,7 +540,7 @@ def test_discover_plugins_no_plugins():
     registry = PluginRegistry()
     with patch("modulo.core.plugin_registry.importlib.metadata.entry_points", return_value=[]):
         discovered = registry.discover_plugins()
-    assert discovered == []
+    assert not discovered
     assert not registry.list_plugins()
 
 
@@ -643,7 +643,19 @@ def test_discover_plugins_swallows_entry_point_query_error():
         side_effect=ValueError("boom"),
     ):
         discovered = registry.discover_plugins()
-    assert discovered == []
+    assert not discovered
+
+
+def test_discover_plugins_swallows_unexpected_entry_point_query_error():
+    """A metadata provider failure must not abort startup discovery."""
+    registry = PluginRegistry()
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=RuntimeError("metadata provider unavailable"),
+    ):
+        discovered = registry.discover_plugins()
+    assert not discovered
+    assert not registry.list_plugins()
 
 
 def test_discover_plugins_propagates_stop_iteration():
@@ -672,7 +684,7 @@ def test_load_entry_point_failure_variants_are_skipped():
             side_effect=[[fail_ep], [], [], []],
         ):
             discovered = registry.discover_plugins()
-        assert discovered == []
+        assert not discovered
         assert not registry.has_connector_type("broken_con")
 
 
@@ -701,7 +713,7 @@ def test_load_entry_point_unexpected_exception_is_surfaced_not_raised(exc_type):
     ):
         discovered = registry.discover_plugins()
 
-    assert discovered == []
+    assert not discovered
     assert not registry.has_connector_type("broken_con")
     health = registry.health_check(dist_name)
     assert health[dist_name].ok is False
@@ -912,7 +924,7 @@ def test_discover_plugins_entry_point_no_dist():
         return_value=[no_dist],
     ):
         discovered = registry.discover_plugins()
-    assert discovered == []
+    assert not discovered
 
     # The entry point has no distribution to derive metadata from, so it is
     # surfaced as a broken plugin with a descriptive detail instead of being
@@ -937,7 +949,7 @@ def test_discover_plugins_entry_point_load_failure():
         side_effect=[[fail_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
-    assert discovered == []
+    assert not discovered
 
     # The entry point failed to load → the cached error is definitive.
     health = registry.health_check("pkg-broken")
@@ -1210,3 +1222,102 @@ def test_unreadable_distribution_metadata_is_surfaced_unhealthy():
     assert "broken_type" in listed
     assert registry.health_check()["broken_type"].ok is False
     assert "Failed to read distribution metadata" in registry.health_check()["broken_type"].detail
+
+
+def test_unreadable_entry_point_attributes_do_not_abort_discovery():
+    """A broken entry-point object cannot take down sibling discovery."""
+    registry = PluginRegistry()
+    broken = _ExplodingEntryPoint()
+    healthy_dist = MagicMock()
+    healthy_dist.name = "healthy-plugin"
+    healthy_dist.metadata = {"Name": "healthy-plugin", "Summary": "s", "Version": "1.0"}
+    healthy = _entry_point(healthy_dist, "healthy_type", loads=_build_stub_connector)
+
+    with _entry_points_returning([broken, healthy]):
+        discovered = registry.discover_plugins()
+
+    assert [manifest.PLUGIN_ID for manifest in discovered] == ["healthy-plugin"]
+    assert registry.has_connector_type("healthy_type")
+    assert registry.health_check("unknown-entry-point")["unknown-entry-point"].ok is False
+
+
+def test_unreadable_entry_point_distribution_does_not_abort_discovery():
+    """A distribution access failure is unhealthy without blocking siblings."""
+    registry = PluginRegistry()
+    broken = _ExplodingDistributionEntryPoint()
+    healthy_dist = MagicMock()
+    healthy_dist.name = "healthy-plugin"
+    healthy_dist.metadata = {"Name": "healthy-plugin", "Summary": "s", "Version": "1.0"}
+    healthy = _entry_point(healthy_dist, "healthy_type", loads=_build_stub_connector)
+
+    with _entry_points_returning([broken, healthy]):
+        discovered = registry.discover_plugins()
+
+    assert [manifest.PLUGIN_ID for manifest in discovered] == ["healthy-plugin"]
+    assert registry.has_connector_type("healthy_type")
+    assert registry.health_check("broken_type")["broken_type"].ok is False
+    assert "Failed to read distribution metadata" in registry.entry_point_errors["broken_type"]
+
+
+def test_cancelled_entry_point_name_is_reraised():
+    """Cancellation while reading entry-point metadata must propagate.
+
+    ``_load_entry_point`` isolates plugin defects from startup, but
+    cancellation is cooperative control flow, not a plugin defect. The explicit
+    ``except asyncio.CancelledError: raise`` arm ahead of the broad handler must
+    re-raise instead of recording the plugin unhealthy and continuing.
+    """
+    registry = PluginRegistry()
+    with _entry_points_returning([_CancelledNameEntryPoint()]), pytest.raises(asyncio.CancelledError):
+        registry.discover_plugins()
+
+    assert not registry.list_plugins()
+
+
+def test_cancelled_entry_point_distribution_is_reraised():
+    """Cancellation while reading the distribution must propagate, not be swallowed."""
+    registry = PluginRegistry()
+    with _entry_points_returning([_CancelledDistributionEntryPoint()]), pytest.raises(asyncio.CancelledError):
+        registry.discover_plugins()
+
+    assert not registry.list_plugins()
+
+
+class _ExplodingEntryPoint:
+    """Entry-point metadata object whose fields fail when read."""
+
+    @property
+    def name(self) -> str:
+        raise RuntimeError("entry-point name unavailable")
+
+    @property
+    def dist(self) -> Any:
+        raise RuntimeError("entry-point distribution unavailable")
+
+
+class _ExplodingDistributionEntryPoint:
+    """Entry-point object whose distribution metadata access fails after naming."""
+
+    name = "broken_type"
+
+    @property
+    def dist(self) -> Any:
+        raise RuntimeError("entry-point distribution unavailable")
+
+
+class _CancelledNameEntryPoint:
+    """Entry-point object cancelled while its name is being read."""
+
+    @property
+    def name(self) -> str:
+        raise asyncio.CancelledError
+
+
+class _CancelledDistributionEntryPoint:
+    """Entry-point object cancelled while its distribution is being read."""
+
+    name = "cancelled_type"
+
+    @property
+    def dist(self) -> Any:
+        raise asyncio.CancelledError
