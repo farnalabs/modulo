@@ -127,7 +127,14 @@ async def test_read_log_tail_after_destroy_is_empty(k8s_cluster: K8sConformanceC
 
 
 async def test_egress_none_refused_with_typed_error(k8s_cluster: K8sConformanceCluster) -> None:
-    """Error-envelope clause: unenforceable egress fails TYPED, never a silent downgrade."""
+    """Error-envelope clause: unenforceable egress fails TYPED, never a silent downgrade.
+
+    This conformance cluster has no chart-rendered workspace NetworkPolicy, so
+    the chart's enforcement signal is absent and an egress 'none' (deny_all)
+    claim is unenforceable here: FAR-2068 keeps it fail-closed. With
+    ``workspaceNetworkPolicy.enabled=true`` the manifest would exist and the
+    claim is accepted (see the unit provider tests).
+    """
     spec = conformance_workspace_spec()
     spec.egress_policy = "none"
     with pytest.raises(ProviderCapabilityUnsupportedError, match="NetworkPolicy"):

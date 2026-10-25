@@ -28,13 +28,13 @@ _FRONTEND_SRC = _REPO_ROOT / "frontend" / "src"
 
 # Team-tier flags declared in the catalog but intentionally not yet enforced
 # anywhere (backend route gate, frontend FeatureGate, or service check).
-# ``scim`` (ctx.feature_enabled("scim") in auth/scim_auth.py),
-# ``external_secrets`` (registry.get_flag("external_secrets") in
-# core/secrets_backend/__init__.py) and ``pipeline_delete``
-# (planStore.featureEnabled('pipeline_delete') in the frontend pipeline
-# views) ARE enforced — scim/external_secrets at the SERVICE level,
+# ``scim`` (ctx.feature_enabled("scim") in auth/scim_auth.py) and
+# ``pipeline_delete`` (planStore.featureEnabled('pipeline_delete') in the
+# frontend pipeline views) ARE enforced — scim at the SERVICE level,
 # pipeline_delete in the FRONTEND — so the detector correctly classifies them
-# as enforced and they do NOT belong in this gap set.
+# as enforced and they do NOT belong in this gap set. ``external_secrets`` was
+# retired from the catalog: external secret backends are available on every
+# tier, so there is no flag to enforce and it is no longer a team-tier entry.
 KNOWN_UNENFORCED_TEAM_FLAGS: set[str] = set()
 
 

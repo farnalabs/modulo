@@ -30,6 +30,7 @@ from modulo.core.product_analytics.constants import (
 from modulo.db.crud.system_config import get_config
 
 _log = logging.getLogger(__name__)
+_KILL_SWITCH_TRUTHY_VALUES = frozenset(("1", "true", "yes"))
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +250,7 @@ def kill_switch_disables_enforcement(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes")
+        return value.strip().lower() in _KILL_SWITCH_TRUTHY_VALUES
     return bool(value)
 
 

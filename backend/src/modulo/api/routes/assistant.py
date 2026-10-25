@@ -434,8 +434,8 @@ async def _is_ui_driving_enabled(org_id: uuid.UUID) -> bool:
         registry = get_registry()
         return await registry.resolve_flag("assistant_ui_driving", org_id=org_id)
     except Exception:
-        logger.warning("Failed to resolve plan context for ui_driving check, defaulting to True", exc_info=True)
-        return True
+        logger.warning("Failed to resolve plan context for ui_driving check, defaulting to False", exc_info=True)
+        return False
 
 
 # ── UI command helpers ───────────────────────────────────────────────────

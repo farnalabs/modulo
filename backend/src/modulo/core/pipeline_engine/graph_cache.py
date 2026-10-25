@@ -587,8 +587,9 @@ def _make_node_fn(
         # silently execute as an LLM node — no dispatch, no error. Fail LOUD at
         # graph build instead (the API model rejects the shape at save time;
         # this catches hand-written and legacy graphs).
-        #
+
         # FAR-2089: a ``connector`` node is the same shape — its whole job is the
+
         # binding, and the ownerless fall-through below is the general LLM
         # factory. A binding-less connector node therefore ran as an agent node
         # with no agent instead of failing; same guard, same message shape.

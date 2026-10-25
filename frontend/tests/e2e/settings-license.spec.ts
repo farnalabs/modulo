@@ -1,23 +1,32 @@
-﻿import { test, expect, loginAsAdmin, loginForSystemRoute } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Settings License', { tag: "@regression" }, () => {
   test('renders the License page', { tag: "@regression" }, async ({ page, env }) => {
-    const systemAdmin = await loginForSystemRoute(page, env)
+    await loginAsAdmin(page, env)
     if (env.name === 'local') {
-      // Registered after login so it is not shadowed by setupLocalMockApi's
+      // Registered after login so they are not shadowed by setupLocalMockApi's
       // catch-all (Playwright matches the last registered route first).
+      //
+      // FAR-2104: /settings/license sits in the ADMIN group behind the
+      // `org.license.manage` permission (an org-admin permission, no longer the
+      // FAR-938 SYSTEM group). The local mock's catch-all answers the
+      // caller-scoped GET /api/v1/auth/permissions with `{items: [], total: 0}`
+      // — no `permissions` array — which leaves the router's permission gate
+      // fail-closed and bounces the page to the dashboard. Supply the same
+      // permission the staging e2e org admin holds, so both targets exercise
+      // the shipped gate instead of a mock gap.
+      await page.route('**/api/v1/auth/permissions', (route) => {
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ permissions: ['org.license.manage'] }) })
+      })
       await page.route('**/api/v1/admin/license*', (route) => {
         route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ has_license: true, tier: 'team', features: ['sso', 'audit_log', 'custom_roles'], expires_at: '2026-06-01T10:00:00Z', org_id: 'org1' }) })
       })
     }
     await page.goto('/settings/license')
-    if (!systemAdmin) {
-      // FAR-938: the SYSTEM sidebar group is system-admin-only. The staging/prod
-      // e2e identity is a regular org admin, so the router guard redirects to '/'.
-      await expect(page).toHaveURL(/\/$/)
-      await expect(page.locator('h1')).toContainText('Dashboard')
-      return
-    }
+    // FAR-2104: the licence is an org-level object, so an org admin — the
+    // staging/prod e2e identity — reaches this screen and it renders. The old
+    // FAR-938 SYSTEM-group assertion (redirect to the dashboard) is stale.
+    await expect(page).toHaveURL(/\/settings\/license$/)
     await expect(page.locator('h1')).toContainText('License')
     await expect(page.getByTestId('license-title')).toBeVisible()
   })

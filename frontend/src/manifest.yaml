@@ -72,6 +72,22 @@ routes:
         deprecated: false
         exact: true
 
+    # FAR-2114: public post-purchase surface (no session, no sidebar). The
+    # endpoint is admitted by the signed licence keys, so the page is listed
+    # here for the product map / Assistant index and registered in App.vue's
+    # public-route-view set — not in the authenticated sidebar.
+    /licence/claim:
+        name: licence-claim
+        breadcrumb: Add Your Remaining Days
+        parent:
+        product_map: [feat-license]
+        sidebar_group:
+        sidebar_order:
+        type: form_page
+        <<: *community
+        deprecated: false
+        exact: true
+
     /onboarding:
         name: onboarding
         breadcrumb: Onboarding
@@ -1118,6 +1134,61 @@ elements:
         dynamic_testid: false
       - testid: accept-invite-success
         type: element
+        dynamic_testid: false
+    /licence/claim:
+      - testid: licence-claim-title
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-purchase-key
+        type: textarea
+        dynamic_testid: false
+      - testid: licence-claim-previous-key
+        type: textarea
+        dynamic_testid: false
+      - testid: licence-claim-error
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-error-detail
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-submit
+        type: button
+        dynamic_testid: false
+      - testid: licence-claim-stacked
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-stacked-title
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-unstacked
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-unstacked-title
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-key-value
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-copy
+        type: button
+        dynamic_testid: false
+      - testid: licence-claim-copy-error
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-expiry
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-previous-expiry
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-days-kept
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-detail
+        type: element
+        dynamic_testid: false
+      - testid: licence-claim-again
+        type: button
         dynamic_testid: false
     /admin/audit:
       - testid: admin-audit-verify-chain
@@ -5657,6 +5728,9 @@ elements:
       - testid: license-remove-btn-system
         type: button
         dynamic_testid: false
+      - testid: licence-claim-link
+        type: element
+        dynamic_testid: false
       - testid: licence-renewal-banner
         type: element
         dynamic_testid: false
@@ -5665,6 +5739,9 @@ elements:
         dynamic_testid: false
       - testid: licence-renewal-install-action
         type: button
+        dynamic_testid: false
+      - testid: licence-renewal-claim-link
+        type: link
         dynamic_testid: false
       - testid: licence-grace-dialog
         type: element
@@ -6898,6 +6975,7 @@ features:
             - "[x] The authenticated shell surfaces a backend-derived renewal state (FAR-2075): GET /api/v1/admin/license returns `licence_state` (none | active | renewal_due | grace | lapsed), `days_until_expiry` and `grace_ends_at`, derived once from `expires_at` + `LICENCE_GRACE_DAYS` in `derive_licence_state`; the shell reads that status once per session for org admins and renders the notice on EVERY authenticated route (not only the licence page) without comparing dates itself — `renewal_due` shows a countdown banner that offers a purchase path ONLY for a manual renewal (an auto-renewing licence is never invited to buy again), `grace` shows a dismissible dialog that returns on the next visit until the licence is renewed, with two equally-weighted actions (install a key the customer may never have received, or buy a new licence), and `lapsed` explains that Team capability is off and where to install a key; the licence page reuses the same query instead of issuing a second read (backend/src/modulo/api/routes/admin_license.py, frontend/src/components/AppLayout.vue, frontend/src/components/licence/LicenceRenewalNotice.vue, backend/tests/unit/api/test_admin_license.py, frontend/src/__tests__/LicenceRenewalNotice.spec.ts, frontend/src/__tests__/components/AppLayoutLicenceBanner.spec.ts)"
             - "[x] The licence screen's audience is ONE permission, not a parallel role check (FAR-2104): /settings/license sits in the ADMIN group with `required_permissions: [org.license.manage]` and a community tier floor, so an org admin — and a deployment whose licence has lapsed — can reach the page and install a key; the authenticated shell derives the renewal notice's audience from the same permission (frontend/src/composables/useLicenceAccess.ts → the server-resolved GET /api/v1/auth/permissions list) instead of an `orgRole === admin` check; the page splits the scopes — an org admin installs/removes the organisation's key via PUT/DELETE /api/v1/admin/orgs/{org_id}/license, while the instance-wide POST /api/v1/admin/license controls render only for a system admin (system.config.manage); GET /api/v1/admin/license is require_system_or_org_admin so the read admits exactly the principals those writes admit, and backend/tests/unit/api/test_admin_license_permission_agreement.py pins the agreement so the surfaces cannot drift apart again"
             - "[x] The INSTANCE-WIDE licence can be removed without a restart (FAR-2110): DELETE /api/v1/admin/license (guarded by the strict system-admin `system.config.manage`, so an org admin gets 403) clears the in-memory system licence and busts every cached `license:{org_id}` status entry, so GET /api/v1/admin/license immediately reports has_license false / licence_state none for an org falling back to the system key and Team-gated routes return 402; the system card renders a Remove control only for a caller holding system.config.manage (frontend/src/composables/useLicenceAccess.ts), and the removal is audited as license_removed on resource license (backend/tests/unit/api/test_admin_license.py, frontend/src/__tests__/SettingsLicenseView.spec.ts)"
+            - "[x] Early-renewal claim is reachable by a customer without a session (FAR-2114): the public /licence/claim page (meta.public, rendered outside the authenticated shell) posts the purchase key plus an optional previous licence to POST /api/v1/webhooks/stripe/renewal-claim; a stacked response shows the new key (copyable) with the new expiry, the previous expiry and the days carried over, an unstacked response is presented as a legitimate success (no time added, purchase key unchanged, re-submit with the previous licence) rather than an error, and every rejection reason (malformed / signature_mismatch / anchor_mismatch / expired / org_mismatch / same_licence / not_a_purchase_key / no_expiry / no_presented_key) renders an actionable message; the renewal banner and the License page link to it (frontend/src/views/LicenceClaimView.vue, frontend/src/router/index.ts, frontend/src/views/SettingsLicenseView.vue, frontend/src/components/licence/LicenceRenewalNotice.vue, backend/src/modulo/api/routes/stripe_webhook.py)"
             - "[ ] License-driven gating is not applied to EVERY registered feat-* surface — gating targets the licensed Team-tier surfaces, not the whole feature registry"
         deferrals:
             - "Universal license gating of every registered feature is tracked under feat-license"
