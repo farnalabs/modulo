@@ -94,7 +94,6 @@ _EXPECTED_MAPPING = {
     "hitl_approve_sweep_suspected": ("warning", "admin", "hitl.approve_sweep", "org_admin", True, 168),
     "eval_regression": ("warning", "org", "eval.regression", "any_scope", True, 336),
     "eval_blocked": ("error", "org", "eval.blocked", "any_scope", True, 168),
-    "feedback_pending": ("info", "user", "feedback.pending", "user_only", False, 336),
     "trigger_deactivated": ("warning", "org", "triggers.auto_deactivated", "org_admin", True, 168),
     "trigger_streak_alert": ("warning", "org", "triggers.streak_alert", "org_admin", True, 168),
     "guardrail_enforcement_gap": ("error", "admin", "guardrails.enforcement_gap", "org_admin", True, 168),
@@ -257,22 +256,13 @@ async def test_hitl_approve_sweep_templates_resolved(mapper: NotificationEventMa
     assert kwargs["action_url"] is None
 
 
-async def test_system_announcement_uses_message_payload(mapper: NotificationEventMapper) -> None:
-    _, mock_create = await _call(mapper, "system_announcement")
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["title"] == "System announcement"
-    assert kwargs["body"] == "hello world"
-    assert kwargs["action_url"] is None
-
-
-async def test_feedback_pending_static_action_url_independent_of_payload(
-    mapper: NotificationEventMapper,
-) -> None:
-    """feedback_pending has a static action URL that does not depend on the payload."""
-    _, mock_create = await _call(mapper, "feedback_pending", payload={})
-    kwargs = mock_create.await_args.kwargs
-    assert kwargs["action_url"] == "/feedback/inbox"
-    assert kwargs["body"] == "A feedback record is pending your review."
+@pytest.mark.parametrize("event_type", ["feedback_pending", "system_announcement"])
+async def test_retired_event_is_an_unknown_event(mapper: NotificationEventMapper, event_type: str) -> None:
+    """FAR-2138 retired these: with no render config they are the unknown-event
+    no-op, so nothing can ever be persisted for them."""
+    result, mock_create = await _call(mapper, event_type)
+    assert result is None
+    mock_create.assert_not_called()
 
 
 async def test_guardrail_enforcement_gap_templates_resolved(mapper: NotificationEventMapper) -> None:
@@ -420,9 +410,29 @@ async def test_missing_pipeline_name_key_does_not_crash(mapper: NotificationEven
 # ---------------------------------------------------------------------------
 
 
-async def test_system_announcement_has_no_expiry(mapper: NotificationEventMapper) -> None:
-    """system_announcement configures ttl_hours=None, so no expires_at is passed."""
-    _, mock_create = await _call(mapper, "system_announcement")
+async def test_ttl_hours_none_passes_no_expiry(
+    mapper: NotificationEventMapper, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config entry with ttl_hours=None passes no expires_at.
+
+    No shipped event uses None since FAR-2138 retired ``system_announcement``;
+    the mapper capability is pinned here so the branch cannot rot untested.
+    """
+    from modulo.core.notifier.event_mapper import _EVENT_CONFIG
+
+    monkeypatch.setitem(
+        _EVENT_CONFIG,
+        "test_no_expiry",
+        {
+            "level": "info",
+            "scope": "org",
+            "category": "test.no_expiry",
+            "dismiss_strategy": "any_scope",
+            "dismissible_at_scope": True,
+            "ttl_hours": None,
+        },
+    )
+    _, mock_create = await _call(mapper, "test_no_expiry")
     kwargs = mock_create.await_args.kwargs
     assert kwargs["expires_at"] is None
 
@@ -435,7 +445,7 @@ async def test_system_announcement_has_no_expiry(mapper: NotificationEventMapper
 async def test_target_user_id_passed_through(mapper: NotificationEventMapper) -> None:
     result, mock_create = await _call(
         mapper,
-        "feedback_pending",
+        "run_failed",
         target_user_id=_TARGET_USER,
     )
     assert result is not None

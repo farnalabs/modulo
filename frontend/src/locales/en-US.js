@@ -779,9 +779,6 @@ export default {
           "blocked": "Eval blocked",
           "regression": "Eval regression"
         },
-        "feedback": {
-          "pending": "Feedback pending"
-        },
         "guardrails": {
           "enforcement_gap": "Guardrail enforcement gap",
           "kill_switch": "Guardrail kill switch",
@@ -803,9 +800,6 @@ export default {
           "budget_exceeded": "Run budget exceeded",
           "failed": "Run failed",
           "stalled": "Run stalled"
-        },
-        "system": {
-          "announcement": "System announcement"
         },
         "triggers": {
           "auto_deactivated": "Trigger auto-deactivated",

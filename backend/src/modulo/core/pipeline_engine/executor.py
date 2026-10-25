@@ -75,7 +75,14 @@ from modulo.core.node_output_split import (
     node_telemetry,
     resolve_node_contract_output,
 )
-from modulo.core.notifier import EVENT_HITL_AWAITING, EVENT_PROVIDER_FAILURE, EVENT_RUN_FAILED
+from modulo.core.notifier import (
+    EVENT_BUDGET_EXCEEDED,
+    EVENT_EVAL_BLOCKED,
+    EVENT_HITL_AWAITING,
+    EVENT_PROVIDER_FAILURE,
+    EVENT_RUN_FAILED,
+    EVENT_RUN_STALLED,
+)
 from modulo.core.pipeline_engine import retry_compensation as rc
 from modulo.core.pipeline_engine.decorator import (
     _RESERVED_RUN_CONTEXT_KEYS,
@@ -200,6 +207,17 @@ _ADMISSIBLE_STATUSES = ACTIVE_RUN_STATUSES
 # be resurrected AND must never spawn (or hold) a retry task. Single-sourced
 # from ``db.models.run.TERMINAL_STATUSES`` (includes ``stalled`` since #1011).
 _TERMINAL_STATUSES = TERMINAL_STATUSES
+
+# FAR-2138 — terminal run statuses that carry their own notifier event. Read
+# off the COMMITTED run row (never the pre-finalize locals) so the per-agent
+# token budget override applied inside ``finalize_cost`` is observed. The
+# ``eval_blocked`` event is keyed on a status+error_code pair instead of a
+# status, so it is resolved separately in
+# ``_dispatch_terminal_status_notification``.
+_TERMINAL_STATUS_EVENTS: dict[str, str] = {
+    "stalled": EVENT_RUN_STALLED,
+    "budget_exceeded": EVENT_BUDGET_EXCEEDED,
+}
 
 _SANDBOX_AGENT_CACHE: OrderedDict[str, bool] = OrderedDict()
 _SANDBOX_AGENT_CACHE_MAX = 512
@@ -5794,6 +5812,19 @@ class PipelineExecutor:
             error_code=error_code,
         )
 
+        # FAR-2138 — terminal-outcome notifications for the statuses that carry
+        # their own event (stalled / budget_exceeded / eval_blocked). Read from
+        # the COMMITTED row, never the pre-finalize locals: the per-agent token
+        # budget override lands INSIDE finalize_cost above, so only the row
+        # carries the resulting ``budget_exceeded`` status. Dispatched from this
+        # ONE shared tail so execute and resume are both covered.
+        await self._dispatch_terminal_status_notification(
+            org_id=org_id,
+            run_id=run_id,
+            pipeline_id=pipeline_id,
+            final_run=final_run,
+        )
+
         # FAR-152 §15.3 — post-commit async evidence probe (same rule as
         # execute()). Bounded ≤3s per node, gated by the EvidenceProvider seam.
         await self._run_post_terminal_evidence_probes(
@@ -8170,6 +8201,67 @@ class PipelineExecutor:
             _log.exception(
                 "pipeline.run_failed_notification_failed",
                 extra={"run_id": str(run_id), "org_id": str(org_id), "error_code": canonical_code},
+            )
+
+    async def _dispatch_terminal_status_notification(
+        self,
+        *,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        final_run: Run,
+    ) -> None:
+        """Dispatch the notification for a terminal status that carries its own event.
+
+        ``run_stalled``, ``budget_exceeded`` and ``eval_blocked`` were declared
+        constants with full in-app render configs but NO ``dispatch_event`` call
+        site, so an operator could subscribe to (``run_stalled`` /
+        ``budget_exceeded`` are webhook-subscribable) or opt out of them and no
+        notification could ever arrive (FAR-2138).
+
+        The payload supplies exactly the fields the mapper's title/body/deep-link
+        templates render: ``pipeline_name`` (best-effort; the mapper degrades to
+        ``[unknown]``), ``error_code`` and the run-scoped ``run_id`` (the action
+        URL is ``/runs/{run_id}``).
+
+        Failure-isolated: a missing notifier, a name-lookup failure or a
+        dispatch exception is logged and never blocks or alters the terminal
+        write (mirrors ``_dispatch_run_failed`` / ``_dispatch_hitl_awaiting``).
+        """
+        if self._notifier is None:
+            return
+        status = getattr(final_run, "status", None)
+        if not isinstance(status, str):
+            return
+        error_code = getattr(final_run, "error_code", None)
+        event_type = _TERMINAL_STATUS_EVENTS.get(status)
+        if event_type is None and status == "eval_failed" and error_code == "eval_blocked":
+            event_type = EVENT_EVAL_BLOCKED
+        if event_type is None:
+            return
+        payload: dict[str, Any] = {"run_id": str(run_id)}
+        if error_code:
+            payload["error_code"] = str(error_code)
+        pipeline_name = await self._notification_pipeline_name(
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            run_id=run_id,
+        )
+        if pipeline_name is not None:
+            payload["pipeline_name"] = pipeline_name
+        try:
+            await self._notifier.dispatch_event(
+                org_id=org_id,
+                event_type=event_type,
+                payload=payload,
+                run_id=run_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "pipeline.terminal_status_notification_failed",
+                extra={"run_id": str(run_id), "org_id": str(org_id), "event_type": event_type},
             )
 
     async def _notification_pipeline_name(

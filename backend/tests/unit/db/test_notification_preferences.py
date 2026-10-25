@@ -38,8 +38,11 @@ _USER = uuid.UUID("00000000-0000-0000-0000-000000000002")
 #: A second member of the same org with the VIEWER role.
 _VIEWER = uuid.UUID("00000000-0000-0000-0000-000000000005")
 
-# The 13 categories named in the FAR-247 ticket — must be a subset of what is
-# derived at runtime from _EVENT_CONFIG.
+# The FAR-247 ticket's categories that remain real signals — must be a subset
+# of what is derived at runtime from _EVENT_CONFIG. FAR-2138 retired
+# ``feedback.pending`` and ``system.announcement``: neither had a dispatch call
+# site, so advertising them in the preferences UI described a signal that could
+# never arrive.
 _TICKET_CATEGORIES = {
     "hitl.awaiting",
     "hitl.claim_expired",
@@ -51,8 +54,6 @@ _TICKET_CATEGORIES = {
     "run.budget_exceeded",
     "eval.regression",
     "eval.blocked",
-    "feedback.pending",
-    "system.announcement",
     "triggers.auto_deactivated",
 }
 

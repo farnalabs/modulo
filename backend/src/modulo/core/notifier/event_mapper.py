@@ -19,8 +19,6 @@ the webhook-subscribable subset is ``AVAILABLE_EVENTS`` in
   - hitl_review_removed / hitl_review_removal_denied → scope: admin (hitl-gate guard)
   - eval_regression   → level: warning, scope: org
   - eval_blocked      → level: error,  scope: org
-  - feedback_pending  → level: info,   scope: user (target_user_id assigned)
-  - system_announcement → level: info,  scope: org
   - trigger_deactivated → level: warning, scope: org (FAR-190; wording is
                           payload-driven per trigger_type — FAR-1410)
   - trigger_streak_alert → level: warning, scope: org (FAR-1410, a notify-only
@@ -54,7 +52,6 @@ from modulo.core.notifier import (
     EVENT_CLAIM_EXPIRED,
     EVENT_EVAL_BLOCKED,
     EVENT_EVAL_REGRESSION,
-    EVENT_FEEDBACK_PENDING,
     EVENT_GUARDRAIL_ENFORCEMENT_GAP,
     EVENT_GUARDRAIL_KILL_SWITCH,
     EVENT_GUARDRAIL_UNEXPECTED_SKIP,
@@ -69,7 +66,6 @@ from modulo.core.notifier import (
     EVENT_QUEUE_PRESSURE_WARNING,
     EVENT_RUN_FAILED,
     EVENT_RUN_STALLED,
-    EVENT_SYSTEM_ANNOUNCEMENT,
     EVENT_TRIGGER_DEACTIVATED,
     EVENT_TRIGGER_STREAK_ALERT,
 )
@@ -205,22 +201,6 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismiss_strategy": "any_scope",
         "dismissible_at_scope": True,
         "ttl_hours": 168,
-    },
-    EVENT_FEEDBACK_PENDING: {
-        "level": "info",
-        "scope": "user",
-        "category": "feedback.pending",
-        "dismiss_strategy": "user_only",
-        "dismissible_at_scope": False,
-        "ttl_hours": 336,
-    },
-    EVENT_SYSTEM_ANNOUNCEMENT: {
-        "level": "info",
-        "scope": "org",
-        "category": "system.announcement",
-        "dismiss_strategy": "org_admin",
-        "dismissible_at_scope": True,
-        "ttl_hours": None,
     },
     EVENT_TRIGGER_DEACTIVATED: {
         "level": "warning",
@@ -376,8 +356,6 @@ _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_HITL_REVIEW_REMOVAL_DENIED: "HITL review removal denied",
     EVENT_EVAL_REGRESSION: "Eval regression detected — {agent_name}",
     EVENT_EVAL_BLOCKED: "Eval blocked — {pipeline_name}",
-    EVENT_FEEDBACK_PENDING: "Feedback awaiting review",
-    EVENT_SYSTEM_ANNOUNCEMENT: "System announcement",
     EVENT_TRIGGER_DEACTIVATED: "Ongoing trigger auto-deactivated — {pipeline_name}",
     EVENT_TRIGGER_STREAK_ALERT: "No-delivery streak detected — {pipeline_name}",
     EVENT_ORG_TRIGGERS_AUTO_PAUSED: "Triggers paused — budget exceeded",
@@ -420,8 +398,6 @@ _BODY_TEMPLATES: dict[str, str] = {
     EVENT_HITL_REVIEW_REMOVAL_DENIED: "A non-privileged attempt to weaken a HITL review was denied.",
     EVENT_EVAL_REGRESSION: 'Eval pass rate dropped for agent "{agent_name}".',
     EVENT_EVAL_BLOCKED: 'An eval check blocked pipeline "{pipeline_name}".',
-    EVENT_FEEDBACK_PENDING: "A feedback record is pending your review.",
-    EVENT_SYSTEM_ANNOUNCEMENT: "{message}",
     EVENT_TRIGGER_DEACTIVATED: (
         'Ongoing trigger "{pipeline_name}" was auto-deactivated after {streak} consecutive no-delivery runs '
         "(threshold {threshold})."
@@ -502,8 +478,6 @@ _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_HITL_REVIEW_REMOVAL_DENIED: None,
     EVENT_EVAL_REGRESSION: "/evals",
     EVENT_EVAL_BLOCKED: _RUN_DETAIL_URL,
-    EVENT_FEEDBACK_PENDING: "/feedback/inbox",
-    EVENT_SYSTEM_ANNOUNCEMENT: None,
     EVENT_TRIGGER_DEACTIVATED: None,
     EVENT_TRIGGER_STREAK_ALERT: "/settings/triggers",
     EVENT_ORG_TRIGGERS_AUTO_PAUSED: None,
