@@ -110,7 +110,9 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 _TOKEN_TYPE_BEARER = "bearer"
 
 
-async def _require_csrf_double_submit(request: Request, settings: Settings = Depends(get_settings)) -> None:
+async def _require_csrf_double_submit(  # NOSONAR S7503 - FastAPI dependency seam
+    request: Request, settings: Settings = Depends(get_settings)
+) -> None:
     """Double-submit CSRF gate for the cookie-only refresh/logout endpoints (FAR-1197).
 
     ``modulo_csrf_exempt_paths`` exempts the whole ``/api/v1/auth`` prefix by
