@@ -12,7 +12,6 @@ and the subscribable webhook subset in ``api/routes.admin_notifications.py``
   - Triggers:         trigger_deactivated, trigger_streak_alert,
                       org_triggers_auto_paused
   - Evals:            eval_regression, eval_blocked
-  - Feedback/system:  feedback_pending, system_announcement
   - Guardrails:       guardrail_enforcement_gap, guardrail_kill_switch,
                       guardrail_unexpected_skip
   - Capacity:         queue_pressure_notice, queue_pressure_warning,
@@ -68,7 +67,6 @@ __all__ = [
     "EVENT_CLAIM_EXPIRED",
     "EVENT_EVAL_BLOCKED",
     "EVENT_EVAL_REGRESSION",
-    "EVENT_FEEDBACK_PENDING",
     "EVENT_GUARDRAIL_ENFORCEMENT_GAP",
     "EVENT_GUARDRAIL_KILL_SWITCH",
     "EVENT_GUARDRAIL_UNEXPECTED_SKIP",
@@ -85,7 +83,6 @@ __all__ = [
     "EVENT_QUEUE_PRESSURE_WARNING",
     "EVENT_RUN_FAILED",
     "EVENT_RUN_STALLED",
-    "EVENT_SYSTEM_ANNOUNCEMENT",
     "EVENT_TRIGGER_DEACTIVATED",
     "EVENT_TRIGGER_STREAK_ALERT",
     "MAX_ATTEMPTS",
@@ -239,8 +236,6 @@ EVENT_HITL_DEADLINE_WARNING = "hitl_deadline_warning"
 EVENT_HITL_APPROVE_SWEEP = "hitl_approve_sweep_suspected"
 EVENT_EVAL_REGRESSION = "eval_regression"
 EVENT_EVAL_BLOCKED = "eval_blocked"
-EVENT_FEEDBACK_PENDING = "feedback_pending"
-EVENT_SYSTEM_ANNOUNCEMENT = "system_announcement"
 # FAR-190 — a trigger auto-deactivated after N consecutive no-delivery runs
 # (an ongoing trigger, or a cron that opted in via
 # ``no_delivery_auto_deactivate``). Payload is sanitised (identifiers/titles +
