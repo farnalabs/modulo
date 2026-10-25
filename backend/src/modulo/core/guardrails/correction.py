@@ -1062,7 +1062,7 @@ def _resolved_outcome(
     )
 
 
-async def _validate_and_build_context(input_params: _CorrectionInput) -> _CorrectionRunContext:
+def _validate_and_build_context(input_params: _CorrectionInput) -> _CorrectionRunContext:
     """Validate correction binding and build the run context."""
     input_params.correction.validate_guardrail_binding(input_params.guardrail)
     return _build_run_context(
@@ -1103,7 +1103,7 @@ class _CorrectionBackendError(Exception):
         self.exc_type_name = exc_type_name
 
 
-async def _parse_and_validate_output(ctx: _CorrectionRunContext, raw_output: str) -> dict[str, Any]:
+def _parse_and_validate_output(ctx: _CorrectionRunContext, raw_output: str) -> dict[str, Any]:
     """Parse and validate the backend output against the schema."""
     try:
         return _parse_structured_output(raw_output, ctx.correction.output_schema)
@@ -1120,7 +1120,7 @@ class _CorrectionOutputInvalidError(Exception):
         self.detail = detail
 
 
-async def _check_input_convergence(ctx: _CorrectionRunContext) -> CorrectionOutcome | None:
+def _check_input_convergence(ctx: _CorrectionRunContext) -> CorrectionOutcome | None:
     """Check convergence on input state. Returns escalated outcome if converged, None otherwise."""
     converged = _convergence_check(ctx, produced_output=None, current_violation_metric=ctx.input_violation_metric)
     if converged is not None:
@@ -1135,7 +1135,7 @@ async def _check_input_convergence(ctx: _CorrectionRunContext) -> CorrectionOutc
     return None
 
 
-async def _process_produced_output(
+def _process_produced_output(
     ctx: _CorrectionRunContext, produced: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Redact produced output and compute violation metric."""
@@ -1144,7 +1144,7 @@ async def _process_produced_output(
     return produced_redacted, output_metric
 
 
-async def _check_output_convergence(
+def _check_output_convergence(
     ctx: _CorrectionRunContext,
     produced_redacted: dict[str, Any],
     output_metric: dict[str, Any],
@@ -1236,10 +1236,10 @@ async def run_single_node_correction(
         bound_guardrails=bound_guardrails,
     )
 
-    ctx = await _validate_and_build_context(input_params)
+    ctx = _validate_and_build_context(input_params)
 
     # Step 3: Convergence check on input
-    escalated = await _check_input_convergence(ctx)
+    escalated = _check_input_convergence(ctx)
     if escalated is not None:
         return escalated
 
@@ -1250,15 +1250,15 @@ async def run_single_node_correction(
         return _escalated_outcome(ctx, CorrectionVerdict.LM_ERROR, detail=str(exc))
 
     try:
-        produced = await _parse_and_validate_output(ctx, raw_output)
+        produced = _parse_and_validate_output(ctx, raw_output)
     except _CorrectionOutputInvalidError as exc:
         return _escalated_outcome(ctx, CorrectionVerdict.STILL_VIOLATING, detail=exc.detail)
 
     # Redact produced output and compute metric
-    produced_redacted, output_metric = await _process_produced_output(ctx, produced)
+    produced_redacted, output_metric = _process_produced_output(ctx, produced)
 
     # Step 5: Convergence check on output
-    escalated = await _check_output_convergence(ctx, produced_redacted, output_metric)
+    escalated = _check_output_convergence(ctx, produced_redacted, output_metric)
     if escalated is not None:
         return escalated
 

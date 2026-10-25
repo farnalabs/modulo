@@ -1000,7 +1000,7 @@ class TriggerEngine:
             rate_limit=rate_limit,
             ci_failure_coalesce_key=ci_failure_coalesce_key,
         )
-        await self._persist_pre_trigger_guardrail_evidence(
+        self._persist_pre_trigger_guardrail_evidence(
             session,
             org_id=delivery.org_id,
             trigger_event_id=trigger_event.id,
@@ -1224,7 +1224,7 @@ class TriggerEngine:
                 is_replay=True,
                 ci_failure_coalesce_key=ci_failure_coalesce_key,
             )
-            await self._persist_pre_trigger_guardrail_evidence(
+            self._persist_pre_trigger_guardrail_evidence(
                 session,
                 org_id=org_id,
                 trigger_event_id=trigger_event.id,
@@ -1524,7 +1524,7 @@ class TriggerEngine:
         """
         return await count_trigger_slot_occupancy(session, trigger_id)
 
-    async def _persist_pre_trigger_guardrail_evidence(
+    def _persist_pre_trigger_guardrail_evidence(
         self,
         session: AsyncSession,
         *,
@@ -1788,7 +1788,7 @@ class TriggerEngine:
                 result="guardrail_blocked",
                 error_detail=outcome.block_message[:2000],
             )
-            await self._persist_pre_trigger_guardrail_evidence(
+            self._persist_pre_trigger_guardrail_evidence(
                 session,
                 org_id=delivery.org_id,
                 trigger_event_id=block_event.id,
