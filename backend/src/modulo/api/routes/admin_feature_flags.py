@@ -21,6 +21,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
+from modulo.api.constants import PERM_SYSTEM_CONFIG_MANAGE
 from modulo.api.db_error_handling import (
     handle_db_errors,
     raise_lock_timeout_conflict_if,
@@ -43,7 +44,6 @@ _AUDIT_LOG_KEY = "feature_flags.audit_append_failed"
 _CODE_FEATURE_FLAGS_LIST_FAILED = "feature_flags.list_failed"
 _MSG_FEATURE_FLAGS_NOT_AVAILABLE = "Feature flags are not available. Run database migrations to enable this feature."
 _CODE_FEATURE_FLAGS_GET_FAILED = "feature_flags.get_failed"
-_CODE_SYSTEM_CONFIG_MANAGE = "system.config.manage"
 _CODE_FEATURE_FLAGS_TOGGLE_FAILED = "feature_flags.toggle_failed"
 _CODE_FEATURE_FLAGS_GET_ORG = "feature_flags.get_org_override_failed"
 _CODE_FEATURE_FLAGS_SET_ORG = "feature_flags.set_org_override_failed"
@@ -304,7 +304,7 @@ async def _emit_org_flag_override_audit(
 async def list_feature_flags(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> Response | dict[str, Any]:
     # Attempt Redis cache read
     redis: Redis | None = None
@@ -426,7 +426,7 @@ async def get_feature_flag(
     flag_name: str,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
@@ -508,7 +508,7 @@ async def toggle_feature_flag(
     req: ToggleFlagRequest,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> Response | dict[str, Any]:
     """Toggle a feature flag for the caller's organisation — persists durably.
 
@@ -583,7 +583,7 @@ async def toggle_feature_flag(
 @handle_db_errors("admin.feature_flags.get_org_flag_override")
 async def get_org_flag_override(
     flag_name: str,
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     if current_user.organisation_id is None:
@@ -646,7 +646,7 @@ async def set_org_flag_override(
     flag_name: str,
     req: ToggleFlagRequest,
     settings: Settings = Depends(get_settings),
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     try:
@@ -715,7 +715,7 @@ async def set_org_flag_override(
 async def clear_org_flag_override(
     flag_name: str,
     settings: Settings = Depends(get_settings),
-    current_user: AuthenticatedPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
     if current_user.organisation_id is None:
