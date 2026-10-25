@@ -679,7 +679,9 @@ jobs:
           echo "Pushed $BUNDLE_TAG at $(git rev-parse --short HEAD)"
 
   # ---------------------------------------------------------------------------
-  # PyPI package publish (promote only)
+  # PyPI package publish (promote only). This is the repository's sole live
+  # PyPI publisher; the legacy release.yml workflow is a read-only migration
+  # wrapper and must never gain a second publisher.
   # ---------------------------------------------------------------------------
   publish-pypi:
     name: Publish farnalabs-modulo to PyPI
