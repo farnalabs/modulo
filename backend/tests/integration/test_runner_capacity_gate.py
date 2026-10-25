@@ -1109,7 +1109,13 @@ async def test_sweep_far1808_reclaims_node_started_leak_frees_slot(
     ``updated_at`` is deliberately left at its insert default (FRESH): the fix
     keys liveness on the heartbeat, so a fresh ``updated_at`` must NOT keep a
     dead executor alive. Before the fix this row was kept live (row_fresh),
-    so the leak assertion fails without the change."""
+    so the leak assertion fails without the change.
+
+    ``dispatcher='saq'`` is REQUIRED: FAR-1808/FAR-1803 own the SAQ-dispatched
+    node-started class. A dispatcherless (NULL) node-started row is a
+    DIFFERENT class — FAR-2122's checkpoint-resume recovery leg — which the
+    marker sweep must keep (rule b). Seeding the default NULL here made the
+    row recoverable through that leg and shadowed the reclaim."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1125,6 +1131,7 @@ async def test_sweep_far1808_reclaims_node_started_leak_frees_slot(
         snap,
         status="running",
         marker=_node_started_marker(10),
+        dispatcher="saq",
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
         # updated_at intentionally NOT backdated — it is the static insert
@@ -1172,7 +1179,10 @@ async def test_sweep_far1808_protects_live_node_started_run(
     ``updated_at`` is deliberately backdated (STALE): a dead-looking
     ``updated_at`` must NOT reclaim the run. Before the fix this row was
     reclaimed (row_fresh False from the stale ``updated_at``), so the
-    ``status == running`` assertion fails without the change."""
+    ``status == running`` assertion fails without the change.
+
+    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched class — see
+    the leak test's note on the FAR-2122 dispatcherless class."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1188,6 +1198,7 @@ async def test_sweep_far1808_protects_live_node_started_run(
         snap,
         status="running",
         marker=marker,
+        dispatcher="saq",
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC),
         updated_at=datetime.now(UTC) - timedelta(hours=9),
@@ -1206,7 +1217,10 @@ async def test_sweep_far1808_keeps_in_window_node_started_marker(
 ) -> None:
     """In-window case: a marker only 1h old (< the 2h bound) with a STALE
     ``heartbeat_at`` is kept live — the node may still legitimately be
-    running."""
+    running.
+
+    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched class — see
+    the leak test's note on the FAR-2122 dispatcherless class."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1222,6 +1236,7 @@ async def test_sweep_far1808_keeps_in_window_node_started_marker(
         snap,
         status="running",
         marker=marker,
+        dispatcher="saq",
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
     )
@@ -1239,7 +1254,10 @@ async def test_sweep_far1808_watchdog_write_noops_after_reclaim(
 ) -> None:
     """Watchdog race: after the sweep reclaims the run, a claim-fenced,
     ``status='running'``-guarded terminal write on the same row no-ops (0 rows)
-    — the dead executor can never resurrect or overwrite the terminal state."""
+    — the dead executor can never resurrect or overwrite the terminal state.
+
+    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched class — see
+    the leak test's note on the FAR-2122 dispatcherless class."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1257,6 +1275,7 @@ async def test_sweep_far1808_watchdog_write_noops_after_reclaim(
         status="running",
         marker=_node_started_marker(10),
         claim_token=claim,
+        dispatcher="saq",
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
     )
