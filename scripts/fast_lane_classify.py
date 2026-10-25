@@ -107,7 +107,7 @@ def classify_paths(paths: Sequence[str]) -> str:
 # scripts/run_frontend_npm.py.
 _REPO_ARG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
 _REF_RANGE_ARG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\.\.\.[A-Za-z0-9][A-Za-z0-9._/-]*")
-_PR_ARG_RE = re.compile(r"[0-9]+")
+_PR_ARG_RE = re.compile(r"\d+", re.ASCII)
 
 
 def _safe_arg(value: str, pattern: re.Pattern[str]) -> str | None:
