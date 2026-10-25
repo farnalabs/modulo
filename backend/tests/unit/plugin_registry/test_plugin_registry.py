@@ -646,6 +646,18 @@ def test_discover_plugins_swallows_entry_point_query_error():
     assert discovered == []
 
 
+def test_discover_plugins_swallows_unexpected_entry_point_query_error():
+    """A metadata provider failure must not abort startup discovery."""
+    registry = PluginRegistry()
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=RuntimeError("metadata provider unavailable"),
+    ):
+        discovered = registry.discover_plugins()
+    assert discovered == []
+    assert not registry.list_plugins()
+
+
 def test_discover_plugins_propagates_stop_iteration():
     registry = PluginRegistry()
     with (
@@ -1210,3 +1222,32 @@ def test_unreadable_distribution_metadata_is_surfaced_unhealthy():
     assert "broken_type" in listed
     assert registry.health_check()["broken_type"].ok is False
     assert "Failed to read distribution metadata" in registry.health_check()["broken_type"].detail
+
+
+def test_unreadable_entry_point_attributes_do_not_abort_discovery():
+    """A broken entry-point object cannot take down sibling discovery."""
+    registry = PluginRegistry()
+    broken = _ExplodingEntryPoint()
+    healthy_dist = MagicMock()
+    healthy_dist.name = "healthy-plugin"
+    healthy_dist.metadata = {"Name": "healthy-plugin", "Summary": "s", "Version": "1.0"}
+    healthy = _entry_point(healthy_dist, "healthy_type", loads=_build_stub_connector)
+
+    with _entry_points_returning([broken, healthy]):
+        discovered = registry.discover_plugins()
+
+    assert [manifest.PLUGIN_ID for manifest in discovered] == ["healthy-plugin"]
+    assert registry.has_connector_type("healthy_type")
+    assert registry.health_check("unknown-entry-point")["unknown-entry-point"].ok is False
+
+
+class _ExplodingEntryPoint:
+    """Entry-point metadata object whose fields fail when read."""
+
+    @property
+    def name(self) -> str:
+        raise RuntimeError("entry-point name unavailable")
+
+    @property
+    def dist(self) -> Any:
+        raise RuntimeError("entry-point distribution unavailable")

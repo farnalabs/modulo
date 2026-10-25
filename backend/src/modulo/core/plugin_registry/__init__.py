@@ -154,6 +154,12 @@ class PluginRegistry:
         except (ImportError, importlib.metadata.PackageNotFoundError, ValueError):
             logger.exception("Failed to query entry points during plugin discovery")
             return discovered
+        except Exception:
+            # A third-party metadata provider can fail with errors other than
+            # the standard import/metadata exceptions. Discovery runs during
+            # startup, so those failures must not make the instance unbootable.
+            logger.exception("Unexpected failure querying entry points during plugin discovery")
+            return discovered
 
         for group, ep in entries:
             manifest = self._load_entry_point(ep, group)
@@ -173,11 +179,29 @@ class PluginRegistry:
 
         Returns a ``PluginManifest`` or ``None`` if the module could not be imported.
         """
-        dist = ep.dist
-        if dist is None:
-            self._record_unhealthy(ep.name, ep.name, "", "0.0.0", _HLTH_MISSING_METADATA)
+        try:
+            entry_point_name = ep.name
+            dist = ep.dist
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to read entry-point metadata")
+            # Do not touch the entry point again here: a malformed metadata
+            # object may raise from both ``name`` and ``dist``. Discovery must
+            # still fail soft even when no trustworthy plugin id is available.
+            fallback_id = "unknown-entry-point"
+            self._record_unhealthy(
+                fallback_id,
+                fallback_id,
+                "",
+                "0.0.0",
+                f"{_HLTH_UNREADABLE_METADATA} {fallback_id}",
+            )
             return None
-        metadata_fields = self._read_distribution_metadata(dist, ep.name)
+        if dist is None:
+            self._record_unhealthy(entry_point_name, entry_point_name, "", "0.0.0", _HLTH_MISSING_METADATA)
+            return None
+        metadata_fields = self._read_distribution_metadata(dist, entry_point_name)
         if metadata_fields is None:
             return None
         plugin_id, display_name, description, version = metadata_fields

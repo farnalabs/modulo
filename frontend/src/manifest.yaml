@@ -7052,6 +7052,7 @@ features:
         behaviours:
             - "[x] The plugin registry lists installed plugins and their entry point groups"
             - "[x] Plugins support connector, model-backend, eval, and schema-type entry points"
+            - "[x] Plugin discovery fails soft when the metadata provider or an individual entry-point object raises: the error is logged, the broken plugin is represented as unhealthy, and healthy siblings remain discoverable (core/plugin_registry.py)"
             - "[ ] Plugin lifecycle management (install, enable, disable, uninstall) is not exposed through the registry API — the registry is read-only (importlib.metadata discovery at startup) and plugin installation/removal/upgrade is deliberately left to pip"
         deferrals:
             - "Plugin lifecycle management via the registry API is tracked under feat-plugins (install/enable/disable/uninstall stay pip-managed today); the /admin/plugins UI is a private_preview surface"
