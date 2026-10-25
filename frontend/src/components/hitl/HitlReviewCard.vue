@@ -478,8 +478,8 @@ const responseContract = computed<ResponseContract | null>(() => {
     ? obj.options
         .filter((o): o is Record<string, unknown> => o !== null && typeof o === 'object')
         .map((o) => ({
-          id: String(o.id ?? ''),
-          label: String(o.label ?? ''),
+          id: `${o.id ?? ''}`,
+          label: `${o.label ?? ''}`,
           description: typeof o.description === 'string' ? o.description : null,
         }))
         .filter((o) => o.id !== '' && o.label !== '')
