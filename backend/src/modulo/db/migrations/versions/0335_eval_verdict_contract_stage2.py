@@ -1,7 +1,7 @@
 """Complete the staged eval verdict contract (FAR-2058 / ADR 066 S1).
 
-Revision ID: 0334_eval_verdict_contract_stage2
-Revises: 0333_trigger_event_findings
+Revision ID: 0335_eval_verdict_contract_stage2
+Revises: 0334_runs_webhook_decay_sweep_index
 Create Date: 2026-10-25
 
 Stage 0330 was deliberately an expand migration: old application instances could
@@ -38,8 +38,8 @@ from typing import Any
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0334_eval_verdict_contract_stage2"
-down_revision: str | None = "0333_trigger_event_findings"
+revision: str = "0335_eval_verdict_contract_stage2"
+down_revision: str | None = "0334_runs_webhook_decay_sweep_index"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

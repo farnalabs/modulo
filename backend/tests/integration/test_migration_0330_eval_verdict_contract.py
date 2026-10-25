@@ -40,7 +40,7 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
 MIGRATION_REV = "0330_eval_verdict_contract"
-STAGE2_REV = "0334_eval_verdict_contract_stage2"
+STAGE2_REV = "0335_eval_verdict_contract_stage2"
 STAGE2_PREV_REV = "0333_trigger_event_findings"
 PREV_REV = "0327_runs_execution_attempt_count"
 
