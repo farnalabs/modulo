@@ -4779,7 +4779,7 @@ def _apply_node_connector_binding(
 )
 @mcp_audited("pipeline_node_connector_bound", "pipeline", fail_closed=False)
 @_RETRY_DB
-async def bind_connector_to_node(
+async def bind_connector_to_node(  # NOSONAR S3776 - orchestration endpoint delegates validation/persistence helpers
     pipeline_id: str,
     node_id: str,
     connector_type: str,
