@@ -313,8 +313,8 @@ async function loadSchemaCounts() {
     const { data } = await api.GET('/api/v1/schemas/counts')
     if (!data) return
     folderSchemaCounts.value = { ...(data.by_folder ?? {}), __all__: data.total }
-  } catch (e: unknown) {
-    console.warn('Failed to load schema counts', e)
+  } catch {
+    console.warn('Failed to load schema counts')
   }
 }
 

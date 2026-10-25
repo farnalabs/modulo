@@ -194,6 +194,19 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     expect(wrapper.text()).toContain('regex')
   })
 
+  it('falls back to empty collections when pipelines, graph and evals omit data', async () => {
+    apiGET.mockImplementation(async () => ({ data: undefined }))
+    const wrapper = mountView()
+    await flush()
+
+    await selectPipeline(wrapper, 'p1')
+    await flush()
+
+    expect((wrapper.vm as unknown as { pipelines: unknown[] }).pipelines).toEqual([])
+    expect((wrapper.vm as unknown as { nodes: unknown[] }).nodes).toEqual([])
+    expect((wrapper.vm as unknown as { evals: unknown[] }).evals).toEqual([])
+  })
+
   it('graph load failure shows the nodes error without crashing the page', async () => {
     apiGET.mockImplementation(async (url: string) => {
       if (url === '/api/v1/pipelines/{pipeline_id}/graph') throw new Error('graph down')

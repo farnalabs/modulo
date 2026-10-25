@@ -599,6 +599,27 @@ describe('SchemaListView', () => {
     expect(mockPush).toHaveBeenCalledWith({ name: 'schema-editor', params: { id: '1' } })
   })
 
+  it('keeps rendering when the schema-counts request fails, warning instead of crashing', async () => {
+    const { api } = await import('../lib/api/client')
+    const getMockApi = api.GET as ReturnType<typeof vi.fn>
+    const originalGet = getMockApi.getMockImplementation()
+    getMockApi.mockImplementation((url: string) => {
+      if (url === '/api/v1/schemas/counts') return Promise.reject(new Error('counts down'))
+      return Promise.resolve({ data: { items: [], total: 0, page: 1, page_size: 100 }, error: undefined })
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const wrapper = mountView()
+      await flushPromises()
+
+      expect(warn).toHaveBeenCalledWith('Failed to load schema counts')
+      expect(wrapper.exists()).toBe(true)
+    } finally {
+      warn.mockRestore()
+      getMockApi.mockImplementation(originalGet as (...args: unknown[]) => unknown)
+    }
+  })
+
   it('shows the folder load error and no folder list when the folder endpoint returns a non-array', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
