@@ -839,6 +839,11 @@ class ApplyExecutor:
             return f"model backend {name!r} failed health check: {detail}"
         return None
 
+    @staticmethod
+    def _report_entries(report: dict[str, list[dict[str, Any]]], status: str) -> tuple[dict[str, Any], ...]:
+        """Snapshot one report lane before applying entries that may fail."""
+        return tuple(report[status])
+
     def apply_schemas(
         self,
         entities: dict[str, list[tuple[str, Any]]],
@@ -852,7 +857,7 @@ class ApplyExecutor:
         to ``failed``; later entities still apply.
         """
         for status in ("created", "updated"):
-            for entry in list(report[status]):
+            for entry in self._report_entries(report, status):
                 if entry["kind"] != KIND_SCHEMA:
                     continue
                 self._apply_schema_entry(status, entry, entities, current_entities, report)
@@ -882,7 +887,7 @@ class ApplyExecutor:
             self._apply_schema_versions(entity, schema_id, existing_versions, report)
         except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
             message = _failure_message(exc)
-            _log.warning("apply schema failed: %s: %s", entity.name if entity else entry["name"], message)
+            _log.exception("apply schema failed: %s: %s", entity.name if entity else entry["name"], message)
             report[status].remove(entry)
             report["failed"].append({"kind": KIND_SCHEMA, "name": entry["name"], "error": message})
 
@@ -936,7 +941,7 @@ class ApplyExecutor:
                 # version failed. Keep the entity entry (truthful)
                 # and add a version-scoped failed entry.
                 message = _failure_message(exc)
-                _log.warning("apply schema version failed: %s/%s: %s", entity.name, spec.version, message)
+                _log.exception("apply schema version failed: %s/%s: %s", entity.name, spec.version, message)
                 report["failed"].append(
                     {
                         "kind": "schema_version",
@@ -959,7 +964,7 @@ class ApplyExecutor:
         stored-but-broken credential is never reported as plain success.
         """
         for status in ("created", "updated"):
-            for entry in list(report[status]):
+            for entry in self._report_entries(report, status):
                 if entry["kind"] != KIND_BACKEND:
                     continue
                 self._apply_backend_entry(status, entry, entities, current_entities, resolved_api_keys, report)
@@ -990,12 +995,12 @@ class ApplyExecutor:
         except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
             message = _failure_message(exc)
             displayed_name = entity.name if entity else entry["name"]
-            _log.warning("apply model backend failed: %s: %s", displayed_name, message)
+            _log.exception("apply model backend failed: %s: %s", displayed_name, message)
             report[status].remove(entry)
             report["failed"].append({"kind": KIND_BACKEND, "name": entry["name"], "error": message})
         else:
             if health_error:
-                _log.warning("apply model backend unhealthy: %s: %s", entity.name, health_error)
+                _log.error("apply model backend unhealthy: %s: %s", entity.name, health_error)
                 report[status].remove(entry)
                 report["failed"].append(
                     {

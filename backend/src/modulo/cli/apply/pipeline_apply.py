@@ -614,7 +614,7 @@ def _record_pipeline_failure(
     """
     message = _failure_message(exc)
     displayed_name = entity.name if entity else entry["name"]
-    _log.warning("apply pipeline failed: %s: %s", displayed_name, message)
+    _log.exception("apply pipeline failed: %s: %s", displayed_name, message)
     report[status].remove(entry)
     report["failed"].append({"kind": KIND_PIPELINE, "name": entry["name"], "error": message})
     if status == "created" and entity is not None:
@@ -668,7 +668,7 @@ def apply_pipelines(
         name: str(item["id"]) for name, item in current_pipelines.items() if item.get("id") is not None
     }
     for status in ("created", "updated"):
-        for entry in list(report[status]):
+        for entry in tuple(report[status]):
             if entry["kind"] != KIND_PIPELINE:
                 continue
             entity: PipelineEntity | None = None
