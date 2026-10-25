@@ -2773,6 +2773,12 @@ elements:
       - testid: risk-assessment-error
         type: element
         dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
       - testid: risk-assessment-facets
         type: element
         dynamic_testid: false
@@ -2791,7 +2797,17 @@ elements:
       - testid: risk-assessment-facet-degraded-note
         type: element
         dynamic_testid: false
+      - testid: risk-assessment-pipelines-error
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-pipelines-error-message
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-pipelines-retry
+        type: button
+        dynamic_testid: false
       - testid: risk-assessment-facet-actions
+
         type: element
         dynamic_testid: false
       - testid: risk-assessment-apply

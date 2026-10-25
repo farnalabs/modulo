@@ -14,6 +14,7 @@
       @update:filters="updateFilters"
       @apply="applyFilters"
       @reset="resetFilters"
+      @retryPipelines="loadPipelines"
     />
 
     <div v-if="isLoading" aria-live="polite" class="flex items-center gap-3 text-sm text-muted-foreground" data-testid="risk-assessment-loading">
@@ -21,7 +22,7 @@
       <span>{{ $t('views.RiskAssessmentView.loading') }}</span>
     </div>
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="applyFilters" data-testid="risk-assessment-error" />
+    <ErrorAlert v-else-if="error" :message="t('views.RiskAssessmentView.load_failed')" :on-retry="retryAll" data-testid="risk-assessment-error" />
 
     <template v-else>
       <RiskAssessmentSummaryCard
@@ -39,9 +40,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../lib/api/client'
-import { formatApiError } from '../lib/api/formatError'
 import {
   defaultRiskAssessmentFilters,
   riskAssessmentRouteQuery,
@@ -62,6 +63,7 @@ interface Pipeline {
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 
 const store = useRiskAssessmentStore()
 const { rows, totalRows, actionCounts, facetDegraded, isLoading, error } = storeToRefs(store)
@@ -78,15 +80,13 @@ async function loadPipelines(): Promise<void> {
       params: { query: { limit: 100, page: 1 } },
     })
     if (responseError || !response?.ok) {
-      throw new Error(
-        responseError ? formatApiError(responseError) : `HTTP ${response?.status ?? 0}`,
-      )
+      throw new Error(t('views.RiskAssessmentView.pipelines_load_failed'))
     }
     pipelines.value = data?.items ?? []
   } catch (err) {
     // Non-fatal: the projection still loads, but the operator must know the
     // pipeline facet is empty because its source failed (never a silent warn).
-    pipelinesError.value = formatApiError(err)
+    pipelinesError.value = t('views.RiskAssessmentView.pipelines_load_failed')
   }
 }
 
@@ -98,6 +98,11 @@ async function applyFilters(): Promise<void> {
   store.setFilters({ ...filters.value })
   await router.replace({ query: riskAssessmentRouteQuery(filters.value) })
   await store.fetchRiskAssessment()
+}
+
+async function retryAll(): Promise<void> {
+  await loadPipelines()
+  await applyFilters()
 }
 
 function resetFilters(): void {
@@ -120,7 +125,6 @@ function filtersFromRoute(): RiskAssessmentFilters {
 
 onMounted(async () => {
   filters.value = filtersFromRoute()
-  await loadPipelines()
-  await applyFilters()
+  await retryAll()
 })
 </script>

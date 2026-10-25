@@ -509,13 +509,26 @@ class TestRiskAssessmentDegradationRealPath:
 
         row = _fake_evidence()
         session = _make_mock_session()
-        session.execute = AsyncMock(side_effect=[ProgrammingError("stmt", "params", "no column"), _rows_result([row])])
+        missing_column = ProgrammingError("stmt", "params", "no column")
+        missing_column.orig = MagicMock(sqlstate="42703")
+        session.execute = AsyncMock(side_effect=[missing_column, _rows_result([row])])
 
         rows, degraded = await mod._load_risk_assessment_rows(session, _ORG_ID, action="block", limit=10)
 
         assert rows == [row]
         assert degraded is True
         assert session.execute.await_count == 2
+
+    async def test_load_rows_re_raises_unrelated_programming_error(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        unrelated = ProgrammingError("stmt", "params", "syntax error")
+        unrelated.orig = MagicMock(sqlstate="42601")
+        session.execute = AsyncMock(side_effect=unrelated)
+
+        with pytest.raises(ProgrammingError):
+            await mod._load_risk_assessment_rows(session, _ORG_ID, action="block", limit=10)
 
     async def test_load_rows_with_action_uses_the_filtered_query(self) -> None:
         from modulo.api.routes import evidence as mod
@@ -547,7 +560,9 @@ class TestRiskAssessmentDegradationRealPath:
         from modulo.api.routes import evidence as mod
 
         session = _make_mock_session()
-        session.execute = AsyncMock(side_effect=[ProgrammingError("stmt", "params", "no column"), _scalar_result(4)])
+        missing_column = ProgrammingError("stmt", "params", "no column")
+        missing_column.orig = MagicMock(sqlstate="42703")
+        session.execute = AsyncMock(side_effect=[missing_column, _scalar_result(4)])
 
         total = await mod._count_risk_assessment_rows(session, _ORG_ID, action="block")
 
@@ -568,7 +583,9 @@ class TestRiskAssessmentDegradationRealPath:
         from modulo.api.routes import evidence as mod
 
         session = _make_mock_session()
-        session.execute = AsyncMock(side_effect=ProgrammingError("stmt", "params", "no column"))
+        missing_column = ProgrammingError("stmt", "params", "no column")
+        missing_column.orig = MagicMock(sqlstate="42703")
+        session.execute = AsyncMock(side_effect=missing_column)
 
         counts, degraded = await mod._count_risk_assessment_by_action(session, _ORG_ID)
 
@@ -701,7 +718,9 @@ class TestRiskAssessmentRowActions:
 
         row = _fake_evidence()
         session = _make_mock_session()
-        session.execute = AsyncMock(side_effect=ProgrammingError("stmt", "params", "no column"))
+        missing_column = ProgrammingError("stmt", "params", "no column")
+        missing_column.orig = MagicMock(sqlstate="42703")
+        session.execute = AsyncMock(side_effect=missing_column)
 
         resolved, degraded = await mod._load_risk_assessment_row_actions(session, _ORG_ID, [row])
 

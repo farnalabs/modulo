@@ -203,7 +203,7 @@ describe('RiskAssessmentView', () => {
 
     const wrapper = await mountView()
 
-    expect(wrapper.find('[data-testid="risk-assessment-error"]').text()).toContain('Projection failed')
+    expect(wrapper.find('[data-testid="risk-assessment-error"]').text()).toContain('Could not load risk assessment. Try again.')
     await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
     await flushPromises()
 
@@ -248,7 +248,7 @@ describe('RiskAssessmentView', () => {
 
     const wrapper = await mountView()
 
-    expect(wrapper.find('[data-testid="risk-assessment-pipelines-error"]').text()).toBe('HTTP 503')
+    expect(wrapper.find('[data-testid="risk-assessment-pipelines-error-message"]').text()).toBe('Could not load the pipeline list. Try again.')
     expect(wrapper.findAll('[data-testid="risk-assessment-row"]')).toHaveLength(1)
   })
 
@@ -267,8 +267,8 @@ describe('RiskAssessmentView', () => {
 
     const wrapper = await mountView()
 
-    expect(wrapper.find('[data-testid="risk-assessment-pipelines-error"]').text()).toBe(
-      'Pipelines forbidden',
+    expect(wrapper.find('[data-testid="risk-assessment-pipelines-error-message"]').text()).toBe(
+      'Could not load the pipeline list. Try again.',
     )
     expect(wrapper.findAll('[data-testid="risk-assessment-row"]')).toHaveLength(1)
   })
@@ -296,7 +296,7 @@ describe('RiskAssessmentView', () => {
 
     const wrapper = await mountView()
 
-    expect(wrapper.find('[data-testid="risk-assessment-pipelines-error"]').text()).toBe('HTTP 0')
+    expect(wrapper.find('[data-testid="risk-assessment-pipelines-error-message"]').text()).toBe('Could not load the pipeline list. Try again.')
   })
 
   it('exposes every gate action in the facet', async () => {

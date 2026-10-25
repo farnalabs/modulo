@@ -23,6 +23,7 @@ taken from the principal, never from client input.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -52,10 +53,15 @@ from modulo.core.evidence_redaction import (
 )
 from modulo.db.models.evidence import Evidence
 from modulo.db.models.evidence_redaction_rule import EvidenceRedactionRule
-from modulo.db.models.policy_gate_decision import PolicyGateDecision
+from modulo.db.models.policy_gate_decision import RESOLVED_ACTION_VALUES, PolicyGateDecision
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
+from modulo.db.sqlstates import sqlstate_of
+
+_log = logging.getLogger(__name__)
+
+_UNDEFINED_COLUMN_SQLSTATE = "42703"
 
 router = APIRouter(prefix="/api/v1", tags=["evidence"])
 
@@ -74,11 +80,12 @@ _MSG_EVIDENCE_NOT_FOUND = "Evidence row not found"
 #: ``created_at`` then ``id`` (stable), so the cap truncates a deterministic tail.
 _EVIDENCE_LIST_LIMIT = 500
 
-#: Gate-action vocabulary for the action facet. Single source for validation,
-#: per-row resolution and the summary counts — never re-list these values.
-_RISK_ACTIONS: tuple[str, ...] = ("block", "escalate", "warn", "continue")
-_VALID_ACTIONS = frozenset(_RISK_ACTIONS)
-#: Severity ordering used when a run has decisions with several actions.
+#: Explicit severity ordering used when a run has decisions with several actions.
+_RISK_ACTIONS: tuple[str, ...] = tuple(
+    action for action in ("block", "escalate", "warn", "continue") if action in RESOLVED_ACTION_VALUES
+)
+#: Canonical model vocabulary validates the action facet and row actions.
+_VALID_ACTIONS = frozenset(RESOLVED_ACTION_VALUES)
 _ACTION_SEVERITY = {action: rank for rank, action in enumerate(_RISK_ACTIONS)}
 
 
@@ -576,6 +583,22 @@ def _risk_scope_clause(
     return and_(*clauses)
 
 
+def _is_undefined_column_error(exc: ProgrammingError) -> bool:
+    """Return whether a programming error is the optional facet column gap."""
+    return sqlstate_of(exc) == _UNDEFINED_COLUMN_SQLSTATE
+
+
+def _degrade_programming_error(exc: ProgrammingError, operation: str) -> None:
+    """Log the optional-facet degradation and re-raise unrelated DB errors."""
+    if not _is_undefined_column_error(exc):
+        raise exc
+    _log.warning(
+        "risk_assessment.%s degraded: policy_gate_decisions.run_id is unavailable",
+        operation,
+        exc_info=True,
+    )
+
+
 def _risk_action_clause(organisation_id: uuid.UUID, action: str) -> Any:
     """WHERE clause matching evidence rows whose run resolved to *action*.
 
@@ -666,11 +689,10 @@ async def _load_risk_assessment_rows(
             async with session.begin_nested():
                 result = await session.execute(stmt.where(_risk_action_clause(organisation_id, action)))
                 return list(result.scalars().all()), False
-        except ProgrammingError:
-            # The run_id column doesn't exist on policy_gate_decisions (chunk 4
-            # hasn't landed). Degrade gracefully: ignore the action filter and
-            # signal the degradation to the caller.
-            pass
+        except ProgrammingError as exc:
+            # Only an older schema without run_id is degradable. Other database
+            # programming errors must remain visible to the shared error handler.
+            _degrade_programming_error(exc, "rows")
 
     result = await session.execute(stmt)
     return list(result.scalars().all()), action is not None
@@ -700,9 +722,9 @@ async def _count_risk_assessment_rows(
             async with session.begin_nested():
                 result = await session.execute(stmt.where(_risk_action_clause(organisation_id, action)))
                 return result.scalar_one_or_none() or 0
-        except ProgrammingError:
-            # run_id column doesn't exist — ignore the action filter for counting
-            pass
+        except ProgrammingError as exc:
+            # Only an older schema without run_id is degradable.
+            _degrade_programming_error(exc, "count")
 
     result = await session.execute(stmt)
     return result.scalar_one_or_none() or 0
@@ -737,8 +759,14 @@ async def _count_risk_assessment_by_action(
             async with session.begin_nested():
                 result = await session.execute(base_stmt.where(_risk_action_clause(organisation_id, action)))
                 counts[action] = result.scalar_one_or_none() or 0
-        except ProgrammingError:
-            return counts, True
+        except ProgrammingError as exc:
+            if _is_undefined_column_error(exc):
+                _log.warning(
+                    "risk_assessment.action_counts degraded: policy_gate_decisions.run_id is unavailable",
+                    exc_info=True,
+                )
+                return counts, True
+            raise
 
     return counts, False
 
@@ -817,8 +845,14 @@ async def _load_risk_assessment_row_actions(
         async with session.begin_nested():
             result = await session.execute(stmt)
             decisions = result.all()
-    except ProgrammingError:
-        return {}, True
+    except ProgrammingError as exc:
+        if _is_undefined_column_error(exc):
+            _log.warning(
+                "risk_assessment.row_actions degraded: policy_gate_decisions.run_id is unavailable",
+                exc_info=True,
+            )
+            return {}, True
+        raise
 
     run_actions, node_actions = _aggregate_decision_actions(decisions)
     return _resolve_row_actions(rows, run_actions, node_actions), False

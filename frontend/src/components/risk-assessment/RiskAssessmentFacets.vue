@@ -78,9 +78,17 @@
         <p v-if="facetDegraded" class="mt-1 text-xs text-warning-text" data-testid="risk-assessment-facet-degraded-note">
           {{ $t('views.RiskAssessmentView.facet_degraded_note') }}
         </p>
-        <p v-if="pipelinesError" class="mt-1 text-xs text-destructive-text" data-testid="risk-assessment-pipelines-error">
-          {{ pipelinesError }}
-        </p>
+        <div v-if="pipelinesError" class="mt-1 flex items-center gap-2 text-xs text-destructive-text" data-testid="risk-assessment-pipelines-error">
+          <span data-testid="risk-assessment-pipelines-error-message">{{ pipelinesError }}</span>
+          <button
+            type="button"
+            class="underline"
+            data-testid="risk-assessment-pipelines-retry"
+            @click="retryPipelines"
+          >
+            {{ $t('components.ErrorAlert.retry') }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -128,6 +136,7 @@ const emit = defineEmits<{
   'update:filters': [filters: RiskAssessmentFilters]
   apply: [filters: RiskAssessmentFilters]
   reset: []
+  retryPipelines: []
 }>()
 
 // Local reactive copy of filters to avoid mutating props directly
@@ -157,6 +166,10 @@ watch(
 
 function applyFilters(): void {
   emit('apply', { ...localFilters })
+}
+
+function retryPipelines(): void {
+  emit('retryPipelines')
 }
 
 function resetFilters(): void {

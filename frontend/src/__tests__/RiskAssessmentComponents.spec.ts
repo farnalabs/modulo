@@ -411,6 +411,6 @@ describe('RiskAssessmentFacets', () => {
   it('surfaces a pipeline load failure instead of hiding it', () => {
     const wrapper = mountFacets({ pipelines: [], pipelinesError: 'HTTP 503' })
 
-    expect(wrapper.find('[data-testid="risk-assessment-pipelines-error"]').text()).toBe('HTTP 503')
+    expect(wrapper.find('[data-testid="risk-assessment-pipelines-error-message"]').text()).toBe('HTTP 503')
   })
 })
