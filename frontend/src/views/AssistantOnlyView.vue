@@ -365,7 +365,7 @@ watch(
   () => store.activeSessionId,
   (id) => {
     if (!id) return
-    const live = Array.isArray(store.sessions) ? store.sessions.some(s => s.id === id) : false
+    const live = store.sessions.some(s => s.id === id)
     if (live && !tabsStore.tabs.some(t => t.sessionId === id)) {
       tabsStore.resumeTab(id)
     }

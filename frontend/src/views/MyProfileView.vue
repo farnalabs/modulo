@@ -136,7 +136,7 @@ type PipelineItem = components['schemas']['PipelineResponse']
 
 const EMPTY_PROFILE: Profile = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '', is_system_admin: false, must_change_password: false }
 
-const profile = ref<Profile>({ ...EMPTY_PROFILE })
+const profile = ref<Profile>(EMPTY_PROFILE)
 
 const myTeams = ref<MyTeam[]>([])
 const myTeamsLoading = ref(false)
@@ -234,7 +234,7 @@ async function loadHitlEmailPrefs() {
     }
     if (data) {
       hitlDefault.value = data.default
-      hitlOverrides.value = { ...(data.pipeline_overrides ?? {}) }
+      hitlOverrides.value = data.pipeline_overrides ?? {}
     } else {
       hitlDefault.value = false
       hitlOverrides.value = {}
