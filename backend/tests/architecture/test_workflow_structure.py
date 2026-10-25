@@ -1552,3 +1552,106 @@ def test_sonar_new_issues_gate_non_blocking_smells_cannot_fail() -> None:
     # The blocking exit is explicit; the non-blocking else branch should just warn
     # and fall through to the final "No blocking" echo
     assert not violations, "sonar-new-issues-gate non-blocking path can fail the job:\n" + "\n".join(violations)
+
+
+# --- FAR-2139: the deploy escalation email edge is one shared implementation --
+
+
+DEPLOY_WATCHDOG_YML = WORKFLOWS / "deploy-watchdog.yml"
+DEPLOY_STALENESS_YML = WORKFLOWS / "deploy-staleness-check.yml"
+
+#: The step in each workflow whose conclusion IS the durable health state
+#: vector the next tick reads back. Renaming it without updating the notify
+#: step's ``VERDICT_STEP_NAME`` silently degrades the previous verdict to
+#: UNKNOWN - fail loud here instead.
+WATCHDOG_VERDICT_STEP = "Fail the run when the deploy watchdog is unhealthy"
+STALENESS_VERDICT_STEP = "Fail the run when deploy health is unhealthy"
+
+#: The single shared transition step both workflows call.
+SHARED_NOTIFY_SCRIPT = "bash .github/scripts/deploy-health-notify.sh"
+
+
+def _all_steps(path: Path) -> list[dict]:
+    steps: list[dict] = []
+    for job in (_load_yaml(path).get("jobs") or {}).values():
+        if isinstance(job, dict):
+            steps.extend(step for step in job.get("steps") or [] if isinstance(step, dict))
+    return steps
+
+
+def _step_named(path: Path, name: str) -> dict:
+    for step in _all_steps(path):
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"{path.name}: no step named {name!r}")
+
+
+def test_deploy_escalations_share_one_email_implementation() -> None:
+    """Both deploy escalation workflows email through ONE shared step.
+
+    FAR-2116 added the transition email to the staleness check; FAR-2139 gives
+    the watchdog the same edge. Two copies of a transition decision and a
+    message format WILL drift (the whole ticket is about an escalation channel
+    that looked present and reached nobody), so the SMTP send lives only in
+    ``.github/scripts/deploy-health-notify.sh`` and both workflows call it.
+    """
+    violations: list[str] = []
+    for path in (DEPLOY_WATCHDOG_YML, DEPLOY_STALENESS_YML):
+        raw = path.read_text(encoding="utf-8")
+        if SHARED_NOTIFY_SCRIPT not in raw:
+            msg = f"  {path.name}: does not invoke the shared transition step ({SHARED_NOTIFY_SCRIPT})"
+            violations.append(msg)
+        if "smtplib" in raw:
+            msg = f"  {path.name}: carries its own inline SMTP send - the shared step is the only one"
+            violations.append(msg)
+    assert not violations, "deploy escalation emails are not shared:\n" + "\n".join(violations)
+
+
+def test_deploy_watchdog_email_fires_on_the_transition_not_per_tick() -> None:
+    """The watchdog's email step must run on every outcome and name the verdict
+    step whose conclusion encodes the previous verdict.
+
+    ``if: always()`` matters: the recovery email is sent from the tick whose
+    own evaluation is healthy, and a step gated on ``success()`` would be
+    skipped by the very failure that opens the incident.
+    """
+    step = _step_named(DEPLOY_WATCHDOG_YML, "Email the operator on a deploy-health transition")
+    condition = str(step.get("if") or "")
+    env = step.get("env") or {}
+    violations: list[str] = []
+    if "always()" not in condition:
+        violations.append(f"  notify step condition must contain always(), got {condition!r}")
+    if str(env.get("VERDICT_STEP_NAME") or "") != WATCHDOG_VERDICT_STEP:
+        msg = f"  notify step VERDICT_STEP_NAME is {env.get('VERDICT_STEP_NAME')!r}"
+        violations.append(msg)
+    if "steps.watchdog.outputs.healthy" not in str(env.get("CURRENT_HEALTHY") or ""):
+        msg = "  notify step must read the watchdog's structured health verdict"
+        violations.append(msg)
+    # The step it names must actually exist, or the previous verdict is always UNKNOWN.
+    assert any(s.get("name") == WATCHDOG_VERDICT_STEP for s in _all_steps(DEPLOY_WATCHDOG_YML)), (
+        f"deploy-watchdog.yml: state-vector step {WATCHDOG_VERDICT_STEP!r} is missing"
+    )
+    assert not violations, "watchdog transition email is not wired:\n" + "\n".join(violations)
+
+
+def test_deploy_watchdog_ticket_leg_is_gated_on_the_health_verdict() -> None:
+    """The Linear ticket leg keys on the evaluated health, never on ``failure()``.
+
+    ``failure()`` cannot distinguish "deploy.yml is broken" from "the checkout
+    broke", and it can never fire for an UNKNOWN verdict. The ticket must gate
+    on the structured ``healthy == 'false'`` output so both escalation states
+    (exhausted self-heal, failed re-dispatch) raise a ticket and nothing else
+    does.
+    """
+    step = _step_named(DEPLOY_WATCHDOG_YML, "Create Linear ticket on watchdog escalation")
+    condition = str(step.get("if") or "")
+    violations: list[str] = []
+    if "failure()" in condition:
+        violations.append(f"  ticket leg still gates on failure(): {condition!r}")
+    if "steps.watchdog.outputs.healthy == 'false'" not in condition:
+        violations.append(f"  ticket leg must gate on healthy == 'false', got {condition!r}")
+    verdict = _step_named(DEPLOY_WATCHDOG_YML, WATCHDOG_VERDICT_STEP)
+    if "steps.watchdog.outputs.healthy == 'false'" not in str(verdict.get("if") or ""):
+        msg = "  state-vector step must FAIL only on healthy == 'false' (otherwise the run is never red)"
+        violations.append(msg)
+    assert not violations, "watchdog ticket leg is not gated on the health verdict:\n" + "\n".join(violations)
