@@ -685,11 +685,12 @@ jobs:
         if: ${{ steps.gate.outputs.skip != 'true' && env.CANARY == '1' && env.N_MINUS_1 != '' }}
         env:
           ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
-          # The canary resolve set N_MINUS_1 in a prior step; absence means the
-          # release feed holds no previous bundle release yet. That is expected
+          # The canary resolve set N_MINUS_1 in a prior step; absence means
+          # the release feed holds no previous bundle release yet. That is expected
           # EXACTLY once at the start of a release line - report it loudly, don't
           # silently exit 0.
           if [ -z "${N_MINUS_1:-}" ]; then
@@ -697,10 +698,28 @@ jobs:
             exit 0
           fi
           prev_ver="${N_MINUS_1#bundle-v}"
-          curl --proto '=https' -fsSL -o n1.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/${N_MINUS_1}/modulo-${prev_ver}-linux-amd64.tar.gz"
+          n1_dir="n1-artifact"
+          n1_tarball="modulo-${prev_ver}-linux-amd64.tar.gz"
+          mkdir -p "${n1_dir}"
+          n1_base="https://github.com/${{ github.repository }}/releases/download/${N_MINUS_1}"
+          curl --proto '=https' -fsSL -o "${n1_dir}/${n1_tarball}" "${n1_base}/${n1_tarball}" \
+            || { echo "::error::N-1 tarball is not downloadable at ${N_MINUS_1}"; exit 1; }
+          curl --proto '=https' -fsSL -o "${n1_dir}/RELEASE_MANIFEST.json" "${n1_base}/RELEASE_MANIFEST.json" \
+            || { echo "::error::N-1 RELEASE_MANIFEST.json is not downloadable at ${N_MINUS_1}"; exit 1; }
+          curl --proto '=https' -fsSL -o "${n1_dir}/RELEASE_MANIFEST.json.sig" "${n1_base}/RELEASE_MANIFEST.json.sig" \
+            || { echo "::error::N-1 RELEASE_MANIFEST.json.sig is not downloadable at ${N_MINUS_1}"; exit 1; }
+          curl --proto '=https' -fsSL -o "${n1_dir}/SHA256SUMS" "${n1_base}/SHA256SUMS" \
+            || { echo "::error::N-1 SHA256SUMS is not downloadable at ${N_MINUS_1}"; exit 1; }
+          expected="$(sha256sum "${n1_dir}/${n1_tarball}" | awk '{print $1}')"
+          actual="$(grep -F "${n1_tarball}" "${n1_dir}/SHA256SUMS" | awk '{print $1}')"
+          if [ -z "${actual}" ] || [ "${expected}" != "${actual}" ]; then
+            echo "::error::N-1 tarball sha256 does not match SHA256SUMS - refusing to install (fail closed)"; exit 1
+          fi
+          if ! gh attestation verify "${n1_dir}/${n1_tarball}" --repo "${{ github.repository }}"; then
+            echo "::error::no verifiable build-provenance attestation for ${N_MINUS_1} - refusing to install (fail closed)"; exit 1
+          fi
           # Install N-1, seed identifiable data, upgrade to TAG, prove data intact.
-          bash scripts/install.sh --from-file n1.tar.gz  #NOSONAR install.sh is from the trusted checkout; the --from-file tarball is verified (ed25519 signature + sha256 + SLSA attestation) before this step
+          bash scripts/install.sh --from-file "${n1_dir}/${n1_tarball}"  #NOSONAR install.sh is from the trusted checkout; the --from-file tarball is verified (ed25519 manifest signature + sha256 + internal SHA256SUMS + SLSA attestation) before this step
           modulo start --detach
           modulo users add n1-seed@modulo.run --admin --password "${ADMIN_PASSWORD}"
           modulo backup --data-dir "${DATA_DIR}" --output-dir canary-backup
@@ -713,6 +732,7 @@ jobs:
             || { echo "::error::seeded N-1 data did not survive the upgrade"; exit 1; }
           modulo stop
           echo "N-1 upgrade leg OK (data intact + doctor green)"
+
 
   canary-housekeeping:
     name: Canary tracking issue (dedupe + auto-close)

@@ -168,6 +168,28 @@ def test_native_release_smoke_verifies_release_tarball_attestation_before_instal
     assert 'gh attestation verify "${TARBALL}"' in verify["run"]
 
 
+def test_native_release_smoke_n_minus_one_reuses_fail_closed_artifact_gates() -> None:
+    workflow = yaml.safe_load(NATIVE_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["canary"]["steps"]
+    names = _step_names(steps)
+    n_minus_one = steps[names.index("N-1 upgrade leg (canary leg only)")]
+    script = n_minus_one["run"]
+
+    assert "n1-artifact" in script
+    assert "RELEASE_MANIFEST.json" in script
+    assert "RELEASE_MANIFEST.json.sig" in script
+    assert "SHA256SUMS" in script
+    assert 'sha256sum "${n1_dir}/${n1_tarball}"' in script
+    assert 'grep -F "${n1_tarball}" "${n1_dir}/SHA256SUMS"' in script
+    assert 'gh attestation verify "${n1_dir}/${n1_tarball}"' in script
+    assert 'bash scripts/install.sh --from-file "${n1_dir}/${n1_tarball}"' in script
+    assert script.index("RELEASE_MANIFEST.json") < script.index("bash scripts/install.sh")
+    assert script.index("RELEASE_MANIFEST.json.sig") < script.index("bash scripts/install.sh")
+    assert script.index("SHA256SUMS") < script.index("bash scripts/install.sh")
+    assert script.index("sha256sum") < script.index("bash scripts/install.sh")
+    assert script.index("gh attestation verify") < script.index("bash scripts/install.sh")
+
+
 def test_release_sh_passes_rehearsal_env_through() -> None:
     """release.sh must not sanitise the env alembic's env.py reads.
 
