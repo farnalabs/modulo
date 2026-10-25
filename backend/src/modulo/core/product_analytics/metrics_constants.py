@@ -44,3 +44,11 @@ EVENT_PAYLOAD_FIELDS: dict[str, frozenset[str]] = {
     "eval_created": frozenset({"eval_id"}),
     "api_error": frozenset({"route", "status"}),
 }
+
+# Each retained field also has a deliberately narrow value contract.  These
+# values are kept as strings so this module remains a constants-only boundary;
+# the ingest route applies the actual checks before staging.
+EVENT_PAYLOAD_VALUE_TYPES: dict[str, dict[str, str]] = {
+    event_type: dict.fromkeys(fields, "uuid") for event_type, fields in EVENT_PAYLOAD_FIELDS.items()
+}
+EVENT_PAYLOAD_VALUE_TYPES["api_error"] = {"route": "route", "status": "http_status"}

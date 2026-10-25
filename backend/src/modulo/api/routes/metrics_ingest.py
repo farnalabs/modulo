@@ -27,6 +27,7 @@ from modulo.core.product_analytics.consent import is_org_consenting
 from modulo.core.product_analytics.metrics_constants import (
     API_ERROR_DAILY_CAP,
     EVENT_PAYLOAD_FIELDS,
+    EVENT_PAYLOAD_VALUE_TYPES,
     MAX_BATCH_SIZE,
     VALID_EVENT_TYPES,
 )
@@ -105,6 +106,34 @@ def _sanitize_route_template(route: str | None, templates: set[str]) -> str:
     return route if route in templates else "unknown"
 
 
+def _validated_payload(event: MetricsEventItem, registered_templates: set[str]) -> dict[str, Any]:
+    """Return only payload values that satisfy the event-specific contract.
+
+    Invalid values are dropped rather than rejected so ingest remains
+    best-effort, while the staged payload cannot become a PII or nested-object
+    channel through an otherwise allowlisted key.
+    """
+    payload: dict[str, Any] = {}
+    value_types = EVENT_PAYLOAD_VALUE_TYPES[event.event_type]
+    for key in EVENT_PAYLOAD_FIELDS[event.event_type]:
+        value = event.payload.get(key)
+        value_type = value_types[key]
+        if value_type == "uuid":
+            try:
+                parsed = uuid.UUID(value) if isinstance(value, str) else None
+            except ValueError:
+                parsed = None
+            if parsed is not None:
+                payload[key] = str(parsed)
+        elif value_type == "route":
+            if isinstance(value, str) and len(value) <= 256:
+                payload[key] = _sanitize_route_template(value, registered_templates)
+        elif value_type == "http_status":
+            if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599:
+                payload[key] = value
+    return payload
+
+
 async def _api_error_count_today(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -163,11 +192,7 @@ async def _stage_single_event(
     # Enforce the event contract at the ingest boundary.  The browser sends
     # curated events, but the endpoint is public to any authenticated tenant
     # client; unknown payload keys could otherwise become a covert PII channel.
-    allowed_fields = EVENT_PAYLOAD_FIELDS[event.event_type]
-    payload = {key: value for key, value in event.payload.items() if key in allowed_fields}
-    if event.event_type == "api_error" and "route" in payload:
-        route = payload["route"]
-        payload["route"] = _sanitize_route_template(route if isinstance(route, str) else None, registered_templates)
+    payload = _validated_payload(event, registered_templates)
 
     recorded_at = event.recorded_at or now
 
