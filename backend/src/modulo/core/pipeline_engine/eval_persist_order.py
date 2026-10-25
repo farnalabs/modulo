@@ -234,7 +234,7 @@ async def _persist_decision_row(
         if failure_class == "referential":
             from modulo.db.crud.policy_gate_decision import _extract_constraint_name
 
-            _log.error(
+            _log.exception(
                 "policy_gate_decision.persist_failed_referential",
                 extra={
                     "policy_gate_id": str(snapshot.policy_gate.id),

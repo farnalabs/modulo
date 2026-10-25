@@ -2318,7 +2318,7 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
     }
 
 
-async def _before_process_hook(ctx: dict[str, Any]) -> None:
+def _before_process_hook(ctx: dict[str, Any]) -> None:
     """SAQ ``before_process`` hook — bind the job's organisation for ERROR capture (FAR-1417).
 
     ``Worker.process()`` awaits this hook BEFORE ``asyncio.create_task``-ing the
