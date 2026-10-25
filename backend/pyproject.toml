@@ -18,6 +18,7 @@ name = "farnalabs-modulo"
 version = "0.3.323"
 description = "Agent governance for your agentic SDLC"
 license = "BUSL-1.1"
+license-files = ["LICENSE"]
 authors = [
     { name = "Duncan Tait", email = "admin@modulo.run" },
 ]

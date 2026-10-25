@@ -639,9 +639,8 @@ jobs:
     steps:
       - name: Not implemented yet
         run: |
-          echo "STUB (FAR-1871, release slice 7): build with uv and publish to PyPI via the"
-          echo "Trusted Publisher OIDC flow on a GA release only, fixing the MIT-vs-BUSL licence"
-          echo "metadata on the way. Owned by FAR-1871."
+          echo "STUB (FAR-1871, release slice 7): superseded by the unified release workflow."
+          echo "The live PyPI publish path is promote-only in release-unified.yml."
 
   # FAR-1872 (release slice 8) - release documentation and version pins.
   pin-release-docs:

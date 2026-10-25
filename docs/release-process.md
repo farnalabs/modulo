@@ -6,11 +6,11 @@ How we cut, validate and promote a release of Modulo - and how to rehearse the w
 
 ## The single entry point
 
-Every release action runs through one workflow, `.github/workflows/release.yml` ("Release: Cut / Recut / Promote"). It is `workflow_dispatch` only - it never runs on a push - and takes two inputs:
+Every release action runs through one workflow, `.github/workflows/release-unified.yml` ("Release: Unified Pipeline"). It is `workflow_dispatch` only - it never runs on a push - and takes two inputs:
 
 | Input | Meaning |
 |-------|---------|
-| `action` | One of `cut`, `recut`, `release`, `dry-run` |
+| `mode` | One of `cut`, `recut`, `promote`, `dry-run` |
 | `version` | The plain numeric version being released, e.g. `0.4.0` |
 
 The workflow defaults to workflow-level `permissions: contents: read`, with write scopes granted only on the job that needs them: the `release` job carries `contents: write` (push tags and the CHANGELOG commit, create the GitHub Release) and `actions: write` (`gh workflow run rc-validate.yml`). The `dry-run` and build jobs are read-only. A `release-process` concurrency group with `cancel-in-progress: false` ensures two release actions can never interleave.
@@ -19,9 +19,9 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 
 | Mode | What it does | Publishes? |
 |------|--------------|------------|
-| `cut` | Tags `vX.Y.Z-rcN` at the current `main` HEAD, pushes the `release-freeze` tag (which suspends the merge queue), and dispatches `rc-validate.yml` | Yes - RC tag + freeze |
-| `recut` | After a fix has been manually merged to `main`: tags the *next* RC and re-freezes | Yes - RC tag + freeze |
-| `release` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, lifts the freeze, then updates `CHANGELOG.md` and creates the GitHub Release | Yes - GA tag + Release |
+| `cut` | Bumps the version, tags `vX.Y.Z-rcN` at `main`, pushes the `release-freeze` tag (which suspends the merge queue), builds/publishes RC artefacts and dispatches validation | Yes - RC tag + freeze + RC artefacts |
+| `recut` | Re-publishes from the latest RC after a fix has been manually merged to `main` | Yes - RC artefacts |
+| `promote` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, lifts the freeze, updates `CHANGELOG.md` and creates the GitHub Release, then publishes `farnalabs-modulo` to PyPI | Yes - GA tag + Release + PyPI package |
 | `dry-run` | Builds everything and resolves what a `cut` would have done, then stops | **No - nothing at all** |
 
 ### The freeze
@@ -87,14 +87,14 @@ Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-i
 
 ## Not implemented yet
 
-`release.yml` today covers the RC/GA lifecycle and the rehearsal. The remaining publish steps are **deliberate, visible stubs** rather than silent gaps - each carries a comment naming its tracking ticket. They are gated so they can never execute.
+`release-unified.yml` owns the RC/GA lifecycle, rehearsal, and PyPI publication. The remaining publish steps in the legacy `release.yml` are **deliberate, visible stubs** rather than silent gaps - each carries a comment naming its tracking ticket. They are gated so they can never execute.
 
 | Stub job | Ticket | Will own |
 |----------|--------|----------|
 | `publish-images` | FAR-1869 | Publishing the built images to GHCR (folding in `publish-images.yml`, including its smoke checks) |
 | `publish-release-bundle` | FAR-1869 | The release bundle, GitHub Release assets and Helm chart |
 | `dispatch-rc-soak` | FAR-1870 | Dispatching the RC soak run |
-| `publish-pypi` | FAR-1871 | Publishing the Python package |
+| `publish-pypi` | FAR-1871 | Publishing the Python package (implemented in `release-unified.yml`; legacy stub retained in `release.yml`) |
 | `pin-release-docs` | FAR-1872 | Pinning the released version in the docs |
 
 SBOM production and file-artefact attestation are **no longer stubs** (FAR-1868). `produce-sbom` runs for every action, dry-run included, and uploads a validated CycloneDX SBOM as the `sbom-cyclonedx` artefact. `attest-artefacts` runs for every action except `dry-run` and creates SLSA build provenance with `actions/attest-build-provenance`; it is the producer for the fail-closed `gh attestation verify` gate in `native-release-smoke.yml`. Container-image and release-bundle attestation remain FAR-1869 work: both sets are produced by that slice's still-stubbed publish jobs, and attesting an image needs a registry digest that does not exist yet - nothing fabricates a subject for an artefact that was not produced.
@@ -109,16 +109,16 @@ The repository enforces build provenance with `gh attestation verify`, fail-clos
 
 ```bash
 # Rehearse first - builds everything, publishes nothing.
-gh workflow run "Release: Cut / Recut / Promote" -f action=dry-run -f version=0.4.0
+gh workflow run "Release: Unified Pipeline" -f mode=dry-run -f version=0.4.0
 
 # Cut an RC and freeze.
-gh workflow run "Release: Cut / Recut / Promote" -f action=cut -f version=0.4.0
+gh workflow run "Release: Unified Pipeline" -f mode=cut -f version=0.4.0
 
 # After a fix has been merged to main, cut the next RC.
-gh workflow run "Release: Cut / Recut / Promote" -f action=recut -f version=0.4.0
+gh workflow run "Release: Unified Pipeline" -f mode=recut -f version=0.4.0
 
 # Once the RC has validated, promote to GA.
-gh workflow run "Release: Cut / Recut / Promote" -f action=release -f version=0.4.0
+gh workflow run "Release: Unified Pipeline" -f mode=promote -f version=0.4.0
 ```
 
 ## Version numbering
