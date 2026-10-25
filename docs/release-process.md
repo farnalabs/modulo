@@ -21,12 +21,12 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 |------|--------------|------------|
 | `cut` | Tags `vX.Y.Z-rcN` at the current `main` HEAD, pushes the `release-freeze` tag (which suspends the merge queue), and dispatches `rc-validate.yml` | Yes - RC tag + freeze |
 | `recut` | After a fix has been manually merged to `main`: tags the *next* RC and re-freezes | Yes - RC tag + freeze |
-| `release` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, lifts the freeze, then updates `CHANGELOG.md` and creates the GitHub Release | Yes - GA tag + Release |
+| `promote` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, lifts the freeze, then updates `CHANGELOG.md` and creates the GitHub Release | Yes - GA tag + Release |
 | `dry-run` | Builds everything and resolves what a `cut` would have done, then stops | **No - nothing at all** |
 
 ### The freeze
 
-`cut` and `recut` push a tag named `release-freeze`. The merge queue checks for that tag and does not merge while it is present, so `main` is held still against the RC under validation. A cut chooses the first free `vX.Y.Z-rcN`; a recut always chooses the next free RC number and tags the current `main` commit, so it cannot accidentally republish an older RC after a fix has landed. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` with `force_deploy=true`, and the deploy workflow's normal staging, E2E and production gates remain in force. `release` / `promote` deletes the tag, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
+`cut` and `recut` push a tag named `release-freeze`. The merge queue checks for that tag and does not merge while it is present, so `main` is held still against the RC under validation. A cut chooses the first free `vX.Y.Z-rcN`; a recut always chooses the next free RC number and tags the current `main` commit, so it cannot accidentally republish an older RC after a fix has landed. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` with `force_deploy=true`, and the deploy workflow's normal staging, E2E and production gates remain in force. `promote` deletes the tag, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
 
 ### Recut runbook
 
@@ -40,7 +40,7 @@ Use `recut` after a fix has been merged to `main` while the release freeze is ac
 4. `rc-validate.yml` waits for `/api/v1/deployment` to report the new RC commit, runs the read-only Schemathesis checks, and pushes `validated/vX.Y.Z-rcN` at the RC commit only on success.
 5. Promote only after the validation marker exists and points at the latest RC commit. If validation fails, fix the issue on `main` and repeat this recut sequence; do not move the marker by hand.
 
-## What `release` requires (the four promote invariants)
+## What `promote` requires (the four promote invariants)
 
 Promotion is the irreversible step, so the `release` job refuses to run unless all four of these hold. Each is a separate, loud `::error::` and a non-zero exit:
 

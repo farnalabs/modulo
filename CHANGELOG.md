@@ -4,7 +4,7 @@ All notable changes to Modulo are documented in this file.
 
 Entries are generated automatically from merged pull requests, classified by
 their `changelog:*` labels (see `scripts/generate_changelog.py`, run by the
-`release` action in `.github/workflows/release.yml`):
+`release` action in `.github/workflows/release-unified.yml`):
 
 | Label | Section |
 | --- | --- |

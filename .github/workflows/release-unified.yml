@@ -4,11 +4,11 @@ name: "Release: Unified Pipeline"
 # This workflow consolidates the release logic with a `mode` input.
 # Modes:
 #   cut      - Push release-freeze, bump version in SoT files, commit on main,
-#              tag vX.Y.Z-rcN, publish 4 images to GHCR, build/sign/attest bundle,
-#              push bundle-v* tag, create GitHub Release, push Helm chart to OCI,
-#              dispatch Deploy + rc-validate
+#              tag vX.Y.Z-rcN, publish 4 RC images to GHCR, build/sign/attest bundle,
+#              push bundle-v* tag, create GitHub Release, dispatch Deploy + rc-validate
 #   recut    - Tag current main as the next RC and re-publish (no version bump)
-#   promote  - Promote RC to GA (retag, update release, lift freeze)
+#   promote  - Promote RC to GA (retag images to stable/latest, push Helm chart to OCI,
+#              update release/changelog, lift freeze)
 #   dry-run  - Build + verify everything, emit artefacts as CI artefacts, publish NOTHING
 #
 # The bundle is built by the reusable `.github/workflows/bundle-release.yml`
@@ -404,7 +404,6 @@ jobs:
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
           RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
           REGISTRY_USER: ${{ github.actor }}
           IMAGE_NAMESPACE: ${{ github.repository }}
@@ -412,7 +411,6 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${RC_TAG}"
-          VERSION_NUM="${VERSION}"
 
           # Log in to GHCR
           echo "${GH_TOKEN}" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
@@ -449,7 +447,6 @@ jobs:
               --platform linux/amd64 \
               --push \
               --tag "ghcr.io/$image_name:$TAG" \
-              --tag "ghcr.io/$image_name:$VERSION_NUM" \
               --cache-from type=gha,scope=$img \
               --cache-to type=gha,mode=max,scope=$img
 
@@ -473,30 +470,6 @@ jobs:
                 ;;
             esac
           done
-
-      # -----------------------------------------------------------------------
-      # Push Helm chart to OCI registry (cut and recut)
-      # -----------------------------------------------------------------------
-      - name: Push Helm chart to OCI registry
-        if: inputs.mode == 'cut' || inputs.mode == 'recut'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
-          RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
-          REGISTRY_USER: ${{ github.actor }}
-          IMAGE_NAMESPACE: ${{ github.repository }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION_NUM="${VERSION}"
-
-          # Log in to GHCR for Helm
-          echo "${GH_TOKEN}" | helm registry login ghcr.io -u "$REGISTRY_USER" --password-stdin
-
-          # Package and push chart
-          helm package deploy/helm/modulo --destination /tmp/helm-pkg --version "$VERSION_NUM" --app-version "$VERSION_NUM"
-          CHART_TGZ="/tmp/helm-pkg/modulo-${VERSION_NUM}.tgz"
-          helm push "$CHART_TGZ" "oci://ghcr.io/${IMAGE_NAMESPACE}/charts"
 
       # -----------------------------------------------------------------------
       # Dispatch Deploy + rc-validate (cut and recut)
@@ -527,6 +500,86 @@ jobs:
            gh workflow run rc-validate.yml --ref "${RC_TAG}" -f rc_tag="${RC_TAG}"
 
           echo "Dispatched Deploy (force) and rc-validate for ${RC_TAG}."
+
+      # -----------------------------------------------------------------------
+      # Retag container images for GA (promote only)
+      # -----------------------------------------------------------------------
+      - name: Retag container images for GA
+        if: inputs.mode == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          RC_TAG: ${{ steps.promote.outputs.rc_tag }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE_NAMESPACE: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_NUM="${VERSION}"
+
+          if [ -z "$RC_TAG" ]; then
+            echo "::error::RC_TAG is empty; cannot retag images."
+            exit 1
+          fi
+
+          # Log in to GHCR
+          echo "${GH_TOKEN}" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+
+          for img in all-in-one backend frontend runner-opencode; do
+            case "$img" in
+              all-in-one)
+                image_name="$IMAGE_NAMESPACE"
+                ;;
+              backend)
+                image_name="$IMAGE_NAMESPACE/backend"
+                ;;
+              frontend)
+                image_name="$IMAGE_NAMESPACE/frontend"
+                ;;
+              runner-opencode)
+                image_name="$IMAGE_NAMESPACE/runner-opencode"
+                ;;
+            esac
+
+            echo "Retagging $img ($RC_TAG -> $VERSION_NUM, latest)..."
+            if docker buildx imagetools create \
+                --tag "ghcr.io/$image_name:$VERSION_NUM" \
+                --tag "ghcr.io/$image_name:latest" \
+                "ghcr.io/$image_name:$RC_TAG"; then
+              echo "Retagged $img via imagetools."
+            else
+              echo "imagetools retag failed; falling back to docker pull/tag/push..."
+              docker pull "ghcr.io/$image_name:$RC_TAG"
+              docker tag "ghcr.io/$image_name:$RC_TAG" "ghcr.io/$image_name:$VERSION_NUM"
+              docker tag "ghcr.io/$image_name:$RC_TAG" "ghcr.io/$image_name:latest"
+              docker push "ghcr.io/$image_name:$VERSION_NUM"
+              docker push "ghcr.io/$image_name:latest"
+              echo "Retagged $img via docker pull/tag/push."
+            fi
+          done
+
+      # -----------------------------------------------------------------------
+      # Push Helm chart to OCI registry (promote only)
+      # -----------------------------------------------------------------------
+      - name: Push Helm chart to OCI registry
+        if: inputs.mode == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE_NAMESPACE: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_NUM="${VERSION}"
+
+          # Log in to GHCR for Helm
+          echo "${GH_TOKEN}" | helm registry login ghcr.io -u "$REGISTRY_USER" --password-stdin
+
+          # Package and push chart
+          helm package deploy/helm/modulo --destination /tmp/helm-pkg --version "$VERSION_NUM" --app-version "$VERSION_NUM"
+          CHART_TGZ="/tmp/helm-pkg/modulo-${VERSION_NUM}.tgz"
+          helm push "$CHART_TGZ" "oci://ghcr.io/${IMAGE_NAMESPACE}/charts"
 
       # -----------------------------------------------------------------------
       # Update CHANGELOG.md and GitHub Release (promote only)
@@ -585,11 +638,19 @@ jobs:
             printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
           fi
 
-          # 5. Update GitHub Release
-          if ! gh release edit "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
-            echo "::warning::GitHub Release update failed for ${GA_TAG}"
+          # 5. Update or create GitHub Release
+          if gh release view "$GA_TAG" >/dev/null 2>&1; then
+            if ! gh release edit "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
+              echo "::warning::GitHub Release update failed for ${GA_TAG}"
+            else
+              echo "GitHub Release updated for ${GA_TAG}."
+            fi
           else
-            echo "GitHub Release updated for ${GA_TAG}."
+            if ! gh release create "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
+              echo "::warning::GitHub Release creation failed for ${GA_TAG}"
+            else
+              echo "GitHub Release created for ${GA_TAG}."
+            fi
           fi
 
           exit $rc
