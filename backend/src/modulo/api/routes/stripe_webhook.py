@@ -373,7 +373,6 @@ class RenewalClaimResponse(BaseModel):
             )
         )
     ],
-    response_model=RenewalClaimResponse,
     include_in_schema=True,
 )
 async def stripe_renewal_claim(

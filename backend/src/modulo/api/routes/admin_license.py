@@ -526,7 +526,7 @@ async def get_license_status(
     # role is below admin, contradicting ``GET /api/v1/auth/permissions``
     # (which resolves a system admin at the admin floor) and making the
     # frontend's permission-derived licence audience wrong for that principal.
-    current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_LICENSE_MANAGE),
+    current_user: Annotated[TenantPrincipal, require_system_or_org_admin(_CODE_ORG_LICENSE_MANAGE)],
 ) -> LicenseStatusResponse:
 
     org_id = current_user.organisation_id
@@ -579,7 +579,7 @@ async def get_license_status(
 async def upload_license(
     req: LicenseUploadRequest,
     settings: Annotated[Settings, Depends(get_settings)],
-    _: TenantPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    _: Annotated[TenantPrincipal, require_system_permission(PERM_SYSTEM_CONFIG_MANAGE)],
 ) -> LicenseUploadResponse | JSONResponse:
     try:
         validation = parse_and_verify(req.license_key)
@@ -623,11 +623,10 @@ async def upload_license(
     "",
     dependencies=[Depends(audited("license_removed", "license", principal_dep=resolve_audit_principal))],
     status_code=status.HTTP_200_OK,
-    response_model=LicenseStatusResponse,
 )
 async def remove_license(
     settings: Annotated[Settings, Depends(get_settings)],
-    _: TenantPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    _: Annotated[TenantPrincipal, require_system_permission(PERM_SYSTEM_CONFIG_MANAGE)],
 ) -> LicenseStatusResponse:
     """Remove the instance-wide (system-scope) licence (FAR-2110).
 
@@ -684,7 +683,7 @@ async def issue_license(
     req: LicenseIssueRequest,
     background_tasks: BackgroundTasks,
     settings: Annotated[Settings, Depends(get_settings)],
-    _: TenantPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    _: Annotated[TenantPrincipal, require_system_permission(PERM_SYSTEM_CONFIG_MANAGE)],
 ) -> LicenseIssueResponse | JSONResponse:
     """Manually issue (sign) a team license key for a customer.
 
