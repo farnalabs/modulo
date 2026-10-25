@@ -97,10 +97,10 @@ jobs:
                 exit 1
               fi
             fi
-            if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" \
-              --jq 'select(.draft == false and .prerelease == false) | .tag_name' | grep -qx "${tag}"; then
-              echo "::error::canary release ${tag} is missing or is not published (draft/prerelease)"; exit 1
-            fi
+            gh api "repos/${{ github.repository }}/releases/tags/${tag}" > release.json \
+              || { echo "::error::canary release ${tag} does not exist"; exit 1; }
+            python3 scripts/validate_release_tag.py validate --tag "${tag}" --release-json release.json \
+              || { echo "::error::canary release ${tag} is missing or is not published (draft/prerelease)"; exit 1; }
             version="${tag#bundle-v}"
             echo "TAG=${tag}" >> "$GITHUB_ENV"
             echo "TARBALL=canary.tar.gz" >> "$GITHUB_ENV"
@@ -124,6 +124,10 @@ jobs:
               bundle-v*) ;;
               *) echo "::error::release-smoke TAG '${TAG}' does not match bundle-v*"; exit 1 ;;
             esac
+            gh api "repos/${{ github.repository }}/releases/tags/${TAG}" > release.json \
+              || { echo "::error::release ${TAG} does not exist"; exit 1; }
+            python3 scripts/validate_release_tag.py validate --tag "${TAG}" --release-json release.json \
+              || { echo "::error::release ${TAG} is missing or is not published (draft/prerelease)"; exit 1; }
             version="${TAG#bundle-v}"
             tarball="modulo-${version}-linux-amd64.tar.gz"
             assets="$(gh release view "${TAG}" --json assets --jq '.assets[].name')"
@@ -406,17 +410,19 @@ jobs:
           # run together past the 100-release page size. Published means both
           # draft=false and prerelease=false, everywhere in this resolver.
           set +e
-          releases="$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate \
-            --jq '.[] | select(.tag_name | startswith("bundle-v")) | if (.tag_name | test("^bundle-v[0-9]+\\.[0-9]+\\.[0-9]+$")) then select(.draft == false) | select(.prerelease == false) | .tag_name else error("malformed bundle release tag: " + .tag_name) end' 2>/tmp/gate-err)"
+          gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate --slurp > release-pages.json 2>/tmp/gate-err
           rc=$?
+          if [ "${rc}" -eq 0 ]; then
+            releases="$(python3 scripts/validate_release_tag.py published-tags --release-json release-pages.json 2>/tmp/gate-validator-err)"
+            rc=$?
+          fi
           set -e
           if [ "${rc}" -ne 0 ]; then
-            echo "::warning::cannot list releases for ${{ github.repository }} ($(tr -d '\n' </tmp/gate-err)) - cannot prove a bundle-v* release is absent, so NOT skipping; the fetch step will report the failure loudly"
+            echo "::warning::cannot list/validate releases for ${{ github.repository }} ($(tr -d '\n' </tmp/gate-err) $(tr -d '\n' </tmp/gate-validator-err 2>/dev/null || true)) - cannot prove a bundle-v* release is absent, so NOT skipping; the fetch step will report the failure loudly"
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -z "${releases}" ]; then
-            echo "::notice::no published bundle-v* release exists for ${{ github.repository }} - the nightly canary has nothing to verify, so it is skipping successfully (no failure, no tracking issue). Durable fix: publish a bundle-v* release as part of the release process; until then this nightly signal is honestly 'not applicable' rather than red."
+          if [ -z "${releases}" ]; then            echo "::notice::no published bundle-v* release exists for ${{ github.repository }} - the nightly canary has nothing to verify, so it is skipping successfully (no failure, no tracking issue). Durable fix: publish a bundle-v* release as part of the release process; until then this nightly signal is honestly 'not applicable' rather than red."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -442,10 +448,10 @@ jobs:
                 exit 1
               fi
             fi
-            if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" \
-              --jq 'select(.draft == false and .prerelease == false) | .tag_name' | grep -qx "${tag}"; then
-              echo "::error::canary release ${tag} is missing or is not published (draft/prerelease)"; exit 1
-            fi
+            gh api "repos/${{ github.repository }}/releases/tags/${tag}" > release.json \
+              || { echo "::error::canary release ${tag} does not exist"; exit 1; }
+            python3 scripts/validate_release_tag.py validate --tag "${tag}" --release-json release.json \
+              || { echo "::error::canary release ${tag} is missing or is not published (draft/prerelease)"; exit 1; }
             version="${tag#bundle-v}"
             echo "TAG=${tag}" >> "$GITHUB_ENV"
             echo "TARBALL=canary.tar.gz" >> "$GITHUB_ENV"
@@ -458,33 +464,22 @@ jobs:
             # history. Every bundle-v* history entry is validated before filtering, so
             # malformed history fails closed instead of being sorted or selected.
             set +e
-            release_list="$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate \
-              --jq '.[] | select(.tag_name | startswith("bundle-v")) | if (.tag_name | test("^bundle-v[0-9]+\\.[0-9]+\\.[0-9]+$")) then select(.draft == false) | select(.prerelease == false) | .tag_name else error("malformed bundle release tag: " + .tag_name) end' 2>/tmp/n1-release-list-err)"
+            gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate --slurp > release-pages.json 2>/tmp/n1-release-list-err
             release_list_rc=$?
+            if [ "${release_list_rc}" -eq 0 ]; then
+              release_list="$(python3 scripts/validate_release_tag.py resolve-n-minus-1 --current "${tag}" --release-json release-pages.json 2>/tmp/n1-resolver-err)"
+              release_list_rc=$?
+            fi
             set -e
             if [ "${release_list_rc}" -ne 0 ]; then
-              echo "::error::cannot validate/list published bundle releases to resolve N-1 for ${tag} ($(tr -d '\n' </tmp/n1-release-list-err)) - refusing to skip the upgrade leg"
+              echo "::error::cannot validate/list published bundle releases to resolve N-1 for ${tag} ($(tr -d '\n' </tmp/n1-release-list-err) $(tr -d '\n' </tmp/n1-resolver-err 2>/dev/null || true)) - refusing to skip the upgrade leg"
               exit 1
             fi
-            if [ -z "${release_list}" ]; then
-              echo "::error::published bundle release history is empty while resolving N-1 for ${tag} - refusing to skip the upgrade leg"
-              exit 1
-            fi
-            readarray -t tags_arr < <(printf '%s\n' "${release_list}" | sort -V)
-            current_idx=-1
-            for i in "${!tags_arr[@]}"; do
-              if [ "${tags_arr[i]}" = "${tag}" ]; then current_idx=$i; break; fi
-            done
-            if [ "${current_idx}" -lt 0 ]; then
-              echo "::error::current canary ${tag} is not a published, non-prerelease bundle release - refusing to skip the N-1 upgrade leg"
-              exit 1
-            fi
-            if [ "${current_idx}" -eq 0 ]; then
-              echo "::notice::${tag} is the first published bundle release in the release line; no N-1 upgrade leg applies"
+            if [ -n "${release_list}" ]; then
+              echo "N_MINUS_1=${release_list}" >> "$GITHUB_ENV"
+              echo "resolved N-1 release: ${release_list} (published, non-prerelease, below ${tag})"
             else
-              n1_tag="${tags_arr[$((current_idx - 1))]}"
-              echo "N_MINUS_1=${n1_tag}" >> "$GITHUB_ENV"
-              echo "resolved N-1 release: ${n1_tag} (published, non-prerelease, below ${tag})"
+              echo "::notice::${tag} is the first published bundle release in the release line; no N-1 upgrade leg applies"
             fi
             curl --proto '=https' -fsSL -o canary.tar.gz \
               "https://github.com/${{ github.repository }}/releases/download/${tag}/modulo-${version}-linux-amd64.tar.gz" \
@@ -506,6 +501,10 @@ jobs:
               bundle-v*) ;;
               *) echo "::error::release-smoke TAG '${TAG}' does not match bundle-v*"; exit 1 ;;
             esac
+            gh api "repos/${{ github.repository }}/releases/tags/${TAG}" > release.json \
+              || { echo "::error::release ${TAG} does not exist"; exit 1; }
+            python3 scripts/validate_release_tag.py validate --tag "${TAG}" --release-json release.json \
+              || { echo "::error::release ${TAG} is missing or is not published (draft/prerelease)"; exit 1; }
             version="${TAG#bundle-v}"
             tarball="modulo-${version}-linux-amd64.tar.gz"
             assets="$(gh release view "${TAG}" --json assets --jq '.assets[].name')"
@@ -805,8 +804,10 @@ jobs:
             bundle-v*) ;;
             *) echo "::error::rollback_version must look like bundle-vX.Y.Z; got '${TARGET}'"; exit 1 ;;
           esac
-          gh api "repos/${{ github.repository }}/releases/tags/${TARGET}" > /dev/null \
+          gh api "repos/${{ github.repository }}/releases/tags/${TARGET}" > rollback-release.json \
             || { echo "::error::release ${TARGET} not found - refusing to verify a nonexistent rollback target"; exit 1; }
+          python3 scripts/validate_release_tag.py validate --tag "${TARGET}" --release-json rollback-release.json \
+            || { echo "::error::release ${TARGET} is missing or is not published (draft/prerelease)"; exit 1; }
           version="${TARGET#bundle-v}"
           tarball_url="https://github.com/${{ github.repository }}/releases/download/${TARGET}/modulo-${version}-linux-amd64.tar.gz"
           curl --proto '=https' -fsSLI "${tarball_url}" | grep -q '^HTTP/. 200' \
