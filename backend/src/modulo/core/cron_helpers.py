@@ -10273,6 +10273,36 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         raise
     except Exception:
         _log.warning("dispatcher_reconcile.capacity_alerts_failed", exc_info=True)
+    # FAR-2116 — pipeline-decay alerting: a webhook-triggered pipeline whose
+    # rolling 2h success rate collapses (or whose node-deadline watchdog keeps
+    # firing) is alerted through the same Notifier. This is the gap neither
+    # readiness nor capacity alerting covered: the Branch Fixer ran at a 35%
+    # success rate for ~5 days with the app perfectly healthy. Isolated — a
+    # failure here is a WARNING, never an abort of the reconcile tick.
+    try:
+        from modulo.core.pipeline_decay_alerts import evaluate_pipeline_decay_alerts
+
+        decay_alerts = await evaluate_pipeline_decay_alerts(
+            factory=_open_system_factory(),
+            redis_client=redis_client,
+        )
+        summary["pipeline_decay_alerts_measured"] = decay_alerts.get("pipelines_measured", 0)
+        summary["pipeline_decay_alerts_raised"] = decay_alerts.get("alerts", 0)
+        summary["pipeline_decay_alerts_recovered"] = decay_alerts.get("recoveries", 0)
+        summary["pipeline_decay_alerts_failed"] = decay_alerts.get("notify_failed", 0)
+        if decay_alerts.get("alerts") or decay_alerts.get("recoveries"):
+            _log.info(
+                "dispatcher_reconcile.pipeline_decay_alerts",
+                extra={
+                    "pipelines_measured": decay_alerts.get("pipelines_measured", 0),
+                    "alerts": decay_alerts.get("alerts", 0),
+                    "recoveries": decay_alerts.get("recoveries", 0),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatcher_reconcile.pipeline_decay_alerts_failed", exc_info=True)
     try:
         from modulo.auth.api_key import revoke_run_api_key_sweep
 

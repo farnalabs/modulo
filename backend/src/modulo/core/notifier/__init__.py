@@ -8,6 +8,7 @@ and the subscribable webhook subset in ``api/routes.admin_notifications.py``
                       claim_expired, hitl_approve_sweep_suspected
   - Runs / cost:      run_failed, run_stalled, budget_exceeded,
                       circuit_breaker_tripped, provider_failure (FAR-2006)
+  - Pipeline health:  pipeline_decay, pipeline_decay_recovered (FAR-2116)
   - Triggers:         trigger_deactivated, trigger_streak_alert,
                       org_triggers_auto_paused
   - Evals:            eval_regression, eval_blocked
@@ -76,6 +77,8 @@ __all__ = [
     "EVENT_HITL_DEADLINE_WARNING",
     "EVENT_HITL_OVERDUE",
     "EVENT_ORG_TRIGGERS_AUTO_PAUSED",
+    "EVENT_PIPELINE_DECAY",
+    "EVENT_PIPELINE_DECAY_RECOVERED",
     "EVENT_PROVIDER_FAILURE",
     "EVENT_QUEUE_PRESSURE_CRITICAL",
     "EVENT_QUEUE_PRESSURE_NOTICE",
@@ -300,6 +303,17 @@ EVENT_CAPACITY_RECOVERED = "capacity_recovered"
 # deployment change (raise ``REDIS_MAXMEMORY`` / the Redis tier), not a
 # pipeline fix.
 EVENT_CAPACITY_REDIS_PRESSURE = "capacity_redis_pressure"
+# FAR-2116 — pipeline-decay alerting. A readiness check answers "is the app
+# up"; neither of the two outages this closes (deploys red for ~30h, and the
+# Branch Fixer at a 35% success rate for ~5 days) made the app unhealthy. These
+# two events are the sustained-degradation pair: ``pipeline_decay`` opens one
+# alert per webhook pipeline whose rolling success rate collapses (or whose
+# node-deadline watchdog keeps firing) over a 2-hour window, and
+# ``pipeline_decay_recovered`` closes it once the pipeline is healthy again —
+# the same open/close shape as the capacity ladder, so an operator is never
+# left holding a stale "degraded".
+EVENT_PIPELINE_DECAY = "pipeline_decay"
+EVENT_PIPELINE_DECAY_RECOVERED = "pipeline_decay_recovered"
 
 
 @dataclass
