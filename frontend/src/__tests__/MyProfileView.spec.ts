@@ -492,6 +492,47 @@ describe('MyProfileView HITL email alerts', () => {
     expect(pipelineAttempts).toBe(2)
   })
 
+  it('shows an actionable error when the pipelines response carries no data', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+      }
+      if (url === '/api/v1/pipelines') return Promise.resolve({ data: undefined, error: undefined })
+      return Promise.resolve({ data: PROFILE, error: undefined })
+    })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Could not load pipelines for HITL email overrides.')
+    })
+
+    const pipelinesError = wrapper.find('.my-profile-hitl-email-pipelines-error')
+    expect(pipelinesError.exists()).toBe(true)
+    expect(pipelinesError.attributes('role')).toBe('alert')
+    expect(pipelinesError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('No pipelines available.')
+  })
+
+  it('shows an actionable error when the pipelines request throws', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+      }
+      if (url === '/api/v1/pipelines') return Promise.reject(new Error('Pipeline network error'))
+      return Promise.resolve({ data: PROFILE, error: undefined })
+    })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Pipeline network error')
+    })
+
+    const pipelinesError = wrapper.find('.my-profile-hitl-email-pipelines-error')
+    expect(pipelinesError.exists()).toBe(true)
+    expect(pipelinesError.attributes('role')).toBe('alert')
+    expect(pipelinesError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+  })
+
   it('shows an error and re-enables the save button when saving fails', async () => {
     mockPrefsGet({ default: false, pipeline_overrides: {} })
     mockPut.mockResolvedValueOnce({ data: undefined, error: { detail: 'Save failed' } })
@@ -605,6 +646,29 @@ describe('MyProfileView loading placeholders and fallbacks', () => {
       expect(wrapper.find('.card p.text-lg').text()).toContain('Test User')
     })
     expect(profileAttempts).toBe(2)
+  })
+
+  it('shows an actionable error when the profile request throws', async () => {
+    usePlanStore().currentTier = 'team'
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/auth/me') return Promise.reject(new Error('Profile network error'))
+      if (url === '/api/v1/teams/my') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+    const wrapper = mount(MyProfileView)
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Profile network error')
+    })
+
+    const profileError = wrapper.find('.my-profile-profile-error')
+    expect(profileError.exists()).toBe(true)
+    expect(profileError.attributes('role')).toBe('alert')
+    expect(profileError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    expect(wrapper.find('.card p.text-lg').exists()).toBe(false)
   })
 
   it('falls back to an em dash when org_role is missing', async () => {
