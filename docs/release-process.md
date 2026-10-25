@@ -6,7 +6,7 @@ How we cut, validate and promote a release of Modulo - and how to rehearse the w
 
 ## The single entry point
 
-Every release action runs through one workflow, `.github/workflows/release-unified.yml` ("Release: Unified Pipeline"). It is `workflow_dispatch` only - it never runs on a push - and takes two inputs:
+Every release action runs through one workflow, `.github/workflows/release-unified.yml` ("Release: Unified Pipeline"). It is `workflow_dispatch` only - it never runs on a push - and takes two inputs. The older `.github/workflows/release.yml` name remains only as a fail-closed migration wrapper: it has no write permissions or release-mutating steps, so it cannot create a tag, release, freeze marker, or package. Operators using an old bookmark must re-run the command against the unified workflow.
 
 | Input | Meaning |
 |-------|---------|
@@ -61,7 +61,7 @@ It does **not** publish anything. It does not create a tag of any kind - not the
 
 A tag push is not a private act: `.github/workflows/publish-images.yml` triggers on `push: tags: ["v*"]`. Pushing *any* version-shaped tag - including an RC - immediately publishes container images to GHCR. So the dry-run path takes no tag action whatsoever rather than "a harmless local tag".
 
-The rule that keeps this true as the workflow grows: **any job added to `release.yml` that publishes something must be explicitly gated so it cannot run under `dry-run`.** Publish-shaped work is expected to carry `if: inputs.action != 'dry-run'` (matching the existing publish jobs). This is documented in the workflow header so the next author cannot miss it.
+The rule that keeps this true as the workflow grows: **publish-shaped work belongs in `release-unified.yml`, not in the legacy `release.yml` wrapper.** The wrapper must remain fail-closed and read-only. Do not add tags, releases, freeze changes, registry publishes, package publishes, changelog commits, or release dispatches to it; add them to the unified workflow with an explicit mode gate instead.
 
 ## Container images and platform scope
 
@@ -85,16 +85,20 @@ Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-i
 - **The dry-run's "no tag at all" rule stays correct.** It is conservative for the right reason: a HUMAN pushing a version-shaped tag - or any push made with a credential other than `github.token` - WOULD trigger `publish-images.yml` and publish images. The rationale above is unchanged; what is added here is that a WORKFLOW-initiated push behaves differently from a human one.
 - **The CHANGELOG commit's push to `main` triggers no CI either.** The same `github.token` pushes it, so `main`'s HEAD after a release is not CI-validated. That is observed behaviour, recorded here rather than changed.
 
+## Legacy workflow migration
+
+`release.yml` is retained only so an old bookmarked workflow name produces a loud, actionable failure. It is deliberately read-only and contains no release-mutating job. A failed wrapper run is safe: it creates no tag, moves no freeze marker, creates no GitHub Release, publishes no package, commits no changelog, and dispatches no release workflow. Re-run the intended operation through `Release: Unified Pipeline` using the commands above.
+
 ## Not implemented yet
 
-`release-unified.yml` owns the RC/GA lifecycle, rehearsal, and PyPI publication. The remaining publish steps in the legacy `release.yml` are **deliberate, visible stubs** rather than silent gaps - each carries a comment naming its tracking ticket. They are gated so they can never execute.
+`release-unified.yml` owns the RC/GA lifecycle, rehearsal, and PyPI publication. The legacy workflow is not a second release implementation and must remain a fail-closed wrapper.
 
 | Stub job | Ticket | Will own |
 |----------|--------|----------|
 | `publish-images` | FAR-1869 | Publishing the built images to GHCR (folding in `publish-images.yml`, including its smoke checks) |
 | `publish-release-bundle` | FAR-1869 | The release bundle, GitHub Release assets and Helm chart |
 | `dispatch-rc-soak` | FAR-1870 | Dispatching the RC soak run |
-| `publish-pypi` | FAR-1871 | Publishing the Python package (implemented in `release-unified.yml`; legacy stub retained in `release.yml`) |
+| `publish-pypi` | FAR-1871 | Publishing the Python package in `release-unified.yml`; `release.yml` has no publisher |
 | `pin-release-docs` | FAR-1872 | Pinning the released version in the docs |
 
 SBOM production and file-artefact attestation are **no longer stubs** (FAR-1868). `produce-sbom` runs for every action, dry-run included, and uploads a validated CycloneDX SBOM as the `sbom-cyclonedx` artefact. `attest-artefacts` runs for every action except `dry-run` and creates SLSA build provenance with `actions/attest-build-provenance`; it is the producer for the fail-closed `gh attestation verify` gate in `native-release-smoke.yml`. Container-image and release-bundle attestation remain FAR-1869 work: both sets are produced by that slice's still-stubbed publish jobs, and attesting an image needs a registry digest that does not exist yet - nothing fabricates a subject for an artefact that was not produced.
