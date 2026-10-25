@@ -1,0 +1,96 @@
+{
+  "modelBackendJudge": {
+    "answer_contract": "typed_questions",
+    "field": "output.text",
+    "context_fields": ["input", "output.metadata"],
+    "backing": {
+      "kind": "model_backend",
+      "model_backend_id": "11111111-1111-4111-8111-111111111111"
+    },
+    "questions": [
+      {
+        "id": "accurate",
+        "type": "noul",
+        "instructions": "Is the answer accurate?",
+        "criteria": ["No invented facts"],
+        "weight": 2,
+        "required": true,
+        "min_pass_confidence": 0.7
+      },
+      {
+        "id": "tone",
+        "type": "choice",
+        "instructions": "Pick the tone",
+        "criteria": [],
+        "weight": 1,
+        "required": false,
+        "min_pass_confidence": 0.5,
+        "options": [
+          { "key": "neutral", "description": "Plain" },
+          { "key": "friendly", "description": "Warm" }
+        ],
+        "passing_keys": ["neutral"],
+        "option_scores": { "neutral": 1, "friendly": 0.5 }
+      },
+      {
+        "id": "quality",
+        "type": "score",
+        "instructions": "Rate quality",
+        "criteria": [],
+        "weight": 1.5,
+        "required": false,
+        "min_pass_confidence": 0.5,
+        "levels": [
+          { "score": 0, "description": "Bad" },
+          { "score": 1, "description": "Good" }
+        ],
+        "pass_from": 1
+      }
+    ],
+    "pass_rule": { "kind": "weighted_score_at_least", "threshold": 0.6 },
+    "verdict_kind": "assessment",
+    "timeouts": { "per_question_seconds": 10, "per_definition_seconds": 45 },
+    "cascade": {
+      "enabled": true,
+      "on": "derived_pass_confidence",
+      "threshold": 0.85,
+      "escalate_to": {
+        "kind": "model_backend",
+        "model_backend_id": "22222222-2222-4222-8222-222222222222"
+      }
+    }
+  },
+  "decisionModelJudge": {
+    "answer_contract": "typed_questions",
+    "field": "output",
+    "context_fields": [],
+    "backing": {
+      "kind": "decision_model",
+      "vendor": "Jev",
+      "model_class": "system_one"
+    },
+    "questions": [
+      {
+        "id": "verdict",
+        "type": "noul",
+        "instructions": "Is the output acceptable?",
+        "criteria": [],
+        "weight": 1,
+        "required": true,
+        "min_pass_confidence": 0.5
+      }
+    ],
+    "pass_rule": { "kind": "weighted_score_at_least", "threshold": 0.5 },
+    "verdict_kind": "assessment",
+    "timeouts": { "per_question_seconds": 10, "per_definition_seconds": 45 },
+    "cascade": {
+      "enabled": true,
+      "on": "derived_pass_confidence",
+      "threshold": 0.9,
+      "escalate_to": {
+        "kind": "model_backend",
+        "model_backend_id": "33333333-3333-4333-8333-333333333333"
+      }
+    }
+  }
+}

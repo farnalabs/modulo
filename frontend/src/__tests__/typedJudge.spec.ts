@@ -17,64 +17,18 @@ import {
   type TypedJudgeDraft,
 } from '../components/eval/typedJudge'
 
+import fixtures from './fixtures/typed-judge-payload.json'
+
 const SRC_ROOT = join(__dirname, '..')
 
-const MODEL_BACKEND_ID = '11111111-1111-4111-8111-111111111111'
-
 /**
- * The exact payload the builder must emit. It mirrors the server's
- * ``TypedJudgeConfig``: snake_case, ``extra="forbid"`` at every level, and the
- * cut lives in ``pass_rule.threshold`` (never ``pass_threshold``).
+ * The exact payload the builder must emit. It is ONE shared artefact: this
+ * suite proves the builder round-trips it byte-for-byte, and the backend test
+ * `tests/unit/core/eval_engine/test_typed_judge_wire_contract.py` proves the
+ * real `validate_typed_judge_config` accepts it.
  */
-const WIRE_FIXTURE: Record<string, unknown> = {
-  answer_contract: 'typed_questions',
-  field: 'output.text',
-  context_fields: ['input', 'output.metadata'],
-  backing: { kind: 'model_backend', model_backend_id: MODEL_BACKEND_ID },
-  questions: [
-    {
-      id: 'accurate',
-      type: 'noul',
-      instructions: 'Is the answer accurate?',
-      criteria: ['No invented facts'],
-      weight: 2,
-      required: true,
-      min_pass_confidence: 0.7,
-    },
-    {
-      id: 'tone',
-      type: 'choice',
-      instructions: 'Pick the tone',
-      criteria: [],
-      weight: 1,
-      required: false,
-      min_pass_confidence: 0.5,
-      options: [
-        { key: 'neutral', description: 'Plain' },
-        { key: 'friendly', description: 'Warm' },
-      ],
-      passing_keys: ['neutral'],
-      option_scores: { neutral: 1, friendly: 0.5 },
-    },
-    {
-      id: 'quality',
-      type: 'score',
-      instructions: 'Rate quality',
-      criteria: [],
-      weight: 1.5,
-      required: false,
-      min_pass_confidence: 0.5,
-      levels: [
-        { score: 0, description: 'Bad' },
-        { score: 1, description: 'Good' },
-      ],
-      pass_from: 1,
-    },
-  ],
-  pass_rule: { kind: 'weighted_score_at_least', threshold: 0.6 },
-  verdict_kind: 'assessment',
-  timeouts: { per_question_seconds: 10, per_definition_seconds: 45 },
-}
+const WIRE_FIXTURE = fixtures.modelBackendJudge as Record<string, unknown>
+const DECISION_MODEL_FIXTURE = fixtures.decisionModelJudge as Record<string, unknown>
 
 const ROOT_KEYS = new Set([
   'answer_contract',
@@ -145,11 +99,41 @@ describe('typedJudge — default draft and builder', () => {
     expect(config.field).toBe('')
   })
 
-  it('emits only the declared decision-model backing keys', () => {
+  it('emits the decision-model backing keys, including an authored model_class', () => {
     const draft = createDefaultDraft()
     draft.backingKind = 'decision_model'
     draft.decisionVendor = 'Jev'
     expect(buildTypedJudgeConfig(draft).backing).toEqual({ kind: 'decision_model', vendor: 'Jev' })
+
+    draft.decisionModelClass = 'system_one'
+    expect(buildTypedJudgeConfig(draft).backing).toEqual({
+      kind: 'decision_model',
+      vendor: 'Jev',
+      model_class: 'system_one',
+    })
+  })
+
+  it('does not normalise an unparseable numeric field to a number', () => {
+    const draft = createDefaultDraft()
+    const question = createQuestion('score', 'quality')
+    question.weight = 'abc'
+    question.minPassConfidence = ''
+    question.levels[0].score = 'nope'
+    question.passFrom = ''
+    draft.questions = [question]
+    draft.threshold = 'abc'
+    draft.perQuestionSeconds = ''
+    draft.perDefinitionSeconds = ''
+
+    const config = buildTypedJudgeConfig(draft)
+    const built = (config.questions as Record<string, unknown>[])[0]
+    expect(built.weight).toBeNaN()
+    expect(built.min_pass_confidence).toBeNaN()
+    expect((built.levels as Record<string, unknown>[])[0].score).toBeNaN()
+    expect(built.pass_from).toBeNaN()
+    expect((config.pass_rule as Record<string, unknown>).threshold).toBeNaN()
+    expect((config.timeouts as Record<string, unknown>).per_question_seconds).toBeNaN()
+    expect((config.timeouts as Record<string, unknown>).per_definition_seconds).toBeNaN()
   })
 
   it('emits option_scores only when at least one score is supplied', () => {
@@ -176,12 +160,25 @@ describe('typedJudge — default draft and builder', () => {
 })
 
 describe('typedJudge — contract round-trip', () => {
-  it('round-trips a stored typed config without drift', () => {
-    expect(buildTypedJudgeConfig(draftFromFixture())).toEqual(WIRE_FIXTURE)
+  it('round-trips a model-backed config without drift, cascade included', () => {
+    const out = buildTypedJudgeConfig(draftFromFixture())
+    expect(out).toEqual(WIRE_FIXTURE)
+    // The cascade must survive the editor round-trip (it has no authoring UI
+    // yet); the shared fixture pins this so dropping it fails the test.
+    expect(out).toHaveProperty('cascade')
+    expect(out.cascade).toEqual(WIRE_FIXTURE.cascade)
+  })
+
+  it('round-trips a decision-model config, preserving model_class and cascade', () => {
+    const draft = draftFromConfig(DECISION_MODEL_FIXTURE)
+    expect(draft).not.toBeNull()
+    const out = buildTypedJudgeConfig(draft as TypedJudgeDraft)
+    expect(out).toEqual(DECISION_MODEL_FIXTURE)
+    expect((out.backing as Record<string, unknown>).model_class).toBe('system_one')
+    expect(out.cascade).toEqual(DECISION_MODEL_FIXTURE.cascade)
   })
 
   it('emits no camelCase key and no key outside the server schema', () => {
-    const config = buildTypedJudgeConfig(draftFromFixture())
     const seenKeys: string[] = []
 
     function checkKeys(record: Record<string, unknown>, allowed: Set<string>, where: string): void {
@@ -192,35 +189,62 @@ describe('typedJudge — contract round-trip', () => {
       }
     }
 
-    checkKeys(config, ROOT_KEYS, 'config')
-    checkKeys(config.backing as Record<string, unknown>, new Set(['kind', 'model_backend_id']), 'backing')
-    checkKeys(
-      config.pass_rule as Record<string, unknown>,
-      new Set(['kind', 'threshold']),
-      'pass_rule',
-    )
-    checkKeys(
-      config.timeouts as Record<string, unknown>,
-      new Set(['per_question_seconds', 'per_definition_seconds']),
-      'timeouts',
-    )
+    function checkPayload(
+      config: Record<string, unknown>,
+      backingKeys: Set<string>,
+      label: string,
+    ): void {
+      checkKeys(config, ROOT_KEYS, label)
+      checkKeys(config.backing as Record<string, unknown>, backingKeys, `${label}.backing`)
+      checkKeys(
+        config.pass_rule as Record<string, unknown>,
+        new Set(['kind', 'threshold']),
+        `${label}.pass_rule`,
+      )
+      checkKeys(
+        config.timeouts as Record<string, unknown>,
+        new Set(['per_question_seconds', 'per_definition_seconds']),
+        `${label}.timeouts`,
+      )
+      // Descend into cascade (finding: the walk previously skipped it).
+      const cascade = config.cascade as Record<string, unknown>
+      checkKeys(cascade, new Set(['enabled', 'on', 'threshold', 'escalate_to']), `${label}.cascade`)
+      checkKeys(
+        cascade.escalate_to as Record<string, unknown>,
+        new Set(['kind', 'model_backend_id']),
+        `${label}.cascade.escalate_to`,
+      )
 
-    for (const [index, question] of (config.questions as Record<string, unknown>[]).entries()) {
-      const type = String(question.type)
-      checkKeys(question, QUESTION_KEYS[type], `questions[${index}]`)
-      for (const option of (question.options as Record<string, unknown>[] | undefined) ?? []) {
-        checkKeys(option, new Set(['key', 'description']), `questions[${index}].option`)
-      }
-      for (const level of (question.levels as Record<string, unknown>[] | undefined) ?? []) {
-        checkKeys(level, new Set(['score', 'description']), `questions[${index}].level`)
+      for (const [index, question] of (config.questions as Record<string, unknown>[]).entries()) {
+        const type = String(question.type)
+        checkKeys(question, QUESTION_KEYS[type], `${label}.questions[${index}]`)
+        for (const option of (question.options as Record<string, unknown>[] | undefined) ?? []) {
+          checkKeys(option, new Set(['key', 'description']), `${label}.questions[${index}].option`)
+        }
+        for (const level of (question.levels as Record<string, unknown>[] | undefined) ?? []) {
+          checkKeys(level, new Set(['score', 'description']), `${label}.questions[${index}].level`)
+        }
       }
     }
 
+    checkPayload(
+      buildTypedJudgeConfig(draftFromFixture()),
+      new Set(['kind', 'model_backend_id']),
+      'modelBackend',
+    )
+    checkPayload(
+      buildTypedJudgeConfig(draftFromConfig(DECISION_MODEL_FIXTURE) as TypedJudgeDraft),
+      new Set(['kind', 'vendor', 'model_class']),
+      'decisionModel',
+    )
+
     // Prove the walk actually covered the payload (a negative search alone
     // would pass on an empty object).
-    expect(seenKeys).toContain('config.answer_contract')
-    expect(seenKeys).toContain('questions[1].passing_keys')
-    expect(seenKeys).toContain('questions[2].pass_from')
+    expect(seenKeys).toContain('modelBackend.answer_contract')
+    expect(seenKeys).toContain('modelBackend.questions[1].passing_keys')
+    expect(seenKeys).toContain('modelBackend.questions[2].pass_from')
+    expect(seenKeys).toContain('modelBackend.cascade.escalate_to.model_backend_id')
+    expect(seenKeys).toContain('decisionModel.backing.model_class')
   })
 
   it('bounds match the server schema', () => {
@@ -242,6 +266,74 @@ describe('typedJudge — draftFromConfig', () => {
     expect(draft.questions[1].options.map((option) => option.score)).toEqual(['1', '0.5'])
     expect(draft.questions[2].levels.map((level) => level.score)).toEqual(['0', '1'])
     expect(draft.verdictKind).toBe('assessment')
+  })
+
+  it('preserves cascade and model_class as authored', () => {
+    const draft = draftFromConfig(DECISION_MODEL_FIXTURE) as TypedJudgeDraft
+    expect(draft.decisionModelClass).toBe('system_one')
+    expect(draft.cascade).toEqual(DECISION_MODEL_FIXTURE.cascade)
+    // The cascade is cloned, not shared with the stored object.
+    expect(draft.cascade).not.toBe(DECISION_MODEL_FIXTURE.cascade)
+  })
+
+  it('tolerates a malformed stored config without inventing values', () => {
+    const draft = draftFromConfig({
+      answer_contract: 'typed_questions',
+      field: 42,
+      judge_whole_output: 'yes',
+      context_fields: 'not-a-list',
+      backing: 'not-a-record',
+      questions: 'not-a-list',
+      pass_rule: 'not-a-record',
+      timeouts: 'not-a-record',
+      verdict_kind: 'other',
+    }) as TypedJudgeDraft
+
+    expect(draft.field).toBe('output')
+    expect(draft.judgeWholeOutput).toBe(false)
+    expect(draft.contextFields).toBe('')
+    expect(draft.backingKind).toBe('model_backend')
+    expect(draft.modelBackendId).toBe('')
+    expect(draft.decisionVendor).toBe('Jev')
+    expect(draft.questions).toHaveLength(1)
+    expect(draft.threshold).toBe('0.5')
+    expect(draft.perQuestionSeconds).toBe('10')
+    expect(draft.perDefinitionSeconds).toBe('45')
+    expect(draft.verdictKind).toBe('assessment')
+    expect(draft.cascade).toBeNull()
+  })
+
+  it('tolerates malformed question internals and seeds their answer space', () => {
+    const draft = draftFromConfig({
+      answer_contract: 'typed_questions',
+      field: 'output',
+      questions: [
+        {
+          type: 'choice',
+          weight: 'heavy',
+          criteria: 'not-a-list',
+          options: 'not-a-list',
+          passing_keys: 'not-a-list',
+          option_scores: 'not-a-list',
+        },
+        { type: 'score', levels: 'not-a-list' },
+      ],
+    }) as TypedJudgeDraft
+
+    expect(draft.questions[0].criteriaText).toBe('')
+    expect(draft.questions[0].weight).toBe('1')
+    expect(draft.questions[0].options).toHaveLength(2)
+    expect(draft.questions[1].levels).toHaveLength(2)
+  })
+
+  it('seeds a default question when the stored list is empty', () => {
+    const draft = draftFromConfig({
+      answer_contract: 'typed_questions',
+      field: 'output',
+      questions: [],
+    }) as TypedJudgeDraft
+    expect(draft.questions).toHaveLength(1)
+    expect(draft.questions[0].id).toBe('verdict')
   })
 })
 
@@ -373,6 +465,34 @@ describe('typedJudge — client validation mirrors the server bounds', () => {
     timeouts.perQuestionSeconds = '10'
     timeouts.perDefinitionSeconds = '5'
     expect(errorKeys(timeouts)).toContain('definitionTimeoutTooShort')
+
+    const noQuestionTimeout = createDefaultDraft()
+    noQuestionTimeout.perQuestionSeconds = ''
+    expect(errorKeys(noQuestionTimeout)).toContain('timeoutsInvalid')
+
+    const zeroDefinitionTimeout = createDefaultDraft()
+    zeroDefinitionTimeout.perDefinitionSeconds = '0'
+    expect(errorKeys(zeroDefinitionTimeout)).toContain('timeoutsInvalid')
+  })
+
+  it('rejects a missing level score and a missing pass-from', () => {
+    const missingLevel = createDefaultDraft()
+    const level = createQuestion('score', 'quality')
+    level.levels[0].score = ''
+    missingLevel.questions = [level]
+    expect(errorKeys(missingLevel)).toContain('scoreLevelRequired')
+
+    const missingPassFrom = createDefaultDraft()
+    const passFrom = createQuestion('score', 'quality')
+    passFrom.passFrom = ''
+    missingPassFrom.questions = [passFrom]
+    expect(errorKeys(missingPassFrom)).toContain('scorePassFromInvalid')
+  })
+
+  it('rejects an empty question id', () => {
+    const draft = createDefaultDraft()
+    draft.questions[0].id = ' '
+    expect(errorKeys(draft)).toContain('questionIdRequired')
   })
 
   it('rejects a decision model without a vendor and a malformed backend id', () => {

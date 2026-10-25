@@ -156,6 +156,15 @@
                         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         :placeholder="$t('views.EvalEditorView.judging.decisionVendorPlaceholder')"
                       />
+                      <label for="evaleditorview-backing-model-class" class="mb-1 mt-2 block text-sm font-medium">{{ $t('views.EvalEditorView.judging.decisionModelClass') }}</label>
+                      <input
+                        id="evaleditorview-backing-model-class"
+                        v-model="typedDraft.decisionModelClass"
+                        type="text"
+                        data-testid="eval-editor-backing-model-class"
+                        class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        :placeholder="$t('views.EvalEditorView.judging.decisionModelClassPlaceholder')"
+                      />
                     </div>
 
                     <p class="rounded bg-muted px-2 py-1 text-xs text-muted-foreground" data-testid="eval-editor-backing-preview">
@@ -1275,15 +1284,11 @@ function removeLevel(question: QuestionDraft, index: number): void {
 
 function migrateLegacyConfig(): void {
   const draft = createDefaultDraft()
-  if (legacyConfigJson.value) {
-    try {
-      const legacy = JSON.parse(legacyConfigJson.value) as Record<string, unknown>
-      if (typeof legacy.field === 'string' && legacy.field.trim() !== '') {
-        draft.field = legacy.field
-      }
-    } catch {
-      // A malformed legacy blob still migrates to a valid default draft.
-    }
+  // The migration action only renders while a legacy config is loaded, so the
+  // buffer is non-null here; it is always the JSON.stringify of the stored row.
+  const legacy = JSON.parse(legacyConfigJson.value as string) as Record<string, unknown>
+  if (typeof legacy.field === 'string' && legacy.field.trim() !== '') {
+    draft.field = legacy.field
   }
   typedDraft.value = draft
   legacyMode.value = false

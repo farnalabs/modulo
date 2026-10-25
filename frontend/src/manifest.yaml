@@ -3145,6 +3145,9 @@ elements:
       - testid: eval-editor-backing-vendor
         type: input
         dynamic_testid: false
+      - testid: eval-editor-backing-model-class
+        type: input
+        dynamic_testid: false
       - testid: eval-editor-backing-preview
         type: element
         dynamic_testid: false

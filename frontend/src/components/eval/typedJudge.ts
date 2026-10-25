@@ -31,16 +31,23 @@ export type QuestionType = 'noul' | 'choice' | 'score'
 export type BackingKind = 'model_backend' | 'decision_model'
 export type VerdictKind = 'assessment' | 'derivation'
 
+/**
+ * A numeric draft value. Vue's `v-model` casts `<input type="number">` to a
+ * number, while a cleared field stays `''`; both shapes reach the helpers, so
+ * they accept either rather than assuming a string and crashing on `.trim()`.
+ */
+export type NumericDraftValue = string | number
+
 export interface ChoiceOptionDraft {
   key: string
   description: string
   passing: boolean
   /** Optional per-option score (0..1). Empty means "not supplied". */
-  score: string
+  score: NumericDraftValue
 }
 
 export interface ScoreLevelDraft {
-  score: string
+  score: NumericDraftValue
   description: string
 }
 
@@ -50,12 +57,12 @@ export interface QuestionDraft {
   instructions: string
   /** One criterion per line. */
   criteriaText: string
-  weight: string
+  weight: NumericDraftValue
   required: boolean
-  minPassConfidence: string
+  minPassConfidence: NumericDraftValue
   options: ChoiceOptionDraft[]
   levels: ScoreLevelDraft[]
-  passFrom: string
+  passFrom: NumericDraftValue
 }
 
 export interface TypedJudgeDraft {
@@ -66,11 +73,20 @@ export interface TypedJudgeDraft {
   backingKind: BackingKind
   modelBackendId: string
   decisionVendor: string
+  /** Optional decision-model class (``backing.model_class``), preserved as authored. */
+  decisionModelClass: string
+  /**
+   * The stored cascade block, carried through the editor untouched (its
+   * execution UI is a later slice, ADR 066 D7/S4). ``null`` means the config
+   * had no cascade; an object is re-emitted verbatim so an author who opens and
+   * saves an API/config-as-code definition never loses it.
+   */
+  cascade: Record<string, unknown> | null
   questions: QuestionDraft[]
-  threshold: string
+  threshold: NumericDraftValue
   verdictKind: VerdictKind
-  perQuestionSeconds: string
-  perDefinitionSeconds: string
+  perQuestionSeconds: NumericDraftValue
+  perDefinitionSeconds: NumericDraftValue
 }
 
 export interface JudgingValidationError {
@@ -81,8 +97,8 @@ export interface JudgingValidationError {
   params?: Record<string, string | number>
 }
 
-export function parseNumber(raw: string): number | null {
-  const trimmed = raw.trim()
+export function parseNumber(raw: NumericDraftValue): number | null {
+  const trimmed = String(raw).trim()
   if (trimmed === '') return null
   const value = Number(trimmed)
   return Number.isFinite(value) ? value : null
@@ -151,6 +167,8 @@ export function createDefaultDraft(): TypedJudgeDraft {
     backingKind: 'model_backend',
     modelBackendId: '',
     decisionVendor: 'Jev',
+    decisionModelClass: '',
+    cascade: null,
     questions: [createQuestion('noul', 'verdict')],
     threshold: '0.5',
     verdictKind: 'assessment',
@@ -167,8 +185,8 @@ function readString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback
 }
 
-function readNumberString(value: unknown, fallback: string): string {
-  return typeof value === 'number' && Number.isFinite(value) ? String(value) : fallback
+function readNumberString(value: unknown, fallback: NumericDraftValue): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : String(fallback)
 }
 
 /**
@@ -191,6 +209,10 @@ export function draftFromConfig(config: unknown): TypedJudgeDraft | null {
   draft.backingKind = backing.kind === 'decision_model' ? 'decision_model' : 'model_backend'
   draft.modelBackendId = readString(backing.model_backend_id)
   draft.decisionVendor = readString(backing.vendor, draft.decisionVendor)
+  draft.decisionModelClass = readString(backing.model_class)
+  // Preserve the cascade block (and any key the server schema gains later)
+  // rather than silently dropping a valid definition on save.
+  draft.cascade = isRecord(config.cascade) ? structuredClone(config.cascade) : null
 
   const questions = Array.isArray(config.questions) ? config.questions : []
   draft.questions = questions.filter(isRecord).map((raw, index) => {
@@ -260,7 +282,13 @@ export function draftFromConfig(config: unknown): TypedJudgeDraft | null {
 
 function buildBacking(draft: TypedJudgeDraft): Record<string, unknown> {
   if (draft.backingKind === 'decision_model') {
-    return { kind: 'decision_model', vendor: draft.decisionVendor.trim() }
+    const backing: Record<string, unknown> = {
+      kind: 'decision_model',
+      vendor: draft.decisionVendor.trim(),
+    }
+    const modelClass = draft.decisionModelClass.trim()
+    if (modelClass !== '') backing.model_class = modelClass
+    return backing
   }
   const backendId = draft.modelBackendId.trim()
   return backendId
@@ -337,6 +365,9 @@ export function buildTypedJudgeConfig(draft: TypedJudgeDraft): Record<string, un
     },
   }
   if (draft.judgeWholeOutput) config.judge_whole_output = true
+  // Re-emit the stored cascade verbatim; the editor does not author it yet, so
+  // dropping it would silently rewrite an API/config-as-code definition.
+  if (draft.cascade !== null) config.cascade = draft.cascade
   return config
 }
 
@@ -388,7 +419,7 @@ function validateChoiceQuestion(
       })
     }
     seen.add(key)
-    if (option.score.trim() !== '') {
+    if (String(option.score).trim() !== '') {
       const score = parseNumber(option.score)
       if (score === null || score < 0 || score > 1) {
         errors.push({

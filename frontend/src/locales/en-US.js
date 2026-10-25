@@ -487,7 +487,7 @@ export default {
       "config_placeholders": {
         "model_judge": "\\{ \"field\": \"output\", \"answer_contract\": \"typed_questions\", \"backing\": \\{ \"kind\": \"model_backend\" \\}, \"questions\": [\\{ \"id\": \"verdict\", \"type\": \"noul\", \"instructions\": \"...\" \\}], \"pass_rule\": \\{ \"kind\": \"weighted_score_at_least\", \"threshold\": 0.5 \\}, \"verdict_kind\": \"assessment\" \\}",
         "regex": "\\{ \"pattern\": \"(error|failed)\", \"field\": \"output\" \\}",
-        "json_schema": "\\{ \"schema\": { \"type\": \"object\", \"properties\": { \"valid\": { \"type\": \"boolean\" } } } \\}",
+        "json_schema": "\\{ \"schema\": \\{ \"type\": \"object\", \"properties\": \\{ \"valid\": \\{ \"type\": \"boolean\" \\} \\} \\} \\}",
         "custom_function": "\\{ \"function\": \"def evaluate(output):\\n    return output.get('score', 0) >= 0.8\" \\}"
       },
       "publish_confirm": "Publish",
@@ -2024,7 +2024,7 @@ export default {
       "configPlaceholder": {
         "model_judge": "\\{ \"field\": \"output\", \"answer_contract\": \"typed_questions\", \"backing\": \\{ \"kind\": \"model_backend\" \\}, \"questions\": [\\{ \"id\": \"verdict\", \"type\": \"noul\", \"instructions\": \"...\" \\}], \"pass_rule\": \\{ \"kind\": \"weighted_score_at_least\", \"threshold\": 0.5 \\}, \"verdict_kind\": \"assessment\" \\}",
         "regex": "\\{ \"pattern\": \"(error|failed)\", \"field\": \"output\" \\}",
-        "json_schema": "\\{ \"schema\": { \"type\": \"object\", \"properties\": { \"valid\": { \"type\": \"boolean\" } } } \\}",
+        "json_schema": "\\{ \"schema\": \\{ \"type\": \"object\", \"properties\": \\{ \"valid\": \\{ \"type\": \"boolean\" \\} \\} \\} \\}",
         "custom_function": "\\{ \"function\": \"def evaluate(output):\\n    return output.get('score', 0) >= 0.8\" \\}"
       },
       "pass_threshold": "Pass Threshold",
@@ -2073,6 +2073,8 @@ export default {
         "failedToLoadBackends": "Failed to load model backends.",
         "decisionVendor": "Decision-model vendor",
         "decisionVendorPlaceholder": "e.g. Jev",
+        "decisionModelClass": "Model class (optional)",
+        "decisionModelClassPlaceholder": "e.g. system_one",
         "decisionModelFallback": "decision model",
         "systemOneModel": "System One model",
         "confidenceVendorClaimed": "vendor-claimed calibration",
