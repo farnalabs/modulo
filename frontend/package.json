@@ -98,7 +98,7 @@
         "vitest": "^4.0.0",
         "vue-tsc": "^3.3.7"
     },
-    "packageManager": "pnpm@11.28.6",
+    "packageManager": "pnpm@11.28.7",
     "overrides": {
         "qs": ">=6.15.3"
     }
