@@ -19,9 +19,9 @@
       data-testid="admin-users-loading"
     />
 
-      <div v-else-if="error" aria-live="assertive">
-        <ErrorAlert :message="error" :on-retry="retryUsers" />
-      </div>
+    <div v-else-if="error" aria-live="assertive">
+      <ErrorAlert :message="error" :on-retry="loadUsers" />
+    </div>
 
     <EmptyState
       v-else-if="users.length === 0"
@@ -134,7 +134,7 @@
         data-testid="admin-invitations-loading"
       />
       <div v-else-if="invitationsError" aria-live="assertive" data-testid="admin-invitations-error">
-        <ErrorAlert :message="invitationsError" :on-retry="retryInvitations" />
+        <ErrorAlert :message="invitationsError" :on-retry="loadInvitations" />
       </div>
       <EmptyState
         v-else-if="pendingInvitations.length === 0"
@@ -411,14 +411,6 @@ const { data: usersResp, loading, error, load: loadUsers } = useDataFetch(
   { initialValue: { items: [] as UserItem[], total: 0, page: 1, page_size: 50 } as UserListResponse }
 )
 
-async function retryUsers() {
-  try {
-    await loadUsers()
-  } catch (retryError) {
-    error.value = retryError instanceof Error ? retryError.message : t('views.AdminUsersView.failed_to_load_users')
-  }
-}
-
 const users = computed(() => usersResp.value?.items ?? [])
 const total = computed(() => usersResp.value?.total ?? 0)
 
@@ -429,15 +421,6 @@ const { data: invitationsResp, loading: invitationsLoading, error: invitationsEr
   { initialValue: { items: [] as InvitationItem[], total: 0, page: 1, page_size: 100 } as InvitationListResponse }
 )
 
-async function retryInvitations() {
-  try {
-    await loadInvitations()
-  } catch (retryError) {
-    invitationsError.value = retryError instanceof Error
-      ? retryError.message
-      : t('views.AdminUsersView.failed_to_load_users')
-  }
-}
 const pendingInvitations = computed(() => invitationsResp.value?.items ?? [])
 
 // ── Create / invite dialog ───────────────────────────────────
