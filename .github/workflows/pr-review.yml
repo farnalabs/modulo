@@ -12,8 +12,17 @@ name: "Review: Modulo Agent"
 # a self-amplifying outage that could not self-heal (2026-10-15, 5 h, 28+ PRs).
 # A dispatch failure now fails only THIS workflow's own run.
 #
-# Review is a QUALITY GATE INDEPENDENT OF CI COLOUR. Dispatch is driven by
-# product-CI COMPLETION, not by its conclusion: a red-CI PR still gets a
+# FAR-2111: the review STARTS when the PR becomes ready — it does NOT wait for
+# product CI. "CI: Fast Validation" is the dispatch signal's old trigger and its
+# `Test (Backend)` job is the long pole (48-53 min: #2153 52m36s, #2246 48m), so
+# dispatch-on-completion meant no PR could be reviewed for ~50 min after it
+# opened (#2246: opened 18:55, review 20:00 — 67 min in which nothing about the
+# PR changed) and the merge queue kept idling at APPROVED_COUNT=0. The early
+# path is `pull_request_target` (rationale on the trigger below) and is
+# coalesced with the completion path by the head-SHA dedup.
+#
+# Review is a QUALITY GATE INDEPENDENT OF CI COLOUR. The COMPLETION dispatch is
+# driven by product-CI COMPLETION, not by its conclusion: a red-CI PR still gets a
 # quality review, while the Branch Fixer fixes its checks concurrently. The
 # reviewer reports the failing checks in its review body and does not derive
 # its verdict from CI colour — a CI-mirroring CHANGES_REQUESTED is forbidden in
@@ -43,6 +52,34 @@ on:
         required: false
         default: ''
         type: string
+  # FAR-2111: the EARLY dispatch — start the review the moment a PR is ready,
+  # in parallel with the ~50-minute product-CI run instead of behind it. Nothing
+  # the reviewer needs depends on CI's verdict (see the header), so gating its
+  # START on CI completion only serialised it behind the backend suite.
+  #
+  # `pull_request_target`, NOT `pull_request`, and NOT `synchronize`:
+  #
+  # * A plain `pull_request` trigger attaches THIS workflow's check run to the
+  #   PR HEAD, and the app-leg merge queue requires EVERY check run on a PR head
+  #   to be completed/success (dogfood/pipeline-scripts/merge-queue.py
+  #   `checks_pass`). A failed review dispatch would then block that PR's merge —
+  #   the exact FAR-1843 regression the decoupling exists to prevent. A
+  #   `pull_request_target` run's check run attaches to the BASE branch SHA,
+  #   exactly like a `workflow_run` run's, so the PR's own checks are untouched.
+  #   It also checks out the BASE branch, so the dedup and fork-gate scripts are
+  #   always trusted base-branch code, never the PR's own copy of them.
+  # * NO `synchronize`: a push to an existing PR is already covered by the
+  #   `workflow_run` completion path, which carries the superseded-run guard and
+  #   the head-SHA dedup. Every push is a NEW head SHA, so head-SHA dedup cannot
+  #   coalesce a burst of pushes into one review — a few quick pushes would fan a
+  #   review storm onto the shared model capacity.
+  #
+  # `opened` covers a PR created ready (the common case); `ready_for_review`
+  # covers a draft being marked ready. `opened` on a still-draft PR is skipped
+  # in `Set PR details` — a draft is work in progress, and the completion path
+  # (unchanged) still reviews it.
+  pull_request_target:
+    types: [opened, ready_for_review]
   # Drive the review from product-CI COMPLETION, decoupled from the CI run
   # itself (FAR-1843 D1). Every conclusion except CANCELLED dispatches a review
   # (see the job-level `if`): a red CI is the Branch Fixer's job to fix
@@ -68,9 +105,13 @@ jobs:
     # and `action_required` are FAILURE conclusions and MUST dispatch.
     # Expressing the gate by EXCLUSION is deliberate: an inclusion list would
     # silently withhold the review from every conclusion it omits.
-    # This gate is safe to express at job level: workflow_run-triggered runs
-    # attach their check runs to the default-branch SHA, not to the PR head, so
-    # skipping this job never changes the PR's own check status.
+    # This gate is safe to express at job level: a workflow_run-triggered run —
+    # and the FAR-2111 pull_request_target early run — attaches its check runs to
+    # the base/default-branch SHA, not to the PR head, so skipping this job never
+    # changes the PR's own check status. Both automatic triggers therefore
+    # dispatch unconditionally here; only the per-path skips inside the job
+    # (draft, no open PR, superseded run, manual-delivery, dedup, fork) withhold
+    # a review.
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'cancelled'
     runs-on: ubicloud-standard-2
     steps:
@@ -89,25 +130,42 @@ jobs:
           PR_NUMBER_EVENT: ${{ github.event.pull_request.number }}
           HEAD_SHA_EVENT: ${{ github.event.pull_request.head.sha }}
           HEAD_BRANCH_EVENT: ${{ github.event.pull_request.head.ref }}
+          PR_DRAFT_EVENT: ${{ github.event.pull_request.draft }}
           PR_NUMBER_INPUT: ${{ inputs.pr_number }}
           HEAD_SHA_INPUT: ${{ inputs.head_sha }}
           HEAD_BRANCH_INPUT: ${{ inputs.head_branch }}
           WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            {
-              echo "pr_number=${PR_NUMBER_EVENT}"
-              echo "repo=${REPO}"
-              echo "head_sha=${HEAD_SHA_EVENT}"
-              echo "head_branch=${HEAD_BRANCH_EVENT}"
-              echo "ready=true"
-            } >> "$GITHUB_OUTPUT"
+          # Resolve the PR this dispatch is for. Everything AFTER the
+          # resolution — the manual-delivery gate and the outputs — is shared by
+          # every path, so the gates cannot diverge between the early dispatch
+          # (pull_request_target) and the CI-completion dispatch (workflow_run).
+          if [ "$EVENT_NAME" = "pull_request" ] || [ "$EVENT_NAME" = "pull_request_target" ]; then
+            # EARLY dispatch (FAR-2111): the PR is ready NOW; review it in
+            # parallel with the ~50-minute product CI instead of behind it.
+            #
+            # A DRAFT is skipped: `opened` fires for a draft too, but a draft is
+            # work in progress and `ready_for_review` is the event that says it
+            # is ready. Until then the workflow_run completion path reviews it
+            # exactly as it did before this change.
+            if [ "$PR_DRAFT_EVENT" = "true" ]; then
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::PR #${PR_NUMBER_EVENT} is a draft — the early review waits for ready_for_review (the CI-completion path still reviews it)."
+              exit 0
+            fi
+            PR_NUM="${PR_NUMBER_EVENT}"
+            HEAD_SHA="${HEAD_SHA_EVENT}"
+            HEAD_BRANCH="${HEAD_BRANCH_EVENT}"
+            if [ -z "$PR_NUM" ] || [ -z "$HEAD_SHA" ]; then
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              echo "::error::${EVENT_NAME} carried no pull_request.number / head.sha — no review dispatch."
+              exit 0
+            fi
           elif [ "$EVENT_NAME" = "workflow_run" ]; then
             # Product-CI completed for WORKFLOW_RUN_HEAD_SHA. Resolve the PR
-            # it validated, then apply the skip conditions the old ci.yml
-            # notify-pr-review job carried: superseded-run and
-            # manual-delivery (dedup runs as its own step after checkout).
+            # it validated, then apply the superseded-run guard (dedup runs as
+            # its own step after checkout).
             HEAD_SHA="${WORKFLOW_RUN_HEAD_SHA}"
             PR_NUM=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
               --jq '[.[] | select(.state == "open")][0].number // empty' 2>/dev/null || true)
@@ -131,23 +189,6 @@ jobs:
               exit 0
             fi
             HEAD_BRANCH=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.ref' 2>/dev/null || echo "${WORKFLOW_RUN_HEAD_BRANCH}")
-            # manual-delivery label: do not auto-dispatch the reviewer (same
-            # documented meaning as on the Branch Fixer dispatch in ci.yml).
-            LABELS=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
-            case ",${LABELS}," in
-              *,manual-delivery,*)
-                echo "ready=false" >> "$GITHUB_OUTPUT"
-                echo "::notice::PR #${PR_NUM} carries the manual-delivery label — no automatic review dispatch."
-                exit 0
-                ;;
-            esac
-            {
-              echo "pr_number=${PR_NUM}"
-              echo "repo=${REPO}"
-              echo "head_sha=${HEAD_SHA}"
-              echo "head_branch=${HEAD_BRANCH}"
-              echo "ready=true"
-            } >> "$GITHUB_OUTPUT"
           else
             PR_NUM="${PR_NUMBER_INPUT}"
             HEAD_SHA="${HEAD_SHA_INPUT}"
@@ -157,14 +198,35 @@ jobs:
               HEAD_SHA=$(printf '%s' "$PR_JSON" | jq -r '.head_sha')
               HEAD_BRANCH=$(printf '%s' "$PR_JSON" | jq -r '.head_branch')
             fi
-            {
-              echo "pr_number=${PR_NUM}"
-              echo "repo=${REPO}"
-              echo "head_sha=${HEAD_SHA}"
-              echo "head_branch=${HEAD_BRANCH}"
-              echo "ready=true"
-            } >> "$GITHUB_OUTPUT"
           fi
+
+          # manual-delivery label: do not auto-dispatch the reviewer (same
+          # documented meaning as on the Branch Fixer dispatch in ci.yml).
+          # FAR-2111: this gate is SHARED by the CI-completion path and the
+          # early path — a PR a human is driving manually must not be
+          # auto-reviewed on either. (Shipping the early trigger without this
+          # hoist is the defect: the gate used to live inside the workflow_run
+          # branch, so the early path would have bypassed it.) A manual
+          # workflow_dispatch is an explicit operator re-trigger and still
+          # bypasses it, as it always has.
+          if [ "$EVENT_NAME" != "workflow_dispatch" ]; then
+            LABELS=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+            case ",${LABELS}," in
+              *,manual-delivery,*)
+                echo "ready=false" >> "$GITHUB_OUTPUT"
+                echo "::notice::PR #${PR_NUM} carries the manual-delivery label — no automatic review dispatch."
+                exit 0
+                ;;
+            esac
+          fi
+
+          {
+            echo "pr_number=${PR_NUM}"
+            echo "repo=${REPO}"
+            echo "head_sha=${HEAD_SHA}"
+            echo "head_branch=${HEAD_BRANCH}"
+            echo "ready=true"
+          } >> "$GITHUB_OUTPUT"
 
       # FAR-264: the same-repo author gate, shared with merge-queue.yml via the
       # versioned helper (.github/scripts/same-repo-author-guard.py) so the
@@ -176,14 +238,23 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.pr-details.outputs.ready == 'true'
 
-      # Dedup: do not re-review a head SHA the reviewer already reviewed
-      # (workflow_run path only — a manual workflow_dispatch is an explicit
-      # operator re-trigger and bypasses this, as it always has). Ported from
-      # the old ci.yml notify-pr-review job (FAR-1843 D1: same semantics).
+      # Dedup: do not re-review a head SHA the reviewer already reviewed.
+      # FAR-2111: this runs on EVERY automatic path, not just workflow_run. The
+      # early dispatch (pull_request_target) reviews a head SHA within minutes;
+      # the CI-completion dispatch for that same SHA arrives ~50 min later and is
+      # skipped here. It also coalesces repeated early events on an unchanged
+      # head (a PR opened as a draft — skipped there — then marked ready, or a
+      # draft/ready toggle), which is what keeps "one review per head SHA" true.
+      # A manual workflow_dispatch stays an explicit operator re-trigger and
+      # bypasses dedup, as it always has. Ported from the old ci.yml
+      # notify-pr-review job (FAR-1843 D1: same semantics).
       # The script fails OPEN (dispatch) on any load error or ambiguous state.
       - name: Skip when head already reviewed (dedup)
         id: dedup
-        if: github.event_name == 'workflow_run' && steps.pr-details.outputs.ready == 'true'
+        # Expressed as a `workflow_dispatch` exclusion rather than an
+        # allow-list: a future trigger must inherit dedup by default, because a
+        # MISSING dedup doubles reviews while a redundant one only skips one.
+        if: github.event_name != 'workflow_dispatch' && steps.pr-details.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr-details.outputs.pr_number }}
