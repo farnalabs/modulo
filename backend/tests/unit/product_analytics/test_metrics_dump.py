@@ -772,6 +772,27 @@ class TestVendorClient:
         assert client._http_client is None
 
     @pytest.mark.asyncio
+    async def test_post_batch_transport_error_reports_request_error(self) -> None:
+        """A non-timeout transport failure describes itself as a ``RequestError``."""
+        client = VendorClient("https://vendor.example.com", "test-secret")
+
+        mock_http = AsyncMock()
+        mock_http.post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+        mock_http.is_closed = False
+        client._http_client = mock_http
+
+        with patch("modulo.core.product_analytics.vendor_client.asyncio.sleep", new_callable=AsyncMock):
+            success, code, error = await client.post_batch(b'{"test":1}', 100.0, 1)
+
+        assert success is False
+        assert code is None
+        assert error is not None
+        assert error.startswith("RequestError: ")
+        assert mock_http.post.call_count == MAX_ATTEMPTS
+
+        await client.close()
+
+    @pytest.mark.asyncio
     async def test_post_batch_returns_success(self) -> None:
         client = VendorClient("https://vendor.example.com", "test-secret")
 
