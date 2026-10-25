@@ -507,3 +507,29 @@ class TestOrgLockTimeoutSkip:
             )
 
         assert not any("org_lock_timeout" in record.getMessage() for record in caplog.records)
+
+
+class TestReconcileOrgKwargCompatibility:
+    """The ``**kwargs`` compatibility shim on ``_reconcile_org`` must reject
+    unknown options loudly instead of silently ignoring a caller's typo.
+
+    The shim exists so a stale caller still passing the pre-refactor tuning
+    keywords is absorbed into ``_ReconcileOrgLimits``; anything it does not
+    recognise has no defined meaning and must raise before any DB work starts.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unexpected_keyword_argument_raises_type_error(self) -> None:
+        with pytest.raises(TypeError, match="Unexpected keyword argument"):
+            await ch._reconcile_org(
+                factory=MagicMock(),
+                q=MagicMock(),
+                redis_client=AsyncMock(),
+                org_id=ORG,
+                re_dispatch_predicate=ch.text("1 = 1"),
+                tuning=_tuning(),
+                enqueue_failed_redispatched=0,
+                summary=ch._dispatcher_summary(),
+                terminalized_run_ids=[],
+                not_a_real_option=True,
+            )
