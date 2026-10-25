@@ -146,11 +146,6 @@ export function resolveTargetTier(env: TestEnv): Promise<string> {
   return resolved
 }
 
-/** Drop the cached tier (tests of this helper; also makes a worker re-resolve). */
-export function resetTargetTierCache(): void {
-  tierCache.clear()
-}
-
 function patternIncludesPlan(pattern: string | RegExp): boolean {
   const source = typeof pattern === 'string' ? pattern : pattern.source
   return source.includes('/api/v1/plan')
