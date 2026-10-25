@@ -11,7 +11,7 @@ import re
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -2247,6 +2247,32 @@ async def _validate_run_grouping_kwargs(
         raise ValueError("thread_id override must be a non-empty string")
 
 
+def _reject_unknown_options(options: Mapping[str, Any], allowed: Iterable[str], func_name: str) -> None:
+    """Fail loudly on an option the option group does not declare.
+
+    mypy validates keyword names for a literal call, but a caller splatting a
+    ``dict[str, Any]`` bypasses the static check, so the runtime guard remains
+    the backstop. Shared by the grouped CRUD entry points in this module.
+    """
+    unknown_options = set(options) - set(allowed)
+    if unknown_options:
+        raise TypeError(f"unexpected {func_name} options: {sorted(unknown_options)}")
+
+
+def _guardrail_suppression_reason(*, is_replay: bool | None, kill_switch: bool) -> str | None:
+    """Return why guardrail enforcement was suppressed on this run, if it was.
+
+    Extracted from :func:`create_run` so the two suppression modes (a
+    detection-only replay, an org observe-only kill-switch) stay readable
+    without adding branches to the run-creation body (python:S3776).
+    """
+    if is_replay:
+        return "replay run; guardrails are detection-only"
+    if kill_switch:
+        return "org guardrails kill-switch is on; guardrails are observe-only"
+    return None
+
+
 class CreateRunOptions(TypedDict, total=False):
     """Keyword-only options accepted by :func:`create_run` (python:S107).
 
@@ -2303,9 +2329,7 @@ async def create_run(
     run_group_id = options.get("run_group_id")
     run_group_kind = options.get("run_group_kind")
     thread_id = options.get("thread_id")
-    unknown_options = set(options) - set(CreateRunOptions.__annotations__)
-    if unknown_options:
-        raise TypeError(f"unexpected create_run options: {sorted(unknown_options)}")
+    _reject_unknown_options(options, CreateRunOptions.__annotations__, "create_run")
     # FAR-153 / §15.1 — validate the grouping kwargs at the persist boundary
     # BEFORE any DB write (the ``run_idempotency_key`` fail-loud pattern).
     # Extracted into ``_validate_run_grouping_kwargs`` to keep this function's
@@ -2411,11 +2435,7 @@ async def create_run(
     # both surface as ``interception.blocked``).
     from modulo.core.guardrails.coverage import derive_seam_coverage
 
-    suppression_reason: str | None = None
-    if is_replay:
-        suppression_reason = "replay run; guardrails are detection-only"
-    elif guardrails_kill_switch:
-        suppression_reason = "org guardrails kill-switch is on; guardrails are observe-only"
+    suppression_reason = _guardrail_suppression_reason(is_replay=is_replay, kill_switch=guardrails_kill_switch)
     seam_coverage = derive_seam_coverage(
         blocked_before_runtime=guardrail_blocked,
         ingestion_summary=guardrail_summary_dict,
@@ -3873,9 +3893,7 @@ async def update_run_status(
     caller-side follow-up this note originally recorded under FAR-1601.
     Bounding here remains deliberately out of scope for this shared function.
     """
-    unknown_options = set(options) - set(_RUN_STATUS_UPDATE_OPTION_DEFAULTS)
-    if unknown_options:
-        raise TypeError(f"unexpected update_run_status options: {sorted(unknown_options)}")
+    _reject_unknown_options(options, _RUN_STATUS_UPDATE_OPTION_DEFAULTS, "update_run_status")
     resolved_options: dict[str, Any] = {
         name: options.get(name, default) for name, default in _RUN_STATUS_UPDATE_OPTION_DEFAULTS.items()
     }

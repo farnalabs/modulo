@@ -80,18 +80,20 @@ class TestLibraryPrimitiveRequiredOptions:
         kwargs = _library_primitive_kwargs()
         kwargs.pop("visibility")
         with pytest.raises(TypeError, match="missing required keyword argument: 'visibility'"):
-            await create_library_primitive(session=None, **kwargs)
+            await create_library_primitive(session=AsyncMock(spec=AsyncSession), **kwargs)
 
     async def test_missing_nullable_required_option_raises(self) -> None:
         """A previously-required (but nullable) parameter stays required."""
         kwargs = _library_primitive_kwargs()
         kwargs.pop("checksum")
         with pytest.raises(TypeError, match="missing required keyword argument: 'checksum'"):
-            await create_library_primitive(session=None, **kwargs)
+            await create_library_primitive(session=AsyncMock(spec=AsyncSession), **kwargs)
 
     async def test_unknown_option_raises(self) -> None:
         with pytest.raises(TypeError, match="unexpected create_library_primitive options"):
-            await create_library_primitive(session=None, **_library_primitive_kwargs(unexpected_option=True))
+            await create_library_primitive(
+                session=AsyncMock(spec=AsyncSession), **_library_primitive_kwargs(unexpected_option=True)
+            )
 
 
 class TestGroupedCrudUnknownOptions:
@@ -118,3 +120,21 @@ class TestGroupedCrudUnknownOptions:
         }
         with pytest.raises(TypeError, match="unexpected create_environment_profile options"):
             await create_environment_profile(**kwargs)
+
+    async def test_create_environment_profile_accepts_a_known_option_set(self) -> None:
+        """The no-unknown-options path still persists the row with its defaults."""
+        session = AsyncMock(spec=AsyncSession)
+        await create_environment_profile(
+            session,
+            org_id=uuid.uuid4(),
+            name="profile",
+            account_id=uuid.uuid4(),
+            provider_type="docker",
+            visibility="team",
+        )
+
+        profile = session.add.call_args.args[0]
+        assert profile.visibility == "team"
+        assert profile.network_policy == "outbound"
+        assert profile.persistence_policy == "ephemeral"
+        session.flush.assert_awaited_once()
