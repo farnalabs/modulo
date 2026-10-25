@@ -17,7 +17,7 @@ import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -176,7 +176,11 @@ def _build_client(session: AsyncMock, role: str = "admin") -> TestClient:
 def api() -> Generator[tuple[TestClient, AsyncMock], None, None]:
     session = _make_session()
     client = _build_client(session, role="admin")
-    yield client, session
+    # Webhook payloads use non-resolving example hosts; stub the DNS-backed
+    # SSRF floor so these tests exercise their own concern. The floor's
+    # internal-address rejection is covered in test_admin_notifications_webhooks.
+    with patch("modulo.api.routes.admin_notifications.validate_outbound_url"):
+        yield client, session
     app.dependency_overrides.clear()
 
 

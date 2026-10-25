@@ -81,7 +81,7 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     with (
-        patch("modulo.api.routes.notifications.validate_outbound_url"),
+        patch("modulo.api.routes.admin_notifications.validate_outbound_url"),
         patch("modulo.api.routes.notifications.validate_outbound_url_async", new=AsyncMock()),
     ):
         yield TestClient(app)
@@ -169,7 +169,7 @@ def test_create_endpoint_returns_201(client: TestClient) -> None:
             "/api/v1/notifications",
             json={
                 "url": "https://hooks.example.com/notify",
-                "events": ["hitl.review_required"],
+                "events": ["hitl_awaiting"],
                 "description": "My endpoint",
             },
         )
@@ -179,10 +179,10 @@ def test_create_endpoint_returns_201(client: TestClient) -> None:
     body = resp.json()
     assert body["url"] == "https://hooks.example.com/notify"
     assert "secret" not in body
-    assert body["events"] == ["hitl.review_required"]
+    assert body["events"] == ["hitl_awaiting"]
     persisted = session.add.call_args.args[0]
     assert isinstance(persisted.events, list)
-    assert persisted.events == ["hitl.review_required"]
+    assert persisted.events == ["hitl_awaiting"]
 
 
 @pytest.mark.parametrize(
@@ -245,7 +245,7 @@ def test_create_endpoint_with_secret_encrypts_it(client: TestClient) -> None:
             json={
                 "url": "https://hooks.example.com/notify",
                 "secret": "my-webhook-secret",
-                "events": ["hitl.review_required"],
+                "events": ["hitl_awaiting"],
             },
         )
         client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
@@ -346,13 +346,14 @@ def test_update_endpoint_returns_200(client: TestClient) -> None:
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.put(
             f"/api/v1/notifications/{_ENDPOINT_ID}",
-            json={"url": "https://updated.example.com/hook", "description": "Updated"},
+            json={"url": "https://updated.example.com/hook", "events": ["run_failed"], "description": "Updated"},
         )
         client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["url"] == "https://updated.example.com/hook"
+    assert ep.events == ["run_failed"]
 
 
 def test_update_endpoint_not_found_returns_404(client: TestClient) -> None:
@@ -375,6 +376,22 @@ def test_update_endpoint_not_found_returns_404(client: TestClient) -> None:
         client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
     assert resp.status_code == 404
+
+
+def test_create_endpoint_rejects_unknown_event(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/notifications",
+        json={"url": "https://hooks.example.com/notify", "events": ["not_a_real_event"]},
+    )
+    assert resp.status_code == 422
+
+
+def test_update_endpoint_rejects_unknown_event(client: TestClient) -> None:
+    resp = client.put(
+        f"/api/v1/notifications/{_ENDPOINT_ID}",
+        json={"events": ["not_a_real_event"]},
+    )
+    assert resp.status_code == 422
 
 
 def test_delete_endpoint_returns_204(client: TestClient) -> None:
@@ -478,7 +495,7 @@ def test_notifications_unauthenticated_returns_4xx(client: TestClient) -> None:
 def test_create_endpoint_viewer_gets_403(viewer_client: TestClient) -> None:
     resp = viewer_client.post(
         "/api/v1/notifications",
-        json={"url": "https://hooks.example.com/notify", "events": ["hitl.review_required"]},
+        json={"url": "https://hooks.example.com/notify", "events": ["hitl_awaiting"]},
     )
     assert resp.status_code == 403
 

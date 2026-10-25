@@ -44,6 +44,7 @@ from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core.ssrf import pinned_async_client
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.db.url_utils import split_engine_sslmode
 from modulo.settings import get_settings
@@ -965,33 +966,65 @@ async def _deliver_to_urls(
     with HMAC-SHA256, and sent byte-for-byte with an ``X-Modulo-Signature``
     header so the recipient can verify authenticity. ``request_timeout``
     overrides the per-request timeout (default ``_REPORT_HTTP_TIMEOUT``).
+
+    Each URL is dispatched through a pinned, freshly re-validated
+    ``httpx.AsyncClient`` (:func:`modulo.core.ssrf.pinned_async_client`) — the
+    same SSRF boundary the notifier uses. A URL that resolves to a
+    private/internal address is rejected before any request is made and recorded
+    as an ``ssrf_blocked`` failure; the DNS-rebinding window a validate-at-save
+    check alone leaves open is closed by pinning the connection to the
+    re-validated address.
     """
     body_bytes, merged_headers = _signed_body_and_headers(body, headers, signing_secret)
     effective_timeout = _coerce_timeout(request_timeout) if request_timeout is not None else None
     request_timeout_seconds = effective_timeout if effective_timeout is not None else _REPORT_HTTP_TIMEOUT
 
     results: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=request_timeout_seconds) as client:
-        for url in urls:
-            invalid_reason = _webhook_url_error(url)
-            if invalid_reason is not None:
-                # Permanent config error — skip the retry/backoff loop entirely;
-                # a malformed URL cannot become deliverable on a later attempt.
-                display_url = _redact_url_credentials(url)
-                _log.warning(
-                    "Delivery to %s skipped: invalid webhook URL (%s)",
-                    display_url,
-                    invalid_reason,
-                )
-                result: dict[str, Any] = {
+    for url in urls:
+        invalid_reason = _webhook_url_error(url)
+        if invalid_reason is not None:
+            # Permanent config error — skip the retry/backoff loop entirely;
+            # a malformed URL cannot become deliverable on a later attempt.
+            display_url = _redact_url_credentials(url)
+            _log.warning(
+                "Delivery to %s skipped: invalid webhook URL (%s)",
+                display_url,
+                invalid_reason,
+            )
+            result: dict[str, Any] = {
+                "url": display_url,
+                "status": "failed",
+                "status_code": None,
+                "error": f"invalid_webhook_url: {invalid_reason}",
+            }
+            results.append(result)
+            continue
+        try:
+            client = await pinned_async_client(url, timeout=request_timeout_seconds)
+        except ValueError as exc:
+            # Fail CLOSED: the target is internal/private (or cannot be verified
+            # as otherwise), so no request is made. Mirrors the notifier, which
+            # re-validates and pins at dispatch time rather than trusting the
+            # save-time check against a rebinding host.
+            display_url = _redact_url_credentials(url)
+            _log.warning(
+                "Delivery to %s skipped: SSRF validation rejected the target (%s)",
+                display_url,
+                exc,
+            )
+            results.append(
+                {
                     "url": display_url,
                     "status": "failed",
                     "status_code": None,
-                    "error": f"invalid_webhook_url: {invalid_reason}",
+                    "error": f"ssrf_blocked: {exc}",
                 }
-                results.append(result)
-                continue
+            )
+            continue
+        try:
             results.append(await _deliver_one_url(client, url, body, body_bytes=body_bytes, headers=merged_headers))
+        finally:
+            await client.aclose()
     return results
 
 

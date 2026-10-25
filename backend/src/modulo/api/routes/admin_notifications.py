@@ -43,7 +43,7 @@ from modulo.core.notifier import (
     EVENT_TRIGGER_STREAK_ALERT,
     endpoint_events_to_list,
 )
-from modulo.core.ssrf import pinned_async_client
+from modulo.core.ssrf import pinned_async_client, validate_outbound_url
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.team import Team
@@ -94,6 +94,31 @@ AVAILABLE_EVENTS = [
 ]
 
 
+def ensure_safe_webhook_url(url: str) -> None:
+    """Validate a webhook URL's shape and SSRF floor.
+
+    Shared with the notification-endpoint CRUD surface
+    (:mod:`modulo.api.routes.notifications`) so both save paths enforce the
+    same contract: an ``http(s)`` URL with no credentials that does not resolve
+    to an internal/private address. Raises ``ValueError`` when unsafe.
+    """
+    if not is_valid_http_url(url):
+        raise ValueError("url must start with http:// or https://")
+    validate_outbound_url(url)
+
+
+def validate_event_names(events: list[str]) -> list[str]:
+    """Return *events* unchanged, rejecting names outside ``AVAILABLE_EVENTS``.
+
+    The single vocabulary check for both the admin webhook surface and the
+    notification-endpoint CRUD surface — never inline a second copy.
+    """
+    invalid = [e for e in events if e not in AVAILABLE_EVENTS]
+    if invalid:
+        raise ValueError(f"Unknown event types: {invalid}")
+    return events
+
+
 # ── Request / Response models ──────────────────────────────────────────
 
 
@@ -109,17 +134,13 @@ class WebhookCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_http(cls, v: str) -> str:
-        if not is_valid_http_url(v):
-            raise ValueError("url must start with http:// or https://")
+        ensure_safe_webhook_url(v)
         return v
 
     @field_validator("events")
     @classmethod
     def _events_must_be_valid(cls, v: list[str]) -> list[str]:
-        invalid = [e for e in v if e not in AVAILABLE_EVENTS]
-        if invalid:
-            raise ValueError(f"Unknown event types: {invalid}")
-        return v
+        return validate_event_names(v)
 
 
 class WebhookUpdate(BaseModel):
@@ -134,18 +155,17 @@ class WebhookUpdate(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_http(cls, v: str | None) -> str | None:
-        if v is not None and not is_valid_http_url(v):
-            raise ValueError("url must start with http:// or https://")
+        if v is None:
+            return None
+        ensure_safe_webhook_url(v)
         return v
 
     @field_validator("events")
     @classmethod
     def _events_must_be_valid(cls, v: list[str] | None) -> list[str] | None:
-        if v is not None:
-            invalid = [e for e in v if e not in AVAILABLE_EVENTS]
-            if invalid:
-                raise ValueError(f"Unknown event types: {invalid}")
-        return v
+        if v is None:
+            return None
+        return validate_event_names(v)
 
 
 class WebhookResponse(BaseModel):

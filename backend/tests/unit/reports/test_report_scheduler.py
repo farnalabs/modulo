@@ -13,8 +13,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import respx
-from httpx import Response
 
 from modulo.core.reports.scheduler import (
     _REPORT_HTTP_TIMEOUT,
@@ -945,11 +943,9 @@ class TestDeliverSlackWebhook:
     async def test_delivers_to_multiple_urls(self) -> None:
         url1 = SLACK_URL
         url2 = SLACK_URL_2
+        client = make_http_client([make_http_response(status_code=200)] * 2)
 
-        with respx.mock:
-            respx.post(url1).mock(return_value=Response(200, text="ok"))
-            respx.post(url2).mock(return_value=Response(200, text="ok"))
-
+        with patched_http_client(client):
             results = await _deliver_slack_webhook(
                 {"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "hi"}}]},
                 [url1, url2],
@@ -957,16 +953,16 @@ class TestDeliverSlackWebhook:
 
         assert len(results) == 2
         assert all(r["status"] == "delivered" for r in results)
+        assert client.post.await_count == 2
 
     async def test_reports_failure(self) -> None:
         url = SLACK_URL
+        client = make_http_client([make_http_response(is_success=False, status_code=500)] * 3)
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
-            respx.mock,
+            patched_http_client(client),
         ):
-            respx.post(url).mock(return_value=Response(500, text="Internal Server Error"))
-
             results = await _deliver_slack_webhook({"text": "hello"}, [url])
 
         assert len(results) == 1
@@ -978,25 +974,25 @@ class TestDeliverWebhook:
     async def test_delivers_with_custom_headers(self) -> None:
         url = "https://hooks.example.com/report"
         config = {"urls": [url], "headers": {"X-Custom": "value"}}
+        client = make_http_client([make_http_response(status_code=200)])
 
-        with respx.mock:
-            route = respx.post(url).mock(return_value=Response(200, text="ok"))
-
+        with patched_http_client(client):
             results = await _deliver_webhook({"report": "data"}, config)
 
         assert len(results) == 1
         assert results[0]["status"] == "delivered"
-        assert route.calls.last.request.headers["X-Custom"] == "value"
+        sent = client.post.await_args
+        assert sent is not None
+        assert sent.kwargs["headers"]["X-Custom"] == "value"
 
 
 class TestDeliverViaConfig:
     async def test_slack_webhook_type(self) -> None:
         url = SLACK_URL
         config = {"type": "slack_webhook", "webhook_urls": [url]}
+        client = make_http_client([make_http_response(status_code=200)])
 
-        with respx.mock:
-            respx.post(url).mock(return_value=Response(200, text="ok"))
-
+        with patched_http_client(client):
             results = await _deliver_via_config({"text": "hello"}, config)
 
         assert len(results) == 1
@@ -1005,10 +1001,9 @@ class TestDeliverViaConfig:
     async def test_webhook_type_default(self) -> None:
         url = "https://hooks.example.com/report"
         config = {"urls": [url]}
+        client = make_http_client([make_http_response(status_code=200)])
 
-        with respx.mock:
-            respx.post(url).mock(return_value=Response(200, text="ok"))
-
+        with patched_http_client(client):
             results = await _deliver_via_config({"report": "data"}, config)
 
         assert len(results) == 1
@@ -1369,10 +1364,61 @@ class TestDeliverToUrlsRejectsInvalid:
         client.post.assert_not_awaited()
 
 
+class TestDeliverToUrlsSsrf:
+    """A report recipient URL must pass the shared SSRF floor before any send.
+
+    Regression: quality-report delivery used to POST through a plain
+    ``httpx.AsyncClient`` after only a syntactic URL check, so a URL resolving
+    to loopback / RFC1918 / cloud-metadata was reachable from a report config.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://127.0.0.1/hook",
+            "http://10.1.2.3/hook",
+            "http://169.254.169.254/latest/meta-data/",
+        ],
+        ids=["loopback", "rfc1918", "cloud-metadata"],
+    )
+    async def test_internal_target_is_blocked_and_never_sent(self, url: str) -> None:
+        with patch("modulo.core.reports.scheduler._deliver_one_url", new_callable=AsyncMock) as deliver_one:
+            results = await _deliver_to_urls([url], {"a": 1})
+
+        assert results[0]["status"] == "failed"
+        assert results[0]["status_code"] is None
+        assert results[0]["error"].startswith("ssrf_blocked:")
+        deliver_one.assert_not_awaited()
+
+    async def test_each_url_is_dispatched_through_a_pinned_client(self) -> None:
+        urls = [SLACK_URL, SLACK_URL_2]
+        client = make_http_client([make_http_response(status_code=200)] * 2)
+
+        with patched_http_client(client) as pinned:
+            results = await _deliver_to_urls(urls, {"a": 1})
+
+        assert [r["status"] for r in results] == ["delivered", "delivered"]
+        assert [call.args[0] for call in pinned.await_args_list] == urls
+        assert client.aclose.await_count == 2
+
+    async def test_pinned_rejection_is_recorded_and_siblings_still_deliver(self) -> None:
+        """A dispatch-time re-validation failure (the DNS-rebinding residual)
+        fails that URL CLOSED without blocking its siblings."""
+        client = make_http_client([make_http_response(status_code=200)])
+        pinned = AsyncMock(side_effect=[ValueError("host now resolves internally"), client])
+
+        with patch("modulo.core.reports.scheduler.pinned_async_client", new=pinned):
+            results = await _deliver_to_urls(["https://rebind.example.com/x", SLACK_URL], {"a": 1})
+
+        assert results[0]["status"] == "failed"
+        assert results[0]["error"] == "ssrf_blocked: host now resolves internally"
+        assert results[1]["status"] == "delivered"
+
+
 class TestDeliverToUrlsTimeout:
     async def _client_timeout(self, request_timeout: object) -> float:
         """Call ``_deliver_to_urls`` with *request_timeout* and return the
-        ``timeout`` the underlying ``httpx.AsyncClient`` was built with."""
+        ``timeout`` the pinned client factory was called with."""
         url = "https://hooks.example.com/x"
         client = make_http_client([make_http_response(status_code=200)])
         with patched_http_client(client) as client_cls:

@@ -18,15 +18,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_DB_OPERATION_FAILED, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
+from modulo.api.routes.admin_notifications import ensure_safe_webhook_url, validate_event_names
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.notifier import endpoint_events_to_list
-from modulo.core.ssrf import validate_outbound_url, validate_outbound_url_async
+from modulo.core.ssrf import validate_outbound_url_async
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
-from modulo.util import is_valid_http_url
 
 _CODE_NOTIFICATION_VIEW = "notification.view"
 _CODE_NOTIFICATION_MANAGE = "notification.manage"
@@ -49,10 +49,13 @@ class NotificationEndpointCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_safe(cls, v: str) -> str:
-        if not is_valid_http_url(v):
-            raise ValueError("url must start with http:// or https://")
-        validate_outbound_url(v)
+        ensure_safe_webhook_url(v)
         return v
+
+    @field_validator("events")
+    @classmethod
+    def _events_must_be_known(cls, v: list[str]) -> list[str]:
+        return validate_event_names(v)
 
     @field_validator("team_id")
     @classmethod
@@ -71,6 +74,13 @@ class NotificationEndpointUpdate(BaseModel):
     events: list[str] | None = None
     description: str | None = Field(None, max_length=500)
     team_id: str | None = None
+
+    @field_validator("events")
+    @classmethod
+    def _events_must_be_known(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        return validate_event_names(v)
 
 
 class NotificationEndpointResponse(BaseModel):

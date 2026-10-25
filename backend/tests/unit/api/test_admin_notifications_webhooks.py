@@ -82,10 +82,7 @@ def _make_session_with_team(team_present: bool) -> AsyncMock:
     return session
 
 
-@pytest.fixture
-def client() -> Generator[TestClient, None, None]:
-    mock_session = _make_mock_session()
-
+def _install_overrides(mock_session: AsyncMock) -> None:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
@@ -100,6 +97,23 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
+
+
+@pytest.fixture
+def client() -> Generator[TestClient, None, None]:
+    _install_overrides(_make_mock_session())
+    # The URL shape/SSRF floor resolves DNS; unit tests use example hosts that
+    # do not resolve, so stub the floor here. The SSRF behaviour itself is
+    # covered by ``ssrf_client`` below.
+    with patch("modulo.api.routes.admin_notifications.validate_outbound_url"):
+        yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def ssrf_client() -> Generator[TestClient, None, None]:
+    """Client with the REAL SSRF floor wired (no validator stub)."""
+    _install_overrides(_make_mock_session())
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -200,6 +214,34 @@ def test_create_webhook_with_invalid_team_uuid_returns_422(client: TestClient) -
             client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
     assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/hook",
+        "http://10.0.0.5/hook",
+        "http://169.254.169.254/latest/meta-data/",
+    ],
+    ids=["loopback", "rfc1918", "cloud-metadata"],
+)
+def test_create_webhook_rejects_internal_url(ssrf_client: TestClient, url: str) -> None:
+    """A webhook aimed at an internal/private address must never be saved."""
+    resp = ssrf_client.post(
+        "/api/v1/admin/notifications",
+        json={"url": url, "events": ["hitl_awaiting"]},
+    )
+    assert resp.status_code == 422
+    assert "private/internal" in resp.text
+
+
+def test_update_webhook_rejects_internal_url(ssrf_client: TestClient) -> None:
+    resp = ssrf_client.put(
+        f"/api/v1/admin/notifications/{_WEBHOOK_ID}",
+        json={"url": "http://127.0.0.1/hook"},
+    )
+    assert resp.status_code == 422
+    assert "private/internal" in resp.text
 
 
 # ── PUT /api/v1/admin/notifications/{webhook_id} ──────────────────────
