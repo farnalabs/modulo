@@ -260,7 +260,7 @@ class ModelBackendBase(ABC):
             return exc
         detail = getattr(exc, "message", None) or str(exc)
         status_desc = f"HTTP {status}" if status else "connection failure"
-        return ProviderUnavailableError(
+        return ProviderUnavailableError(  # NOSONAR python:S112 — explicit typed outage classification
             f"{self.backend_id} provider gateway{self._gateway_error_context()} "
             f"returned {status_desc} on the model endpoint — upstream outage, "
             f"not an auth failure. Detail: {detail}"
@@ -279,7 +279,7 @@ class ModelBackendBase(ABC):
             return HealthResult(ok=False, detail="Health check timed out")
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # NOSONAR python:S112 — health checks must contain provider failures
             logger.warning("Health check failed for %s: %s", type(self).__name__, exc)
             return HealthResult(ok=False, detail=str(exc)[:HEALTH_DETAIL_MAX_LENGTH])
 
@@ -318,4 +318,5 @@ class LangChainChatForwardingMixin:
         output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
+        del output_schema  # Contract parameter; streaming structured output is unsupported.
         return self._model.astream(messages, tools=tools, **kwargs)
