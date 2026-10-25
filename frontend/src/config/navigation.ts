@@ -195,7 +195,7 @@ function buildSidebarGroups(): NavGroup[] {
       id,
       label: sg.label,
       labelKey: sg.labelKey || groupLabelKeyMap[id] || `components.SidebarNav.group_${id}`,
-      items: itemsByGroup[id] || [],
+      items: itemsByGroup[id] ?? [],
       defaultCollapsed: !sg.default_expanded,
       systemAdminOnly: sg.system_admin_only || undefined,
     }))
