@@ -8,6 +8,7 @@ export interface Column {
   sortable?: boolean
   numeric?: boolean
   width?: string
+  testid?: string
 }
 
 export interface DataTableRow {
@@ -20,25 +21,33 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   loadingRows?: number
   rowClickable?: boolean
+  initialSortColumn?: string | null
+  initialSortDirection?: 'asc' | 'desc'
+  newSortDirection?: 'asc' | 'desc'
+  rowTestid?: string
 }>(), {
   loading: false,
   loadingRows: 5,
   rowClickable: true,
+  initialSortColumn: null,
+  initialSortDirection: 'asc',
+  newSortDirection: 'asc',
+  rowTestid: undefined,
 })
 
 const emit = defineEmits<{
   'row-click': [row: DataTableRow]
 }>()
 
-const sortColumn = ref<string | null>(null)
-const sortDirection = ref<'asc' | 'desc'>('asc')
+const sortColumn = ref<string | null>(props.initialSortColumn)
+const sortDirection = ref<'asc' | 'desc'>(props.initialSortDirection)
 
 function toggleSort(key: string) {
   if (sortColumn.value === key) {
     sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
   } else {
     sortColumn.value = key
-    sortDirection.value = 'asc'
+    sortDirection.value = props.newSortDirection
   }
 }
 
@@ -104,7 +113,19 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
             @keydown.enter="col.sortable && toggleSort(col.key)"
             @keydown.space.prevent="col.sortable && toggleSort(col.key)"
           >
-            {{ col.label }}<span v-if="col.sortable" class="text-xs ml-0.5">{{ getSortIndicator(col.key) }}</span>
+            <button
+              v-if="col.sortable"
+              type="button"
+              class="inline-flex items-center gap-1"
+              :data-testid="col.testid"
+              tabindex="-1"
+              @click.stop="toggleSort(col.key)"
+              @keydown.enter.stop="toggleSort(col.key)"
+              @keydown.space.prevent.stop="toggleSort(col.key)"
+            >
+              {{ col.label }}<span class="text-xs ml-0.5">{{ getSortIndicator(col.key) }}</span>
+            </button>
+            <template v-else>{{ col.label }}</template>
           </th>
         </tr>
       </thead>
@@ -127,7 +148,8 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
       <tbody v-else class="divide-y divide-border">
         <tr
           v-for="(row, index) in sortedRows"
-          :key="index"
+          :key="String(row.id ?? index)"
+          :data-testid="rowTestid ?? (row.testid as string | undefined)"
           class="transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           :tabindex="props.rowClickable ? 0 : undefined"
           @click="onRowClick(row)"

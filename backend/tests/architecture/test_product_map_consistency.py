@@ -462,6 +462,16 @@ OWNED_PAGES = {
     # child components through the closure, so only the owning view is pinned.
     "/licence/claim": "frontend/src/views/LicenceClaimView.vue",
     "/oauth/authorize": "frontend/src/views/OAuthConsentView.vue",
+    "/risk-assessment": (
+        "frontend/src/views/RiskAssessmentView.vue",
+        "frontend/src/components/risk-assessment/RiskAssessmentFacets.vue",
+        "frontend/src/components/risk-assessment/RiskAssessmentSummaryCard.vue",
+        "frontend/src/components/risk-assessment/RiskAssessmentTable.vue",
+        "frontend/src/components/risk-assessment/ActionBadge.vue",
+        "frontend/src/components/shared/ErrorAlert.vue",
+        "frontend/src/components/shared/EmptyState.vue",
+        "frontend/src/components/ui/data-table/DataTable.vue",
+    ),
     "/admin/audit": (
         "frontend/src/views/AdminAuditView.vue",
         "frontend/src/components/shared/JsonViewer.vue",
