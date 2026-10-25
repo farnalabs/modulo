@@ -2,7 +2,7 @@ name: "RC Validation (pen test vs app.modulo.run)"
 
 # Runs during the alpha release freeze against the LIVE production soak
 # deployment - NOT an in-process app (that is schemathesis-nightly.yml).
-# Triggered automatically by release.yml on cut/recut; can also be
+# Triggered automatically by release-unified.yml on cut/recut; can also be
 # dispatched manually with an rc_tag.
 #
 # v1 scope: read-only (GET) fuzzing only. Destructive-method fuzzing against
