@@ -106,7 +106,9 @@ async def get_scim_plan_context(
         return CommunityTier()
 
 
-async def require_scim_feature(ctx: PlanContext = Depends(get_scim_plan_context)) -> None:
+async def require_scim_feature(  # NOSONAR S7503 - FastAPI dependency coroutine seam
+    ctx: PlanContext = Depends(get_scim_plan_context),
+) -> None:
     """Require the SCIM feature using the SCIM principal's organisation plan."""
     if not ctx.feature_enabled("scim"):
         raise ProblemException(
