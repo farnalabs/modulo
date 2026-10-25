@@ -1453,7 +1453,7 @@ class RestConnector(ConnectorBase):
         """
         try:
             text = repr(item)
-        except Exception:
+        except (TypeError, ValueError, RuntimeError):
             text = f"<{type(item).__name__}>"
         redacted = self._redact(text)
         return redacted if len(redacted) <= 80 else redacted[:77] + "..."
@@ -1906,7 +1906,7 @@ class RestConnector(ConnectorBase):
     def _host(url: str) -> str:
         try:
             return urlparse(url).hostname or ""
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             return ""
 
     async def _consume_body(self, resp: httpx.Response) -> str:

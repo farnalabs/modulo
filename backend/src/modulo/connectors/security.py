@@ -49,6 +49,10 @@ _MASK = "***"
 _MIN_SECRET_LEN = 4
 
 
+class CredentialRedactionError(RuntimeError):
+    """Fallback error when a credential-bearing exception cannot be rebuilt."""
+
+
 def _leaf_strings(value: Any) -> Iterator[str]:
     """Yield every leaf string reachable inside *value* (dicts, lists, scalars)."""
     if isinstance(value, str):
@@ -132,13 +136,13 @@ def _scrub_request(request: httpx.Request | None, secrets: Sequence[str]) -> htt
     kwargs: dict[str, Any] = {"method": request.method, "url": url, "headers": headers}
     try:
         content = request.content
-    except Exception:
+    except (RuntimeError, AttributeError):
         content = None
     if content is not None:
         kwargs["content"] = content
     try:
         return httpx.Request(**kwargs)
-    except Exception:  # pragma: no cover - defensive fallback
+    except (TypeError, ValueError, RuntimeError):  # pragma: no cover - defensive fallback
         return request
 
 
@@ -158,7 +162,7 @@ def _scrub_response(response: httpx.Response, secrets: Sequence[str]) -> httpx.R
         return response
     try:
         return httpx.Response(status_code=response.status_code, request=request, text=text, headers=headers)
-    except Exception:  # pragma: no cover - defensive fallback
+    except (TypeError, ValueError, RuntimeError):  # pragma: no cover - defensive fallback
         return response
 
 
@@ -213,8 +217,9 @@ def redact_exc(
             new = _rebuild_httpx_request_error(exc, message, secrets)
         else:
             new = _rebuild_generic_error(exc, message)
-    except Exception:  # pragma: no cover - defensive fallback
-        new = RuntimeError(message)
+    except (TypeError, ValueError, AttributeError) as rebuild_error:  # pragma: no cover - defensive fallback
+        new = CredentialRedactionError(message)
+        new.__cause__ = rebuild_error
     if chain_cause:
         new.__cause__ = exc.__cause__
     else:
@@ -270,7 +275,9 @@ def redacting(method: Callable[..., Any]) -> Callable[..., Any]:
     """
 
     @functools.wraps(method)
-    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+    async def wrapper(  # NOSONAR S7503 - preserves async connector method seam
+        self: Any, *args: Any, **kwargs: Any
+    ) -> Any:
         redactor: CredentialRedactor = self._redactor
         with redactor.wrapping():
             return await method(self, *args, **kwargs)
