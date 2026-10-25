@@ -23,14 +23,19 @@ function headerCells(wrapper: ReturnType<typeof mountTable>) {
 }
 
 describe('DataTable keyboard accessibility', () => {
-  it('marks sortable headers as focusable with an aria-sort state', () => {
+  it('marks sortable headers with a focusable button and an aria-sort state', () => {
     const wrapper = mountTable()
     const sortable = headerCells(wrapper)[0]
-    expect(sortable.attributes('tabindex')).toBe('0')
-    // No active sort yet → aria-sort absent.
-    expect(sortable.attributes('aria-sort')).toBeUndefined()
-    // Non-sortable header is not focusable.
-    expect(headerCells(wrapper)[1].attributes('tabindex')).toBeUndefined()
+    // A real button is the keyboard affordance, not a click-only <th>.
+    const sortButton = sortable.find('button')
+    expect(sortButton.exists()).toBe(true)
+    expect(sortButton.attributes('tabindex')).toBeUndefined()
+    // Sortable but not yet sorted → aria-sort="none" (never a missing state).
+    expect(sortable.attributes('aria-sort')).toBe('none')
+    // Non-sortable header has no sort button and is not focusable.
+    const nonSortable = headerCells(wrapper)[1]
+    expect(nonSortable.find('button').exists()).toBe(false)
+    expect(nonSortable.attributes('tabindex')).toBeUndefined()
   })
 
   it('toggles sort on Enter for a sortable header', async () => {
