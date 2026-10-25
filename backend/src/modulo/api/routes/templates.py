@@ -246,6 +246,7 @@ _TEMPLATE_CREATE_PERMISSION = require_permission("pipeline.create")
 @router.post(
     "/pipelines/from-template/{template_id}",
     status_code=status.HTTP_201_CREATED,
+    responses={500: {"description": "Internal Server Error"}},
     dependencies=[
         Depends(audited("pipeline_created_from_template", "pipeline", principal_dep=get_current_tenant_user))
     ],

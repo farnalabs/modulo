@@ -15,7 +15,7 @@ _tool_definitions: list[dict[str, Any]] | None = None
 _registry_built = False
 
 
-async def build_tool_registry() -> None:
+async def build_tool_registry() -> None:  # NOSONAR S7503 - async API seam for callers
     """Build the MCP tool registry from FastMCP's registered tools."""
     global _tool_definitions, _registry_built
     if _registry_built:

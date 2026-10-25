@@ -111,7 +111,9 @@ def _is_hitl_budget_path(path: str) -> bool:
 class _NoopRateLimiter:
     """No-op rate limiter used when Redis is unavailable — allows all requests."""
 
-    async def check(self, _key: str, _max_requests: int, _window_s: int = 60) -> bool:
+    async def check(
+        self, _key: str, _max_requests: int, _window_s: int = 60
+    ) -> bool:  # NOSONAR S7503 - async interface seam for registry callers
         """Interface-compatible ``check`` (mirrors ``RateLimiterRegistry.check``).
 
         ``_key`` / ``_max_requests`` / ``_window_s`` are intentionally unused:
