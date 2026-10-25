@@ -1259,6 +1259,30 @@ def test_unreadable_entry_point_distribution_does_not_abort_discovery():
     assert "Failed to read distribution metadata" in registry.entry_point_errors["broken_type"]
 
 
+def test_cancelled_entry_point_name_is_reraised():
+    """Cancellation while reading entry-point metadata must propagate.
+
+    ``_load_entry_point`` isolates plugin defects from startup, but
+    cancellation is cooperative control flow, not a plugin defect. The explicit
+    ``except asyncio.CancelledError: raise`` arm ahead of the broad handler must
+    re-raise instead of recording the plugin unhealthy and continuing.
+    """
+    registry = PluginRegistry()
+    with _entry_points_returning([_CancelledNameEntryPoint()]), pytest.raises(asyncio.CancelledError):
+        registry.discover_plugins()
+
+    assert not registry.list_plugins()
+
+
+def test_cancelled_entry_point_distribution_is_reraised():
+    """Cancellation while reading the distribution must propagate, not be swallowed."""
+    registry = PluginRegistry()
+    with _entry_points_returning([_CancelledDistributionEntryPoint()]), pytest.raises(asyncio.CancelledError):
+        registry.discover_plugins()
+
+    assert not registry.list_plugins()
+
+
 class _ExplodingEntryPoint:
     """Entry-point metadata object whose fields fail when read."""
 
@@ -1279,3 +1303,21 @@ class _ExplodingDistributionEntryPoint:
     @property
     def dist(self) -> Any:
         raise RuntimeError("entry-point distribution unavailable")
+
+
+class _CancelledNameEntryPoint:
+    """Entry-point object cancelled while its name is being read."""
+
+    @property
+    def name(self) -> str:
+        raise asyncio.CancelledError
+
+
+class _CancelledDistributionEntryPoint:
+    """Entry-point object cancelled while its distribution is being read."""
+
+    name = "cancelled_type"
+
+    @property
+    def dist(self) -> Any:
+        raise asyncio.CancelledError
