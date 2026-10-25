@@ -509,7 +509,12 @@ jobs:
           # forced deploy that puts this RC into the production soak.
            echo "Dispatching Deploy: Staging + Prod for ${RC_TAG} (force_deploy=true)."
            RC_SHA="$(git rev-parse "${RC_TAG}^{commit}")"
-           gh workflow run "Deploy: Staging + Prod" --ref "${RC_TAG}" \
+           # Dispatch from main, NOT the RC tag: deploy.yml serialises on
+           # `deploy-pipeline-${{ github.ref_name }}`, so a tag ref gives each
+           # RC its own concurrency group and two forced deploys can race the
+           # same Fly apps (the older RC can win). The RC commit is deployed via
+           # release_ref/release_sha, which deploy.yml checks out explicitly.
+           gh workflow run "Deploy: Staging + Prod" --ref main \
              -f force_deploy=true \
              -f release_ref="${RC_TAG}" \
              -f release_sha="${RC_SHA}"

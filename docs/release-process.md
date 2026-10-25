@@ -26,7 +26,7 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 
 ### The freeze
 
-`cut` first pushes a temporary `release-publication-hold` marker before its version-bump push; `publish-images.yml` observes that marker and refuses stable `latest` while allowing the immutable SHA publication to proceed. It then pushes the authoritative `release-freeze` tag, which the merge queue checks and does not merge while it is present, and removes the temporary hold. A cut chooses the first free `vX.Y.Z-rcN`; a recut always chooses the next free RC number and tags the current `main` commit, so it cannot accidentally republish an older RC after a fix has landed. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` with `force_deploy=true`, and the deploy workflow's normal staging, E2E and production gates remain in force. `promote` deletes the authoritative freeze tag, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
+`cut` first pushes a temporary `release-publication-hold` marker before its version-bump push; `publish-images.yml` observes that marker and refuses stable `latest` while allowing the immutable SHA publication to proceed. It then pushes the authoritative `release-freeze` tag, which the merge queue checks and does not merge while it is present, and removes the temporary hold. A cut chooses the first free `vX.Y.Z-rcN`; a recut always chooses the next free RC number and tags the current `main` commit, so it cannot accidentally republish an older RC after a fix has landed. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` from `main` with `force_deploy=true` and the RC tag as `release_ref`/`release_sha`; dispatching from the RC tag would give each RC its own `deploy-pipeline-${{ github.ref_name }}` concurrency group and allow two forced deploys to race the same Fly apps. The deploy workflow checks out the RC commit explicitly from `release_ref`. The deploy workflow's normal staging, E2E and production gates remain in force. `promote` deletes the authoritative freeze tag, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
 
 ### Recut runbook
 
@@ -95,6 +95,13 @@ Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-i
 The unified workflow owns release publication directly. `cut` and `recut` publish four RC-qualified images (`all-in-one`, `backend`, `frontend`, and `runner-opencode`) alongside the signed bundle and release artefacts. `promote` is the only path that publishes stable `VERSION_NUM` and `latest` image tags and the stable Helm chart.
 
 `publish-images.yml` remains the ordinary `main` publication path. It always publishes the immutable short-SHA image; it publishes `latest` only when neither the authoritative `release-freeze` nor the cut-only `release-publication-hold` marker exists. A failed or unknown marker lookup fails closed. The temporary hold closes the race between the cut's version-bump push and creation of `release-freeze`; the freeze remains the authoritative release boundary after that point.
+
+If a cut fails between pushing `release-publication-hold` and removing it, the hold stays behind and every later cut refuses to start while `publish-images.yml` keeps stable publication suppressed. Nothing in the pipeline clears a stale hold automatically (including `promote`), so the recovery is manual once the failed cut is understood:
+
+```bash
+git ls-remote --exit-code origin refs/tags/release-publication-hold   # confirm it exists
+git push origin --delete release-publication-hold                     # release the suppression
+```
 
 The dry-run's no-publication guarantee stays structural: it performs no tag action, registry push, Release creation, commit, attestation, or deploy. A human or another credential pushing a tag is a separate event and is outside the dry-run path.
 

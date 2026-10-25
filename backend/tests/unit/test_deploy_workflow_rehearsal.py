@@ -291,3 +291,24 @@ def test_release_sh_passes_rehearsal_env_through() -> None:
     release_sh = (REPO_ROOT / "deploy" / "fly" / "release.sh").read_text(encoding="utf-8")
     assert "unset " not in release_sh, "release.sh must not unset env vars (would strip ALEMBIC_REHEARSAL)"
     assert "alembic upgrade heads" in release_sh
+
+
+def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:
+    """Deploy must be dispatched from ``main``, not the RC tag.
+
+    ``deploy.yml`` serialises on ``deploy-pipeline-${{ github.ref_name }}``. A
+    dispatch ``--ref ${RC_TAG}`` gives every RC its own concurrency group, so
+    two forced RC deploys can run concurrently against the same Fly apps and
+    the older RC can win. The RC commit is still deployed from ``main`` because
+    ``deploy.yml`` checks out ``release_ref``/``release_sha`` explicitly.
+    """
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    dispatch = steps[names.index("Dispatch Deploy and rc-validate")]["run"]
+
+    assert 'gh workflow run "Deploy: Staging + Prod" --ref main' in dispatch
+    assert 'gh workflow run "Deploy: Staging + Prod" --ref "${RC_TAG}"' not in dispatch
+    assert "-f force_deploy=true" in dispatch
+    assert '-f release_ref="${RC_TAG}"' in dispatch
+    assert '-f release_sha="${RC_SHA}"' in dispatch

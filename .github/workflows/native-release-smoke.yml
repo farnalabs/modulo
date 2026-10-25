@@ -422,7 +422,8 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -z "${releases}" ]; then            echo "::notice::no published bundle-v* release exists for ${{ github.repository }} - the nightly canary has nothing to verify, so it is skipping successfully (no failure, no tracking issue). Durable fix: publish a bundle-v* release as part of the release process; until then this nightly signal is honestly 'not applicable' rather than red."
+          if [ -z "${releases}" ]; then
+            echo "::notice::no published bundle-v* release exists for ${{ github.repository }} - the nightly canary has nothing to verify, so it is skipping successfully (no failure, no tracking issue). Durable fix: publish a bundle-v* release as part of the release process; until then this nightly signal is honestly 'not applicable' rather than red."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
