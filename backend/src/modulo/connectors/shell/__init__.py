@@ -43,6 +43,55 @@ _ERR_RUNTIME_NOT_CONFIGURED = "Runtime provider not configured"
 _UNQUOTED_SHELL_OPERATORS = frozenset(";&|<>()`\n\r")
 
 
+def _is_shell_substitution(command: str, index: int) -> bool:
+    """Return True when a substitution the shell evaluates starts at *index*."""
+    return command.startswith("`", index) or command.startswith("$(", index)
+
+
+def _scan_single_quoted(command: str, start: int) -> int:
+    """Return the index just past the closing single quote (or past the end)."""
+    index = start + 1
+    while index < len(command) and command[index] != "'":
+        index += 1
+    return index + 1
+
+
+def _scan_double_quoted(command: str, start: int) -> tuple[int, bool]:
+    """Scan a double-quoted span; return (next index, substitution found).
+
+    Command substitution stays active inside double quotes, so ``$(`` and a
+    backtick are rejected there; a backslash escapes the character after it.
+    """
+    index = start + 1
+    while index < len(command):
+        char = command[index]
+        if char == "\\":
+            index += 2
+        elif char == '"':
+            return index + 1, False
+        elif _is_shell_substitution(command, index):
+            return index, True
+        else:
+            index += 1
+    return len(command), False
+
+
+def _scan_unquoted(command: str, start: int) -> tuple[int, bool]:
+    """Scan unquoted text; return (index of the next quote/operator, metacharacter found)."""
+    index = start
+    while index < len(command):
+        char = command[index]
+        if char in "'\"":
+            return index, False
+        if char == "\\":
+            index += 2
+        elif char in _UNQUOTED_SHELL_OPERATORS:
+            return index, True
+        else:
+            index += 1
+    return index, False
+
+
 def _contains_unquoted_shell_syntax(command: str) -> bool:
     """Return True when *command* would be parsed by ``sh`` as more than one command.
 
@@ -51,32 +100,18 @@ def _contains_unquoted_shell_syntax(command: str) -> bool:
     Command substitution is still rejected inside double quotes, where the shell
     evaluates it, but is literal in single quotes.
     """
-    in_single = False
-    in_double = False
-    escaped = False
-    for index, char in enumerate(command):
-        if escaped:
-            escaped = False
-            continue
-        if in_single:
-            in_single = char != "'"
-            continue
-        if in_double:
-            if char == "\\":
-                escaped = True
-            elif char == '"':
-                in_double = False
-            elif char == "`" or (char == "$" and command[index + 1 : index + 2] == "("):
+    index = 0
+    while index < len(command):
+        if command[index] == "'":
+            index = _scan_single_quoted(command, index)
+        elif command[index] == '"':
+            index, found = _scan_double_quoted(command, index)
+            if found:
                 return True
-            continue
-        if char == "\\":
-            escaped = True
-        elif char == "'":
-            in_single = True
-        elif char == '"':
-            in_double = True
-        elif char in _UNQUOTED_SHELL_OPERATORS:
-            return True
+        else:
+            index, found = _scan_unquoted(command, index)
+            if found:
+                return True
     return False
 
 

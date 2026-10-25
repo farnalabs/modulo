@@ -15,7 +15,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.connectors.shell import ShellConnector
+from modulo.connectors.shell import ShellConnector, _contains_unquoted_shell_syntax
 from modulo.core.runtime_provider import ProviderNotConfiguredError, WorkspaceSpec
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
@@ -450,12 +450,16 @@ async def test_run_command_allows_plain_commands(
         'python -c "import sys; sys.exit(42)"',
         "printf '%s' 'a;b'",
         "ls '`id`'",
+        'ls "$HOME"',
+        'ls "\\$(id)"',
+        'ls "a\\"b"',
+        "ls \\;",
     ],
 )
 async def test_run_command_allows_quoted_metacharacters(
     provider: _FakeRuntimeProvider, provider_ref: str, command_str: str
 ) -> None:
-    """A metacharacter inside single quotes is a literal argument, not shell syntax."""
+    """A metacharacter made literal by quoting or escaping is not shell syntax."""
     c = ShellConnector(
         runtime_provider=provider,
         workspace_lease_id=uuid.uuid4(),
@@ -470,6 +474,26 @@ async def test_run_command_allows_quoted_metacharacters(
     )
 
     assert result["exit_code"] == 0
+
+
+@pytest.mark.parametrize(
+    ("command_str", "expected"),
+    [
+        pytest.param("ls -la", False, id="plain"),
+        pytest.param("ls 'unterminated", False, id="unterminated-single-quote"),
+        pytest.param('ls "unterminated', False, id="unterminated-double-quote"),
+        pytest.param("ls trailing\\", False, id="trailing-escape-unquoted"),
+        pytest.param('ls "trailing\\', False, id="trailing-escape-double-quoted"),
+        pytest.param("ls 'a;b' && id", True, id="operator-after-single-quoted-span"),
+        pytest.param('ls "a;b" && id', True, id="operator-after-double-quoted-span"),
+        pytest.param('ls "$HOME"', False, id="variable-in-double-quotes"),
+        pytest.param("ls )", True, id="closing-paren"),
+        pytest.param("ls }", False, id="brace-is-not-an-operator"),
+    ],
+)
+def test_contains_unquoted_shell_syntax(command_str: str, expected: bool) -> None:
+    """The scanner's termination and quote-span edge cases (S3776 decomposition)."""
+    assert _contains_unquoted_shell_syntax(command_str) is expected
 
 
 # ---------------------------------------------------------------------------
