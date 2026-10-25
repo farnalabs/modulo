@@ -10591,9 +10591,16 @@ async def list_plugins() -> dict[str, Any]:
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_plugins")
 
-        from modulo.core.plugin_registry import get_plugin_registry
+        org_id = _ctx_org_id_val()  # fail closed when no authenticated org context
+        # Plan gate parity with GET /api/v1/plugins: the plugin registry is the
+        # ``plugin_management`` entitlement, enforced there by
+        # ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "plugin_management")
+        if feat_err:
+            return feat_err
 
-        _ctx_org_id_val()  # fail closed when no authenticated org context
+        from modulo.core.plugin_registry import get_plugin_registry
 
         registry = get_plugin_registry()
         health_results = registry.health_check()
@@ -10642,6 +10649,13 @@ async def list_sso_providers() -> dict[str, Any]:
         from modulo.db.crud.sso_provider import list_providers
 
         org_id = _ctx_org_id_val()
+        # Plan gate parity with GET /api/v1/admin/sso/providers: SSO
+        # configuration is the ``sso`` entitlement, enforced there by
+        # ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "sso")
+        if feat_err:
+            return feat_err
 
         async with _session(org_id) as s:
             providers = await list_providers(s, org_id=org_id)
@@ -10812,6 +10826,14 @@ async def get_schema_versions(
         from modulo.db.crud.schema import get_schema, list_schema_versions
 
         org_id = _ctx_org_id_val()
+        # Plan gate parity with GET /api/v1/schemas/{schema_id}/versions:
+        # version history is the ``schema_version_history`` entitlement, enforced
+        # there by ``require_feature``. MCP must enforce it too rather than stay
+        # an unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "schema_version_history")
+        if feat_err:
+            return feat_err
+
         schid, schid_err = _parse_uuid_param(schema_id, "schema_id")
         if schid_err:
             return schid_err
@@ -11396,6 +11418,14 @@ async def list_environment_profiles(
         from modulo.db.crud.environment_profile import list_environment_profiles as db_list_environment_profiles
 
         org_id = _ctx_org_id_val()
+        # Plan gate parity with GET /api/v1/environment-profiles: environment
+        # profiles are the ``environment_profiles`` entitlement, enforced there
+        # by ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "environment_profiles")
+        if feat_err:
+            return feat_err
+
         lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
@@ -13055,11 +13085,18 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     denied = _resource_node_scope_error("get_schema_versions")
     if denied is not None:
         return denied
+    # FAR-2129: same plan-feature parity as the tool and the REST route it
+    # mirrors (GET /api/v1/schemas/{schema_id}/versions/{version}, gated
+    # require_feature("schema_version_history")). Without it the resource would
+    # remain an unentitled way to read the same version payload.
+    org_id = _ctx_org_id_val()
+    feat_err = await _require_plan_feature(org_id, get_settings(), "schema_version_history")
+    if feat_err:
+        return f"error: {feat_err['error']}: {feat_err['detail']}"
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema, SchemaVersion
 
-    org_id = _ctx_org_id_val()
     sid, sid_err = _parse_uuid_param(schema_id, "schema_id")
     if sid_err:
         return f"error: Invalid UUID format: {schema_id}"

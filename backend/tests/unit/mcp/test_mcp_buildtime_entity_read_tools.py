@@ -51,6 +51,29 @@ def _page(items: list, next_cursor: str | None = None, total: int | None = None)
     )
 
 
+class _EnabledPlan:
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+
+class _DisabledPlan:
+    def feature_enabled(self, name: str) -> bool:
+        return False
+
+
+def _patch_plan(enabled: bool) -> tuple:
+    """Patch org lookup + plan resolution so the tools' feature gate is on/off."""
+    plan = _EnabledPlan() if enabled else _DisabledPlan()
+    return (
+        patch(
+            "modulo.db.crud.organisation.get_organisation",
+            new=AsyncMock(return_value=MagicMock(settings_json={})),
+        ),
+        patch("modulo.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan)),
+        patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
+    )
+
+
 # ---------------------------------------------------------------------------
 # list_agents / get_agent
 # ---------------------------------------------------------------------------
@@ -724,7 +747,9 @@ class TestListEnvironmentProfiles(AuthContext):
         mock_list.return_value = _page([profile])
         mock_session.return_value = make_session_context(make_session_scope())
 
-        result = await list_environment_profiles(limit=200)
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await list_environment_profiles(limit=200)
 
         (item,) = result["data"]
         assert item["provider_type"] == "e2b"
@@ -751,7 +776,9 @@ class TestListEnvironmentProfiles(AuthContext):
     ) -> None:
         mock_list.side_effect = ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await list_environment_profiles()
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await list_environment_profiles()
         assert result["error"] == "migration_required"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -766,8 +793,30 @@ class TestListEnvironmentProfiles(AuthContext):
         """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
         mock_list.side_effect = RuntimeError("boom")
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await list_environment_profiles()
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await list_environment_profiles()
         assert result["error"] == "server_error"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.environment_profile.list_environment_profiles")
+    async def test_feature_gate_off_returns_feature_required(
+        self,
+        mock_list: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-2129: Community plan is refused before the profile table is read."""
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
+        with org_patch, plan_patch, settings_patch:
+            result = await list_environment_profiles()
+
+        assert result["error"] == "feature_required"
+        assert "environment_profiles" in result["detail"]
+        mock_list.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
