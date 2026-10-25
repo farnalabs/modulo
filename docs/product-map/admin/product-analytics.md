@@ -107,19 +107,23 @@ an eligible tier.
       `api/routes/product_analytics_transparency.py`,
       `tests/unit/api/routes/test_product_analytics_transparency.py`)
 - [x] The event-ingest endpoint `POST /api/v1/metrics/events` stages consent-gated
-      curated frontend events into `metrics_staging`: an org-scoped insert with
-      `UNIQUE(organisation_id, event_id)` dedup (`ON CONFLICT DO NOTHING`), an
-      `api_error` daily cap, and route-template sanitisation so raw paths never
-      reach the table; it is best-effort (always 204) and consent-gated through the
-      shared `consent.is_org_consenting` predicate; the client's `event_id` is a
-      per-session prefix plus a monotonic counter, so its IDs stay unique across
-      page reloads and concurrent tabs (a bare counter restarting at 1 collided
-      with the earlier session's IDs under this dedup and was silently dropped)
-      (`api/routes/metrics_ingest.py`,
-      `frontend/src/composables/useProductAnalytics.ts`,
-      `frontend/src/__tests__/composables/useProductAnalytics.spec.ts`,
-      `tests/unit/product_analytics/test_metrics_ingest.py`,
-      `tests/bdd/features/product_analytics/metrics_ingest.feature`)
+       curated frontend events into `metrics_staging`: an org-scoped insert with
+       `UNIQUE(organisation_id, event_id)` dedup (`ON CONFLICT DO NOTHING`), an
+       `api_error` daily cap, route-template sanitisation so raw paths never reach
+       the table, and an allowlisted payload schema that drops unknown fields
+       before staging; it is best-effort (always 204) and consent-gated through
+       the shared `consent.is_org_consenting` predicate; the client's `event_id`
+       is a per-session prefix plus a monotonic counter, so its IDs stay unique
+       across page reloads and concurrent tabs (a bare counter restarting at 1
+       collided with the earlier session's IDs under this dedup and was silently
+       dropped)
+       (`api/routes/metrics_ingest.py`,
+       `core/product_analytics/metrics_constants.py`,
+       `frontend/src/composables/useProductAnalytics.ts`,
+       `frontend/src/__tests__/composables/useProductAnalytics.spec.ts`,
+       `tests/unit/product_analytics/test_metrics_ingest.py`,
+       `tests/bdd/features/product_analytics/metrics_ingest.feature`)
+
 - [x] Staged frontend events are consumed and purged end to end (FAR-1717): the
       daily dump's `_aggregate_staged_events` folds each UTC day's
       `metrics_staging` rows into the payload's `event_counts` section, and

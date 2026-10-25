@@ -26,6 +26,7 @@ from modulo.core.audit_coverage import audited
 from modulo.core.product_analytics.consent import is_org_consenting
 from modulo.core.product_analytics.metrics_constants import (
     API_ERROR_DAILY_CAP,
+    EVENT_PAYLOAD_FIELDS,
     MAX_BATCH_SIZE,
     VALID_EVENT_TYPES,
 )
@@ -159,10 +160,14 @@ async def _stage_single_event(
             return api_error_count
         api_error_count += 1
 
-    # Sanitize route in api_error payloads
-    payload = dict(event.payload)
+    # Enforce the event contract at the ingest boundary.  The browser sends
+    # curated events, but the endpoint is public to any authenticated tenant
+    # client; unknown payload keys could otherwise become a covert PII channel.
+    allowed_fields = EVENT_PAYLOAD_FIELDS[event.event_type]
+    payload = {key: value for key, value in event.payload.items() if key in allowed_fields}
     if event.event_type == "api_error" and "route" in payload:
-        payload["route"] = _sanitize_route_template(payload["route"], registered_templates)
+        route = payload["route"]
+        payload["route"] = _sanitize_route_template(route if isinstance(route, str) else None, registered_templates)
 
     recorded_at = event.recorded_at or now
 

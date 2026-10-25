@@ -282,6 +282,29 @@ class TestApiErrorDailyCap:
         assert len(_insert_calls(mock_session)) == 5, "all 5 api_error events under the cap must be staged"
 
 
+class TestPayloadPrivacyBoundary:
+    @patch("modulo.api.routes.metrics_ingest.get_organisation")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_user_context")
+    @patch("modulo.api.routes.metrics_ingest.set_rls_org")
+    def test_unknown_payload_fields_are_dropped(
+        self,
+        mock_rls: MagicMock,
+        mock_user_ctx: MagicMock,
+        mock_get_org: MagicMock,
+        client: TestClient,
+        mock_session: AsyncMock,
+    ) -> None:
+        mock_get_org.return_value = _consented_org()
+        event = _valid_event("evt-private")
+        event["payload"] = {"pipeline_id": "p-1", "email": "secret@example.com", "nested": {"token": "secret"}}
+
+        resp = _post_events(client, [event])
+
+        assert resp.status_code == 204
+        payload = _inserted_payload(mock_session)
+        assert payload == {"pipeline_id": "p-1"}
+
+
 class TestRouteSanitizer:
     @patch("modulo.api.routes.metrics_ingest._api_error_count_today")
     @patch("modulo.api.routes.metrics_ingest.get_organisation")
