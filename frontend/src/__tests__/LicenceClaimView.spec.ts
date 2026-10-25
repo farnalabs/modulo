@@ -293,4 +293,199 @@ describe('LicenceClaimView', () => {
     expect(wrapper.get('[data-testid="licence-claim-error"]').text()).toContain(strings.error_unknown)
     expect(wrapper.find('form').exists()).toBe(true)
   })
+
+  // ── defensive branches: absent / unparseable responses ─────────────────
+
+  it('treats a response with no body as an actionable failure', async () => {
+    post.mockResolvedValue({ data: undefined, error: undefined })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+
+    expect(wrapper.get('[data-testid="licence-claim-error"]').text()).toContain(strings.error_unknown)
+    expect(wrapper.find('form').exists()).toBe(true)
+  })
+
+  it('treats a non-problem error payload as an actionable failure', async () => {
+    post.mockResolvedValue({ error: { message: 'boom' } })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+
+    expect(wrapper.get('[data-testid="licence-claim-error"]').text()).toContain(strings.error_unknown)
+    expect(wrapper.find('[data-testid="licence-claim-error-detail"]').exists()).toBe(false)
+  })
+
+  it('omits the days-kept line when the response carries no previous expiry', async () => {
+    post.mockResolvedValue({
+      data: stackedResponse({ previous_expires_at: null }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+
+    expect(wrapper.find('[data-testid="licence-claim-days-kept"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="licence-claim-previous-expiry"]').exists()).toBe(false)
+  })
+
+  it('omits the days-kept line when the previous expiry cannot be parsed', async () => {
+    post.mockResolvedValue({
+      data: stackedResponse({ previous_expires_at: 'not-a-date' }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+
+    expect(wrapper.find('[data-testid="licence-claim-days-kept"]').exists()).toBe(false)
+  })
+
+  it('says a fresh term starts when the previous licence had no days left', async () => {
+    const past = new Date(Date.now() - 5 * 86_400_000).toISOString() // nosemgrep: new-date-without-guard
+    post.mockResolvedValue({
+      data: stackedResponse({ previous_expires_at: past }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+
+    expect(wrapper.get('[data-testid="licence-claim-days-kept"]').text()).toContain(
+      strings.days_kept_zero,
+    )
+  })
+
+  it('falls back to the raw expiry string when it cannot be formatted', async () => {
+    post.mockResolvedValue({
+      data: stackedResponse({ expires_at: 'not-a-date' }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+
+    expect(wrapper.get('[data-testid="licence-claim-expiry"]').text()).toBe('not-a-date')
+  })
+
+  it('clears the whole claim when the customer claims another licence', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    post.mockResolvedValue({ data: stackedResponse(), error: undefined })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+    await wrapper.get('[data-testid="licence-claim-copy"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="licence-claim-again"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('form').exists()).toBe(true)
+    expect(
+      (wrapper.get('[data-testid="licence-claim-purchase-key"]').element as HTMLTextAreaElement).value,
+    ).toBe('')
+    expect(
+      (wrapper.get('[data-testid="licence-claim-previous-key"]').element as HTMLTextAreaElement).value,
+    ).toBe('')
+    expect(wrapper.find('[data-testid="licence-claim-copy"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // ── clipboard: success, failure and the copied-state timer ─────────────
+
+  it('shows the copied label on the unstacked panel after a successful copy', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    post.mockResolvedValue({ data: unstackedResponse(), error: undefined })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper)
+    await wrapper.get('[data-testid="licence-claim-copy"]').trigger('click')
+    await flushPromises()
+
+    expect(writeText).toHaveBeenCalledWith(PURCHASE_KEY)
+    expect(wrapper.get('[data-testid="licence-claim-copy"]').text()).toBe(strings.copied)
+  })
+
+  it('shows the copy-failure notice on the stacked panel when the clipboard rejects', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    post.mockResolvedValue({ data: stackedResponse(), error: undefined })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+    await wrapper.get('[data-testid="licence-claim-copy"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="licence-claim-copy-error"]').text()).toBe(strings.copy_failed)
+    expect(wrapper.get('[data-testid="licence-claim-copy"]').text()).toBe(strings.copy_key)
+  })
+
+  it('shows the copy-failure notice on the unstacked panel when the clipboard rejects', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    post.mockResolvedValue({ data: unstackedResponse(), error: undefined })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper)
+    await wrapper.get('[data-testid="licence-claim-copy"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="licence-claim-copy-error"]').text()).toBe(strings.copy_failed)
+  })
+
+  it('does not touch the clipboard when the response carries no key', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    post.mockResolvedValue({ data: stackedResponse({ license_key: '' }), error: undefined })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+    await wrapper.get('[data-testid="licence-claim-copy"]').trigger('click')
+    await flushPromises()
+
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('restores the copy label when the copied-state timer elapses', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    post.mockResolvedValue({ data: stackedResponse(), error: undefined })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+    await wrapper.get('[data-testid="licence-claim-copy"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="licence-claim-copy"]').text()).toBe(strings.copied)
+
+    // A second copy replaces the pending timer instead of stacking a new one.
+    await wrapper.get('[data-testid="licence-claim-copy"]').trigger('click')
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 2_100))
+    await nextTick()
+
+    expect(wrapper.get('[data-testid="licence-claim-copy"]').text()).toBe(strings.copy_key)
+  })
+
+  it('clears a pending copy timer on unmount', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout')
+    post.mockResolvedValue({ data: stackedResponse(), error: undefined })
+    const wrapper = mountView()
+
+    await fillAndSubmit(wrapper, PURCHASE_KEY, PREVIOUS_KEY)
+    await wrapper.get('[data-testid="licence-claim-copy"]').trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+
+    expect(clearSpy).toHaveBeenCalled()
+    clearSpy.mockRestore()
+  })
+
+  it('unmounts cleanly when nothing was copied', () => {
+    const wrapper = mountView()
+
+    wrapper.unmount()
+  })
 })
