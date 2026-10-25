@@ -6,7 +6,7 @@ How we cut, validate and promote a release of Modulo - and how to rehearse the w
 
 ## The single entry point
 
-Every release action runs through `.github/workflows/release-unified.yml` ("Release: Unified Pipeline"). This is the only executable release entry point. It is `workflow_dispatch` only - it never runs on a push - and takes a version plus a mode input:
+Every release action runs through `.github/workflows/release-unified.yml` ("Release: Unified Pipeline"). This is the only executable release entry point. The legacy `.github/workflows/release.yml` is a read-only, fail-closed wrapper that exists only to direct old callers here; it performs no release action. It is `workflow_dispatch` only - it never runs on a push - and takes a version plus a mode input:
 
 | Input | Meaning |
 |-------|---------|
