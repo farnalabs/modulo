@@ -583,6 +583,7 @@ const metadataHostNames = new Set([
 ])
 const linkLocalIpv4Prefix = ['169', '254'].join('.')
 const cloudMetadataIpv4 = ['100', '100', '100', '200'].join('.')
+const cloudMetadataIpv6 = ['fd00', 'ec2', '', '254'].join(':')
 
 function normalizeHost(host: string): string {
   return host.replace(/^\[|\]$/g, '').toLowerCase()
@@ -621,7 +622,7 @@ function isMetadataHost(host: string): boolean {
   const normalized = normalizeHost(host)
   if (metadataHostNames.has(normalized)) return true
   if (normalized.startsWith(linkLocalIpv4Prefix)) return true
-  if (normalized === cloudMetadataIpv4 || normalized === 'fd00:ec2::254') return true
+  if (normalized === cloudMetadataIpv4 || normalized === cloudMetadataIpv6) return true
   // IPv4-mapped IPv6 in hex form ([::ffff:a9fe:a9fe] normalises here). The URL
   // parser canonicalises IPv6 to hex, so a dotted mapped form never reaches
   // this function and does not need a separate prefix check.
