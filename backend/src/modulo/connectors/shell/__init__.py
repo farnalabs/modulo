@@ -36,6 +36,84 @@ _log = logging.getLogger(__name__)
 # Raised/reported when no runtime provider is bound to the connector (S1192).
 _ERR_RUNTIME_NOT_CONFIGURED = "Runtime provider not configured"
 
+# Shell control operators. The allowlist only matches the first argv token while
+# the raw string is executed through ``sh -c``, so an unquoted operator would let
+# an allowed command smuggle in a second one (``ls -la; id``). A quoted operator
+# is a literal character and is therefore allowed.
+_UNQUOTED_SHELL_OPERATORS = frozenset(";&|<>()`\n\r")
+
+
+def _is_shell_substitution(command: str, index: int) -> bool:
+    """Return True when a substitution the shell evaluates starts at *index*."""
+    return command.startswith("`", index) or command.startswith("$(", index)
+
+
+def _scan_single_quoted(command: str, start: int) -> int:
+    """Return the index just past the closing single quote (or past the end)."""
+    index = start + 1
+    while index < len(command) and command[index] != "'":
+        index += 1
+    return index + 1
+
+
+def _scan_double_quoted(command: str, start: int) -> tuple[int, bool]:
+    """Scan a double-quoted span; return (next index, substitution found).
+
+    Command substitution stays active inside double quotes, so ``$(`` and a
+    backtick are rejected there; a backslash escapes the character after it.
+    """
+    index = start + 1
+    while index < len(command):
+        char = command[index]
+        if char == "\\":
+            index += 2
+        elif char == '"':
+            return index + 1, False
+        elif _is_shell_substitution(command, index):
+            return index, True
+        else:
+            index += 1
+    return len(command), False
+
+
+def _scan_unquoted(command: str, start: int) -> tuple[int, bool]:
+    """Scan unquoted text; return (index of the next quote/operator, metacharacter found)."""
+    index = start
+    while index < len(command):
+        char = command[index]
+        if char in "'\"":
+            return index, False
+        if char == "\\":
+            index += 2
+        elif char in _UNQUOTED_SHELL_OPERATORS:
+            return index, True
+        else:
+            index += 1
+    return index, False
+
+
+def _contains_unquoted_shell_syntax(command: str) -> bool:
+    """Return True when *command* would be parsed by ``sh`` as more than one command.
+
+    Quote-aware: control operators are rejected only outside quotes, because a
+    quoted ``;`` is a literal argument (``python -c "import sys; sys.exit(42)"``).
+    Command substitution is still rejected inside double quotes, where the shell
+    evaluates it, but is literal in single quotes.
+    """
+    index = 0
+    while index < len(command):
+        if command[index] == "'":
+            index = _scan_single_quoted(command, index)
+        elif command[index] == '"':
+            index, found = _scan_double_quoted(command, index)
+            if found:
+                return True
+        else:
+            index, found = _scan_unquoted(command, index)
+            if found:
+                return True
+    return False
+
 
 class ShellRuntimeProvider(Protocol):
     """Legacy workspace operations consumed by ShellConnector."""
@@ -67,7 +145,9 @@ class ShellConnector(ConnectorBase):
     corresponding runtime provider to be registered, e.g. via its
     documented environment variable). ``workspace_lease_id`` is no longer
     consumed (the WorkspaceLease scaffolding was removed, FAR-587).
-    Command allowlist is enforced via ``allowed_commands``.
+    The command allowlist is read from the connector's ``config_json``
+    (``allowed_commands``) and matched against the first argv token; a command
+    containing an unquoted shell metacharacter is rejected.
 
     Supported query resources:
       "file"      — read a file via ``cat``; filters: {path, provider_ref}
@@ -162,11 +242,15 @@ class ShellConnector(ConnectorBase):
             _log.exception("Failed to resolve environment profile from hub")
             return None
 
-    def _check_command_allowed(self, command: list[str]) -> None:
+    def _check_command_allowed(self, command_str: str, command: list[str]) -> None:
         if not self._allowed_commands:
             raise ConnectorPermissionError(
                 "No commands are allowed (deny-all). "
-                "Operator must configure permitted commands in the environment profile.",
+                "Operator must configure permitted commands in the connector configuration.",
+            )
+        if _contains_unquoted_shell_syntax(command_str):
+            raise ConnectorPermissionError(
+                f"Command {command_str!r} contains unquoted shell metacharacters, which are not allowed.",
             )
         base = command[0] if command else ""
         if base not in self._allowed_commands:
@@ -253,7 +337,7 @@ class ShellConnector(ConnectorBase):
             case "command":
                 command_str: str = payload.data["command"]
                 command_parts = shlex.split(command_str)
-                self._check_command_allowed(command_parts)
+                self._check_command_allowed(command_str, command_parts)
 
                 env: dict[str, str] | None = payload.data.get("env")
                 timeout: int = payload.data.get("timeout_seconds", 60)
