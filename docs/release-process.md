@@ -6,11 +6,11 @@ How we cut, validate and promote a release of Modulo - and how to rehearse the w
 
 ## The single entry point
 
-Every release action runs through one workflow, `.github/workflows/release.yml` ("Release: Cut / Recut / Promote"). It is `workflow_dispatch` only - it never runs on a push - and takes two inputs:
+Every release action runs through the unified workflow, `.github/workflows/release-unified.yml` ("Release: Unified Pipeline"). The legacy `.github/workflows/release.yml` remains a compatibility entry point with the same cut/recut RC semantics. Both are `workflow_dispatch` only - they never run on a push - and take a version plus a mode/action input:
 
 | Input | Meaning |
 |-------|---------|
-| `action` | One of `cut`, `recut`, `release`, `dry-run` |
+| `mode` / `action` | Unified workflow uses `cut`, `recut`, `promote`, `dry-run`; legacy workflow uses `cut`, `recut`, `release`, `dry-run` |
 | `version` | The plain numeric version being released, e.g. `0.4.0` |
 
 The workflow defaults to workflow-level `permissions: contents: read`, with write scopes granted only on the job that needs them: the `release` job carries `contents: write` (push tags and the CHANGELOG commit, create the GitHub Release) and `actions: write` (`gh workflow run rc-validate.yml`). The `dry-run` and build jobs are read-only. A `release-process` concurrency group with `cancel-in-progress: false` ensures two release actions can never interleave.
@@ -26,14 +26,16 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 
 ### The freeze
 
-`cut` and `recut` push a tag named `release-freeze`. The merge queue checks for that tag and does not merge while it is present, so `main` is held still against the RC under validation. The freeze stops merges, not deploys: the release workflow still force-dispatches `Deploy: Staging + Prod` with `force_deploy=true`, and the deploy workflow's normal staging, E2E and production gates remain in force. `release` deletes the tag, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
+`cut` and `recut` push a tag named `release-freeze`. The merge queue checks for that tag and does not merge while it is present, so `main` is held still against the RC under validation. A cut chooses the first free `vX.Y.Z-rcN`; a recut always chooses the next free RC number and tags the current `main` commit, so it cannot accidentally republish an older RC after a fix has landed. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` with `force_deploy=true`, and the deploy workflow's normal staging, E2E and production gates remain in force. `release` / `promote` deletes the tag, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
 
 ### Recut runbook
+
+The unified workflow is the canonical entry point. Its `recut` mode publishes from the new RC tag created at current `main`; it never checks out or reuses the previous RC tag.
 
 Use `recut` after a fix has been merged to `main` while the release freeze is active:
 
 1. Confirm the fix is on `main` and the previous RC remains identifiable.
-2. Dispatch `recut` for the same `X.Y.Z` version. The workflow creates the next free `vX.Y.Z-rcN` tag and force-moves `release-freeze` to that RC commit.
+2. Dispatch `recut` for the same `X.Y.Z` version. The workflow selects the next free `vX.Y.Z-rcN`, tags the current `main` commit with it, and force-moves `release-freeze` to that new RC commit.
 3. The workflow then dispatches `Deploy: Staging + Prod` with `force_deploy=true`, so the freeze cannot throttle the soak deployment. It dispatches `rc-validate.yml` for the new RC only after the deploy dispatch is accepted.
 4. `rc-validate.yml` waits for `/api/v1/deployment` to report the new RC commit, runs the read-only Schemathesis checks, and pushes `validated/vX.Y.Z-rcN` at the RC commit only on success.
 5. Promote only after the validation marker exists and points at the latest RC commit. If validation fails, fix the issue on `main` and repeat this recut sequence; do not move the marker by hand.

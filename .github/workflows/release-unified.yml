@@ -7,7 +7,7 @@ name: "Release: Unified Pipeline"
 #              tag vX.Y.Z-rcN, publish 4 images to GHCR, build/sign/attest bundle,
 #              push bundle-v* tag, create GitHub Release, push Helm chart to OCI,
 #              dispatch Deploy + rc-validate
-#   recut    - Re-publish from existing RC tag (no version bump)
+#   recut    - Tag current main as the next RC and re-publish (no version bump)
 #   promote  - Promote RC to GA (retag, update release, lift freeze)
 #   dry-run  - Build + verify everything, emit artefacts as CI artefacts, publish NOTHING
 #
@@ -279,9 +279,9 @@ jobs:
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
-      # RECUT: re-publish from existing RC tag (no version bump)
+      # RECUT: tag current main as the next RC (no version bump)
       # -----------------------------------------------------------------------
-      - name: Recut from existing RC
+      - name: Recut from current main
         id: recut
         if: inputs.mode == 'recut'
         env:
@@ -292,18 +292,30 @@ jobs:
           set -euo pipefail
           BASE="v${VERSION}"
 
-          # Find the latest RC tag for this version
-          LATEST_RC=$(git tag --list "${BASE}-rc*" --sort=-v:refname | head -n1)
-          if [ -z "$LATEST_RC" ]; then
-            echo "::error::No ${BASE}-rc* tags found - nothing to recut."
-            exit 1
-          fi
+          # A recut must represent the fix currently on main, never re-use the
+          # prior RC tag. Resolve the next free number from all local tags.
+          N=1
+          while git rev-parse -q --verify "refs/tags/${BASE}-rc${N}" >/dev/null 2>&1; do
+            N=$((N+1))
+          done
+          RC_TAG="${BASE}-rc${N}"
 
-          # Force-move the freeze tag to the latest RC
-          git tag -f -a release-freeze -m "Release freeze active (for $LATEST_RC)"
+          # Refresh from the live main ref so the new RC always captures the
+          # fix that was merged before this recut dispatch started.
+          git fetch origin main
+          git checkout --detach origin/main
+          RC_SHA="$(git rev-parse HEAD)"
+
+          echo "Tagging recut RC: $RC_TAG at $RC_SHA"
+          git tag -a "$RC_TAG" -m "Release candidate $RC_TAG"
+          git push origin "$RC_TAG"
+
+          # Move the freeze to the new RC commit so main remains frozen at the
+          # exact commit sent to deploy and rc-validate.
+          git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
           git push origin release-freeze --force
 
-          echo "rc_tag=$LATEST_RC" >> "$GITHUB_OUTPUT"
+          echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
       # PROMOTE: promote RC to GA + lift freeze
@@ -373,9 +385,7 @@ jobs:
           echo "rc_tag=$LATEST_RC" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
-      # RECUT: publish from the RC commit, not from main's current tip. A recut
-      # after main has moved must never tag main-HEAD artefacts with an older
-      # RC tag. (Cut already sits on the bumped commit the new tag points at.)
+      # RECUT: publish from the new RC tag, which was created at current main.
       # -----------------------------------------------------------------------
       - name: Check out the RC commit for publishing (recut only)
         if: inputs.mode == 'recut'
