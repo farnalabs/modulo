@@ -30,6 +30,8 @@ PASS=0
 FAIL=0
 NO_TRANSITION_LOG="No transition"
 SUBJECT_FIELD='"subject"'
+NO_TRANSITION_LABEL="no transition logged"
+NO_EMAIL_LABEL="no email rendered"
 
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
@@ -157,8 +159,8 @@ echo ""
 
 echo "Case 1: healthy -> healthy (no transition, no email)"
 OUT="$(run_notify true healthy "$WORK/healthy.json" 2>&1)"
-assert_contains "no transition logged" "${NO_TRANSITION_LOG}" "$OUT"
-assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+assert_contains "${NO_TRANSITION_LABEL}" "${NO_TRANSITION_LOG}" "$OUT"
+assert_not_contains "${NO_EMAIL_LABEL}" "${SUBJECT_FIELD}" "$OUT"
 echo ""
 
 echo "Case 2: healthy -> unhealthy (alert exactly once)"
