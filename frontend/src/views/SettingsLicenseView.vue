@@ -410,7 +410,7 @@ async function removeLicense() {
 async function removeSystemLicense() {
   removing.value = true
   try {
-    const { error: err } = await (api as any).DELETE('/api/v1/admin/license')
+    const { error: err } = await api.DELETE('/api/v1/admin/license')
     if (err) {
       verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}` }
     } else {
