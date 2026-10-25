@@ -444,6 +444,46 @@ describe('EvalEditorView — typed builder interaction coverage', () => {
     expect(wrapper.find('[data-testid="eval-editor-backing-kind"]').exists()).toBe(true)
   })
 
+  it('preserves authored deterministic JSON across mechanism and type round-trips (STATE-4)', async () => {
+    const wrapper = mountView()
+    await flush()
+    const vm = wrapper.vm as any
+
+    await chooseOption(wrapper, 'eval-editor-eval-type', 'deterministic')
+    expect(vm.form.eval_type).toBe('regex')
+
+    const authoredRegex = '{\n  "pattern": "authored",\n  "field": "output"\n}'
+    vm.form.config_json = authoredRegex
+    await nextTick()
+
+    // Re-selecting the current mechanism is a no-op, not a reset.
+    vm.onMechanismChange('deterministic')
+    expect(vm.form.config_json).toBe(authoredRegex)
+
+    // A mechanism round-trip restores the authored document, not the default.
+    await chooseOption(wrapper, 'eval-editor-eval-type', 'typed_questions')
+    vm.onMechanismChange('typed_questions')
+    await chooseOption(wrapper, 'eval-editor-eval-type', 'deterministic')
+    expect(vm.form.eval_type).toBe('regex')
+    expect(vm.form.config_json).toBe(authoredRegex)
+
+    // Per-type drafts survive switching to another type and back.
+    const authoredSchema = '{"schema":{"type":"string"}}'
+    await chooseOption(wrapper, 'eval-editor-deterministic-type', 'json_schema')
+    vm.form.config_json = authoredSchema
+    await nextTick()
+    // Re-selecting the current type is a no-op, not a reset.
+    vm.onDeterministicTypeChange('json_schema')
+    expect(vm.form.config_json).toBe(authoredSchema)
+
+    await chooseOption(wrapper, 'eval-editor-deterministic-type', 'regex')
+    expect(vm.form.eval_type).toBe('regex')
+    expect(vm.form.config_json).toBe(authoredRegex)
+    await chooseOption(wrapper, 'eval-editor-deterministic-type', 'json_schema')
+    expect(vm.form.eval_type).toBe('json_schema')
+    expect(vm.form.config_json).toBe(authoredSchema)
+  })
+
   it('drives the backing axis and labels both backings', async () => {
     modelBackends = [
       {
@@ -823,5 +863,26 @@ describe('EvalEditorView — typed builder interaction coverage', () => {
     await flush()
     await chooseOption(wrapper, 'eval-editor-eval-type', 'deterministic')
     expect((wrapper.vm as any).backingPreview).toBe('')
+  })
+
+  it('seeds the deterministic draft from the eval being edited without leaking it', async () => {
+    evalsList = [
+      evalItem({ id: 'eval-regex', eval_type: 'regex', config_json: { pattern: 'from-server' } }),
+      evalItem({ id: 'eval-typed', eval_type: 'model_judge', config_json: TYPED_CONFIG }),
+    ]
+    const wrapper = mountView()
+    await flush()
+    await selectPipeline(wrapper)
+    await flush()
+    await openEditor(wrapper, 'eval-regex')
+    const vm = wrapper.vm as any
+    expect(vm.form.config_json).toContain('from-server')
+
+    // Leaving the eval and opening another must reset the per-type drafts, so
+    // the previous eval's authored JSON can never reappear in a later edit.
+    await chooseOption(wrapper, 'eval-editor-eval-type', 'typed_questions')
+    await openEditor(wrapper, 'eval-typed')
+    await chooseOption(wrapper, 'eval-editor-eval-type', 'deterministic')
+    expect(vm.form.config_json).not.toContain('from-server')
   })
 })

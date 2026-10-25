@@ -1055,6 +1055,11 @@ const form = reactive({
 // config; `form.config_json` is only the deterministic JSON editor's buffer.
 const typedDraft = ref<TypedJudgeDraft>(createDefaultDraft())
 const deterministicType = ref<DeterministicType>('regex')
+// Authored deterministic JSON is kept per type so switching mechanism or type
+// is a pause, not a silent discard (STATE-4).
+const deterministicDrafts = ref<Record<DeterministicType, string>>({
+  ...DETERMINISTIC_DEFAULTS,
+})
 // A legacy model_judge config is read-only until the author explicitly
 // migrates it (ADR 066 D8) — a metadata edit must never silently rewrite it.
 const legacyMode = ref(false)
@@ -1223,22 +1228,35 @@ const canSave = computed(() => {
 const maxChoiceOptions = MAX_CHOICE_OPTIONS
 const maxScoreLevels = MAX_SCORE_LEVELS
 
+function rememberDeterministicDraft(): void {
+  deterministicDrafts.value[deterministicType.value] = form.config_json
+}
+
+function restoreDeterministicDraft(type: DeterministicType): string {
+  return deterministicDrafts.value[type]
+}
+
 function onMechanismChange(value: unknown): void {
   const mechanism = String(value)
-  if (mechanism === 'typed_questions') {
+  const typed = mechanism === 'typed_questions'
+  if (typed === isTyped.value) return
+  if (typed) {
+    rememberDeterministicDraft()
     form.eval_type = 'model_judge'
     return
   }
   form.eval_type = deterministicType.value
-  form.config_json = DETERMINISTIC_DEFAULTS[deterministicType.value]
+  form.config_json = restoreDeterministicDraft(deterministicType.value)
 }
 
 function onDeterministicTypeChange(value: unknown): void {
   const next = String(value) as DeterministicType
   if (!DETERMINISTIC_TYPES.includes(next)) return
+  if (next === deterministicType.value) return
+  rememberDeterministicDraft()
   deterministicType.value = next
   form.eval_type = next
-  form.config_json = DETERMINISTIC_DEFAULTS[next]
+  form.config_json = restoreDeterministicDraft(next)
 }
 
 function setQuestionType(question: QuestionDraft, value: unknown): void {
@@ -1325,6 +1343,7 @@ function resetForm() {
   form.pass_threshold = 0.8
   typedDraft.value = createDefaultDraft()
   deterministicType.value = 'regex'
+  deterministicDrafts.value = { ...DETERMINISTIC_DEFAULTS }
   legacyMode.value = false
   legacyConfigJson.value = null
   serverConfigError.value = null
@@ -1672,6 +1691,7 @@ async function startEdit(ev: EvalDefinition) {
   serverConfigError.value = null
   legacyMode.value = false
   legacyConfigJson.value = null
+  deterministicDrafts.value = { ...DETERMINISTIC_DEFAULTS }
 
   if (ev.eval_type === 'model_judge') {
     const draft = draftFromConfig(ev.config_json)
@@ -1692,6 +1712,10 @@ async function startEdit(ev: EvalDefinition) {
       ? (ev.eval_type as DeterministicType)
       : 'regex'
     form.config_json = JSON.stringify(ev.config_json, null, 2)
+    deterministicDrafts.value = {
+      ...DETERMINISTIC_DEFAULTS,
+      [deterministicType.value]: form.config_json,
+    }
     typedDraft.value = createDefaultDraft()
   }
   // Fetch gate state for this eval (§3.2 — switching evals re-populates)
