@@ -1111,13 +1111,15 @@ async def test_sweep_far1808_reclaims_node_started_leak_frees_slot(
     dead executor alive. Before the fix this row was kept live (row_fresh),
     so the leak assertion fails without the change.
 
-    ``dispatcher='saq'`` is the FAR-1808 production shape: the leaked row was
-    created by an e2b sandbox dispatch, and ``dispatch_run`` stamps the SAQ
-    dispatcher identity. The sweep's recoverability check must therefore not
-    treat it as recoverable. A DISPATCHERLESS node-started row
-    (``dispatcher IS NULL``) is a different class — FAR-2122 resumes it from
-    its checkpoint — so seeding no dispatcher would test that class instead
-    (its marker is correctly kept for the reconciler)."""
+    ``dispatcher='saq'`` is REQUIRED: FAR-1808/FAR-1803 own the SAQ-dispatched
+    node-started class, and it is the FAR-1808 production shape — the leaked
+    row was created by an e2b sandbox dispatch, and ``dispatch_run`` stamps the
+    SAQ dispatcher identity, so the sweep's recoverability check must not treat
+    it as recoverable. A dispatcherless (``dispatcher IS NULL``) node-started
+    row is a DIFFERENT class — FAR-2122's checkpoint-resume recovery leg, which
+    resumes it from its checkpoint — and the marker sweep must keep it (rule b).
+    Seeding the default NULL here made the row recoverable through that leg and
+    shadowed the reclaim."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1222,7 +1224,10 @@ async def test_sweep_far1808_protects_live_node_started_run(
     ``updated_at`` is deliberately backdated (STALE): a dead-looking
     ``updated_at`` must NOT reclaim the run. Before the fix this row was
     reclaimed (row_fresh False from the stale ``updated_at``), so the
-    ``status == running`` assertion fails without the change."""
+    ``status == running`` assertion fails without the change.
+
+    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched class — see
+    the leak test's note on the FAR-2122 dispatcherless class."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1238,6 +1243,7 @@ async def test_sweep_far1808_protects_live_node_started_run(
         snap,
         status="running",
         marker=marker,
+        dispatcher="saq",
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC),
         updated_at=datetime.now(UTC) - timedelta(hours=9),
@@ -1256,7 +1262,10 @@ async def test_sweep_far1808_keeps_in_window_node_started_marker(
 ) -> None:
     """In-window case: a marker only 1h old (< the 2h bound) with a STALE
     ``heartbeat_at`` is kept live — the node may still legitimately be
-    running."""
+    running.
+
+    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched class — see
+    the leak test's note on the FAR-2122 dispatcherless class."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1272,6 +1281,7 @@ async def test_sweep_far1808_keeps_in_window_node_started_marker(
         snap,
         status="running",
         marker=marker,
+        dispatcher="saq",
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
     )
@@ -1291,10 +1301,9 @@ async def test_sweep_far1808_watchdog_write_noops_after_reclaim(
     ``status='running'``-guarded terminal write on the same row no-ops (0 rows)
     — the dead executor can never resurrect or overwrite the terminal state.
 
-    Seeds ``dispatcher='saq'`` for the same FAR-1808 reason as
-    :func:`test_sweep_far1808_reclaims_node_started_leak_frees_slot`: the
-    dispatcherless node-started class belongs to FAR-2122's checkpoint-resume
-    recovery, so its marker is NOT swept."""
+    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched production
+    shape — see the leak test's note on the FAR-2122 dispatcherless class,
+    whose marker is NOT swept."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
