@@ -498,9 +498,19 @@ jobs:
           RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
         shell: bash
         run: |
+          set -euo pipefail
+
+          # The release freeze pauses merges only. It must not prevent the
+          # forced deploy that puts this RC into the production soak.
+          echo "Dispatching Deploy: Staging + Prod for ${RC_TAG} (force_deploy=true)."
           gh workflow run "Deploy: Staging + Prod" --ref main -f force_deploy=true
+
+          # Dispatch validation only after GitHub has accepted the deploy
+          # dispatch. rc-validate waits for /api/v1/deployment to report the RC
+          # commit, then owns the validated/${RC_TAG} marker on success.
+          echo "Dispatching rc-validate.yml for ${RC_TAG}."
           gh workflow run rc-validate.yml --ref main -f rc_tag="${RC_TAG}"
-          echo "Dispatched Deploy (force) and rc-validate for ${RC_TAG}"
+          echo "Dispatched Deploy (force) and rc-validate for ${RC_TAG}."
 
       # -----------------------------------------------------------------------
       # Update CHANGELOG.md and GitHub Release (promote only)

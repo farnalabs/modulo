@@ -103,6 +103,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         shell: bash
         run: |
+          set -euo pipefail
           BASE="v${VERSION}"
 
           # Next free RC number for this version.
@@ -122,9 +123,13 @@ jobs:
           git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
           git push origin release-freeze --force
 
-          # Kick off validation against the deployed RC (app.modulo.run).
+          # Kick off the forced deploy before validation. The freeze pauses
+          # merges only; it must not prevent the deploy that puts this RC into
+          # the production soak. rc-validate waits for the deployed RC and
+          # pushes validated/<rc_tag> only after the read-only validation succeeds.
+          gh workflow run "Deploy: Staging + Prod" --ref main -f force_deploy=true
           gh workflow run rc-validate.yml --ref main -f rc_tag="$RC_TAG"
-          echo "Triggered rc-validate.yml for $RC_TAG."
+          echo "Triggered forced Deploy: Staging + Prod and rc-validate.yml for $RC_TAG."
 
       - name: Promote to GA and lift the freeze
         if: inputs.action == 'release'
@@ -613,20 +618,10 @@ jobs:
           echo "from scripts/bundle-versions.env, push bundle-v*, create the GitHub Release with its"
           echo "assets, and push the Helm chart to OCI. Owned by FAR-1869."
 
-  # FAR-1870 (release slice 6) - the deterministic RC soak.
-  dispatch-rc-soak:
-    name: "STUB FAR-1870 - dispatch the RC soak"
-    if: inputs.action == 'never'
-    runs-on: ubicloud-standard-2
-    environment: release
-    permissions:
-      contents: read
-    steps:
-      - name: Not implemented yet
-        run: |
-          echo "STUB (FAR-1870, release slice 6): dispatch 'Deploy: Staging + Prod' with"
-          echo "force_deploy=true and then rc-validate.yml, so an RC is actually soaked and the"
-          echo "validated/<rc> marker a real release requires can be produced. Owned by FAR-1870."
+  # FAR-1870 (release slice 6) is implemented by the unified release workflow
+  # above. Keep this legacy workflow's release path as a compatibility entry
+  # point; its cut/recut step dispatches the same forced deploy and validation
+  # sequence directly.
 
   # FAR-1871 (release slice 7) - the PyPI package.
   publish-pypi:

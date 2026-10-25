@@ -26,7 +26,17 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 
 ### The freeze
 
-`cut` and `recut` push a tag named `release-freeze`. The merge queue checks for that tag and does not merge while it is present, so `main` is held still against the RC under validation. `release` deletes the tag, which lets the merge queue resume on its next tick.
+`cut` and `recut` push a tag named `release-freeze`. The merge queue checks for that tag and does not merge while it is present, so `main` is held still against the RC under validation. The freeze stops merges, not deploys: the release workflow still force-dispatches `Deploy: Staging + Prod` with `force_deploy=true`, and the deploy workflow's normal staging, E2E and production gates remain in force. `release` deletes the tag, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
+
+### Recut runbook
+
+Use `recut` after a fix has been merged to `main` while the release freeze is active:
+
+1. Confirm the fix is on `main` and the previous RC remains identifiable.
+2. Dispatch `recut` for the same `X.Y.Z` version. The workflow creates the next free `vX.Y.Z-rcN` tag and force-moves `release-freeze` to that RC commit.
+3. The workflow then dispatches `Deploy: Staging + Prod` with `force_deploy=true`, so the freeze cannot throttle the soak deployment. It dispatches `rc-validate.yml` for the new RC only after the deploy dispatch is accepted.
+4. `rc-validate.yml` waits for `/api/v1/deployment` to report the new RC commit, runs the read-only Schemathesis checks, and pushes `validated/vX.Y.Z-rcN` at the RC commit only on success.
+5. Promote only after the validation marker exists and points at the latest RC commit. If validation fails, fix the issue on `main` and repeat this recut sequence; do not move the marker by hand.
 
 ## What `release` requires (the four promote invariants)
 
@@ -114,7 +124,7 @@ gh workflow run "Release: Cut / Recut / Promote" -f action=dry-run -f version=0.
 # Cut an RC and freeze.
 gh workflow run "Release: Cut / Recut / Promote" -f action=cut -f version=0.4.0
 
-# After a fix has been merged to main, cut the next RC.
+# After a fix has been merged to main, cut the next RC and re-run the soak.
 gh workflow run "Release: Cut / Recut / Promote" -f action=recut -f version=0.4.0
 
 # Once the RC has validated, promote to GA.
