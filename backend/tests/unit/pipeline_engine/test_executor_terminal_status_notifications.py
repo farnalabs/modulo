@@ -18,6 +18,7 @@ that dispatch was called:
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any
@@ -321,3 +322,59 @@ async def test_payload_omits_pipeline_name_when_the_lookup_fails() -> None:
     assert payload == {"run_id": str(run_id), "error_code": "budget_exceeded"}
     title, _, _ = _render("budget_exceeded", payload)
     assert title == "Budget exceeded — [unknown]"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_when_the_committed_status_is_not_a_string() -> None:
+    """A row whose status is missing/None carries no known terminal event."""
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = _executor_with_notifier(notifier)
+    final_run = _run_row(status="stalled", error_code="executor_stalled")
+    final_run.status = None
+
+    await executor._dispatch_terminal_status_notification(
+        org_id=_ORG_ID,
+        run_id=uuid.uuid4(),
+        pipeline_id=uuid.uuid4(),
+        final_run=final_run,
+    )
+
+    notifier.dispatch_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_payload_omits_error_code_when_the_run_has_none() -> None:
+    """``error_code`` is optional in the payload — a status-only event still renders."""
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock()
+    executor = _executor_with_notifier(notifier)
+    run_id = uuid.uuid4()
+
+    await executor._dispatch_terminal_status_notification(
+        org_id=_ORG_ID,
+        run_id=run_id,
+        pipeline_id=uuid.uuid4(),
+        final_run=_run_row(status="stalled", error_code=None),
+    )
+
+    payload = notifier.dispatch_event.await_args.kwargs["payload"]
+    assert payload == {"run_id": str(run_id), "pipeline_name": "My Pipeline"}
+    title, _, _ = _render("run_stalled", payload)
+    assert title == "Run stalled — My Pipeline"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_propagates_cancellation() -> None:
+    """Cancellation is never swallowed — it must unwind the executor's task."""
+    notifier = MagicMock()
+    notifier.dispatch_event = AsyncMock(side_effect=asyncio.CancelledError())
+    executor = _executor_with_notifier(notifier)
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor._dispatch_terminal_status_notification(
+            org_id=_ORG_ID,
+            run_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            final_run=_run_row(status="stalled", error_code="executor_stalled"),
+        )
