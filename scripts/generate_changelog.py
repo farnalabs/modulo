@@ -350,22 +350,22 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     prs = collect_prs(args.from_ref, args.to_ref, args.pr_limit)
     groups, other_count = classify_prs(prs)
     section = render_release_section(args.version, groups, other_count, args.summary, datetime.now(UTC).date())
     sys.stdout.write(section)
     if args.body_only or args.output is None:
-        return 0
+        return
     existing = ""
     if args.output.exists():
         existing = args.output.read_text(encoding="utf-8")
     updated = upsert_section(existing, section, args.version)
     with args.output.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(updated)
-    return 0
+
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

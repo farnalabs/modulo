@@ -108,7 +108,11 @@ def verify_stripe_signature(
         return False
     signed_payload = f"{timestamp}.".encode() + payload
     expected = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. ``signature`` is
+    # attacker-controlled and arrives latin-1-decoded from the header, so a high
+    # byte must fail closed with False instead of escaping as an uncaught 500.
+    return hmac.compare_digest(expected.encode("utf-8"), signature.encode("utf-8"))
 
 
 def _event_object(event: dict[str, Any]) -> dict[str, Any]:

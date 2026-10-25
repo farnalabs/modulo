@@ -1112,10 +1112,14 @@ async def test_sweep_far1808_reclaims_node_started_leak_frees_slot(
     so the leak assertion fails without the change.
 
     ``dispatcher='saq'`` is REQUIRED: FAR-1808/FAR-1803 own the SAQ-dispatched
-    node-started class. A dispatcherless (NULL) node-started row is a
-    DIFFERENT class — FAR-2122's checkpoint-resume recovery leg — which the
-    marker sweep must keep (rule b). Seeding the default NULL here made the
-    row recoverable through that leg and shadowed the reclaim."""
+    node-started class, and it is the FAR-1808 production shape — the leaked
+    row was created by an e2b sandbox dispatch, and ``dispatch_run`` stamps the
+    SAQ dispatcher identity, so the sweep's recoverability check must not treat
+    it as recoverable. A dispatcherless (``dispatcher IS NULL``) node-started
+    row is a DIFFERENT class — FAR-2122's checkpoint-resume recovery leg, which
+    resumes it from its checkpoint — and the marker sweep must keep it (rule b).
+    Seeding the default NULL here made the row recoverable through that leg and
+    shadowed the reclaim."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1165,6 +1169,47 @@ async def test_sweep_far1808_reclaims_node_started_leak_frees_slot(
         provider="e2b",
     )
     assert slot.status == "acquired"
+
+
+async def test_sweep_far2122_keeps_dispatcherless_node_started_marker(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DISPATCHERLESS node-started class is NOT the FAR-1808 leak.
+
+    FAR-2122 resumes a ``running`` + ``first_node_dispatched`` row with no SAQ
+    dispatcher identity from its checkpoint (never re-executing the started
+    node), so the sweep's recoverability check must keep its marker: parity by
+    construction — a row the reconciler would recover can never have its
+    dispatch marker swept. Only the ``dispatcher='saq'`` shape (the e2b
+    sandbox dispatch FAR-1808 reclaimed) is terminalised by the 2h bound.
+    """
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=True)
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far2122Dispatchless", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar2122Dispatchless", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+    marker = _node_started_marker(10)
+
+    run_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="running",
+        marker=marker,
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+        heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
+    )
+
+    result = await _sweep(db_engine)
+    assert result["transitioned"] == 0, "FAR-2122's resume class must not be terminalised"
+
+    row = await _run_row(db_engine, org_id, run_id)
+    assert row["status"] == "running"
+    assert row["marker"] == marker, "the recoverable row's marker must survive the sweep"
 
 
 async def test_sweep_far1808_protects_live_node_started_run(
@@ -1256,8 +1301,9 @@ async def test_sweep_far1808_watchdog_write_noops_after_reclaim(
     ``status='running'``-guarded terminal write on the same row no-ops (0 rows)
     — the dead executor can never resurrect or overwrite the terminal state.
 
-    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched class — see
-    the leak test's note on the FAR-2122 dispatcherless class."""
+    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched production
+    shape — see the leak test's note on the FAR-2122 dispatcherless class,
+    whose marker is NOT swept."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 

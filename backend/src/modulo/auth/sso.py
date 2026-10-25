@@ -121,7 +121,11 @@ def verify_state(signed: str, secret_key: str) -> str | None:
         return None
     state, sig = parts
     expected = hmac.new(secret_key.encode(), state.encode(), "sha256").hexdigest()[:16]
-    if not hmac.compare_digest(expected, sig):
+    # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. ``sig`` is attacker-derived (the
+    # OIDC ``state`` query param / SAML ``RelayState``), so a non-ASCII value must
+    # fail closed with None instead of escaping as an uncaught 500.
+    if not hmac.compare_digest(expected.encode("utf-8"), sig.encode("utf-8")):
         return None
     return state
 
@@ -179,7 +183,7 @@ def verify_saml_relay_state(
     try:
         padded = state + "=" * (-len(state) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded))
-    except (ValueError, TypeError, json.JSONDecodeError):
+    except (ValueError, TypeError):
         return None
     if not isinstance(payload, dict):
         return None
@@ -446,7 +450,9 @@ def _sso_jit_mode_allows_auto(provider: SsoProvider, email: str, email_verified:
     return email_verified, mode
 
 
-async def _deny_join(provider: SsoProvider, org_id: uuid.UUID) -> None:
+async def _deny_join(  # NOSONAR S7503 - awaited helper preserves the SSO denial seam
+    provider: SsoProvider, org_id: uuid.UUID
+) -> None:
     """Structured, PII-free denial log + fail-closed user-facing raise."""
     _log.info(
         "sso.jit_join_denied",

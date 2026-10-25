@@ -714,7 +714,7 @@ async function copyCallbackUrl() {
     document.body.appendChild(textarea)
     textarea.select()
     document.execCommand('copy')
-    document.body.removeChild(textarea)
+    textarea.remove()
     copySuccess.value = true
     scheduleCopyReset()
   }

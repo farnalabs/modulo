@@ -328,7 +328,12 @@ def verify_hmac(raw_body: bytes, secret: str, signature_header: str | None, time
         return False
     payload = f"{timestamp}.".encode() + raw_body if timestamp is not None else raw_body
     expected = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature_header)
+    # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. ``signature_header`` is
+    # attacker-controlled and Starlette decodes header bytes as latin-1, so a
+    # single high byte would otherwise escape as an uncaught 500 instead of a
+    # clean rejection. Bytes comparison is behaviour-identical for ASCII input.
+    return hmac.compare_digest(expected.encode("utf-8"), signature_header.encode("utf-8"))
 
 
 # Backward-compatible private aliases — legacy callers and tests import the

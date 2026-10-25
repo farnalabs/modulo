@@ -17,7 +17,7 @@ import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -176,7 +176,11 @@ def _build_client(session: AsyncMock, role: str = "admin") -> TestClient:
 def api() -> Generator[tuple[TestClient, AsyncMock], None, None]:
     session = _make_session()
     client = _build_client(session, role="admin")
-    yield client, session
+    # Webhook payloads use non-resolving example hosts; stub the DNS-backed
+    # SSRF floor so these tests exercise their own concern. The floor's
+    # internal-address rejection is covered in test_admin_notifications_webhooks.
+    with patch("modulo.api.routes.admin_notifications.validate_outbound_url"):
+        yield client, session
     app.dependency_overrides.clear()
 
 
@@ -362,6 +366,12 @@ def test_update_webhook_invalid_event_422(api: tuple[TestClient, AsyncMock]) -> 
     client, _ = api
     resp = client.put(f"/api/v1/admin/notifications/{_WEBHOOK_ID}", json={"events": ["bogus"]})
     assert resp.status_code == 422
+
+
+def test_webhook_update_optional_fields_accept_null() -> None:
+    model = admin_notifications.WebhookUpdate(url=None, events=None)
+    assert model.url is None
+    assert model.events is None
 
 
 def test_update_webhook_not_found_404(api: tuple[TestClient, AsyncMock]) -> None:

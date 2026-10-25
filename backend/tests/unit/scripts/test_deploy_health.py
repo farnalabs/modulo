@@ -392,3 +392,120 @@ def test_cli_email_renders_json(tmp_path: Path, capsys: Any) -> None:
     rendered = json.loads(capsys.readouterr().out)
     assert "UNHEALTHY" in rendered["subject"]
     assert _RUN_URL in rendered["body"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-2139: a second caller (the deploy watchdog) reuses this renderer
+# ---------------------------------------------------------------------------
+
+
+def test_watchdog_condition_reaches_the_subject_and_body() -> None:
+    """A caller-measured condition the shared pair cannot express is rendered.
+
+    The deploy watchdog escalates for two reasons: it exhausted its 3-failure
+    self-heal cap (expressed by the shared consecutive-failure condition), or
+    its own re-dispatch failed (expressible by NEITHER shared condition). The
+    second case travels in ``summary``/``notes`` so the watchdog keeps the
+    SAME subject/body shape instead of inventing a second email format.
+    """
+    verdict = health.Verdict(
+        **{
+            **_verdict().as_dict(),
+            "healthy": False,
+            "notes": ["the deploy watchdog could not re-dispatch deploy.yml while production served 7b1c064"],
+            "summary": "watchdog could not re-dispatch deploy.yml",
+        }
+    )
+    subject, body = health.build_email(
+        verdict=verdict,
+        action="alert",
+        run_url=_RUN_URL,
+        deploy_url=_DEPLOY_URL,
+    )
+    assert "UNHEALTHY" in subject
+    assert "watchdog could not re-dispatch deploy.yml" in subject
+    assert "could not re-dispatch deploy.yml while production served 7b1c064" in body
+    # An unhealthy verdict must never fall through to the healthy sentence.
+    assert "all measured deploy-health conditions are healthy" not in body
+
+
+def test_unhealthy_with_no_shared_condition_never_claims_health() -> None:
+    """A false verdict with no condition and no summary must not read healthy."""
+    verdict = health.Verdict(
+        **{
+            **_verdict().as_dict(),
+            "healthy": False,
+            "summary": "",
+            "notes": [],
+        }
+    )
+    assert "all measured deploy-health conditions are healthy" not in verdict.reason
+    assert verdict.reason
+
+
+def test_watchdog_recovery_replaces_the_unmeasured_production_claim() -> None:
+    """A watchdog recovery can happen while a deploy is still in flight.
+
+    The staleness check's recovery text ("production is current at X") is a fact
+    that check measured; the watchdog has not measured it at that point, so the
+    caller supplies the measured evidence for the subject and the action line
+    instead of inheriting an unverified claim.
+    """
+    verdict = health.Verdict(
+        **{
+            **_verdict().as_dict(),
+            "healthy": True,
+            "summary": "the deploy watchdog is not escalating (deploy in flight)",
+            "notes": ["a deploy run is in progress, so this tick did not compare production"],
+            "recovery_detail": "A deploy run is in progress; no action is needed.",
+        }
+    )
+    subject, body = health.build_email(
+        verdict=verdict,
+        action="recovery",
+        run_url=_RUN_URL,
+        deploy_url=_DEPLOY_URL,
+    )
+    assert "RECOVERED" in subject
+    assert "not escalating (deploy in flight)" in subject
+    assert "production is current at" not in subject
+    assert "A deploy run is in progress; no action is needed." in body
+    assert "a deploy run is in progress, so this tick did not compare production" in body
+
+
+def test_cli_email_round_trips_a_watchdog_verdict(tmp_path: Path, capsys: Any) -> None:
+    """The workflow path: verdict JSON -> CLI -> rendered email (notes included).
+
+    ``_cmd_email`` rebuilds the dataclass from the JSON a workflow writes, so a
+    JSON list for ``notes`` must render exactly like the in-process tuple.
+    """
+    verdict = health.Verdict(
+        **{
+            **_verdict().as_dict(),
+            "healthy": False,
+            "notes": ["the watchdog could not re-dispatch deploy.yml"],
+            "summary": "watchdog could not re-dispatch deploy.yml",
+        }
+    )
+    verdict_path = tmp_path / "verdict.json"
+    verdict_path.write_text(json.dumps(verdict.as_dict()), encoding="utf-8")
+
+    assert (
+        health.main(
+            [
+                "email",
+                "--verdict-json",
+                str(verdict_path),
+                "--action",
+                "alert",
+                "--run-url",
+                _RUN_URL,
+                "--deploy-url",
+                _DEPLOY_URL,
+            ]
+        )
+        == 0
+    )
+    rendered = json.loads(capsys.readouterr().out)
+    assert "watchdog could not re-dispatch deploy.yml" in rendered["subject"]
+    assert "could not re-dispatch deploy.yml" in rendered["body"]

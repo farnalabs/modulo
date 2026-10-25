@@ -127,7 +127,11 @@ async def _require_csrf_double_submit(  # NOSONAR S7503 - FastAPI dependency sea
         return
     cookie = request.cookies.get(CsrfMiddleware.CSRF_COOKIE)
     header = request.headers.get(CsrfMiddleware.CSRF_HEADER)
-    if not cookie or not header or not secrets.compare_digest(cookie, header):
+    # Compare as UTF-8 bytes: ``secrets.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. Both operands are attacker-controlled
+    # (a forged Cookie / X-CSRF-Token header), so a non-ASCII pair must fail closed
+    # with a 403 instead of escaping as an uncaught 500.
+    if not cookie or not header or not secrets.compare_digest(cookie.encode("utf-8"), header.encode("utf-8")):
         _log.warning("auth.csrf_double_submit_rejected path=%s", request.url.path)
         raise HTTPException(status_code=403, detail=MSG_CSRF_FAILED)
 

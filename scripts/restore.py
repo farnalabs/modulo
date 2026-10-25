@@ -74,7 +74,7 @@ def _validate_executable(value: str, name: str) -> str:
     return resolved
 
 
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$", re.ASCII)
 
 
 def _validate_identifier(value: str, name: str) -> str:

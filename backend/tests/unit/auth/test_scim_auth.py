@@ -82,6 +82,21 @@ class TestGetScimPrincipal:
         assert exc.value.status_code == 401
         assert "Invalid SCIM token" in exc.value.detail
 
+    async def test_non_ascii_token_returns_401_without_raising(self) -> None:
+        """A non-ASCII bearer token must produce a clean 401, not a 500.
+
+        Starlette decodes the Authorization header as latin-1, so a single high
+        byte reaches the comparator as a non-ASCII str — and
+        ``hmac.compare_digest`` raises TypeError on those instead of returning
+        False.
+        """
+        settings = _settings()
+        session = _make_session()
+        with pytest.raises(HTTPException) as exc:
+            await get_scim_principal(_credentials("valid-scim-token-é"), settings, session)
+        assert exc.value.status_code == 401
+        assert "Invalid SCIM token" in exc.value.detail
+
     async def test_invalid_uuid_in_default_org_id_returns_500(self) -> None:
         settings = _settings(default_org_id="not-a-uuid")
         session = _make_session()
