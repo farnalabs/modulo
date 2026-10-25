@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate a label-driven changelog section from merged pull requests.
 
-Used by the release workflow (``.github/workflows/release.yml``, the
-``release`` action) to build the ``CHANGELOG.md`` section and the GitHub
+Used by Release: Unified Pipeline (``.github/workflows/release-unified.yml``,
+the ``promote`` action) to build the ``CHANGELOG.md`` section and the GitHub
 Release notes for a GA tag. Classification is driven entirely by
 ``changelog:*`` labels:
 
@@ -364,7 +364,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     updated = upsert_section(existing, section, args.version)
     with args.output.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(updated)
-
 
 
 if __name__ == "__main__":

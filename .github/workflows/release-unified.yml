@@ -215,10 +215,25 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
-      # Version bump (cut only). Runs BEFORE the RC tag is created so the
-      # tagged commit is the bumped one. Committed and pushed to main by the
-      # workflow, matching the header contract.
+      # Version bump (cut only). The publication hold is established first so
+      # publish-images cannot publish stable latest during the main push below.
+      # The later release-freeze tag remains the authoritative release boundary.
       # -----------------------------------------------------------------------
+      - name: Establish release publication hold (cut only)
+        if: inputs.mode == 'cut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
+            echo "::error::release-publication-hold already exists; refusing to start a second cut over an unresolved hold."
+            exit 1
+          fi
+          git tag -a release-publication-hold -m "Suppress stable publication while cut establishes release-freeze"
+          git push origin release-publication-hold
+          echo "Established release-publication-hold before the version-bump push."
+
       - name: Bump version in SoT files and commit to main (cut only)
         if: inputs.mode == 'cut'
         # Mapped through the step env block (S7630): GitHub expressions inside a
@@ -268,14 +283,21 @@ jobs:
           git tag -a "$RC_TAG" -m "Release candidate $RC_TAG"
           git push origin "$RC_TAG"
 
-          # The freeze signal: merge-queue.yml's freeze-gate pauses while this
-          # tag exists. Force-move it on recut so the gate always tracks the
-          # latest freeze.
-          git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
-          git push origin release-freeze --force
+           # The freeze signal: merge-queue.yml's freeze-gate pauses while this
+           # tag exists. Force-move it on recut so the gate always tracks the
+           # latest freeze.
+           git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
+           git push origin release-freeze --force
 
-          # rc-validate.yml is dispatched once, by the consolidated
-          # "Dispatch Deploy and rc-validate" step after the artefacts publish.
+           # The hold only covers the version-bump push. Once the authoritative
+           # release-freeze exists, remove the temporary suppression marker.
+           if ! git push origin --delete release-publication-hold; then
+             echo "::error::Could not remove release-publication-hold after establishing release-freeze; refusing to continue with a stale suppression marker."
+             exit 1
+           fi
+
+           # rc-validate.yml is dispatched once, by the consolidated
+           # "Dispatch Deploy and rc-validate" step after the artefacts publish.
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------

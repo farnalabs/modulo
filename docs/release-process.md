@@ -19,14 +19,14 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 
 | Mode | What it does | Publishes? |
 |------|--------------|------------|
-| `cut` | Tags `vX.Y.Z-rcN` at the current `main` HEAD, pushes the `release-freeze` tag (which suspends the merge queue), and dispatches `rc-validate.yml` | Yes - RC tag + freeze |
-| `recut` | After a fix has been manually merged to `main`: tags the *next* RC and re-freezes | Yes - RC tag + freeze |
-| `promote` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, lifts the freeze, then updates `CHANGELOG.md` and creates the GitHub Release | Yes - GA tag + Release |
-| `dry-run` | Builds everything and resolves what a `cut` would have done, then stops | **No - nothing at all** |
+| `cut` | Establishes a temporary publication hold, bumps the version on `main`, tags `vX.Y.Z-rcN`, establishes the authoritative `release-freeze`, publishes four RC-qualified container images (including `runner-opencode`), builds/signs the release bundle, pushes the bundle tag, creates the GitHub Release, and dispatches forced deploy plus `rc-validate.yml` | Yes - RC tag, freeze, four RC images, signed bundle/artifacts, GitHub Release, bundle tag, forced deploy + validation |
+| `recut` | After a fix has been manually merged to `main`: tags the *next* RC, re-freezes, republishes the four RC-qualified images and signed release artefacts, and dispatches the forced soak and validation again | Yes - next RC tag, freeze, four RC images, signed bundle/artifacts, GitHub Release, bundle tag, forced deploy + validation |
+| `promote` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, retags all four images as `VERSION_NUM` and `latest`, pushes the stable Helm chart, updates `CHANGELOG.md`, creates or updates the GitHub Release, and lifts the freeze | Yes - stable `VERSION_NUM`/`latest` images and Helm chart only here, plus GA tag and Release |
+| `dry-run` | Builds everything and resolves what a `cut` would have done, then stops | **No - no publication, tags, commits, registry pushes, Release, attestation, or deploy** |
 
 ### The freeze
 
-`cut` and `recut` push a tag named `release-freeze`. The merge queue checks for that tag and does not merge while it is present, so `main` is held still against the RC under validation. A cut chooses the first free `vX.Y.Z-rcN`; a recut always chooses the next free RC number and tags the current `main` commit, so it cannot accidentally republish an older RC after a fix has landed. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` with `force_deploy=true`, and the deploy workflow's normal staging, E2E and production gates remain in force. `promote` deletes the tag, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
+`cut` first pushes a temporary `release-publication-hold` marker before its version-bump push; `publish-images.yml` observes that marker and refuses stable `latest` while allowing the immutable SHA publication to proceed. It then pushes the authoritative `release-freeze` tag, which the merge queue checks and does not merge while it is present, and removes the temporary hold. A cut chooses the first free `vX.Y.Z-rcN`; a recut always chooses the next free RC number and tags the current `main` commit, so it cannot accidentally republish an older RC after a fix has landed. The freeze stops merges, not deploys: the release workflow force-dispatches `Deploy: Staging + Prod` with `force_deploy=true`, and the deploy workflow's normal staging, E2E and production gates remain in force. `promote` deletes the authoritative freeze tag, which lets the merge queue resume on its next tick. Do not add release-freeze awareness to `deploy.yml`.
 
 ### Recut runbook
 
@@ -71,19 +71,20 @@ It does **not** publish anything. It does not create a tag of any kind - not the
 
 ### Why the "no tag at all" guarantee is structural, not a convention
 
-A tag push is not a private act: `.github/workflows/publish-images.yml` triggers on `push: tags: ["v*"]`. Pushing *any* version-shaped tag - including an RC - immediately publishes container images to GHCR. So the dry-run path takes no tag action whatsoever rather than "a harmless local tag".
+A tag push is not a private act: a separate tag-triggered publication path could publish images if one were configured. The current `publish-images.yml` trigger is limited to `main` pushes and manual dispatch, while Release: Unified Pipeline publishes release images explicitly. So the dry-run path takes no tag action whatsoever rather than "a harmless local tag".
 
 The rule that keeps this true as the workflow grows: **any job added to `release-unified.yml` that publishes something must be explicitly gated so it cannot run under `dry-run`.** Publish-shaped work is expected to carry `if: inputs.mode != 'dry-run'` (matching the existing publish jobs). This is documented in the workflow header so the next author cannot miss it.
 
 ## Container images and platform scope
 
-The `dry-run` build job builds the three images the deployments consume:
+The `dry-run` build job builds the four images the release and deployments consume:
 
 | Image | Context | Dockerfile |
 |-------|---------|------------|
 | all-in-one | `.` | `deploy/docker/Dockerfile.all-in-one` |
 | backend | `backend` | `backend/Dockerfile` |
 | frontend | `frontend` | `frontend/Dockerfile.prod` |
+| runner-opencode | `.` | `deploy/docker/runner-opencode.Dockerfile` |
 
 Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-images.yml` declares no `platforms:` (so it builds amd64), and `docs/system-requirements.md` lists `linux-amd64 (x86_64)` as supported while `linux-arm64` is Planned (P2) - as are macOS (P2) and Windows (P3). `bundle-release.yml` carries the same deferral ("linux-amd64 only for now; the matrix structure below is where linux-arm64 slots in; `scripts/bundle-versions.env` already carries the arm64 pins"). The Windows/macOS installer scope-out is tracked separately (FAR-1873).
 
@@ -91,11 +92,11 @@ Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-i
 
 ### How images are actually published
 
-`publish-images.yml` triggers on a `push` of a version tag (`v*`) - but a release's own tag push does NOT run it, so image publishing is owned by the unified workflow directly rather than by the tag trigger:
+The unified workflow owns release publication directly. `cut` and `recut` publish four RC-qualified images (`all-in-one`, `backend`, `frontend`, and `runner-opencode`) alongside the signed bundle and release artefacts. `promote` is the only path that publishes stable `VERSION_NUM` and `latest` image tags and the stable Helm chart.
 
-- **The unified workflow's `release` job tag push does not trigger the workflow.** The job pushes its `vX.Y.Z-rc*` and `vX.Y.Z` tags with the default `github.token` (`GH_TOKEN: ${{ github.token }}`). GitHub deliberately suppresses workflow runs for events caused by that token, so the tag push triggers no workflow at all - which is also why the same job reaches `rc-validate.yml` by running `gh workflow run` rather than relying on the tag. A release therefore does not publish container images through the tag trigger; the unified workflow's publish job (FAR-1869) is the piece that will own publishing them directly.
-- **The dry-run's "no tag at all" rule stays correct.** It is conservative for the right reason: a HUMAN pushing a version-shaped tag - or any push made with a credential other than `github.token` - WOULD trigger `publish-images.yml` and publish images. The rationale above is unchanged; what is added here is that a WORKFLOW-initiated push behaves differently from a human one.
-- **The CHANGELOG commit's push to `main` triggers no CI either.** The same `github.token` pushes it, so `main`'s HEAD after a release is not CI-validated. That is observed behaviour, recorded here rather than changed.
+`publish-images.yml` remains the ordinary `main` publication path. It always publishes the immutable short-SHA image; it publishes `latest` only when neither the authoritative `release-freeze` nor the cut-only `release-publication-hold` marker exists. A failed or unknown marker lookup fails closed. The temporary hold closes the race between the cut's version-bump push and creation of `release-freeze`; the freeze remains the authoritative release boundary after that point.
+
+The dry-run's no-publication guarantee stays structural: it performs no tag action, registry push, Release creation, commit, attestation, or deploy. A human or another credential pushing a tag is a separate event and is outside the dry-run path.
 
 ## Not implemented yet
 
