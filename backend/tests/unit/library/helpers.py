@@ -12,28 +12,38 @@ from typing import Any, cast
 
 from modulo.core.library.agents import definitions as _agent_defs
 from modulo.core.library.complexity_reviewer import COMPLEXITY_REVIEWER
+from modulo.core.library.integrations import definitions as _integration_defs
 from modulo.core.library.workflows import definitions as _workflow_defs
 from modulo.core.seed_data.library_schemas import SCHEMAS
 
 
-def _kebab(name: str) -> str:
+def kebab(name: str) -> str:
     """Kebab-case slug used by workflow step agent references."""
     return name.lower().replace(" ", "-")
 
 
+def module_dicts(module: Any) -> dict[str, dict[str, Any]]:
+    """Every upper-case dict constant defined by *module*, keyed by constant name."""
+    return {
+        name: getattr(module, name)
+        for name in dir(module)
+        if name.isupper() and isinstance(getattr(module, name), dict)
+    }
+
+
 KNOWN_AGENTS: set[str] = {
-    _kebab(entry["name"])
+    kebab(entry["name"])
     for entry in vars(_agent_defs).values()
     if isinstance(entry, dict) and entry.get("node_type") == "agent"
-} | {_kebab(COMPLEXITY_REVIEWER["name"])}
+} | {kebab(COMPLEXITY_REVIEWER["name"])}
 
 # Every workflow primitive exported by the definitions module, keyed by its
 # canonical constant name so parametrized tests can identify failures.
-WORKFLOWS: dict[str, dict[str, Any]] = {
-    name: getattr(_workflow_defs, name)
-    for name in dir(_workflow_defs)
-    if name.isupper() and isinstance(getattr(_workflow_defs, name), dict)
-}
+WORKFLOWS: dict[str, dict[str, Any]] = module_dicts(_workflow_defs)
+
+INTEGRATIONS: dict[str, dict[str, Any]] = module_dicts(_integration_defs)
+
+AGENTS: dict[str, dict[str, Any]] = module_dicts(_agent_defs)
 
 REQUIRED_WORKFLOW_KEYS = {"name", "description", "version", "author", "tags", "pipeline_steps", "default_config"}
 
@@ -60,6 +70,32 @@ VALID_CONNECTOR_BINDING_TYPES: set[str] = {
     "automation",
     "integration",
 }
+
+
+def step_by_id(workflow: dict[str, Any], step_id: str) -> dict[str, Any]:
+    """Return the pipeline step named *step_id* from *workflow*."""
+    for step in workflow["pipeline_steps"]:
+        if step["id"] == step_id:
+            return cast(dict[str, Any], step)
+    msg = f"Step '{step_id}' not found"
+    raise AssertionError(msg)
+
+
+def assert_step_matches(
+    workflow: dict[str, Any],
+    step_id: str,
+    *,
+    agent: str | None,
+    depends_on: list[str] | None,
+    connector_binding: dict[str, Any] | None,
+) -> None:
+    """Pin a step's agent reference, dependency edge and connector binding."""
+    step = step_by_id(workflow, step_id)
+    assert step.get("agent") == agent, f"{step_id}: unexpected agent {step.get('agent')!r}"
+    assert step.get("depends_on") == depends_on, f"{step_id}: unexpected depends_on {step.get('depends_on')!r}"
+    assert step.get("connector_binding") == connector_binding, (
+        f"{step_id}: unexpected connector_binding {step.get('connector_binding')!r}"
+    )
 
 
 def _string_value(prop_schema: dict[str, Any]) -> str:

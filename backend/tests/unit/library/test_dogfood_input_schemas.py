@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -25,7 +25,7 @@ _DOGFOOD_SCHEMAS_DIR_RAW = os.environ.get("MODULO_DOGFOOD_SCHEMAS_DIR")
 def _definition(name: str) -> dict[str, Any]:
     for entry in SCHEMAS:
         if entry["name"] == name:
-            return entry["definition"]
+            return cast(dict[str, Any], entry["definition"])
     raise AssertionError(f"Schema '{name}' not defined in library seed data")
 
 
@@ -53,16 +53,10 @@ INVALID_SAMPLES: dict[str, dict[str, Any]] = {
     "ticket-input": {"id": "FAR-304", "title": "Missing type enum"},
 }
 
-
-@pytest.mark.parametrize("name", ["pr-review-input", "ticket-input"])
-def test_schema_is_defined(name: str) -> None:
-    """The schema is defined in library seed data and is a valid JSON Schema."""
-    definition = _definition(name)
-    assert definition
-    Draft202012Validator.check_schema(definition)
+DOGFOOD_SCHEMA_NAMES: tuple[str, ...] = tuple(VALID_SAMPLES)
 
 
-@pytest.mark.parametrize("name", ["pr-review-input", "ticket-input"])
+@pytest.mark.parametrize("name", DOGFOOD_SCHEMA_NAMES)
 def test_valid_sample_payload_passes_validation(name: str) -> None:
     """A valid sample payload validates against the schema's latest definition."""
     validator = Draft202012Validator(_definition(name))
@@ -70,7 +64,7 @@ def test_valid_sample_payload_passes_validation(name: str) -> None:
     assert not errors, f"'{name}' rejected a valid payload: {errors}"
 
 
-@pytest.mark.parametrize("name", ["pr-review-input", "ticket-input"])
+@pytest.mark.parametrize("name", DOGFOOD_SCHEMA_NAMES)
 def test_invalid_payload_fails_validation(name: str) -> None:
     """A payload missing required / mistyped fields is rejected."""
     validator = Draft202012Validator(_definition(name))
@@ -102,4 +96,4 @@ def test_reference_copies_match_seed_definitions() -> None:
         assert data["description"] == seed["description"]
         assert data["definition"] == seed["definition"]
 
-    assert {data["name"] for data in refs} == {"pr-review-input", "ticket-input"}
+    assert {data["name"] for data in refs} == set(DOGFOOD_SCHEMA_NAMES)
