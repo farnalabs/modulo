@@ -165,6 +165,13 @@ jobs:
                 if gh run cancel "$RUN_ID" --repo "$REPO" 2>/dev/null; then
                   echo "  Cancelled run #$RUN_ID."
                   CANCELLED_COUNT=$((CANCELLED_COUNT + 1))
+                  # FAR-2115: record it so the classifier step below can tell a
+                  # stuck-runner cancel (a REAL stall: the queue was blocked and
+                  # never got a runner) from GitHub's benign pending-run dedupe.
+                  # Both show `conclusion: cancelled` and 0 executed queue steps,
+                  # so this file is the only discriminator. RUNNER_TEMP is
+                  # per-job, so it cannot leak into another job's classification.
+                  echo "$RUN_ID" >> "${RUNNER_TEMP:-/tmp}/watchdog-cancelled-runs.txt"
                 else
                   echo "  Cancel of #$RUN_ID failed (ignoring — next tick retries)."
                 fi
@@ -435,31 +442,37 @@ jobs:
       # concurrency: { group: merge-queue, cancel-in-progress: false }, and
       # GitHub keeps only ONE *pending* run per group, so every new event
       # cancels the previous pending run. That is normal operation, not a
-      # failure — yet a displaced run's `conclusion` is `cancelled`, identical
+      # failure — and a displaced run's `conclusion` is `cancelled`, identical
       # to a genuinely interrupted pass. This has twice sent an agent down a
       # wrong investigation (and cost real time diagnosing a non-defect).
       #
-      # The discriminating fact lives on the JOB, never the run conclusion:
-      #   - queue job `steps: []` (0 executed steps) => never got a runner =>
-      #     benign pending dedupe, zero runner cost;
-      #   - executed steps (a healthy pass shows ~42) => a real mid-flight
-      #     cancellation, worth attention.
-      # `started_at` is NOT usable for this: it is stamped at job creation, so
-      # it is populated even for a job that never ran (the exact trap that
-      # made the 2026-09-17 incident ambiguous).
+      # A cancelled run falls into one of THREE real classes, and TWO of them
+      # have 0 executed queue steps — so neither the run conclusion nor the
+      # step count alone can separate them:
+      #   1. pending dedupe  - displaced while pending. Benign: no runner cost,
+      #      nothing lost. (Pending dedupe is what "benign" means here, NOT
+      #      "0 executed steps".)
+      #   2. stuck-runner    - cancelled BY the step above because the queue was
+      #      BLOCKED and never got a runner (the 2026-09-17 incident). This is
+      #      a REAL stall and the primary failure mode this watchdog exists to
+      #      catch, so it must never be reported as benign — doing so is a
+      #      false negative on exactly the case that matters.
+      #   3. mid-flight      - executed steps (a healthy pass shows ~42).
+      # The stuck-runner class is identified ONLY by the run-id file the step
+      # above appends to on a successful cancel (watchdog-cancelled-runs.txt in
+      # RUNNER_TEMP — per-job, so it cannot leak across jobs). That membership
+      # test takes PRIORITY over the step count; a 0-step run that is not in
+      # the file is reserved for pending dedupe.
+      # `started_at` is NOT usable as a discriminator: it is stamped at job
+      # creation, so it is populated even for a job that never ran (the exact
+      # trap that made the 2026-09-17 incident ambiguous).
       #
-      # Strictly READ-ONLY (no gh run cancel, no dispatch, no writes) and it
-      # can never fail the job. Bounded to a 20-min window: this ticks every
-      # 10 min, so each cancellation is classified once or twice rather than
-      # forever. `if: always()` because the queue is least healthy — and the
+      # Read-only (no gh run cancel, no dispatch, no writes) and it can never
+      # fail the job. Bounded to a 20-min window: this ticks every 10 min, so
+      # each cancellation is classified once or twice rather than forever.
+      # `if: always()` because the queue is least healthy — and the
       # classification most useful — when the step above has failed.
-      #
-      # Scope note: a stuck-runner run cancelled by the step above ALSO has 0
-      # executed queue steps (that sweep only cancels all-unstarted runs), so
-      # it lands in the same 0-step bucket. That is correct for the purpose —
-      # "never got a runner, no mid-flight work lost" — but the bucket means
-      # "no executed steps", not strictly "pending dedupe".
-      - name: Classify recent queue cancellations (pending dedupe vs mid-flight)
+      - name: Classify recent queue cancellations (pending dedupe vs stuck-runner vs mid-flight)
         if: always()
         shell: bash
         run: |
@@ -471,10 +484,29 @@ jobs:
           WINDOW_MIN=20
           CUTOFF=$((NOW - WINDOW_MIN * 60))
 
+          # Run ids the step above cancelled because the queue was BLOCKED (all
+          # jobs unstarted) — a real stall, not pending dedupe. Guarded: the
+          # file is absent whenever that sweep cancelled nothing this tick, and
+          # an unreadable file is warned about rather than silently downgrading
+          # a stuck-runner cancel to "benign" (that silent path would hide the
+          # very failure mode this bucket exists to catch).
+          WATCHDOG_FILE="${RUNNER_TEMP:-/tmp}/watchdog-cancelled-runs.txt"
+          WATCHDOG_CANCELLED=""
+          WATCHDOG_LOG_READABLE="true"
+          if [ -f "$WATCHDOG_FILE" ]; then
+            if ! WATCHDOG_CANCELLED="$(cat "$WATCHDOG_FILE" 2>/dev/null)"; then
+              WATCHDOG_CANCELLED=""
+              WATCHDOG_LOG_READABLE="false"
+              echo "::warning::merge-queue-watchdog: could not read ${WATCHDOG_FILE} - any stuck-runner cancel it recorded may be mis-reported as pending dedupe on this tick."
+            fi
+          fi
+
           BENIGN=0
+          STUCK=0
           MIDFLIGHT=0
           UNKNOWN=0
           BENIGN_IDS=""
+          STUCK_IDS=""
           MIDFLIGHT_IDS=""
           UNKNOWN_IDS=""
 
@@ -507,10 +539,18 @@ jobs:
               ''|*[!0-9-]*) STEPS="-1" ;;
             esac
 
-            if [ "$STEPS" -eq 0 ]; then
+            # Class priority is deliberate: membership of the watchdog-cancelled
+            # set wins, because a blocked-queue cancel is a real stall even
+            # though it also has 0 executed steps. A 0-step run the watchdog
+            # did NOT cancel is pending dedupe.
+            if printf '%s\n' "$WATCHDOG_CANCELLED" | grep -qxF "$RUN_ID"; then
+              STUCK=$((STUCK + 1))
+              STUCK_IDS="$STUCK_IDS $RUN_ID"
+              echo "::warning title=merge-queue stuck-runner cancellation::run $RUN_ID cancelled by the watchdog's own stuck-runner sweep (queue was blocked) - this is a real stall, investigate"
+            elif [ "$STEPS" -eq 0 ]; then
               BENIGN=$((BENIGN + 1))
               BENIGN_IDS="$BENIGN_IDS $RUN_ID"
-              echo "::notice title=merge-queue pending dedupe::run $RUN_ID cancelled while pending (0 steps executed - never started; benign, no runner cost)"
+              echo "::notice title=merge-queue pending dedupe::run $RUN_ID cancelled while pending (0 steps executed - never started; pending dedupe, not cancelled by the watchdog; benign, no runner cost)"
             elif [ "$STEPS" -gt 0 ]; then
               MIDFLIGHT=$((MIDFLIGHT + 1))
               MIDFLIGHT_IDS="$MIDFLIGHT_IDS $RUN_ID"
@@ -522,24 +562,40 @@ jobs:
             fi
           done
 
-          echo "Cancellation classification: ${BENIGN} benign pending-dedupe, ${MIDFLIGHT} mid-flight, ${UNKNOWN} unknown."
+          echo "Cancellation classification: ${BENIGN} benign pending-dedupe, ${STUCK} stuck-runner (watchdog-cancelled), ${MIDFLIGHT} mid-flight, ${UNKNOWN} unknown."
 
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             {
               echo "### Merge-queue cancellation classification (last ${WINDOW_MIN} min)"
               echo ""
-              if [ $((BENIGN + MIDFLIGHT + UNKNOWN)) -eq 0 ]; then
+              if [ "$WATCHDOG_LOG_READABLE" != "true" ]; then
+                echo "> **Warning:** this tick's watchdog cancel log could not be read, so a"
+                echo "> stuck-runner cancel may be miscounted as pending dedupe in the table below."
+                echo ""
+              fi
+              if [ $((BENIGN + STUCK + MIDFLIGHT + UNKNOWN)) -eq 0 ]; then
                 echo "No merge-queue cancellation in the window - nothing to classify."
               else
                 echo "| Bucket | Count | Runs |"
                 echo "| --- | --- | --- |"
-                echo "| Benign pending dedupe (0 steps executed) | ${BENIGN} |${BENIGN_IDS:- -} |"
-                echo "| Mid-flight cancellation (steps executed) | ${MIDFLIGHT} |${MIDFLIGHT_IDS:- -} |"
+                echo "| Benign pending dedupe (0 steps, not cancelled by the watchdog) | ${BENIGN} |${BENIGN_IDS:- -} |"
+                echo "| Stuck-runner sweep (cancelled by this watchdog: queue was blocked) | ${STUCK} |${STUCK_IDS:- -} |"
+                echo "| Mid-flight cancellation (executed steps) | ${MIDFLIGHT} |${MIDFLIGHT_IDS:- -} |"
                 echo "| Unknown (queue job not found) | ${UNKNOWN} |${UNKNOWN_IDS:- -} |"
                 echo ""
-                echo "Pending-run dedupe is GitHub's normal behaviour for a"
-                echo "\`concurrency: cancel-in-progress: false\` group holding one pending"
-                echo "run, not a queue defect (FAR-2115)."
+                if [ "$STUCK" -gt 0 ]; then
+                  echo "**Stuck-runner cancellations are a REAL stall**: the queue was blocked and"
+                  echo "never got a runner, which is the failure mode this watchdog exists to catch"
+                  echo "(FAR-2115). Pending dedupe is the benign class: displaced while pending, no"
+                  echo "runner cost. The two are told apart by this workflow's own cancel log, never"
+                  echo "by the step count (both can show 0 executed steps)."
+                elif [ "$WATCHDOG_LOG_READABLE" = "true" ]; then
+                  echo "Pending dedupe is GitHub's normal behaviour for a"
+                  echo "\`concurrency: cancel-in-progress: false\` group holding one pending run, not a"
+                  echo "queue defect. A stuck-runner cancel (a REAL stall) never appears in this"
+                  echo "bucket: it is keyed on this workflow's own cancel log, not on the step count"
+                  echo "(FAR-2115)."
+                fi
               fi
             } >> "$GITHUB_STEP_SUMMARY"
           fi
