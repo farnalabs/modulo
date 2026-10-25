@@ -12,6 +12,7 @@ import re
 import time
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -349,3 +350,137 @@ class TestWebhookDisabled:
             resp = _post(disabled_client, body, _sign(body))
         assert resp.status_code == 404
         mock_fulfil.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-2146 — the customer-chosen licence start
+# ---------------------------------------------------------------------------
+
+
+def _invoice_event_with_starts_at(
+    event_id: str,
+    starts_at: str,
+    *,
+    location: str = "metadata",
+) -> dict:
+    """An ``invoice.paid`` event carrying ``starts_at`` where Stripe would put it.
+
+    Stripe exposes metadata on different objects depending on how the purchase
+    was created, so the route must read all of the supported locations.
+    """
+    event = _invoice_event(event_id)
+    obj = event["data"]["object"]
+    if location == "metadata":
+        obj["metadata"] = {"starts_at": starts_at}
+    elif location == "subscription_details":
+        obj["subscription_details"] = {"metadata": {"starts_at": starts_at}}
+    elif location == "parent":
+        obj["parent"] = {"subscription_details": {"metadata": {"starts_at": starts_at}}}
+    else:  # pragma: no cover - guards a typo in a parametrisation
+        raise AssertionError(f"unknown metadata location {location!r}")
+    return event
+
+
+def _future_date(days_ahead: int) -> str:
+    return (datetime.now(UTC) + timedelta(days=days_ahead)).date().isoformat()
+
+
+class TestChosenStartsAt:
+    """The metadata date is validated at the boundary and reaches the minted key."""
+
+    @pytest.mark.parametrize("location", ["metadata", "subscription_details", "parent"])
+    def test_the_chosen_start_is_read_from_every_supported_metadata_location(
+        self, client: TestClient, location: str
+    ) -> None:
+        starts_at = _future_date(60)
+        body = json.dumps(_invoice_event_with_starts_at("evt_start", starts_at, location=location)).encode()
+
+        with patch(_FULFIL_MODULE, new=AsyncMock(return_value="key")) as mock_fulfil:
+            resp = _post(client, body, _sign(body))
+
+        assert resp.status_code == 200, resp.text
+        mock_fulfil.assert_awaited_once()
+        assert mock_fulfil.await_args.kwargs["starts_at"] == starts_at
+
+    def test_absent_metadata_dispatches_with_no_start(self, client: TestClient) -> None:
+        body = json.dumps(_invoice_event("evt_no_start")).encode()
+
+        with patch(_FULFIL_MODULE, new=AsyncMock(return_value="key")) as mock_fulfil:
+            resp = _post(client, body, _sign(body))
+
+        assert resp.status_code == 200, resp.text
+        assert mock_fulfil.await_args.kwargs["starts_at"] is None
+
+    def test_a_past_start_is_rejected_with_a_distinguishable_reason(self, client: TestClient) -> None:
+        past = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+        body = json.dumps(_invoice_event_with_starts_at("evt_past", past)).encode()
+
+        with patch(_FULFIL_MODULE, new=AsyncMock(return_value="key")) as mock_fulfil:
+            resp = _post(client, body, _sign(body))
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["code"] == "starts_at_in_past"
+        assert "already passed" in resp.json()["detail"]
+        mock_fulfil.assert_not_awaited()
+
+    def test_a_start_beyond_ninety_days_is_rejected_with_its_own_reason(self, client: TestClient) -> None:
+        body = json.dumps(_invoice_event_with_starts_at("evt_far", _future_date(120))).encode()
+
+        with patch(_FULFIL_MODULE, new=AsyncMock(return_value="key")) as mock_fulfil:
+            resp = _post(client, body, _sign(body))
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["code"] == "starts_at_too_far_ahead"
+        assert "90 days ahead" in resp.json()["detail"]
+        mock_fulfil.assert_not_awaited()
+
+    def test_a_malformed_start_is_rejected_as_malformed(self, client: TestClient) -> None:
+        body = json.dumps(_invoice_event_with_starts_at("evt_bad", "next spring")).encode()
+
+        with patch(_FULFIL_MODULE, new=AsyncMock(return_value="key")) as mock_fulfil:
+            resp = _post(client, body, _sign(body))
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["code"] == "starts_at_malformed"
+        mock_fulfil.assert_not_awaited()
+
+    def test_a_non_dict_parent_subscription_details_dispatches_with_no_start(self, client: TestClient) -> None:
+        """The newer Invoice shape is optional; an unexpected one must not crash the read."""
+        event = _invoice_event("evt_odd_parent")
+        event["data"]["object"]["parent"] = {"subscription_details": "not-a-dict"}
+        body = json.dumps(event).encode()
+
+        with patch(_FULFIL_MODULE, new=AsyncMock(return_value="key")) as mock_fulfil:
+            resp = _post(client, body, _sign(body))
+
+        assert resp.status_code == 200, resp.text
+        assert mock_fulfil.await_args.kwargs["starts_at"] is None
+
+    @pytest.mark.parametrize("raw", ["   ", 123])
+    def test_a_blank_or_non_string_starts_at_metadata_value_is_absent(self, client: TestClient, raw: object) -> None:
+        """Only a non-blank string states a start; anything else mints from now."""
+        event = _invoice_event("evt_odd_start")
+        event["data"]["object"]["metadata"] = {"starts_at": raw}
+        body = json.dumps(event).encode()
+
+        with patch(_FULFIL_MODULE, new=AsyncMock(return_value="key")) as mock_fulfil:
+            resp = _post(client, body, _sign(body))
+
+        assert resp.status_code == 200, resp.text
+        assert mock_fulfil.await_args.kwargs["starts_at"] is None
+
+    def test_real_fulfilment_mints_a_key_carrying_the_chosen_start(self, fulfilment_client: TestClient) -> None:
+        starts_at = _future_date(60)
+        body = json.dumps(_invoice_event_with_starts_at("evt_real_start", starts_at)).encode()
+
+        with patch(
+            "modulo.core.stripe_fulfilment.send_email",
+            new=MagicMock(return_value=True),
+        ) as mock_send:
+            resp = _post(fulfilment_client, body, _sign(body))
+
+        assert resp.status_code == 200, resp.text
+        data = parse_and_verify(_minted_key(mock_send)).license_data
+        assert data is not None
+        assert data.starts_at == f"{starts_at}T00:00:00+00:00"
+        assert datetime.fromisoformat(data.expires_at) > datetime.fromisoformat(data.starts_at)

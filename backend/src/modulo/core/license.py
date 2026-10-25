@@ -15,11 +15,22 @@ The payload is a JSON object with keys:
     term          — licence term in MONTHS (FAR-2075; absent on older keys)
     licence_id    — opaque stable identifier for this licence (FAR-2075)
     issued_at     — ISO 8601 mint timestamp (FAR-2075)
+    starts_at     — ISO 8601, timezone-aware instant this licence becomes
+                    active (FAR-2146; absent on older keys and on a key minted
+                    to start immediately)
 
-The last four claims are ADDITIVE. A key minted before FAR-2075 carries only
-the first four and still verifies unchanged: ``renewal_mode`` defaults to
-``"manual"`` (never ``"auto"`` — auto promises a replacement key is on its
-way), and ``term`` / ``licence_id`` / ``issued_at`` resolve to ``None``.
+The FAR-2075 and FAR-2146 claims are ADDITIVE. A key minted before FAR-2075
+carries only the first four and still verifies unchanged: ``renewal_mode``
+defaults to ``"manual"`` (never ``"auto"`` — auto promises a replacement key
+is on its way), and ``term`` / ``licence_id`` / ``issued_at`` resolve to
+``None``.
+
+``starts_at`` is likewise additive. When it is ABSENT the licence is valid from
+``issued_at`` — exactly the behaviour before FAR-2146 — so every existing key
+keeps verifying and keeps behaving identically. A key carrying a FUTURE
+``starts_at`` is valid but not yet active: it is parked (see
+:func:`store_license`) and becomes the active licence when its start arrives,
+without operator action.
 """
 
 from __future__ import annotations
@@ -126,6 +137,12 @@ DEV_ANCHOR_STARTUP_ERROR = (
 # In-memory store for the current validated license.
 _current_license: LicenseData | None = None
 
+#: A verified licence whose signed ``starts_at`` is still in the future
+#: (FAR-2146). It is VALID but not yet ACTIVE: it never displaces
+#: ``_current_license`` before its start, and :func:`get_license` promotes it
+#: when the start arrives.
+_parked_successor: LicenseData | None = None
+
 _log = logging.getLogger(__name__)
 
 
@@ -206,6 +223,10 @@ class LicenseData:
     licence_id: str | None = None
     #: ISO 8601 mint timestamp (informational). ``None`` for a pre-FAR-2075 key.
     issued_at: str | None = None
+    #: ISO 8601, timezone-aware instant this licence becomes ACTIVE (FAR-2146).
+    #: ``None`` when the key carries no claim — such a key is valid from
+    #: ``issued_at``, exactly as before FAR-2146 (never gated on activation).
+    starts_at: str | None = None
 
 
 def _parse_renewal_mode(payload: dict[str, Any]) -> str:
@@ -321,6 +342,45 @@ def _check_expired(expires_at: str) -> str | None:
     return failure[0] if failure is not None else None
 
 
+def _starts_at_failure(payload: dict[str, Any], expires_at: str) -> str | None:
+    """Return an error when the signed ``starts_at`` claim is unusable.
+
+    ABSENT is the documented OLD-KEY case (and the normal immediate-start
+    case) and is not an error — the licence is then valid from ``issued_at``,
+    exactly as before FAR-2146.
+
+    A PRESENT claim is part of the signed window, so it must be a
+    timezone-aware ISO 8601 instant no later than ``expires_at``. Anything else
+    is a signing-side defect (or a tampered-but-validly-signed payload) and is
+    rejected rather than silently ignored: ignoring it would activate a
+    licence before the window the customer chose, granting time that was not
+    paid for.
+    """
+    raw = payload.get("starts_at")
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw:
+        return f"Invalid starts_at claim: {raw!r}"
+    try:
+        start = datetime.fromisoformat(raw)
+    except ValueError:
+        return f"Invalid starts_at format: {raw}"
+    if start.tzinfo is None:
+        return f"starts_at must be timezone-aware: {raw}"
+    if not expires_at:
+        return None
+    try:
+        expiry = datetime.fromisoformat(expires_at)
+    except ValueError:
+        # Reported by ``_expiry_failure`` with its own message.
+        return None
+    if expiry.tzinfo is None:
+        expiry = expiry.astimezone()
+    if start > expiry:
+        return f"starts_at {raw} is after expires_at {expires_at}"
+    return None
+
+
 def parse_and_verify(key: str) -> LicenseValidation:
     try:
         payload_bytes, sig_bytes = _decode_license_key(key)
@@ -385,6 +445,10 @@ def parse_and_verify(key: str) -> LicenseValidation:
     expires_at = payload.get("expires_at", "")
     org_id = payload.get("org_id", "")
 
+    starts_at_error = _starts_at_failure(payload, expires_at)
+    if starts_at_error is not None:
+        return LicenseValidation(valid=False, error=starts_at_error, reason=REASON_MALFORMED)
+
     if expires_at:
         failure = _expiry_failure(expires_at)
         if failure is not None:
@@ -402,36 +466,132 @@ def parse_and_verify(key: str) -> LicenseValidation:
         term=_parse_term(payload),
         licence_id=_parse_optional_str(payload, "licence_id"),
         issued_at=_parse_optional_str(payload, "issued_at"),
+        starts_at=_parse_optional_str(payload, "starts_at"),
     )
 
     return LicenseValidation(valid=True, license_data=data)
 
 
+def _starts_at_instant(data: LicenseData) -> datetime | None:
+    """The licence's signed start as an aware instant, or ``None``.
+
+    ``None`` covers both "no claim" (an old key, or an immediate-start key) and
+    an unparseable claim. ``parse_and_verify`` rejects the latter, so in
+    practice only hand-built ``LicenseData`` reaches the second case; it is
+    logged and treated as "starts now", the pre-FAR-2146 behaviour, rather than
+    parking a licence forever on a value a real key can never carry.
+    """
+    if not data.starts_at:
+        return None
+    try:
+        start = datetime.fromisoformat(data.starts_at)
+    except ValueError:
+        _log.warning("license.unparseable_starts_at value=%r", data.starts_at)
+        return None
+    # A naive claim is rejected by ``parse_and_verify``; read it as LOCAL time
+    # (core's convention for a naive ``expires_at``) if one reaches here.
+    return start if start.tzinfo is not None else start.astimezone()
+
+
+def is_parked(data: LicenseData) -> bool:
+    """Whether ``data`` is VALID but not yet ACTIVE (its start is in the future).
+
+    The single definition of "parked", used by :func:`store_license` to decide
+    the slot and by the admin licence view to tell an operator that an install
+    took effect as a successor rather than as the active licence.
+    """
+    start = _starts_at_instant(data)
+    return start is not None and start > datetime.now(start.tzinfo)
+
+
 def store_license(_key: str, data: LicenseData) -> None:
-    global _current_license
+    """Install a verified licence: ACTIVE now, or PARKED until its start.
+
+    A key whose signed ``starts_at`` is in the future must not be rejected —
+    the customer has legitimately bought a licence that begins later — but it
+    must not displace the licence the instance is running on today either. It
+    is parked, and :func:`get_license` promotes it when the start arrives.
+
+    A key without ``starts_at`` (every key minted before FAR-2146, and every
+    key minted to start immediately) becomes the active licence exactly as
+    before.
+    """
+    global _current_license, _parked_successor
+    if is_parked(data):
+        _parked_successor = data
+        _log.info(
+            "license.parked_successor starts_at=%s expires_at=%s",
+            data.starts_at,
+            data.expires_at,
+        )
+        return
     _current_license = data
+
+
+def _promote_due_successor() -> None:
+    """Move a parked successor into the active slot once its start has arrived.
+
+    Runs on every :func:`get_license` (and :func:`get_parked_successor`) call,
+    so activation needs no operator action and no restart: the next plan
+    resolution after ``starts_at`` sees the successor as the active licence.
+
+    Deliberately unconditional once due — the successor REPLACES whatever is
+    active, because its window is the one the customer chose.
+    """
+    global _current_license, _parked_successor
+    parked = _parked_successor
+    if parked is None or is_parked(parked):
+        return
+    _current_license = parked
+    _parked_successor = None
+    _log.info(
+        "license.promoted_successor starts_at=%s expires_at=%s",
+        parked.starts_at,
+        parked.expires_at,
+    )
+
+
+def get_parked_successor() -> LicenseData | None:
+    """The verified licence waiting for its start, or ``None``.
+
+    Promotes a due successor first, so a caller can never be told about a
+    successor whose start has already arrived — it is the active licence then.
+    """
+    _promote_due_successor()
+    return _parked_successor
 
 
 def get_license() -> LicenseData | None:
     """Return the in-memory license if present and still within its capability window.
 
-    A licence past ``expires_at + LICENCE_GRACE_DAYS`` is cleared and resolves
-    to ``None`` (the instance then runs on Community); within the grace window
-    it is returned unchanged and keeps granting its tier.
+    A parked successor whose ``starts_at`` has arrived is promoted first (no
+    operator action). A licence past ``expires_at + LICENCE_GRACE_DAYS`` is
+    cleared and resolves to ``None`` (the instance then runs on Community);
+    within the grace window it is returned unchanged and keeps granting its
+    tier.
     """
+    global _current_license
+
+    _promote_due_successor()
     if _current_license is None:
         return None
     if _current_license.expires_at:
         error = _check_expired(_current_license.expires_at)
         if error:
-            clear_license()
+            # Clear ONLY the lapsed active licence. ``clear_license()`` would
+            # also discard a parked successor — a paid licence waiting for its
+            # start must survive the previous licence lapsing.
+            _log.info("license.active_lapsed_expired expires_at=%s", _current_license.expires_at)
+            _current_license = None
             return None
     return _current_license
 
 
 def clear_license() -> None:
-    global _current_license
+    """Forget the installed licence AND any parked successor."""
+    global _current_license, _parked_successor
     _current_license = None
+    _parked_successor = None
 
 
 def verify_license_key(key: str) -> LicenseData | None:

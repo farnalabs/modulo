@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from typing import Any, ClassVar, Protocol
 
-from modulo.core.license import LicenseData
+from modulo.core.license import LicenseData, is_parked
 
 logger = logging.getLogger(__name__)
 
@@ -416,6 +416,15 @@ def _verified_license_key(raw_key: str, error_log: str) -> LicenseData | None:
     both key rungs through ``_verified_license_key`` (this per-key verifier).
     Cancellation propagates (``CancelledError`` is a ``BaseException``, never
     swallowed by the ``except Exception``).
+
+    A key carrying a FUTURE ``starts_at`` (FAR-2146) verifies but is not yet
+    active: it resolves to ``None`` here, so the rung falls through and the
+    instance keeps running on whatever licence is in force today. Without this gate a
+    configured env-var or org-level successor would grant Team capability the
+    day it was written into configuration, before the window the customer
+    bought — the free-time defect the future-only rule exists to prevent. It
+    becomes effective automatically once ``starts_at`` arrives, because the
+    gate is evaluated on every resolution.
     """
     from modulo.core.license import parse_and_verify
 
@@ -427,6 +436,13 @@ def _verified_license_key(raw_key: str, error_log: str) -> LicenseData | None:
         logger.warning(error_log, exc_info=True)
         return None
     if validation.valid and validation.license_data is not None:
+        if is_parked(validation.license_data):
+            logger.info(
+                "license.key_parked_until_start org_id=%s starts_at=%s",
+                validation.license_data.org_id,
+                validation.license_data.starts_at,
+            )
+            return None
         return validation.license_data
     return None
 
@@ -472,6 +488,11 @@ def resolve_effective_license(settings: Any, org: Any | None) -> LicenseData | N
     granting its tier. Past the grace every rung falls through to the
     unlicensed (Community) default — the lapse is never a lockout, because
     authentication does not depend on this ladder.
+
+    A key whose signed ``starts_at`` is still in the future (FAR-2146) also
+    falls through: it is valid but not yet active, so it must not grant
+    capability early. It starts resolving here automatically once its start
+    arrives — no operator action, because the gate is evaluated per call.
 
     Local imports keep ``modulo.core.license.{get_license,parse_and_verify}``
     patchable at call time (tests patch the source module, not this one).

@@ -16356,6 +16356,9 @@ export interface components {
             licence_id?: string | null;
             /** Issued At */
             issued_at?: string | null;
+            /** Starts At */
+            starts_at?: string | null;
+            successor?: components["schemas"]["LicenseSuccessor"] | null;
             /** Days Until Expiry */
             days_until_expiry?: number | null;
             /** Grace Ends At */
@@ -16365,6 +16368,22 @@ export interface components {
              * @default none
              */
             licence_state: string;
+        };
+        /**
+         * LicenseSuccessor
+         * @description A verified licence parked until its signed ``starts_at`` (FAR-2146).
+         *
+         *     Reported SEPARATELY from the active licence so ``licence_state`` keeps its
+         *     existing five-value meaning: a parked successor does not make the instance
+         *     licensed yet, and it does not turn over the running licence early either.
+         */
+        LicenseSuccessor: {
+            /** Starts At */
+            starts_at: string;
+            /** Expires At */
+            expires_at: string;
+            /** Gap Days */
+            gap_days?: number | null;
         };
         /** LicenseUploadRequest */
         LicenseUploadRequest: {
@@ -16383,6 +16402,13 @@ export interface components {
             expires_at?: string | null;
             /** Org Id */
             org_id?: string | null;
+            /** Starts At */
+            starts_at?: string | null;
+            /**
+             * Parked
+             * @default false
+             */
+            parked: boolean;
         };
         /** LifecycleMapCreate */
         LifecycleMapCreate: {
