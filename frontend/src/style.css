@@ -106,7 +106,7 @@
     background-color: hsl(var(--card));
   }
 
-  .avatar-ring > * {
+  .avatar-ring > :where(:root :not(html)) {
     border-radius: 9999px;
   }
 
@@ -243,7 +243,7 @@
     padding: 1.5rem;
   }
 
-  .page-narrow > * + * {
+  .page-narrow > :where(:root :not(html)) + :where(:root :not(html)) {
     margin-top: 1.5rem;
   }
 
@@ -252,7 +252,7 @@
     padding: 1.5rem;
   }
 
-  .page-wide > * + * {
+  .page-wide > :where(:root :not(html)) + :where(:root :not(html)) {
     margin-top: 1.5rem;
   }
 }
