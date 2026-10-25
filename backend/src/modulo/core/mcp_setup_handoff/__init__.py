@@ -35,7 +35,7 @@ def _hash_token(token: str) -> str:
     return hash_token(token)
 
 
-async def create_handoff(
+async def create_handoff(  # NOSONAR S7503 - async API seam for AsyncSession callers
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
