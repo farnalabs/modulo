@@ -97,8 +97,9 @@ jobs:
                 exit 1
               fi
             fi
-            if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" > /dev/null; then
-              echo "::error::canary release ${tag} does not exist"; exit 1
+            if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" \
+              --jq 'select(.draft == false and .prerelease == false) | .tag_name' | grep -qx "${tag}"; then
+              echo "::error::canary release ${tag} is missing or is not published (draft/prerelease)"; exit 1
             fi
             version="${tag#bundle-v}"
             echo "TAG=${tag}" >> "$GITHUB_ENV"
@@ -402,10 +403,11 @@ jobs:
           # Emit one tag per line via a scalar stream, never a per-page
           # `join("\n")`: under --paginate gh applies --jq once per page, so a
           # `join` only joins within a page and tags from adjacent pages could
-          # run together past the 100-release page size.
+          # run together past the 100-release page size. Published means both
+          # draft=false and prerelease=false, everywhere in this resolver.
           set +e
           releases="$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate \
-            --jq '.[] | select(.tag_name | startswith("bundle-v")) | select(.draft == false) | .tag_name' 2>/tmp/gate-err)"
+            --jq '.[] | select(.tag_name | startswith("bundle-v")) | if (.tag_name | test("^bundle-v[0-9]+\\.[0-9]+\\.[0-9]+$")) then select(.draft == false) | select(.prerelease == false) | .tag_name else error("malformed bundle release tag: " + .tag_name) end' 2>/tmp/gate-err)"
           rc=$?
           set -e
           if [ "${rc}" -ne 0 ]; then
@@ -440,8 +442,9 @@ jobs:
                 exit 1
               fi
             fi
-            if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" > /dev/null; then
-              echo "::error::canary release ${tag} does not exist"; exit 1
+            if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" \
+              --jq 'select(.draft == false and .prerelease == false) | .tag_name' | grep -qx "${tag}"; then
+              echo "::error::canary release ${tag} is missing or is not published (draft/prerelease)"; exit 1
             fi
             version="${tag#bundle-v}"
             echo "TAG=${tag}" >> "$GITHUB_ENV"
@@ -450,18 +453,17 @@ jobs:
             # canary-housekeeping can name it in the tracking issue body
             # (GITHUB_ENV above does not cross the job boundary).
             echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-            # Resolve N-1 (the previous published, non-prerelease bundle-v release)
-            # deterministically. --paginate is required: the API's default page is
-            # not a complete release history, and drafts/prereleases are not upgrade
-            # sources. A missing eligible predecessor is only valid for the first
-            # release in the line; API failures and malformed histories fail closed.
+            # Resolve N-1 (the previous published bundle-v release) deterministically.
+            # --paginate is required: the API's default page is not a complete release
+            # history. Every bundle-v* history entry is validated before filtering, so
+            # malformed history fails closed instead of being sorted or selected.
             set +e
             release_list="$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate \
-              --jq '.[] | select(.tag_name | startswith("bundle-v")) | select(.draft == false) | select(.prerelease == false) | .tag_name' 2>/tmp/n1-release-list-err)"
+              --jq '.[] | select(.tag_name | startswith("bundle-v")) | if (.tag_name | test("^bundle-v[0-9]+\\.[0-9]+\\.[0-9]+$")) then select(.draft == false) | select(.prerelease == false) | .tag_name else error("malformed bundle release tag: " + .tag_name) end' 2>/tmp/n1-release-list-err)"
             release_list_rc=$?
             set -e
             if [ "${release_list_rc}" -ne 0 ]; then
-              echo "::error::cannot list published bundle releases to resolve N-1 for ${tag} ($(tr -d '\n' </tmp/n1-release-list-err)) - refusing to skip the upgrade leg"
+              echo "::error::cannot validate/list published bundle releases to resolve N-1 for ${tag} ($(tr -d '\n' </tmp/n1-release-list-err)) - refusing to skip the upgrade leg"
               exit 1
             fi
             if [ -z "${release_list}" ]; then

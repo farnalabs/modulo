@@ -10,6 +10,7 @@ pre-deploy wiring intact — the same reasoning as the sibling
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -191,18 +192,91 @@ def test_native_release_smoke_n_minus_one_reuses_fail_closed_artifact_gates() ->
     assert script.index("gh attestation verify") < script.index("bash scripts/install.sh")
 
 
+def _resolve_n_minus_1(release_pages: list[list[dict[str, Any]]] | None, current: str) -> str | None:
+    """Mirror the workflow's paginated published-release resolver."""
+    if release_pages is None:
+        raise RuntimeError("release API failed")
+    candidates: list[tuple[tuple[int, int, int], str]] = []
+    for release in (release for page in release_pages for release in page):
+        tag = release["tag_name"]
+        if not tag.startswith("bundle-v"):
+            continue
+        parts = tag.removeprefix("bundle-v").split(".")
+        if len(parts) != 3 or not all(part.isdigit() for part in parts):
+            raise ValueError(f"malformed bundle release tag: {tag}")
+        if release.get("draft") is False and release.get("prerelease") is False:
+            candidates.append((tuple(int(part) for part in parts), tag))
+
+    candidates.sort()
+    tags = [tag for _version, tag in candidates]
+    if current not in tags:
+        raise ValueError(f"current release is not published: {current}")
+    index = tags.index(current)
+    return tags[index - 1] if index else None
+
+
 def test_n_minus_1_release_resolution_is_paginated_and_fail_closed() -> None:
-    workflow_text = (REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml").read_text(encoding="utf-8")
+    workflow_text = NATIVE_SMOKE_WORKFLOW.read_text(encoding="utf-8")
     assert "releases?per_page=100" in workflow_text
     assert "--paginate" in workflow_text
-    assert "select(.draft == false)" in workflow_text
-    assert "select(.prerelease == false)" in workflow_text
+    assert workflow_text.count("select(.draft == false)") >= 2
+    assert workflow_text.count("select(.prerelease == false)") >= 2
+    assert 'test("^bundle-v[0-9]+\\\\.[0-9]+\\\\.[0-9]+$")' in workflow_text
     assert "sort -V" in workflow_text
     assert "current_idx - 1" in workflow_text
     assert "current canary ${tag} is not a published" in workflow_text
-    assert "cannot list published bundle releases" in workflow_text
+    assert "cannot validate/list published bundle releases" in workflow_text
     assert "first published bundle release" in workflow_text
-    assert "no N-1 release resolvable" not in workflow_text
+
+
+def test_n_minus_1_resolver_selects_semantic_prior_across_pages() -> None:
+    releases = [
+        {"tag_name": "bundle-v1.10.0", "draft": False, "prerelease": False},
+        {"tag_name": "bundle-v1.2.0", "draft": False, "prerelease": False},
+        {"tag_name": "bundle-v1.9.0", "draft": False, "prerelease": False},
+    ]
+    assert _resolve_n_minus_1([releases[:2], releases[2:]], "bundle-v1.10.0") == "bundle-v1.9.0"
+
+
+def test_n_minus_1_resolver_excludes_drafts_and_prereleases() -> None:
+    releases = [
+        {"tag_name": "bundle-v1.0.0", "draft": False, "prerelease": False},
+        {"tag_name": "bundle-v1.1.0", "draft": True, "prerelease": False},
+        {"tag_name": "bundle-v1.2.0", "draft": False, "prerelease": True},
+        {"tag_name": "bundle-v1.3.0", "draft": False, "prerelease": False},
+    ]
+    assert _resolve_n_minus_1([releases], "bundle-v1.3.0") == "bundle-v1.0.0"
+
+
+def test_n_minus_1_resolver_fails_closed_on_api_failure() -> None:
+    with pytest.raises(RuntimeError, match="release API failed"):
+        _resolve_n_minus_1(None, "bundle-v1.0.0")
+
+
+def test_n_minus_1_resolver_fails_closed_on_malformed_history() -> None:
+    with pytest.raises(ValueError, match="malformed bundle release tag"):
+        _resolve_n_minus_1(
+            [[{"tag_name": "bundle-v1.0", "draft": False, "prerelease": False}]],
+            "bundle-v1.0",
+        )
+
+
+def test_n_minus_1_resolver_handles_first_release() -> None:
+    assert (
+        _resolve_n_minus_1(
+            [[{"tag_name": "bundle-v1.0.0", "draft": False, "prerelease": False}]],
+            "bundle-v1.0.0",
+        )
+        is None
+    )
+
+
+def test_n_minus_1_resolver_fails_when_current_release_is_missing() -> None:
+    with pytest.raises(ValueError, match="current release is not published"):
+        _resolve_n_minus_1(
+            [[{"tag_name": "bundle-v1.0.0", "draft": False, "prerelease": False}]],
+            "bundle-v2.0.0",
+        )
 
 
 def test_release_sh_passes_rehearsal_env_through() -> None:
