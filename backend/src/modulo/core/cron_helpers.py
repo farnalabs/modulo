@@ -601,6 +601,17 @@ _MID_GRAPH_WEDGE_SQL = (
     "AND runs.sandbox_dispatch_state NOT LIKE :live_marker_tombstone "
     "AND heartbeat_at IS NOT NULL "
     "AND heartbeat_at >= now() - (:heartbeat_fresh * interval '1 second')) "
+    # A node output written recently is durable evidence that the executor is
+    # still making progress.  The age bound is deliberately not a progress
+    # test: a long-running graph can legitimately exceed it while a node is
+    # still advancing.  Keep this window short enough to collect genuinely
+    # abandoned rows, while allowing the next reconcile tick to observe the
+    # progress and leave the run alone.
+    "  AND NOT EXISTS ("
+    "    SELECT 1 FROM run_node_outputs rno_progress "
+    "    WHERE rno_progress.run_id = runs.id "
+    "    AND rno_progress.updated_at >= now() - interval '15 minutes'"
+    "  ) "
     "  AND NOT (__ZERO_PROGRESS_SHAPE__) "
     "  LIMIT :max_rows) "
     "RETURNING id"
@@ -6488,6 +6499,20 @@ def _build_re_dispatch_predicate(
             ),
             not_(Run.guardrail_override_resume_pending.is_(True)),
         ),
+        # FAR-2122: a node-started run without an SAQ dispatcher identity is
+        # also worker-lost. It cannot safely use execute_run because the first
+        # node may already have side effects; resume_run claims the stale run
+        # and continues from its durable checkpoint. The per-row job and
+        # checkpoint guards are applied in _reconcile_one_row.
+        and_(
+            Run.status == "running",
+            or_(Run.dispatcher.is_(None), Run.dispatcher != "saq"),
+            Run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED,
+            or_(
+                Run.heartbeat_at.is_(None),
+                Run.heartbeat_at < func_now_minus(stale_window),
+            ),
+        ),
         # F6a gated recovery: awaiting_human/claimed/hitl_parked +
         # dispatcher='saq' + stale heartbeat. The no-job gate is applied
         # per-row (q.job() is None). ``hitl_parked`` (qa F1): a parked run
@@ -10879,6 +10904,27 @@ async def _override_resume_checkpoint_present(
     return bool(await _run_has_resumable_checkpoint(session, org_id=org_id, thread_id=thread_id))
 
 
+def _is_unowned_node_started_resume_row(row: Any, stale_window: int) -> bool:
+    """FAR-2122: identify a stale node-started row with no SAQ owner.
+
+    A missing/foreign dispatcher means the SAQ job identity was lost, but the
+    durable phase proves that a node may already have run. Such rows must use
+    the checkpoint-resume claim rather than ``execute_run``.
+    """
+    if getattr(row, "status", None) != "running":
+        return False
+    if getattr(row, "dispatcher", None) == "saq":
+        return False
+    if getattr(row, "dispatch_phase", None) != PHASE_FIRST_NODE_DISPATCHED:
+        return False
+    heartbeat = getattr(row, "heartbeat_at", None)
+    if heartbeat is None:
+        return True
+    if not isinstance(heartbeat, datetime):
+        return False
+    return (datetime.now(UTC) - heartbeat).total_seconds() > stale_window
+
+
 def _is_node_started_executor_lost_row(row: Any, stale_window: int) -> bool:
     """FAR-1803: is *row* the node-started / executor-lost class? (row recheck)
 
@@ -11163,7 +11209,42 @@ async def _reconcile_one_row(
         summary["skipped"] += 1
         return enqueue_failed_redispatched
 
+    # FAR-2122 — recover a node-started row whose SAQ dispatcher identity was
+    # lost. The durable phase means execute_run is unsafe; require a root
+    # checkpoint before claiming a resume, otherwise the row remains owned by
+    # the age gate rather than risking re-execution from the graph start.
+    if _is_unowned_node_started_resume_row(row, stale_window):
+        if not await _override_resume_checkpoint_present(session, org_id, row):
+            summary["skipped"] += 1
+            _log.warning(
+                "dispatcher_reconcile: unowned node-started run %s has no root checkpoint; "
+                "not re-dispatched (resume would re-execute it)",
+                row.id,
+            )
+            return enqueue_failed_redispatched
+        _log.info(
+            "dispatcher_reconcile.unowned_node_started_redispatched run=%s org=%s "
+            "dispatcher=%s dispatch_phase=%s — lost worker identity recovered via resume_run",
+            row.id,
+            org_id,
+            getattr(row, "dispatcher", None),
+            getattr(row, "dispatch_phase", None),
+        )
+        return await _re_dispatch_reconciled_run(
+            session,
+            q,
+            org_id,
+            row,
+            "resume_run",
+            uuid.uuid4().hex,
+            None,
+            is_enqueue_failed,
+            enqueue_failed_redispatched,
+            summary,
+        )
+
     # FAR-1728 — guardrail-override resume self-heal (mirror of the F6a leg).
+
     # Reached ONLY for a row the SQL leg selected AND whose SAQ job is absent
     # (both ``q.job()`` reads above), before the node-started belt would hold
     # it back: a ``running`` + ``first_node_dispatched`` row carrying the
