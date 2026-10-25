@@ -113,6 +113,32 @@ def test_real_run_discovery_excludes_leaked_rehearsal_machine() -> None:
         )
 
 
+def test_release_identity_resolves_annotated_tags_to_commit_sha_and_fails_closed() -> None:
+    workflow_text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "TAG_OBJECT_TYPE=\"$(jq -r '.object.type // empty'" in workflow_text
+    assert "TAG_OBJECT_SHA=\"$(jq -r '.object.sha // empty'" in workflow_text
+    assert 'if [ "$TAG_OBJECT_TYPE" = "tag" ]; then' in workflow_text
+    assert "gh api \"repos/${{ github.repository }}/git/tags/${TAG_OBJECT_SHA}\" --jq '.object.sha'" in workflow_text
+    assert 'elif [ "$TAG_OBJECT_TYPE" = "commit" ]; then' in workflow_text
+    assert 'ACTUAL_SHA="$TAG_OBJECT_SHA"' in workflow_text
+    assert "resolved to unsupported Git object type" in workflow_text
+    assert "did not resolve to a full commit SHA" in workflow_text
+    assert 'if [ "$ACTUAL_SHA" != "$REQUESTED_SHA" ]; then' in workflow_text
+
+
+def test_release_identity_keeps_normal_deploy_outside_rc_validation() -> None:
+    workflow = _workflow()
+    step_names = _step_names(workflow["jobs"]["deploy-throttle"]["steps"])
+    validation_script = workflow["jobs"]["deploy-throttle"]["steps"][
+        step_names.index("Validate requested release identity")
+    ]["run"]
+
+    assert 'if [ -z "$REQUESTED_REF" ] && [ -z "$REQUESTED_SHA" ]; then' in validation_script
+    assert 'echo "Normal deploy identity: ${{ github.sha }}"' in validation_script
+    assert "release_ref must be an RC tag" in validation_script
+
+
 def test_release_sh_passes_rehearsal_env_through() -> None:
     """release.sh must not sanitise the env alembic's env.py reads.
 

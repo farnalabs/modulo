@@ -127,7 +127,25 @@ jobs:
             echo "::error::release_sha must be a full 40-character commit SHA; got '$REQUESTED_SHA'"
             exit 1
           fi
-          ACTUAL_SHA="$(gh api "repos/${{ github.repository }}/git/ref/tags/${REQUESTED_REF}" --jq '.object.sha')"
+          TAG_REF_JSON="$(gh api "repos/${{ github.repository }}/git/ref/tags/${REQUESTED_REF}")"
+          TAG_OBJECT_TYPE="$(jq -r '.object.type // empty' <<<"$TAG_REF_JSON")"
+          TAG_OBJECT_SHA="$(jq -r '.object.sha // empty' <<<"$TAG_REF_JSON")"
+          if [ -z "$TAG_OBJECT_TYPE" ] || [ -z "$TAG_OBJECT_SHA" ]; then
+            echo "::error::could not resolve release tag ${REQUESTED_REF} to a Git object; refusing deployment."
+            exit 1
+          fi
+          if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
+            ACTUAL_SHA="$(gh api "repos/${{ github.repository }}/git/tags/${TAG_OBJECT_SHA}" --jq '.object.sha')"
+          elif [ "$TAG_OBJECT_TYPE" = "commit" ]; then
+            ACTUAL_SHA="$TAG_OBJECT_SHA"
+          else
+            echo "::error::release tag ${REQUESTED_REF} resolved to unsupported Git object type '$TAG_OBJECT_TYPE'; refusing deployment."
+            exit 1
+          fi
+          if ! [[ "$ACTUAL_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::release tag ${REQUESTED_REF} did not resolve to a full commit SHA; refusing deployment."
+            exit 1
+          fi
           if [ "$ACTUAL_SHA" != "$REQUESTED_SHA" ]; then
             echo "::error::requested release identity mismatch: ${REQUESTED_REF} resolves to ${ACTUAL_SHA}, requested ${REQUESTED_SHA}."
             exit 1
