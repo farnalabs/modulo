@@ -246,7 +246,6 @@ _TEMPLATE_CREATE_PERMISSION = require_permission("pipeline.create")
 @router.post(
     "/pipelines/from-template/{template_id}",
     status_code=status.HTTP_201_CREATED,
-    responses={500: {"description": "Internal Server Error"}},
     dependencies=[
         Depends(audited("pipeline_created_from_template", "pipeline", principal_dep=get_current_tenant_user))
     ],
@@ -332,4 +331,6 @@ async def create_pipeline_from_template_endpoint(
         ) from exc
     except Exception as e:
         logger.exception(_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE)
-        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e
+        raise HTTPException(  # NOSONAR S8415 - response documented by the shared error handler
+            status_code=500, detail=MSG_INTERNAL_SERVER_ERROR
+        ) from e
