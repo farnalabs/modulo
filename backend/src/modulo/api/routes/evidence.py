@@ -24,13 +24,14 @@ taken from the principal, never from client input.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status  # nosemgrep: loopvar-shadows-import
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import Text, and_, cast, func, or_, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -553,16 +554,21 @@ def _risk_scope_clause(
             )
             .subquery()
         )
+        # ``evidence.subject_id`` is TEXT while ``runs.id`` is UUID, so the
+        # comparison must be text-to-text (a bare ``text = uuid`` raises on
+        # Postgres). Cast the run id rather than the subject id: malformed
+        # subject ids must not turn a read into a 500.
+        run_id_text = cast(run_ids_subq.c.id, Text)
         clauses.append(
             or_(
                 and_(
                     Evidence.subject_type == "run",
-                    Evidence.subject_id.in_(select(run_ids_subq.c.id)),
+                    Evidence.subject_id.in_(select(run_id_text)),
                 ),
                 and_(
                     Evidence.subject_type == "node_execution",
                     # Extract run_id from subject_id ("{run_id}:{node_id}")
-                    func.split_part(Evidence.subject_id, ":", 1).in_(select(run_ids_subq.c.id)),
+                    func.split_part(Evidence.subject_id, ":", 1).in_(select(run_id_text)),
                 ),
             )
         )
@@ -585,14 +591,16 @@ def _risk_action_clause(organisation_id: uuid.UUID, action: str) -> Any:
         .distinct()
         .subquery()
     )
+    # Same TEXT/UUID asymmetry as ``_risk_scope_clause``: compare text to text.
+    decision_run_id_text = cast(decision_run_ids_subq.c.run_id, Text)
     return or_(
         and_(
             Evidence.subject_type == "run",
-            Evidence.subject_id.in_(select(decision_run_ids_subq.c.run_id)),
+            Evidence.subject_id.in_(select(decision_run_id_text)),
         ),
         and_(
             Evidence.subject_type == "node_execution",
-            func.split_part(Evidence.subject_id, ":", 1).in_(select(decision_run_ids_subq.c.run_id)),
+            func.split_part(Evidence.subject_id, ":", 1).in_(select(decision_run_id_text)),
         ),
     )
 
@@ -735,6 +743,51 @@ async def _count_risk_assessment_by_action(
     return counts, False
 
 
+def _collect_row_run_ids(rows: list[Evidence]) -> set[uuid.UUID]:
+    """Collect the distinct run ids referenced by *rows* (malformed ids skipped)."""
+    run_ids: set[uuid.UUID] = set()
+    for row in rows:
+        run_id, _ = _split_run_and_node(row.subject_type, row.subject_id)
+        if run_id is not None:
+            run_ids.add(run_id)
+    return run_ids
+
+
+def _aggregate_decision_actions(
+    decisions: Sequence[Any],
+) -> tuple[dict[uuid.UUID, str], dict[tuple[uuid.UUID, str], str]]:
+    """Fold decision rows into run-level and node-level most-severe action maps."""
+    run_actions: dict[uuid.UUID, str] = {}
+    node_actions: dict[tuple[uuid.UUID, str], str] = {}
+    for decision_run_id, decision_node_id, resolved_action in decisions:
+        if decision_run_id is None or resolved_action not in _VALID_ACTIONS:
+            continue
+        if decision_node_id is None:
+            run_actions[decision_run_id] = _most_severe(run_actions.get(decision_run_id), resolved_action)
+        else:
+            node_key = (decision_run_id, str(decision_node_id))
+            node_actions[node_key] = _most_severe(node_actions.get(node_key), resolved_action)
+    return run_actions, node_actions
+
+
+def _resolve_row_actions(
+    rows: list[Evidence],
+    run_actions: dict[uuid.UUID, str],
+    node_actions: dict[tuple[uuid.UUID, str], str],
+) -> dict[uuid.UUID, str]:
+    """Map each row id to its node action (when present) else its run action."""
+    resolved: dict[uuid.UUID, str] = {}
+    for row in rows:
+        run_id, node_id = _split_run_and_node(row.subject_type, row.subject_id)
+        if run_id is None:
+            continue
+        action = node_actions.get((run_id, node_id)) if node_id is not None else None
+        action = action or run_actions.get(run_id)
+        if action is not None:
+            resolved[row.id] = action
+    return resolved
+
+
 async def _load_risk_assessment_row_actions(
     session: AsyncSession,
     organisation_id: uuid.UUID,
@@ -747,11 +800,7 @@ async def _load_risk_assessment_row_actions(
     from the map so the UI renders an explicit unknown rather than a
     fabricated value.
     """
-    run_ids: set[uuid.UUID] = set()
-    for row in rows:
-        run_id, _ = _split_run_and_node(row.subject_type, row.subject_id)
-        if run_id is not None:
-            run_ids.add(run_id)
+    run_ids = _collect_row_run_ids(rows)
     if not run_ids:
         return {}, False
 
@@ -771,27 +820,8 @@ async def _load_risk_assessment_row_actions(
     except ProgrammingError:
         return {}, True
 
-    run_actions: dict[uuid.UUID, str] = {}
-    node_actions: dict[tuple[uuid.UUID, str], str] = {}
-    for decision_run_id, decision_node_id, resolved_action in decisions:
-        if decision_run_id is None or resolved_action not in _VALID_ACTIONS:
-            continue
-        if decision_node_id is None:
-            run_actions[decision_run_id] = _most_severe(run_actions.get(decision_run_id), resolved_action)
-        else:
-            node_key = (decision_run_id, str(decision_node_id))
-            node_actions[node_key] = _most_severe(node_actions.get(node_key), resolved_action)
-
-    resolved: dict[uuid.UUID, str] = {}
-    for row in rows:
-        run_id, node_id = _split_run_and_node(row.subject_type, row.subject_id)
-        if run_id is None:
-            continue
-        action = node_actions.get((run_id, node_id)) if node_id is not None else None
-        action = action or run_actions.get(run_id)
-        if action is not None:
-            resolved[row.id] = action
-    return resolved, False
+    run_actions, node_actions = _aggregate_decision_actions(decisions)
+    return _resolve_row_actions(rows, run_actions, node_actions), False
 
 
 def _most_severe(current: str | None, candidate: str) -> str:

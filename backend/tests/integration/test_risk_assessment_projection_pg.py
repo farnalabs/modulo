@@ -105,7 +105,10 @@ async def _seed(session: AsyncSession) -> dict[str, uuid.UUID]:
             )
         )
 
-    # One stale row outside the window — every query must exclude it.
+    # One stale row outside the window — every query must exclude it. The
+    # rolling window is over evidence.created_at (the column the projection
+    # exposes and sorts by), so age created_at as well as observed_at.
+    stale_at = now - timedelta(days=30)
     session.add(
         Evidence(
             id=uuid.uuid4(),
@@ -114,9 +117,10 @@ async def _seed(session: AsyncSession) -> dict[str, uuid.UUID]:
             subject_type="run",
             subject_id=str(run_id),
             value={"ok": True},
-            observed_at=now - timedelta(days=30),
+            observed_at=stale_at,
             producer_type="run",
             producer_id=None,
+            created_at=stale_at,
         )
     )
     await session.flush()
