@@ -38,10 +38,10 @@ BASE_URL_MAX_LENGTH = 2048
 # endpoint, and ::ffff:169.254.169.254 is the IPv4 address in mapped form (the
 # IPv6 network below is checked via ``ipv4_mapped`` too).
 METADATA_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("fe80::/10"),
-    ipaddress.ip_network("fd00:ec2::254/128"),
-    ipaddress.ip_network("100.100.100.200/32"),
+    ipaddress.ip_network("169.254.0.0/16"),  # NOSONAR - AWS/GCP/Azure metadata network
+    ipaddress.ip_network("fe80::/10"),  # NOSONAR - IPv6 link-local metadata network
+    ipaddress.ip_network("fd00:ec2::254/128"),  # NOSONAR - AWS IMDS IPv6 endpoint
+    ipaddress.ip_network("100.100.100.200/32"),  # NOSONAR - Aliyun metadata endpoint
 )
 METADATA_HOSTNAMES = frozenset(
     {

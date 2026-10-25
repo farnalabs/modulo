@@ -388,7 +388,7 @@ async def _check_duplicate_event(settings: Settings, event_id: str) -> bool:
     return False
 
 
-async def _generate_and_verify_license(
+def _generate_and_verify_license(
     settings: Settings,
     org_name: str,
     term_months: int,
@@ -503,7 +503,7 @@ async def fulfil_team_purchase(
         )
         raise
 
-    license_data = await _generate_and_verify_license(
+    license_data = _generate_and_verify_license(
         settings,
         org_name,
         term_months,

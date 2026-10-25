@@ -66,7 +66,7 @@ _DELIMITER_STRIP_PATTERN = re.compile(
 _DETAIL_MAX_LENGTH = 2000
 
 # Pattern detects potential ReDoS: nested quantifiers like (a+)+, (a*)*, (a|b)+, ((a+)+)+
-_RE_NESTED_QUANTIFIER = re.compile(r"\(\s*[^)]*[+*][^)]*\s*\)[+*]")
+_RE_NESTED_QUANTIFIER = re.compile(r"\([^)]*(?:[+*][^)]*)+\)[+*]")
 
 _SCORE_PASS = 1.0
 _SCORE_FAIL = 0.0
