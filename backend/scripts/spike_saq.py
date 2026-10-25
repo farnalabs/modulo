@@ -57,8 +57,9 @@ async def spike_flaky(ctx: dict) -> str:
     """Fails on first attempt, succeeds on the second (retries=2 -> 2 total attempts)."""
     global _flaky_attempts, _flaky_attempt_nos
     job: Job = ctx["job"]
-    _flaky_attempts.append(time.monotonic())
-    _flaky_attempt_nos.append(job.attempts)
+    await asyncio.sleep(0)
+    _flaky_attempts.extend([time.monotonic()])
+    _flaky_attempt_nos.extend([job.attempts])
     if job.attempts == 1:
         raise RuntimeError("flaky first attempt")
     return "ok"
@@ -67,7 +68,8 @@ async def spike_flaky(ctx: dict) -> str:
 async def spike_always_fail(ctx: dict) -> None:
     global _fail_attempt_nos
     job: Job = ctx["job"]
-    _fail_attempt_nos.append(job.attempts)
+    await asyncio.sleep(0)
+    _fail_attempt_nos.extend([job.attempts])
     raise RuntimeError("always fails")
 
 
@@ -443,7 +445,7 @@ async def check10_worker_heartbeat_ttl(redis: aioredis.Redis, q: RedisQueue) -> 
     while time.monotonic() < deadline:
         exists = await redis.exists(key)
         if exists:
-            pttl_observed.append(await redis.pttl(key))
+            pttl_observed.extend([await redis.pttl(key)])
             if pttl_observed[-1] > 0:
                 break
         await asyncio.sleep(0.2)

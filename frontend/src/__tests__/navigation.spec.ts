@@ -11,6 +11,8 @@ const mockManifest = vi.hoisted(() => ({
   routes: {
     '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'core', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/notifications': { name: 'notifications', breadcrumb: 'Notifications', sidebar_group: 'monitor', sidebar_order: 0, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/risk-assessment': { name: 'risk-assessment', breadcrumb: 'Risk Assessment', sidebar_group: 'monitor', sidebar_order: 9, type: 'page', required_tier: null, required_roles: null, required_permissions: null, product_map: ['feat-risk-assessment'] },
+    '/missing-group': { name: 'missing-group', breadcrumb: 'Missing Group', sidebar_group: 'missing', sidebar_order: 99, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/pipelines': { name: 'pipeline-list', breadcrumb: 'Pipelines', sidebar_group: 'core', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/library': { name: 'library', breadcrumb: 'Library', sidebar_group: 'core', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
     '/runs': { name: 'runs-list', breadcrumb: 'Runs', sidebar_group: 'core', sidebar_order: 5, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
@@ -311,6 +313,21 @@ describe('navigation.ts', () => {
   it('core has exactly 5 items (lifecycle-maps restored, connectors moved, stages removed)', () => {
     const core = navGroups.find((g) => g.id === 'core')!
     expect(core.items).toHaveLength(5)
+  })
+
+  it('warns and skips a route whose sidebar group is missing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const manifestModule = await import('@/manifest.yaml')
+    const manifest = manifestModule.default as { routes: Record<string, Record<string, unknown>> }
+    const original = manifest.routes['/risk-assessment']
+    manifest.routes['/risk-assessment'] = { ...original, sidebar_group: 'missing' }
+
+    vi.resetModules()
+    const { getNavGroups: getFreshNavGroups } = await import('../config/navigation')
+    expect(getFreshNavGroups().flatMap((group) => group.items).some((item) => item.to === '/risk-assessment')).toBe(false)
+    expect(warn).toHaveBeenCalled()
+    manifest.routes['/risk-assessment'] = original
+    warn.mockRestore()
   })
 
   it('monitor has evals, diff, observability, etc', () => {

@@ -945,9 +945,9 @@ non-production use.
 
 Hosted Ubicloud runners (ubicloud-standard-2). Workflows:
 - Lint, type-check, unit test, frontend build, audit, and WCAG contrast test on every push
-- Each backend/frontend container is built once and published to ghcr.io only from `main` or a version tag, gated by image smoke checks (`import modulo`, `nginx -t`) only. The publish job does not yet scan the built image – the trivy/grype gates, digest-drift guard and cosign/SBOM attest are the D4 GA/CI follow-up item noted above. CI's Trivy check is a filesystem scan of the repository (dependency CVEs + misconfigurations), not a scan of the built images
+- Containers are built once and published to ghcr.io from `main` (a short-SHA tag plus `:latest`) or, on a release `cut` / `recut`, with versioned tags (`release-unified.yml`). Every GHCR push is gated by image smoke checks (for example `import modulo` and `nginx -t`); the release path also checks `opencode --version` on the runner image. The publish path does not yet scan the built image - the trivy/grype gates, digest-drift guard and cosign/SBOM attest are the D4 GA/CI follow-up item noted above. CI's Trivy check is a filesystem scan of the repository (dependency CVEs + misconfigurations), not a scan of the built images
 - Staging smoke, WCAG, and regression suites share one dependency/browser setup while retaining separate result artifacts
-- Release workflow (tag-driven, semver)
+- Release workflows (`release-unified.yml` for the publishing path with `cut` / `recut` / `promote` / `dry-run`, `release.yml` for the Alpha path) are `workflow_dispatch`-only and semver-tagged; see `docs/release-process.md`
 
 ### Observability
 

@@ -84,6 +84,37 @@ class TestScanPredicateCarriesTheUnownedResumeLeg:
         assert "now() - 42 * interval '1 second'" in sql
 
 
+class TestSweepVariantRequiresAResumableRootCheckpoint:
+    """The D8 marker sweep asks "will the reconciler ACTUALLY recover this?".
+
+    FAR-2122's per-row handler refuses a checkpointless dispatcherless
+    node-started row (leaving it to the orphan sweep), so the sweep must fold
+    the root-checkpoint precondition into its recoverability verdict — else
+    such a row's marker is kept for the 25h cap and shadows FAR-1808's 2h
+    bounded reclaim. The scan keeps the broad leg (default False).
+    """
+
+    def _composed_sql(self, **kwargs: Any) -> str:
+        predicate = ch.reconciler_recovery_predicate(
+            reenqueue_window=600,
+            stale_window=STALE_WINDOW,
+            capacity_redispatch_seconds=120,
+            nodeless_window=35,
+            early_detect_minutes=None,
+            **kwargs,
+        )
+        return str(sa.select(Run.id).where(predicate).compile(compile_kwargs={"literal_binds": True}))
+
+    def test_default_scan_leg_carries_no_root_checkpoint_gate(self) -> None:
+        assert "c.checkpoint_ns = ''" not in self._composed_sql()
+
+    def test_sweep_variant_requires_a_root_checkpoint(self) -> None:
+        sql = self._composed_sql(unowned_node_started_requires_checkpoint=True)
+        assert "c.checkpoint_ns = ''" in sql
+        # Still the same unowned node-started shape, just gated.
+        assert "runs.dispatcher IS NULL OR runs.dispatcher != 'saq'" in sql
+
+
 class TestUnownedNodeStartedResumeRowRecheck:
     """The row-side belt, mirroring the sibling ``_is_*_row`` rechecks."""
 

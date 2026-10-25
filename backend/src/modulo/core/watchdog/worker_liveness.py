@@ -84,6 +84,7 @@ from modulo.core.alert_context import (
     stamp_stdout,
 )
 from modulo.core.email_service import EmailSendingError, send_email
+from modulo.core.ssrf import pinned_async_client
 from modulo.settings import Settings, get_settings, resolve_instance_identity
 
 _log = logging.getLogger("modulo.watchdog")
@@ -357,7 +358,11 @@ async def _post_webhook_payload(url: str, payload: bytes, channel: str) -> None:
     one implementation avoids drift between the copies.
     """
     try:
-        async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
+        async with await pinned_async_client(
+            url,
+            timeout=_WEBHOOK_TIMEOUT_SECONDS,
+            connector_type="watchdog_webhook",
+        ) as client:
             resp = await client.post(
                 url,
                 content=payload,

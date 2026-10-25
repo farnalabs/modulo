@@ -4789,6 +4789,38 @@ def _checkpoint_absent_expr() -> Any:
     )
 
 
+def _root_checkpoint_present_expr() -> Any:
+    """The correlated EXISTS for a RESUMABLE root checkpoint on the run's thread.
+
+    The exact SQL twin of ``pipeline_engine.recovery._HAS_ROOT_CHECKPOINT_SQL``
+    (``checkpoint_ns = ''`` — a resume reads the root namespace), which is the
+    per-row precondition ``_reconcile_one_row`` applies before recovering an
+    unowned node-started row through FAR-2122's ``resume_run`` leg. The marker
+    sweep composes it so its own "will the reconciler actually recover this?"
+    verdict matches that per-row guard: a dispatcherless node-started row with
+    NO root checkpoint is refused by the reconciler (left to the orphan sweep),
+    so its leaked marker must not be kept as "recoverable" — the FAR-1808
+    bounded reclaim owns it.
+
+    It is a SEPARATE expression from :func:`_checkpoint_absent_expr` (which
+    asks the broader "any checkpoint for the thread?"): the nodeless progress
+    question is satisfied by a non-root checkpoint, while a resume needs the
+    root one.
+    """
+    from sqlalchemy import exists as sa_exists
+    from sqlalchemy import select as sa_select
+
+    return sa_exists(
+        sa_select(1)
+        .select_from(text("checkpoints c"))
+        .where(
+            text("c.organisation_id = runs.organisation_id"),
+            text("c.thread_id = runs.langgraph_thread_id"),
+            text("c.checkpoint_ns = ''"),
+        )
+    )
+
+
 # FAR-1088 W-B safety floor for the in-flight marker shield: worst-case node
 # deadline measured from the PER-ATTEMPT anchor max(runs.started_at,
 # runs.dispatched_at) =
@@ -6266,6 +6298,7 @@ def _build_re_dispatch_predicate(
     capacity_redispatch_seconds: int,
     enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
     include_node_started_executor_lost: bool = True,
+    unowned_node_started_requires_checkpoint: bool = False,
 ) -> Any:
     """Build the dispatcher_reconcile re-dispatch predicate (F3c + F6a).
 
@@ -6339,6 +6372,16 @@ def _build_re_dispatch_predicate(
     the marker sweep does exactly that, otherwise the visibility leg shadows
     FAR-1808's bounded reclaim and such a row's marker is kept until the 25h
     staleness cap instead of the 2h node-started bound.
+
+    ``unowned_node_started_requires_checkpoint`` (default False) makes
+    FAR-2122's dispatcherless node-started resume leg require a RESUMABLE ROOT
+    checkpoint (``_root_checkpoint_present_expr``). The scan keeps the default:
+    it selects the class so the row recheck can log a checkpointless row and
+    leave it to the orphan sweep. A caller asking "will this row ACTUALLY be
+    recovered?" — the D8 marker sweep — passes True, because
+    ``_reconcile_one_row`` refuses the checkpointless shape, so its marker must
+    not be kept as recoverable or FAR-1808's bounded reclaim is shadowed for
+    exactly the rows the reconciler will never touch.
     """
     from sqlalchemy import and_, not_, or_
 
@@ -6555,6 +6598,10 @@ def _build_re_dispatch_predicate(
         # the graph start, FAR-1649). Neither arm can double-act: both re-check
         # `status='running'` and the sweep re-checks the phase/dispatcher shape.
         # The per-row job + checkpoint guards are applied in `_reconcile_one_row`.
+        # A caller that needs "will it ACTUALLY be recovered?" (the D8 sweep)
+        # folds the resumable-root-checkpoint precondition into the predicate:
+        # the row recheck refuses a checkpointless row, so such a row must not
+        # be judged recoverable here (see the docstring).
         and_(
             Run.status == "running",
             or_(Run.dispatcher.is_(None), Run.dispatcher != "saq"),
@@ -6563,6 +6610,7 @@ def _build_re_dispatch_predicate(
                 Run.heartbeat_at.is_(None),
                 Run.heartbeat_at < func_now_minus(stale_window),
             ),
+            *([_root_checkpoint_present_expr()] if unowned_node_started_requires_checkpoint else []),
         ),
         # F6a gated recovery: awaiting_human/claimed/hitl_parked +
         # dispatcher='saq' + stale heartbeat. The no-job gate is applied
@@ -6645,6 +6693,7 @@ def reconciler_recovery_predicate(
     enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
     early_detect_minutes: int | None,
     include_node_started_executor_lost: bool = True,
+    unowned_node_started_requires_checkpoint: bool = False,
 ) -> Any:
     """The reconciler's COMPOSED recovery predicate (single source, qa F3).
 
@@ -6665,6 +6714,14 @@ def reconciler_recovery_predicate(
     by the nodeless branch, excluded by the stale branch) was misjudged
     unrecoverable and its marker cleared.
 
+    ``unowned_node_started_requires_checkpoint`` defaults False (the scan
+    keeps FAR-2122's broad leg so its row recheck can log and defer a
+    checkpointless row). The D8 sweep passes True: FAR-2122's recovery is
+    conditional on a resumable root checkpoint, so the sweep must judge only
+    the checkpoint-bearing shape "recoverable" — otherwise a checkpointless
+    dispatcherless node-started marker is kept for 25h instead of being
+    reclaimed by FAR-1808's 2h bound (the reconciler never acts on it).
+
     FAR-873: ``early_detect_minutes`` adds a shorter-window branch that
     matches running + fresh heartbeat + zero progress.  This catches wedged-
     worker zombies ~20 min sooner than the full nodeless window. It is a
@@ -6681,6 +6738,7 @@ def reconciler_recovery_predicate(
             capacity_redispatch_seconds=capacity_redispatch_seconds,
             enqueue_failed_redispatch_seconds=enqueue_failed_redispatch_seconds,
             include_node_started_executor_lost=include_node_started_executor_lost,
+            unowned_node_started_requires_checkpoint=unowned_node_started_requires_checkpoint,
         ),
         _nodeless_zombie_predicate(nodeless_window),
     ]

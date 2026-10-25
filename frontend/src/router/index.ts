@@ -84,6 +84,7 @@ const RunsListView = () => import('../views/RunsListView.vue')
 const RunDetailView = () => import('../views/RunDetailView.vue')
 const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
 const EvidenceView = () => import('../views/EvidenceView.vue')
+const RiskAssessmentView = () => import('../views/RiskAssessmentView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
 const AdminFeatureFlagsView = () => import('../views/AdminFeatureFlagsView.vue')
 const AdminPluginsView = () => import('../views/AdminPluginsView.vue')
@@ -400,6 +401,11 @@ const router = createRouter({
       path: '/evidence',
       name: 'evidence',
       component: EvidenceView,
+    },
+    {
+      path: '/risk-assessment',
+      name: 'risk-assessment',
+      component: RiskAssessmentView,
     },
     {
       path: '/runs/:id',

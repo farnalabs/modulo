@@ -259,7 +259,7 @@ class TestWorkerLivenessWatchdog:
         client.__aenter__.return_value = client
         client.post.side_effect = httpx.ConnectError("boom")
 
-        with patch.object(wl.httpx, "AsyncClient", return_value=client):
+        with patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)):
             await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
         client.__aenter__.assert_awaited()
@@ -270,10 +270,14 @@ class TestWorkerLivenessWatchdog:
         client.__aenter__.return_value = client
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
 
-        with patch.object(wl.httpx, "AsyncClient", return_value=client) as ctor:
+        with patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)) as ctor:
             await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
-        ctor.assert_called_once_with(timeout=wl._WEBHOOK_TIMEOUT_SECONDS)
+        ctor.assert_called_once_with(
+            settings.alert_webhook_url,
+            timeout=wl._WEBHOOK_TIMEOUT_SECONDS,
+            connector_type="watchdog_webhook",
+        )
         call = client.post.await_args
         assert call.args[0] == "https://hooks.slack.com/services/T/X/B"
         body = json.loads(call.kwargs["content"])
@@ -843,10 +847,14 @@ class TestMultiChannelAlertFanout:
         client.__aenter__.return_value = client
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
 
-        with patch.object(wl.httpx, "AsyncClient", return_value=client) as ctor:
+        with patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)) as ctor:
             await wl._send_alerts(settings, ["no live SAQ worker"])
 
-        ctor.assert_called_once_with(timeout=wl._WEBHOOK_TIMEOUT_SECONDS)
+        ctor.assert_called_once_with(
+            settings.alert_webhook_url,
+            timeout=wl._WEBHOOK_TIMEOUT_SECONDS,
+            connector_type="watchdog_webhook",
+        )
         call = client.post.await_args
         assert call.args[0] == "https://hooks.slack.com/services/T/X/B"
         body = json.loads(call.kwargs["content"])
@@ -860,10 +868,14 @@ class TestMultiChannelAlertFanout:
         client.__aenter__.return_value = client
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
 
-        with patch.object(wl.httpx, "AsyncClient", return_value=client) as ctor:
+        with patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)) as ctor:
             await wl._send_alerts(settings, ["no live SAQ worker"])
 
-        ctor.assert_called_once_with(timeout=wl._WEBHOOK_TIMEOUT_SECONDS)
+        ctor.assert_called_once_with(
+            settings.alert_teams_webhook_url,
+            timeout=wl._WEBHOOK_TIMEOUT_SECONDS,
+            connector_type="watchdog_webhook",
+        )
         call = client.post.await_args
         assert call.args[0] == "https://outlook.office.com/webhook/abc"
         body = json.loads(call.kwargs["content"])
@@ -909,7 +921,7 @@ class TestMultiChannelAlertFanout:
         send = MagicMock(return_value=True)
 
         with (
-            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)),
             patch.object(wl, "send_email", send),
         ):
             await wl._send_alerts(settings, ["no live SAQ worker"])
@@ -931,7 +943,7 @@ class TestMultiChannelAlertFanout:
             raise EmailSendingError("smtp down")
 
         with (
-            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)),
             patch.object(wl, "send_email", side_effect=_raise_send_error),
         ):
             await wl._send_alerts(settings, ["no live SAQ worker"])  # must not raise
@@ -1087,6 +1099,37 @@ class TestWebhookErrorPaths:
             await wl._post_teams_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
         assert "watchdog.teams_webhook_no_url" in caplog.text
 
+    async def test_blocked_webhook_url_is_not_contacted_and_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_WEBHOOK_URL="http://169.254.169.254/latest/meta-data")
+        with (
+            patch.object(
+                wl, "pinned_async_client", AsyncMock(side_effect=ValueError("blocked private address"))
+            ) as pin,
+            patch.object(wl.httpx, "AsyncClient", side_effect=AssertionError("raw client must not be used")),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
+
+        pin.assert_awaited_once()
+        assert "watchdog.webhook_unknown_failure" in caplog.text
+        assert "blocked private address" in caplog.text
+
+    async def test_valid_webhook_uses_pinned_client(self) -> None:
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
+
+        with patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)) as pin:
+            await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
+
+        pin.assert_awaited_once_with(
+            settings.alert_webhook_url,
+            timeout=wl._WEBHOOK_TIMEOUT_SECONDS,
+            connector_type="watchdog_webhook",
+        )
+        client.post.assert_awaited_once()
+
     async def test_generic_webhook_http_error_status_logs(self, caplog: pytest.LogCaptureFixture) -> None:
         settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
         client = AsyncMock()
@@ -1094,7 +1137,7 @@ class TestWebhookErrorPaths:
         client.post.return_value = SimpleNamespace(is_success=False, status_code=500)
 
         with (
-            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
             await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
@@ -1110,7 +1153,7 @@ class TestWebhookErrorPaths:
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
         alert_text = wl._alert_text(settings, ["no live SAQ worker"])
 
-        with patch.object(wl.httpx, "AsyncClient", return_value=client):
+        with patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)):
             await wl._post_generic_webhook(settings, alert_text)
 
         client.post.assert_awaited_once()
@@ -1129,7 +1172,7 @@ class TestWebhookErrorPaths:
         client.post.return_value = SimpleNamespace(is_success=False, status_code=503)
 
         with (
-            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
             await wl._post_teams_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
@@ -1144,7 +1187,7 @@ class TestWebhookErrorPaths:
         client.post.side_effect = httpx.ConnectError("boom")
 
         with (
-            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
             await wl._post_teams_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
@@ -1158,7 +1201,7 @@ class TestWebhookErrorPaths:
         client.post.side_effect = RuntimeError("boom")
 
         with (
-            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
             await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
@@ -1172,7 +1215,7 @@ class TestWebhookErrorPaths:
         client.post.side_effect = RuntimeError("boom")
 
         with (
-            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
             await wl._post_teams_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
@@ -1248,7 +1291,7 @@ class TestCancelledErrorReRaise:
         client.__aenter__.return_value = client
         client.post.side_effect = asyncio.CancelledError()
         with (
-            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)),
             pytest.raises(asyncio.CancelledError),
         ):
             await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
@@ -1259,7 +1302,7 @@ class TestCancelledErrorReRaise:
         client.__aenter__.return_value = client
         client.post.side_effect = asyncio.CancelledError()
         with (
-            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)),
             pytest.raises(asyncio.CancelledError),
         ):
             await wl._post_teams_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
@@ -1524,7 +1567,7 @@ class TestAlertContextOnWebhooks:
         client = AsyncMock()
         client.__aenter__.return_value = client
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
-        with patch.object(wl.httpx, "AsyncClient", return_value=client):
+        with patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)):
             await wl._send_alerts(settings, kwargs.pop("conditions", ["no live SAQ worker"]), **kwargs)
         return [json.loads(call.kwargs["content"]) for call in client.post.await_args_list]
 
@@ -1697,7 +1740,7 @@ class TestAlertContextOnWebhookChannels:
         client.__aenter__.return_value = client
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
 
-        with patch.object(wl.httpx, "AsyncClient", return_value=client):
+        with patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)):
             await wl._send_alerts(settings, ["no live SAQ worker"])
 
         assert client.post.await_count == 2
@@ -1722,7 +1765,7 @@ class TestAlertContextOnWebhookChannels:
         client.__aenter__.return_value = client
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
 
-        with patch.object(wl.httpx, "AsyncClient", return_value=client):
+        with patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)):
             await wl._send_alerts(
                 settings,
                 [],
@@ -1759,7 +1802,7 @@ class TestAlertContextOnWebhookChannels:
             return text
 
         with (
-            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "pinned_async_client", AsyncMock(return_value=client)),
             patch.object(wl, "_alert_text", side_effect=_spy),
         ):
             await wl._send_alerts(settings, ["no live SAQ worker"])

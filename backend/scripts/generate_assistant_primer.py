@@ -165,7 +165,7 @@ def _load_navigation() -> str:
         pages.sort(key=lambda x: x[0])
         page_names = [p[1] for p in pages]
         if page_names:
-            lines.append(f"- **{label}** — {', '.join(page_names)}")
+            lines.extend([f"- **{label}** — {', '.join(page_names)}"])
 
     return "\n".join(lines)
 
@@ -402,14 +402,15 @@ def _build_about_section() -> str:
 
 
 def _build_active_context(ctx: dict[str, str]) -> str:
-    lines: list[str] = []
-    lines.append(f"- **User:** {ctx.get('display_name', 'User')}")
-    lines.append(f"- **Role:** {ctx.get('role', 'admin')}")
-    lines.append(f"- **Organisation:** {ctx.get('org_name', 'Your Organisation')}")
-    lines.append(f"- **Plan:** {ctx.get('plan_name', 'Community')}")
-    lines.append(f"- **Pipelines:** {ctx.get('pipelines', '0')}")
-    lines.append(f"- **Connectors:** {ctx.get('connectors', '0')}")
-    lines.append(f"- **Model Backends:** {ctx.get('model_backends', '0')}")
+    lines = [
+        f"- **User:** {ctx.get('display_name', 'User')}",
+        f"- **Role:** {ctx.get('role', 'admin')}",
+        f"- **Organisation:** {ctx.get('org_name', 'Your Organisation')}",
+        f"- **Plan:** {ctx.get('plan_name', 'Community')}",
+        f"- **Pipelines:** {ctx.get('pipelines', '0')}",
+        f"- **Connectors:** {ctx.get('connectors', '0')}",
+        f"- **Model Backends:** {ctx.get('model_backends', '0')}",
+    ]
     return "\n".join(lines)
 
 
@@ -431,20 +432,15 @@ async def generate_primer(
     # Active context
     ctx = await _get_active_context(org_id, user_id)
 
-    sections: list[str] = []
+    sections = [
+        _build_about_section(),
+        f"## Key Concepts\n\n{_render_key_concepts(glossary)}",
+    ]
 
-    # Section 1 — What is Modulo
-    sections.append(_build_about_section())
-
-    # Section 2 — Key Concepts
-    sections.append(f"## Key Concepts\n\n{_render_key_concepts(glossary)}")
-
-    # Section 3 — Pages & Navigation
     if nav:
-        sections.append(f"## Pages & Navigation\n\n{nav}")
+        sections.extend([f"## Pages & Navigation\n\n{nav}"])
 
-    # Section 4 — Active Context
-    sections.append(f"## Active Context\n\n{_build_active_context(ctx)}")
+    sections.extend([f"## Active Context\n\n{_build_active_context(ctx)}"])
 
     primer = "\n\n".join(sections)
 
