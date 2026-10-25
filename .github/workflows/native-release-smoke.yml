@@ -313,18 +313,16 @@ jobs:
           echo "upgrade success OK"
 
       - name: N-1 upgrade leg (canary leg only)
-        if: ${{ env.CANARY == '1' && env.N_MINUS_1 != '' }}
+        if: ${{ env.CANARY == '1' }}
         env:
           ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
-          # The canary resolve set N_MINUS_1 in a prior step; absence means the
-          # release feed holds no previous bundle release yet. That is expected
-          # EXACTLY once at the start of a release line - report it loudly, don't
-          # silently exit 0.
+          # The canary resolver sets N_MINUS_1 for every release after the first.
+          # The first published release is the only explicitly documented skip.
           if [ -z "${N_MINUS_1:-}" ]; then
-            echo "::warning::no N-1 release resolvable - expected exactly once at the start of a release line; NOT a silent skip"
+            echo "::notice::N-1 upgrade leg skipped because this is the first published bundle release"
             exit 0
           fi
           prev_ver="${N_MINUS_1#bundle-v}"
@@ -452,27 +450,39 @@ jobs:
             # canary-housekeeping can name it in the tracking issue body
             # (GITHUB_ENV above does not cross the job boundary).
             echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-            # Resolve N-1 (the previous bundle-v release) so the N-1 upgrade leg
-            # below is not permanently dead code. Best-effort: a resolution
-            # failure must WARN, never abort the smoke.
+            # Resolve N-1 (the previous published, non-prerelease bundle-v release)
+            # deterministically. --paginate is required: the API's default page is
+            # not a complete release history, and drafts/prereleases are not upgrade
+            # sources. A missing eligible predecessor is only valid for the first
+            # release in the line; API failures and malformed histories fail closed.
             set +e
-            release_list="$(gh api "repos/${{ github.repository }}/releases?per_page=20" \
-              --jq '[.[] | select(.tag_name | startswith("bundle-v")) | .tag_name] | join("\n")' 2>/dev/null)"
+            release_list="$(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate \
+              --jq '.[] | select(.tag_name | startswith("bundle-v")) | select(.draft == false) | select(.prerelease == false) | .tag_name' 2>/tmp/n1-release-list-err)"
+            release_list_rc=$?
             set -e
-            if [ -n "${release_list}" ]; then
-              readarray -t tags_arr < <(printf '%s\n' "${release_list}")
-              idx=-1
-              for i in "${!tags_arr[@]}"; do
-                if [ "${tags_arr[i]}" = "${tag}" ]; then idx=$i; break; fi
-              done
-              if [ "${idx}" -ge 0 ] && [ "$((idx+1))" -lt "${#tags_arr[@]}" ]; then
-                echo "N_MINUS_1=${tags_arr[idx+1]}" >> "$GITHUB_ENV"
-                echo "resolved N-1 release: ${tags_arr[idx+1]}"
-              else
-                echo "::warning::no N-1 release resolvable for ${tag} - N-1 upgrade leg will be skipped"
-              fi
+            if [ "${release_list_rc}" -ne 0 ]; then
+              echo "::error::cannot list published bundle releases to resolve N-1 for ${tag} ($(tr -d '\n' </tmp/n1-release-list-err)) - refusing to skip the upgrade leg"
+              exit 1
+            fi
+            if [ -z "${release_list}" ]; then
+              echo "::error::published bundle release history is empty while resolving N-1 for ${tag} - refusing to skip the upgrade leg"
+              exit 1
+            fi
+            readarray -t tags_arr < <(printf '%s\n' "${release_list}" | sort -V)
+            current_idx=-1
+            for i in "${!tags_arr[@]}"; do
+              if [ "${tags_arr[i]}" = "${tag}" ]; then current_idx=$i; break; fi
+            done
+            if [ "${current_idx}" -lt 0 ]; then
+              echo "::error::current canary ${tag} is not a published, non-prerelease bundle release - refusing to skip the N-1 upgrade leg"
+              exit 1
+            fi
+            if [ "${current_idx}" -eq 0 ]; then
+              echo "::notice::${tag} is the first published bundle release in the release line; no N-1 upgrade leg applies"
             else
-              echo "::warning::could not list releases to resolve N-1 for ${tag} - N-1 upgrade leg will be skipped"
+              n1_tag="${tags_arr[$((current_idx - 1))]}"
+              echo "N_MINUS_1=${n1_tag}" >> "$GITHUB_ENV"
+              echo "resolved N-1 release: ${n1_tag} (published, non-prerelease, below ${tag})"
             fi
             curl --proto '=https' -fsSL -o canary.tar.gz \
               "https://github.com/${{ github.repository }}/releases/download/${tag}/modulo-${version}-linux-amd64.tar.gz" \
@@ -682,19 +692,17 @@ jobs:
           echo "upgrade success OK"
 
       - name: N-1 upgrade leg (canary leg only)
-        if: ${{ steps.gate.outputs.skip != 'true' && env.CANARY == '1' && env.N_MINUS_1 != '' }}
+        if: ${{ steps.gate.outputs.skip != 'true' && env.CANARY == '1' }}
         env:
           ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           export PATH="${HOME}/.local/bin:${PATH}"
-          # The canary resolve set N_MINUS_1 in a prior step; absence means
-          # the release feed holds no previous bundle release yet. That is expected
-          # EXACTLY once at the start of a release line - report it loudly, don't
-          # silently exit 0.
+          # The canary resolver sets N_MINUS_1 for every release after the first.
+          # The first published release is the only explicitly documented skip.
           if [ -z "${N_MINUS_1:-}" ]; then
-            echo "::warning::no N-1 release resolvable - expected exactly once at the start of a release line; NOT a silent skip"
+            echo "::notice::N-1 upgrade leg skipped because this is the first published bundle release"
             exit 0
           fi
           prev_ver="${N_MINUS_1#bundle-v}"

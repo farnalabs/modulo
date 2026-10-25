@@ -8,6 +8,7 @@ pre-deploy wiring intact — the same reasoning as the sibling
 """
 
 from pathlib import Path
+from typing import Any, cast
 
 import yaml
 
@@ -27,11 +28,11 @@ _LEGS = (
 )
 
 
-def _workflow() -> dict:
-    return yaml.safe_load(DEPLOY_WORKFLOW.read_text(encoding="utf-8"))
+def _workflow() -> dict[str, Any]:
+    return cast(dict[str, Any], yaml.safe_load(DEPLOY_WORKFLOW.read_text(encoding="utf-8")))
 
 
-def _step_names(steps: list[dict]) -> list[str]:
+def _step_names(steps: list[dict[str, Any]]) -> list[str]:
     return [step.get("name", "") for step in steps]
 
 
@@ -188,6 +189,20 @@ def test_native_release_smoke_n_minus_one_reuses_fail_closed_artifact_gates() ->
     assert script.index("SHA256SUMS") < script.index("bash scripts/install.sh")
     assert script.index("sha256sum") < script.index("bash scripts/install.sh")
     assert script.index("gh attestation verify") < script.index("bash scripts/install.sh")
+
+
+def test_n_minus_1_release_resolution_is_paginated_and_fail_closed() -> None:
+    workflow_text = (REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml").read_text(encoding="utf-8")
+    assert "releases?per_page=100" in workflow_text
+    assert "--paginate" in workflow_text
+    assert "select(.draft == false)" in workflow_text
+    assert "select(.prerelease == false)" in workflow_text
+    assert "sort -V" in workflow_text
+    assert "current_idx - 1" in workflow_text
+    assert "current canary ${tag} is not a published" in workflow_text
+    assert "cannot list published bundle releases" in workflow_text
+    assert "first published bundle release" in workflow_text
+    assert "no N-1 release resolvable" not in workflow_text
 
 
 def test_release_sh_passes_rehearsal_env_through() -> None:
