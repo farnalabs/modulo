@@ -752,20 +752,21 @@ routes:
          sidebar_order:
          type: page
          <<: *community
-         required_roles: [admin]
-         deprecated: false
+         required_permissions: [compliance.evidence_index.read]
+         deprecated: true
 
     /admin/compliance/evidence-index:
-        name: admin-compliance-evidence-index
-        breadcrumb: Compliance Evidence Index
-        parent: /
-        product_map: [feat-evidence]
-        sidebar_group: monitor
-        sidebar_order: 10
-        type: page
-        <<: *community
-        required_permissions: [compliance.evidence_index.read]
-        deprecated: false
+         name: admin-compliance-evidence-index
+         breadcrumb: Compliance Evidence Index
+         parent: /
+         product_map: [feat-evidence]
+         sidebar_group: monitor
+         sidebar_order: 10
+         type: page
+         <<: *community
+         required_permissions: [compliance.evidence_index.read]
+         deprecated: false
+
 
 
     /admin/errors:
