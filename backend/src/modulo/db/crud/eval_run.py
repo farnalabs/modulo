@@ -42,9 +42,11 @@ def non_guardrail_eval_results_clause() -> Any:
     clause keeps every consumer consistent instead of per-endpoint patches.
 
     ``is_distinct_from`` (SQL: ``IS DISTINCT FROM``) rather than ``!=`` is
-    deliberate: ``outcome`` is nullable during the FAR-2040 expand rollout, and
-    a plain inequality evaluates to NULL for legacy rows, silently dropping
-    every pre-``outcome`` pass/fail result from every pass rate.
+    deliberate: ``outcome`` was nullable during the FAR-2040 expand rollout
+    (closed by FAR-2058 stage 2, migration ``0335``, which backfills NULL rows
+    from ``passed`` and sets the column NOT NULL), and a plain inequality
+    evaluates to NULL for legacy rows, silently dropping every pre-``outcome``
+    pass/fail result from every pass rate.
     """
     evals_table = Eval.__table__
     return and_(
