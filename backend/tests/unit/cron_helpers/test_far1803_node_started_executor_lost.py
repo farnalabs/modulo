@@ -111,12 +111,13 @@ class TestFar1803ReproResolved:
         guardrail-override resume leg, so the observed class was never
         SELECTED (not ``scanned``, not counted, invisible to every reconcile
         counter). POST-FIX: a dedicated FAR-1803 leg brings the positive-match
-        count to 2."""
+        count to 2; FAR-2122's non-SAQ node-started resume leg is a third."""
+        # Pre-fix: 1 (the FAR-1728 override leg only). Post-fix: 3 — the
+        # override leg, the FAR-1803 saq/executor-lost leg and the FAR-2122
+        # non-saq checkpoint-resume leg.
         sql = _compile_scan_predicate()
         positive_phase_matches = sql.count("dispatch_phase = 'first_node_dispatched'")
-        # Pre-fix: 1 (the FAR-1728 override leg only). Post-fix: 2 (the
-        # override leg + the FAR-1803 node-started/stale-heartbeat leg).
-        assert positive_phase_matches == 2
+        assert positive_phase_matches == 3
         # The FAR-1649 phase exclusion on the generic stale leg is unchanged —
         # re-dispatch of a node-started run stays impossible.
         assert "dispatch_phase IS NULL" in sql
@@ -159,9 +160,9 @@ class TestFar1803Regression:
         ``first_node_dispatched`` + STALE (or NULL) heartbeat, never the
         guardrail-override class (its own leg owns resume_run)."""
         sql = _compile_scan_predicate()
-        # Two positive phase matches now: the FAR-1728 override leg and the
-        # new FAR-1803 leg.
-        assert sql.count("dispatch_phase = 'first_node_dispatched'") == 2
+        # Three positive phase matches now: the FAR-1728 override leg, the
+        # FAR-1803 saq leg and FAR-2122's non-saq checkpoint-resume leg.
+        assert sql.count("dispatch_phase = 'first_node_dispatched'") == 3
         # The new leg pairs the phase with the staleness gate...
         assert (
             "runs.dispatcher = 'saq' AND runs.dispatch_phase = 'first_node_dispatched' "

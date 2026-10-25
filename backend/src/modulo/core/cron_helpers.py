@@ -541,6 +541,23 @@ _ZERO_PROGRESS_SHAPE_SQL = (
 ).replace(_NON_SENTINEL_FINAL_NODE_ID_TOKEN, _NON_SENTINEL_FINAL_NODE_ID_SQL)
 _ZERO_PROGRESS_SHAPE_TOKEN = "__ZERO_PROGRESS_SHAPE__"
 
+# FAR-2122: a node output written inside the progress window is durable
+# evidence that the executor is still advancing.  The window is a BOUND param
+# (``:node_output_progress_cutoff``, materialised in Python from the tuned
+# ``node_output_progress_seconds``) rather than a literal — one knob, and the
+# clause is executable under the in-memory SQLite fixture (the same technique
+# ``_SWEEP_ORPHANED_RUNS_SQL``'s ``:orphan_cutoff`` uses).
+_NODE_OUTPUT_PROGRESS_ABSENT_SQL = (
+    "NOT EXISTS (SELECT 1 FROM run_node_outputs rno_progress "
+    "WHERE rno_progress.run_id = runs.id "
+    "AND rno_progress.updated_at >= :node_output_progress_cutoff)"
+)
+_NODE_OUTPUT_PROGRESS_ABSENT_TOKEN = "__NODE_OUTPUT_PROGRESS_ABSENT__"
+# Coded fallback for the recency window (Settings
+# ``dispatcher_reconcile_node_output_progress_seconds``). Also used when a
+# direct caller / stand-in settings object omits the knob.
+_NODE_OUTPUT_PROGRESS_DEFAULT_SECONDS = 900
+
 # The two FAR-1329 statements. Assembled from static templates + str.replace
 # (bandit/ruff S608 flag f-string/format SQL construction — trigger_streak's
 # ``__STATUSES__`` precedent): the ONLY thing substituted is the module
@@ -606,12 +623,10 @@ _MID_GRAPH_WEDGE_SQL = (
     # test: a long-running graph can legitimately exceed it while a node is
     # still advancing.  Keep this window short enough to collect genuinely
     # abandoned rows, while allowing the next reconcile tick to observe the
-    # progress and leave the run alone.
-    "  AND NOT EXISTS ("
-    "    SELECT 1 FROM run_node_outputs rno_progress "
-    "    WHERE rno_progress.run_id = runs.id "
-    "    AND rno_progress.updated_at >= now() - interval '15 minutes'"
-    "  ) "
+    # progress and leave the run alone.  The clause (with its BOUND cutoff) is
+    # the shared ``_NODE_OUTPUT_PROGRESS_ABSENT_SQL`` fragment so it is tested
+    # behaviourally on its own.
+    "  AND __NODE_OUTPUT_PROGRESS_ABSENT__ "
     "  AND NOT (__ZERO_PROGRESS_SHAPE__) "
     "  LIMIT :max_rows) "
     "RETURNING id"
@@ -6499,11 +6514,26 @@ def _build_re_dispatch_predicate(
             ),
             not_(Run.guardrail_override_resume_pending.is_(True)),
         ),
-        # FAR-2122: a node-started run without an SAQ dispatcher identity is
-        # also worker-lost. It cannot safely use execute_run because the first
-        # node may already have side effects; resume_run claims the stale run
-        # and continues from its durable checkpoint. The per-row job and
-        # checkpoint guards are applied in _reconcile_one_row.
+        # FAR-2122 — a node-started run WITHOUT an SAQ dispatcher identity (the
+        # dispatcherless orphan class `_SWEEP_ORPHANED_RUNS_SQL` otherwise
+        # terminalises) is recovered by CHECKPOINT RESUME, never re-execution:
+        # the first node may already have had side effects, so `execute_run` is
+        # unsafe, but a run whose thread carries a resumable checkpoint can
+        # continue from that checkpoint.
+        #
+        # PRECEDENCE (the reconciliation with the sweep's "terminalise only"
+        # rationale): this leg and `pipeline_execution._SWEEP_ORPHANED_RUNS_SQL`
+        # are the two arms over the same row class. The sweep now defers its
+        # cutoff past THIS leg's stale window by one reconcile tick
+        # (`_ORPHAN_RECONCILE_GRACE_SECONDS`) precisely so the checkpoint-resume
+        # recovery gets its chance first; the per-row resumable-checkpoint guard
+        # in `_reconcile_one_row` decides whether resume is safe. A run with a
+        # checkpoint is resumed (dispatch_run stamps `dispatcher='saq'`, lifting
+        # it out of both the sweep and this leg); a run WITHOUT one fails the
+        # guard and is left to the sweep's terminaliser (never re-executed from
+        # the graph start, FAR-1649). Neither arm can double-act: both re-check
+        # `status='running'` and the sweep re-checks the phase/dispatcher shape.
+        # The per-row job + checkpoint guards are applied in `_reconcile_one_row`.
         and_(
             Run.status == "running",
             or_(Run.dispatcher.is_(None), Run.dispatcher != "saq"),
@@ -7036,6 +7066,11 @@ class ReconcileTuning:
     stale_window: int
     capacity_redispatch_seconds: int
     hitl_review_cancel_grace_seconds: int
+    # FAR-2122: recency window in which a ``run_node_outputs`` write counts as
+    # live progress for the mid-graph age gate. Defaulted so existing direct
+    # constructors (tests) keep working; the production path always supplies it
+    # from Settings.
+    node_output_progress_seconds: int = _NODE_OUTPUT_PROGRESS_DEFAULT_SECONDS
 
 
 def _int_setting(value: Any, default: int) -> int:
@@ -7252,6 +7287,7 @@ async def _terminalize_mid_graph_wedges(
     *,
     max_age_minutes: int,
     stale_seconds: int | None = None,
+    node_output_progress_seconds: int | None = None,
     max_rows: int | None = None,
 ) -> list[uuid.UUID]:
     """Terminal-fail SAQ runs wedged past the age bound — with a truthful code.
@@ -7306,14 +7342,28 @@ async def _terminalize_mid_graph_wedges(
     drains gradually across 60s ticks instead of one unbounded UPDATE storm
     competing with the tick budget; the predicate re-selects the remaining
     rows next tick. ``None`` (or a non-int stand-in) means uncapped.
+
+    FAR-2122 — *node_output_progress_seconds* is the recency window in which a
+    ``run_node_outputs`` write is treated as live progress (the same knob
+    threaded from ``ReconcileTuning.node_output_progress_seconds`` on the
+    production path). The window is materialised as a bound cutoff datetime
+    (never a SQL literal), so the clause is dialect-testable.
     """
     from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
     if stale_seconds is None:
         stale_seconds = RECONCILE_STALE_HEARTBEAT_FACTOR * int(get_settings().saq_job_heartbeat)
+    if node_output_progress_seconds is None:
+        node_output_progress_seconds = _int_setting(
+            getattr(get_settings(), "dispatcher_reconcile_node_output_progress_seconds", None),
+            _NODE_OUTPUT_PROGRESS_DEFAULT_SECONDS,
+        )
     detail_prefix = _NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT.format(age=max_age_minutes)
+    assembled_sql = _MID_GRAPH_WEDGE_SQL.replace(_ZERO_PROGRESS_SHAPE_TOKEN, _ZERO_PROGRESS_SHAPE_SQL).replace(
+        _NODE_OUTPUT_PROGRESS_ABSENT_TOKEN, _NODE_OUTPUT_PROGRESS_ABSENT_SQL
+    )
     result = await session.execute(
-        text(_MID_GRAPH_WEDGE_SQL.replace(_ZERO_PROGRESS_SHAPE_TOKEN, _ZERO_PROGRESS_SHAPE_SQL)),
+        text(assembled_sql),
         {
             "oid": str(org_id),
             "code": _NO_PROGRESS_ERROR_CODE,
@@ -7329,6 +7379,8 @@ async def _terminalize_mid_graph_wedges(
             "live_marker_tombstone": _live_dispatch_marker_tombstone_pattern(),
             # FAR-1803: the shield's liveness bound (see the template comment).
             "heartbeat_fresh": stale_seconds,
+            # FAR-2122: a node output this recent is live progress.
+            "node_output_progress_cutoff": datetime.now(UTC) - timedelta(seconds=node_output_progress_seconds),
             "max_age_minutes": max_age_minutes,
             "max_rows": _terminalize_max_rows(max_rows),
         },
@@ -7952,7 +8004,13 @@ _TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
         # FAR-1803: ``stale_seconds`` is the live-marker shield's liveness
         # bound — threaded from the SAME ``stale_window`` the scan's
         # stale-heartbeat legs bind, so "stale" has one definition.
-        tuning_kwargs={"max_age_minutes": "max_age_minutes", "stale_seconds": "stale_window"},
+        # FAR-2122: ``node_output_progress_seconds`` is the recent-node-output
+        # progress window, threaded as a bound param (never a SQL literal).
+        tuning_kwargs={
+            "max_age_minutes": "max_age_minutes",
+            "stale_seconds": "stale_window",
+            "node_output_progress_seconds": "node_output_progress_seconds",
+        },
     ),
     ReconcileTerminalizer(
         key="dispatch_failed",
@@ -8616,6 +8674,12 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     max_age_minutes = _saq_zero_progress_max_age_minutes()
     claim_cap = _saq_run_claim_cap()
     hitl_review_cancel_grace = int(settings.hitl_review_cancel_grace_seconds)
+    # FAR-2122: the node-output recency window is a tuning knob (bound, never a
+    # SQL literal) — the same registry `stale_window` travels through.
+    node_output_progress_seconds = _int_setting(
+        getattr(settings, "dispatcher_reconcile_node_output_progress_seconds", None),
+        _NODE_OUTPUT_PROGRESS_DEFAULT_SECONDS,
+    )
     # FAR-720: the tick's tuning knobs travel as one frozen unit.
     tuning = ReconcileTuning(
         nodeless_window=nodeless_window,
@@ -8624,6 +8688,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         stale_window=stale_window,
         capacity_redispatch_seconds=capacity_redispatch_seconds,
         hitl_review_cancel_grace_seconds=hitl_review_cancel_grace,
+        node_output_progress_seconds=node_output_progress_seconds,
     )
     budget_seconds = _int_setting(
         getattr(settings, "dispatcher_reconcile_budget_seconds", None), _RECONCILE_BUDGET_DEFAULT_SECONDS
@@ -10910,6 +10975,12 @@ def _is_unowned_node_started_resume_row(row: Any, stale_window: int) -> bool:
     A missing/foreign dispatcher means the SAQ job identity was lost, but the
     durable phase proves that a node may already have run. Such rows must use
     the checkpoint-resume claim rather than ``execute_run``.
+
+    Heartbeats are normalised with :func:`_as_utc` (the sibling rechecks' rule):
+    a naive datetime from a legacy row / a driver that drops tzinfo would
+    otherwise raise ``TypeError`` on subtraction from an aware ``now``. A NULL
+    heartbeat is stale evidence (no live writer); a non-datetime value fails
+    closed (no verifiable staleness evidence).
     """
     if getattr(row, "status", None) != "running":
         return False
@@ -10917,10 +10988,11 @@ def _is_unowned_node_started_resume_row(row: Any, stale_window: int) -> bool:
         return False
     if getattr(row, "dispatch_phase", None) != PHASE_FIRST_NODE_DISPATCHED:
         return False
-    heartbeat = getattr(row, "heartbeat_at", None)
-    if heartbeat is None:
+    raw_heartbeat = getattr(row, "heartbeat_at", None)
+    if raw_heartbeat is None:
         return True
-    if not isinstance(heartbeat, datetime):
+    heartbeat = _as_utc(raw_heartbeat)
+    if heartbeat is None:
         return False
     return (datetime.now(UTC) - heartbeat).total_seconds() > stale_window
 
@@ -11211,14 +11283,16 @@ async def _reconcile_one_row(
 
     # FAR-2122 — recover a node-started row whose SAQ dispatcher identity was
     # lost. The durable phase means execute_run is unsafe; require a root
-    # checkpoint before claiming a resume, otherwise the row remains owned by
-    # the age gate rather than risking re-execution from the graph start.
+    # checkpoint before claiming a resume. A row WITHOUT one is left to
+    # ``pipeline_execution._SWEEP_ORPHANED_RUNS_SQL`` — the terminaliser for
+    # the checkpointless shape (see the precedence note on the scan leg) —
+    # rather than risking re-execution from the graph start (FAR-1649).
     if _is_unowned_node_started_resume_row(row, stale_window):
         if not await _override_resume_checkpoint_present(session, org_id, row):
             summary["skipped"] += 1
             _log.warning(
                 "dispatcher_reconcile: unowned node-started run %s has no root checkpoint; "
-                "not re-dispatched (resume would re-execute it)",
+                "not re-dispatched (resume would re-execute it) — left to the orphan sweep",
                 row.id,
             )
             return enqueue_failed_redispatched

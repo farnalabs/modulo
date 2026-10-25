@@ -3796,9 +3796,22 @@ async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
 # The fix therefore lives HERE, in the arm whose window is already the non-SAQ
 # one: a node-started run with no SAQ dispatcher identity and a dead heartbeat is
 # terminal-failed ``harness.worker_lost`` — the truthful code for "the executor is
-# gone" (the same code the shutdown handoff stamps), never a re-dispatch
+# gone" (the same code the shutdown handoff stamps), never RE-EXECUTED
 # (FAR-1649). It reuses this sweep's existing terminalisation path, so journeys,
 # the daily fact and the audit record are written exactly as for every other arm.
+#
+# FAR-2122 RECONCILIATION — ``dispatcher_reconcile``'s non-SAQ node-started leg
+# (``cron_helpers._build_re_dispatch_predicate``) recovers the SAME class via
+# ``resume_run`` when the thread carries a resumable checkpoint. Checkpoint
+# resume is NOT re-execution: LangGraph continues from the durable checkpoint, so
+# the started node's side effects are preserved (the FAR-1649 hazard is
+# ``execute_run`` from the graph start). The two arms are reconciled by
+# PRECEDENCE, not exclusion: this arm's cutoff is deferred by
+# ``_ORPHAN_RECONCILE_GRACE_SECONDS`` past the reconcile stale window, so the
+# 60s reconcile tick observes the row first. A successful resume stamps
+# ``dispatcher='saq'`` (``dispatch_run``) and the row leaves this predicate; a
+# row with NO checkpoint is refused by the reconcile guard and terminalised
+# here. This arm remains the terminal backstop, so the class can never leak.
 #
 # Grace: the arm's OWN ``wl_window`` (``SAQ_WORKER_LOST_WINDOW``, 600s = twenty
 # missed 30s heartbeats). The FAR-2005 300s bound is deliberately NOT reused:
@@ -3808,6 +3821,10 @@ async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
 # one. Both timestamps are BOUND datetimes (not ``now()`` arithmetic) so the
 # predicate is executable under the in-memory SQLite fixture — the same technique
 # ``run_admission._REAP_DEAD_HEARTBEAT_NODE_STARTED_SQL`` uses.
+# FAR-2122: one ``dispatcher_reconcile`` tick, so the checkpoint-resume arm is
+# guaranteed a chance before this terminaliser acts on the same row class.
+_ORPHAN_RECONCILE_GRACE_SECONDS = 60
+
 _ORPHANED_RUN_DETAIL = (
     "Worker lost: this node-started run carries no SAQ dispatcher identity (so the "
     "dispatcher-scoped recovery arms cannot see it) and its executor stopped "
@@ -4009,18 +4026,27 @@ async def _sweep_org_stale_runs(
         derived_cost_run_ids.extend((row[0], org_id) for row in lost_rows)
 
     # 2026-10-22 leak (see :data:`_SWEEP_ORPHANED_RUNS_SQL`): a node-started run
-    # with no SAQ dispatcher identity is out of every other arm's scope, so this
-    # arm is its ONLY terminaliser. Runs AFTER the legacy worker_lost branch: the
-    # legacy arm's stricter shape (claim_count >= 5, non-NULL heartbeat) keeps its
-    # own code, and the two can never double-write the same row (this statement
-    # re-checks ``status = 'running'``).
+    # with no SAQ dispatcher identity is out of every other arm's scope. Runs
+    # AFTER the legacy worker_lost branch: the legacy arm's stricter shape
+    # (claim_count >= 5, non-NULL heartbeat) keeps its own code, and the two can
+    # never double-write the same row (this statement re-checks
+    # ``status = 'running'``). FAR-2122: the cutoff defers one
+    # ``dispatcher_reconcile`` tick past the reconcile stale window so its
+    # checkpoint-resume arm observes the row first (see the reconciliation note
+    # on the SQL constant).
+    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR, _int_setting
+
+    reconcile_window = RECONCILE_STALE_HEARTBEAT_FACTOR * _int_setting(
+        getattr(get_settings(), "saq_job_heartbeat", None), 300
+    )
+    orphan_grace = max(wl_window, reconcile_window + _ORPHAN_RECONCILE_GRACE_SECONDS)
     orphan_now = datetime.now(UTC)
     orphaned_result = await conn.execute(
         _SWEEP_ORPHANED_RUNS_SQL,
         {
             "oid": str(org_id),
             "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
-            "orphan_cutoff": orphan_now - timedelta(seconds=wl_window),
+            "orphan_cutoff": orphan_now - timedelta(seconds=orphan_grace),
             "completed_at": orphan_now,
             "detail": _ORPHANED_RUN_DETAIL,
         },
@@ -4354,12 +4380,13 @@ async def stale_run_recovery_sweep(
       (``dispatcher IS NULL`` or a foreign value) whose liveness reference
       (``COALESCE(heartbeat_at, started_at, created_at)``) is older than the
       same worker-lost window are marked ``failed`` with ``harness.worker_lost``
-      (:data:`_SWEEP_ORPHANED_RUNS_SQL`). This is the ONLY arm that can reclaim
-      that shape — the reconcile retry-reset arm excludes node-started rows
-      (FAR-1649) and every dispatcher-scoped arm requires ``dispatcher='saq'`` —
-      so without it such a run stays ``running`` forever, holding a concurrency
-      slot. Counted separately as ``worker_orphaned_swept``; terminalised
-      without re-dispatch (a started node may already have run).
+      (:data:`_SWEEP_ORPHANED_RUNS_SQL`). Before that, ``dispatcher_reconcile``
+      (FAR-2122) has one tick of precedence over the same class to recover a
+      run that carries a resumable checkpoint via ``resume_run`` (checkpoint
+      resume, never re-execution); this arm is the terminal backstop for every
+      row the resume guard refuses, so the class can never leak. Counted
+      separately as ``worker_orphaned_swept``; terminalised without
+      re-execution (a started node may already have run).
     - FAR-1715: running ``dispatcher='saq'`` runs with ZERO node progress
       whose ``started_at`` is older than the shared zero-progress age bound
       (Settings ``saq_zero_progress_max_age_minutes``, ~135m at the default)

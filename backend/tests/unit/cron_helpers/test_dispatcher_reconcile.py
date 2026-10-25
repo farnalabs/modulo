@@ -2225,7 +2225,9 @@ class TestTerminalizerSyntheticErrorDetail:
         # absent checkpoints) is split between the row-shape tests in
         # test_nodeless_dispatch_phase.py and the real-Postgres wedge in
         # test_org_sandbox_capacity.py.)
-        expect_wedge_sql = ch._MID_GRAPH_WEDGE_SQL.replace(ch._ZERO_PROGRESS_SHAPE_TOKEN, ch._ZERO_PROGRESS_SHAPE_SQL)
+        expect_wedge_sql = ch._MID_GRAPH_WEDGE_SQL.replace(
+            ch._ZERO_PROGRESS_SHAPE_TOKEN, ch._ZERO_PROGRESS_SHAPE_SQL
+        ).replace(ch._NODE_OUTPUT_PROGRESS_ABSENT_TOKEN, ch._NODE_OUTPUT_PROGRESS_ABSENT_SQL)
         assert sql == expect_wedge_sql
 
     @pytest.mark.asyncio
