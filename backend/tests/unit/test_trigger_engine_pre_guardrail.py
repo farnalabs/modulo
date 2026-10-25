@@ -518,7 +518,7 @@ async def test_handle_webhook_mechanism_error_preserves_muted_evidence_with_acti
             "modulo.core.trigger_engine.pre_guardrail.run_interception_pass",
             side_effect=RuntimeError("eval backend unavailable"),
         ),
-        patch.object(TriggerEngine, "_persist_pre_trigger_guardrail_evidence", new_callable=AsyncMock) as persist,
+        patch.object(TriggerEngine, "_persist_pre_trigger_guardrail_evidence", new_callable=MagicMock) as persist,
         pytest.raises(GuardrailBlockedAtIntakeError),
     ):
         await TriggerEngine().handle_webhook(
@@ -532,8 +532,8 @@ async def test_handle_webhook_mechanism_error_preserves_muted_evidence_with_acti
             snapshot_id=_SNAP,
         )
 
-    persist.assert_awaited_once()
-    guardrail_results = persist.await_args.kwargs["guardrail_results"]
+    persist.assert_called_once()
+    guardrail_results = persist.call_args.kwargs["guardrail_results"]
     assert len(guardrail_results) == 2
     assert {result.eval_id for result in guardrail_results} == {active.id, muted.id}
     assert all(result.passed is False for result in guardrail_results)
