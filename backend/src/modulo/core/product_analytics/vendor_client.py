@@ -89,6 +89,8 @@ class VendorClient:
         """Human-readable message for a transport-level failure."""
         if isinstance(exc, TimeoutError):
             return f"Timeout after {REQUEST_TIMEOUT}s"
+        if isinstance(exc, ValueError):
+            return f"Blocked outbound URL: {exc}"
         return f"RequestError: {exc}"
 
     def _log_attempt_failure(self, attempt: int, last_error: str) -> None:

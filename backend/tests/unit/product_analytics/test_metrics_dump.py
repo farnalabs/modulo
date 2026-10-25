@@ -768,7 +768,7 @@ class TestVendorClient:
 
         assert success is False
         assert code is None
-        assert error == "RequestError: blocked internal address"
+        assert error == "Blocked outbound URL: blocked internal address"
         assert client._http_client is None
 
     @pytest.mark.asyncio
