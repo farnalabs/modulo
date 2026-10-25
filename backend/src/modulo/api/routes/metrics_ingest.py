@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -26,6 +27,8 @@ from modulo.core.audit_coverage import audited
 from modulo.core.product_analytics.consent import is_org_consenting
 from modulo.core.product_analytics.metrics_constants import (
     API_ERROR_DAILY_CAP,
+    EVENT_PAYLOAD_FIELDS,
+    EVENT_PAYLOAD_VALUE_TYPES,
     MAX_BATCH_SIZE,
     VALID_EVENT_TYPES,
 )
@@ -104,6 +107,60 @@ def _sanitize_route_template(route: str | None, templates: set[str]) -> str:
     return route if route in templates else "unknown"
 
 
+def _validated_identifier(value: Any, _templates: set[str]) -> str | None:
+    """Return *value* as a canonical UUID string, or None when it is not one."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
+
+
+def _validated_route(value: Any, templates: set[str]) -> str | None:
+    """Return a matched route template, or None when *value* is not a bounded route."""
+    if not isinstance(value, str):
+        return None
+    if len(value) > 256:
+        return None
+    return _sanitize_route_template(value, templates)
+
+
+def _validated_http_status(value: Any, _templates: set[str]) -> int | None:
+    """Return *value* when it is an HTTP status code, or None otherwise."""
+    if isinstance(value, bool):
+        return None
+    if not isinstance(value, int):
+        return None
+    if 100 <= value <= 599:
+        return value
+    return None
+
+
+_PAYLOAD_VALUE_VALIDATORS: dict[str, Callable[[Any, set[str]], Any | None]] = {
+    "uuid": _validated_identifier,
+    "route": _validated_route,
+    "http_status": _validated_http_status,
+}
+
+
+def _validated_payload(event: MetricsEventItem, registered_templates: set[str]) -> dict[str, Any]:
+    """Return only payload values that satisfy the event-specific contract.
+
+    Invalid values are dropped rather than rejected so ingest remains
+    best-effort, while the staged payload cannot become a PII or nested-object
+    channel through an otherwise allowlisted key.
+    """
+    payload: dict[str, Any] = {}
+    value_types = EVENT_PAYLOAD_VALUE_TYPES[event.event_type]
+    for key in EVENT_PAYLOAD_FIELDS[event.event_type]:
+        validator = _PAYLOAD_VALUE_VALIDATORS[value_types[key]]
+        validated = validator(event.payload.get(key), registered_templates)
+        if validated is not None:
+            payload[key] = validated
+    return payload
+
+
 async def _api_error_count_today(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -159,10 +216,10 @@ async def _stage_single_event(
             return api_error_count
         api_error_count += 1
 
-    # Sanitize route in api_error payloads
-    payload = dict(event.payload)
-    if event.event_type == "api_error" and "route" in payload:
-        payload["route"] = _sanitize_route_template(payload["route"], registered_templates)
+    # Enforce the event contract at the ingest boundary.  The browser sends
+    # curated events, but the endpoint is public to any authenticated tenant
+    # client; unknown payload keys could otherwise become a covert PII channel.
+    payload = _validated_payload(event, registered_templates)
 
     recorded_at = event.recorded_at or now
 
