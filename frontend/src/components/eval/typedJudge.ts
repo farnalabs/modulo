@@ -513,14 +513,7 @@ function validateQuestion(
   if (question.type === 'score') validateScoreQuestion(question, index, errors)
 }
 
-/**
- * Mirror the backend's write-time rules so an author sees the problem before
- * submitting. The server stays authoritative: its typed 422 codes are surfaced
- * inline too, because this cannot check backend existence/ownership.
- */
-export function validateTypedJudgeDraft(draft: TypedJudgeDraft): JudgingValidationError[] {
-  const errors: JudgingValidationError[] = []
-
+function validateFieldSelection(draft: TypedJudgeDraft, errors: JudgingValidationError[]): void {
   if (draft.verdictKind === 'derivation') {
     errors.push({ path: 'verdict_kind', key: 'verdictDerivation' })
   }
@@ -542,7 +535,9 @@ export function validateTypedJudgeDraft(draft: TypedJudgeDraft): JudgingValidati
   if (!draft.judgeWholeOutput && field !== '' && contextFields.includes(field)) {
     errors.push({ path: 'context_fields', key: 'contextFieldEqualsField' })
   }
+}
 
+function validateQuestionList(draft: TypedJudgeDraft, errors: JudgingValidationError[]): void {
   if (draft.questions.length === 0) {
     errors.push({ path: 'questions', key: 'questionsRequired' })
   }
@@ -556,7 +551,12 @@ export function validateTypedJudgeDraft(draft: TypedJudgeDraft): JudgingValidati
     seenIds.add(id)
     validateQuestion(question, index, errors)
   }
+}
 
+function validateThresholdsAndTimeouts(
+  draft: TypedJudgeDraft,
+  errors: JudgingValidationError[],
+): void {
   const threshold = parseNumber(draft.threshold)
   if (threshold === null || threshold < 0 || threshold > 1) {
     errors.push({ path: 'pass_rule.threshold', key: 'thresholdInvalid' })
@@ -575,7 +575,19 @@ export function validateTypedJudgeDraft(draft: TypedJudgeDraft): JudgingValidati
       key: 'definitionTimeoutTooShort',
     })
   }
+}
 
+/**
+ * Mirror the backend's write-time rules so an author sees the problem before
+ * submitting. The server stays authoritative: its typed 422 codes are surfaced
+ * inline too, because this cannot check backend existence/ownership.
+ */
+export function validateTypedJudgeDraft(draft: TypedJudgeDraft): JudgingValidationError[] {
+  const errors: JudgingValidationError[] = []
+
+  validateFieldSelection(draft, errors)
+  validateQuestionList(draft, errors)
+  validateThresholdsAndTimeouts(draft, errors)
   validateBacking(draft, errors)
   return errors
 }

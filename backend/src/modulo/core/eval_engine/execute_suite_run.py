@@ -617,64 +617,103 @@ async def _run_suite_cases(
     failed = 0
     excluded = 0
     for case in cases:
-        if _budget_exhausted(judging_deadline):
-            # Do not start (or charge for) a case the run budget cannot finish:
-            # record every definition as ``error`` so the run terminalises
-            # honestly and no verdict row is silently missing.
-            _log.warning(
-                "suite_run.judging_budget_exhausted",
-                extra={"suite_run_id": str(run.id), "unprocessed_cases": 1},
-            )
-            results, errored = _exhausted_case_results(
-                run,
-                suite_defs,
-                eval_definition_version=eval_definition_version,
-            )
-        else:
-            if claims_llm:
-                await _claim_case_cost(session, run, cost_per_llm_case, suite_ceiling)
-            elif run.claimed_cost is None:
-                run.claimed_cost = Decimal(0)
-
-            if hasattr(model_judge_callable, "ajudge"):
-                results, errored = await _case_results_async(
-                    run,
-                    case,
-                    suite_defs,
-                    engine,
-                    model_judge_callable,
-                    scenario_inputs,
-                    eval_definition_version=eval_definition_version,
-                    judging_deadline=judging_deadline,
-                )
-            else:
-                # A synchronous judge cannot be interrupted mid-call; the budget
-                # check above still stops STARTING cases past the deadline.
-                results, errored = _case_results(
-                    run,
-                    case,
-                    suite_defs,
-                    engine,
-                    model_judge_callable,
-                    scenario_inputs,
-                    eval_definition_version=eval_definition_version,
-                )
+        results, errored = await _score_case(
+            session,
+            run,
+            case,
+            suite_defs=suite_defs,
+            engine=engine,
+            model_judge_callable=model_judge_callable,
+            scenario_inputs=scenario_inputs,
+            eval_definition_version=eval_definition_version,
+            claims_llm=claims_llm,
+            suite_ceiling=suite_ceiling,
+            cost_per_llm_case=cost_per_llm_case,
+            judging_deadline=judging_deadline,
+        )
         for result in results:
             session.add(result)
 
-        # A case is EXCLUDED when any definition produced no verdict (error) —
-        # an instrument failure is not a defect escape (ADR 066 D18). Every
-        # non-error row is one definition, so the flags are never pooled with
-        # an error's fail-closed projection.
-        verdict_flags = [r.passed for r in results if r.outcome != JudgeOutcome.ERROR.value]
-        case_passed = bool(verdict_flags) and all(verdict_flags)
-        if errored:
-            excluded += 1
-        elif case_passed:
-            passed += 1
-        else:
-            failed += 1
+        case_passed, case_failed, case_excluded = _case_tally(results, errored)
+        passed += case_passed
+        failed += case_failed
+        excluded += case_excluded
     return passed, failed, excluded
+
+
+async def _score_case(
+    session: AsyncSession,
+    run: SuiteRun,
+    case: EvalCase,
+    *,
+    suite_defs: Sequence[EvalDefinition],
+    engine: EvalEngine,
+    model_judge_callable: Any,
+    scenario_inputs: dict[str, Any] | None,
+    eval_definition_version: int,
+    claims_llm: bool,
+    suite_ceiling: Decimal | None,
+    cost_per_llm_case: Decimal,
+    judging_deadline: float | None,
+) -> tuple[list[EvalResult], int]:
+    """Produce one case's result rows, or its budget-exhausted error rows."""
+    if _budget_exhausted(judging_deadline):
+        # Do not start (or charge for) a case the run budget cannot finish:
+        # record every definition as ``error`` so the run terminalises
+        # honestly and no verdict row is silently missing.
+        _log.warning(
+            "suite_run.judging_budget_exhausted",
+            extra={"suite_run_id": str(run.id), "unprocessed_cases": 1},
+        )
+        return _exhausted_case_results(
+            run,
+            suite_defs,
+            eval_definition_version=eval_definition_version,
+        )
+
+    if claims_llm:
+        await _claim_case_cost(session, run, cost_per_llm_case, suite_ceiling)
+    elif run.claimed_cost is None:
+        run.claimed_cost = Decimal(0)
+
+    if hasattr(model_judge_callable, "ajudge"):
+        return await _case_results_async(
+            run,
+            case,
+            suite_defs,
+            engine,
+            model_judge_callable,
+            scenario_inputs,
+            eval_definition_version=eval_definition_version,
+            judging_deadline=judging_deadline,
+        )
+    # A synchronous judge cannot be interrupted mid-call; the budget check
+    # above still stops STARTING cases past the deadline.
+    return _case_results(
+        run,
+        case,
+        suite_defs,
+        engine,
+        model_judge_callable,
+        scenario_inputs,
+        eval_definition_version=eval_definition_version,
+    )
+
+
+def _case_tally(results: Sequence[EvalResult], errored: int) -> tuple[int, int, int]:
+    """Return ``(passed, failed, excluded)`` deltas for one case's rows.
+
+    A case is EXCLUDED when any definition produced no verdict (error) — an
+    instrument failure is not a defect escape (ADR 066 D18). Every non-error
+    row is one definition, so the flags are never pooled with an error's
+    fail-closed projection.
+    """
+    if errored:
+        return 0, 0, 1
+    verdict_flags = [result.passed for result in results if result.outcome != JudgeOutcome.ERROR.value]
+    if verdict_flags and all(verdict_flags):
+        return 1, 0, 0
+    return 0, 1, 0
 
 
 def _budget_exhausted(judging_deadline: float | None) -> bool:

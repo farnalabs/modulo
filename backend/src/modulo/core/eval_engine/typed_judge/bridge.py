@@ -83,7 +83,11 @@ class _LoopThread:
     async def _carry_base_exceptions(self, coro: Coroutine[Any, Any, Any]) -> Any:
         try:
             return await coro
-        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit) as exc:
+        # NOSONAR python:S5754 — these are deliberately converted into a carrier
+        # and re-raised verbatim by the caller (`run` below): a bare re-raise here
+        # would escape the loop callback and kill the loop thread before the
+        # future could report the failure, wedging every later call.
+        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit) as exc:  # NOSONAR
             raise _CarriedBaseError(exc) from None
 
     def run(self, coro: Coroutine[Any, Any, Any], timeout: float) -> Any:
