@@ -31,6 +31,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'governance-stack': { icon: 'LayoutTemplate', labelKey: 'components.SidebarNav.item_governance_stack' },
   analytics: { icon: 'BarChart', labelKey: 'components.SidebarNav.item_analytics' },
   evidence: { icon: 'FileText', labelKey: 'components.SidebarNav.item_evidence' },
+  'risk-assessment': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_risk_assessment' },
   'admin-compliance-evidence-index': { icon: 'FileText', labelKey: 'components.SidebarNav.item_compliance_evidence_index' },
   notifications: { icon: 'Bell', labelKey: 'components.SidebarNav.item_notifications' },
   library: { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_library' },

@@ -196,6 +196,17 @@ routes:
         <<: *community
         deprecated: false
 
+    /risk-assessment:
+        name: risk-assessment
+        breadcrumb: Risk Assessment
+        parent: /
+        product_map: [feat-evidence, feat-risk-assessment]
+        sidebar_group: monitor
+        sidebar_order: 9
+        type: page
+        <<: *community
+        deprecated: false
+
     /runs/diff:
         name: runs-diff
         breadcrumb: Output Diff
@@ -503,7 +514,7 @@ routes:
         parent: /
         product_map: [feat-notifications]
         sidebar_group: monitor
-        sidebar_order: 9
+        sidebar_order: 10
         type: form_page
         <<: *community
         # Per-user settings: visible to EVERY org role, so role gating stays
@@ -761,7 +772,7 @@ routes:
         parent: /
         product_map: [feat-evidence]
         sidebar_group: monitor
-        sidebar_order: 10
+        sidebar_order: 11
         type: page
         <<: *community
         required_permissions: [compliance.evidence_index.read]
