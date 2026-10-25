@@ -368,6 +368,12 @@ def test_update_webhook_invalid_event_422(api: tuple[TestClient, AsyncMock]) -> 
     assert resp.status_code == 422
 
 
+def test_webhook_update_optional_fields_accept_null() -> None:
+    model = admin_notifications.WebhookUpdate(url=None, events=None)
+    assert model.url is None
+    assert model.events is None
+
+
 def test_update_webhook_not_found_404(api: tuple[TestClient, AsyncMock]) -> None:
     client, session = api
     session.get = AsyncMock(return_value=None)

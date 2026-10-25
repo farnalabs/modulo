@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.notifications import NotificationEndpointUpdate
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
@@ -392,6 +393,11 @@ def test_update_endpoint_rejects_unknown_event(client: TestClient) -> None:
         json={"events": ["not_a_real_event"]},
     )
     assert resp.status_code == 422
+
+
+def test_update_endpoint_optional_events_accept_null() -> None:
+    model = NotificationEndpointUpdate(events=None)
+    assert model.events is None
 
 
 def test_delete_endpoint_returns_204(client: TestClient) -> None:
