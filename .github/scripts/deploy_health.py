@@ -160,8 +160,14 @@ class Verdict:
     @property
     def as_outputs(self) -> dict[str, str]:
         """Plain string outputs, as a GitHub Actions step would consume them."""
+        if self.healthy is None:
+            healthy = ""
+        elif self.healthy:
+            healthy = "true"
+        else:
+            healthy = "false"
         return {
-            "healthy": "" if self.healthy is None else ("true" if self.healthy else "false"),
+            "healthy": healthy,
             "stale": "true" if self.stale else "false",
             "consecutive_failures": str(self.consecutive_failures),
             "failure_threshold": str(self.failure_threshold),
