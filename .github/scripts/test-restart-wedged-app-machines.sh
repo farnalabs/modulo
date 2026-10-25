@@ -27,6 +27,10 @@ APP_LIVENESS_CHECK="app_liveness"
 SERVICE_CHECK="servicecheck-00-http-8080"
 CRITICAL_STATUS="critical"
 PASSING_STATUS="passing"
+export FAKE_FLY_LIST_COMMAND="list"
+export FAKE_FLY_RESTART_COMMAND="restart"
+export FAKE_FLY_DESTROY_COMMAND="destroy"
+export FAILURE_SENTINEL="__FAIL__"
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
@@ -53,8 +57,8 @@ case "${1:-}" in
     exit "${FLY_LOGS_EXIT:-0}"
     ;;
   machines)
-    if [ "${2:-}" = "list" ]; then
-      if [ "${FLY_MACHINES_JSON:-}" = "__FAIL__" ]; then
+    if [[ "${2:-}" == "${FAKE_FLY_LIST_COMMAND}" ]]; then
+      if [[ "${FLY_MACHINES_JSON:-}" == "${FAILURE_SENTINEL}" ]]; then
         exit 1
       fi
       printf '%s' "${FLY_MACHINES_JSON:-[]}"
@@ -62,11 +66,11 @@ case "${1:-}" in
     fi
     ;;
   machine)
-    if [ "${2:-}" = "restart" ]; then
+    if [[ "${2:-}" == "${FAKE_FLY_RESTART_COMMAND}" ]]; then
       echo "${3:-UNKNOWN}" >> "${FLY_RESTART_LOG:?}"
       exit "${FLY_RESTART_EXIT:-0}"
     fi
-    if [ "${2:-}" = "destroy" ]; then
+    if [[ "${2:-}" == "${FAKE_FLY_DESTROY_COMMAND}" ]]; then
       echo "${3:-UNKNOWN}" >> "${FLY_DESTROY_LOG:?}"
       exit "${FLY_DESTROY_EXIT:-0}"
     fi
@@ -140,7 +144,7 @@ assert_eq "no destroy after a successful restart" "" "${DESTROYED}"
 assert_eq "wedged machine log captured before restart" \
   "logs --app ${APP} --machine ${WEDGED_MACHINE_ID} --no-tail" "${LOGGED}"
 assert_eq "captured log is written for the deploy artifact upload" "yes" \
-  "$([ -f "${APP_LOG_DIR}/${WEDGED_MACHINE_ID}.log" ] && echo yes || echo no)"
+  "$(if [[ -f "${APP_LOG_DIR}/${WEDGED_MACHINE_ID}.log" ]]; then echo yes; else echo no; fi)"
 assert_eq "named password redacted from the captured log" "0" \
   "$(grep -c 'hunter2' "${APP_LOG_DIR}/${WEDGED_MACHINE_ID}.log" || true)"
 assert_eq "driver-qualified asyncpg password redacted from the captured log" "0" \
@@ -207,4 +211,4 @@ assert_eq "no destroy" "" "${DESTROYED}"
 
 echo ""
 echo "=== summary: ${PASS} passed, ${FAIL} failed ==="
-[ "${FAIL}" -eq 0 ]
+[[ "${FAIL}" -eq 0 ]]

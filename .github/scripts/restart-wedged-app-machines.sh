@@ -72,7 +72,7 @@ if ! command -v fly >/dev/null 2>&1; then
 fi
 
 MACHINES_JSON="$(fly machines list --app "${APP}" --json 2>/dev/null || true)"
-if [ -z "${MACHINES_JSON}" ]; then
+if [[ -z "${MACHINES_JSON}" ]]; then
   echo "::warning::fly machines list failed for ${APP} - machine state unknown; skipping wedge recovery and continuing to the next deploy attempt."
   exit 0
 fi
@@ -112,7 +112,7 @@ for machine in machines or []:
   exit 0
 }
 
-if [ -z "${WEDGED_IDS}" ]; then
+if [[ -z "${WEDGED_IDS}" ]]; then
   echo "No wedged app machine in ${APP} - nothing to restart."
   exit 0
 fi
@@ -127,7 +127,7 @@ LOG_DIR="${WEDGED_LOG_DIR:-/tmp/app-machine-logs}"
 mkdir -p "${LOG_DIR}" 2>/dev/null || true
 
 while IFS= read -r MID; do
-  [ -z "${MID}" ] && continue
+  [[ -z "${MID}" ]] && continue
   # Bounded and best-effort: capturing the log must never delay or fail the
   # recovery it precedes.
   LOG_FILE="${LOG_DIR}/${MID}.log"
@@ -139,7 +139,7 @@ while IFS= read -r MID; do
   # into this file and the deploy artifact (2026-10-23 outage).
   sed -i -E 's#(://[^:/@]+:)[^@]*@#\1***@#g' "${LOG_FILE}" 2>/dev/null || true
   echo "::notice::Restarting wedged app machine ${MID} in ${APP} (app_liveness critical) so the next deploy attempt can make progress."
-  if [ -s "${LOG_FILE}" ]; then
+  if [[ -s "${LOG_FILE}" ]]; then
     echo "----- wedged machine ${MID} log (tail) -----"
     tail -n 60 "${LOG_FILE}" || true
     echo "----- end wedged machine ${MID} log -----"
