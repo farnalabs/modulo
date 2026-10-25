@@ -3,29 +3,22 @@
     <table class="w-full text-left text-sm">
       <thead>
         <tr class="border-b bg-muted/50">
-          <th scope="col" class="px-3 py-2 font-medium cursor-pointer hover:bg-muted"
-              @click="sortBy('created_at')"
-              data-testid="risk-assessment-sort-timestamp">
-            {{ $t('views.RiskAssessmentView.col_timestamp') }}
-            <SortIcon :direction="sortDirection('created_at')" />
-          </th>
-          <th scope="col" class="px-3 py-2 font-medium cursor-pointer hover:bg-muted"
-              @click="sortBy('key')"
-              data-testid="risk-assessment-sort-key">
-            {{ $t('views.RiskAssessmentView.col_key') }}
-            <SortIcon :direction="sortDirection('key')" />
-          </th>
-          <th scope="col" class="px-3 py-2 font-medium cursor-pointer hover:bg-muted"
-              @click="sortBy('action')"
-              data-testid="risk-assessment-sort-action">
-            {{ $t('views.RiskAssessmentView.col_action') }}
-            <SortIcon :direction="sortDirection('action')" />
-          </th>
-          <th scope="col" class="px-3 py-2 font-medium cursor-pointer hover:bg-muted"
-              @click="sortBy('subject')"
-              data-testid="risk-assessment-sort-subject">
-            {{ $t('views.RiskAssessmentView.col_subject') }}
-            <SortIcon :direction="sortDirection('subject')" />
+          <th
+            v-for="column in sortableColumns"
+            :key="column.key"
+            scope="col"
+            :aria-sort="ariaSort(column.key)"
+            class="px-3 py-2 font-medium"
+          >
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 hover:underline"
+              :data-testid="`risk-assessment-sort-${column.testid}`"
+              @click="sortBy(column.key)"
+            >
+              {{ $t(column.labelKey) }}
+              <SortIcon :direction="sortDirection(column.key)" />
+            </button>
           </th>
           <th scope="col" class="px-3 py-2 font-medium">
             {{ $t('views.RiskAssessmentView.col_value') }}
@@ -61,28 +54,32 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatDateShort } from '../../lib/formatDate'
+import type { EvidenceRow } from '../../lib/riskAssessment'
+import ActionBadge from './ActionBadge.vue'
+import SortIcon from './SortIcon.vue'
+
+type SortKey = 'created_at' | 'key' | 'action' | 'subject'
+type SortOrder = 'asc' | 'desc'
 
 interface Props {
-  rows: Array<{
-    id: string
-    key: string
-    subject_type: string
-    subject_id: string
-    value: unknown
-    created_at: string
-    producer_type: string
-    producer_id: string | null
-  }>
+  rows: EvidenceRow[]
 }
 
 const props = defineProps<Props>()
 
 useI18n()
 
-const sortKey = ref<'created_at' | 'key' | 'action' | 'subject'>('created_at')
-const sortOrder = ref<'asc' | 'desc'>('desc')
+const sortableColumns: Array<{ key: SortKey; testid: string; labelKey: string }> = [
+  { key: 'created_at', testid: 'timestamp', labelKey: 'views.RiskAssessmentView.col_timestamp' },
+  { key: 'key', testid: 'key', labelKey: 'views.RiskAssessmentView.col_key' },
+  { key: 'action', testid: 'action', labelKey: 'views.RiskAssessmentView.col_action' },
+  { key: 'subject', testid: 'subject', labelKey: 'views.RiskAssessmentView.col_subject' },
+]
 
-function sortBy(key: 'created_at' | 'key' | 'action' | 'subject'): void {
+const sortKey = ref<SortKey>('created_at')
+const sortOrder = ref<SortOrder>('desc')
+
+function sortBy(key: SortKey): void {
   if (sortKey.value === key) {
     sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
   } else {
@@ -91,50 +88,47 @@ function sortBy(key: 'created_at' | 'key' | 'action' | 'subject'): void {
   }
 }
 
-function sortDirection(key: 'created_at' | 'key' | 'action' | 'subject'): 'asc' | 'desc' | 'none' {
+function sortDirection(key: SortKey): 'asc' | 'desc' | 'none' {
   if (sortKey.value !== key) return 'none'
   return sortOrder.value
 }
 
+function ariaSort(key: SortKey): 'ascending' | 'descending' | 'none' {
+  if (sortKey.value !== key) return 'none'
+  return sortOrder.value === 'asc' ? 'ascending' : 'descending'
+}
+
+function sortValue(row: EvidenceRow, key: SortKey): string | number {
+  switch (key) {
+    case 'created_at':
+      return new Date(row.created_at).getTime()
+    case 'key':
+      return row.key
+    case 'action':
+      return getRowAction(row)
+    case 'subject':
+      return row.subject_id
+  }
+}
+
 const sortedRows = computed(() => {
+  const direction = sortOrder.value === 'asc' ? 1 : -1
   return [...props.rows].sort((a, b) => {
-    let aVal: string | number
-    let bVal: string | number
-
-    switch (sortKey.value) {
-      case 'created_at':
-        aVal = new Date(a.created_at).getTime()
-        bVal = new Date(b.created_at).getTime()
-        break
-      case 'key':
-        aVal = a.key
-        bVal = b.key
-        break
-      case 'action':
-        aVal = getRowAction(a)
-        bVal = getRowAction(b)
-        break
-      case 'subject':
-        aVal = a.subject_id
-        bVal = b.subject_id
-        break
-      default:
-        return 0
-    }
-
-    if (aVal < bVal) return sortOrder.value === 'asc' ? -1 : 1
-    if (aVal > bVal) return sortOrder.value === 'asc' ? 1 : -1
+    const aVal = sortValue(a, sortKey.value)
+    const bVal = sortValue(b, sortKey.value)
+    if (aVal < bVal) return -direction
+    if (aVal > bVal) return direction
     return 0
   })
 })
 
-function getRowAction(row: Props['rows'][0]): string {
-  // Try to extract action from subject_id for node_execution rows
-  // Format: "{run_id}:{node_id}" - we'd need to join to policy_gate_decisions
-  // For now, check if the key contains action hints or return 'unknown'
-  if (row.key.startsWith('risk.')) return 'risk'
-  if (row.key.startsWith('assessment.')) return 'assessment'
-  return 'unknown'
+/**
+ * The action is resolved server-side from policy_gate_decisions (the route
+ * joins the decision record). Never infer it from the key prefix — that
+ * fabricated a value the summary card then contradicted.
+ */
+function getRowAction(row: EvidenceRow): string {
+  return row.action ?? 'unknown'
 }
 
 function formatDate(dateStr: string): string {
@@ -150,7 +144,3 @@ function formatValue(value: unknown): string {
   }
 }
 </script>
-
-<style scoped>
-/* Sort icon styles */
-</style>

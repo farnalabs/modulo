@@ -137,10 +137,11 @@ class TestRiskAssessmentRedaction:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
             patch(
                 f"{_ROUTES}._count_risk_assessment_by_action",
-                new=AsyncMock(return_value={"block": 1, "warn": 0, "continue": 0, "escalate": 0}),
+                new=AsyncMock(return_value=({"block": 1, "warn": 0, "continue": 0, "escalate": 0}, False)),
             ),
         ):
             resp = client.get(_RISK_ASSESSMENT_URL)
@@ -169,10 +170,11 @@ class TestRiskAssessmentRedaction:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
             patch(
                 f"{_ROUTES}._count_risk_assessment_by_action",
-                new=AsyncMock(return_value={"block": 1, "warn": 0, "continue": 0, "escalate": 0}),
+                new=AsyncMock(return_value=({"block": 1, "warn": 0, "continue": 0, "escalate": 0}, False)),
             ),
         ):
             resp = client.get(_RISK_ASSESSMENT_URL)
@@ -194,10 +196,11 @@ class TestRiskAssessmentRedaction:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
             patch(
                 f"{_ROUTES}._count_risk_assessment_by_action",
-                new=AsyncMock(return_value={"block": 1, "warn": 0, "continue": 0, "escalate": 0}),
+                new=AsyncMock(return_value=({"block": 1, "warn": 0, "continue": 0, "escalate": 0}, False)),
             ),
         ):
             resp = client.get(_RISK_ASSESSMENT_URL)
@@ -222,10 +225,11 @@ class TestRiskAssessmentFilters:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
             patch(
                 f"{_ROUTES}._count_risk_assessment_by_action",
-                new=AsyncMock(return_value={"block": 1, "warn": 0, "continue": 0, "escalate": 0}),
+                new=AsyncMock(return_value=({"block": 1, "warn": 0, "continue": 0, "escalate": 0}, False)),
             ),
         ):
             resp = client.get(f"{_RISK_ASSESSMENT_URL}?key_prefix=risk.")
@@ -247,10 +251,11 @@ class TestRiskAssessmentFilters:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
             patch(
                 f"{_ROUTES}._count_risk_assessment_by_action",
-                new=AsyncMock(return_value={"block": 1, "warn": 0, "continue": 0, "escalate": 0}),
+                new=AsyncMock(return_value=({"block": 1, "warn": 0, "continue": 0, "escalate": 0}, False)),
             ),
         ):
             resp = client.get(f"{_RISK_ASSESSMENT_URL}?pipeline_id={_PIPELINE_ID}")
@@ -271,10 +276,11 @@ class TestRiskAssessmentFilters:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
             patch(
                 f"{_ROUTES}._count_risk_assessment_by_action",
-                new=AsyncMock(return_value={"block": 1, "warn": 0, "continue": 0, "escalate": 0}),
+                new=AsyncMock(return_value=({"block": 1, "warn": 0, "continue": 0, "escalate": 0}, False)),
             ),
         ):
             resp = client.get(_RISK_ASSESSMENT_URL)
@@ -295,10 +301,11 @@ class TestRiskAssessmentFilters:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
             patch(
                 f"{_ROUTES}._count_risk_assessment_by_action",
-                new=AsyncMock(return_value={"block": 1, "warn": 0, "continue": 0, "escalate": 0}),
+                new=AsyncMock(return_value=({"block": 1, "warn": 0, "continue": 0, "escalate": 0}, False)),
             ),
         ):
             resp = client.get(f"{_RISK_ASSESSMENT_URL}?days=30")
@@ -320,10 +327,11 @@ class TestRiskAssessmentFilters:
                 patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
                 patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
                 patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+                patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
                 patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
                 patch(
                     f"{_ROUTES}._count_risk_assessment_by_action",
-                    new=AsyncMock(return_value={"block": 1, "warn": 0, "continue": 0, "escalate": 0}),
+                    new=AsyncMock(return_value=({"block": 1, "warn": 0, "continue": 0, "escalate": 0}, False)),
                 ),
             ):
                 resp = client.get(f"{_RISK_ASSESSMENT_URL}?action={action}")
@@ -348,10 +356,11 @@ class TestRiskAssessmentActionFacetDegradation:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
             patch(
                 f"{_ROUTES}._count_risk_assessment_by_action",
-                new=AsyncMock(return_value={"block": 0, "warn": 0, "continue": 0, "escalate": 0}),
+                new=AsyncMock(return_value=({"block": 0, "warn": 0, "continue": 0, "escalate": 0}, False)),
             ),
         ):
             resp = client.get(f"{_RISK_ASSESSMENT_URL}?action=block")
@@ -373,10 +382,11 @@ class TestRiskAssessmentActionFacetDegradation:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
             patch(
                 f"{_ROUTES}._count_risk_assessment_by_action",
-                new=AsyncMock(return_value={"block": 0, "warn": 0, "continue": 0, "escalate": 0}),
+                new=AsyncMock(return_value=({"block": 0, "warn": 0, "continue": 0, "escalate": 0}, False)),
             ),
         ):
             resp = client.get(f"{_RISK_ASSESSMENT_URL}?action=block")
@@ -401,6 +411,7 @@ class TestRiskAssessmentErrorArms:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(side_effect=side_effect)),
             patch(f"{_ROUTES}._count_risk_assessment_by_action", new=AsyncMock(side_effect=side_effect)),
         ):
@@ -452,10 +463,11 @@ class TestRiskAssessmentNoOutcomeFacet:
             patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
             patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
             patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(f"{_ROUTES}._load_risk_assessment_row_actions", new=AsyncMock(return_value=({}, False))),
             patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
             patch(
                 f"{_ROUTES}._count_risk_assessment_by_action",
-                new=AsyncMock(return_value={"block": 1, "warn": 0, "continue": 0, "escalate": 0}),
+                new=AsyncMock(return_value=({"block": 1, "warn": 0, "continue": 0, "escalate": 0}, False)),
             ),
         ):
             # FastAPI will ignore unknown query params (or return 422 if strict)
@@ -463,3 +475,333 @@ class TestRiskAssessmentNoOutcomeFacet:
 
         # Should not error on unknown param (FastAPI ignores extra params by default)
         assert resp.status_code == 200
+
+
+def _scalar_result(value: int | None) -> MagicMock:
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = value
+    return result
+
+
+def _rows_result(rows: list[Any]) -> MagicMock:
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = rows
+    return result
+
+
+def _decisions_result(decisions: list[tuple[Any, Any, str]]) -> MagicMock:
+    result = MagicMock()
+    result.all.return_value = decisions
+    return result
+
+
+class TestRiskAssessmentDegradationRealPath:
+    """The real ``ProgrammingError`` arms — no patching of the loaders.
+
+    These drive the helper functions with an execute that actually raises, so
+    removing the guard fails the suite (the mocked-loader tests above cannot
+    prove the catch exists).
+    """
+
+    async def test_load_rows_degrades_and_falls_back_to_unfiltered(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        row = _fake_evidence()
+        session = _make_mock_session()
+        session.execute = AsyncMock(side_effect=[ProgrammingError("stmt", "params", "no column"), _rows_result([row])])
+
+        rows, degraded = await mod._load_risk_assessment_rows(session, _ORG_ID, action="block", limit=10)
+
+        assert rows == [row]
+        assert degraded is True
+        assert session.execute.await_count == 2
+
+    async def test_load_rows_with_action_uses_the_filtered_query(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        row = _fake_evidence()
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_rows_result([row]))
+
+        rows, degraded = await mod._load_risk_assessment_rows(session, _ORG_ID, action="block")
+
+        assert rows == [row]
+        assert degraded is False
+        assert session.execute.await_count == 1
+
+    async def test_load_rows_without_action_never_degrades(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        row = _fake_evidence()
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_rows_result([row]))
+
+        rows, degraded = await mod._load_risk_assessment_rows(session, _ORG_ID)
+
+        assert rows == [row]
+        assert degraded is False
+        assert session.execute.await_count == 1
+
+    async def test_count_degrades_to_unfiltered_count(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(side_effect=[ProgrammingError("stmt", "params", "no column"), _scalar_result(4)])
+
+        total = await mod._count_risk_assessment_rows(session, _ORG_ID, action="block")
+
+        assert total == 4
+
+    async def test_count_with_action_uses_filtered_query(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_scalar_result(2))
+
+        total = await mod._count_risk_assessment_rows(session, _ORG_ID, action="warn")
+
+        assert total == 2
+        assert session.execute.await_count == 1
+
+    async def test_count_by_action_degrades_all_to_zero(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(side_effect=ProgrammingError("stmt", "params", "no column"))
+
+        counts, degraded = await mod._count_risk_assessment_by_action(session, _ORG_ID)
+
+        assert counts == {"block": 0, "escalate": 0, "warn": 0, "continue": 0}
+        assert degraded is True
+        # The first failing action short-circuits the rest.
+        assert session.execute.await_count == 1
+
+    async def test_count_by_action_success(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(
+            side_effect=[
+                _scalar_result(3),
+                _scalar_result(1),
+                _scalar_result(5),
+                _scalar_result(2),
+            ]
+        )
+
+        counts, degraded = await mod._count_risk_assessment_by_action(session, _ORG_ID)
+
+        assert counts == {"block": 3, "escalate": 1, "warn": 5, "continue": 2}
+        assert degraded is False
+
+
+class TestRiskAssessmentScopeClause:
+    """The shared WHERE builder covers every filter combination."""
+
+    async def test_rows_apply_key_prefix_and_pipeline_filters(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_rows_result([]))
+
+        rows, degraded = await mod._load_risk_assessment_rows(
+            session,
+            _ORG_ID,
+            key_prefix="risk.",
+            pipeline_id=_PIPELINE_ID,
+            days=3,
+            limit=5,
+        )
+
+        assert rows == []
+        assert degraded is False
+        sql = str(session.execute.await_args.args[0])
+        # The pipeline filter is the split_part subquery, not an ORM join.
+        assert "split_part" in sql
+        assert "LIKE" in sql
+
+    async def test_count_applies_key_prefix_and_pipeline_filters(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_scalar_result(7))
+
+        total = await mod._count_risk_assessment_rows(
+            session, _ORG_ID, key_prefix="risk.", pipeline_id=_PIPELINE_ID, days=3
+        )
+
+        assert total == 7
+        sql = str(session.execute.await_args.args[0])
+        assert "split_part" in sql
+        assert "LIKE" in sql
+
+    async def test_by_action_applies_key_prefix_and_pipeline_filters(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_scalar_result(0))
+
+        await mod._count_risk_assessment_by_action(
+            session, _ORG_ID, key_prefix="risk.", pipeline_id=_PIPELINE_ID, days=3
+        )
+
+        sql = str(session.execute.await_args.args[0])
+        assert "split_part" in sql
+        assert "LIKE" in sql
+
+
+class TestRiskAssessmentRowActions:
+    """Per-row gate action resolution from the decision record."""
+
+    async def test_resolves_run_and_node_actions_with_severity(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        node_id = uuid.uuid4()
+        run_row = _fake_evidence(id=uuid.uuid4(), subject_type="run", subject_id=str(_RUN_ID))
+        node_row = _fake_evidence(
+            id=uuid.uuid4(),
+            subject_type="node_execution",
+            subject_id=f"{_RUN_ID}:{node_id}",
+        )
+        session = _make_mock_session()
+        session.execute = AsyncMock(
+            return_value=_decisions_result(
+                [
+                    (_RUN_ID, None, "continue"),
+                    (_RUN_ID, None, "warn"),  # run-level worst is warn
+                    (_RUN_ID, node_id, "block"),
+                    (_RUN_ID, node_id, "warn"),
+                    (None, None, "block"),  # unattributed decision is ignored
+                    (_RUN_ID, None, "bogus"),  # invalid vocabulary is ignored
+                ]
+            )
+        )
+
+        resolved, degraded = await mod._load_risk_assessment_row_actions(session, _ORG_ID, [run_row, node_row])
+
+        assert degraded is False
+        assert resolved[run_row.id] == "warn"
+        assert resolved[node_row.id] == "block"
+
+    async def test_no_rows_issues_no_query(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        session = _make_mock_session()
+        session.execute = AsyncMock()
+
+        resolved, degraded = await mod._load_risk_assessment_row_actions(session, _ORG_ID, [])
+
+        assert resolved == {}
+        assert degraded is False
+        session.execute.assert_not_awaited()
+
+    async def test_degrades_when_run_id_column_missing(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        row = _fake_evidence()
+        session = _make_mock_session()
+        session.execute = AsyncMock(side_effect=ProgrammingError("stmt", "params", "no column"))
+
+        resolved, degraded = await mod._load_risk_assessment_row_actions(session, _ORG_ID, [row])
+
+        assert resolved == {}
+        assert degraded is True
+
+    async def test_malformed_subjects_are_skipped(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        rows = [
+            _fake_evidence(id=uuid.uuid4(), subject_type="run", subject_id="not-a-uuid"),
+            _fake_evidence(id=uuid.uuid4(), subject_type="node_execution", subject_id="no-colon"),
+            _fake_evidence(id=uuid.uuid4(), subject_type="other", subject_id=str(_RUN_ID)),
+            _fake_evidence(id=uuid.uuid4(), subject_type="node_execution", subject_id="bad:node"),
+        ]
+        session = _make_mock_session()
+        session.execute = AsyncMock()
+
+        resolved, degraded = await mod._load_risk_assessment_row_actions(session, _ORG_ID, rows)
+
+        assert resolved == {}
+        assert degraded is False
+        session.execute.assert_not_awaited()
+
+    async def test_mixed_valid_and_malformed_rows_resolve_the_valid_ones(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        valid = _fake_evidence(id=uuid.uuid4(), subject_type="run", subject_id=str(_RUN_ID))
+        unmatched = _fake_evidence(id=uuid.uuid4(), subject_type="run", subject_id=str(uuid.uuid4()))
+        malformed = _fake_evidence(id=uuid.uuid4(), subject_type="run", subject_id="not-a-uuid")
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_decisions_result([(_RUN_ID, None, "warn")]))
+
+        resolved, degraded = await mod._load_risk_assessment_row_actions(
+            session, _ORG_ID, [valid, unmatched, malformed]
+        )
+
+        assert degraded is False
+        # A run with no decision is absent (renders as unknown), never fabricated.
+        assert resolved == {valid.id: "warn"}
+
+    def test_most_severe_ordering(self) -> None:
+        from modulo.api.routes import evidence as mod
+
+        assert mod._most_severe(None, "continue") == "continue"
+        assert mod._most_severe("continue", "escalate") == "escalate"
+        assert mod._most_severe("block", "escalate") == "block"
+        assert mod._most_severe("warn", "continue") == "warn"
+
+
+class TestRiskAssessmentRowActionInResponse:
+    """The response carries the resolved action per row, not a frontend guess."""
+
+    def test_row_action_is_serialised(self) -> None:
+        row = _fake_evidence()
+        with (
+            _client("viewer") as client,
+            patch(
+                f"{_ROUTES}._load_risk_assessment_rows",
+                new=AsyncMock(return_value=([row], False)),
+            ),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+            patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(
+                f"{_ROUTES}._load_risk_assessment_row_actions",
+                new=AsyncMock(return_value=({_EVIDENCE_ID: "block"}, False)),
+            ),
+            patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
+            patch(
+                f"{_ROUTES}._count_risk_assessment_by_action",
+                new=AsyncMock(return_value=({"block": 1, "warn": 0, "continue": 0, "escalate": 0}, False)),
+            ),
+        ):
+            resp = client.get(_RISK_ASSESSMENT_URL)
+
+        assert resp.status_code == 200
+        assert resp.json()["rows"][0]["action"] == "block"
+
+    def test_degradation_from_counts_is_surfaced(self) -> None:
+        row = _fake_evidence()
+        with (
+            _client("viewer") as client,
+            patch(
+                f"{_ROUTES}._load_risk_assessment_rows",
+                new=AsyncMock(return_value=([row], False)),
+            ),
+            patch(f"{_ROUTES}.set_rls_org", new=AsyncMock()),
+            patch(f"{_ROUTES}.set_rls_user_context", new=AsyncMock()),
+            patch(f"{_ROUTES}.load_redaction_rules", new=AsyncMock(return_value=[_viewer_catch_all_rule()])),
+            patch(
+                f"{_ROUTES}._load_risk_assessment_row_actions",
+                new=AsyncMock(return_value=({}, False)),
+            ),
+            patch(f"{_ROUTES}._count_risk_assessment_rows", new=AsyncMock(return_value=1)),
+            patch(
+                f"{_ROUTES}._count_risk_assessment_by_action",
+                new=AsyncMock(return_value=({"block": 0, "warn": 0, "continue": 0, "escalate": 0}, True)),
+            ),
+        ):
+            resp = client.get(_RISK_ASSESSMENT_URL)
+
+        assert resp.status_code == 200
+        assert resp.json()["summary"]["facet_degraded"] is True

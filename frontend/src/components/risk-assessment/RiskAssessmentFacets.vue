@@ -71,13 +71,15 @@
           data-testid="risk-assessment-action"
         >
           <option value="">{{ $t('views.RiskAssessmentView.all_actions') }}</option>
-          <option value="block">{{ $t('views.RiskAssessmentView.action_block') }}</option>
-          <option value="warn">{{ $t('views.RiskAssessmentView.action_warn') }}</option>
-          <option value="continue">{{ $t('views.RiskAssessmentView.action_continue') }}</option>
-          <option value="escalate">{{ $t('views.RiskAssessmentView.action_escalate') }}</option>
+          <option v-for="action in RISK_ACTIONS" :key="action" :value="action">
+            {{ $t(`views.RiskAssessmentView.action_${action}`) }}
+          </option>
         </select>
-        <p v-if="facetDegraded" class="mt-1 text-xs text-warning" data-testid="risk-assessment-facet-degraded-note">
+        <p v-if="facetDegraded" class="mt-1 text-xs text-warning-text" data-testid="risk-assessment-facet-degraded-note">
           {{ $t('views.RiskAssessmentView.facet_degraded_note') }}
+        </p>
+        <p v-if="pipelinesError" class="mt-1 text-xs text-destructive-text" data-testid="risk-assessment-pipelines-error">
+          {{ pipelinesError }}
         </p>
       </div>
     </div>
@@ -106,38 +108,30 @@
 <script setup lang="ts">
 import { reactive, watch } from 'vue'
 import Button from 'primevue/button'
-
-interface FilterState {
-  keyPrefix: string
-  pipelineId: string
-  days: number
-  action: string
-  limit: number
-}
+import {
+  RISK_ACTIONS,
+  defaultRiskAssessmentFilters,
+  type RiskAssessmentFilters,
+} from '../../lib/riskAssessment'
 
 interface Props {
-  filters: FilterState
+  filters: RiskAssessmentFilters
   facetDegraded: boolean
   isLoading: boolean
   pipelines: Array<{ id: string; name: string }>
+  pipelinesError?: string
 }
 
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
-  'update:filters': [filters: FilterState]
-  apply: [filters: FilterState]
+  'update:filters': [filters: RiskAssessmentFilters]
+  apply: [filters: RiskAssessmentFilters]
   reset: []
 }>()
 
 // Local reactive copy of filters to avoid mutating props directly
-const localFilters = reactive<FilterState>({
-  keyPrefix: '',
-  pipelineId: '',
-  days: 7,
-  action: '',
-  limit: 100,
-})
+const localFilters = reactive<RiskAssessmentFilters>(defaultRiskAssessmentFilters())
 
 // Sync local filters with props when props change
 watch(
@@ -166,11 +160,7 @@ function applyFilters(): void {
 }
 
 function resetFilters(): void {
-  localFilters.keyPrefix = ''
-  localFilters.pipelineId = ''
-  localFilters.days = 7
-  localFilters.action = ''
-  localFilters.limit = 100
+  Object.assign(localFilters, defaultRiskAssessmentFilters())
   emit('reset')
 }
 </script>

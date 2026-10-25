@@ -14845,6 +14845,11 @@ export interface components {
         /**
          * EvidenceRowResponse
          * @description One evidence row with its ``value`` already redacted for the caller's role.
+         *
+         *     ``action`` is the gate action resolved from ``policy_gate_decisions`` for the
+         *     row's run (and node, for ``node_execution`` rows). It is only populated by
+         *     the risk/assessment projection; the plain evidence reads leave it ``None``
+         *     because they do not join the decision record.
          */
         EvidenceRowResponse: {
             /**
@@ -14884,6 +14889,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Action */
+            action?: string | null;
         };
         /** ExportPreviewResponse */
         ExportPreviewResponse: {

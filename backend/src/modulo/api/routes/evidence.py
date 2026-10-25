@@ -73,8 +73,12 @@ _MSG_EVIDENCE_NOT_FOUND = "Evidence row not found"
 #: ``created_at`` then ``id`` (stable), so the cap truncates a deterministic tail.
 _EVIDENCE_LIST_LIMIT = 500
 
-# Valid gate actions for the action facet
-_VALID_ACTIONS = frozenset({"continue", "warn", "block", "escalate"})
+#: Gate-action vocabulary for the action facet. Single source for validation,
+#: per-row resolution and the summary counts — never re-list these values.
+_RISK_ACTIONS: tuple[str, ...] = ("block", "escalate", "warn", "continue")
+_VALID_ACTIONS = frozenset(_RISK_ACTIONS)
+#: Severity ordering used when a run has decisions with several actions.
+_ACTION_SEVERITY = {action: rank for rank, action in enumerate(_RISK_ACTIONS)}
 
 
 # ── Request / response models ────────────────────────────────────────────
@@ -111,7 +115,13 @@ class RedactionRuleResponse(BaseModel):
 
 
 class EvidenceRowResponse(BaseModel):
-    """One evidence row with its ``value`` already redacted for the caller's role."""
+    """One evidence row with its ``value`` already redacted for the caller's role.
+
+    ``action`` is the gate action resolved from ``policy_gate_decisions`` for the
+    row's run (and node, for ``node_execution`` rows). It is only populated by
+    the risk/assessment projection; the plain evidence reads leave it ``None``
+    because they do not join the decision record.
+    """
 
     id: uuid.UUID
     organisation_id: uuid.UUID
@@ -124,6 +134,7 @@ class EvidenceRowResponse(BaseModel):
     producer_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    action: str | None = None
 
 
 class RiskAssessmentSummary(BaseModel):
@@ -264,6 +275,7 @@ def _redacted_row(
     row: Evidence,
     role: str,
     rules: list[EvidenceRedactionRule],
+    action: str | None = None,
 ) -> EvidenceRowResponse:
     """Serialise one evidence row, resolving its classes from pre-loaded *rules*.
 
@@ -284,6 +296,7 @@ def _redacted_row(
         producer_id=row.producer_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        action=action,
     )
 
 
@@ -416,9 +429,11 @@ async def risk_assessment_endpoint(
             limit=limit,
         )
 
-        # Load redaction rules ONCE and apply to all rows
+        # Load redaction rules ONCE and apply to all rows. Per-row gate actions
+        # come from one decision-record query, never one query per row.
         rules = await load_redaction_rules(session, org_id)
-        redacted_rows = [_redacted_row(row, principal.org_role, rules) for row in rows]
+        row_actions, actions_degraded = await _load_risk_assessment_row_actions(session, org_id, rows)
+        redacted_rows = [_redacted_row(row, principal.org_role, rules, row_actions.get(row.id)) for row in rows]
 
         # Count total rows matching filters (without limit)
         total_rows = await _count_risk_assessment_rows(
@@ -431,7 +446,7 @@ async def risk_assessment_endpoint(
         )
 
         # Count by action for summary card
-        action_counts = await _count_risk_assessment_by_action(
+        action_counts, counts_degraded = await _count_risk_assessment_by_action(
             session,
             org_id,
             key_prefix=key_prefix,
@@ -443,7 +458,7 @@ async def risk_assessment_endpoint(
         summary=RiskAssessmentSummary(
             total_rows=total_rows,
             action_counts=action_counts,
-            facet_degraded=facet_degraded,
+            facet_degraded=facet_degraded or actions_degraded or counts_degraded,
         ),
         rows=redacted_rows,
     )
@@ -507,6 +522,103 @@ async def list_evidence_endpoint(
         return [_redacted_row(row, principal.org_role, rules) for row in rows]
 
 
+def _risk_scope_clause(
+    organisation_id: uuid.UUID,
+    *,
+    key_prefix: str | None,
+    pipeline_id: uuid.UUID | None,
+    days: int,
+) -> Any:
+    """Build the shared WHERE clause for the risk/assessment projection.
+
+    One builder for the rows, the total and the per-action counts — the three
+    queries must never drift apart (a drift shows up as a summary that
+    disagrees with its own table).
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    clauses: list[Any] = [
+        Evidence.organisation_id == organisation_id,
+        Evidence.created_at >= cutoff,
+    ]
+
+    if key_prefix is not None:
+        clauses.append(Evidence.key.like(f"{key_prefix}%"))
+
+    if pipeline_id is not None:
+        run_ids_subq = (
+            select(Run.id)
+            .where(
+                Run.organisation_id == organisation_id,
+                Run.pipeline_id == pipeline_id,
+            )
+            .subquery()
+        )
+        clauses.append(
+            or_(
+                and_(
+                    Evidence.subject_type == "run",
+                    Evidence.subject_id.in_(select(run_ids_subq.c.id)),
+                ),
+                and_(
+                    Evidence.subject_type == "node_execution",
+                    # Extract run_id from subject_id ("{run_id}:{node_id}")
+                    func.split_part(Evidence.subject_id, ":", 1).in_(select(run_ids_subq.c.id)),
+                ),
+            )
+        )
+
+    return and_(*clauses)
+
+
+def _risk_action_clause(organisation_id: uuid.UUID, action: str) -> Any:
+    """WHERE clause matching evidence rows whose run resolved to *action*.
+
+    Requires the ``policy_gate_decisions.run_id`` column (chunk 4); callers
+    wrap the execute in a savepoint and degrade when that column is absent.
+    """
+    decision_run_ids_subq = (
+        select(PolicyGateDecision.run_id)
+        .where(
+            PolicyGateDecision.organisation_id == organisation_id,
+            PolicyGateDecision.resolved_action == action,
+        )
+        .distinct()
+        .subquery()
+    )
+    return or_(
+        and_(
+            Evidence.subject_type == "run",
+            Evidence.subject_id.in_(select(decision_run_ids_subq.c.run_id)),
+        ),
+        and_(
+            Evidence.subject_type == "node_execution",
+            func.split_part(Evidence.subject_id, ":", 1).in_(select(decision_run_ids_subq.c.run_id)),
+        ),
+    )
+
+
+def _split_run_and_node(subject_type: str, subject_id: str) -> tuple[uuid.UUID | None, str | None]:
+    """Resolve a row's run id and (for node rows) node id from its subject.
+
+    Returns ``(None, None)`` for a malformed subject id — a data anomaly must
+    not turn a read into a 500.
+    """
+    if subject_type == "run":
+        try:
+            return uuid.UUID(subject_id), None
+        except ValueError:
+            return None, None
+    if subject_type == "node_execution":
+        run_part, separator, node_part = subject_id.partition(":")
+        if not separator:
+            return None, None
+        try:
+            return uuid.UUID(run_part), node_part
+        except ValueError:
+            return None, None
+    return None, None
+
+
 async def _load_risk_assessment_rows(
     session: AsyncSession,
     organisation_id: uuid.UUID,
@@ -522,82 +634,38 @@ async def _load_risk_assessment_rows(
     Returns (rows, facet_degraded) where facet_degraded is True if the action
     filter was requested but the policy_gate_decisions.run_id column does not
     exist (or the query failed due to a schema mismatch).
+
+    The action-filtered execute runs inside a SAVEPOINT: on Postgres a failed
+    statement aborts the enclosing transaction, so catching ``ProgrammingError``
+    without a savepoint would poison the fallback query.
     """
-
-    cutoff = datetime.now(UTC) - timedelta(days=days)
-
-    # Build the base query
-    stmt = select(Evidence).where(
-        Evidence.organisation_id == organisation_id,
-        Evidence.created_at >= cutoff,
+    stmt = (
+        select(Evidence)
+        .where(
+            _risk_scope_clause(
+                organisation_id,
+                key_prefix=key_prefix,
+                pipeline_id=pipeline_id,
+                days=days,
+            )
+        )
+        .order_by(Evidence.created_at.desc(), Evidence.id.desc())
+        .limit(limit)
     )
 
-    # Key prefix filter
-    if key_prefix is not None:
-        stmt = stmt.where(Evidence.key.like(f"{key_prefix}%"))
-
-    # Pipeline filter — join to runs table
-    if pipeline_id is not None:
-        run_ids_subq = (
-            select(Run.id)
-            .where(
-                Run.organisation_id == organisation_id,
-                Run.pipeline_id == pipeline_id,
-            )
-            .subquery()
-        )
-        stmt = stmt.where(
-            or_(
-                and_(
-                    Evidence.subject_type == "run",
-                    Evidence.subject_id.in_(select(run_ids_subq.c.id)),
-                ),
-                and_(
-                    Evidence.subject_type == "node_execution",
-                    # Extract run_id from subject_id ("{run_id}:{node_id}")
-                    func.split_part(Evidence.subject_id, ":", 1).in_(select(run_ids_subq.c.id)),
-                ),
-            )
-        )
-
-    # Action facet — best-effort match against policy_gate_decisions
-    # This requires the run_id column on policy_gate_decisions (chunk 4).
-    # If the column doesn't exist, we catch the ProgrammingError and return
-    # facet_degraded=True.
-    # Note: action validation is done at the route level, so action is
-    # guaranteed to be a valid value here.
-    facet_degraded = False
     if action is not None:
         try:
-            decision_run_ids_subq = (
-                select(PolicyGateDecision.run_id.distinct())
-                .where(
-                    PolicyGateDecision.organisation_id == organisation_id,
-                    PolicyGateDecision.resolved_action == action,
-                )
-                .subquery()
-            )
-            stmt = stmt.where(
-                or_(
-                    and_(
-                        Evidence.subject_type == "run",
-                        Evidence.subject_id.in_(select(decision_run_ids_subq.c.run_id)),
-                    ),
-                    and_(
-                        Evidence.subject_type == "node_execution",
-                        func.split_part(Evidence.subject_id, ":", 1).in_(select(decision_run_ids_subq.c.run_id)),
-                    ),
-                )
-            )
+            async with session.begin_nested():
+                result = await session.execute(stmt.where(_risk_action_clause(organisation_id, action)))
+                return list(result.scalars().all()), False
         except ProgrammingError:
             # The run_id column doesn't exist on policy_gate_decisions (chunk 4
             # hasn't landed). Degrade gracefully: ignore the action filter and
             # signal the degradation to the caller.
-            facet_degraded = True
+            pass
 
-    stmt = stmt.order_by(Evidence.created_at.desc(), Evidence.id.desc()).limit(limit)
     result = await session.execute(stmt)
-    return list(result.scalars().all()), facet_degraded
+    return list(result.scalars().all()), action is not None
 
 
 async def _count_risk_assessment_rows(
@@ -610,63 +678,22 @@ async def _count_risk_assessment_rows(
     action: str | None = None,
 ) -> int:
     """Count evidence rows matching the risk/assessment filters (without limit)."""
-
-    cutoff = datetime.now(UTC) - timedelta(days=days)
-
     stmt = select(func.count(Evidence.id)).where(
-        Evidence.organisation_id == organisation_id,
-        Evidence.created_at >= cutoff,
+        _risk_scope_clause(
+            organisation_id,
+            key_prefix=key_prefix,
+            pipeline_id=pipeline_id,
+            days=days,
+        )
     )
-
-    if key_prefix is not None:
-        stmt = stmt.where(Evidence.key.like(f"{key_prefix}%"))
-
-    if pipeline_id is not None:
-        run_ids_subq = (
-            select(Run.id)
-            .where(
-                Run.organisation_id == organisation_id,
-                Run.pipeline_id == pipeline_id,
-            )
-            .subquery()
-        )
-        stmt = stmt.where(
-            or_(
-                and_(
-                    Evidence.subject_type == "run",
-                    Evidence.subject_id.in_(select(run_ids_subq.c.id)),
-                ),
-                and_(
-                    Evidence.subject_type == "node_execution",
-                    func.split_part(Evidence.subject_id, ":", 1).in_(select(run_ids_subq.c.id)),
-                ),
-            )
-        )
 
     if action is not None:
         try:
-            decision_run_ids_subq = (
-                select(PolicyGateDecision.run_id.distinct())
-                .where(
-                    PolicyGateDecision.organisation_id == organisation_id,
-                    PolicyGateDecision.resolved_action == action,
-                )
-                .subquery()
-            )
-            stmt = stmt.where(
-                or_(
-                    and_(
-                        Evidence.subject_type == "run",
-                        Evidence.subject_id.in_(select(decision_run_ids_subq.c.run_id)),
-                    ),
-                    and_(
-                        Evidence.subject_type == "node_execution",
-                        func.split_part(Evidence.subject_id, ":", 1).in_(select(decision_run_ids_subq.c.run_id)),
-                    ),
-                )
-            )
+            async with session.begin_nested():
+                result = await session.execute(stmt.where(_risk_action_clause(organisation_id, action)))
+                return result.scalar_one_or_none() or 0
         except ProgrammingError:
-            # run_id column doesn't exist — ignore action filter for counting
+            # run_id column doesn't exist — ignore the action filter for counting
             pass
 
     result = await session.execute(stmt)
@@ -680,72 +707,95 @@ async def _count_risk_assessment_by_action(
     key_prefix: str | None = None,
     pipeline_id: uuid.UUID | None = None,
     days: int = 7,
-) -> dict[str, int]:
-    """Count evidence rows grouped by gate action (block/warn/continue).
+) -> tuple[dict[str, int], bool]:
+    """Count evidence rows grouped by gate action.
 
-    Returns a dict mapping action -> count. If the run_id column doesn't exist
-    on policy_gate_decisions, returns empty counts for all actions.
+    Returns ``(counts, facet_degraded)``. Every action's execute is guarded
+    like the other two helpers (savepoint + ``ProgrammingError``); a missing
+    ``run_id`` column returns zero counts and ``facet_degraded=True``.
     """
-
-    cutoff = datetime.now(UTC) - timedelta(days=days)
-
-    base_where = and_(
-        Evidence.organisation_id == organisation_id,
-        Evidence.created_at >= cutoff,
+    base_stmt = select(func.count(Evidence.id)).where(
+        _risk_scope_clause(
+            organisation_id,
+            key_prefix=key_prefix,
+            pipeline_id=pipeline_id,
+            days=days,
+        )
     )
 
-    if key_prefix is not None:
-        base_where = and_(base_where, Evidence.key.like(f"{key_prefix}%"))
-
-    if pipeline_id is not None:
-        run_ids_subq = (
-            select(Run.id)
-            .where(
-                Run.organisation_id == organisation_id,
-                Run.pipeline_id == pipeline_id,
-            )
-            .subquery()
-        )
-        pipeline_where = or_(
-            and_(
-                Evidence.subject_type == "run",
-                Evidence.subject_id.in_(select(run_ids_subq.c.id)),
-            ),
-            and_(
-                Evidence.subject_type == "node_execution",
-                func.split_part(Evidence.subject_id, ":", 1).in_(select(run_ids_subq.c.id)),
-            ),
-        )
-        base_where = and_(base_where, pipeline_where)
-
-    actions = ["block", "warn", "continue", "escalate"]
-    counts = dict.fromkeys(actions, 0)
-
-    for action in actions:
+    counts = dict.fromkeys(_RISK_ACTIONS, 0)
+    for action in _RISK_ACTIONS:
         try:
-            decision_run_ids_subq = (
-                select(PolicyGateDecision.run_id.distinct())
-                .where(
-                    PolicyGateDecision.organisation_id == organisation_id,
-                    PolicyGateDecision.resolved_action == action,
-                )
-                .subquery()
-            )
-            action_where = or_(
-                and_(
-                    Evidence.subject_type == "run",
-                    Evidence.subject_id.in_(select(decision_run_ids_subq.c.run_id)),
-                ),
-                and_(
-                    Evidence.subject_type == "node_execution",
-                    func.split_part(Evidence.subject_id, ":", 1).in_(select(decision_run_ids_subq.c.run_id)),
-                ),
-            )
-            stmt = select(func.count(Evidence.id)).where(and_(base_where, action_where))
-            result = await session.execute(stmt)
-            counts[action] = result.scalar_one_or_none() or 0
+            async with session.begin_nested():
+                result = await session.execute(base_stmt.where(_risk_action_clause(organisation_id, action)))
+                counts[action] = result.scalar_one_or_none() or 0
         except ProgrammingError:
-            # run_id column doesn't exist — leave counts at 0
-            break
+            return counts, True
 
-    return counts
+    return counts, False
+
+
+async def _load_risk_assessment_row_actions(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    rows: list[Evidence],
+) -> tuple[dict[uuid.UUID, str], bool]:
+    """Resolve each row's gate action from ``policy_gate_decisions``.
+
+    One query for the whole page (never one per row). Returns
+    ``(row_id -> action, facet_degraded)``; a row with no decision is absent
+    from the map so the UI renders an explicit unknown rather than a
+    fabricated value.
+    """
+    run_ids: set[uuid.UUID] = set()
+    for row in rows:
+        run_id, _ = _split_run_and_node(row.subject_type, row.subject_id)
+        if run_id is not None:
+            run_ids.add(run_id)
+    if not run_ids:
+        return {}, False
+
+    stmt = select(
+        PolicyGateDecision.run_id,
+        PolicyGateDecision.node_id,
+        PolicyGateDecision.resolved_action,
+    ).where(
+        PolicyGateDecision.organisation_id == organisation_id,
+        PolicyGateDecision.run_id.in_(run_ids),
+    )
+
+    try:
+        async with session.begin_nested():
+            result = await session.execute(stmt)
+            decisions = result.all()
+    except ProgrammingError:
+        return {}, True
+
+    run_actions: dict[uuid.UUID, str] = {}
+    node_actions: dict[tuple[uuid.UUID, str], str] = {}
+    for decision_run_id, decision_node_id, resolved_action in decisions:
+        if decision_run_id is None or resolved_action not in _VALID_ACTIONS:
+            continue
+        if decision_node_id is None:
+            run_actions[decision_run_id] = _most_severe(run_actions.get(decision_run_id), resolved_action)
+        else:
+            node_key = (decision_run_id, str(decision_node_id))
+            node_actions[node_key] = _most_severe(node_actions.get(node_key), resolved_action)
+
+    resolved: dict[uuid.UUID, str] = {}
+    for row in rows:
+        run_id, node_id = _split_run_and_node(row.subject_type, row.subject_id)
+        if run_id is None:
+            continue
+        action = node_actions.get((run_id, node_id)) if node_id is not None else None
+        action = action or run_actions.get(run_id)
+        if action is not None:
+            resolved[row.id] = action
+    return resolved, False
+
+
+def _most_severe(current: str | None, candidate: str) -> str:
+    """Return the more severe of two gate actions (block > escalate > warn > continue)."""
+    if current is None:
+        return candidate
+    return current if _ACTION_SEVERITY[current] <= _ACTION_SEVERITY[candidate] else candidate

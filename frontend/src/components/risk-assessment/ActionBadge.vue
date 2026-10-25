@@ -19,27 +19,26 @@ interface Props {
 }
 
 const props = defineProps<Props>()
-const { t } = useI18n()
+const { t, te } = useI18n()
 
-const actionLabel = computed(() => {
-  const key = `views.RiskAssessmentView.action_${props.action.toLowerCase()}`
-  return t(key) || props.action
-})
+const actionKey = computed(
+  () => `views.RiskAssessmentView.action_${props.action.toLowerCase()}`,
+)
+
+// vue-i18n returns the key itself for a missing message, so `t(key) || action`
+// can never fall back. `te()` is the existence check that makes it real.
+const actionLabel = computed(() => (te(actionKey.value) ? t(actionKey.value) : props.action))
 
 const badgeClass = computed(() => {
   switch (props.action.toLowerCase()) {
     case 'block':
-      return 'bg-destructive/10 text-destructive border border-destructive/20'
+      return 'bg-destructive/10 text-destructive-text border border-destructive/20'
     case 'warn':
-      return 'bg-warning/10 text-warning border border-warning/20'
+      return 'bg-warning/10 text-warning-text border border-warning/20'
     case 'continue':
-      return 'bg-success/10 text-success border border-success/20'
+      return 'bg-success/10 text-success-text border border-success/20'
     case 'escalate':
-      return 'bg-primary/10 text-primary border border-primary/20'
-    case 'risk':
-      return 'bg-orange/10 text-orange border border-orange/20'
-    case 'assessment':
-      return 'bg-blue/10 text-blue border border-blue/20'
+      return 'bg-primary/10 text-primary-text border border-primary/20'
     default:
       return 'bg-muted text-muted-foreground border border-muted'
   }

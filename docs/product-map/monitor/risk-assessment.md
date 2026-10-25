@@ -5,11 +5,19 @@ adr: []
 code:
   - backend/src/modulo/api/routes/evidence.py
   - frontend/src/views/RiskAssessmentView.vue
+  - frontend/src/components/risk-assessment/ActionBadge.vue
   - frontend/src/components/risk-assessment/RiskAssessmentFacets.vue
   - frontend/src/components/risk-assessment/RiskAssessmentSummaryCard.vue
   - frontend/src/components/risk-assessment/RiskAssessmentTable.vue
+  - frontend/src/components/risk-assessment/SortIcon.vue
   - frontend/src/stores/riskAssessment.ts
-unit-tests: []
+  - frontend/src/lib/riskAssessment.ts
+unit-tests:
+  - backend/tests/unit/api/test_risk_assessment_routes.py
+  - backend/tests/integration/test_risk_assessment_projection_pg.py
+  - frontend/src/__tests__/riskAssessmentStore.spec.ts
+  - frontend/src/__tests__/RiskAssessmentComponents.spec.ts
+  - frontend/src/__tests__/RiskAssessmentView.spec.ts
 depends-on:
   - feat-evidence
   - feat-core-evidence-store
@@ -39,7 +47,10 @@ formatted value columns. All strings are i18n-backed and status regions use
 - [x] Summary card displays total rows and per-action counts (block, warn,
       continue, escalate) with facet degradation indicator and time window note
 - [x] Sortable table renders evidence rows with timestamp, key, action badge,
-      subject, and formatted value columns; empty state handled
+      subject, and formatted value columns; empty state handled. The action
+      badge renders the gate action resolved server-side from
+      `policy_gate_decisions` (never a key-prefix guess), and sortable headers
+      are buttons carrying `aria-sort` so keyboard users can sort
 
 ## Known Gaps
 
