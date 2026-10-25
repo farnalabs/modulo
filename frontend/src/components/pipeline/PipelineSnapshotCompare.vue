@@ -615,6 +615,17 @@ const FIELD_LABEL_KEYS: Record<string, string> = {
   environment_binding: 'components.PipelineSnapshotCompare.field_environment',
   source_port: 'components.PipelineSnapshotCompare.field_source_port',
   target_port: 'components.PipelineSnapshotCompare.field_target_port',
+  // Behaviour-bearing fields the diff reports so a config-only edit is never
+  // presented as "no differences": a node-level HITL gate, its execution
+  // bound, its template/model class, the one-PR-per-run isolation flag, an
+  // edge's routing expression and an edge review gate.
+  hitl_config: 'components.PipelineSnapshotCompare.field_hitl_config',
+  hitl_review_config: 'components.PipelineSnapshotCompare.field_hitl_review_config',
+  timeout_seconds: 'components.PipelineSnapshotCompare.field_timeout_seconds',
+  template_id: 'components.PipelineSnapshotCompare.field_template_id',
+  model_class: 'components.PipelineSnapshotCompare.field_model_class',
+  single_pr_per_run: 'components.PipelineSnapshotCompare.field_single_pr_per_run',
+  condition_expression: 'components.PipelineSnapshotCompare.field_condition_expression',
 }
 
 function fieldLabel(key: string): string {
