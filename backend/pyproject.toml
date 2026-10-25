@@ -729,10 +729,12 @@ dev = [
 # (locust -> geventhttpclient), so it is pinned via a constraint rather than a
 # direct dep so pip-audit (run in CI Lint (Backend)) passes.
 #
-# CVE-2026-115586: virtualenv < 21.14.13 allows arbitrary code execution
-# (fixed in 21.14.13). virtualenv is transitive (pre-commit), so it is pinned
-# via a constraint rather than a direct dep so the Trivy filesystem scan (run in
-# CI Lint (Backend)) passes and a relock cannot silently drop the fix.
+# CVE-2026-115586: virtualenv 21.14.11 is vulnerable to arbitrary code
+# execution via an unescaped prompt in the bash activation script; fixed in
+# 21.14.13. virtualenv is transitive (pre-commit), so it is pinned via a
+# constraint rather than a direct dev dependency so the Trivy filesystem scan
+# (run in CI Lint (Backend)) passes on backend/uv.lock and a relock cannot
+# silently drop the fix.
 constraint-dependencies = [
     "pip>=26.2",
     "certifi>=2026.10.19",
