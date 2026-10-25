@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Deploy-health evaluation for ``deploy-staleness-check.yml`` (FAR-2116).
+"""Deploy-health evaluation for the deploy escalation workflows.
+
+Used by ``deploy-staleness-check.yml`` (FAR-2116) and ``deploy-watchdog.yml``
+(FAR-2139). One evaluator and one email renderer for both: the two workflows
+measure different things (the staleness check reads prod's build age and the
+deploy run history; the watchdog reads the fly image tag and its own self-heal
+outcome) but they must not drift into two thresholds or two email formats. The
+watchdog supplies its own measured condition through :attr:`Verdict.notes` /
+:attr:`Verdict.summary` when neither of the shared conditions below applies.
 
 CI never exercises a workflow's decision logic, so the logic lives here where
 ``backend/tests/unit/scripts/test_deploy_health.py`` can drive it: every
@@ -74,11 +82,24 @@ class Verdict:
     prod_build_ts: str = "unknown"
     runs_considered: int = 0
     last_failed: dict[str, str] = field(default_factory=dict)
+    #: A short condition label for the subject line when neither of the two
+    #: shared conditions applies (e.g. the watchdog could not re-dispatch).
+    summary: str = ""
+    #: Caller-measured detail lines folded into :attr:`reason`. Both callers
+    #: share this renderer; a caller with a condition the shared pair cannot
+    #: express names it here instead of inventing a second email format.
+    notes: tuple[str, ...] = ()
+    #: Caller-measured sentence replacing the recovery email's default
+    #: "production now serves the latest build" claim when the caller's
+    #: recovery is real but not "production is current" (the deploy watchdog
+    #: recovers into "no longer escalating", which can happen while a deploy is
+    #: still in flight).
+    recovery_detail: str = ""
 
     @property
     def reason(self) -> str:
         """Every failing condition, naming its figures and the window."""
-        parts: list[str] = []
+        parts: list[str] = list(self.notes)
         if self.stale:
             if self.age_hours is None:
                 parts.append(
@@ -105,6 +126,11 @@ class Verdict:
                     "deploy health could not be evaluated this cycle "
                     "(no deploy-run or production metadata was readable)"
                 )
+            if self.healthy is False:
+                # A caller-measured unhealthy condition that the shared pair
+                # cannot express must never fall through to the healthy
+                # sentence below.
+                return self.summary or "an unnamed deploy-health condition is unmet"
             return (
                 "all measured deploy-health conditions are healthy: production is within the "
                 f"{self.grace_hours}h grace window and fewer than {self.failure_threshold} consecutive "
@@ -126,6 +152,9 @@ class Verdict:
             "prod_build_ts": self.prod_build_ts,
             "runs_considered": self.runs_considered,
             "last_failed": self.last_failed,
+            "summary": self.summary,
+            "notes": list(self.notes),
+            "recovery_detail": self.recovery_detail,
         }
 
     @property
@@ -143,6 +172,7 @@ class Verdict:
             "prod_build_ts": self.prod_build_ts,
             "runs_considered": str(self.runs_considered),
             "reason": self.reason,
+            "summary": self.summary,
         }
 
 
@@ -336,9 +366,10 @@ def build_email(
 ) -> tuple[str, str]:
     """The (subject, body) an operator receives. Named figures, no lookup."""
     if action == "recovery":
-        subject = f"[Modulo] DEPLOY HEALTH RECOVERED: production is current at {verdict.prod_sha}"
+        detail = verdict.summary or f"production is current at {verdict.prod_sha}"
+        subject = f"[Modulo] DEPLOY HEALTH RECOVERED: {detail}"
         headline = "Deploy health has RECOVERED."
-        action_line = (
+        action_line = verdict.recovery_detail or (
             "Production now serves the latest evaluated build and the deploy workflow is not in a "
             "consecutive-failure streak. No action needed; this email closes the earlier alert."
         )
@@ -348,7 +379,7 @@ def build_email(
             bits.append(f"{verdict.consecutive_failures} failed deploys")
         if verdict.stale and verdict.age_hours is not None:
             bits.append(f"prod {verdict.age_hours}h stale")
-        detail = ", ".join(bits) if bits else "condition met"
+        detail = ", ".join(bits) if bits else (verdict.summary or "condition met")
         subject = f"[Modulo] DEPLOY HEALTH UNHEALTHY: {detail}"
         headline = "Deploy health is UNHEALTHY."
         action_line = (

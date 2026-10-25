@@ -148,7 +148,7 @@ function journeyTimestamp(journey: JourneySummary): number {
 }
 
 function nodeAllJourneys(stageId: unknown): JourneySummary[] {
-  const list = stageId ? (journeysByStage.value[stageId as string] ?? []) : []
+  const list = typeof stageId === 'string' ? (journeysByStage.value[stageId] ?? []) : []
   // Newest-moved first (updated_at = when the journey last moved).
   return [...list].sort((a, b) => journeyTimestamp(b) - journeyTimestamp(a))
 }
@@ -298,18 +298,11 @@ function onStageKeydown(nodeProps: { id: string; data: Record<string, unknown> }
  * session (same persistence model as a drag).
  */
 function nudgeNode(nodeProps: { id: string; data: Record<string, unknown> }, dx: number, dy: number): void {
-  const nodes = flowNodes.value
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i]
-    if (node.id !== nodeProps.id) continue
-    const pos = node.position
-    node.position = {
-      x: (pos?.x ?? 0) + dx * NODE_NUDGE_STEP,
-      y: (pos?.y ?? 0) + dy * NODE_NUDGE_STEP,
-    }
-    emitPositions()
-    return
-  }
+  const node = (flowNodes.value as Array<Node<Record<string, unknown>>>).find((candidate) => candidate.id === nodeProps.id)
+  if (!node) return
+  node.position.x += dx * NODE_NUDGE_STEP
+  node.position.y += dy * NODE_NUDGE_STEP
+  emitPositions()
 }
 
 function onStageClick(nodeProps: { id: string; data: Record<string, unknown> }): void {

@@ -5864,6 +5864,7 @@ async def list_snapshot_endpoint(
                 pipeline_id,
                 page=page,
                 page_size=page_size,
+                organisation_id=principal.organisation_id,
                 exclude_created_kinds=exclude_created_kind,
                 exclude_drafts=exclude_drafts,
             )
@@ -6224,7 +6225,12 @@ async def delete_snapshot_endpoint(
             )
             if snapshot is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
-            deleted = await delete_snapshot(session, snapshot_id)
+            deleted = await delete_snapshot(
+                session,
+                snapshot_id,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -6261,7 +6267,13 @@ async def diff_snapshot_endpoint(
             # FAR-1360: scope BOTH snapshot ids to the path pipeline - the
             # lookup used to resolve each by primary key alone, making the
             # {pipeline_id} path segment decorative.
-            result = await diff_snapshots(session, req.snapshot_a_id, req.snapshot_b_id, pipeline_id=pipeline_id)
+            result = await diff_snapshots(
+                session,
+                req.snapshot_a_id,
+                req.snapshot_b_id,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 

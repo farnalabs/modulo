@@ -112,7 +112,7 @@ spec:
               ephemeral-storage: {{ .Values.saqSystem.resources.requests.ephemeralStorage | quote }}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL

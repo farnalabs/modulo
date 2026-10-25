@@ -29,6 +29,10 @@ import router, {
 } from '../router'
 import { clearAccessToken, setAccessToken } from '../lib/api/auth'
 
+it('registers the risk assessment route in the real router', () => {
+  expect(router.getRoutes().some((route) => route.name === 'risk-assessment' && route.path === '/risk-assessment')).toBe(true)
+})
+
 function makeRoute(name: string | undefined, meta: Record<string, unknown> = {}): any {
   return { name, meta }
 }

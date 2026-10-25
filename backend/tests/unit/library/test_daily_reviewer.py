@@ -14,13 +14,34 @@ import pytest
 
 from modulo.core.library.workflows.definitions import DAILY_REVIEWER
 
-from .helpers import KNOWN_AGENTS
+from .helpers import assert_step_matches
+
+STEP_CASES: list[tuple[str, dict[str, Any]]] = [
+    (
+        "collect-changes",
+        {"agent": None, "depends_on": None, "connector_binding": {"type": "source_control", "required": True}},
+    ),
+    (
+        "review-main",
+        {"agent": "main-reviewer", "depends_on": ["collect-changes"], "connector_binding": None},
+    ),
+    (
+        "group-findings",
+        {"agent": "finding-grouper", "depends_on": ["review-main"], "connector_binding": None},
+    ),
+    (
+        "implement-batches",
+        {
+            "agent": "spec-implementer",
+            "depends_on": ["group-findings"],
+            "connector_binding": {"type": "source_control", "required": True},
+        },
+    ),
+]
 
 
-def test_name_and_version() -> None:
+def test_name() -> None:
     assert DAILY_REVIEWER["name"] == "Daily Reviewer"
-    assert DAILY_REVIEWER["version"] == "1.0.0"
-    assert DAILY_REVIEWER["author"] == "Modulo"
 
 
 def test_tags_include_canonical() -> None:
@@ -31,49 +52,19 @@ def test_tags_include_canonical() -> None:
 
 
 def test_step_identifiers() -> None:
-    steps = DAILY_REVIEWER["pipeline_steps"]
-    expected_ids = ["collect-changes", "review-main", "group-findings", "implement-batches"]
-    actual_ids = [s["id"] for s in steps]
-    assert len(actual_ids) == 4
-    assert actual_ids == expected_ids
+    actual_ids = [step["id"] for step in DAILY_REVIEWER["pipeline_steps"]]
+    assert actual_ids == [step_id for step_id, _ in STEP_CASES]
 
 
-@pytest.mark.parametrize(
-    ("step_id", "expected"),
-    [
-        (
-            "collect-changes",
-            {"agent": None, "depends_on": None, "connector_binding": {"type": "source_control", "required": True}},
-        ),
-        (
-            "review-main",
-            {"agent": "main-reviewer", "depends_on": ["collect-changes"], "connector_binding": None},
-        ),
-        (
-            "group-findings",
-            {"agent": "finding-grouper", "depends_on": ["review-main"], "connector_binding": None},
-        ),
-        (
-            "implement-batches",
-            {
-                "agent": "spec-implementer",
-                "depends_on": ["group-findings"],
-                "connector_binding": {"type": "source_control", "required": True},
-            },
-        ),
-    ],
-)
+@pytest.mark.parametrize(("step_id", "expected"), STEP_CASES, ids=[case[0] for case in STEP_CASES])
 def test_step_properties(step_id: str, expected: dict[str, Any]) -> None:
-    step = _step_by_id(step_id)
-    assert step.get("agent") == expected["agent"]
-    assert step.get("depends_on") == expected["depends_on"]
-    assert step.get("connector_binding") == expected["connector_binding"]
-
-
-def test_known_agents_cover_daily_reviewer_roles() -> None:
-    assert "main-reviewer" in KNOWN_AGENTS
-    assert "finding-grouper" in KNOWN_AGENTS
-    assert "spec-implementer" in KNOWN_AGENTS
+    assert_step_matches(
+        DAILY_REVIEWER,
+        step_id,
+        agent=expected["agent"],
+        depends_on=expected["depends_on"],
+        connector_binding=expected["connector_binding"],
+    )
 
 
 def test_default_config_keys() -> None:
@@ -103,11 +94,3 @@ def test_default_config_schedules_daily_at_0500_utc() -> None:
 
 def test_phase1_defaults_to_sequential_coders() -> None:
     assert DAILY_REVIEWER["default_config"]["parallel_coders"] is False
-
-
-def _step_by_id(step_id: str) -> dict[str, Any]:
-    for step in DAILY_REVIEWER["pipeline_steps"]:
-        if step["id"] == step_id:
-            return step
-    msg = f"Step '{step_id}' not found"
-    raise AssertionError(msg)

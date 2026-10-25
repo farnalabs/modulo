@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_CSRF_FAILED
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.routes.auth import REFRESH_COOKIE
 from modulo.api.routes.auth import router as auth_router
@@ -222,6 +223,24 @@ def test_refresh_without_csrf_pair_rejected_403(client: TestClient) -> None:
         headers={"X-CSRF-Token": _CSRF_VALUE},
     )
     assert mismatched.status_code == 403
+
+
+def test_non_ascii_csrf_header_rejected_403_without_raising(client: TestClient) -> None:
+    """A non-ASCII CSRF header must be a clean 403, not a 500.
+
+    Starlette decodes header bytes as latin-1, so a high byte reaches
+    ``secrets.compare_digest`` as a non-ASCII str — which raises TypeError on
+    those instead of returning False. Both operands are attacker-controlled.
+    """
+    resp = client.post(
+        "/api/v1/auth/refresh",
+        headers=[
+            (b"cookie", b"XSRF-TOKEN=unit-csrf-token"),
+            (b"x-csrf-token", b"unit-csrf-t\xe9ken"),
+        ],
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == MSG_CSRF_FAILED
 
 
 def test_refresh_cookie_attributes(client: TestClient, mock_session: AsyncMock) -> None:

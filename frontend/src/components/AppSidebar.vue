@@ -2,10 +2,12 @@
   <!-- Desktop (>=768px): in-flow collapsible sidebar, default expanded -->
   <aside
     v-if="isDesktop"
-    class="h-screen sticky top-0 border-r bg-background flex flex-col overflow-hidden transition-[width] duration-200"
+    class="h-screen sticky top-0 border-r bg-background flex flex-col overflow-hidden transition-[width] duration-200 motion-reduce:transition-none"
     :class="collapsed ? 'w-16' : 'w-64 p-4 pr-3'"
     :aria-label="$t('components.AppLayout.main_navigation')"
+    aria-labelledby="desktop-navigation-heading"
   >
+    <h2 id="desktop-navigation-heading" class="sr-only">{{ $t('components.AppLayout.main_navigation') }}</h2>
     <SidebarRail
       v-if="collapsed"
       ref="railRef"
@@ -42,7 +44,9 @@
     <aside
       class="h-screen sticky top-0 border-r bg-background flex flex-col overflow-hidden w-16"
       :aria-label="$t('components.AppLayout.main_navigation')"
+      aria-labelledby="mobile-rail-navigation-heading"
     >
+      <h2 id="mobile-rail-navigation-heading" class="sr-only">{{ $t('components.AppLayout.main_navigation') }}</h2>
       <SidebarRail
         ref="railRef"
         :is-system-admin="isSystemAdmin"
@@ -70,12 +74,14 @@
       id="mobile-nav-panel"
       ref="mobilePanelRef"
       :aria-label="$t('components.AppLayout.main_navigation')"
+      aria-labelledby="mobile-panel-navigation-heading"
       class="fixed top-0 left-0 z-40 m-0 h-full w-64 max-h-none max-w-none border-r bg-background p-4 flex flex-col overflow-y-auto text-foreground backdrop:bg-black/50 md:hidden"
       @click="onMobilePanelBackdropClick"
       @keydown.escape="closeMobilePanel"
       @cancel="closeMobilePanel"
       @close="mobileExpanded = false"
     >
+      <h2 id="mobile-panel-navigation-heading" class="sr-only">{{ $t('components.AppLayout.main_navigation') }}</h2>
       <SidebarFull
         :is-system-admin="isSystemAdmin"
         :user-role="userRole"
@@ -133,7 +139,7 @@
       <button type="button"
         ref="mobileButtonRef"
         @click="mobileOpen = !mobileOpen"
-        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors motion-reduce:transition-none"
         :aria-label="mobileOpen ? $t('components.AppLayout.close_navigation') : $t('components.AppLayout.open_navigation')"
         :aria-expanded="mobileOpen"
         aria-controls="mobile-sidebar"
@@ -145,7 +151,7 @@
         <NotificationBell size="touch" />
         <button type="button"
           @click="$emit('open-command-palette')"
-          class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors motion-reduce:transition-none"
           :title="$t('components.AppLayout.search_pages_hint', { modifier: isMac ? 'Cmd' : 'Ctrl' })"
           :aria-label="$t('components.AppLayout.search_pages')"
         >
@@ -189,7 +195,7 @@
     <aside
       id="mobile-sidebar"
       ref="mobileSidebarRef"
-      class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-[transform,visibility] overflow-y-auto"
+      class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-[transform,visibility] motion-reduce:transition-none overflow-y-auto"
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full invisible'"
       :inert="!mobileOpen"
       :aria-hidden="!mobileOpen || undefined"
@@ -205,7 +211,7 @@
         </div>
         <router-link
           to="/admin/my-profile"
-          class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors flex-1 min-w-0"
+          class="text-sm text-muted-foreground truncate hover:text-foreground transition-colors motion-reduce:transition-none flex-1 min-w-0"
           :aria-label="$t('components.AppLayout.user_profile_link', { label: userEmail })"
         >
           {{ userEmail }}

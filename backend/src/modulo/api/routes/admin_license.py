@@ -37,6 +37,8 @@ from modulo.core.license import (
     LicenseError,
     LicenseValidation,
     clear_license,
+    get_parked_successor,
+    is_parked,
     parse_and_verify,
     store_license,
 )
@@ -181,6 +183,25 @@ def _renewal_claims(data: LicenseData) -> dict[str, Any]:
     }
 
 
+class LicenseSuccessor(BaseModel):
+    """A verified licence parked until its signed ``starts_at`` (FAR-2146).
+
+    Reported SEPARATELY from the active licence so ``licence_state`` keeps its
+    existing five-value meaning: a parked successor does not make the instance
+    licensed yet, and it does not turn over the running licence early either.
+    """
+
+    #: ISO 8601 instant the successor becomes the active licence.
+    starts_at: str
+    #: ISO 8601 instant that successor's term ends.
+    expires_at: str
+    #: Whole days of COVERAGE GAP when the successor starts after the active
+    #: licence's ``expires_at`` (rounded up, so any positive gap is at least
+    #: 1); ``None`` when nothing is active or the windows meet/overlap. This is
+    #: how a chosen start later than the current expiry is reported.
+    gap_days: int | None = None
+
+
 class LicenseStatusResponse(BaseModel):
     has_license: bool
     tier: str = "community"
@@ -198,6 +219,14 @@ class LicenseStatusResponse(BaseModel):
     licence_id: str | None = None
     #: ISO 8601 issue timestamp; ``None`` before FAR-2075.
     issued_at: str | None = None
+    #: ISO 8601 instant the ACTIVE licence becomes active (FAR-2146). ``None``
+    #: when the key carries no claim — it is then valid from ``issued_at``,
+    #: exactly as before FAR-2146.
+    starts_at: str | None = None
+    #: A verified successor licence waiting for its start, if one is installed.
+    #: The UI reads THIS to say "your next licence starts on X"; ``licence_state``
+    #: continues to describe only the currently active licence.
+    successor: LicenseSuccessor | None = None
     #: Whole days to expiry (negative once past it); ``None`` with no expiry.
     days_until_expiry: int | None = None
     #: ISO timestamp at which the delivery grace ends (capability stops).
@@ -217,6 +246,14 @@ class LicenseUploadResponse(BaseModel):
     features: list[str]
     expires_at: str | None = None
     org_id: str | None = None
+    #: ISO 8601 instant this licence becomes active (FAR-2146); ``None`` when
+    #: the key carries no claim (valid from ``issued_at``).
+    starts_at: str | None = None
+    #: True when the installed key is VALID but not yet ACTIVE because its
+    #: ``starts_at`` is in the future — it was parked as a successor and the
+    #: currently active licence keeps running. Lets the installer tell "my key
+    #: is now active" from "my key is waiting for its start date".
+    parked: bool = False
 
 
 class LicenseIssueRequest(BaseModel):
@@ -255,7 +292,49 @@ def _license_failure_body(validation: LicenseValidation) -> dict[str, object]:
     return body
 
 
-def _license_status(data: LicenseData, *, has_license: bool = True) -> LicenseStatusResponse:
+def _as_aware(instant: datetime) -> datetime:
+    """Read a naive instant as LOCAL time — the convention this key already uses."""
+    return instant if instant.tzinfo is not None else instant.astimezone()
+
+
+def _successor_block(
+    successor: LicenseData | None,
+    active_expires_at: str | None,
+) -> LicenseSuccessor | None:
+    """Describe a parked successor, reporting a coverage gap when there is one.
+
+    A successor starting AFTER the active licence's expiry leaves a period in
+    which the instance is unlicensed (it runs on Community). That is a
+    legitimate customer choice, so it is not an error — but it must be visible,
+    not inferred: ``gap_days`` states it, and is ``None`` when nothing is
+    active or the windows meet/overlap. A positive gap is rounded UP so a
+    partial day is never reported as "no gap".
+    """
+    if successor is None or not successor.starts_at:
+        return None
+    gap_days: int | None = None
+    if active_expires_at:
+        try:
+            active_expiry = _as_aware(datetime.fromisoformat(active_expires_at))
+            starts = _as_aware(datetime.fromisoformat(successor.starts_at))
+        except ValueError:
+            gap_days = None
+        else:
+            if starts > active_expiry:
+                gap_days = math.ceil((starts - active_expiry).total_seconds() / 86_400)
+    return LicenseSuccessor(
+        starts_at=successor.starts_at,
+        expires_at=successor.expires_at,
+        gap_days=gap_days,
+    )
+
+
+def _license_status(
+    data: LicenseData,
+    *,
+    has_license: bool = True,
+    successor: LicenseData | None = None,
+) -> LicenseStatusResponse:
     """Build a ``LicenseStatusResponse`` from a signed-license payload."""
     days_until_expiry, licence_state = derive_licence_state(data.expires_at or None)
     return LicenseStatusResponse(
@@ -264,11 +343,38 @@ def _license_status(data: LicenseData, *, has_license: bool = True) -> LicenseSt
         features=data.features,
         expires_at=data.expires_at or None,
         org_id=data.org_id or None,
+        starts_at=data.starts_at,
+        successor=_successor_block(successor, data.expires_at or None),
         days_until_expiry=days_until_expiry,
         grace_ends_at=licence_grace_ends_at(data.expires_at or None),
         licence_state=licence_state,
         **_renewal_claims(data),
     )
+
+
+def _configured_parked_successor(settings: Settings, org: Organisation | None) -> LicenseData | None:
+    """A future-dated licence configured on the org or the env var, if any.
+
+    The in-memory park slot only holds keys INSTALLED through
+    ``POST /api/v1/admin/license``. A successor can also arrive as deployment
+    configuration (``MODULO_LICENSE_KEY``) or an org-level key; those are not
+    "installed" by an operator action at all, so the status surface looks for
+    them here to report their start date. This is REPORTING only: the ladder
+    itself already refuses to apply a parked key
+    (``feature_flags._verified_license_key``).
+    """
+    candidates: list[str] = []
+    org_settings = getattr(org, "settings_json", None)
+    if isinstance(org_settings, dict) and org_settings.get("license_key"):
+        candidates.append(str(org_settings["license_key"]))
+    env_key = getattr(settings, "modulo_license_key", "") or ""
+    if env_key:
+        candidates.append(env_key)
+    for key in candidates:
+        validation = parse_and_verify(key)
+        if validation.valid and validation.license_data is not None and is_parked(validation.license_data):
+            return validation.license_data
+    return None
 
 
 def _lapsed_licence_present(settings: Settings, org: Organisation | None) -> bool:
@@ -308,18 +414,30 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
     the app actually runs on for the same deployment state.
     """
     data = resolve_effective_license(settings, org)
+    # Read the parked slot AFTER the walk: the walk calls ``get_license``,
+    # which promotes a successor whose start has arrived, so a due successor is
+    # never reported as still parked. A key that arrives as configuration
+    # (env var / org-level) has no park slot, so it is discovered separately.
+    successor = get_parked_successor() or _configured_parked_successor(settings, org)
     if data is None:
         # No rung grants capability. Distinguish "never licensed" from "the
         # licence lapsed": the admin needs the second one explained, and the
         # only difference is whether a verified-but-expired key still exists.
+        # A parked successor is reported either way so the admin can say when
+        # the next licence begins even while nothing is active.
         if _lapsed_licence_present(settings, org):
             return LicenseStatusResponse(
                 has_license=False,
                 tier="community",
                 licence_state=LICENCE_STATE_LAPSED,
+                successor=_successor_block(successor, None),
             )
-        return LicenseStatusResponse(has_license=False, tier="community")
-    return _license_status(data)
+        return LicenseStatusResponse(
+            has_license=False,
+            tier="community",
+            successor=_successor_block(successor, None),
+        )
+    return _license_status(data, successor=successor)
 
 
 async def _read_license_cache(settings: Settings, org_id: str) -> LicenseStatusResponse | None:
@@ -496,6 +614,8 @@ async def upload_license(
         features=data.features,
         expires_at=data.expires_at or None,
         org_id=data.org_id or None,
+        starts_at=data.starts_at,
+        parked=is_parked(data),
     )
 
 

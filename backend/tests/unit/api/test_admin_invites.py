@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session
 from modulo.api.main import app
+from modulo.api.routes.admin import InviteUserRequest
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.settings import Settings, get_settings
@@ -222,6 +223,19 @@ def test_invite_user_malformed_or_overlength_email_422(admin_client: TestClient,
         json={"email": email, "display_name": "X", "org_role": "runner"},
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "email",
+    ["new.member@example.com", "user@sub.example.co.uk", "first.last+tag@example.io"],
+)
+def test_invite_user_accepts_ordinary_email(email: str) -> None:
+    """The ReDoS-safe possessive regexes must still ACCEPT ordinary addresses.
+
+    Regression guard for the S8786 rewrite, where the possessive domain segment
+    swallowed the literal dot and rejected every valid address with a 422.
+    """
+    assert InviteUserRequest(email=email, display_name="X", org_role="runner").email == email
 
 
 def test_invite_user_overlength_display_name_422(admin_client: TestClient) -> None:

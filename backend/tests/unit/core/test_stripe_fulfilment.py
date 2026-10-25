@@ -1,6 +1,7 @@
 """Tests for modulo.core.stripe_fulfilment — idempotent purchase fulfilment."""
 
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,14 +15,19 @@ from modulo.core.license import (
     parse_and_verify,
     set_public_key,
 )
-from modulo.core.license_signing import LicenseSigningError
+from modulo.core.license_signing import LicenseSigningError, _add_months
 from modulo.core.registry.crypto import generate_keypair
 from modulo.core.stripe_fulfilment import (
+    REASON_STARTS_AT_IN_PAST,
+    REASON_STARTS_AT_MALFORMED,
+    REASON_STARTS_AT_TOO_FAR_AHEAD,
+    StartsAtRejectedError,
     _licence_email_html,
     _licence_email_text,
     _processed_event_ids,
     email_team_license,
     fulfil_team_purchase,
+    resolve_starts_at,
 )
 from modulo.settings import Settings
 
@@ -290,3 +296,179 @@ class TestFulfilTeamPurchase:
         validation = parse_and_verify(license_key)
         assert validation.license_data is not None
         assert validation.license_data.renewal_mode == RENEWAL_MODE_MANUAL
+
+
+# ---------------------------------------------------------------------------
+# FAR-2146 — the customer-chosen licence start
+# ---------------------------------------------------------------------------
+
+_NOW = datetime(2026, 10, 25, 12, 0, 0, tzinfo=UTC)
+
+
+class TestResolveStartsAt:
+    """The boundary rules: future-only, at most 90 days out, and never clamped."""
+
+    def test_absent_metadata_means_start_now(self) -> None:
+        assert resolve_starts_at(None) is None
+        assert resolve_starts_at("") is None
+        assert resolve_starts_at("   ") is None
+
+    def test_a_bare_date_is_interpreted_at_midnight_utc(self) -> None:
+        # ``now`` is pinned so the assertion does not drift out of the 90-day
+        # horizon as the real clock moves.
+        now = datetime(2027, 1, 15, tzinfo=UTC)
+
+        assert resolve_starts_at("2027-03-12", now=now) == datetime(2027, 3, 12, tzinfo=UTC)
+
+    def test_today_is_accepted_for_the_whole_day(self) -> None:
+        """A date-only choice is a calendar day, not the instant of UTC midnight."""
+        late_today = datetime(2026, 10, 25, 23, 0, 0, tzinfo=UTC)
+
+        assert resolve_starts_at("2026-10-25", now=late_today) == datetime(2026, 10, 25, tzinfo=UTC)
+
+    def test_yesterday_is_rejected_as_in_the_past(self) -> None:
+        with pytest.raises(StartsAtRejectedError) as raised:
+            resolve_starts_at("2026-10-24", now=_NOW)
+
+        assert raised.value.reason == REASON_STARTS_AT_IN_PAST
+        assert raised.value.value == "2026-10-24"
+        assert "already passed" in raised.value.detail
+
+    def test_a_past_full_datetime_is_rejected(self) -> None:
+        with pytest.raises(StartsAtRejectedError) as raised:
+            resolve_starts_at("2026-10-25T11:59:59+00:00", now=_NOW)
+
+        assert raised.value.reason == REASON_STARTS_AT_IN_PAST
+
+    def test_exactly_ninety_days_ahead_is_allowed(self) -> None:
+        latest = (_NOW + timedelta(days=90)).date()
+
+        assert resolve_starts_at(latest.isoformat(), now=_NOW) == datetime(
+            latest.year, latest.month, latest.day, tzinfo=UTC
+        )
+
+    def test_more_than_ninety_days_ahead_is_rejected(self) -> None:
+        too_far = (_NOW + timedelta(days=91)).date()
+
+        with pytest.raises(StartsAtRejectedError) as raised:
+            resolve_starts_at(too_far.isoformat(), now=_NOW)
+
+        assert raised.value.reason == REASON_STARTS_AT_TOO_FAR_AHEAD
+        assert "90 days ahead" in raised.value.detail
+
+    def test_a_full_datetime_beyond_the_horizon_is_rejected(self) -> None:
+        too_far = (_NOW + timedelta(days=91)).isoformat()
+
+        with pytest.raises(StartsAtRejectedError) as raised:
+            resolve_starts_at(too_far, now=_NOW)
+
+        assert raised.value.reason == REASON_STARTS_AT_TOO_FAR_AHEAD
+
+    def test_a_full_datetime_within_the_horizon_is_allowed(self) -> None:
+        within = (_NOW + timedelta(days=10)).isoformat()
+
+        assert resolve_starts_at(within, now=_NOW) == datetime.fromisoformat(within)
+
+    @pytest.mark.parametrize("value", ["not-a-date", "2027-13-01", "next tuesday"])
+    def test_an_unparseable_value_is_rejected_as_malformed(self, value: str) -> None:
+        with pytest.raises(StartsAtRejectedError) as raised:
+            resolve_starts_at(value, now=_NOW)
+
+        assert raised.value.reason == REASON_STARTS_AT_MALFORMED
+        assert value in raised.value.detail
+
+
+class TestFulfilmentWithChosenStart:
+    async def test_a_chosen_start_mints_a_key_that_verifies_with_the_claim(self) -> None:
+        settings = _make_settings()
+        start = datetime.now(UTC) + timedelta(days=60)
+
+        license_key = await fulfil_team_purchase(
+            settings,
+            event_id="evt_future_start",
+            customer_email="bob@acme.com",
+            org_name="Acme",
+            send_key_email=False,
+            starts_at=start.date().isoformat(),
+        )
+
+        assert license_key is not None
+        data = parse_and_verify(license_key).license_data
+        assert data is not None
+        # A bare date resolves to midnight UTC, and the term runs from THERE
+        # (not from the mint time).
+        expected_start = datetime(start.year, start.month, start.day, tzinfo=UTC)
+        assert data.starts_at == expected_start.isoformat()
+        assert datetime.fromisoformat(data.expires_at) == _add_months(expected_start, 12)
+        assert datetime.fromisoformat(data.issued_at or "") < expected_start
+
+    async def test_a_past_start_is_rejected_and_nothing_is_minted_or_claimed(self) -> None:
+        settings = _make_settings()
+        past = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+        with (
+            patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock()) as mock_send,
+            pytest.raises(StartsAtRejectedError) as raised,
+        ):
+            await fulfil_team_purchase(
+                settings,
+                event_id="evt_past_start",
+                customer_email="bob@acme.com",
+                org_name="Acme",
+                starts_at=past,
+            )
+
+        assert raised.value.reason == REASON_STARTS_AT_IN_PAST
+        mock_send.assert_not_called()
+        # Unclaimed, so a corrected event can still be fulfilled.
+        assert "evt_past_start" not in _processed_event_ids
+
+    async def test_a_start_beyond_the_horizon_is_rejected(self) -> None:
+        settings = _make_settings()
+        too_far = (datetime.now(UTC) + timedelta(days=120)).date().isoformat()
+
+        with pytest.raises(StartsAtRejectedError) as raised:
+            await fulfil_team_purchase(
+                settings,
+                event_id="evt_far_start",
+                customer_email="bob@acme.com",
+                org_name="Acme",
+                starts_at=too_far,
+            )
+
+        assert raised.value.reason == REASON_STARTS_AT_TOO_FAR_AHEAD
+        assert "evt_far_start" not in _processed_event_ids
+
+    async def test_absent_start_mints_exactly_as_before(self) -> None:
+        settings = _make_settings()
+
+        license_key = await fulfil_team_purchase(
+            settings,
+            event_id="evt_no_start",
+            customer_email="bob@acme.com",
+            org_name="Acme",
+            send_key_email=False,
+        )
+
+        assert license_key is not None
+        data = parse_and_verify(license_key).license_data
+        assert data is not None
+        assert data.starts_at is None
+
+    async def test_the_email_states_when_the_licence_becomes_active(self) -> None:
+        settings = _make_settings()
+        start = (datetime.now(UTC) + timedelta(days=45)).date().isoformat()
+
+        with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock(return_value=True)) as mock_send:
+            await fulfil_team_purchase(
+                settings,
+                event_id="evt_email_start",
+                customer_email="bob@acme.com",
+                org_name="Acme",
+                starts_at=start,
+            )
+
+        html_body = mock_send.call_args.args[3]
+        text_body = mock_send.call_args.args[4]
+        assert start in html_body
+        assert "It becomes active on" in html_body
+        assert f"It becomes active on {start}" in text_body

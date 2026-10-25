@@ -10947,7 +10947,7 @@ async def get_pipeline_diff(
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", pipeline_id)
-            result = await diff_snapshots(s, snap_a, snap_b, pipeline_id=pid)
+            result = await diff_snapshots(s, snap_a, snap_b, organisation_id=org_id, pipeline_id=pid)
 
         if result is None:
             return {"error": "not_found", "detail": "One or both snapshots not found"}
@@ -12748,7 +12748,7 @@ async def resource_pipeline_snapshots(pipeline_id: str) -> str:
     async with _session(org_id) as s:
         if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, pid)):
             return _team_scope_error_str("pipeline", pipeline_id)
-        snapshots, _ = await list_snapshots(s, pid, page=1, page_size=50)
+        snapshots, _ = await list_snapshots(s, pid, page=1, page_size=50, organisation_id=org_id)
 
     lines = [
         f"- snapshot {s.snapshot_version} (id={s.id}, tag={s.tag or ''}, created={s.created_at.isoformat()})"

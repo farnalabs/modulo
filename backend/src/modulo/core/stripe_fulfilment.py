@@ -18,6 +18,19 @@ eventually gets a key instead of permanently losing it. When Redis is
 unavailable a process-local set is used — single-instance only. Production
 runs Redis, so the limitation does not apply there.
 
+Chosen licence start (FAR-2146)
+-------------------------------
+A purchase may state when the licence should begin, in the
+checkout/subscription metadata as ``starts_at`` (ISO date, e.g.
+``2027-03-12``). The date is validated at this boundary — a past start and one
+more than ``STARTS_AT_MAX_AHEAD_DAYS`` ahead are rejected with distinct
+reasons, never clamped — and the minted key carries the signed claim. A key
+whose start is still in the future is VALID but not yet ACTIVE; the instance
+parks it and activates it when the date arrives (``core.license``).
+
+This is not stacking: stacking extends the window past a previous expiry,
+while a chosen start moves the same ``term``-month window to a later date.
+
 Early-renewal stacking (FAR-2109)
 ---------------------------------
 A purchase is minted at the charge date, so a renewal charged on time already
@@ -43,7 +56,7 @@ import html
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from redis.asyncio import Redis
 
@@ -65,6 +78,44 @@ _log = logging.getLogger(__name__)
 _IDEMPOTENCY_TTL_SECONDS = 90 * 24 * 3600
 
 _RENEWAL_NOTE = "Your Modulo Team License renews annually at list price."
+
+# ---------------------------------------------------------------------------
+# Chosen licence start (FAR-2146)
+#
+# A customer may choose WHEN their licence starts, future-only. The metadata
+# value is an ISO 8601 date (e.g. ``2027-03-12``). Two rules are enforced at
+# the boundary — a past start and one too far ahead are REJECTED, never
+# clamped, because a silent clamp hides the customer's mistake: a backdated
+# start would grant free time, and an over-eager future start would leave the
+# customer paying for a licence that does not begin when they think it does.
+# ---------------------------------------------------------------------------
+
+#: The furthest ahead a chosen start may be, in days. A start more than this
+#: is rejected — a licence bought today cannot reasonably begin that far out.
+STARTS_AT_MAX_AHEAD_DAYS = 90
+
+#: The chosen start is earlier than today.
+REASON_STARTS_AT_IN_PAST = "starts_at_in_past"
+#: The chosen start is more than ``STARTS_AT_MAX_AHEAD_DAYS`` ahead.
+REASON_STARTS_AT_TOO_FAR_AHEAD = "starts_at_too_far_ahead"
+#: The metadata value is not a parseable ISO 8601 date/datetime.
+REASON_STARTS_AT_MALFORMED = "starts_at_malformed"
+
+
+class StartsAtRejectedError(ValueError):
+    """A chosen licence start the fulfiller refuses to mint on.
+
+    ``reason`` is machine-readable (one of the ``REASON_STARTS_AT_*``
+    constants) so the route can report WHICH rule failed; ``detail`` is the
+    operator-facing explanation.
+    """
+
+    def __init__(self, reason: str, detail: str, *, value: str | None = None) -> None:
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail
+        self.value = value
+
 
 # Process-local fallback for event-id idempotency when Redis is unavailable
 # (single process only; production uses Redis).
@@ -102,15 +153,109 @@ _RENEWAL_CLAIM_KEY_PREFIX = "stripe:renewal-claim:"
 _renewal_claims: dict[str, dict[str, str]] = {}
 
 
-def _licence_email_html(license_key: str, expires_at: str) -> str:
+def _as_aware(instant: datetime) -> datetime:
+    """Read a naive datetime as UTC — metadata carries no local-time meaning."""
+    return instant if instant.tzinfo is not None else instant.replace(tzinfo=UTC)
+
+
+def resolve_starts_at(raw: str | None, *, now: datetime | None = None) -> datetime | None:
+    """Validate a customer-chosen licence start and return it as an aware instant.
+
+    ``raw`` is the ``starts_at`` value from the checkout/subscription metadata:
+    an ISO 8601 date (the expected form, e.g. ``2027-03-12``) or a full ISO
+    8601 datetime with an offset. A bare date is interpreted at midnight UTC.
+    An absent/blank value means "start now" and returns ``None`` — the
+    behaviour of every purchase before FAR-2146.
+
+    Raises :class:`StartsAtRejectedError` with a DISTINGUISHABLE
+    ``reason`` rather than clamping:
+
+    - :data:`REASON_STARTS_AT_IN_PAST` — the chosen start has already passed.
+      A *date-only* value is compared by calendar date, so choosing "today"
+      is accepted for the whole day rather than being rejected once UTC
+      midnight has passed.
+    - :data:`REASON_STARTS_AT_TOO_FAR_AHEAD` — more than
+      ``STARTS_AT_MAX_AHEAD_DAYS`` ahead (exactly 90 days is allowed).
+    - :data:`REASON_STARTS_AT_MALFORMED` — not a parseable ISO 8601 value.
+
+    ``now`` is injectable so the boundary can be pinned in tests; it must be
+    timezone-aware (a naive value is read as UTC).
+    """
+    value = (raw or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise StartsAtRejectedError(
+            REASON_STARTS_AT_MALFORMED,
+            f"The chosen licence start {value!r} is not a valid ISO 8601 date (expected e.g. 2027-03-12), "
+            "so no licence was issued.",
+            value=value,
+        ) from exc
+
+    start = _as_aware(parsed)
+    reference = _as_aware(now) if now is not None else datetime.now(UTC)
+    # ``2027-03-12`` (no time component) is a calendar choice, not an instant:
+    # compare it by date so "today" stays valid all day.
+    date_only = "T" not in value and " " not in value
+    horizon = reference + timedelta(days=STARTS_AT_MAX_AHEAD_DAYS)
+
+    if date_only:
+        if start.date() < reference.date():
+            raise StartsAtRejectedError(
+                REASON_STARTS_AT_IN_PAST,
+                f"The chosen licence start {value} has already passed (today is {reference.date().isoformat()}); "
+                "a licence cannot start in the past, so no licence was issued.",
+                value=value,
+            )
+        if start.date() > horizon.date():
+            raise StartsAtRejectedError(
+                REASON_STARTS_AT_TOO_FAR_AHEAD,
+                f"The chosen licence start {value} is more than {STARTS_AT_MAX_AHEAD_DAYS} days ahead; "
+                f"the latest allowed start is {horizon.date().isoformat()}, so no licence was issued.",
+                value=value,
+            )
+    else:
+        if start < reference:
+            raise StartsAtRejectedError(
+                REASON_STARTS_AT_IN_PAST,
+                f"The chosen licence start {value} has already passed (now is {reference.isoformat()}); "
+                "a licence cannot start in the past, so no licence was issued.",
+                value=value,
+            )
+        if start > horizon:
+            raise StartsAtRejectedError(
+                REASON_STARTS_AT_TOO_FAR_AHEAD,
+                f"The chosen licence start {value} is more than {STARTS_AT_MAX_AHEAD_DAYS} days ahead; "
+                f"the latest allowed start is {horizon.isoformat()}, so no licence was issued.",
+                value=value,
+            )
+    return start
+
+
+def _starts_at_sentence(starts_at: str | None) -> str:
+    """The email sentence stating when the licence begins.
+
+    A key whose window starts later is VALID but not yet ACTIVE, so the email
+    must say so: otherwise the customer installs it and sees Community with no
+    explanation of why.
+    """
+    if not starts_at:
+        return ""
+    return f" It becomes active on <strong>{html.escape(starts_at)}</strong>."
+
+
+def _licence_email_html(license_key: str, expires_at: str, starts_at: str | None = None) -> str:
     key_html = html.escape(license_key)
     expiry_html = html.escape(expires_at or "N/A")
+    start_sentence = _starts_at_sentence(starts_at)
     return f"""\
 <html>
 <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #1f2937;">
   <p>Thank you for purchasing <strong>Modulo Team License</strong>. Your license key is:</p>
   <pre style="background:#f3f4f6;padding:12px;border-radius:6px;overflow-x:auto;">MODULO_LICENSE_KEY={key_html}</pre>
-  <p>This license is valid until <strong>{expiry_html}</strong>.</p>
+  <p>This license is valid until <strong>{expiry_html}</strong>.{start_sentence}</p>
   <p>To activate it:</p>
   <ol>
     <li>Set <code>MODULO_LICENSE_KEY</code> to the value above in your Modulo instance's environment.</li>
@@ -123,11 +268,12 @@ def _licence_email_html(license_key: str, expires_at: str) -> str:
 """
 
 
-def _licence_email_text(license_key: str, expires_at: str) -> str:
+def _licence_email_text(license_key: str, expires_at: str, starts_at: str | None = None) -> str:
+    start_sentence = f" It becomes active on {starts_at}." if starts_at else ""
     return (
         "Thank you for purchasing Modulo Team License.\n\n"
         f"Your license key is:\n\n  MODULO_LICENSE_KEY={license_key}\n\n"
-        f"This license is valid until {expires_at or 'N/A'}.\n\n"
+        f"This license is valid until {expires_at or 'N/A'}.{start_sentence}\n\n"
         "To activate it, set MODULO_LICENSE_KEY to the value above in your "
         "Modulo instance's environment and restart the service. See "
         "https://docs.modulo.run for full instructions.\n\n"
@@ -196,8 +342,19 @@ async def _is_event_claimed(settings: Settings, event_id: str) -> bool:
     return event_id in _processed_event_ids
 
 
-async def email_team_license(settings: Settings, to: str, license_key: str, expires_at: str) -> bool:
+async def email_team_license(
+    settings: Settings,
+    to: str,
+    license_key: str,
+    expires_at: str,
+    starts_at: str | None = None,
+) -> bool:
     """Send the team license key to *to*.
+
+    ``starts_at`` is the signed start of the licence window when it is later
+    than now (FAR-2146); the email then states that the key becomes active
+    then, so a customer does not install a valid-but-parked key and wonder why
+    the instance still reports Community.
 
     Returns True on success, False on failure — never raises. The caller
     (``fulfil_team_purchase``) relies on the bool to decide whether the
@@ -210,8 +367,8 @@ async def email_team_license(settings: Settings, to: str, license_key: str, expi
             settings,
             [to],
             "Your Modulo Team License",
-            _licence_email_html(license_key, expires_at),
-            _licence_email_text(license_key, expires_at),
+            _licence_email_html(license_key, expires_at, starts_at),
+            _licence_email_text(license_key, expires_at, starts_at),
         )
     except EmailSendingError:
         _log.exception("stripe.fulfilment.email_failed to=%s", to)
@@ -237,6 +394,7 @@ async def _generate_and_verify_license(
     term_months: int,
     event_id: str,
     renewal_mode: str = DEFAULT_RENEWAL_MODE,
+    starts_at: datetime | None = None,
 ) -> tuple[str, str] | None:
     """Generate license key and verify it. Returns (license_key, expires_at) or None on failure."""
     try:
@@ -245,6 +403,7 @@ async def _generate_and_verify_license(
             term_months=term_months,
             private_key_hex=settings.modulo_license_private_key or None,
             renewal_mode=renewal_mode,
+            starts_at=starts_at,
         )
     except ValueError:
         _log.exception("stripe.fulfilment.license_generation_failed event_id=%s", event_id)
@@ -267,10 +426,15 @@ async def _generate_and_verify_license(
 
 
 async def _send_license_email(
-    settings: Settings, customer_email: str, license_key: str, expires_at: str, event_id: str
+    settings: Settings,
+    customer_email: str,
+    license_key: str,
+    expires_at: str,
+    event_id: str,
+    starts_at: str | None = None,
 ) -> bool:
     """Send license email. Returns True on success, False on failure."""
-    if not await email_team_license(settings, customer_email, license_key, expires_at):
+    if not await email_team_license(settings, customer_email, license_key, expires_at, starts_at):
         _log.error(
             "stripe.fulfilment.email_failed_event_not_claimed event_id=%s — "
             "event left unclaimed so Stripe's retries will re-attempt",
@@ -297,6 +461,7 @@ async def fulfil_team_purchase(
     term_months: int = 12,
     send_key_email: bool = True,
     renewal_mode: str = DEFAULT_RENEWAL_MODE,
+    starts_at: str | None = None,
 ) -> str | None:
     """Idempotently fulfil a Stripe purchase: generate + email a team license.
 
@@ -306,24 +471,58 @@ async def fulfil_team_purchase(
     a caller that does not state the mode can never promise a renewal that was
     not bought.
 
-    Ordering (FAR-180): duplicate-check -> generate -> email -> claim. The event
-    id is claimed ONLY AFTER a successful email send, so a transient SMTP
-    failure (``email_team_license`` returns False) leaves the event
-    unclaimed and Stripe's automatic retries re-attempt the fulfilment — the
-    customer never permanently loses their key to an SMTP outage. A duplicate
-    delivery (already claimed) is detected BEFORE generation/emailing and
-    returns ``None`` without re-sending. Returns the generated license key, or
-    ``None`` when the event was already fulfilled or generation/email failed.
+    ``starts_at`` is the customer-chosen licence start read from the
+    checkout/subscription metadata (FAR-2146): an ISO 8601 date such as
+    ``2027-03-12``. It is validated by :func:`resolve_starts_at` and a past
+    date, one more than ``STARTS_AT_MAX_AHEAD_DAYS`` ahead, or an unparseable
+    value raises :class:`StartsAtRejectedError` with a distinguishable
+    ``reason`` — nothing is minted and the event is left unclaimed. An absent
+    value mints exactly as before (the term starts now).
+
+    Ordering (FAR-180): duplicate-check -> validate start -> generate -> email
+    -> claim. The event id is claimed ONLY AFTER a successful email send, so a
+    transient SMTP failure (``email_team_license`` returns False) leaves the
+    event unclaimed and Stripe's automatic retries re-attempt the fulfilment —
+    the customer never permanently loses their key to an SMTP outage. A
+    duplicate delivery (already claimed) is detected BEFORE generation/emailing
+    and returns ``None`` without re-sending. Returns the generated license key,
+    or ``None`` when the event was already fulfilled or generation/email failed.
     """
     if await _check_duplicate_event(settings, event_id):
         return None
 
-    license_data = await _generate_and_verify_license(settings, org_name, term_months, event_id, renewal_mode)
+    try:
+        chosen_start = resolve_starts_at(starts_at)
+    except StartsAtRejectedError as exc:
+        _log.error(
+            "stripe.fulfilment.starts_at_rejected event_id=%s reason=%s value=%r detail=%s",
+            event_id,
+            exc.reason,
+            exc.value,
+            exc.detail,
+        )
+        raise
+
+    license_data = await _generate_and_verify_license(
+        settings,
+        org_name,
+        term_months,
+        event_id,
+        renewal_mode,
+        chosen_start,
+    )
     if license_data is None:
         return None
     license_key, expires_at = license_data
 
-    if send_key_email and not await _send_license_email(settings, customer_email, license_key, expires_at, event_id):
+    if send_key_email and not await _send_license_email(
+        settings,
+        customer_email,
+        license_key,
+        expires_at,
+        event_id,
+        chosen_start.isoformat() if chosen_start is not None else None,
+    ):
         return None
 
     if not await _claim_event(settings, event_id):

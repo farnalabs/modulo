@@ -219,17 +219,17 @@ def report_firing_env(session: MockSession) -> Iterator[None]:
 
 
 @contextmanager
-def patched_http_client(client: AsyncMock) -> Iterator[MagicMock]:
-    """Make the scheduler's ``httpx.AsyncClient(...)`` hand out *client*.
+def patched_http_client(client: AsyncMock) -> Iterator[AsyncMock]:
+    """Make the scheduler's pinned client factory hand out *client*.
 
-    Yields the mocked client class so tests that must inspect the constructor
-    call (e.g. the timeout pass-through contract) can assert on its kwargs.
-    Both ``scheduler`` and ``quality_report`` call the same ``httpx`` module
-    attribute, so one patch covers delivery through either.
+    Every delivery URL now goes through
+    ``modulo.core.ssrf.pinned_async_client`` (re-validated + connection pinned),
+    so this patches that factory rather than ``httpx.AsyncClient``. Yields the
+    factory mock so tests that must inspect the construction call (e.g. the
+    timeout pass-through contract) can assert on its kwargs.
     """
-    with patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls:
-        client_cls.return_value.__aenter__.return_value = client
-        yield client_cls
+    with patch("modulo.core.reports.scheduler.pinned_async_client", new=AsyncMock(return_value=client)) as pinned:
+        yield pinned
 
 
 @contextmanager

@@ -130,7 +130,7 @@ class LoopInterceptConfig(BaseModel):
 
     enabled: bool = True
     latency_budget_ms: int = Field(default=DEFAULT_LOOP_INTERCEPT_LATENCY_BUDGET_MS, ge=1, le=5000)
-    intercepted_tool_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_LOOP_INTERCEPT_PATTERNS))
+    intercepted_tool_patterns: list[str] = Field(default_factory=lambda: [*DEFAULT_LOOP_INTERCEPT_PATTERNS])
     intercept_tool_results: bool = True
     block_on_guardrail: bool = True
 
@@ -850,7 +850,7 @@ class LoopInterceptCallbackServer:
         port: int = 0,
     ) -> None:
         self._engine = engine
-        self._definitions = list(definitions)
+        self._definitions = (*definitions,)
         self._config = config
         self._audit_sink = audit_sink
         self._host = host
@@ -879,6 +879,7 @@ class LoopInterceptCallbackServer:
             daemon=True,
         )
         self._thread.start()
+        await asyncio.sleep(0)
         return int(server.server_address[1])
 
     async def close(self) -> None:

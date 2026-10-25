@@ -76,7 +76,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER,
         org_role="operator",
     )
-    with patch("modulo.api.routes.notifications.validate_outbound_url"):
+    with patch("modulo.api.routes.admin_notifications.validate_outbound_url"):
         test_client = TestClient(app)
         test_client.cookies.set("XSRF-TOKEN", "test-csrf-token")
         test_client.headers["X-CSRF-Token"] = "test-csrf-token"

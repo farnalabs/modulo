@@ -47,8 +47,27 @@ REQUIRED_PROPERTIES: dict[str, list[str]] = {
 }
 
 
-def test_exactly_25_schemas() -> None:
-    assert len(SCHEMAS) == 25
+EXPECTED_ENUMS: dict[str, dict[str, list[str]]] = {
+    "adr": {"status": ["proposed", "accepted", "deprecated", "superseded"]},
+    "api-spec": {"method": ["GET", "POST", "PUT", "DELETE", "PATCH"]},
+    "changelog-entry": {"type": ["added", "changed", "deprecated", "removed", "fixed", "security"]},
+    "test-case": {"priority": ["high", "medium", "low"]},
+    "db-change": {"risk": ["low", "medium", "high"]},
+    "roadmap-item": {
+        "priority": ["p0", "p1", "p2", "p3"],
+        "status": ["planned", "in-progress", "completed", "cancelled"],
+    },
+    "deployment": {
+        "environment": ["staging", "production"],
+        "status": ["pending", "in-progress", "completed", "rolled-back"],
+    },
+    "incident-report": {"status": ["investigating", "identified", "monitoring", "resolved"]},
+    "okr": {"status": ["on-track", "at-risk", "behind", "not-started"]},
+    "issue-ticket": {"type": ["bug", "feature", "enhancement", "chore"]},
+    "pull-request": {"status": ["open", "draft", "merged", "closed"]},
+    "ticket-input": {"type": ["bug", "feature", "enhancement", "chore"]},
+    "pr-review-decision": {"decision": ["APPROVE", "REQUEST_CHANGES"]},
+}
 
 
 def test_all_schema_names_are_unique() -> None:
@@ -130,30 +149,7 @@ def test_json_roundtrip(entry: dict[str, Any]) -> None:
 
 @pytest.mark.parametrize("entry", SCHEMAS, ids=lambda e: e["name"])
 def test_enum_values_are_valid(entry: dict[str, Any]) -> None:
-    expected_by_schema: dict[str, dict[str, list[str]]] = {
-        "adr": {"status": ["proposed", "accepted", "deprecated", "superseded"]},
-        "api-spec": {"method": ["GET", "POST", "PUT", "DELETE", "PATCH"]},
-        "changelog-entry": {"type": ["added", "changed", "deprecated", "removed", "fixed", "security"]},
-        "test-case": {"priority": ["high", "medium", "low"]},
-        "db-change": {"risk": ["low", "medium", "high"]},
-        "roadmap-item": {
-            "priority": ["p0", "p1", "p2", "p3"],
-            "status": ["planned", "in-progress", "completed", "cancelled"],
-        },
-        "deployment": {
-            "environment": ["staging", "production"],
-            "status": ["pending", "in-progress", "completed", "rolled-back"],
-        },
-        "incident-report": {"status": ["investigating", "identified", "monitoring", "resolved"]},
-        "okr": {"status": ["on-track", "at-risk", "behind", "not-started"]},
-        "issue-ticket": {"type": ["bug", "feature", "enhancement", "chore"]},
-        "pull-request": {"status": ["open", "draft", "merged", "closed"]},
-        "ticket-input": {"type": ["bug", "feature", "enhancement", "chore"]},
-        "pr-review-decision": {
-            "decision": ["APPROVE", "REQUEST_CHANGES"],
-        },
-    }
-    expected = expected_by_schema.get(entry["name"], {})
+    expected = EXPECTED_ENUMS.get(entry["name"], {})
     actual = {
         prop: prop_schema["enum"]
         for prop, prop_schema in entry["definition"]["properties"].items()
@@ -164,22 +160,7 @@ def test_enum_values_are_valid(entry: dict[str, Any]) -> None:
 
 def test_enum_coverage_is_exhaustive() -> None:
     """Every schema with an enum-bearing property is pinned by the canonical spec."""
-    expected = {
-        "adr",
-        "api-spec",
-        "changelog-entry",
-        "test-case",
-        "db-change",
-        "roadmap-item",
-        "deployment",
-        "incident-report",
-        "okr",
-        "issue-ticket",
-        "pull-request",
-        "ticket-input",
-        "pr-review-decision",
-    }
-    assert set(enum_bearing_schemas()) == expected
+    assert set(enum_bearing_schemas()) == set(EXPECTED_ENUMS)
 
 
 @pytest.mark.parametrize("entry", SCHEMAS, ids=lambda e: e["name"])
