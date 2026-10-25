@@ -88,13 +88,17 @@ const DEACTIVATED_ROUTES: Record<string, string> = {
   '/admin/system/orgs': 'system_admin_only — route entry flag; e2e identities have no is_system_admin claim',
   '/admin/housekeeping': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
   '/admin/run-retention': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
-  '/settings/license': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
   '/settings/email': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
   '/settings/observability': 'system_admin_only — SYSTEM sidebar group',
   '/admin/feature-flags': 'system_admin_only — SYSTEM sidebar group',
   '/settings/error-forwarders': 'system_admin_only — SYSTEM sidebar group',
   '/settings/rate-limits': 'system_admin_only — SYSTEM sidebar group',
   '/settings/runtime-config': 'system_admin_only — SYSTEM sidebar group',
+  // --- required_permissions: renders for the staging org admin, which holds
+  // the listed permission; redirects on the LOCAL mock only, because its
+  // GET /api/v1/auth/permissions falls through to setupLocalMockApi's
+  // catch-all ({}), so the router's permission gate denies the route there ---
+  '/settings/license': 'required_permissions [org.license.manage] unsatisfied on the local mock; FAR-2104 moved it out of the SYSTEM group, so the staging org admin reaches it and every check runs there',
   // --- private_preview: documented mechanism, currently deactivates nothing.
   // Both e2e identities run with dev mode on (local mock dev_mode: true;
   // staging org flag observed on 2026-10-16), so preview routes render in
