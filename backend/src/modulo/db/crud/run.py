@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from operator import attrgetter
-from typing import Any, TypeGuard
+from typing import Any, TypedDict, TypeGuard, Unpack
 
 from sqlalchemy import Date, and_, bindparam, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -2247,6 +2247,34 @@ async def _validate_run_grouping_kwargs(
         raise ValueError("thread_id override must be a non-empty string")
 
 
+class CreateRunOptions(TypedDict, total=False):
+    """Keyword-only options accepted by :func:`create_run` (python:S107).
+
+    Grouped behind ``**options: Unpack[CreateRunOptions]`` so the function
+    stays inside the S107 parameter budget without changing a single caller:
+    every option keeps its exact name, type and ``None`` default, and mypy
+    still type-checks each keyword at the call site.
+    """
+
+    account_id: uuid.UUID | None
+    trigger_id: uuid.UUID | None
+    owner_team_id: uuid.UUID | None
+    parent_run_id: uuid.UUID | None
+    rate_limit_key: str | None
+    work_item_id: uuid.UUID | None
+    work_item_refs: list[dict[str, Any]] | None
+    is_replay: bool | None
+    variant_group_id: uuid.UUID | None
+    batch_id: uuid.UUID | None
+    variant_config_snapshot: dict[str, Any] | None
+    feedback_correction: dict[str, Any] | None
+    coalesce_key: str | None
+    ci_failure_coalesce_key: str | None
+    run_group_id: uuid.UUID | None
+    run_group_kind: str | None
+    thread_id: str | None
+
+
 async def create_run(
     session: AsyncSession,
     *,
@@ -2255,28 +2283,29 @@ async def create_run(
     snapshot_id: uuid.UUID,
     trigger_type: str,
     input_payload: dict[str, Any],
-    **options: Any,
+    **options: Unpack[CreateRunOptions],
 ) -> Run:
-    """Create a run; optional run metadata is accepted as named options."""
-    account_id = options.pop("account_id", None)
-    trigger_id = options.pop("trigger_id", None)
-    owner_team_id = options.pop("owner_team_id", None)
-    parent_run_id = options.pop("parent_run_id", None)
-    rate_limit_key = options.pop("rate_limit_key", None)
-    work_item_id = options.pop("work_item_id", None)
-    work_item_refs = options.pop("work_item_refs", None)
-    is_replay = options.pop("is_replay", None)
-    variant_group_id = options.pop("variant_group_id", None)
-    batch_id = options.pop("batch_id", None)
-    variant_config_snapshot = options.pop("variant_config_snapshot", None)
-    feedback_correction = options.pop("feedback_correction", None)
-    coalesce_key = options.pop("coalesce_key", None)
-    ci_failure_coalesce_key = options.pop("ci_failure_coalesce_key", None)
-    run_group_id = options.pop("run_group_id", None)
-    run_group_kind = options.pop("run_group_kind", None)
-    thread_id = options.pop("thread_id", None)
-    if options:
-        raise TypeError(f"unexpected create_run options: {sorted(options)}")
+    """Create a run; optional run metadata rides on :class:`CreateRunOptions`."""
+    account_id = options.get("account_id")
+    trigger_id = options.get("trigger_id")
+    owner_team_id = options.get("owner_team_id")
+    parent_run_id = options.get("parent_run_id")
+    rate_limit_key = options.get("rate_limit_key")
+    work_item_id = options.get("work_item_id")
+    work_item_refs = options.get("work_item_refs")
+    is_replay = options.get("is_replay")
+    variant_group_id = options.get("variant_group_id")
+    batch_id = options.get("batch_id")
+    variant_config_snapshot = options.get("variant_config_snapshot")
+    feedback_correction = options.get("feedback_correction")
+    coalesce_key = options.get("coalesce_key")
+    ci_failure_coalesce_key = options.get("ci_failure_coalesce_key")
+    run_group_id = options.get("run_group_id")
+    run_group_kind = options.get("run_group_kind")
+    thread_id = options.get("thread_id")
+    unknown_options = set(options) - set(CreateRunOptions.__annotations__)
+    if unknown_options:
+        raise TypeError(f"unexpected create_run options: {sorted(unknown_options)}")
     # FAR-153 / §15.1 — validate the grouping kwargs at the persist boundary
     # BEFORE any DB write (the ``run_idempotency_key`` fail-loud pattern).
     # Extracted into ``_validate_run_grouping_kwargs`` to keep this function's
@@ -3754,29 +3783,38 @@ async def write_run_outputs_from_run(
     )
 
 
+class UpdateRunStatusOptions(TypedDict, total=False):
+    """Keyword-only options accepted by :func:`update_run_status` (python:S107).
+
+    Grouped behind ``**options: Unpack[UpdateRunStatusOptions]`` so the function
+    stays inside the S107 parameter budget without changing a single caller:
+    every option keeps its exact name, type and default, and mypy still
+    type-checks each keyword at the call site. ``total=False`` models the
+    defaults; the body applies them via ``options.get(name, default)``.
+    """
+
+    error_code: str | None
+    error_detail: str | None
+    total_tokens: int | None
+    total_cost_usd: Decimal | None
+    cost_breakdown: Any
+    node_token_usage: dict[str, Any] | None
+    outputs_json: dict[str, Any] | None
+    node_telemetry_json: dict[str, Any] | None
+    claimed_by: str | None
+    clear_error_code: bool
+    claim_token: str | None
+    from_status: str | None
+    not_status: str | None
+    refund_claim_count: bool
+
+
 async def update_run_status(
     session: AsyncSession,
     run_id: uuid.UUID,
     status: str,
-    **options: Any,
+    **options: Unpack[UpdateRunStatusOptions],
 ) -> Run | None:
-    """Write a run status and its optional update fields."""
-    error_code = options.pop("error_code", None)
-    error_detail = options.pop("error_detail", None)
-    total_tokens = options.pop("total_tokens", None)
-    total_cost_usd = options.pop("total_cost_usd", None)
-    cost_breakdown = options.pop("cost_breakdown", _COST_BREAKDOWN_SENTINEL)
-    node_token_usage = options.pop("node_token_usage", None)
-    outputs_json = options.pop("outputs_json", None)
-    node_telemetry_json = options.pop("node_telemetry_json", None)
-    claimed_by = options.pop("claimed_by", None)
-    clear_error_code = options.pop("clear_error_code", False)
-    claim_token = options.pop("claim_token", None)
-    from_status = options.pop("from_status", None)
-    not_status = options.pop("not_status", None)
-    refund_claim_count = options.pop("refund_claim_count", False)
-    if options:
-        raise TypeError(f"unexpected update_run_status options: {sorted(options)}")
     """Write a run's status (optionally + blobs) — the FAR-583 store-write
     chokepoint.
 
@@ -3826,6 +3864,23 @@ async def update_run_status(
     caller-side follow-up this note originally recorded under FAR-1601.
     Bounding here remains deliberately out of scope for this shared function.
     """
+    error_code = options.get("error_code")
+    error_detail = options.get("error_detail")
+    total_tokens = options.get("total_tokens")
+    total_cost_usd = options.get("total_cost_usd")
+    cost_breakdown = options.get("cost_breakdown", _COST_BREAKDOWN_SENTINEL)
+    node_token_usage = options.get("node_token_usage")
+    outputs_json = options.get("outputs_json")
+    node_telemetry_json = options.get("node_telemetry_json")
+    claimed_by = options.get("claimed_by")
+    clear_error_code = options.get("clear_error_code", False)
+    claim_token = options.get("claim_token")
+    from_status = options.get("from_status")
+    not_status = options.get("not_status")
+    refund_claim_count = options.get("refund_claim_count", False)
+    unknown_options = set(options) - set(UpdateRunStatusOptions.__annotations__)
+    if unknown_options:
+        raise TypeError(f"unexpected update_run_status options: {sorted(unknown_options)}")
     if status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {status!r}")
     if refund_claim_count and claim_token is None:
