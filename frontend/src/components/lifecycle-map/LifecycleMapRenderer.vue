@@ -300,11 +300,8 @@ function onStageKeydown(nodeProps: { id: string; data: Record<string, unknown> }
 function nudgeNode(nodeProps: { id: string; data: Record<string, unknown> }, dx: number, dy: number): void {
   const node = (flowNodes.value as Array<Node<Record<string, unknown>>>).find((candidate) => candidate.id === nodeProps.id)
   if (!node) return
-  const pos = node.position
-  node.position = {
-    x: (pos?.x ?? 0) + dx * NODE_NUDGE_STEP,
-    y: (pos?.y ?? 0) + dy * NODE_NUDGE_STEP,
-  }
+  node.position.x += dx * NODE_NUDGE_STEP
+  node.position.y += dy * NODE_NUDGE_STEP
   emitPositions()
 }
 
