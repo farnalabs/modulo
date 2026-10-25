@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { setActivePinia, createPinia } from 'pinia'
 import AssistantOnlyView from '../views/AssistantOnlyView.vue'
 import { useAssistantStore } from '../composables/useAssistantStore'
+import { useAssistantTabsStore } from '../composables/useAssistantTabsStore'
 import { api } from '@/lib/api/client'
 import { usePlanStore } from '@/stores/planStore'
 
@@ -119,6 +121,25 @@ describe('AssistantOnlyView', () => {
       expect(wrapper.find('[data-testid="assistant-only-tab-bar"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="assistant-only-chat"]').exists()).toBe(true)
     })
+  })
+
+  it('resumes a tab when the active session changes to a live session with no open tab', async () => {
+    ;(api.GET as any).mockResolvedValue({ error: null, data: { items: [], total: 0 } })
+    const store = useAssistantStore()
+    const tabsStore = useAssistantTabsStore()
+
+    const wrapper = mount(AssistantOnlyView)
+    await flushPromises()
+
+    store.sessions = [makeSession('session-live', 'Live')] as never
+    await nextTick()
+    const resumeSpy = vi.spyOn(tabsStore, 'resumeTab').mockResolvedValue(undefined)
+    store.activeSessionId = 'session-live'
+
+    await vi.waitFor(() => {
+      expect(resumeSpy).toHaveBeenCalledWith('session-live')
+    })
+    wrapper.unmount()
   })
 
   it('renders resolved i18n keys for the assistant-only chrome (banner is not a raw key)', async () => {

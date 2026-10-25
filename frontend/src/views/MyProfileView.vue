@@ -283,7 +283,7 @@ async function loadHitlEmailPrefs() {
     }
     if (data) {
       hitlDefault.value = data.default
-      hitlOverrides.value = { ...(data.pipeline_overrides ?? {}) }
+      hitlOverrides.value = data.pipeline_overrides ?? {}
     } else {
       hitlDefault.value = false
       hitlOverrides.value = {}
