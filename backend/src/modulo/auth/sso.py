@@ -183,7 +183,7 @@ def verify_saml_relay_state(
     try:
         padded = state + "=" * (-len(state) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded))
-    except (ValueError, TypeError, json.JSONDecodeError):
+    except (ValueError, TypeError):
         return None
     if not isinstance(payload, dict):
         return None
@@ -450,7 +450,9 @@ def _sso_jit_mode_allows_auto(provider: SsoProvider, email: str, email_verified:
     return email_verified, mode
 
 
-async def _deny_join(provider: SsoProvider, org_id: uuid.UUID) -> None:
+async def _deny_join(  # NOSONAR S7503 - awaited helper preserves the SSO denial seam
+    provider: SsoProvider, org_id: uuid.UUID
+) -> None:
     """Structured, PII-free denial log + fail-closed user-facing raise."""
     _log.info(
         "sso.jit_join_denied",
