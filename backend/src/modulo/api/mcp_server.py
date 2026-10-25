@@ -10229,6 +10229,15 @@ async def get_audit_log(
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("get_audit_log")
 
+        org_id = _ctx_org_id_val()
+        # Plan gate parity with the audit REST surface: reading the audit trail
+        # is the Team-tier ``audit_viewer`` entitlement, enforced there by
+        # ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2119).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "audit_viewer")
+        if feat_err:
+            return feat_err
+
         actor_uid: uuid.UUID | None = None
         if actor_user_id is not None:
             actor_uid, actor_err = _parse_uuid_param(actor_user_id, "actor_user_id")
@@ -10257,7 +10266,6 @@ async def get_audit_log(
 
         from modulo.core.audit_logger import list_audit_events
 
-        org_id = _ctx_org_id_val()
         lim = max(1, min(limit, 200))
 
         async with _session(org_id) as s:
