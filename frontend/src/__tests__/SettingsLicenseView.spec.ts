@@ -361,6 +361,40 @@ describe('SettingsLicenseView', () => {
     expect(api.DELETE).not.toHaveBeenCalledWith('/api/v1/admin/orgs/org-1/license')
   })
 
+  it('removeSystemLicense surfaces an error when the API returns an error', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+    ;(api.DELETE as any).mockResolvedValue({ error: 'nope' })
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    await wrapper.find('[data-testid="license-remove-btn-system"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    expect(wrapper.text()).toContain('Failed to remove')
+  })
+
+  it('removeSystemLicense surfaces an error when the API call throws', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+    ;(api.DELETE as any).mockRejectedValue(new Error('network-down'))
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+    await wrapper.find('[data-testid="license-remove-btn-system"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    expect(wrapper.text()).toContain('Failed to remove')
+  })
+
   it('a system admin sees the system Remove control only when a licence is installed', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET, mockLicenseFree, mockFlagsFree, SYSTEM_PERMISSIONS)
