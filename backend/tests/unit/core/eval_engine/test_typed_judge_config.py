@@ -398,6 +398,25 @@ class TestBackendResolutionAtTheChokepoint:
 
         assert row.eval_type == "model_judge"
 
+    async def test_a_non_judge_write_skips_typed_resolution(self, session) -> None:
+        org = uuid.uuid4()
+
+        row = await create_or_update_eval(
+            session,
+            org_id=org,
+            account_id=org,
+            pipeline_id=uuid.uuid4(),
+            node_id=None,
+            name="regex",
+            eval_type="regex",
+            config_json={"pattern": "x", "field": "output"},
+            failure_behaviour="warn",
+            pass_threshold=None,
+            suite_id=None,
+        )
+
+        assert row.eval_type == "regex"
+
     async def test_an_update_also_resolves_the_backing(self, session) -> None:
         org = uuid.uuid4()
         await _seed_backend(session, org_id=org)

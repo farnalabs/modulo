@@ -21,7 +21,10 @@ from langchain_core.messages import AIMessage
 
 import modulo.core.pipeline_engine.llm_judge as llm_judge
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
-from modulo.core.eval_engine.eval_definition_write import _resolve_typed_backings
+from modulo.core.eval_engine.eval_definition_write import (
+    _resolve_typed_backings,
+    _typed_backend_refs,
+)
 from modulo.core.eval_engine.execute_suite_run import _case_results_async, _run_suite_cases
 from modulo.core.eval_engine.typed_judge import (
     JudgeConfigWriteError,
@@ -168,6 +171,29 @@ class TestProbabilityEdges:
             self._aggregate(question, {"answer": "a", "probabilities": {"a": 0.9}})
 
         assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    @pytest.mark.parametrize("probabilities", [[], {}])
+    def test_a_non_object_or_empty_score_distribution_is_rejected(self, probabilities: Any) -> None:
+        question = {
+            "id": "q",
+            "type": "score",
+            "levels": [{"score": 1}, {"score": 3}],
+            "pass_from": 3,
+            "weight": 1.0,
+        }
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(question, {"answer": 3, "probabilities": probabilities})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_MALFORMED_RESPONSE
+
+    def test_a_choice_without_a_list_of_options_is_configuration(self) -> None:
+        question = {"id": "q", "type": "choice", "options": "nope", "passing_keys": ["a"], "weight": 1.0}
+
+        with pytest.raises(JudgeExecutionError) as exc_info:
+            self._aggregate(question, {"answer": "a"})
+
+        assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
 
     def test_a_partial_score_distribution_is_rejected(self) -> None:
         question = {
@@ -666,6 +692,34 @@ class TestEngineAsyncErrors:
         assert result.outcome is JudgeOutcome.ERROR
         assert result.judge_verdict is not None
         assert result.judge_verdict.error_code is JudgeErrorCode.JUDGE_CONFIGURATION
+
+
+class TestBackendRefEdges:
+    def test_a_non_object_backing_contributes_no_ref(self) -> None:
+        assert not _typed_backend_refs({"answer_contract": "typed_questions", "backing": "nope"})
+
+    def test_a_decision_model_backing_contributes_no_model_ref(self) -> None:
+        assert not _typed_backend_refs(
+            {"answer_contract": "typed_questions", "backing": {"kind": "decision_model", "vendor": "jev"}}
+        )
+
+    def test_a_cascade_with_a_non_object_target_contributes_no_ref(self) -> None:
+        config = {
+            "answer_contract": "typed_questions",
+            "backing": {"kind": "model_backend", "model_backend_id": str(uuid.uuid4())},
+            "cascade": {"enabled": True, "escalate_to": "nope"},
+        }
+
+        assert len(_typed_backend_refs(config)) == 1
+
+    def test_a_decision_model_cascade_target_contributes_no_model_ref(self) -> None:
+        config = {
+            "answer_contract": "typed_questions",
+            "backing": {"kind": "model_backend", "model_backend_id": str(uuid.uuid4())},
+            "cascade": {"enabled": True, "escalate_to": {"kind": "decision_model", "vendor": "jev"}},
+        }
+
+        assert len(_typed_backend_refs(config)) == 1
 
 
 class TestWriteResolutionEdges:

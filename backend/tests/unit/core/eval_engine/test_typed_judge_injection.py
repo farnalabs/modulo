@@ -158,6 +158,20 @@ class TestMultiFieldBound:
         assert result.judge_verdict.error_code is JudgeErrorCode.JUDGE_CONFIGURATION
 
 
+class TestContextPathEdges:
+    def test_duplicate_and_blank_context_paths_are_deduplicated(self) -> None:
+        eval_def = _eval_def({"field": "output", "context_fields": ["output", "", "scenario.input", "scenario.input"]})
+
+        safe_output, safe_eval_def = EvalEngine._build_safe_judge_input(
+            {"output": "answer", "scenario": {"input": "question"}},
+            eval_def,
+        )
+
+        content = safe_eval_def.config["_judge_content"]
+        assert content.count(_CONTENT_BEGIN) == 2  # primary field + one context field
+        assert safe_output["output"] == content
+
+
 class TestNullField:
     def test_a_null_field_renders_an_empty_payload(self) -> None:
         captured: list[dict[str, Any]] = []
