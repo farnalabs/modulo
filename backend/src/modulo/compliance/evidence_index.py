@@ -323,7 +323,9 @@ async def _collect_audit_chain(
 ) -> ArtifactEntry:
     location = (
         "GET /api/v1/admin/audit (browse), GET /api/v1/admin/audit/verify (integrity), "
-        "GET /api/v1/admin/audit/evidence-pack (signed offline-verifiable export)"
+        "GET /api/v1/admin/audit/evidence-pack (signed offline-verifiable export) - all "
+        "three require the Team tier's audit_viewer feature plus audit.manage; the events "
+        "themselves are recorded on every tier"
     )
     head = await get_chain_head(session, organisation_id)
     # Served by ix_audit_events_org_created_at (migration 0155): the count and
@@ -646,7 +648,9 @@ async def _collect_autonomy_changes(
     period_to: datetime | None = None,
 ) -> ArtifactEntry:
     location = (
-        "Audit events pipeline.autonomy_promotion_decided and pipeline.autonomy_demoted at GET /api/v1/admin/audit"
+        "Audit events pipeline.autonomy_promotion_decided and pipeline.autonomy_demoted, "
+        "recorded on every tier and read at GET /api/v1/admin/audit (Team tier's "
+        "audit_viewer feature plus audit.manage)"
     )
     by_type_stmt = select(AuditEvent.event_type, func.count(AuditEvent.id)).where(
         AuditEvent.organisation_id == organisation_id,
