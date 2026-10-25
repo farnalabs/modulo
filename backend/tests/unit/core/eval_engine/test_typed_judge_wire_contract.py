@@ -22,7 +22,11 @@ from pathlib import Path
 
 import pytest
 
-from modulo.core.eval_engine.typed_judge.config import validate_typed_judge_config
+from modulo.core.eval_engine.typed_judge.config import (
+    TYPED_ANSWER_CONTRACT,
+    parse_typed_judge_config,
+    validate_typed_judge_config,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _FIXTURE = _REPO_ROOT / "frontend" / "src" / "__tests__" / "fixtures" / "typed-judge-payload.json"
@@ -48,4 +52,8 @@ def test_fixture_pins_cascade_and_decision_model_class() -> None:
 @pytest.mark.parametrize("name", ["modelBackendJudge", "decisionModelJudge"])
 def test_frontend_builder_payload_is_accepted_by_the_write_validator(name: str) -> None:
     """The exact payload the builder emits passes the real server schema."""
-    validate_typed_judge_config(_payloads()[name])
+    payload = _payloads()[name]
+    assert validate_typed_judge_config(payload) is None
+    parsed = parse_typed_judge_config(payload)
+    assert parsed.answer_contract == TYPED_ANSWER_CONTRACT
+    assert [question.id for question in parsed.questions] == [question["id"] for question in payload["questions"]]
