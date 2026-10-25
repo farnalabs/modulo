@@ -462,6 +462,32 @@ def test_create_from_template_with_declared_policy_gate_strips_and_warns(
     assert "policy_gate declaration(s) stripped when creating a pipeline from template" in caplog.text
 
 
+def test_create_from_template_unexpected_error_returns_500(client: TestClient) -> None:
+    """The catch-all arm maps an unexpected writer failure to the shared 500.
+
+    The specific arms above map IntegrityError / ProgrammingError /
+    ManualNodeOutputSchemaError and re-raise HTTPException; this pins the
+    generic ``except Exception`` arm so an unexpected failure inside the
+    writer surfaces as ``MSG_INTERNAL_SERVER_ERROR`` instead of leaking.
+    """
+    template_id = uuid.uuid4()
+    template_prim = _make_template_primitive(id=template_id)
+
+    with (
+        patch("modulo.api.routes.templates.get_template", new_callable=AsyncMock) as mock_get,
+        patch(
+            "modulo.api.routes.templates.create_pipeline",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("unexpected writer failure"),
+        ),
+    ):
+        mock_get.return_value = template_prim
+        resp = client.post(f"/api/v1/pipelines/from-template/{template_id}")
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "Internal server error"
+
+
 def test_create_from_template_below_operator_denied(client: TestClient) -> None:
     _set_tenant_principal("viewer")
     resp = client.post(f"/api/v1/pipelines/from-template/{uuid.uuid4()}")
