@@ -509,26 +509,12 @@ def _stacked_detail(previous: LicenseData, purchase: LicenseData, expires_at: st
     )
 
 
-async def claim_stacked_renewal(
-    settings: Settings,
-    *,
-    purchase_key: str,
-    presented_key: str | None,
-) -> RenewalClaim:
-    """Stack an early renewal onto the licence the customer presents.
+def _verified_purchase(purchase_key: str) -> LicenseData:
+    """Verify the purchase key and require the claims a renewal needs.
 
-    ``purchase_key`` is the key issued for the purchase — the proof that a
-    licence was bought, and the idempotency anchor (its signed ``licence_id``).
-    ``presented_key`` is the previous licence the customer wants its remaining
-    term carried over from; omitting it is a legitimate outcome that returns
-    the purchase key unchanged WITH an explanation (never a silent fallback).
-
-    The expiry is read ONLY from a signature-verified presented key; there is
-    no caller-supplied start date, so backdating cannot be expressed. The new
-    expiry is ``max(now, presented_expiry) + term`` — delegated wholesale to
-    ``license_signing.build_team_payload``'s ``expires_from`` seam. The stacked
-    key preserves the purchase's ``licence_id``, so it is the same entitlement
-    corrected, not a second licence.
+    A purchase key is the proof that a licence was bought and the idempotency
+    anchor, so nothing may be minted from one that does not verify or that
+    lacks the signed ``licence_id``/``term`` claims.
     """
     purchase_validation = parse_and_verify(purchase_key)
     if not purchase_validation.valid or purchase_validation.license_data is None:
@@ -547,23 +533,15 @@ async def claim_stacked_renewal(
             "This licence has no expiry date, so there is no term to extend and no new licence was issued.",
             purchase_expires_at=None,
         )
+    return purchase
 
-    candidate = (presented_key or "").strip()
-    if not candidate:
-        _log.info("stripe.renewal_claim.no_presented_key licence_id=%s", purchase.licence_id)
-        return RenewalClaim(
-            license_key=purchase_key,
-            expires_at=purchase.expires_at,
-            stacked=False,
-            reason=REASON_NO_PRESENTED_KEY,
-            detail=(
-                "No previous licence was applied, so no time was added: the key from this purchase already "
-                f"grants a full term and expires {purchase.expires_at}. If you renewed before your previous "
-                "licence expired, re-submit this claim with that previous licence key and the remaining days "
-                "will be added."
-            ),
-        )
 
+def _verified_previous(candidate: str, purchase: LicenseData) -> LicenseData:
+    """Verify the presented licence and prove it may be stacked onto the purchase.
+
+    Every check here refuses to stack rather than correcting an unverifiable or
+    mismatched key: the purchase key the customer already holds is unchanged.
+    """
     presented_validation = parse_and_verify(candidate)
     if not presented_validation.valid or presented_validation.license_data is None:
         reason = presented_validation.reason or REASON_MALFORMED
@@ -601,22 +579,17 @@ async def claim_stacked_renewal(
             f"No new licence was issued; the purchase key still expires {purchase.expires_at}.",
             purchase_expires_at=purchase.expires_at,
         )
+    return previous
 
-    stored = await _read_renewal_claim(settings, purchase.licence_id)
-    if stored is not None:
-        _log.info("stripe.renewal_claim.reused licence_id=%s", purchase.licence_id)
-        return RenewalClaim(
-            license_key=stored["license_key"],
-            expires_at=stored["expires_at"],
-            stacked=True,
-            previous_expires_at=stored["previous_expires_at"],
-            repeated=True,
-            detail=(
-                "This purchase was already stacked onto a previous licence, so the key issued for it is "
-                "returned unchanged rather than extended a second time."
-            ),
-        )
 
+def _mint_stacked_licence(
+    settings: Settings,
+    purchase: LicenseData,
+    previous: LicenseData,
+) -> tuple[str, LicenseData]:
+    """Sign the stacked licence, failing closed if our own anchor rejects it."""
+    assert purchase.licence_id is not None  # narrowed by _verified_purchase
+    assert purchase.term is not None
     try:
         stacked_key = generate_team_license(
             # ``org_name`` only derives ``org_id`` when none is supplied; this
@@ -655,10 +628,99 @@ async def claim_stacked_renewal(
             "This deployment could not verify the replacement licence it just signed, so it was not issued. "
             "Your purchase key is unchanged; try again later."
         )
+    return stacked_key, minted.license_data
+
+
+def _unstacked_claim(purchase_key: str, purchase: LicenseData) -> RenewalClaim:
+    """Return the purchase key unchanged when no previous licence was presented."""
+    return RenewalClaim(
+        license_key=purchase_key,
+        expires_at=purchase.expires_at,
+        stacked=False,
+        reason=REASON_NO_PRESENTED_KEY,
+        detail=(
+            "No previous licence was applied, so no time was added: the key from this purchase already "
+            f"grants a full term and expires {purchase.expires_at}. If you renewed before your previous "
+            "licence expired, re-submit this claim with that previous licence key and the remaining days "
+            "will be added."
+        ),
+    )
+
+
+def _repeated_claim(stored: dict[str, str]) -> RenewalClaim:
+    """Return the key already issued for this purchase (a retry, not an extension)."""
+    return RenewalClaim(
+        license_key=stored["license_key"],
+        expires_at=stored["expires_at"],
+        stacked=True,
+        previous_expires_at=stored["previous_expires_at"],
+        repeated=True,
+        detail=(
+            "This purchase was already stacked onto a previous licence, so the key issued for it is "
+            "returned unchanged rather than extended a second time."
+        ),
+    )
+
+
+def _fresh_claim(
+    previous: LicenseData,
+    purchase: LicenseData,
+    stored: dict[str, str],
+    now: datetime,
+) -> RenewalClaim:
+    """Return the stacked key this claim minted and stored."""
+    return RenewalClaim(
+        license_key=stored["license_key"],
+        expires_at=stored["expires_at"],
+        stacked=True,
+        previous_expires_at=stored["previous_expires_at"],
+        repeated=False,
+        detail=_stacked_detail(previous, purchase, stored["expires_at"], now),
+    )
+
+
+async def claim_stacked_renewal(
+    settings: Settings,
+    *,
+    purchase_key: str,
+    presented_key: str | None,
+) -> RenewalClaim:
+    """Stack an early renewal onto the licence the customer presents.
+
+    ``purchase_key`` is the key issued for the purchase — the proof that a
+    licence was bought, and the idempotency anchor (its signed ``licence_id``).
+    ``presented_key`` is the previous licence the customer wants its remaining
+    term carried over from; omitting it is a legitimate outcome that returns
+    the purchase key unchanged WITH an explanation (never a silent fallback).
+
+    The expiry is read ONLY from a signature-verified presented key; there is
+    no caller-supplied start date, so backdating cannot be expressed. The new
+    expiry is ``max(now, presented_expiry) + term`` — delegated wholesale to
+    ``license_signing.build_team_payload``'s ``expires_from`` seam. The stacked
+    key preserves the purchase's ``licence_id``, so it is the same entitlement
+    corrected, not a second licence.
+    """
+    purchase = _verified_purchase(purchase_key)
+    assert purchase.licence_id is not None  # narrowed by _verified_purchase
+    assert purchase.term is not None
+
+    candidate = (presented_key or "").strip()
+    if not candidate:
+        _log.info("stripe.renewal_claim.no_presented_key licence_id=%s", purchase.licence_id)
+        return _unstacked_claim(purchase_key, purchase)
+
+    previous = _verified_previous(candidate, purchase)
+
+    stored = await _read_renewal_claim(settings, purchase.licence_id)
+    if stored is not None:
+        _log.info("stripe.renewal_claim.reused licence_id=%s", purchase.licence_id)
+        return _repeated_claim(stored)
+
+    stacked_key, minted = _mint_stacked_licence(settings, purchase, previous)
 
     record = {
         "license_key": stacked_key,
-        "expires_at": minted.license_data.expires_at,
+        "expires_at": minted.expires_at,
         "previous_expires_at": previous.expires_at,
     }
     stored = await _store_renewal_claim(
@@ -674,16 +736,6 @@ async def claim_stacked_renewal(
         purchase.expires_at,
         stored["expires_at"],
     )
-    return RenewalClaim(
-        license_key=stored["license_key"],
-        expires_at=stored["expires_at"],
-        stacked=True,
-        previous_expires_at=stored["previous_expires_at"],
-        repeated=stored is not record,
-        detail=(
-            "This purchase was already stacked onto a previous licence, so the key issued for it is "
-            "returned unchanged rather than extended a second time."
-            if stored is not record
-            else _stacked_detail(previous, purchase, stored["expires_at"], now)
-        ),
-    )
+    if stored is not record:
+        return _repeated_claim(stored)
+    return _fresh_claim(previous, purchase, stored, now)
