@@ -540,7 +540,7 @@ def test_discover_plugins_no_plugins():
     registry = PluginRegistry()
     with patch("modulo.core.plugin_registry.importlib.metadata.entry_points", return_value=[]):
         discovered = registry.discover_plugins()
-    assert discovered == []
+    assert not discovered
     assert not registry.list_plugins()
 
 
@@ -643,7 +643,7 @@ def test_discover_plugins_swallows_entry_point_query_error():
         side_effect=ValueError("boom"),
     ):
         discovered = registry.discover_plugins()
-    assert discovered == []
+    assert not discovered
 
 
 def test_discover_plugins_swallows_unexpected_entry_point_query_error():
@@ -654,7 +654,7 @@ def test_discover_plugins_swallows_unexpected_entry_point_query_error():
         side_effect=RuntimeError("metadata provider unavailable"),
     ):
         discovered = registry.discover_plugins()
-    assert discovered == []
+    assert not discovered
     assert not registry.list_plugins()
 
 
@@ -684,7 +684,7 @@ def test_load_entry_point_failure_variants_are_skipped():
             side_effect=[[fail_ep], [], [], []],
         ):
             discovered = registry.discover_plugins()
-        assert discovered == []
+        assert not discovered
         assert not registry.has_connector_type("broken_con")
 
 
@@ -713,7 +713,7 @@ def test_load_entry_point_unexpected_exception_is_surfaced_not_raised(exc_type):
     ):
         discovered = registry.discover_plugins()
 
-    assert discovered == []
+    assert not discovered
     assert not registry.has_connector_type("broken_con")
     health = registry.health_check(dist_name)
     assert health[dist_name].ok is False
@@ -924,7 +924,7 @@ def test_discover_plugins_entry_point_no_dist():
         return_value=[no_dist],
     ):
         discovered = registry.discover_plugins()
-    assert discovered == []
+    assert not discovered
 
     # The entry point has no distribution to derive metadata from, so it is
     # surfaced as a broken plugin with a descriptive detail instead of being
@@ -949,7 +949,7 @@ def test_discover_plugins_entry_point_load_failure():
         side_effect=[[fail_ep], [], [], []],
     ):
         discovered = registry.discover_plugins()
-    assert discovered == []
+    assert not discovered
 
     # The entry point failed to load → the cached error is definitive.
     health = registry.health_check("pkg-broken")
@@ -1241,12 +1241,40 @@ def test_unreadable_entry_point_attributes_do_not_abort_discovery():
     assert registry.health_check("unknown-entry-point")["unknown-entry-point"].ok is False
 
 
+def test_unreadable_entry_point_distribution_does_not_abort_discovery():
+    """A distribution access failure is unhealthy without blocking siblings."""
+    registry = PluginRegistry()
+    broken = _ExplodingDistributionEntryPoint()
+    healthy_dist = MagicMock()
+    healthy_dist.name = "healthy-plugin"
+    healthy_dist.metadata = {"Name": "healthy-plugin", "Summary": "s", "Version": "1.0"}
+    healthy = _entry_point(healthy_dist, "healthy_type", loads=_build_stub_connector)
+
+    with _entry_points_returning([broken, healthy]):
+        discovered = registry.discover_plugins()
+
+    assert [manifest.PLUGIN_ID for manifest in discovered] == ["healthy-plugin"]
+    assert registry.has_connector_type("healthy_type")
+    assert registry.health_check("broken_type")["broken_type"].ok is False
+    assert "Failed to read distribution metadata" in registry.entry_point_errors["broken_type"]
+
+
 class _ExplodingEntryPoint:
     """Entry-point metadata object whose fields fail when read."""
 
     @property
     def name(self) -> str:
         raise RuntimeError("entry-point name unavailable")
+
+    @property
+    def dist(self) -> Any:
+        raise RuntimeError("entry-point distribution unavailable")
+
+
+class _ExplodingDistributionEntryPoint:
+    """Entry-point object whose distribution metadata access fails after naming."""
+
+    name = "broken_type"
 
     @property
     def dist(self) -> Any:

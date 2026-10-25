@@ -60,8 +60,8 @@ API surface ships and is gated by the `plugin_management` feature and the
       broken third-party package
       (`test_plugin_registry.py::test_unreadable_distribution_metadata_*`)
 - [x] Unexpected failures from the entry-point provider or malformed entry-point
-      objects are fail-soft: discovery logs the provider error and returns the
-      plugins found so far, while a broken entry point is surfaced as an
+      objects are fail-soft: discovery logs the provider error and returns an
+      empty discovery result, while a broken entry point is surfaced as an
       unhealthy `unknown-entry-point` record and healthy siblings continue
       scanning (`test_plugin_registry.py::test_discover_plugins_swallows_unexpected_entry_point_query_error`,
       `test_unreadable_entry_point_attributes_do_not_abort_discovery`)
