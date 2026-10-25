@@ -190,7 +190,7 @@ describe('RiskAssessmentTable', () => {
     expect(timestampHeader.element.closest('th')?.getAttribute('aria-sort')).toBe('descending')
 
     const keyButton = wrapper.find('[data-testid="risk-assessment-sort-key"]')
-    expect(keyButton.element.closest('th')?.getAttribute('aria-sort')).toBe('none')
+    expect(keyButton.element.closest('th')?.getAttribute('aria-sort') ?? undefined).toBeUndefined()
 
     await keyButton.trigger('click')
     expect(keyButton.element.closest('th')?.getAttribute('aria-sort')).toBe('descending')

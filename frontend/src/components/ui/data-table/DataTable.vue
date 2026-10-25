@@ -107,8 +107,8 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
               col.sortable && 'cursor-pointer select-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               sortColumn === col.key ? 'text-foreground' : 'text-muted-foreground',
             )"
-            :tabindex="undefined"
-            :aria-sort="sortColumn === col.key ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'"
+            :tabindex="col.sortable ? 0 : undefined"
+            :aria-sort="sortColumn === col.key ? (sortDirection === 'asc' ? 'ascending' : 'descending') : undefined"
             @click="col.sortable && toggleSort(col.key)"
             @keydown.enter="col.sortable && toggleSort(col.key)"
             @keydown.space.prevent="col.sortable && toggleSort(col.key)"
@@ -118,6 +118,7 @@ function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
               type="button"
               class="inline-flex items-center gap-1"
               :data-testid="col.testid"
+              tabindex="-1"
               @click.stop="toggleSort(col.key)"
               @keydown.enter.stop="toggleSort(col.key)"
               @keydown.space.prevent.stop="toggleSort(col.key)"
