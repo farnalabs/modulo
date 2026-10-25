@@ -1139,9 +1139,17 @@ def _sweep_recoverability_predicate() -> tuple[Any, Any]:
     the nodeless zombie branch OR the FAR-873 early-detect branch), and
     ``exclusion`` is the capacity-marker
     exclusion applied AFTER the OR (exactly the scan's
-    ``WHERE recovery OR … AND NOT capacity-marker-excluded`` shape). Lazy
-    import: cron_helpers transitively reaches dispatch/pipeline machinery that
-    runner_capacity's importers (node_runner) must not pull at module load.
+    ``WHERE recovery OR … AND NOT capacity-marker-excluded`` shape).
+
+    The FAR-1803 node-started/executor-lost leg is EXCLUDED
+    (``include_node_started_executor_lost=False``). That leg is
+    visibility-only: ``_reconcile_one_row`` counts it and returns without
+    re-dispatching, so it is not a recovery. Judging such a row "recoverable"
+    here made the sweep keep its marker and skip FAR-1808's 2h bounded reclaim
+    — the reclaim only ever fired for rows the age gate had already missed.
+
+    Lazy import: cron_helpers transitively reaches dispatch/pipeline machinery
+    that runner_capacity's importers (node_runner) must not pull at module load.
     """
     from modulo.core.cron_helpers import (
         CAPACITY_REDISPATCH_SECONDS,
@@ -1166,6 +1174,10 @@ def _sweep_recoverability_predicate() -> tuple[Any, Any]:
         # judges recoverable MUST be recoverable here too, or this sweep clears
         # a dispatch marker it should keep.
         early_detect_minutes=resolve_nodeless_early_detect_minutes(settings, nodeless_window),
+        # FAR-1803's leg only surfaces/counts the node-started dead-executor
+        # class; it never re-dispatches, so it must not outrank the FAR-1808
+        # reclaim (rule b).
+        include_node_started_executor_lost=False,
     )
     return recovery_or, reconcile_capacity_marker_exclusion(CAPACITY_REDISPATCH_SECONDS)
 

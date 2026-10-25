@@ -1375,6 +1375,9 @@ def test_sweep_recoverability_predicate_resolves_early_detect_window(
     rc._sweep_recoverability_predicate()
     assert captured["nodeless_window"] == 35
     assert captured["early_detect_minutes"] == 15
+    # FAR-1803's visibility-only leg must not count as "recoverable" here, or
+    # FAR-1808's bounded node-started reclaim is shadowed (rule b).
+    assert captured["include_node_started_executor_lost"] is False
 
 
 def test_sweep_recoverability_predicate_disables_early_detect_when_not_early(
