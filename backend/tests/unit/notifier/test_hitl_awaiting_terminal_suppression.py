@@ -166,7 +166,6 @@ class _Harness:
             return list(await self.notifier.dispatch_event(_ORG, event_type, payload, **kwargs))
 
     async def aclose(self) -> None:
-        await self.notifier.close()
         await self.engine.dispose()
 
 

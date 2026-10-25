@@ -213,7 +213,6 @@ async def _dispatch(
     mapper_instance.create_from_event = AsyncMock(return_value=None)
     with (
         patch.object(n, "_get_subscribed_endpoints", AsyncMock(return_value=endpoints)),
-        patch.object(n, "_get_client", AsyncMock(return_value=AsyncMock())),
         patch.object(n, "_dispatch_to_endpoint") as mock_dispatch,
         patch.object(n, "_session_factory", _session_factory(owners, raise_on_execute=raise_on_execute)),
         patch("modulo.core.notifier.event_mapper.NotificationEventMapper", return_value=mapper_instance),
