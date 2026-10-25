@@ -131,13 +131,12 @@
         :aria-label="$t('common.loading')"
         data-testid="admin-invitations-loading"
       />
-      <p
+      <ErrorAlert
         v-else-if="invitationsError"
-        class="text-sm text-destructive"
+        :message="invitationsError"
+        :on-retry="loadInvitations"
         data-testid="admin-invitations-error"
-      >
-        {{ invitationsError }}
-      </p>
+      />
       <EmptyState
         v-else-if="pendingInvitations.length === 0"
         :title="$t('views.AdminUsersView.no_pending_invitations')"

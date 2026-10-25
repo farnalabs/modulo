@@ -188,6 +188,33 @@ describe('AdminUsersView', () => {
     expect(wrapper.text()).toContain('alice@example.com')
   })
 
+  it('shows a shared ErrorAlert with retry when pending invitations fail, and recovers on retry', async () => {
+    const healthyGet = mockGet.getMockImplementation()!
+    mockGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/users/invitations')) {
+        return Promise.reject(new Error('invitations unavailable'))
+      }
+      return healthyGet(path)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-invitations-error"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Failed to load')
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    mockGet.mockImplementation(healthyGet)
+    await retry.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-invitations-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-invitations-row"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('newbie@example.com')
+  })
+
   // STATE-3 (ux-conformance): list loading states render determinate table
   // skeletons, not indeterminate spinners.
   it('renders table skeletons (not spinners) while loading', async () => {
