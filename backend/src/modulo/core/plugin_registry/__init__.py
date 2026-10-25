@@ -151,7 +151,7 @@ class PluginRegistry:
             # side_effects) surfaces here as StopIteration — propagate it so the
             # real cause is not masked as a silent discovery failure.
             raise
-        except (ImportError, importlib.metadata.PackageNotFoundError, ValueError):
+        except (ImportError, ValueError):
             logger.exception("Failed to query entry points during plugin discovery")
             return discovered
 

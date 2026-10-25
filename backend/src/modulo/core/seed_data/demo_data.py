@@ -317,7 +317,7 @@ async def seed_demo_orgs(factory: async_sessionmaker[AsyncSession]) -> None:
                     admin_email=spec["email"],
                     admin_password=spec["password"],
                 )
-        except (ValueError, LicenseSigningError, IntegrityError):
+        except (ValueError, IntegrityError):
             # FAR-1539: attribute ``demo_org.seed_failed`` to the demo org when
             # a row survives the rollback (idempotent re-run), so
             # ErrorTrackingLogHandler persists it instead of dropping it as

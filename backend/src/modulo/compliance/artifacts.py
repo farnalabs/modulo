@@ -92,10 +92,12 @@ ARTIFACT_TYPES: Final[dict[str, ArtifactTypeSpec]] = {
         artifact_type=ARTIFACT_AUDIT_CHAIN,
         description=(
             "The organisation's hash-chained, append-only audit trail. A ``present`` "
-            "status means the trail exists in this instance; it does NOT assert that "
-            "the offline-verifiable evidence pack export is available here, which "
-            "additionally needs the Team-tier audit_viewer feature and a configured "
-            "MODULO_EVIDENCE_SIGNING_KEY."
+            "status means the trail exists in this instance - recording is not "
+            "licence-gated, so a Community install records too. It does NOT assert "
+            "that the trail can be browsed, verified or exported here: browsing and "
+            "chain-verification, like the offline-verifiable evidence pack, need the "
+            "Team-tier audit_viewer feature (plus audit.manage), and the pack "
+            "additionally needs a configured MODULO_EVIDENCE_SIGNING_KEY."
         ),
         indexed=True,
         instance_observable=True,

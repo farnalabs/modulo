@@ -73,6 +73,25 @@ class _CooldownKey:
         return base
 
 
+@dataclass(frozen=True)
+class _RuleEvaluationContext:
+    """Event data shared while evaluating one notification rule."""
+
+    org_id: uuid.UUID
+    session: AsyncSession
+    error_group_id: uuid.UUID
+    fingerprint: str
+    level: str
+    count: int
+    now: float
+    environment: str | None
+    signal: str | None
+    run_id: str | None
+    elevation_signal: str | None
+    attempt_n: int | None
+    run_group_id: uuid.UUID | None
+
+
 class AlertEngine:
     """Evaluates error events against notification rules with cooldown.
 
@@ -118,20 +137,22 @@ class AlertEngine:
 
         for rule in rules:
             alert = await self._evaluate_rule(
-                rule=rule,
-                org_id=org_id,
-                session=session,
-                error_group_id=error_group_id,
-                fingerprint=fingerprint,
-                level=level,
-                count=count,
-                now=now,
-                environment=environment,
-                signal=signal,
-                run_id=run_id,
-                elevation_signal=elevation_signal,
-                attempt_n=attempt_n,
-                run_group_id=run_group_id,
+                rule,
+                _RuleEvaluationContext(
+                    org_id=org_id,
+                    session=session,
+                    error_group_id=error_group_id,
+                    fingerprint=fingerprint,
+                    level=level,
+                    count=count,
+                    now=now,
+                    environment=environment,
+                    signal=signal,
+                    run_id=run_id,
+                    elevation_signal=elevation_signal,
+                    attempt_n=attempt_n,
+                    run_group_id=run_group_id,
+                ),
             )
             if alert is not None:
                 triggered.append(alert)
@@ -140,21 +161,8 @@ class AlertEngine:
 
     async def _evaluate_rule(
         self,
-        *,
         rule: ErrorNotificationRule,
-        org_id: uuid.UUID,
-        session: AsyncSession,
-        error_group_id: uuid.UUID,
-        fingerprint: str,
-        level: str,
-        count: int,
-        now: float,
-        environment: str | None,
-        signal: str | None,
-        run_id: str | None,
-        elevation_signal: str | None,
-        attempt_n: int | None,
-        run_group_id: uuid.UUID | None,
+        context: _RuleEvaluationContext,
     ) -> TriggeredAlert | None:
         """Evaluate a single rule. Returns a ``TriggeredAlert`` or ``None``.
 
@@ -162,42 +170,44 @@ class AlertEngine:
         count, cooldown suppression, cooldown write) so ``evaluate`` stays a
         thin loop. Behavior is identical to the previous inline implementation.
         """
-        if not self._rule_matches(rule, signal, level):
+        if not self._rule_matches(rule, context.signal, context.level):
             return None
 
         min_count = rule.condition_min_count if rule.condition_min_count is not None else 0
         effective_count = await self._resolve_effective_count(
             rule=rule,
-            session=session,
-            org_id=org_id,
-            fingerprint=fingerprint,
-            count=count,
+            session=context.session,
+            org_id=context.org_id,
+            fingerprint=context.fingerprint,
+            count=context.count,
         )
         if effective_count < min_count:
             return None
 
-        cross_key = _CooldownKey(org_id=org_id, rule_id=rule.id, fingerprint=fingerprint)
+        cross_key = _CooldownKey(org_id=context.org_id, rule_id=rule.id, fingerprint=context.fingerprint)
         run_key = (
-            _CooldownKey(org_id=org_id, rule_id=rule.id, fingerprint=fingerprint, run_id=run_id)
-            if run_id is not None
+            _CooldownKey(org_id=context.org_id, rule_id=rule.id, fingerprint=context.fingerprint, run_id=context.run_id)
+            if context.run_id is not None
             else None
         )
-        if await self._is_suppressed(rule=rule, now=now, cross_key=cross_key, run_key=run_key, run_id=run_id):
+        if await self._is_suppressed(
+            rule=rule, now=context.now, cross_key=cross_key, run_key=run_key, run_id=context.run_id
+        ):
             return None
 
-        await self._persist_firing(rule=rule, cross_key=cross_key, run_key=run_key, now=now)
+        await self._persist_firing(rule=rule, cross_key=cross_key, run_key=run_key, now=context.now)
 
         return self._build_triggered_alert(
             rule=rule,
-            error_group_id=error_group_id,
-            fingerprint=fingerprint,
-            level=level,
+            error_group_id=context.error_group_id,
+            fingerprint=context.fingerprint,
+            level=context.level,
             count=effective_count,
-            environment=environment,
-            signal=signal,
-            elevation_signal=elevation_signal,
-            attempt_n=attempt_n,
-            run_group_id=run_group_id,
+            environment=context.environment,
+            signal=context.signal,
+            elevation_signal=context.elevation_signal,
+            attempt_n=context.attempt_n,
+            run_group_id=context.run_group_id,
         )
 
     @staticmethod

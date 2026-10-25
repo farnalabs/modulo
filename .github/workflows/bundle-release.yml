@@ -190,8 +190,9 @@ jobs:
           cp -a debx/redis-tools/usr/bin/. "$BUNDLE/redis/"
 
           # Launcher placeholder -- the real launcher binary is FAR-671.
-          # TODO(FAR-671): replace with the actual launcher (process
-          # supervision, env scrub, boot contract per ADR 031 Decisions 1-2),
+          # Deferred implementation: FAR-671 owns the actual launcher
+          # (process supervision, env scrub, boot contract per ADR 031
+          # Decisions 1-2). Keep this tracked placeholder until that work lands,
           # plus PG share-dir relocation and venv rewiring to runtime/.
           {
             echo '#!/bin/sh'

@@ -49,6 +49,7 @@ from pydantic import BaseModel, Field
 
 from modulo.api.constants import MSG_NOT_FOUND
 from modulo.core.audit_coverage import audited_system, bind_audit_org
+from modulo.core.license import DEFAULT_RENEWAL_MODE, RENEWAL_MODE_AUTO
 from modulo.core.stripe_fulfilment import (
     RenewalClaimRejectedError,
     RenewalClaimUnavailableError,
@@ -114,6 +115,27 @@ def _event_object(event: dict[str, Any]) -> dict[str, Any]:
     data = event.get("data")
     obj = data.get("object") if isinstance(data, dict) else None
     return obj if isinstance(obj, dict) else {}
+
+
+def _renewal_mode_for(event: dict[str, Any]) -> str:
+    """Return the ``renewal_mode`` the purchase's licence must carry (FAR-2136).
+
+    Stripe's Invoice object already answers this in the event: ``subscription``
+    holds the subscription id (or the expanded subscription object) for an
+    invoice raised by a subscription, and is ``null`` for a one-off invoice.
+    That single field is the whole signal — no Stripe API call and no
+    seller-side record of what a customer bought.
+
+    Staleness is accepted deliberately, not engineered around: a subscription
+    cancelled AFTER this purchase leaves the minted key claiming ``"auto"``,
+    and a self-hosted instance has no phone-home to learn otherwise. The
+    consequence is mild and already covered — the customer does not renew, the
+    licence lapses into the delivery grace window, and the grace dialog offers
+    BOTH the renew path and the buy-a-new-licence path. Tracking cancellation
+    would add seller-side state (and a callback the instance cannot receive)
+    for a case that flow already handles.
+    """
+    return RENEWAL_MODE_AUTO if _event_object(event).get("subscription") else DEFAULT_RENEWAL_MODE
 
 
 def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
@@ -206,13 +228,20 @@ async def stripe_webhook(
     if event_type in _FULFILMENT_EVENTS:
         customer_email, org_name = _extract_customer(event)
         if customer_email:
-            _log.info("stripe.webhook.fulfilling event=%s event_id=%s", event_type, event["id"])
+            renewal_mode = _renewal_mode_for(event)
+            _log.info(
+                "stripe.webhook.fulfilling event=%s event_id=%s renewal_mode=%s",
+                event_type,
+                event["id"],
+                renewal_mode,
+            )
             background_tasks.add_task(
                 fulfil_team_purchase,
                 settings,
                 event_id=event["id"],
                 customer_email=customer_email,
                 org_name=org_name,
+                renewal_mode=renewal_mode,
             )
         else:
             _log.warning(
@@ -255,11 +284,11 @@ class RenewalClaimResponse(BaseModel):
     repeated: bool = False
 
 
-# Deliberately NOT in the OpenAPI document: publishing this route changes the
-# generated `frontend/src/lib/api/schema.ts`, which this delivery is scoped not
-# to touch (no frontend change). The route is exercised directly by its tests;
-# the delivery that adds the customer-facing claim UI should drop this flag and
-# regenerate the schema in the same change.
+# Published in the OpenAPI document (FAR-2114): the customer-facing claim page
+# consumes the generated `frontend/src/lib/api/schema.ts` types, so this route
+# must appear there. Publishing it is also what makes the endpoint discoverable
+# to the public claim surface; the caller is admitted by the signed keys, not a
+# session (see the module docstring).
 @router.post(
     "/stripe/renewal-claim",
     dependencies=[
@@ -272,7 +301,7 @@ class RenewalClaimResponse(BaseModel):
         )
     ],
     response_model=RenewalClaimResponse,
-    include_in_schema=False,
+    include_in_schema=True,
 )
 async def stripe_renewal_claim(
     req: RenewalClaimRequest,

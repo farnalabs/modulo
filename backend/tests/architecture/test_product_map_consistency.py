@@ -457,6 +457,10 @@ OWNED_PAGES = {
         "frontend/src/components/DashboardNotificationsPanel.vue",
     ),
     "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
+    # FAR-2114: the public early-renewal claim page. Its static testids are
+    # registered under /licence/claim in the manifest; the page imports its own
+    # child components through the closure, so only the owning view is pinned.
+    "/licence/claim": "frontend/src/views/LicenceClaimView.vue",
     "/oauth/authorize": "frontend/src/views/OAuthConsentView.vue",
     "/admin/audit": (
         "frontend/src/views/AdminAuditView.vue",

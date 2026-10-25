@@ -229,19 +229,28 @@ demotion is equally audited.
 Evidence: `POST /api/v1/pipelines/{pipeline_id}/autonomy/promote` and
 `POST /api/v1/pipelines/{pipeline_id}/autonomy/demote`; the
 `pipeline.autonomy_promotion_decided` / `pipeline.autonomy_demoted` audit
-events at `GET /api/v1/admin/audit`.
+events, recorded on every tier and read at `GET /api/v1/admin/audit` (Team-tier
+`audit_viewer` feature plus `audit.manage`).
 
 **Q: How do we know what actually happened in a run?**
 
 A: A hash-chained, append-only audit trail records every governance-relevant
-action with actor, resource, payload and outcome. The chain can be verified in
-place on every tier (`GET /api/v1/admin/audit/verify`, which checks up to 10,000
-events per call and reports `truncated` when it stops short). Exporting it as an
-offline-verifiable, Ed25519-signed evidence pack is conditional: it needs the
-Team-tier `audit_viewer` feature and a configured `MODULO_EVIDENCE_SIGNING_KEY`.
+action with actor, resource, payload and outcome. **Recording is not
+licence-gated**: the append-only triggers and hash chaining are always active,
+so a Community deployment records the trail too. **Reading it through the
+product is Team-tier**: browsing the trail, verifying the chain in place
+(`GET /api/v1/admin/audit/verify`, which checks up to 10,000 events per call and
+reports `truncated` when it stops short), exporting it, scanning it and taking
+the offline-verifiable, Ed25519-signed evidence pack all need the Team-tier
+`audit_viewer` feature plus the `audit.manage` permission. The signed evidence
+pack additionally needs a configured `MODULO_EVIDENCE_SIGNING_KEY`. On a
+Community install the events exist and are hash-chained in the customer's own
+database, but no admin route through the product can browse, verify or export
+them.
 
 Evidence: `docs/offline-verifiable-evidence.md`;
-`GET /api/v1/admin/audit/verify`; `GET /api/v1/admin/audit/evidence-pack`;
+`GET /api/v1/admin/audit`; `GET /api/v1/admin/audit/verify`;
+`GET /api/v1/admin/audit/evidence-pack`;
 `backend/src/modulo/api/routes/audit.py`.
 
 **Q: How does this map to our compliance framework?**

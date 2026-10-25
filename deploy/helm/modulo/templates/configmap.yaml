@@ -13,3 +13,11 @@ data:
   MODULO_MAX_LOCAL_CONCURRENCY: "{{ .Values.backend.env.MODULO_MAX_LOCAL_CONCURRENCY | default "2" }}"
   CORS_ORIGINS: "{{ .Values.backend.env.CORS_ORIGINS | default "http://localhost:5173" }}"
   MODULO_PLUGIN_DISCOVERY: "{{ .Values.backend.env.MODULO_PLUGIN_DISCOVERY | default "false" }}"
+  {{- if .Values.workspaceNetworkPolicy.enabled }}
+  # FAR-2068 enforcement contract: present ONLY when the chart renders the
+  # workspace egress NetworkPolicy below. The backend gates the Kubernetes
+  # deny_all DECLARED posture (and the provider's acceptance of an egress
+  # 'none' workspace) on this signal, so a posture can never be declared when
+  # its enforcing manifest does not exist.
+  MODULO_WORKSPACE_NETWORK_POLICY: "enabled"
+  {{- end }}

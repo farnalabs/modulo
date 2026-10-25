@@ -177,7 +177,7 @@ async def _resolve_binding_values(
     resolved: dict[str, str] = {}
     resolved_backend_by_var: dict[str, uuid.UUID] = {}
     try:
-        from modulo.core.model_backend_hub import BackendDecryptError, ModelBackendHub
+        from modulo.core.model_backend_hub import ModelBackendHub
 
         async with ModelBackendHub() as hub:
             await hub.initialise(referenced_rows, secrets_backend=secrets_backend)
@@ -199,7 +199,7 @@ async def _resolve_binding_values(
                 resolved[str(binding.target_env_var)] = str(creds[binding.source_field])
                 resolved_backend_by_var[str(binding.target_env_var)] = binding.model_backend_id
         # Hub explicitly disposed above via the async context manager — never GC.
-    except (BackendDecryptError, ValueError) as exc:
+    except ValueError as exc:
         raise AgentBindingResolutionError(f"credential resolution failed for a bound model backend: {exc}") from exc
     return resolved, resolved_backend_by_var
 
