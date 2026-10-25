@@ -233,6 +233,8 @@ the deployment would reject.
 
 ## QA History
 
+- 2026-10-25: **Improve Architecture product-map walk** - fixed the admin feature-flag registry's org-level licence rung to verify the signed key (including expiry) before setting `has_license_key`, matching the canonical licence ladder. Added regression coverage for valid, malformed and expired org keys; malformed and expired keys now report `has_license_key: false` instead of being trusted on presence. Status stays `partial` (the manifest's universal-gating deferral is unchanged).
+
 - 2026-10-23: **FAR-2091** - made the licence trust anchor honest and surfaced
   verification failure at install. The built-in public key in `core/license.py`
   carried a comment marking it as the dev/test key to replace for production

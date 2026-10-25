@@ -87,7 +87,8 @@ async def _build_registry(
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
             if org is not None and isinstance(getattr(org, "settings_json", None), dict):
-                has_key = bool(org.settings_json.get("license_key"))
+                org_key = org.settings_json.get("license_key")
+                has_key = bool(org_key) and verify_license_key(str(org_key)) is not None
 
     async with session.begin():
         return await FeatureFlagRegistry.from_db(
