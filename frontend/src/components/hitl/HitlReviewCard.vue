@@ -779,8 +779,9 @@ async function modifyAndApprove() {
   actioning.value = 'modify-approve'
   message.value = null
   // Shape-preserving reconstruction: clone the parent, replace only the
-  // subject leaf.  JSON round-trip gives a deep plain-object copy — safe
-  // because the backend already serialised the parent to JSON at capture time.
+  // subject leaf.  structuredClone(toRaw(parent)) gives a deep plain-object
+  // copy — safe because the backend already serialised the parent to JSON at
+  // capture time.
   const reconstructedOutput = { ...structuredClone(toRaw(parent)), [leafKey]: modifiedSubject.value }
   try {
     const { error: err } = await api.POST(

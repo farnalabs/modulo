@@ -198,7 +198,7 @@
       class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-[transform,visibility] motion-reduce:transition-none overflow-y-auto"
       :class="mobileOpen ? 'translate-x-0' : '-translate-x-full invisible'"
       :inert="!mobileOpen"
-      aria-label="Mobile navigation"
+      :aria-label="$t('components.AppLayout.mobile_navigation')"
       :aria-hidden="!mobileOpen || undefined"
     >
       <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
