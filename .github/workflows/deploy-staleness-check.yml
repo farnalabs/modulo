@@ -152,6 +152,10 @@ jobs:
             echo "work_dir=$WORK"
           } >> "$GITHUB_OUTPUT"
 
+      # FAR-2139: the transition decision, the message and the SMTP send are ONE
+      # shared step with deploy-watchdog.yml (.github/scripts/deploy-health-notify.sh),
+      # rendered by .github/scripts/deploy_health.py. Two copies of an escalation
+      # channel are exactly what drifted out of reach in the 2026-10-23..25 outage.
       - name: Email the operator on a deploy-health transition
         id: notify
         if: always()
@@ -161,134 +165,16 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           CURRENT_HEALTHY: ${{ steps.health.outputs.healthy }}
           VERDICT_JSON: ${{ steps.health.outputs.verdict_json }}
-          WORK_DIR: ${{ steps.health.outputs.work_dir }}
+          WORKFLOW_NAME: "Deploy staleness check (prod vs main)"
+          VERDICT_STEP_NAME: "Fail the run when deploy health is unhealthy"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEPLOY_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/deploy.yml
           # --- Zoho SMTP (the existing email path issue-notify.yml uses) ---
           ZOHO_SMTP_USER: ${{ secrets.ZOHO_SMTP_USER }}
           ZOHO_SMTP_PASS: ${{ secrets.ZOHO_SMTP_PASS }}
           ISSUE_NOTIFY_EMAIL: ${{ secrets.ISSUE_NOTIFY_EMAIL }}
           ISSUE_NOTIFY_FROM: ${{ secrets.ISSUE_NOTIFY_FROM }}
-        run: |
-          set -o pipefail
-
-          if [ -z "$CURRENT_HEALTHY" ]; then
-            echo "::warning::Deploy health could not be evaluated this cycle - no transition can be inferred; no email sent."
-            echo "action=none" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # ---- Previous verdict: THIS workflow's most recent COMPLETED run ----
-          # The durable state vector is the verdict step's conclusion in that
-          # run ("Fail the run when deploy health is unhealthy"): it FAILS
-          # exactly when the evaluated health was unhealthy and is SKIPPED when
-          # it was healthy, so no state store is introduced. UNKNOWN (a crashed
-          # tick, a cancelled run, or a run from an older workflow definition)
-          # must EMAIL rather than suppress.
-          PREV_VERDICT="unknown"
-          PREV_RUNS="$(gh run list --repo "$REPOSITORY" \
-            --workflow "Deploy staleness check (prod vs main)" --limit 10 \
-            --json databaseId,status,conclusion,createdAt 2>/dev/null)" || PREV_RUNS=""
-          if [ -n "$PREV_RUNS" ]; then
-            PREV_ID="$(PAYLOAD="$PREV_RUNS" CURRENT="$GITHUB_RUN_ID" python3 - <<'PY'
-          import json, os
-          try:
-              runs = json.loads(os.environ["PAYLOAD"])
-          except Exception:
-              runs = []
-          current = str(os.environ.get("CURRENT", ""))
-          completed = [r for r in runs if r.get("status") == "completed" and str(r.get("databaseId")) != current]
-          print(completed[0]["databaseId"] if completed else "")
-          PY
-          )" || PREV_ID=""
-            if [ -n "$PREV_ID" ]; then
-              if gh api "repos/$REPOSITORY/actions/runs/$PREV_ID/jobs" > "$WORK_DIR/prev_jobs.json" 2>/dev/null; then
-                PREV_VERDICT="$(python3 .github/scripts/deploy_health.py previous-verdict --jobs-json "$WORK_DIR/prev_jobs.json")" || PREV_VERDICT="unknown"
-              else
-                echo "::warning::Could not read the previous run's jobs ($PREV_ID) - treating the previous verdict as UNKNOWN."
-              fi
-            fi
-          fi
-          echo "previous verdict: $PREV_VERDICT (current healthy=$CURRENT_HEALTHY)"
-
-          ACTION="$(python3 .github/scripts/deploy_health.py action --healthy "$CURRENT_HEALTHY" --previous "$PREV_VERDICT")" || ACTION="none"
-          echo "action=$ACTION" >> "$GITHUB_OUTPUT"
-          if [ "$ACTION" = "none" ]; then
-            echo "No transition (current healthy=$CURRENT_HEALTHY, previous=$PREV_VERDICT) - nothing to send."
-            exit 0
-          fi
-
-          if [ -z "$ZOHO_SMTP_USER" ] || [ -z "$ZOHO_SMTP_PASS" ] || [ -z "$ISSUE_NOTIFY_EMAIL" ]; then
-            # Best-effort channel: unconfigured is reported, never silently
-            # green. The red run + Linear ticket legs still fire.
-            echo "::warning::Deploy health transition ($ACTION) but ZOHO_SMTP_USER / ZOHO_SMTP_PASS / ISSUE_NOTIFY_EMAIL are not configured - no email sent. Configure the same secrets issue-notify.yml uses."
-            exit 0
-          fi
-
-          SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
-          PAYLOAD="$(python3 .github/scripts/deploy_health.py email \
-            --verdict-json "$VERDICT_JSON" \
-            --action "$ACTION" \
-            --run-url "$SERVER_URL/$REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            --deploy-url "$SERVER_URL/$REPOSITORY/actions/workflows/deploy.yml")" || {
-            echo "::error::Could not render the deploy-health email payload."
-            exit 1
-          }
-          SUBJECT="$(printf '%s' "$PAYLOAD" | jq -r .subject)"
-          BODY="$(printf '%s' "$PAYLOAD" | jq -r .body)"
-
-          SUBJECT="$SUBJECT" BODY="$BODY" python3 - <<'PY'
-          import os
-          import smtplib
-          import sys
-          from email.mime.text import MIMEText
-          from email.utils import formatdate
-
-          HOST = "smtppro.zoho.eu"
-          PORT_STARTTLS = 587
-          PORT_SSL = 465
-
-          user = os.environ["ZOHO_SMTP_USER"]
-          password = os.environ["ZOHO_SMTP_PASS"]
-          to_addr = os.environ["ISSUE_NOTIFY_EMAIL"]
-          from_addr = os.environ.get("ISSUE_NOTIFY_FROM") or user
-          subject = os.environ["SUBJECT"]
-          body = os.environ["BODY"]
-
-          def scrub(text: str) -> str:
-              return text.replace(password, "***") if password else text
-
-          message = MIMEText(body + "\n")
-          message["Subject"] = subject
-          message["From"] = from_addr
-          message["To"] = to_addr
-          message["Date"] = formatdate(localtime=True)
-
-          def send(port: int, use_ssl: bool) -> None:
-              if use_ssl:
-                  client = smtplib.SMTP_SSL(HOST, port, timeout=30)
-              else:
-                  client = smtplib.SMTP(HOST, port, timeout=30)
-              try:
-                  if not use_ssl:
-                      client.starttls()
-                  client.login(user, password)
-                  client.sendmail(from_addr, [to_addr], message.as_string())
-              finally:
-                  try:
-                      client.quit()
-                  except Exception:
-                      pass
-
-          try:
-              send(PORT_STARTTLS, use_ssl=False)
-          except Exception as first_error:
-              try:
-                  send(PORT_SSL, use_ssl=True)
-              except Exception as second_error:
-                  print(scrub(f"SMTP send failed on 587 ({first_error}) and 465 ({second_error})"), file=sys.stderr)
-                  sys.exit(1)
-
-          print(scrub(f"Sent '{subject}' to {to_addr}"))
-          PY
+        run: bash .github/scripts/deploy-health-notify.sh
 
       - name: Create Linear ticket on starvation
         if: always() && steps.health.outputs.stale == 'true'
