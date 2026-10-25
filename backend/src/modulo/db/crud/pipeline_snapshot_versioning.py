@@ -45,22 +45,106 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 _PORT_CHANGE_KIND_NODE_SIGNATURE = "node_signature"
 _PORT_CHANGE_KIND_EDGE_PORT = "edge_port"
 
+# Fields from the authoritative PipelineGraphNode model that can alter graph
+# execution, security, runtime policy, or node behaviour. Identity, labels,
+# editor position, and port declarations are handled separately below.
+_BEHAVIOUR_NODE_FIELDS = (
+    "agent_id",
+    "label",
+    "role",
+    "node_type",
+    "connector_binding",
+    "environment_binding",
+    "input_schema_pin",
+    "output_schema_pin",
+    "output_schema_id",
+    "capability_scope",
+    "idempotent",
+    "composite_ref",
+    "composite_parameter_values",
+    "composite_input_mapping",
+    "composite_output_mapping",
+    "parameter_set_id",
+    "parameter_overrides",
+    "template_id",
+    "mode",
+    "agent_commands",
+    "commands_concatenation_string",
+    "agent_prompt",
+    "script_command",
+    "model_class",
+    "egress_policy",
+    "egress_allowlist",
+    "resource_limits",
+    "read_only",
+    "git_credentials",
+    "wallclock_budget_seconds",
+    "delivery_sentinel",
+    "single_pr_per_run",
+    "env_vars",
+    "context_files",
+    "timeout_seconds",
+    "output_schema_json",
+    "schema_profile",
+    "stall_timeout_seconds",
+    "enable_heartbeat",
+    "watch_log_path",
+    "stdout_percentage_delta",
+    "watch_globs",
+    "router_config",
+    "hitl_config",
+    "policy_gate",
+    "fan_out",
+    "collect",
+    "aggregate",
+    "join_partial_policy",
+    "workspace_inputs",
+    "await_completion",
+    "wait_timeout",
+    "stdout_retention_mode",
+    "stdout_max_bytes",
+)
+
+
+def _normalise_edge_type(edge: dict[str, Any]) -> str:
+    """Return the canonical edge type, accepting historic ``type`` data."""
+    value = edge.get("edge_type")
+    if value is None:
+        value = edge.get("type")
+    return str(value or "normal")
+
 
 async def delete_snapshot(
     session: AsyncSession,
     snapshot_id: uuid.UUID,
+    *,
+    organisation_id: uuid.UUID | None = None,
+    pipeline_id: uuid.UUID | None = None,
 ) -> bool:
-    """Delete a historical snapshot. Refuses to delete the latest snapshot."""
-    target = await get_snapshot(session, snapshot_id)
+    """Delete a historical snapshot. Refuses to delete the latest snapshot.
+
+    Scoping parameters ``organisation_id`` and ``pipeline_id`` provide
+    defense-in-depth on top of RLS: when provided, the snapshot must belong
+    to that organisation and pipeline.
+    """
+    target = await get_snapshot_detail(
+        session,
+        snapshot_id,
+        organisation_id=organisation_id,
+        pipeline_id=pipeline_id,
+    )
     if target is None:
         return False
 
-    result = await session.execute(
+    stmt = (
         select(PipelineSnapshot)
         .where(PipelineSnapshot.pipeline_id == target.pipeline_id)
         .order_by(PipelineSnapshot.snapshot_version.desc())
         .limit(1)
     )
+    if organisation_id is not None:
+        stmt = stmt.where(PipelineSnapshot.organisation_id == organisation_id)
+    result = await session.execute(stmt)
     latest = result.scalar_one_or_none()
     if latest is not None and latest.id == target.id:
         return False
@@ -128,6 +212,7 @@ async def list_snapshots(
     page: int = 1,
     page_size: int = 20,
     *,
+    organisation_id: uuid.UUID | None = None,
     exclude_created_kinds: Iterable[str] | None = None,
     exclude_drafts: bool = False,
 ) -> tuple[list[PipelineSnapshot], int]:
@@ -135,6 +220,10 @@ async def list_snapshots(
 
     Returns (snapshots, total_count) where total_count is the total
     number of snapshots for the pipeline across all pages.
+
+    ``organisation_id`` provides defense-in-depth tenant scoping on top of RLS
+    when provided: it is applied to the snapshot rows on BOTH the page query
+    and the count, so the two can never disagree about what is in scope.
 
     ``exclude_created_kinds`` optionally drops rows whose ``created_kind`` is
     in the given set, on BOTH the page query and the count. It exists so a
@@ -161,6 +250,8 @@ async def list_snapshots(
         PipelineSnapshot.pipeline_id == pipeline_id,
         Pipeline.deleted_at.is_(None),
     ]
+    if organisation_id is not None:
+        filters.append(PipelineSnapshot.organisation_id == organisation_id)
     if excluded:
         filters.append(PipelineSnapshot.created_kind.not_in(excluded))
     if exclude_drafts:
@@ -512,23 +603,22 @@ async def rollback_to_snapshot(
 
 
 def _compute_node_changes(na: dict[str, Any], nb: dict[str, Any]) -> dict[str, Any]:
+    """Per-field changes between two versions of the SAME node.
+
+    The compared field set is "what changes what the node DOES", not "every key
+    the node happens to carry". A node whose only change is to a field outside
+    this set must still surface as MODIFIED, or the diff (and the restore
+    dialog's change summary, which embeds it) reports "no differences" for a
+    version pair that behaves differently.
+    """
     changes: dict[str, Any] = {}
-    for key in ("agent_id", "label", "node_type"):
+    for key in _BEHAVIOUR_NODE_FIELDS:
         if na.get(key) != nb.get(key):
             changes[key] = {"old": na.get(key), "new": nb.get(key)}
-    for key in ("output_schema_id",):
-        if na.get(key) != nb.get(key):
-            changes["schema_id"] = {"old": na.get(key), "new": nb.get(key)}
-    if na.get("connector_binding") != nb.get("connector_binding"):
-        changes["connector_binding"] = {
-            "old": na.get("connector_binding"),
-            "new": nb.get("connector_binding"),
-        }
-    if na.get("environment_binding") != nb.get("environment_binding"):
-        changes["environment_binding"] = {
-            "old": na.get("environment_binding"),
-            "new": nb.get("environment_binding"),
-        }
+    # ``schema_id`` is the public diff vocabulary retained for compatibility;
+    # the graph model's authoritative field is ``output_schema_id``.
+    if "output_schema_id" in changes:
+        changes["schema_id"] = changes.pop("output_schema_id")
     # FAR-402 P6: surface PORT-SIGNATURE deltas (inputs/outputs port names +
     # schema_refs) alongside the scalar field changes.
     port_changes = diff_node_ports(na, nb)
@@ -540,14 +630,22 @@ def _compute_node_changes(na: dict[str, Any], nb: dict[str, Any]) -> dict[str, A
 def _compute_edge_changes(ea: dict[str, Any], eb: dict[str, Any]) -> dict[str, Any]:
     """Compute per-field changes between two edge dicts (parallel to :func:`_compute_node_changes`)."""
     changes: dict[str, Any] = {}
-    for ekey in ("edge_type", "type"):
-        if ea.get(ekey) != eb.get(ekey):
-            changes["edge_type"] = {"old": ea.get(ekey), "new": eb.get(ekey)}
+    edge_type_a = _normalise_edge_type(ea)
+    edge_type_b = _normalise_edge_type(eb)
+    if edge_type_a != edge_type_b:
+        changes["edge_type"] = {"old": edge_type_a, "new": edge_type_b}
     if ea.get("hitl_review_config") != eb.get("hitl_review_config"):
         changes["hitl_review_config"] = {
             "old": ea.get("hitl_review_config"),
             "new": eb.get("hitl_review_config"),
         }
+    # A conditional edge's routing expression decides which branch runs. Two
+    # versions that differ ONLY in this expression execute different paths, so
+    # omitting it reported a semantically different graph as unchanged.
+    condition_a = ea.get("condition_expression") or ea.get("condition")
+    condition_b = eb.get("condition_expression") or eb.get("condition")
+    if condition_a != condition_b:
+        changes["condition_expression"] = {"old": condition_a, "new": condition_b}
     # FAR-402 P6: surface source_port/target_port deltas.
     edge_ports = diff_edge_ports(ea, eb)
     if edge_ports:
@@ -670,6 +768,18 @@ def _compute_semantic_layer(
 
 
 def _rebuild_graph(snapshot: PipelineSnapshot) -> dict[str, Any]:
+    """The frozen graph a diff side reports to the client.
+
+    A node id is read strictly (``n["id"]``): an id-less node is a corrupt
+    graph the write validator refuses (``TOPOLOGY_NODE_MISSING_ID``), and
+    tolerating it here would silently collapse several such nodes under one
+    ``None`` key — masking corruption rather than reporting it (the recorded
+    decision in ``docs/product-map/pipelines/pipeline-diff-rollback.md``).
+
+    ``condition_expression`` is carried through: it is what an edge DOES, and
+    the field-changes layer reports it (see :func:`_compute_edge_changes`), so
+    the frozen side must show it or the reported change has nothing to land on.
+    """
     graph = snapshot.graph_json
     return {
         "nodes": [
@@ -677,6 +787,7 @@ def _rebuild_graph(snapshot: PipelineSnapshot) -> dict[str, Any]:
                 "id": n["id"],
                 "agent_id": n.get("agent_id"),
                 "label": n.get("label"),
+                "role": n.get("role"),
                 "node_type": n.get("node_type", "agent"),
                 "position": n.get("position", {"x": 0, "y": 0}),
                 "output_schema_id": n.get("output_schema_id"),
@@ -692,8 +803,9 @@ def _rebuild_graph(snapshot: PipelineSnapshot) -> dict[str, Any]:
                 "id": e.get("id"),
                 "source_node_id": e.get("source") or e.get("source_node_id", ""),
                 "target_node_id": e.get("target") or e.get("target_node_id", ""),
-                "edge_type": e.get("edge_type", e.get("type", "normal")),
+                "edge_type": _normalise_edge_type(e),
                 "hitl_review_config": e.get("hitl_review_config"),
+                "condition_expression": e.get("condition_expression") or e.get("condition"),
                 "source_port": e.get("source_port"),
                 "target_port": e.get("target_port"),
             }
@@ -707,6 +819,7 @@ async def diff_snapshots(
     snapshot_id_a: uuid.UUID,
     snapshot_id_b: uuid.UUID,
     *,
+    organisation_id: uuid.UUID | None = None,
     pipeline_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
     """Compare two snapshots and return structural differences with per-field changes.
@@ -719,12 +832,17 @@ async def diff_snapshots(
     side returns ``None``, which the route maps to its existing 404 ("One or
     both snapshots not found"); omitted (internal/test callers) keeps the
     unscoped behaviour.
+
+    ``organisation_id`` provides defense-in-depth tenant scoping on top of RLS:
+    when provided, both snapshots must belong to the caller's organisation.
+    Both reads go through :func:`get_snapshot_detail` with the SAME scoping, so
+    the scope predicate itself decides the answer - an out-of-scope id on
+    EITHER side resolves to ``None`` and the route answers its existing 404
+    (the pattern :func:`tag_snapshot` uses).
     """
-    a = await get_snapshot(session, snapshot_id_a)
-    b = await get_snapshot(session, snapshot_id_b)
+    a = await get_snapshot_detail(session, snapshot_id_a, organisation_id=organisation_id, pipeline_id=pipeline_id)
+    b = await get_snapshot_detail(session, snapshot_id_b, organisation_id=organisation_id, pipeline_id=pipeline_id)
     if a is None or b is None:
-        return None
-    if pipeline_id is not None and (a.pipeline_id != pipeline_id or b.pipeline_id != pipeline_id):
         return None
 
     nodes_a = _index_layer(a.graph_json.get("nodes", []), lambda n: n["id"])

@@ -140,13 +140,6 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
 
     await page.evaluate(() => document.documentElement.classList.add('light'))
 
-    // FAR-2016: in light mode the fill hue and its text-safe counterpart are
-    // deliberately different (--success 45% vs --success-text 28% lightness,
-    // i.e. 2.30:1 vs 5.42:1 on white). Equal-to-the-text-token alone would not
-    // prove which token the value follows, so pin the divergence and prove the
-    // value follows the TEXT-SAFE token and NOT the low-contrast fill hue —
-    // the exact regression FAR-1938 fixed. Updating the expectation to
-    // `success` would re-enshrine that contrast violation.
     const lightProbe = await probe('.vjs-value-string', 'success-text')
     const lightFillHue = await probe('.vjs-value-string', 'success')
     expect(

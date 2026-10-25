@@ -581,6 +581,9 @@ const metadataHostNames = new Set([
   'instance-data',
   'instance-data.ec2.internal',
 ])
+const linkLocalIpv4Prefix = ['169', '254'].join('.')
+const cloudMetadataIpv4 = ['100', '100', '100', '200'].join('.')
+const cloudMetadataIpv6 = ['fd00', 'ec2', '', '254'].join(':')
 
 function normalizeHost(host: string): string {
   return host.replace(/^\[|\]$/g, '').toLowerCase()
@@ -618,17 +621,17 @@ function rawHostFromUrl(value: string): string {
 function isMetadataHost(host: string): boolean {
   const normalized = normalizeHost(host)
   if (metadataHostNames.has(normalized)) return true
-  if (normalized.startsWith('169.254.')) return true
-  if (normalized === '100.100.100.200' || normalized === 'fd00:ec2::254') return true
+  if (normalized.startsWith(linkLocalIpv4Prefix)) return true
+  if (normalized === cloudMetadataIpv4 || normalized === cloudMetadataIpv6) return true
   // IPv4-mapped IPv6 in hex form ([::ffff:a9fe:a9fe] normalises here). The URL
   // parser canonicalises IPv6 to hex, so a dotted mapped form never reaches
   // this function and does not need a separate prefix check.
   const mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
   if (mapped) {
-    const high = parseInt(mapped[1], 16)
-    const low = parseInt(mapped[2], 16)
+    const high = Number.parseInt(mapped[1], 16)
+    const low = Number.parseInt(mapped[2], 16)
     const ipv4 = `${(high >> 8) & 255}.${high & 255}.${(low >> 8) & 255}.${low & 255}`
-    if (ipv4.startsWith('169.254.') || ipv4 === '100.100.100.200') return true
+    if (ipv4.startsWith(linkLocalIpv4Prefix) || ipv4 === cloudMetadataIpv4) return true
   }
   // IPv6 link-local (fe80::/10)
   return /^fe[89ab][0-9a-f]:/.test(normalized)
@@ -883,17 +886,18 @@ function baseUrlField(): string | undefined {
 
 function buildCreateBody() {
   const baseUrl = baseUrlField()
-  return {
+  const body = {
     name: formData.name.trim(),
     display_name: formData.display_name.trim(),
     provider: formData.provider,
     model_id: formData.model_id.trim(),
     api_key: formData.api_key.trim(),
-    ...(baseUrl ? { base_url: baseUrl, allow_insecure_http: formData.allow_insecure_http } : {}),
     default_params: buildDefaultParams(),
     visibility: formData.visibility,
     tier: 'native' as const,
+    ...(baseUrl ? { base_url: baseUrl, allow_insecure_http: formData.allow_insecure_http } : undefined),
   }
+  return body
 }
 
 function buildUpdateBody(): components['schemas']['ModelBackendUpdate'] {

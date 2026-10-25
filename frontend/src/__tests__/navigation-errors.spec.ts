@@ -68,4 +68,27 @@ describe('navigation.ts error handling', () => {
       expect(groups[0].items.map((i) => i.to)).toEqual(['/'])
     })
   })
+
+  describe('sidebar group with no routes', () => {
+    beforeEach(() => {
+      vi.resetModules()
+      vi.doMock('@/manifest.yaml', () => ({
+        default: {
+          sidebar_groups: {
+            core: { label: 'BUILD', order: 1, default_expanded: true },
+            empty: { label: 'EMPTY', order: 2, default_expanded: true },
+          },
+          routes: {
+            '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'core', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
+          },
+        },
+      }))
+    })
+
+    it('defaults an unreferenced group to an empty item list and drops it', async () => {
+      const { getNavGroups } = await import('../config/navigation')
+      const groups = getNavGroups()
+      expect(groups.map((g) => g.id)).toEqual(['core'])
+    })
+  })
 })

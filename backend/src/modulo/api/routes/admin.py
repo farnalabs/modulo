@@ -1738,7 +1738,7 @@ async def admin_reset_password(
 # with no whitespace. Deliberately permissive — it exists to reject obvious
 # garbage (and over-length input that would 503 on a Postgres DataError) with a
 # 422, not to be an RFC-5322 validator.
-_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_EMAIL_PATTERN = re.compile(r"\A[^@\s]++@[^@\s.]++(?:\.[^@\s.]++)++\Z")
 
 
 class InviteUserRequest(BaseModel):

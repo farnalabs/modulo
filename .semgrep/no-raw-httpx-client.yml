@@ -39,15 +39,14 @@ rules:
         - "**/backend/src/modulo/connectors/rest/**"
         # FAR-526C honest-scope residual (see the scope note in core/ssrf.py):
         # these support modules build their own clients toward operator-config /
-        # multi-host endpoints (library_sync already validate-then-connects).
-        # They are excluded so this gate stays green while they remain
-        # un-migrated, but they are documented residual — NOT accepted raw
-        # egress. A new raw construction anywhere else in the tree is still
-        # caught.
+        # multi-host endpoints. They are excluded so this gate stays green
+        # while they remain un-migrated, but they are documented residual —
+        # NOT accepted raw egress. A new raw construction anywhere else in the
+        # tree is still caught - including core/library_sync/**,
+        # core/product_analytics/** and core/notifier/**, which now build
+        # through the pinned factory and are deliberately NOT excluded.
         - "**/backend/src/modulo/core/error_tracking/**"
-        - "**/backend/src/modulo/core/product_analytics/**"
         - "**/backend/src/modulo/core/watchdog/**"
-        - "**/backend/src/modulo/core/library_sync/**"
         - "**/backend/src/modulo/core/reports/**"
         # FAR-681 apply CLI: no sync pinned-egress factory exists (ssrf.py only
         # builds pinned ASYNC transports/pools) and the click executor is sync.

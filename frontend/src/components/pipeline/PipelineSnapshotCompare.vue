@@ -4,7 +4,7 @@
        changed on K -> these J downstream nodes are impacted"), NOT a wall of
        JSON. The backend semantic layer (breaking_changes + impacted_nodes) is
        presented FIRST; the raw JSON diff is the LAST thing and is behind a
-       toggle that is OFF by default. No backend endpoint is added or changed —
+       toggle that is OFF by default. The existing backend diff endpoint supplies this compare data —
        this binds to the existing POST /snapshots/diff response. -->
   <section
     class="flex h-full flex-col gap-4 p-4"
@@ -609,12 +609,24 @@ function modifiedEdgeText(modified: SnapshotModifiedEdge): string {
 const FIELD_LABEL_KEYS: Record<string, string> = {
   agent_id: 'components.PipelineSnapshotCompare.field_agent',
   label: 'components.PipelineSnapshotCompare.field_label',
+  role: 'components.PipelineSnapshotCompare.field_role',
   node_type: 'components.PipelineSnapshotCompare.field_node_type',
   schema_id: 'components.PipelineSnapshotCompare.field_schema',
   connector_binding: 'components.PipelineSnapshotCompare.field_connector',
   environment_binding: 'components.PipelineSnapshotCompare.field_environment',
   source_port: 'components.PipelineSnapshotCompare.field_source_port',
   target_port: 'components.PipelineSnapshotCompare.field_target_port',
+  // Behaviour-bearing fields the diff reports so a config-only edit is never
+  // presented as "no differences": a node-level HITL gate, its execution
+  // bound, its template/model class, the one-PR-per-run isolation flag, an
+  // edge's routing expression and an edge review gate.
+  hitl_config: 'components.PipelineSnapshotCompare.field_hitl_config',
+  hitl_review_config: 'components.PipelineSnapshotCompare.field_hitl_review_config',
+  timeout_seconds: 'components.PipelineSnapshotCompare.field_timeout_seconds',
+  template_id: 'components.PipelineSnapshotCompare.field_template_id',
+  model_class: 'components.PipelineSnapshotCompare.field_model_class',
+  single_pr_per_run: 'components.PipelineSnapshotCompare.field_single_pr_per_run',
+  condition_expression: 'components.PipelineSnapshotCompare.field_condition_expression',
 }
 
 function fieldLabel(key: string): string {

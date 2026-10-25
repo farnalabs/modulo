@@ -10,12 +10,13 @@ checks.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from modulo.core.library.workflows import __all__ as workflow_exports
 from modulo.core.library.workflows import definitions as workflow_defs
+from modulo.core.seed_data.library_schemas import SCHEMAS
 
 from .helpers import (
     KNOWN_AGENTS,
@@ -26,14 +27,13 @@ from .helpers import (
 
 
 def _workflow(name: str) -> dict[str, Any]:
-    return getattr(workflow_defs, name)
+    return cast(dict[str, Any], getattr(workflow_defs, name))
 
 
 def test_all_workflows_exported() -> None:
-    """Every exported workflow constant is a dict definition."""
-    assert len(workflow_exports) == 15
-    for name in workflow_exports:
-        assert isinstance(_workflow(name), dict), name
+    """``__all__`` mirrors the workflow definitions module exactly."""
+    assert WORKFLOWS, "library catalog is empty"
+    assert set(workflow_exports) == set(WORKFLOWS), f"unexported: {set(WORKFLOWS) - set(workflow_exports)}"
 
 
 @pytest.mark.parametrize("name", workflow_exports, ids=lambda n: n)
@@ -105,6 +105,16 @@ def test_connector_bindings_are_valid(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", workflow_exports, ids=lambda n: n)
+def test_input_schema_bindings_are_registered(name: str) -> None:
+    """Every ``input_schema`` a step binds must be a registered library schema."""
+    registered = {entry["name"] for entry in SCHEMAS}
+    for step in _workflow(name)["pipeline_steps"]:
+        bound = step.get("input_schema")
+        if bound is not None:
+            assert bound in registered, f"{name}.{step['id']} binds unknown schema {bound!r}"
+
+
+@pytest.mark.parametrize("name", workflow_exports, ids=lambda n: n)
 def test_json_roundtrip(name: str) -> None:
     workflow = _workflow(name)
     assert json.loads(json.dumps(workflow)) == workflow
@@ -128,13 +138,3 @@ def test_package_reexports_every_workflow() -> None:
 
     for name in workflow_exports:
         assert getattr(library_package, name) is getattr(workflow_defs, name)
-
-
-def test_integration_tool_groups_match_binding_vocabulary() -> None:
-    """Integration tool_groups use the same vocabulary as workflow bindings."""
-    from modulo.core.library.integrations import __all__ as integration_exports
-    from modulo.core.library.integrations import definitions as integration_defs
-
-    for name in integration_exports:
-        tool_group = getattr(integration_defs, name)["tool_group"]
-        assert tool_group in VALID_CONNECTOR_BINDING_TYPES, f"{name}: unknown tool_group {tool_group!r}"

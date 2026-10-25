@@ -1148,6 +1148,14 @@ def _sweep_recoverability_predicate() -> tuple[Any, Any]:
     here made the sweep keep its marker and skip FAR-1808's 2h bounded reclaim
     — the reclaim only ever fired for rows the age gate had already missed.
 
+    FAR-2122's dispatcherless node-started resume leg is kept, but gated on a
+    RESUMABLE ROOT checkpoint
+    (``unowned_node_started_requires_checkpoint=True``). That leg only
+    recovers rows whose thread has a root checkpoint; ``_reconcile_one_row``
+    refuses a checkpointless row and leaves it to the orphan sweep. Without
+    the gate the checkpointless shape was judged recoverable and its marker
+    kept until the 25h cap, shadowing FAR-1808's 2h reclaim.
+
     Lazy import: cron_helpers transitively reaches dispatch/pipeline machinery
     that runner_capacity's importers (node_runner) must not pull at module load.
     """
@@ -1178,6 +1186,10 @@ def _sweep_recoverability_predicate() -> tuple[Any, Any]:
         # class; it never re-dispatches, so it must not outrank the FAR-1808
         # reclaim (rule b).
         include_node_started_executor_lost=False,
+        # FAR-2122's leg only recovers a run with a resumable root checkpoint;
+        # the checkpointless shape is refused per-row, so it must not be
+        # judged recoverable (that would shadow FAR-1808's reclaim).
+        unowned_node_started_requires_checkpoint=True,
     )
     return recovery_or, reconcile_capacity_marker_exclusion(CAPACITY_REDISPATCH_SECONDS)
 

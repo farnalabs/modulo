@@ -30,6 +30,18 @@ name: "Deploy: Staleness Watchdog"
 #     watchdog failed to heal - investigate the watchdog. If this watchdog's
 #     3-consecutive-failure ::error:: cap fires, deploy.yml itself is broken -
 #     investigate deploy.yml.
+#
+# FAR-2139 (the escalation gap): during the 2026-10-23..25 outage this
+# watchdog hit its 3-failure cap TEN times and every escalation landed in the
+# same unread place - a red run in the Actions tab plus a comment on a
+# three-week-old Backlog ticket. Both workflows now escalate through ONE
+# shared email-on-transition step (.github/scripts/deploy-health-notify.sh):
+# entering unhealthy and recovering each send exactly one email through the
+# Zoho SMTP secrets issue-notify.yml already uses, and the message is rendered
+# by the same .github/scripts/deploy_health.py renderer the staleness check
+# uses. A single failed deploy still never alerts (the 3-run cap below is the
+# watchdog's floor); the Linear ticket leg is gated on the structured health
+# verdict rather than on `failure()` of a step.
 
 on:
   schedule:
@@ -78,10 +90,12 @@ jobs:
           persist-credentials: false
 
       # Design contract: every gh/flyctl call is wrapped so an API hiccup
-      # logs a ::warning:: and exits 0 (failing safe - never dispatch blind).
-      # The ONLY non-zero exit is a failed dispatch attempt itself, so a
-      # broken watchdog is visible in the Actions tab via the ::error::
-      # annotation. Dispatch is ALWAYS plain: deploy.yml's throttle anchor
+      # logs a ::warning:: and exits 0 (failing safe - never dispatch blind),
+      # with the verdict emitted as UNKNOWN so a blind tick is never read as
+      # "no failures". The non-zero exits are the two real escalation states -
+      # the 3-consecutive-failure cap and a failed re-dispatch - and each one
+      # is visible in the Actions tab AND emailed (FAR-2139). Dispatch is
+      # ALWAYS plain: deploy.yml's throttle anchor
       # only counts runs whose "Deploy to app.modulo.run" job SUCCEEDED, so a
       # FAILED deploy never advances the throttle window and a plain dispatch
       # re-runs full pre-deploy CI and deploys once CI passes - the throttle
@@ -99,11 +113,98 @@ jobs:
           DEPLOY_WORKFLOW="deploy.yml"
           PROD_APP="app-modulo"
           PROD_URL="https://app.modulo.run"
+          # The watchdog's own escalation floor (FAR-910/FAR-954): it stops
+          # re-dispatching after this many consecutive failed deploys. It is
+          # deliberately HIGHER than the staleness check's 2-run threshold, so
+          # a single flaky deploy never alerts; only an exhausted self-heal does.
+          CONSECUTIVE_FAILURE_CAP=3
+          # Shared staleness grace, used only for the figures block of the
+          # transition email (the staleness check owns the age measurement).
+          GRACE_HOURS="${{ vars.STALENESS_GRACE_HOURS || 6 }}"
+
+          # ---- 0. The verdict the escalation legs read (FAR-2139) ----
+          # deploy-watchdog escalates through ONE structured verdict instead of
+          # a step's failure colour: the email edge, the Linear ticket leg and
+          # the run's red/green state all read `healthy`. The ticket leg used
+          # to hang off `failure()`, which could not distinguish "deploy.yml is
+          # broken" from "a different step broke" and could not express
+          # UNKNOWN at all.
+          #
+          #   true  -> the watchdog is NOT escalating: production is in sync,
+          #            a deploy is in flight, or this tick re-dispatched one.
+          #            These carry a recovery_detail when "production is
+          #            current" is not yet true, so a recovery email never
+          #            overstates it -- and a recovery arriving from a healthy
+          #            tick (the normal post-incident path: cap hit -> human
+          #            fixes deploy.yml -> deploy in flight -> in sync) is not
+          #            swallowed by the in-flight tick in between.
+          #   false -> self-heal is exhausted (the 3-failure cap) or the
+          #            re-dispatch itself failed
+          #   empty -> UNKNOWN: this tick could not decide (unreadable API,
+          #            unresolvable prod SHA, diverged main). UNKNOWN must
+          #            never read as "no failures" and never clears an alert
+          #            (see deploy-health-notify.sh).
+          #
+          # The verdict is the state vector the next tick reads back: the
+          # "Fail the run when the deploy watchdog is unhealthy" step FAILS on
+          # `false` and is SKIPPED otherwise, which is what makes the email
+          # transition-based with no state store.
+          VERDICT_DIR="/tmp/deploy-health"
+          rm -rf "$VERDICT_DIR"
+          mkdir -p "$VERDICT_DIR"
+          VERDICT_JSON="$VERDICT_DIR/verdict.json"
+          MAIN_SHORT=""
+          PROD_SHA=""
+          FAILED_STREAK=0
+          RUNS_CONSIDERED=0
+
+          # emit_verdict <healthy> <summary> <notes> [condition] [recovery_detail]
+          emit_verdict() {
+            local healthy="$1" summary="$2" notes="$3" condition="${4:-}" recovery_detail="${5:-}"
+            jq -n \
+              --arg h "$healthy" \
+              --arg summary "$summary" \
+              --arg notes "$notes" \
+              --arg recovery_detail "$recovery_detail" \
+              --arg main "$MAIN_SHORT" \
+              --arg prod "$PROD_SHA" \
+              --arg cf "$FAILED_STREAK" \
+              --arg cap "$CONSECUTIVE_FAILURE_CAP" \
+              --arg rc "$RUNS_CONSIDERED" \
+              --arg grace "$GRACE_HOURS" \
+              '{
+                healthy: (if $h == "" then null else ($h == "true") end),
+                stale: false,
+                consecutive_failures: ($cf | tonumber),
+                failure_threshold: ($cap | tonumber),
+                age_hours: null,
+                grace_hours: ($grace | tonumber),
+                main_sha: (if $main == "" then "unknown" else $main end),
+                prod_sha: (if $prod == "" then "unknown" else $prod end),
+                prod_build_ts: "unknown",
+                runs_considered: ($rc | tonumber),
+                last_failed: {},
+                summary: $summary,
+                notes: (if $notes == "" then [] else [$notes] end),
+                recovery_detail: $recovery_detail
+              }' > "$VERDICT_JSON"
+            {
+              echo "healthy=$healthy"
+              echo "verdict_json=$VERDICT_JSON"
+              echo "summary=$summary"
+              echo "condition=$condition"
+              echo "prod_sha=$PROD_SHA"
+              echo "main_sha=$MAIN_SHORT"
+              echo "consecutive_failures=$FAILED_STREAK"
+              echo "failure_threshold=$CONSECUTIVE_FAILURE_CAP"
+            } >> "$GITHUB_OUTPUT"
+          }
 
           # ---- 1. Deploy-run state: is a deploy already trying? ----
           RUNS_JSON="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --branch main --limit 10 --json status,conclusion 2>/dev/null)" || RUNS_JSON=""
           if [ -z "$RUNS_JSON" ]; then
-            echo "::warning::Deploy-staleness watchdog: could not list deploy.yml runs (gh API error) - failing safe, no dispatch. Next tick retries."
+            echo "::warning::Deploy-staleness watchdog: could not list deploy.yml runs (gh API error) - failing safe, no dispatch. Next tick retries. Verdict is UNKNOWN, never 'no failures'."
+            emit_verdict "" "" "the watchdog could not list deploy.yml runs, so it cannot tell whether deploys are failing"
             exit 0
           fi
 
@@ -117,6 +218,13 @@ jobs:
           ')" || ACTIVE_COUNT="0"
           if [ "$ACTIVE_COUNT" != "0" ]; then
             echo "Deploy run(s) in progress/queued ($ACTIVE_COUNT) - nothing to do."
+            # Not escalating: a deploy is already trying. This MUST be recorded
+            # as healthy rather than UNKNOWN, otherwise the post-incident
+            # recovery path (cap -> human fix -> deploy in flight -> in sync)
+            # loses the recovery email to the in-flight tick in between.
+            emit_verdict "true" "the deploy watchdog is not escalating (deploy in flight)" \
+              "a deploy run is in progress/queued, so this tick did not compare production against origin/main" "" \
+              "A deploy run is in progress, so the pipeline is expected to converge on its own; the deploy watchdog is not escalating and no action is needed."
             exit 0
           fi
 
@@ -127,15 +235,16 @@ jobs:
           # compare prod against MAIN, not the branch tip).
           MAIN_SHA="$(git rev-parse HEAD 2>/dev/null)" || MAIN_SHA=""
           if [ -z "$MAIN_SHA" ]; then
-            echo "::warning::Deploy-staleness watchdog: could not resolve main HEAD sha - failing safe, no dispatch. Next tick retries."
+            echo "::warning::Deploy-staleness watchdog: could not resolve main HEAD sha - failing safe, no dispatch. Next tick retries. Verdict is UNKNOWN."
+            emit_verdict "" "" "the watchdog could not resolve origin/main HEAD"
             exit 0
           fi
           MAIN_SHORT="${MAIN_SHA:0:12}"
-          echo "main_sha=${MAIN_SHORT}" >> "$GITHUB_OUTPUT"
 
           # ---- 3. Prod SHA: fly image tag -> complete release -> deployment endpoint ----
           if ! bash .github/scripts/install-flyctl.sh; then
-            echo "::warning::Deploy-staleness watchdog: flyctl install failed - failing safe, no dispatch. Next tick retries."
+            echo "::warning::Deploy-staleness watchdog: flyctl install failed - failing safe, no dispatch. Next tick retries. Verdict is UNKNOWN."
+            emit_verdict "" "" "the watchdog could not install flyctl, so it could not read production's version"
             exit 0
           fi
           export FLYCTL_INSTALL="/home/runner/.fly"
@@ -253,7 +362,8 @@ jobs:
           PROD_SHA=""
           SHA_SOURCE=""
           if [ "$SHA_COUNT" -gt 1 ]; then
-            echo "::warning::Deploy-staleness watchdog: multiple distinct prod SHAs ($PROD_SHAS) - unexpected after disambiguation - failing safe, no dispatch. Next tick retries."
+            echo "::warning::Deploy-staleness watchdog: multiple distinct prod SHAs ($PROD_SHAS) - unexpected after disambiguation - failing safe, no dispatch. Next tick retries. Verdict is UNKNOWN."
+            emit_verdict "" "" "the watchdog found multiple distinct production SHAs and could not decide"
             exit 0
           elif [ "$SHA_COUNT" -eq 1 ]; then
             PROD_SHA="$PROD_SHAS"
@@ -271,7 +381,8 @@ jobs:
               echo "::warning::Deploy-staleness watchdog: no prod SHA from $PROD_APP fly image tags (started-app machines AND latest-complete-release both empty) - using the LAST-RESORT app-level deployment endpoint ($PROD_URL/api/v1/deployment) as the prod SHA source. The primary fly-tag path may have drifted - check deploy.yml's IMAGE_LABEL convention."
               SHA_SOURCE="deployment endpoint (last-resort)"
             else
-              echo "::warning::Deploy-staleness watchdog: could not extract a prod SHA from any source (fly status machines, latest complete release, $PROD_URL/api/v1/deployment) - failing safe, no dispatch. Next tick retries."
+              echo "::warning::Deploy-staleness watchdog: could not extract a prod SHA from any source (fly status machines, latest complete release, $PROD_URL/api/v1/deployment) - failing safe, no dispatch. Next tick retries. Verdict is UNKNOWN."
+              emit_verdict "" "" "the watchdog could not determine which build production serves"
               exit 0
             fi
           fi
@@ -279,6 +390,9 @@ jobs:
           # ---- 4. In sync, or is main genuinely ahead? ----
           if [ "$PROD_SHA" = "$MAIN_SHORT" ]; then
             echo "prod=$PROD_SHA main=$MAIN_SHORT - in sync. Nothing to do."
+            # The ONE healthy state: production serves main HEAD, so a
+            # recovery email (previous run escalated) can truthfully say so.
+            emit_verdict "true" "" ""
             exit 0
           fi
           # compare(base=PROD, head=MAIN): status "ahead" = prod is behind main
@@ -294,18 +408,23 @@ jobs:
               ;;
             "identical")
               echo "prod=$PROD_SHA main=$MAIN_SHORT - in sync (compare). Nothing to do."
+              emit_verdict "true" "" ""
               exit 0
               ;;
             "behind")
               echo "prod=$PROD_SHA is AHEAD of main=$MAIN_SHORT - not stale; nothing to do."
+              # Not a recovery: production is not serving main HEAD.
+              emit_verdict "" "" "production is ahead of origin/main (main rewritten?), so the watchdog did not evaluate deploy staleness"
               exit 0
               ;;
             "diverged")
               echo "::warning::Deploy-staleness watchdog: prod=$PROD_SHA has DIVERGED from main=$MAIN_SHORT (main rewritten?) - ambiguous, failing safe, no dispatch. Human review recommended."
+              emit_verdict "" "" "production has diverged from origin/main, so the watchdog could not decide"
               exit 0
               ;;
             *)
               echo "::warning::Deploy-staleness watchdog: compare API failed or prod sha $PROD_SHA unresolvable on main (status: '${CMP_STATUS:-<empty>}') - failing safe, no dispatch. Next tick retries."
+              emit_verdict "" "" "the compare API failed, so the watchdog could not decide deploy staleness"
               exit 0
               ;;
           esac
@@ -328,7 +447,7 @@ jobs:
           # would cap the re-dispatch after just 3 throttle events, even though
           # no deploy was attempted. Filter them out of the consecutive-failure
           # check: only runs where the deploy job actually ran and failed count.
-          RECENT="$(PAYLOAD="$RUNS_JSON" python3 - <<'PYEOF'
+          RECENT_JSON="$(PAYLOAD="$RUNS_JSON" python3 - <<'PYEOF'
           import json, os
           try:
               runs = json.loads(os.environ["PAYLOAD"])
@@ -360,55 +479,130 @@ jobs:
                   # skipped, cancelled — not a real attempt, skip
                   pass
           all_failed = len(conclusions) == 3 and all(c != "success" for c in conclusions)
-          print("all-failed" if all_failed else "ok")
+          # The leading failure streak over COMPLETED runs (newest first), for
+          # the shared email renderer's figures. Bounded by the same window.
+          streak = 0
+          for r in runs:
+              if r.get("status") != "completed":
+                  continue
+              if (r.get("conclusion") or "") == "failure":
+                  streak += 1
+              else:
+                  break
+          print(json.dumps({
+              "all_failed": all_failed,
+              "failed_streak": streak,
+              "runs_considered": len([r for r in runs if r.get("status") == "completed"]),
+          }))
           PYEOF
-          )" || RECENT="ok"
-          if [ "$RECENT" != "ok" ]; then
+          )" || RECENT_JSON=""
+          if [ -n "$RECENT_JSON" ]; then
+            ALL_FAILED="$(printf '%s' "$RECENT_JSON" | jq -r '.all_failed')"
+            FAILED_STREAK="$(printf '%s' "$RECENT_JSON" | jq -r '.failed_streak')"
+            RUNS_CONSIDERED="$(printf '%s' "$RECENT_JSON" | jq -r '.runs_considered')"
+          else
+            # Cannot evaluate the streak: keep the heal attempt (never stop
+            # dispatching because a local computation failed) but report the
+            # verdict as UNKNOWN rather than "no failures".
+            ALL_FAILED="false"
+            FAILED_STREAK="0"
+            RUNS_CONSIDERED="0"
+            echo "::warning::Deploy-staleness watchdog: could not evaluate the deploy failure streak locally - attempting the re-dispatch anyway, but the verdict is UNKNOWN (never 'no failures')."
+            RECENT_UNKNOWN="true"
+          fi
+
+          echo "sha_source=${SHA_SOURCE}" >> "$GITHUB_OUTPUT"
+
+          if [ "$ALL_FAILED" = "true" ]; then
+            # The escalation floor: three consecutive deploys actually ran and
+            # failed. This is the watchdog's UNHEALTHY state - its self-heal is
+            # exhausted - and it is what the email edge and the ticket leg key
+            # on (never `failure()` of this step).
             echo "::error::deploy-watchdog: 3 consecutive failed deploys; not re-dispatching - investigate deploy.yml failures; deploy-staleness-check.yml escalates staleness independently"
-            {
-              echo "consecutive_failures=true"
-              echo "prod_sha=${PROD_SHA}"
-              echo "main_sha=${MAIN_SHORT}"
-            } >> "$GITHUB_OUTPUT"
+            emit_verdict "false" "3 consecutive failed deploys (self-heal exhausted)" "" "cap"
             exit 1
           fi
 
           echo "Prod is stale (prod=$PROD_SHA main=$MAIN_SHORT, prod sha source: $SHA_SOURCE) - re-dispatching deploy.yml (plain dispatch; the deploy throttle is authoritative)."
-          echo "prod_sha=${PROD_SHA}" >> "$GITHUB_OUTPUT"
-          echo "sha_source=${SHA_SOURCE}" >> "$GITHUB_OUTPUT"
           if ! gh workflow run "$DEPLOY_WORKFLOW" --repo "$REPO" --ref main; then
             echo "::error::Deploy-staleness watchdog: prod is STALE (prod=$PROD_SHA main=$MAIN_SHORT) and the plain re-dispatch of deploy.yml FAILED. Next tick retries; if it persists, dispatch manually: gh workflow run \"Deploy: Staging + Prod\" --ref main"
-            echo "dispatch_failed=true" >> "$GITHUB_OUTPUT"
+            # UNHEALTHY: production is stale and the self-heal mechanism itself
+            # is broken. No shared condition expresses this, so the measured
+            # detail travels in the verdict's notes (same email renderer).
+            emit_verdict "false" "watchdog could not re-dispatch deploy.yml" "the deploy watchdog could not re-dispatch deploy.yml while production served ${PROD_SHA} and origin/main was ${MAIN_SHORT}" "dispatch-failed"
             exit 1
           fi
           echo "Watchdog re-dispatched deploy.yml (prod=$PROD_SHA main=$MAIN_SHORT)."
+          if [ "${RECENT_UNKNOWN:-}" = "true" ]; then
+            emit_verdict "true" "the deploy watchdog re-dispatched deploy.yml" \
+              "production served ${PROD_SHA} and origin/main was ${MAIN_SHORT} when this tick re-dispatched deploy.yml; the failure streak could not be evaluated locally" "" \
+              "Production was behind origin/main and the watchdog re-dispatched deploy.yml, but it could not evaluate the deploy failure streak locally. It is not escalating; check the deploy run if production stays stale."
+          else
+            # Not escalating: the self-heal path worked. A later in-sync tick
+            # (or the staleness check's 6h grace) covers a deploy that fails
+            # after this dispatch, and the recovery email is accurate because
+            # it carries the measured detail rather than claiming prod is current.
+            emit_verdict "true" "the deploy watchdog re-dispatched deploy.yml" \
+              "production served ${PROD_SHA} and origin/main was ${MAIN_SHORT} when this tick re-dispatched deploy.yml" "" \
+              "Production was behind origin/main and the watchdog re-dispatched deploy.yml, so it is no longer escalating. No action is needed unless production stays stale."
+          fi
+
+      # FAR-2139: the human channel. During the 2026-10-23..25 outage this
+      # watchdog hit its cap ten times; every escalation was a red run plus a
+      # comment on a three-week-old Backlog ticket, and nobody was told. This
+      # step is shared verbatim with deploy-staleness-check.yml
+      # (.github/scripts/deploy-health-notify.sh) so the two cannot drift into
+      # two message formats: transition in (healthy -> unhealthy) and
+      # transition out (unhealthy -> healthy) are the only emails.
+      - name: Email the operator on a deploy-health transition
+        id: notify
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_HEALTHY: ${{ steps.watchdog.outputs.healthy }}
+          VERDICT_JSON: ${{ steps.watchdog.outputs.verdict_json }}
+          WORKFLOW_NAME: "Deploy: Staleness Watchdog"
+          VERDICT_STEP_NAME: "Fail the run when the deploy watchdog is unhealthy"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEPLOY_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/deploy.yml
+          ZOHO_SMTP_USER: ${{ secrets.ZOHO_SMTP_USER }}
+          ZOHO_SMTP_PASS: ${{ secrets.ZOHO_SMTP_PASS }}
+          ISSUE_NOTIFY_EMAIL: ${{ secrets.ISSUE_NOTIFY_EMAIL }}
+          ISSUE_NOTIFY_FROM: ${{ secrets.ISSUE_NOTIFY_FROM }}
+        run: bash .github/scripts/deploy-health-notify.sh
 
       - name: Create Linear ticket on watchdog escalation
-        if: failure()
+        # FAR-2139: gated on the REAL health condition, not on `failure()` of a
+        # step. `failure()` could not tell "deploy.yml is broken" from "the
+        # checkout broke", and it could never fire for an UNKNOWN verdict.
+        if: always() && steps.watchdog.outputs.healthy == 'false'
         shell: bash
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           if [ -z "$LINEAR_API_KEY" ]; then
-            echo "LINEAR_API_KEY not set - skipping ticket (workflow failure still alerts via GitHub)."
+            echo "LINEAR_API_KEY not set - skipping ticket (the operator was emailed on the transition; this run also shows red)."
             exit 0
           fi
           PROD_SHA="${{ steps.watchdog.outputs.prod_sha }}"
           MAIN_SHA="${{ steps.watchdog.outputs.main_sha }}"
+          CONDITION="${{ steps.watchdog.outputs.condition }}"
+          SUMMARY="${{ steps.watchdog.outputs.summary }}"
           CONSECUTIVE="${{ steps.watchdog.outputs.consecutive_failures }}"
-          DISPATCH_FAILED="${{ steps.watchdog.outputs.dispatch_failed }}"
           SHA_SOURCE="${{ steps.watchdog.outputs.sha_source }}"
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          if [ "$CONSECUTIVE" = "true" ]; then
+          if [ "$CONDITION" = "cap" ]; then
             TITLE="DEPLOY WATCHDOG GAVE UP: 3 consecutive failures (FAR-910)"
-            DESC="The deploy watchdog detected 3 consecutive failed deploys and stopped re-dispatching at ${TS}. Prod SHA: ${PROD_SHA:-unknown} Main HEAD: ${MAIN_SHA:-unknown} SHA source: ${SHA_SOURCE:-unknown}. deploy.yml itself is broken -- investigate the deploy workflow failures. The deploy-staleness-check.yml escalates staleness independently. This is FAR-910 -- deploy watchdog terminal case must escalate, not annotate."
-          elif [ "$DISPATCH_FAILED" = "true" ]; then
+            DESC="The deploy watchdog detected ${CONSECUTIVE:-3} consecutive failed deploys and stopped re-dispatching at ${TS}. Prod SHA: ${PROD_SHA:-unknown} Main HEAD: ${MAIN_SHA:-unknown} SHA source: ${SHA_SOURCE:-unknown}. deploy.yml itself is broken -- investigate the deploy workflow failures. The deploy-staleness-check.yml escalates staleness independently. This is FAR-910 -- deploy watchdog terminal case must escalate, not annotate. The operator was also emailed on the health transition (FAR-2139)."
+          elif [ "$CONDITION" = "dispatch-failed" ]; then
             TITLE="DEPLOY WATCHDOG DISPATCH FAILED (FAR-910)"
-            DESC="The deploy watchdog could not re-dispatch deploy.yml at ${TS}. Prod SHA: ${PROD_SHA:-unknown} Main HEAD: ${MAIN_SHA:-unknown}. The prod is stale and the watchdog dispatch mechanism failed. Check the GitHub Actions token scope and workflow_dispatch permissions. This is FAR-910."
+            DESC="The deploy watchdog could not re-dispatch deploy.yml at ${TS}. Prod SHA: ${PROD_SHA:-unknown} Main HEAD: ${MAIN_SHA:-unknown}. The prod is stale and the watchdog dispatch mechanism failed. Check the GitHub Actions token scope and workflow_dispatch permissions. This is FAR-910. The operator was also emailed on the health transition (FAR-2139)."
           else
-            TITLE="DEPLOY WATCHDOG FAILED (FAR-910)"
-            DESC="The deploy watchdog workflow failed at ${TS}. Check the GitHub Actions run for details. This is FAR-910."
+            TITLE="DEPLOY WATCHDOG UNHEALTHY (FAR-910)"
+            DESC="The deploy watchdog evaluated UNHEALTHY at ${TS}: ${SUMMARY:-an unnamed condition}. Prod SHA: ${PROD_SHA:-unknown} Main HEAD: ${MAIN_SHA:-unknown}. This is FAR-910 (deploy health must escalate, not annotate) and FAR-2139 (the operator is emailed on the transition)."
           fi
 
           # FAR-1407: dedupe KEY = the condition title itself. The three
@@ -509,3 +703,21 @@ jobs:
           else
             echo "::warning::Failed to create Linear ticket: $RESULT"
           fi
+
+      # FAR-2139: the durable state vector the NEXT tick reads back. It FAILS
+      # exactly when the evaluated health was unhealthy and is SKIPPED
+      # otherwise (healthy or UNKNOWN), which is what makes the email edge a
+      # transition rather than a per-tick shout with no state store. It runs
+      # LAST so the notify and ticket legs above always execute. This name is
+      # the VERDICT_STEP_NAME the notify step reads -- rename both together.
+      - name: Fail the run when the deploy watchdog is unhealthy
+        if: always() && steps.watchdog.outputs.healthy == 'false'
+        shell: bash
+        env:
+          SUMMARY: ${{ steps.watchdog.outputs.summary }}
+          PROD_SHA: ${{ steps.watchdog.outputs.prod_sha }}
+          MAIN_SHA: ${{ steps.watchdog.outputs.main_sha }}
+          CONSECUTIVE: ${{ steps.watchdog.outputs.consecutive_failures }}
+        run: |
+          echo "::error::Deploy health UNHEALTHY: ${SUMMARY:-deploy watchdog escalation} (prod ${PROD_SHA:-unknown}, origin/main ${MAIN_SHA:-unknown}, ${CONSECUTIVE:-unknown} consecutive failed deploys). The operator was emailed on the transition (FAR-2139)."
+          exit 1

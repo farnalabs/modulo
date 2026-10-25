@@ -778,6 +778,36 @@ jobs:
       - name: Run mobile nav specs (flash + usable)
         if: needs.changes.outputs.frontend == 'true'
         run: pnpm exec playwright test mobile-nav-flash mobile-nav-usable
+      # FAR-2017: the visual/token/layout slice runs on every frontend PR.
+      # These specs previously ran ONLY in the post-deploy staging @regression
+      # gate, so a token/CSS regression passed every PR check, landed on main
+      # and broke the deploy train (FAR-2016 json-viewer light-mode token
+      # probe; FAR-1913/FAR-2028 mobile-layout axe contrast). The whole suite is
+      # not affordable per PR (~313 tests, ~11 min against a deployed target,
+      # plus provisioning); this slice is ~19 tests / ~2 min locally.
+      #
+      # The selection is deliberately UNCONDITIONAL (not changed-path gated).
+      # A path filter can miss a spec whose subject changed without a matching
+      # path (a token defined in JS, a class rename in a .vue script block), and
+      # a selector that under-selects reads as coverage. `--check` turns that
+      # into a hard failure instead: a new @regression spec asserting rendered
+      # CSS/tokens/layout must be classified in SLICE or STAGING_ONLY (with a
+      # reason) or the PR fails.
+      #
+      # Serial (--workers=1): the slice shares one cold Vite dev server, and
+      # parallel workers competing with its on-demand compile produced
+      # full-element-timeout flakes in combined local runs.
+      - name: Check the e2e visual slice classification
+        if: needs.changes.outputs.frontend == 'true'
+        run: node scripts/e2e-visual-slice.mjs --check
+      - name: Run the visual/token e2e slice
+        if: needs.changes.outputs.frontend == 'true'
+        env:
+          E2E_TARGET: local
+        run: |
+          read -r -a FILES <<< "$(node scripts/e2e-visual-slice.mjs --list)"
+          echo "visual/token e2e slice: ${FILES[*]}"
+          pnpm exec playwright test "${FILES[@]}" --grep "@regression" --workers=1 --reporter=line
       - name: Run unit tests (vitest)
         if: needs.changes.outputs.frontend == 'true'
         # The suite includes src/__tests__/stylesheets-parse.spec.ts (FAR-1995),

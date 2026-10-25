@@ -20,13 +20,14 @@ let _instance: ErrorTracker | null = null
 let _activeConfig: ActiveConfig | null = null
 
 function getConfig(): ActiveConfig {
-  return _activeConfig ?? {
+  _activeConfig ??= {
     appName: 'modulo',
     environment: 'production',
     version: '',
     flushIntervalMs: 5000,
     batchSize: 10,
   }
+  return _activeConfig
 }
 
 export function createErrorTracker(config?: ErrorTrackerConfig): ErrorTracker {

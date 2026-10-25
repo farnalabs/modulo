@@ -271,7 +271,7 @@ def _record_trigger_failure(
     """Move a failed trigger entry to ``report['failed']`` (isolated per trigger)."""
     message = _failure_message(exc)
     displayed_name = entity.display_key() if entity else entry["name"]
-    _log.warning("apply trigger failed: %s: %s", displayed_name, message)
+    _log.exception("apply trigger failed: %s: %s", displayed_name, message)
     report[status].remove(entry)
     report["failed"].append({"kind": KIND_TRIGGER, "name": entry["name"], "error": message})
 
@@ -295,7 +295,7 @@ def apply_triggers(
     declared_pipelines = {name for name, _entity in entities[KIND_PIPELINE]}
     current_triggers = current_entities.get(KIND_TRIGGER) or {}
     for status in ("created", "updated"):
-        for entry in list(report[status]):
+        for entry in tuple(report[status]):
             if entry["kind"] != KIND_TRIGGER:
                 continue
             entity: TriggerEntity | None = None

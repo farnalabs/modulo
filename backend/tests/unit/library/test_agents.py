@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from jsonschema import Draft202012Validator
 
 from modulo.core.library.agents import __all__ as agent_exports
 from modulo.core.library.agents import definitions as agent_defs
+
+from .helpers import AGENTS, kebab
 
 REQUIRED_KEYS: set[str] = {
     "name",
@@ -52,12 +54,13 @@ _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _agent(name: str) -> dict[str, Any]:
-    return getattr(agent_defs, name)
+    return cast(dict[str, Any], getattr(agent_defs, name))
 
 
 def test_all_agents_exported() -> None:
-    """Every exported agent constant is a dict definition."""
-    assert len(agent_exports) == 24
+    """``__all__`` mirrors the agent definitions module exactly."""
+    assert AGENTS, "library catalog is empty"
+    assert set(agent_exports) == set(AGENTS), f"unexported: {set(AGENTS) - set(agent_exports)}"
     for name in agent_exports:
         assert isinstance(_agent(name), dict), name
 
@@ -81,8 +84,8 @@ def test_role_is_known(name: str) -> None:
 
 def test_agent_slugs_are_unique() -> None:
     """Name-derived slugs must be unique so library lookups stay unambiguous."""
-    slugs = [_agent(n)["name"].lower().replace(" ", "-") for n in agent_exports]
-    assert len(slugs) == len(set(slugs))
+    slugs = [kebab(_agent(n)["name"]) for n in agent_exports]
+    assert len(slugs) == len(set(slugs)), f"duplicate slugs: {sorted({s for s in slugs if slugs.count(s) > 1})}"
 
 
 @pytest.mark.parametrize("name", agent_exports, ids=lambda n: n)
@@ -95,22 +98,15 @@ def test_metadata_fields(name: str) -> None:
     assert "library" in agent["tags"]
 
 
+@pytest.mark.parametrize("schema_field", ["input_schema", "output_schema"])
 @pytest.mark.parametrize("name", agent_exports, ids=lambda n: n)
-def test_input_schema_is_valid_json_schema(name: str) -> None:
-    schema = _agent(name)["input_schema"]
+def test_schemas_are_valid_json_schema(name: str, schema_field: str) -> None:
+    """Both schemas are valid JSON Schemas whose required fields are declared."""
+    schema = _agent(name)[schema_field]
     Draft202012Validator.check_schema(schema)
-    assert schema["type"] == "object"
-    for field in schema.get("required", []):
-        assert field in schema["properties"], f"required {field!r} not in properties"
-
-
-@pytest.mark.parametrize("name", agent_exports, ids=lambda n: n)
-def test_output_schema_is_valid_json_schema(name: str) -> None:
-    schema = _agent(name)["output_schema"]
-    Draft202012Validator.check_schema(schema)
-    assert schema["type"] == "object"
-    for field in schema.get("required", []):
-        assert field in schema["properties"], f"required {field!r} not in properties"
+    assert schema["type"] == "object", f"{name}.{schema_field} is not an object schema"
+    undeclared = set(schema.get("required", [])) - set(schema["properties"])
+    assert not undeclared, f"{name}.{schema_field}: required {undeclared} not in properties"
 
 
 @pytest.mark.parametrize("name", agent_exports, ids=lambda n: n)
@@ -126,16 +122,3 @@ def test_prompt_placeholders_match_input_schema(name: str) -> None:
 def test_json_roundtrip(name: str) -> None:
     agent = _agent(name)
     assert json.loads(json.dumps(agent)) == agent
-
-
-def test_workflow_agent_refs_all_exist() -> None:
-    """Every agent referenced by a workflow step must be a defined primitive."""
-    from modulo.core.library.workflows import __all__ as workflow_exports
-    from modulo.core.library.workflows import definitions as workflow_defs
-
-    defined = {_agent(n)["name"].lower().replace(" ", "-") for n in agent_exports}
-    for name in workflow_exports:
-        for step in getattr(workflow_defs, name)["pipeline_steps"]:
-            agent = step.get("agent")
-            if agent is not None:
-                assert agent in defined, f"{name}: unknown agent ref {agent!r}"

@@ -107,6 +107,30 @@ function principalSubject(token: string | null | undefined): string | null {
   return typeof sub === "string" && sub.length > 0 ? sub : null;
 }
 
+function initialPrincipalSubject(): string | null {
+  try {
+    return principalSubject(getAccessToken());
+  } catch (err) {
+    console.warn("[plan] Could not read the access token", err);
+    return null;
+  }
+}
+
+async function fetchOrgFlagOverride(flagName: string): Promise<boolean | null> {
+  try {
+    const res = await api.GET(
+      "/api/v1/admin/feature-flags/{flag_name}/org-override",
+      { params: { path: { flag_name: flagName } } },
+    );
+    if (res.error) return null;
+    const data = res.data as { override: boolean | null } | undefined;
+    return data?.override ?? null;
+  } catch (err) {
+    console.warn("[plan] Failed to fetch org flag override", err);
+    return null;
+  }
+}
+
 /**
  * Synchronous read of the persisted flag map for `orgId` (FAR-1237). Runs at
  * store creation — before first paint — so flag-driven decisions (mobile nav
@@ -382,20 +406,6 @@ export const usePlanStore = defineStore("plan", () => {
   // was in flight across the switch can never be applied to the new session.
   let permissionsGeneration = 0;
 
-  /**
-   * The principal this store starts out belonging to. Best effort, like
-   * `currentOrgId`: a storage-blocked browser cannot read the token, which is
-   * simply the unknown bucket — never a reason to fail store creation.
-   */
-  function initialPrincipalSubject(): string | null {
-    try {
-      return principalSubject(getAccessToken());
-    } catch (err) {
-      console.warn("[plan] Could not read the access token", err);
-      return null;
-    }
-  }
-
   let permissionsPrincipalSub = initialPrincipalSubject();
 
   /**
@@ -492,21 +502,6 @@ export const usePlanStore = defineStore("plan", () => {
         "[plan] Permissions request failed - permission-gated nav items stay hidden",
         e,
       );
-    }
-  }
-
-  async function fetchOrgFlagOverride(flagName: string): Promise<boolean | null> {
-    try {
-      const res = await api.GET(
-        '/api/v1/admin/feature-flags/{flag_name}/org-override',
-        { params: { path: { flag_name: flagName } } },
-      );
-      if (res.error) return null;
-      const data = res.data as { override: boolean | null } | undefined;
-      return data?.override ?? null;
-    } catch (err) {
-      console.warn('[plan] Failed to fetch org flag override', err);
-      return null;
     }
   }
 

@@ -218,7 +218,7 @@ class TestResolvePlanContext:
     def _valid(tier: str = "team", features: list[str] | None = None) -> SimpleNamespace:
         return SimpleNamespace(
             valid=True,
-            license_data=SimpleNamespace(tier=tier, features=features or []),
+            license_data=SimpleNamespace(tier=tier, features=features or [], starts_at=None, org_id=None),
         )
 
     async def test_org_license_key_takes_priority(self, mock_from_db) -> None:

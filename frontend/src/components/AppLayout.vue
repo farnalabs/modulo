@@ -301,7 +301,7 @@ onMounted(() => {
 }
 .assistant-execution-banner {
   position: fixed;
-  top: 0; left: 0; right: 0;
+  inset: 0 0 auto;
   z-index: 41;
   display: flex;
   align-items: center;

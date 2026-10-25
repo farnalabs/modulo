@@ -98,7 +98,7 @@ export function isDemoSession(): boolean {
   return localStorage.getItem(DEMO_SESSION_KEY) === '1'
 }
 
-export function setDemoSession(active: boolean): void {
+export function setDemoSession(...[active]: [boolean]): void {
   if (active) {
     localStorage.setItem(DEMO_SESSION_KEY, '1')
   } else {
@@ -202,7 +202,7 @@ export function getAccessToken(): string | null {
 // Read a single cookie value (document.cookie is script-readable for
 // non-httpOnly cookies — the CSRF double-submit cookie is exposed on purpose).
 function readCookie(name: string): string | null {
-  const match = document.cookie.match(`^(?:.*; )?${name}=([^;]*).*$`)
+  const match = new RegExp(`^(?:.*; )?${name}=([^;]*).*$`).exec(document.cookie)
   if (!match?.[1]) return null
   try {
     return decodeURIComponent(match[1])

@@ -15,7 +15,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.connectors.shell import ShellConnector
+from modulo.connectors.shell import ShellConnector, _contains_unquoted_shell_syntax
 from modulo.core.runtime_provider import ProviderNotConfiguredError, WorkspaceSpec
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
@@ -378,6 +378,122 @@ async def test_run_command_allowed(provider: _FakeRuntimeProvider, provider_ref:
         )
     )
     assert result["exit_code"] == 0
+
+
+_SHELL_METACHARACTER_COMMANDS = [
+    pytest.param("ls -la; id", id="semicolon"),
+    pytest.param("ls -la & id", id="ampersand"),
+    pytest.param("ls -la && id", id="and-and"),
+    pytest.param("ls -la | id", id="pipe"),
+    pytest.param("ls -la || id", id="or-or"),
+    pytest.param("ls $(id)", id="command-substitution"),
+    pytest.param("ls `id`", id="backtick"),
+    pytest.param('ls "$(id)"', id="command-substitution-in-double-quotes"),
+    pytest.param('ls "`id`"', id="backtick-in-double-quotes"),
+    pytest.param("ls > /tmp/out", id="redirect-output"),
+    pytest.param("ls < /etc/passwd", id="redirect-input"),
+    pytest.param("ls -la\nid", id="newline"),
+]
+
+
+@pytest.mark.parametrize("command_str", _SHELL_METACHARACTER_COMMANDS)
+async def test_run_command_rejects_shell_metacharacters(
+    provider: _FakeRuntimeProvider, provider_ref: str, command_str: str
+) -> None:
+    """A metacharacter-bearing command is rejected before it reaches the provider.
+
+    The allowlist matches only the first argv token while the raw string is run
+    through ``sh -c``, so ``ls -la; id`` would otherwise execute ``id`` too.
+    """
+    c = ShellConnector(
+        runtime_provider=provider,
+        workspace_lease_id=uuid.uuid4(),
+        allowed_commands=["ls", "id"],
+    )
+
+    with pytest.raises(ConnectorPermissionError, match="shell metacharacters"):
+        await c.write(
+            ConnectorPayload(
+                resource="command",
+                data={"command": command_str, "provider_ref": provider_ref},
+            )
+        )
+
+    assert not provider.executed_commands
+
+
+@pytest.mark.parametrize("command_str", ["ls -la", "git status"])
+async def test_run_command_allows_plain_commands(
+    provider: _FakeRuntimeProvider, provider_ref: str, command_str: str
+) -> None:
+    """A simple allowlisted command without shell syntax still runs."""
+    c = ShellConnector(
+        runtime_provider=provider,
+        workspace_lease_id=uuid.uuid4(),
+        allowed_commands=["ls", "git"],
+    )
+
+    result = await c.write(
+        ConnectorPayload(
+            resource="command",
+            data={"command": command_str, "provider_ref": provider_ref},
+        )
+    )
+
+    assert result["exit_code"] == 0
+    assert len(provider.executed_commands) == 1
+
+
+@pytest.mark.parametrize(
+    "command_str",
+    [
+        'python -c "import sys; sys.exit(42)"',
+        "printf '%s' 'a;b'",
+        "ls '`id`'",
+        'ls "$HOME"',
+        'ls "\\$(id)"',
+        'ls "a\\"b"',
+        "ls \\;",
+    ],
+)
+async def test_run_command_allows_quoted_metacharacters(
+    provider: _FakeRuntimeProvider, provider_ref: str, command_str: str
+) -> None:
+    """A metacharacter made literal by quoting or escaping is not shell syntax."""
+    c = ShellConnector(
+        runtime_provider=provider,
+        workspace_lease_id=uuid.uuid4(),
+        allowed_commands=["python", "printf", "ls"],
+    )
+
+    result = await c.write(
+        ConnectorPayload(
+            resource="command",
+            data={"command": command_str, "provider_ref": provider_ref},
+        )
+    )
+
+    assert result["exit_code"] == 0
+
+
+@pytest.mark.parametrize(
+    ("command_str", "expected"),
+    [
+        pytest.param("ls -la", False, id="plain"),
+        pytest.param("ls 'unterminated", False, id="unterminated-single-quote"),
+        pytest.param('ls "unterminated', False, id="unterminated-double-quote"),
+        pytest.param("ls trailing\\", False, id="trailing-escape-unquoted"),
+        pytest.param('ls "trailing\\', False, id="trailing-escape-double-quoted"),
+        pytest.param("ls 'a;b' && id", True, id="operator-after-single-quoted-span"),
+        pytest.param('ls "a;b" && id', True, id="operator-after-double-quoted-span"),
+        pytest.param('ls "$HOME"', False, id="variable-in-double-quotes"),
+        pytest.param("ls )", True, id="closing-paren"),
+        pytest.param("ls }", False, id="brace-is-not-an-operator"),
+    ],
+)
+def test_contains_unquoted_shell_syntax(command_str: str, expected: bool) -> None:
+    """The scanner's termination and quote-span edge cases (S3776 decomposition)."""
+    assert _contains_unquoted_shell_syntax(command_str) is expected
 
 
 # ---------------------------------------------------------------------------

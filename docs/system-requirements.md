@@ -187,7 +187,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 | Redis | 8+ | **Yes** (production) | SAQ task queue, rate limiting, event broker |
 | Python | 3.12+ | Yes | Application runtime |
 | `uv` | 0.11.13 | Yes | Python package manager (exact pin in `backend/Dockerfile` and `deploy/docker/Dockerfile.all-in-one`) |
-| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.6` via `packageManager`), not npm |
+| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.7` via `packageManager`), not npm |
 | Docker | 24+ | For Docker Compose | Container runtime |
 
 ### Redis Requirement Table

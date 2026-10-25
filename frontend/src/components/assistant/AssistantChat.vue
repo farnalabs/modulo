@@ -531,7 +531,7 @@ function toggleToolExpand(id: string) {
 function formatToolDetails(tc: { tool_call_id: string; tool_name: string; success: boolean; result?: unknown; error?: string }): string {
   const lines: string[] = [`Tool: ${tc.tool_name}`, `ID: ${tc.tool_call_id}`, `Status: ${tc.success ? 'Completed' : 'Failed'}`, '']
   if (tc.result !== undefined) {
-    const resultStr = typeof tc.result === 'object' ? JSON.stringify(tc.result, null, 2) : String(tc.result)
+    const resultStr = typeof tc.result === 'object' ? JSON.stringify(tc.result, null, 2) : `${tc.result}`
     lines.push('Result:', resultStr)
   }
   if (tc.error) {
@@ -877,10 +877,7 @@ function renderMarkdown(text: string): string {
 
 .assistant-input-highlight {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   padding: 8px 12px;
   font-size: 0.875rem;
   line-height: 1.4;

@@ -114,3 +114,45 @@ def test_available_events_have_frontend_labels(section: str, component: str) -> 
     )
     blank = [event for event in AVAILABLE_EVENTS if not labels.get(event, "").strip()]
     assert not blank, f"{section}.{component} has blank labels for {blank}"
+
+
+# FAR-2138 — five events were declared constants with full render configs but
+# no ``dispatch_event`` call site, so they could never fire. Three were given a
+# real call site in the executor's shared terminalization tail (stalled /
+# budget_exceeded / eval_blocked); two had no product signal that could carry
+# them and were retired entirely (feedback_pending / system_announcement). The
+# disposition is pinned here so neither can silently drift back: a retired
+# event must stay absent from every surface an operator can see, and a wired
+# event must stay renderable.
+_WIRED_TERMINAL_EVENTS = ("run_stalled", "budget_exceeded", "eval_blocked")
+_RETIRED_EVENTS = ("feedback_pending", "system_announcement")
+
+
+@pytest.mark.parametrize("event_type", _WIRED_TERMINAL_EVENTS)
+def test_far2138_wired_event_is_renderable(event_type: str) -> None:
+    assert event_type in _EVENT_CONFIG
+    assert event_type in _TITLE_TEMPLATES
+    assert event_type in _BODY_TEMPLATES
+    assert event_type in _ACTION_URL_TEMPLATES
+
+
+@pytest.mark.parametrize("event_type", _RETIRED_EVENTS)
+def test_far2138_retired_event_is_absent_from_every_surface(event_type: str) -> None:
+    assert event_type not in _EVENT_CONFIG
+    assert event_type not in _TITLE_TEMPLATES
+    assert event_type not in _BODY_TEMPLATES
+    assert event_type not in _ACTION_URL_TEMPLATES
+    assert event_type not in AVAILABLE_EVENTS
+
+
+def test_far2138_wired_events_are_advertised_where_they_are_subscribable() -> None:
+    """``run_stalled`` and ``budget_exceeded`` are webhook-subscribable, so they
+    must remain in ``AVAILABLE_EVENTS`` now that a dispatch site exists.
+
+    ``eval_blocked`` is deliberately NOT subscribable (like its sibling
+    ``eval_regression``): the in-app render config is the surface it was
+    advertised on, and it is dispatched now.
+    """
+    assert "run_stalled" in AVAILABLE_EVENTS
+    assert "budget_exceeded" in AVAILABLE_EVENTS
+    assert "eval_blocked" not in AVAILABLE_EVENTS
