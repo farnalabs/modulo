@@ -255,33 +255,27 @@ def write_outputs(
             fh.write(f"retargeted_prs={retargeted_str}\n")
 
 
-def run(
-    argv: Sequence[str],
-    run_gh: GhRunner = _run_gh,
-    github_output: str | None = None,
-) -> int:
-    """Guard logic. Returns an exit code; all failure paths fail SAFE."""
-    branches_to_check, target_ref = parse_args(argv)
-
-    if not branches_to_check:
-        print("No branches to check.")
-        write_outputs(github_output, set(), [])
-        return 0
-
+def _guard(
+    branches_to_check: Sequence[str],
+    target_ref: str,
+    run_gh: GhRunner,
+    github_output: str | None,
+) -> None:
+    """Retarget every reachable child PR; protect any base we could not retarget."""
     try:
         open_prs = fetch_open_prs(run_gh)
     except (GhError, ValueError, json.JSONDecodeError, OSError) as exc:
         # FAIL SAFE: we could not verify which branches have child PRs, so we
         # protect EVERY slated branch -- the delete sweep skips them all. We
-        # deliberately exit 0: the delete step is gated on `if: success()`, and
-        # the post-merge CI/deploy dispatch must still run. Protection, not a
-        # failed step, is what prevents the silent closure.
+        # deliberately do not fail the step: the delete step is gated on
+        # `if: success()`, and the post-merge CI/deploy dispatch must still run.
+        # Protection, not a failed step, is what prevents the silent closure.
         print(
             "::error title=FAR-917 stacked-PR guard::could not query open PRs "
             f"({exc}) - protecting all {len(branches_to_check)} slated branch(es)"
         )
         write_outputs(github_output, set(branches_to_check), [])
-        return 0
+        return
 
     protected, retargeted = decide(branches_to_check, open_prs, target_ref, run_gh)
     write_outputs(github_output, protected, retargeted)
@@ -292,6 +286,28 @@ def run(
         print(f"Retargeted PRs: {' '.join(str(n) for n in retargeted)}")
     if not protected and not retargeted:
         print("\nNo stacked PRs found -- all branches safe to delete.")
+
+
+def run(
+    argv: Sequence[str],
+    run_gh: GhRunner = _run_gh,
+    github_output: str | None = None,
+) -> int:
+    """Guard logic. Returns 0 on every path: all failure paths fail SAFE.
+
+    The constant exit code is deliberate and part of the FAR-917 contract: the
+    delete step is gated on `if: success()`, so a non-zero exit here would skip
+    both the branch delete and the post-merge CI/deploy dispatch. Protection
+    (protecting every slated branch), not a failed step, is what prevents a
+    base branch being deleted and its child PR silently closed.
+    """
+    branches_to_check, target_ref = parse_args(argv)
+
+    if not branches_to_check:
+        print("No branches to check.")
+        write_outputs(github_output, set(), [])
+    else:
+        _guard(branches_to_check, target_ref, run_gh, github_output)
     return 0
 
 
