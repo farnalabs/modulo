@@ -217,9 +217,14 @@ def redact_exc(
             new = _rebuild_httpx_request_error(exc, message, secrets)
         else:
             new = _rebuild_generic_error(exc, message)
-    except (TypeError, ValueError, AttributeError) as rebuild_error:  # pragma: no cover - defensive fallback
+    except Exception:  # NOSONAR S112 - a rebuild failure of ANY type must still fail closed, not leak the credential
+        # Deliberately broad: ``_rebuild_generic_error`` calls an arbitrary
+        # vendor ``type(exc)(message)`` constructor, which can raise anything
+        # (e.g. ``KeyError`` from an exotic ``__init__``). Narrowing this to a
+        # fixed tuple lets such an exception propagate the ORIGINAL,
+        # credential-bearing message out of ``redact_exc``. Whatever the
+        # rebuild failure, it must be replaced with the sanitized fallback.
         new = CredentialRedactionError(message)
-        new.__cause__ = rebuild_error
     if chain_cause:
         new.__cause__ = exc.__cause__
     else:

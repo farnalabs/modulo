@@ -2340,3 +2340,19 @@ def asyncio_run(coro: Any) -> Any:
     import asyncio
 
     return asyncio.run(coro)
+
+
+def test_item_summary_falls_back_when_repr_raises_unexpected_exception() -> None:
+    """Fan-out outcome recording must never abort because an item's ``__repr__``
+    raised an unexpected type (e.g. ``KeyError``) -- it falls back to the
+    bounded ``<ClassName>`` summary instead."""
+
+    class ExplodingRepr:
+        def __repr__(self) -> str:
+            raise KeyError("no repr for you")
+
+    c = _make_connector(
+        {"base_url": "https://api.example.com", "path": "/items"},
+        {"auth_mode": "bearer", "token": "t"},
+    )
+    assert c._item_summary(ExplodingRepr()) == "<ExplodingRepr>"
