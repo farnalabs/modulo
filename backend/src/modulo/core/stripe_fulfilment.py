@@ -223,6 +223,71 @@ async def email_team_license(settings: Settings, to: str, license_key: str, expi
         return False
 
 
+async def _check_duplicate_event(settings: Settings, event_id: str) -> bool:
+    """Check if event was already claimed. Returns True if duplicate."""
+    if await _is_event_claimed(settings, event_id):
+        _log.info("stripe.fulfilment.duplicate_event event_id=%s", event_id)
+        return True
+    return False
+
+
+async def _generate_and_verify_license(
+    settings: Settings,
+    org_name: str,
+    term_months: int,
+    event_id: str,
+    renewal_mode: str = DEFAULT_RENEWAL_MODE,
+) -> tuple[str, str] | None:
+    """Generate license key and verify it. Returns (license_key, expires_at) or None on failure."""
+    try:
+        license_key = generate_team_license(
+            org_name,
+            term_months=term_months,
+            private_key_hex=settings.modulo_license_private_key or None,
+            renewal_mode=renewal_mode,
+        )
+    except ValueError:
+        _log.exception("stripe.fulfilment.license_generation_failed event_id=%s", event_id)
+        return None
+
+    validation = parse_and_verify(license_key)
+    if not validation.valid or validation.license_data is None:
+        _log.error(
+            "stripe.fulfilment.generated_license_failed_verification event_id=%s error=%s "
+            "reason=%s hint=%s — unverifiable key not emailed; event left unclaimed so Stripe's "
+            "retries re-attempt. The signing key (MODULO_LICENSE_PRIVATE_KEY) and the trust "
+            "anchor (MODULO_LICENSE_PUBLIC_KEY) must be the two halves of one Ed25519 keypair.",
+            event_id,
+            validation.error,
+            validation.reason,
+            validation.hint,
+        )
+        return None
+    return license_key, validation.license_data.expires_at
+
+
+async def _send_license_email(
+    settings: Settings, customer_email: str, license_key: str, expires_at: str, event_id: str
+) -> bool:
+    """Send license email. Returns True on success, False on failure."""
+    if not await email_team_license(settings, customer_email, license_key, expires_at):
+        _log.error(
+            "stripe.fulfilment.email_failed_event_not_claimed event_id=%s — "
+            "event left unclaimed so Stripe's retries will re-attempt",
+            event_id,
+        )
+        return False
+    return True
+
+
+async def _claim_event(settings: Settings, event_id: str) -> bool:
+    """Claim event ID after successful email. Returns True if newly claimed."""
+    if not await _claim_event_id(settings, event_id):
+        _log.info("stripe.fulfilment.duplicate_event event_id=%s", event_id)
+        return False
+    return True
+
+
 async def fulfil_team_purchase(
     settings: Settings,
     *,
@@ -250,52 +315,18 @@ async def fulfil_team_purchase(
     returns ``None`` without re-sending. Returns the generated license key, or
     ``None`` when the event was already fulfilled or generation/email failed.
     """
-    if await _is_event_claimed(settings, event_id):
-        _log.info("stripe.fulfilment.duplicate_event event_id=%s", event_id)
+    if await _check_duplicate_event(settings, event_id):
         return None
 
-    try:
-        license_key = generate_team_license(
-            org_name,
-            term_months=term_months,
-            private_key_hex=settings.modulo_license_private_key or None,
-            renewal_mode=renewal_mode,
-        )
-    except ValueError:
-        _log.exception("stripe.fulfilment.license_generation_failed event_id=%s", event_id)
+    license_data = await _generate_and_verify_license(settings, org_name, term_months, event_id, renewal_mode)
+    if license_data is None:
+        return None
+    license_key, expires_at = license_data
+
+    if send_key_email and not await _send_license_email(settings, customer_email, license_key, expires_at, event_id):
         return None
 
-    validation = parse_and_verify(license_key)
-    if not validation.valid or validation.license_data is None:
-        # A key we just signed that does not verify against our OWN configured
-        # public key is unusable — the customer would receive a licence the
-        # product rejects on upload. Fail CLOSED: never email it and never claim
-        # the event, so a corrected deployment plus Stripe's retry can still
-        # fulfil the purchase. Mirrors ``admin_license.issue_license``, which
-        # answers 500 for the same condition instead of returning a bad key.
-        _log.error(
-            "stripe.fulfilment.generated_license_failed_verification event_id=%s error=%s "
-            "reason=%s hint=%s — unverifiable key not emailed; event left unclaimed so Stripe's "
-            "retries re-attempt. The signing key (MODULO_LICENSE_PRIVATE_KEY) and the trust "
-            "anchor (MODULO_LICENSE_PUBLIC_KEY) must be the two halves of one Ed25519 keypair.",
-            event_id,
-            validation.error,
-            validation.reason,
-            validation.hint,
-        )
-        return None
-    expires_at = validation.license_data.expires_at
-
-    if send_key_email and not await email_team_license(settings, customer_email, license_key, expires_at):
-        _log.error(
-            "stripe.fulfilment.email_failed_event_not_claimed event_id=%s — "
-            "event left unclaimed so Stripe's retries will re-attempt",
-            event_id,
-        )
-        return None
-
-    if not await _claim_event_id(settings, event_id):
-        _log.info("stripe.fulfilment.duplicate_event event_id=%s", event_id)
+    if not await _claim_event(settings, event_id):
         return None
 
     _log.info("stripe.fulfilment.license_generated event_id=%s org_name=%s", event_id, org_name)

@@ -19,6 +19,7 @@ No DB is required — the session/backend are stubbed. Uses a real
 ``StubModelBackend`` (LangChain) wrapped in a tiny dict-to-BaseMessage adapter.
 """
 
+import asyncio
 import json
 import uuid
 from typing import Any
@@ -510,6 +511,48 @@ async def test_lm_error_is_fail_mode():
         backend=_Raises(),
     )
     assert outcome.verdict == CorrectionVerdict.LM_ERROR
+    assert outcome.needs_human_review is True
+
+
+@pytest.mark.asyncio
+async def test_cancelled_backend_propagates_cancellation():
+    """A cancelled backend invocation must propagate ``CancelledError`` unchanged
+    (task cancellation is not a correction failure and must not be swallowed
+    into an ``LM_ERROR`` verdict)."""
+
+    class _Cancels:
+        async def invoke(self, messages: list[Any], **kwargs: Any) -> Any:
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_single_node_correction(
+            correction=_correction(),
+            guardrail=_guardrail(),
+            node_input={"body": "secret: hunter2"},
+            backend=_Cancels(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_previously_seen_input_converges_before_backend_invocation():
+    """A redacted input whose fingerprint matches a recorded prior state
+    escalates to HITL immediately, without spending an LM call."""
+
+    class _MustNotRun:
+        async def invoke(self, messages: list[Any], **kwargs: Any) -> Any:
+            raise AssertionError("backend must not run when the input state has converged")
+
+    correction = _correction()
+    redacted = redact_payload({"body": "secret: hunter2"}, correction.input_redaction_patterns)
+    prior = [{"input_fingerprint": fingerprint_state(redacted)}]
+    outcome = await run_single_node_correction(
+        correction=correction,
+        guardrail=_guardrail(),
+        node_input={"body": "secret: hunter2"},
+        backend=_MustNotRun(),
+        prior_states=prior,
+    )
+    assert outcome.verdict == CorrectionVerdict.CONVERGED
     assert outcome.needs_human_review is True
 
 

@@ -353,6 +353,27 @@ class CorrectionOutcome:
     state: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class _CorrectionInput:
+    """Input parameters for a single-node correction run.
+
+    Grouped to reduce parameter count and cognitive complexity of the main
+    correction function.
+    """
+
+    correction: CorrectionDefinition
+    guardrail: EvalDefinition
+    node_input: dict[str, Any]
+    backend: CorrectionBackend
+    engine: EvalEngine | None = None
+    prior_states: Sequence[Mapping[str, Any]] | None = None
+    idempotency_key: str | None = None
+    attempt: int = 1
+    revalidation_config: dict[str, Any] | None = None
+    judge_callable: ModelJudgeCallable | None = None
+    bound_guardrails: Sequence[EvalDefinition] | None = None
+
+
 def fingerprint_state(payload: Mapping[str, Any]) -> str:
     """Canonical SHA-256 fingerprint of a dict (sorted keys, compact JSON).
 
@@ -1041,6 +1062,124 @@ def _resolved_outcome(
     )
 
 
+async def _validate_and_build_context(input_params: _CorrectionInput) -> _CorrectionRunContext:
+    """Validate correction binding and build the run context."""
+    input_params.correction.validate_guardrail_binding(input_params.guardrail)
+    return _build_run_context(
+        correction=input_params.correction,
+        guardrail=input_params.guardrail,
+        node_input=input_params.node_input,
+        backend=input_params.backend,
+        engine=input_params.engine,
+        prior_states=input_params.prior_states,
+        idempotency_key=input_params.idempotency_key,
+        attempt=input_params.attempt,
+        revalidation_config=input_params.revalidation_config,
+        judge_callable=input_params.judge_callable,
+        bound_guardrails=input_params.bound_guardrails,
+    )
+
+
+async def _execute_correction_backend(ctx: _CorrectionRunContext) -> str:
+    """Invoke the correction backend and return raw output."""
+    try:
+        return await _invoke_correction_backend(
+            ctx.backend,
+            correction=ctx.correction,
+            redacted_input=ctx.redacted_input,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.exception("guardrails.correction.backend_error correction_id=%s", ctx.correction.id)
+        raise _CorrectionBackendError(type(exc).__name__) from exc
+
+
+class _CorrectionBackendError(Exception):
+    """Internal error for backend failures during correction."""
+
+    def __init__(self, exc_type_name: str) -> None:
+        super().__init__(f"correction backend error: {exc_type_name}")
+        self.exc_type_name = exc_type_name
+
+
+async def _parse_and_validate_output(ctx: _CorrectionRunContext, raw_output: str) -> dict[str, Any]:
+    """Parse and validate the backend output against the schema."""
+    try:
+        return _parse_structured_output(raw_output, ctx.correction.output_schema)
+    except CorrectionConfigError as exc:
+        _log.warning("guardrails.correction.output_invalid correction_id=%s: %s", ctx.correction.id, exc)
+        raise _CorrectionOutputInvalidError(str(exc)) from exc
+
+
+class _CorrectionOutputInvalidError(Exception):
+    """Internal error for invalid correction output."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+async def _check_input_convergence(ctx: _CorrectionRunContext) -> CorrectionOutcome | None:
+    """Check convergence on input state. Returns escalated outcome if converged, None otherwise."""
+    converged = _convergence_check(ctx, produced_output=None, current_violation_metric=ctx.input_violation_metric)
+    if converged is not None:
+        return _escalated_outcome(
+            ctx,
+            converged,
+            detail=(
+                "convergence check: previously-seen or strictly-worse input state, "
+                "escalating to HITL (no oscillation burn / no budget burn)"
+            ),
+        )
+    return None
+
+
+async def _process_produced_output(
+    ctx: _CorrectionRunContext, produced: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Redact produced output and compute violation metric."""
+    produced_redacted = redact_payload(produced, ctx.correction.input_redaction_patterns)
+    output_metric = compute_violation_metric(produced_redacted, ctx.bound_guardrails)
+    return produced_redacted, output_metric
+
+
+async def _check_output_convergence(
+    ctx: _CorrectionRunContext,
+    produced_redacted: dict[str, Any],
+    output_metric: dict[str, Any],
+) -> CorrectionOutcome | None:
+    """Check convergence on produced output. Returns escalated outcome if converged, None otherwise."""
+    repeated = _convergence_check(ctx, produced_output=produced_redacted, current_violation_metric=output_metric)
+    if repeated is not None:
+        return _escalated_outcome(
+            ctx,
+            repeated,
+            produced_output=produced_redacted,
+            output_violation_metric=output_metric,
+            detail=(
+                "convergence check: previously-seen or strictly-worse produced output, "
+                "escalating to HITL (no oscillation burn / no budget burn)"
+            ),
+        )
+    return None
+
+
+async def _run_revalidation(
+    ctx: _CorrectionRunContext,
+    produced_redacted: dict[str, Any],
+) -> EvalResult:
+    """Run the different-family revalidation."""
+    return await _run_different_family_revalidation(
+        ctx.engine,
+        produced_redacted,
+        family=ctx.resolved_family,
+        correction=ctx.correction,
+        revalidation_config=ctx.revalidation_config,
+        judge_callable=ctx.judge_callable,
+    )
+
+
 async def run_single_node_correction(
     *,
     correction: CorrectionDefinition,
@@ -1083,8 +1222,7 @@ async def run_single_node_correction(
     budget. The caller owns persistence of ``outcome.state`` (idempotency key +
     prior fingerprints + violation metrics).
     """
-    correction.validate_guardrail_binding(guardrail)
-    ctx = _build_run_context(
+    input_params = _CorrectionInput(
         correction=correction,
         guardrail=guardrail,
         node_input=node_input,
@@ -1098,75 +1236,34 @@ async def run_single_node_correction(
         bound_guardrails=bound_guardrails,
     )
 
-    converged = _convergence_check(ctx, produced_output=None, current_violation_metric=ctx.input_violation_metric)
-    if converged is not None:
-        return _escalated_outcome(
-            ctx,
-            converged,
-            detail=(
-                "convergence check: previously-seen or strictly-worse input state, "
-                "escalating to HITL (no oscillation burn / no budget burn)"
-            ),
-        )
+    ctx = await _validate_and_build_context(input_params)
+
+    # Step 3: Convergence check on input
+    escalated = await _check_input_convergence(ctx)
+    if escalated is not None:
+        return escalated
+
+    # Step 4: Run backend and parse output
+    try:
+        raw_output = await _execute_correction_backend(ctx)
+    except _CorrectionBackendError as exc:
+        return _escalated_outcome(ctx, CorrectionVerdict.LM_ERROR, detail=str(exc))
 
     try:
-        raw_output = await _invoke_correction_backend(
-            ctx.backend,
-            correction=ctx.correction,
-            redacted_input=ctx.redacted_input,
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        _log.exception("guardrails.correction.backend_error correction_id=%s", ctx.correction.id)
-        return _escalated_outcome(
-            ctx,
-            CorrectionVerdict.LM_ERROR,
-            detail=f"correction backend error: {type(exc).__name__}",
-        )
+        produced = await _parse_and_validate_output(ctx, raw_output)
+    except _CorrectionOutputInvalidError as exc:
+        return _escalated_outcome(ctx, CorrectionVerdict.STILL_VIOLATING, detail=exc.detail)
 
-    try:
-        produced = _parse_structured_output(raw_output, ctx.correction.output_schema)
-    except CorrectionConfigError as exc:
-        _log.warning("guardrails.correction.output_invalid correction_id=%s: %s", ctx.correction.id, exc)
-        return _escalated_outcome(
-            ctx,
-            CorrectionVerdict.STILL_VIOLATING,
-            detail=str(exc),
-        )
+    # Redact produced output and compute metric
+    produced_redacted, output_metric = await _process_produced_output(ctx, produced)
 
-    # Redact the produced output BEFORE persistence (never persisted raw).
-    produced_redacted = redact_payload(produced, ctx.correction.input_redaction_patterns)
-    output_metric = compute_violation_metric(produced_redacted, ctx.bound_guardrails)
+    # Step 5: Convergence check on output
+    escalated = await _check_output_convergence(ctx, produced_redacted, output_metric)
+    if escalated is not None:
+        return escalated
 
-    # Convergence on the PRODUCED OUTPUT: a retry that reproduces a previously
-    # seen output is oscillation -> HITL immediately (no oscillation burn),
-    # even when the corrected input is unchanged across retries (the retry loop
-    # strips input fingerprints from prior states so the same input does not
-    # spuriously converge on its own repeat). A produced output whose violation
-    # severity is STRICTLY WORSE than every recorded prior state -> HITL
-    # immediately (no budget burn).
-    repeated = _convergence_check(ctx, produced_output=produced_redacted, current_violation_metric=output_metric)
-    if repeated is not None:
-        return _escalated_outcome(
-            ctx,
-            repeated,
-            produced_output=produced_redacted,
-            output_violation_metric=output_metric,
-            detail=(
-                "convergence check: previously-seen or strictly-worse produced output, "
-                "escalating to HITL (no oscillation burn / no budget burn)"
-            ),
-        )
-
-    revalidation = await _run_different_family_revalidation(
-        ctx.engine,
-        produced_redacted,
-        family=ctx.resolved_family,
-        correction=ctx.correction,
-        revalidation_config=ctx.revalidation_config,
-        judge_callable=ctx.judge_callable,
-    )
+    # Step 6: Different-family revalidation
+    revalidation = await _run_revalidation(ctx, produced_redacted)
 
     if not revalidation.passed:
         return _escalated_outcome(
