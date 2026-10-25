@@ -452,7 +452,11 @@ describe('MyProfileView HITL email alerts', () => {
     })
 
     expect(wrapper.text()).toContain('Failed to load preferences')
-    expect(wrapper.findAll('[data-testid="error-alert-retry"]').length).toBe(1)
+    const preferenceError = wrapper.find('[data-testid="my-profile-hitl-email-section"] > div.my-profile-hitl-email-load-error')
+    expect(preferenceError.attributes('role')).toBe('alert')
+    expect(preferenceError.attributes('aria-live')).toBe('assertive')
+    expect(preferenceError.findAll('[data-testid="error-alert-retry"]').length).toBe(1)
+    expect(preferenceError.find('[data-testid="my-profile-hitl-email-retry"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="my-profile-hitl-email-save"]').exists()).toBe(false)
   })
 
@@ -477,7 +481,10 @@ describe('MyProfileView HITL email alerts', () => {
 
     expect(wrapper.text()).toContain('Failed to load pipelines')
     expect(wrapper.text()).not.toContain('No pipelines available.')
-    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+    const pipelinesError = wrapper.find('.my-profile-hitl-email-pipelines-error')
+    expect(pipelinesError.attributes('role')).toBe('alert')
+    expect(pipelinesError.attributes('aria-live')).toBe('assertive')
+    await pipelinesError.find('[data-testid="error-alert-retry"]').trigger('click')
 
     await vi.waitFor(() => {
       expect(wrapper.findAll('[data-testid="my-profile-hitl-email-pipeline"]').length).toBe(2)
@@ -498,7 +505,10 @@ describe('MyProfileView HITL email alerts', () => {
     await wrapper.find('[data-testid="my-profile-hitl-email-save"]').trigger('click')
     await nextTick()
 
-    expect(wrapper.find('[data-testid="my-profile-hitl-email-error"]').text()).toContain('Save failed')
+    const saveError = wrapper.find('[data-testid="my-profile-hitl-email-error"]')
+    expect(saveError.text()).toContain('Save failed')
+    expect(saveError.attributes('role')).toBe('alert')
+    expect(saveError.attributes('aria-live')).toBe('assertive')
     expect(wrapper.text()).not.toContain('HITL email preferences saved.')
     const save = wrapper.find('[data-testid="my-profile-hitl-email-save"]')
     expect(save.attributes('disabled')).toBeUndefined()
@@ -582,11 +592,14 @@ describe('MyProfileView loading placeholders and fallbacks', () => {
     })
 
     expect(wrapper.text()).toContain('Failed to load profile')
-    expect(wrapper.findAll('[data-testid="error-alert-retry"]')[0].exists()).toBe(true)
+    const profileError = wrapper.find('.my-profile-profile-error')
+    expect(profileError.attributes('role')).toBe('alert')
+    expect(profileError.attributes('aria-live')).toBe('assertive')
+    expect(profileError.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
     expect(wrapper.find('.card p.text-lg').exists()).toBe(false)
     expect(wrapper.text()).toContain('HITL email alerts')
 
-    await wrapper.findAll('[data-testid="error-alert-retry"]')[0].trigger('click')
+    await profileError.find('[data-testid="error-alert-retry"]').trigger('click')
 
     await vi.waitFor(() => {
       expect(wrapper.find('.card p.text-lg').text()).toContain('Test User')
