@@ -364,6 +364,11 @@ class TestResolveStartsAt:
 
         assert raised.value.reason == REASON_STARTS_AT_TOO_FAR_AHEAD
 
+    def test_a_full_datetime_within_the_horizon_is_allowed(self) -> None:
+        within = (_NOW + timedelta(days=10)).isoformat()
+
+        assert resolve_starts_at(within, now=_NOW) == datetime.fromisoformat(within)
+
     @pytest.mark.parametrize("value", ["not-a-date", "2027-13-01", "next tuesday"])
     def test_an_unparseable_value_is_rejected_as_malformed(self, value: str) -> None:
         with pytest.raises(StartsAtRejectedError) as raised:

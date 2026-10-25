@@ -1373,6 +1373,32 @@ class TestLicenceStartsAtStatus:
         assert data["successor"] is None
 
 
+class TestSuccessorBlockGapGuarding:
+    """``_successor_block`` must never guess a gap from an unreadable timestamp.
+
+    ``active_expires_at`` reaches the helper from the ACTIVE licence row, which
+    a verified key can never leave unparseable — but the helper is a pure
+    boundary and must degrade to "no gap stated" rather than raise on one.
+    """
+
+    def test_an_unparseable_active_expiry_reports_no_gap(self) -> None:
+        start = datetime.now(UTC) + timedelta(days=30)
+        key = _sign_license_payload(
+            _make_valid_payload(
+                starts_at=start.isoformat(),
+                expires_at=(start + timedelta(days=365)).isoformat(),
+            )
+        )
+        successor = parse_and_verify(key).license_data
+        assert successor is not None
+
+        block = admin_license._successor_block(successor, "not-a-date")
+
+        assert block is not None
+        assert block.starts_at == start.isoformat()
+        assert block.gap_days is None
+
+
 class TestUploadReportsParked:
     URL = "/api/v1/admin/license"
 

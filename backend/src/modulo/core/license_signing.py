@@ -85,6 +85,47 @@ def _resolve_private_key(private_key_hex: str | None) -> str:
     )
 
 
+def _validate_term_inputs(
+    renewal_mode: str,
+    expires_from: datetime | None,
+    starts_at: datetime | None,
+) -> None:
+    """Reject the term inputs a payload must never be minted from."""
+    if not isinstance(renewal_mode, str) or renewal_mode not in RENEWAL_MODES:
+        raise LicenseSigningError(f"renewal_mode must be one of {sorted(RENEWAL_MODES)}, got {renewal_mode!r}")
+    if expires_from is not None and expires_from.tzinfo is None:
+        raise LicenseSigningError(
+            "expires_from must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an "
+            "offset); a naive datetime would be compared against an aware now"
+        )
+    if starts_at is not None and starts_at.tzinfo is None:
+        raise LicenseSigningError(
+            "starts_at must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an "
+            "offset); the signed claim is read against an aware now"
+        )
+    if starts_at is not None and expires_from is not None:
+        raise LicenseSigningError(
+            "starts_at and expires_from are mutually exclusive: starts_at states the chosen licence window, "
+            "expires_from continues a previous licence's window — supplying both would make one silently win"
+        )
+
+
+def _resolve_term_base(
+    starts_at: datetime | None,
+    expires_from: datetime | None,
+    issued: datetime,
+) -> datetime:
+    """The instant the term runs from: chosen start, stack-on-previous, or issue."""
+    if starts_at is not None:
+        # The customer chose the window: the term runs from the chosen start.
+        return starts_at
+    if expires_from is None:
+        return issued
+    # Stacking: a renewal starts at the LATER of now and the previous expiry.
+    # See ``build_team_payload`` for why the floor is load-bearing.
+    return max(datetime.now(UTC), expires_from)
+
+
 def build_team_payload(
     org_name: str,
     term_months: int = 12,
@@ -157,35 +198,10 @@ def build_team_payload(
     (``core.stripe_fulfilment.resolve_starts_at``) rejects a past date and one
     more than 90 days ahead rather than clamping either.
     """
-    if not isinstance(renewal_mode, str) or renewal_mode not in RENEWAL_MODES:
-        raise LicenseSigningError(f"renewal_mode must be one of {sorted(RENEWAL_MODES)}, got {renewal_mode!r}")
-    if expires_from is not None and expires_from.tzinfo is None:
-        raise LicenseSigningError(
-            "expires_from must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an "
-            "offset); a naive datetime would be compared against an aware now"
-        )
-    if starts_at is not None and starts_at.tzinfo is None:
-        raise LicenseSigningError(
-            "starts_at must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an "
-            "offset); the signed claim is read against an aware now"
-        )
-    if starts_at is not None and expires_from is not None:
-        raise LicenseSigningError(
-            "starts_at and expires_from are mutually exclusive: starts_at states the chosen licence window, "
-            "expires_from continues a previous licence's window — supplying both would make one silently win"
-        )
+    _validate_term_inputs(renewal_mode, expires_from, starts_at)
     resolved_org_id = org_id or str(uuid.uuid5(uuid.NAMESPACE_DNS, f"modulo:{org_name}"))
     issued = issued_at or datetime.now(UTC)
-    if starts_at is not None:
-        # The customer chose the window: the term runs from the chosen start.
-        base = starts_at
-    elif expires_from is None:
-        base = issued
-    else:
-        # Stacking: a renewal starts at the LATER of now and the previous
-        # expiry. See the docstring for why the floor is load-bearing.
-        now = datetime.now(UTC)
-        base = max(now, expires_from)
+    base = _resolve_term_base(starts_at, expires_from, issued)
     expiry = _add_months(base, term_months)
     if expiry <= base:
         raise LicenseSigningError(f"term_months must advance the expiry beyond starts_at, got {term_months}")

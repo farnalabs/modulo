@@ -429,6 +429,31 @@ class TestChosenStartsAt:
         assert resp.json()["code"] == "starts_at_malformed"
         mock_fulfil.assert_not_awaited()
 
+    def test_a_non_dict_parent_subscription_details_dispatches_with_no_start(self, client: TestClient) -> None:
+        """The newer Invoice shape is optional; an unexpected one must not crash the read."""
+        event = _invoice_event("evt_odd_parent")
+        event["data"]["object"]["parent"] = {"subscription_details": "not-a-dict"}
+        body = json.dumps(event).encode()
+
+        with patch(_FULFIL_MODULE, new=AsyncMock(return_value="key")) as mock_fulfil:
+            resp = _post(client, body, _sign(body))
+
+        assert resp.status_code == 200, resp.text
+        assert mock_fulfil.await_args.kwargs["starts_at"] is None
+
+    @pytest.mark.parametrize("raw", ["   ", 123])
+    def test_a_blank_or_non_string_starts_at_metadata_value_is_absent(self, client: TestClient, raw: object) -> None:
+        """Only a non-blank string states a start; anything else mints from now."""
+        event = _invoice_event("evt_odd_start")
+        event["data"]["object"]["metadata"] = {"starts_at": raw}
+        body = json.dumps(event).encode()
+
+        with patch(_FULFIL_MODULE, new=AsyncMock(return_value="key")) as mock_fulfil:
+            resp = _post(client, body, _sign(body))
+
+        assert resp.status_code == 200, resp.text
+        assert mock_fulfil.await_args.kwargs["starts_at"] is None
+
     def test_real_fulfilment_mints_a_key_carrying_the_chosen_start(self, fulfilment_client: TestClient) -> None:
         starts_at = _future_date(60)
         body = json.dumps(_invoice_event_with_starts_at("evt_real_start", starts_at)).encode()

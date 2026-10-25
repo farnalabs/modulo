@@ -239,6 +239,80 @@ class TestSignedStartsAtClaim:
                 expires_from=_FROZEN_NOW + timedelta(days=10),
             )
 
+    def test_the_signer_rejects_a_term_that_does_not_advance_the_expiry(self) -> None:
+        """A zero/negative term would mint ``expires_at <= starts_at`` — never a valid window."""
+        with pytest.raises(LicenseSigningError, match="term_months must advance the expiry"):
+            build_team_payload("Acme", term_months=0)
+
+
+class TestMalformedStartsAtClaims:
+    """A PRESENT claim is part of the signed window: an unusable one is rejected.
+
+    Only an ABSENT ``starts_at`` is the old-key (immediate-start) case. A
+    present-but-unusable value can only come from a signing-side defect or a
+    payload tampered with and re-signed, so every shape is reported rather than
+    silently treated as "starts now" — ignoring it would grant capability before
+    the window the customer paid for.
+    """
+
+    def _validation(self, kp: dict[str, str], **payload: Any) -> Any:
+        body: dict[str, Any] = {
+            "tier": "team",
+            "expires_at": "2999-01-01T00:00:00+00:00",
+            "org_id": "org-1",
+        }
+        body.update(payload)
+        return parse_and_verify(_sign(body, kp["private_key"]))
+
+    def test_a_non_string_claim_is_rejected(self, kp: dict[str, str]) -> None:
+        validation = self._validation(kp, starts_at=123)
+
+        assert validation.valid is False
+        assert validation.reason == REASON_MALFORMED
+        assert "Invalid starts_at claim" in (validation.error or "")
+
+    def test_an_empty_claim_is_rejected(self, kp: dict[str, str]) -> None:
+        validation = self._validation(kp, starts_at="")
+
+        assert validation.valid is False
+        assert validation.reason == REASON_MALFORMED
+        assert "Invalid starts_at claim" in (validation.error or "")
+
+    def test_an_unparseable_claim_is_rejected(self, kp: dict[str, str]) -> None:
+        validation = self._validation(kp, starts_at="next spring")
+
+        assert validation.valid is False
+        assert validation.reason == REASON_MALFORMED
+        assert "Invalid starts_at format" in (validation.error or "")
+
+    def test_a_claim_without_an_expiry_leaves_the_window_check_to_the_expiry_check(self, kp: dict[str, str]) -> None:
+        """A key may carry no ``expires_at`` at all; then there is no window to bound."""
+        validation = self._validation(kp, starts_at="2027-01-01T00:00:00+00:00", expires_at="")
+
+        assert validation.valid is True
+        assert validation.license_data is not None
+        assert validation.license_data.starts_at == "2027-01-01T00:00:00+00:00"
+
+    def test_an_unparseable_expiry_is_reported_by_the_expiry_check_not_the_window_check(
+        self, kp: dict[str, str]
+    ) -> None:
+        validation = self._validation(kp, starts_at="2027-01-01T00:00:00+00:00", expires_at="not-a-date")
+
+        assert validation.valid is False
+        assert validation.reason == REASON_MALFORMED
+        assert "Invalid expires_at format" in (validation.error or "")
+        assert "starts_at" not in (validation.error or "")
+
+    def test_a_naive_expiry_is_read_as_local_time_when_bounding_the_window(self, kp: dict[str, str]) -> None:
+        """Naive ``expires_at`` is core's local-time convention, here too."""
+        validation = self._validation(kp, starts_at="2027-01-01T00:00:00+00:00", expires_at="2999-01-01T00:00:00")
+
+        assert validation.valid is True
+
+    def test_a_hand_built_unparseable_start_is_treated_as_not_parked(self) -> None:
+        """A key that verified can never reach this; the fallback must not park forever."""
+        assert is_parked(_licence(starts_at="not-a-date")) is False
+
 
 # ---------------------------------------------------------------------------
 # 3. Parking — valid but not yet active
