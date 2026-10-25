@@ -67,6 +67,15 @@ def upgrade() -> None:
     _migrate_graph_json()
 
 
+def _execute_batched_update(sql: str) -> None:
+    """Apply a bounded PostgreSQL rewrite until every matching row is updated."""
+    bind = op.get_bind()
+    while True:
+        result = bind.execute(sa.text(sql))
+        if result.rowcount == 0:
+            return
+
+
 def _migrate_graph_json() -> None:
     """Rewrite hitl_gate_* keys and prefixes in committed graph JSON.
 
@@ -88,108 +97,93 @@ def _migrate_graph_json() -> None:
         # --- pipeline_edges: rename gate_id key inside config dict ---
         # The column stores the config dict directly; only gate_id needs
         # renaming (no top-level hitl_gate_config key exists here).
-        while True:
-            result = bind.execute(
-                sa.text(
-                    """
-                    UPDATE pipeline_edges
-                    SET hitl_review_config = (
-                        SELECT jsonb_object_agg(
-                            CASE WHEN key = 'gate_id' THEN 'review_id'
-                                 ELSE key END,
-                            value
-                        )
-                        FROM jsonb_each(hitl_review_config::jsonb) AS kv(key, value)
-                    )
-                    WHERE ctid IN (
-                        SELECT ctid FROM pipeline_edges
-                        WHERE hitl_review_config IS NOT NULL
-                        AND jsonb_typeof(hitl_review_config::jsonb) = 'object'
-                        AND hitl_review_config::jsonb ? 'gate_id'
-                        LIMIT 1000
-                    )
-                    """
+        _execute_batched_update(
+            """
+            UPDATE pipeline_edges
+            SET hitl_review_config = (
+                SELECT jsonb_object_agg(
+                    CASE WHEN key = 'gate_id' THEN 'review_id'
+                         ELSE key END,
+                    value
                 )
+                FROM jsonb_each(hitl_review_config::jsonb) AS kv(key, value)
             )
-            if result.rowcount == 0:
-                break
+            WHERE ctid IN (
+                SELECT ctid FROM pipeline_edges
+                WHERE hitl_review_config IS NOT NULL
+                AND jsonb_typeof(hitl_review_config::jsonb) = 'object'
+                AND hitl_review_config::jsonb ? 'gate_id'
+                LIMIT 1000
+            )
+            """
+        )
 
         # --- pipelines.graph_nodes_json: synthetic node ID prefix ---
-        while True:
-            result = bind.execute(
-                sa.text(
-                    """
-                    UPDATE pipelines
-                    SET graph_nodes_json = (
-                        SELECT jsonb_agg(
-                            CASE WHEN value::text LIKE '%hitl_gate_%'
-                                 THEN replace(value::text, 'hitl_gate_', 'hitl_review_')::jsonb
-                                 ELSE value END
-                        )
-                        FROM jsonb_array_elements(graph_nodes_json::jsonb) AS value
-                    )
-                    WHERE ctid IN (
-                        SELECT ctid FROM pipelines
-                        WHERE graph_nodes_json IS NOT NULL
-                        AND jsonb_typeof(graph_nodes_json::jsonb) = 'array'
-                        AND graph_nodes_json::text LIKE '%hitl_gate_%'
-                        LIMIT 1000
-                    )
-                    """
+        _execute_batched_update(
+            """
+            UPDATE pipelines
+            SET graph_nodes_json = (
+                SELECT jsonb_agg(
+                    CASE WHEN value::text LIKE '%hitl_gate_%'
+                         THEN replace(value::text, 'hitl_gate_', 'hitl_review_')::jsonb
+                         ELSE value END
                 )
+                FROM jsonb_array_elements(graph_nodes_json::jsonb) AS value
             )
-            if result.rowcount == 0:
-                break
+            WHERE ctid IN (
+                SELECT ctid FROM pipelines
+                WHERE graph_nodes_json IS NOT NULL
+                AND jsonb_typeof(graph_nodes_json::jsonb) = 'array'
+                AND graph_nodes_json::text LIKE '%hitl_gate_%'
+                LIMIT 1000
+            )
+            """
+        )
 
         # --- pipeline_snapshots.graph_json: edge-level hitl_gate_config key
         #     + gate_id inside it + synthetic node ID prefix ---
-        while True:
-            result = bind.execute(
-                sa.text(
-                    """
-                    UPDATE pipeline_snapshots
-                    SET graph_json = (
-                        SELECT replace(
-                            jsonb_set(
-                                graph_json,
-                                '{edges}',
-                                CASE WHEN jsonb_typeof(graph_json->'edges') = 'array' THEN
-                                    COALESCE(
-                                        (
-                                            SELECT jsonb_agg(
-                                                CASE WHEN jsonb_typeof(edge) = 'object' AND edge ? 'hitl_gate_config' THEN
-                                                    (edge - 'hitl_gate_config') || jsonb_build_object(
-                                                        'hitl_review_config',
-                                                        CASE WHEN jsonb_typeof(edge->'hitl_gate_config') = 'object' THEN
-                                                            ((edge->'hitl_gate_config') - 'gate_id'::text) || jsonb_build_object('review_id', edge->'hitl_gate_config'->'gate_id')
-                                                        ELSE edge->'hitl_gate_config' END
-                                                    )
-                                                ELSE edge END
+        _execute_batched_update(
+            """
+            UPDATE pipeline_snapshots
+            SET graph_json = (
+                SELECT replace(
+                    jsonb_set(
+                        graph_json,
+                        '{edges}',
+                        CASE WHEN jsonb_typeof(graph_json->'edges') = 'array' THEN
+                            COALESCE(
+                                (
+                                    SELECT jsonb_agg(
+                                        CASE WHEN jsonb_typeof(edge) = 'object' AND edge ? 'hitl_gate_config' THEN
+                                            (edge - 'hitl_gate_config') || jsonb_build_object(
+                                                'hitl_review_config',
+                                                CASE WHEN jsonb_typeof(edge->'hitl_gate_config') = 'object' THEN
+                                                    ((edge->'hitl_gate_config') - 'gate_id'::text) || jsonb_build_object('review_id', edge->'hitl_gate_config'->'gate_id')
+                                                ELSE edge->'hitl_gate_config' END
                                             )
-                                            FROM jsonb_array_elements(graph_json->'edges') AS edge
-                                        ),
-                                        '[]'::jsonb
+                                        ELSE edge END
                                     )
-                                ELSE graph_json->'edges' END
-                            )::text,
-                            'hitl_gate_',
-                            'hitl_review_'
-                        )::jsonb
-                    )
-                    WHERE ctid IN (
-                        SELECT ctid FROM pipeline_snapshots
-                        WHERE graph_json IS NOT NULL
-                        AND (
-                            graph_json->'edges' IS NOT NULL
-                            AND graph_json::text LIKE '%hitl_gate_%'
-                        )
-                        LIMIT 1000
-                    )
-                    """
-                )
+                                    FROM jsonb_array_elements(graph_json->'edges') AS edge
+                                ),
+                                '[]'::jsonb
+                            )
+                        ELSE graph_json->'edges' END
+                    )::text,
+                    'hitl_gate_',
+                    'hitl_review_'
+                )::jsonb
             )
-            if result.rowcount == 0:
-                break
+            WHERE ctid IN (
+                SELECT ctid FROM pipeline_snapshots
+                WHERE graph_json IS NOT NULL
+                AND (
+                    graph_json->'edges' IS NOT NULL
+                    AND graph_json::text LIKE '%hitl_gate_%'
+                )
+                LIMIT 1000
+            )
+            """
+        )
 
     elif _is_sqlite():
         # SQLite: simpler approach — string REPLACE
@@ -273,107 +267,92 @@ def _reverse_graph_json() -> None:
 
     if _is_postgres():
         # --- pipeline_edges: reverse gate_id → gate_id (only gate_id was renamed) ---
-        while True:
-            result = bind.execute(
-                sa.text(
-                    """
-                    UPDATE pipeline_edges
-                    SET hitl_review_config = (
-                        SELECT jsonb_object_agg(
-                            CASE WHEN key = 'review_id' THEN 'gate_id'
-                                 ELSE key END,
-                            value
-                        )
-                        FROM jsonb_each(hitl_review_config::jsonb) AS kv(key, value)
-                    )
-                    WHERE ctid IN (
-                        SELECT ctid FROM pipeline_edges
-                        WHERE hitl_review_config IS NOT NULL
-                        AND jsonb_typeof(hitl_review_config::jsonb) = 'object'
-                        AND hitl_review_config::jsonb ? 'review_id'
-                        LIMIT 1000
-                    )
-                    """
+        _execute_batched_update(
+            """
+            UPDATE pipeline_edges
+            SET hitl_review_config = (
+                SELECT jsonb_object_agg(
+                    CASE WHEN key = 'review_id' THEN 'gate_id'
+                         ELSE key END,
+                    value
                 )
+                FROM jsonb_each(hitl_review_config::jsonb) AS kv(key, value)
             )
-            if result.rowcount == 0:
-                break
+            WHERE ctid IN (
+                SELECT ctid FROM pipeline_edges
+                WHERE hitl_review_config IS NOT NULL
+                AND jsonb_typeof(hitl_review_config::jsonb) = 'object'
+                AND hitl_review_config::jsonb ? 'review_id'
+                LIMIT 1000
+            )
+            """
+        )
 
         # --- pipelines.graph_nodes_json: reverse synthetic node ID prefix ---
-        while True:
-            result = bind.execute(
-                sa.text(
-                    """
-                    UPDATE pipelines
-                    SET graph_nodes_json = (
-                        SELECT jsonb_agg(
-                            CASE WHEN value::text LIKE '%hitl_review_%'
-                                 THEN replace(value::text, 'hitl_review_', 'hitl_gate_')::jsonb
-                                 ELSE value END
-                        )
-                        FROM jsonb_array_elements(graph_nodes_json::jsonb) AS value
-                    )
-                    WHERE ctid IN (
-                        SELECT ctid FROM pipelines
-                        WHERE graph_nodes_json IS NOT NULL
-                        AND jsonb_typeof(graph_nodes_json::jsonb) = 'array'
-                        AND graph_nodes_json::text LIKE '%hitl_review_%'
-                        LIMIT 1000
-                    )
-                    """
+        _execute_batched_update(
+            """
+            UPDATE pipelines
+            SET graph_nodes_json = (
+                SELECT jsonb_agg(
+                    CASE WHEN value::text LIKE '%hitl_review_%'
+                         THEN replace(value::text, 'hitl_review_', 'hitl_gate_')::jsonb
+                         ELSE value END
                 )
+                FROM jsonb_array_elements(graph_nodes_json::jsonb) AS value
             )
-            if result.rowcount == 0:
-                break
+            WHERE ctid IN (
+                SELECT ctid FROM pipelines
+                WHERE graph_nodes_json IS NOT NULL
+                AND jsonb_typeof(graph_nodes_json::jsonb) = 'array'
+                AND graph_nodes_json::text LIKE '%hitl_review_%'
+                LIMIT 1000
+            )
+            """
+        )
 
         # --- pipeline_snapshots.graph_json: reverse edge key + node prefix ---
-        while True:
-            result = bind.execute(
-                sa.text(
-                    """
-                    UPDATE pipeline_snapshots
-                    SET graph_json = (
-                        SELECT replace(
-                            jsonb_set(
-                                graph_json,
-                                '{edges}',
-                                CASE WHEN jsonb_typeof(graph_json->'edges') = 'array' THEN
-                                    COALESCE(
-                                        (
-                                            SELECT jsonb_agg(
-                                                CASE WHEN jsonb_typeof(edge) = 'object' AND edge ? 'hitl_review_config' THEN
-                                                    (edge - 'hitl_review_config') || jsonb_build_object(
-                                                        'hitl_gate_config',
-                                                        CASE WHEN jsonb_typeof(edge->'hitl_review_config') = 'object' THEN
-                                                            ((edge->'hitl_review_config') - 'review_id'::text) || jsonb_build_object('gate_id', edge->'hitl_review_config'->'review_id')
-                                                        ELSE edge->'hitl_review_config' END
-                                                    )
-                                                ELSE edge END
+        _execute_batched_update(
+            """
+            UPDATE pipeline_snapshots
+            SET graph_json = (
+                SELECT replace(
+                    jsonb_set(
+                        graph_json,
+                        '{edges}',
+                        CASE WHEN jsonb_typeof(graph_json->'edges') = 'array' THEN
+                            COALESCE(
+                                (
+                                    SELECT jsonb_agg(
+                                        CASE WHEN jsonb_typeof(edge) = 'object' AND edge ? 'hitl_review_config' THEN
+                                            (edge - 'hitl_review_config') || jsonb_build_object(
+                                                'hitl_gate_config',
+                                                CASE WHEN jsonb_typeof(edge->'hitl_review_config') = 'object' THEN
+                                                    ((edge->'hitl_review_config') - 'review_id'::text) || jsonb_build_object('gate_id', edge->'hitl_review_config'->'review_id')
+                                                ELSE edge->'hitl_review_config' END
                                             )
-                                            FROM jsonb_array_elements(graph_json->'edges') AS edge
-                                        ),
-                                        '[]'::jsonb
+                                        ELSE edge END
                                     )
-                                ELSE graph_json->'edges' END
-                            )::text,
-                            'hitl_review_',
-                            'hitl_gate_'
-                        )::jsonb
-                    )
-                    WHERE ctid IN (
-                        SELECT ctid FROM pipeline_snapshots
-                        WHERE graph_json IS NOT NULL
-                        AND (
-                            graph_json->'edges' IS NOT NULL
-                            AND graph_json::text LIKE '%hitl_review_%'
-                        )
-                        LIMIT 1000
-                    )
-                    """
-                )
+                                    FROM jsonb_array_elements(graph_json->'edges') AS edge
+                                ),
+                                '[]'::jsonb
+                            )
+                        ELSE graph_json->'edges' END
+                    )::text,
+                    'hitl_review_',
+                    'hitl_gate_'
+                )::jsonb
             )
-            if result.rowcount == 0:
-                break
+            WHERE ctid IN (
+                SELECT ctid FROM pipeline_snapshots
+                WHERE graph_json IS NOT NULL
+                AND (
+                    graph_json->'edges' IS NOT NULL
+                    AND graph_json::text LIKE '%hitl_review_%'
+                )
+                LIMIT 1000
+            )
+            """
+        )
 
     elif _is_sqlite():
         # --- pipeline_edges: reverse only gate_id ---
