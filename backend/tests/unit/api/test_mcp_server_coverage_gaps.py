@@ -3123,6 +3123,24 @@ class TestResourceGaps(_AuthContext):
             result = await resource_pipeline_snapshots("nope")
         assert result.startswith("error:")
 
+    async def test_resource_pipeline_snapshots_passes_org_scope(self) -> None:
+        snap = MagicMock()
+        snap.snapshot_version = 2
+        snap.id = uuid.uuid4()
+        snap.tag = "release"
+        snap.created_at = _NOW
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
+            patch(
+                "modulo.db.crud.pipeline_snapshot_versioning.list_snapshots",
+                new=AsyncMock(return_value=([snap], 1)),
+            ) as list_snapshots_mock,
+        ):
+            await resource_pipeline_snapshots(str(uuid.uuid4()))
+        list_snapshots_mock.assert_awaited_once()
+        assert list_snapshots_mock.await_args.kwargs["organisation_id"] == _ORG_ID
+
     async def test_resource_pipeline_snapshots_success(self) -> None:
         snap = MagicMock()
         snap.snapshot_version = 2
