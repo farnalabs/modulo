@@ -65,6 +65,13 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/sso", tags=["admin-sso"])
 
 
+def _coerce_optional_string(value: object) -> str | None:
+    """Keep optional string fields typed when legacy rows contain other values."""
+    if value is None or isinstance(value, str):
+        return value
+    return None
+
+
 class SsoProviderCreate(BaseModel):
     provider_type: str = Field(pattern=r"^(oidc|saml)$")
     name: str = Field(min_length=1, max_length=255)
@@ -181,16 +188,12 @@ class SsoProviderResponse(BaseModel):
     @field_validator("tenant_domain", mode="before")
     @classmethod
     def _coerce_tenant_domain(cls, value: object) -> str | None:
-        if value is None or isinstance(value, str):
-            return value
-        return None
+        return _coerce_optional_string(value)
 
     @field_validator("callback_url", mode="before")
     @classmethod
     def _coerce_callback_url(cls, value: object) -> str | None:
-        if value is None or isinstance(value, str):
-            return value
-        return None
+        return _coerce_optional_string(value)
 
 
 class SsoProviderTestResult(BaseModel):

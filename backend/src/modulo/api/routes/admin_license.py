@@ -352,6 +352,18 @@ def _license_status(
     )
 
 
+def _configured_license_keys(settings: Settings, org: Organisation | None) -> list[str]:
+    """Return configured organisation and deployment licence keys."""
+    keys: list[str] = []
+    org_settings = getattr(org, "settings_json", None)
+    if isinstance(org_settings, dict) and org_settings.get("license_key"):
+        keys.append(str(org_settings["license_key"]))
+    configured_key = getattr(settings, "modulo_license_key", "") or ""
+    if configured_key:
+        keys.append(configured_key)
+    return keys
+
+
 def _configured_parked_successor(settings: Settings, org: Organisation | None) -> LicenseData | None:
     """A future-dated licence configured on the org or the env var, if any.
 
@@ -363,14 +375,7 @@ def _configured_parked_successor(settings: Settings, org: Organisation | None) -
     itself already refuses to apply a parked key
     (``feature_flags._verified_license_key``).
     """
-    candidates: list[str] = []
-    org_settings = getattr(org, "settings_json", None)
-    if isinstance(org_settings, dict) and org_settings.get("license_key"):
-        candidates.append(str(org_settings["license_key"]))
-    env_key = getattr(settings, "modulo_license_key", "") or ""
-    if env_key:
-        candidates.append(env_key)
-    for key in candidates:
+    for key in _configured_license_keys(settings, org):
         validation = parse_and_verify(key)
         if validation.valid and validation.license_data is not None and is_parked(validation.license_data):
             return validation.license_data
@@ -394,14 +399,7 @@ def _lapsed_licence_present(settings: Settings, org: Organisation | None) -> boo
     ``get_license`` and cannot be recovered here; the org and env keys are the
     durable statements of what was licensed.
     """
-    candidate_keys: list[str] = []
-    org_settings = getattr(org, "settings_json", None)
-    if isinstance(org_settings, dict) and org_settings.get("license_key"):
-        candidate_keys.append(str(org_settings["license_key"]))
-    configured_key = getattr(settings, "modulo_license_key", "") or ""
-    if configured_key:
-        candidate_keys.append(configured_key)
-    return any(parse_and_verify(key).reason == REASON_EXPIRED for key in candidate_keys)
+    return any(parse_and_verify(key).reason == REASON_EXPIRED for key in _configured_license_keys(settings, org))
 
 
 def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:
