@@ -11,6 +11,7 @@ code:
   - backend/src/modulo/api/routes/admin_license.py
   - backend/src/modulo/api/routes/admin_tiers.py
   - backend/src/modulo/api/routes/admin_feature_flags.py
+  - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/api/routes/admin_orgs.py
   - backend/src/modulo/api/routes/stripe_webhook.py
   - backend/src/modulo/api/routes/viewmodel.py
@@ -198,8 +199,9 @@ the deployment would reject.
       (`test_viewmodel_resolve_tier.py`, `test_admin_feature_flags.py`
       `TestBuildRegistryEnvKeyVerification` / `TestLicenseIsValid`,
       `test_mcp_governance_read_tools.py`; FAR-1733). The two env-SAML
-      surfaces were licence-reading when FAR-1733 shipped; FAR-2059 removed
-      the licence condition from them (below).
+      surfaces were licence-reading when FAR-1733 shipped; FAR-2059 removed the
+      licence condition from them (below). Org-level keys are also counted only
+      after the same canonical signature and expiry verification.
 - [x] Licence state never gates authentication (FAR-2059/FAR-2060). A
       self-hosted key is an offline signed key delivered by email, so
       capability survives a FIXED 14-day grace past `expires_at`
@@ -234,6 +236,8 @@ the deployment would reject.
   cited above.
 
 ## QA History
+
+- 2026-10-25: **Improve Architecture product-map walk** - fixed the admin feature-flag registry's org-level licence rung to verify the signed key (including expiry) before setting `has_license_key`, matching the canonical licence ladder. Added regression coverage for valid, malformed and expired org keys; malformed and expired keys now report `has_license_key: false` instead of being trusted on presence. Status stays `partial` (the manifest's universal-gating deferral is unchanged).
 
 - 2026-10-23: **FAR-2091** - made the licence trust anchor honest and surfaced
   verification failure at install. The built-in public key in `core/license.py`

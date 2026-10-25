@@ -1443,11 +1443,30 @@ class TestBuildRegistryEnvKeyVerification:
         registry = await _build_registry_with(_settings_with_key(""))
         assert registry.has_license_key is True
 
-    async def test_org_key_still_counts_by_presence(self) -> None:
-        """The org-level rung of has_key is presence (unchanged by FAR-1733)."""
-        org = _org("community", settings_json={"license_key": "org-key"})
+    async def test_valid_org_key_is_counted(self) -> None:
+        """A valid signed org-level key contributes to has_license_key."""
+        org = _org("community", settings_json={"license_key": _valid_license_key()})
         registry = await _build_registry_with(_settings_with_key(""), org=org)
         assert registry.has_license_key is True
+
+    async def test_invalid_org_key_is_not_counted(self) -> None:
+        """An org key present but failing verification must not be counted."""
+        org = _org("community", settings_json={"license_key": "not-a-valid-key"})
+        registry = await _build_registry_with(_settings_with_key(""), org=org)
+        assert registry.has_license_key is False
+
+    async def test_expired_org_key_is_not_counted(self) -> None:
+        key = _sign_license_payload(
+            {
+                "tier": "team",
+                "features": ["sso"],
+                "expires_at": (datetime.now(UTC) - timedelta(days=LICENCE_GRACE_DAYS + 1)).isoformat(),
+                "org_id": "test-org",
+            }
+        )
+        org = _org("community", settings_json={"license_key": key})
+        registry = await _build_registry_with(_settings_with_key(""), org=org)
+        assert registry.has_license_key is False
 
 
 class TestLicenseIsValid:

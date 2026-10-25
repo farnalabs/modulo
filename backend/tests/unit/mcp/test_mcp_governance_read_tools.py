@@ -61,11 +61,11 @@ _TEST_PRIV = _TEST_KP["private_key"]
 _TEST_PUB = _TEST_KP["public_key"]
 
 
-def _valid_license_key(tier: str = "team") -> str:
+def _valid_license_key(tier: str = "team", expires_at: str | None = None) -> str:
     payload: dict[str, Any] = {
         "tier": tier,
         "features": ["sso", "team_rbac", "audit_viewer"],
-        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "expires_at": expires_at or (datetime.now(UTC) + timedelta(days=365)).isoformat(),
         "org_id": "test-org",
     }
     sig_hex = sign_primitive(payload, _TEST_PRIV)
@@ -1450,7 +1450,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
     @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
     @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
-    async def test_invalid_org_license_key_reports_invalid_but_counts_has_key(
+    async def test_invalid_org_license_key_is_not_counted_and_reports_invalid(
         self,
         mock_org: AsyncMock,
         mock_plan: AsyncMock,
@@ -1459,9 +1459,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         mock_session: AsyncMock,
         mock_validate: AsyncMock,
     ) -> None:
-        """An org-level key still counts for has_license_key (presence rung),
-        but is_valid requires it to VERIFY (FAR-1733).
-        """
+        """An org-level key counts for has_license_key only after verification."""
         from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         mock_org.return_value = MagicMock(settings_json={"license_key": "not-a-valid-key"})
@@ -1470,6 +1468,49 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         mock_plan.return_value = plan_ctx
         registry = MagicMock()
         registry.current_tier = "community"
+        registry.has_license_key = False
+        registry.list_flags.return_value = []
+        registry.tier_gap_flags.return_value = []
+        mock_from_db.return_value = registry
+        mock_session.return_value = make_session_context(make_session_scope())
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+        try:
+            settings = MagicMock()
+            settings.modulo_license_key = ""
+            settings.modulo_dev_mode = False
+            with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+                result = await list_feature_flags()
+        finally:
+            _ctx_is_system_admin.set(False)
+
+        assert "error" not in result
+        assert mock_from_db.call_args.kwargs["has_license_key"] is False
+        assert result["license"]["is_valid"] is False
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.license.get_license", return_value=None)
+    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    async def test_org_license_key_count_requires_valid_signature_and_expiry(
+        self,
+        mock_org: AsyncMock,
+        mock_plan: AsyncMock,
+        mock_from_db: AsyncMock,
+        mock_license: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+
+        mock_org.return_value = MagicMock(id="test-org", settings_json={"license_key": _valid_license_key()})
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "team"
+        mock_plan.return_value = plan_ctx
+        registry = MagicMock()
+        registry.current_tier = plan_ctx.tier.return_value
         registry.has_license_key = True
         registry.list_flags.return_value = []
         registry.tier_gap_flags.return_value = []
@@ -1488,6 +1529,52 @@ class TestListFeatureFlagsErrorArms(AuthContext):
 
         assert "error" not in result
         assert mock_from_db.call_args.kwargs["has_license_key"] is True
+        assert result["license"]["is_valid"] is True
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.license.get_license", return_value=None)
+    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    async def test_expired_org_license_key_is_not_counted(
+        self,
+        mock_org: AsyncMock,
+        mock_plan: AsyncMock,
+        mock_from_db: AsyncMock,
+        mock_license: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+
+        mock_org.return_value = MagicMock(
+            id="test-org",
+            settings_json={"license_key": _valid_license_key(expires_at="2020-01-01T00:00:00+00:00")},
+        )
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        mock_plan.return_value = plan_ctx
+        registry = MagicMock()
+        registry.current_tier = "community"
+        registry.has_license_key = False
+        registry.list_flags.return_value = []
+        registry.tier_gap_flags.return_value = []
+        mock_from_db.return_value = registry
+        mock_session.return_value = make_session_context(make_session_scope())
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+        try:
+            settings = MagicMock()
+            settings.modulo_license_key = ""
+            settings.modulo_dev_mode = False
+            with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+                result = await list_feature_flags()
+        finally:
+            _ctx_is_system_admin.set(False)
+
+        assert "error" not in result
+        assert mock_from_db.call_args.kwargs["has_license_key"] is False
         assert result["license"]["is_valid"] is False
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
