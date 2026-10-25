@@ -3130,6 +3130,129 @@ elements:
       - testid: eval-editor-config
         type: textarea
         dynamic_testid: false
+      - testid: eval-editor-judging
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-deterministic-type
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-backing-kind
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-backing-model
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-backing-vendor
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-backing-model-class
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-backing-preview
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-verdict-kind
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-derivation-warning
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-field
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-judge-whole-output
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-context-fields
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-add
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-question-remove
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-id
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-type
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-question-instructions
+        type: textarea
+        dynamic_testid: false
+      - testid: eval-editor-question-criteria
+        type: textarea
+        dynamic_testid: false
+      - testid: eval-editor-question-weight
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-min-confidence
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-required
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-add-option
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-option-key
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-option-description
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-option-passing
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-option-score
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-remove-option
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-add-level
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-level-score
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-level-description
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-remove-level
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-pass-from
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-pass-rule-threshold
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-timeout-question
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-timeout-definition
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-client-errors
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-server-error
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-legacy-notice
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-migrate-legacy
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-judge-display
+        type: element
+        dynamic_testid: false
       - testid: eval-editor-pass-threshold
         type: input
         dynamic_testid: false
@@ -6663,6 +6786,7 @@ features:
         status: covered
         behaviours:
             - "[x] The eval editor creates, configures, and deletes evaluation definitions per pipeline node"
+            - "[x] The eval editor's free-form config textarea is a typed-question builder behind a two-axis Judging control (ADR 066 D4/D19): the mechanism axis offers only Typed questions or Deterministic (never a flat list mixing a deterministic eval_type with a backing); a typed judge declares a backing (a model backend, displayed as the model via its provider with 'LLM, self-reported confidence', or a decision model whose class label comes from the single locale 'System One model' value — no view composes that phrase), and each question is edited as noul (instructions, criteria, weight, required, min_pass_confidence), choice (2–255 unique option keys with descriptions, passing keys, optional 0–1 option_scores) or score (2–10 ordered levels, pass_from), with a per-question dotted field, top-level context_fields, pass_rule.threshold and timeouts; the emitted config_json is exactly the server's TypedJudgeConfig wire shape (snake_case, no extra keys, no pass_threshold), the editor mirrors the server's bounds client-side, the server's typed 422 codes (judge_config_invalid / judge_verdict_kind_unsupported / judge_backend_*) render inline, verdict_kind=derivation is blocked with an explanation because typed judges are weaker where the verdict must be derived, and a stored legacy prompt judge stays read-only until explicitly migrated (frontend/src/views/EvalEditorView.vue, frontend/src/components/eval/typedJudge.ts, frontend/src/__tests__/EvalEditorView.spec.ts, frontend/src/__tests__/EvalEditorViewTypedJudge.spec.ts, backend/src/modulo/core/eval_engine/typed_judge/config.py)"
             - "[x] The proposal queue surfaces eval proposals for review and supports publish / dismiss (the API publish endpoint creates a live eval definition; the /evals/proposals view's publish currently marks the proposal resolved)"
             - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
             - "[x] Eval policy-gate binding (POST/PUT /api/v1/evals/{eval_id}/policy-gate) runs the FAR-957 advisory author-warning checks for the eval's evidence_key and the PolicyGateResponse carries non-blocking warnings (no_producer / temporal_ordering / recent_undefined) — warning on the safe direction so a racy or indeterminate evidence key is surfaced without ever preventing binding (backend/src/modulo/core/eval_engine/author_warnings.py, backend/tests/unit/core/evidence/test_author_warnings.py, docs/product-map/core/evidence-store.md)"

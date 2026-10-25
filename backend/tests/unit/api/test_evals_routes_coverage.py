@@ -110,6 +110,12 @@ def _make_session(begin_exc: Exception | None = None) -> AsyncMock:
         return default_result
 
     session.execute = AsyncMock(side_effect=_execute)
+    # ADR 066 D4: a typed judge write resolves its model backend. The route
+    # tests use a contract double, so `get` returns an active org-owned row.
+    backend_row = MagicMock()
+    backend_row.organisation_id = _ORG_ID
+    backend_row.status = "active"
+    session.get = AsyncMock(return_value=backend_row)
     return session
 
 

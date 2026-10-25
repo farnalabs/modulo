@@ -179,6 +179,12 @@ def _mock_session() -> AsyncMock:
     nested_cm.__aenter__ = AsyncMock(return_value=None)
     nested_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin_nested = MagicMock(return_value=nested_cm)
+    # ADR 066 D4: a typed judge write resolves its model backend. Default to
+    # an active org-owned row; tests for a missing backend override it.
+    backend_row = MagicMock()
+    backend_row.organisation_id = _ORG_ID
+    backend_row.status = "active"
+    session.get = AsyncMock(return_value=backend_row)
     return session
 
 
