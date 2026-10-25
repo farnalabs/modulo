@@ -289,10 +289,6 @@ _DIFF_GIT_HEADER_RE = re.compile(r"^diff --git a/(.+) b/(.+)$")
 # is embedded in a ``git show <sha>:<path>`` argument).
 _MERGE_BASE_SHA_RE = re.compile(r"[0-9a-f]{7,64}")
 
-# Matches a standalone Python string literal (triple-quoted or single/double
-# quoted) with no other code around it.  Used to exclude docstrings and bare
-# strings from the executable-line count (coverage.py does not instrument them).
-_PYTHON_STRING_LITERAL_RE = re.compile(r"""^\s*(?:('{3}|"{3})[\s\S]*\1|('{1}|"{1})[^\n]*\2)\s*$""")
 
 # ``git diff`` filter and language pathspecs for changed-file discovery.
 _DIFF_FILTER = "--diff-filter=ACM"
@@ -413,7 +409,12 @@ def _is_executable_python_line(line: str) -> bool:
     # instrumented by coverage.py.  Detect by checking if the entire
     # stripped line is a string literal (starts and ends with matching
     # quotes, no other code around it).
-    if _PYTHON_STRING_LITERAL_RE.fullmatch(stripped):
+    if (
+        (stripped.startswith("'''") and stripped.endswith("'''"))
+        or (stripped.startswith('\"\"\"') and stripped.endswith('\"\"\"'))
+        or (stripped.startswith("'") and stripped.endswith("'") and "\n" not in stripped[1:-1])
+        or (stripped.startswith('\"') and stripped.endswith('\"') and "\n" not in stripped[1:-1])
+    ):
         return False
     try:
         tree = ast.parse(stripped, mode="eval")
