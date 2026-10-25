@@ -15,6 +15,7 @@ from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import PERM_SYSTEM_CONFIG_MANAGE
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import (
     get_db_session,
@@ -47,7 +48,6 @@ from modulo.settings import Settings, get_settings
 
 _CODE_ORG_LICENSE_MANAGE = "org.license.manage"
 _CODE_LICENSE_GET_FAILED = "license.get_failed"
-_CODE_SYSTEM_CONFIG_MANAGE = "system.config.manage"
 
 #: Redis key prefix for the per-org licence-status cache (FAR-1719).
 _LICENSE_CACHE_KEY_PREFIX = "license:"
@@ -461,7 +461,7 @@ async def get_license_status(
 async def upload_license(
     req: LicenseUploadRequest,
     settings: Annotated[Settings, Depends(get_settings)],
-    _: TenantPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    _: TenantPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> LicenseUploadResponse | JSONResponse:
     try:
         validation = parse_and_verify(req.license_key)
@@ -507,7 +507,7 @@ async def upload_license(
 )
 async def remove_license(
     settings: Annotated[Settings, Depends(get_settings)],
-    _: TenantPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    _: TenantPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> LicenseStatusResponse:
     """Remove the instance-wide (system-scope) licence (FAR-2110).
 
@@ -564,7 +564,7 @@ async def issue_license(
     req: LicenseIssueRequest,
     background_tasks: BackgroundTasks,
     settings: Annotated[Settings, Depends(get_settings)],
-    _: TenantPrincipal = require_system_permission(_CODE_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
+    _: TenantPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> LicenseIssueResponse | JSONResponse:
     """Manually issue (sign) a team license key for a customer.
 
