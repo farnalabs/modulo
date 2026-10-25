@@ -13,6 +13,8 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
+NATIVE_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml"
 
 _REHEARSAL_STEP_NAME = "Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)"
 _REAL_STEP_NAME = "Pre-deploy migrations (one-off machine)"
@@ -137,6 +139,33 @@ def test_release_identity_keeps_normal_deploy_outside_rc_validation() -> None:
     assert 'if [ -z "$REQUESTED_REF" ] && [ -z "$REQUESTED_SHA" ]; then' in validation_script
     assert 'echo "Normal deploy identity: ${{ github.sha }}"' in validation_script
     assert "release_ref must be an RC tag" in validation_script
+
+
+def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["attest-artefacts"]
+    assert job["needs"] == ["produce-sbom", "bundle"]
+    names = _step_names(job["steps"])
+    assert "Download the SBOM artefact" in names
+    assert "Download the published bundle artefact" in names
+    bundle_download = job["steps"][names.index("Download the published bundle artefact")]
+    assert bundle_download["with"]["name"] == "bundle-artefacts-amd64"
+    assert bundle_download["with"]["path"] == "release-artefacts"
+    assert bundle_download["if"] == "inputs.mode == 'cut' || inputs.mode == 'recut'"
+    attest = job["steps"][names.index("Attest the file artefacts")]
+    assert attest["with"]["subject-path"] == "release-artefacts/*"
+
+
+def test_native_release_smoke_verifies_release_tarball_attestation_before_install() -> None:
+    workflow = yaml.safe_load(NATIVE_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release-smoke"]["steps"]
+    names = _step_names(steps)
+    verify_idx = names.index("Verify release tarball attestation before install")
+    install_idx = names.index("Install from the artifact (verified, installer enforces signature + sha256)")
+    verify = steps[verify_idx]
+    assert verify_idx < install_idx
+    assert verify["if"] == "github.event_name == 'push'"
+    assert 'gh attestation verify "${TARBALL}"' in verify["run"]
 
 
 def test_release_sh_passes_rehearsal_env_through() -> None:

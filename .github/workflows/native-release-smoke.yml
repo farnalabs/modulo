@@ -145,6 +145,15 @@ jobs:
             echo "::error::neither TAG nor the canary env is set - refusing to run a smoke with no argument"; exit 1
           fi
 
+      - name: Verify release tarball attestation before install
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify "${TARBALL}" --repo "${{ github.repository }}" \
+            || { echo "::error::no verifiable build-provenance attestation for ${TARBALL} - refusing to install (fail closed)"; exit 1; }
+
       - name: Install from the artifact (verified, installer enforces signature + sha256)
         run: |
           set -euo pipefail

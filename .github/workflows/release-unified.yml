@@ -703,7 +703,9 @@ jobs:
   # ---------------------------------------------------------------------------
   publish-release:
     name: Create GitHub Release
-    needs: [release, bundle]
+    # Do not publish the bundle-v* tag until its tarball has a provenance
+    # attestation; native-release-smoke is fail-closed on that attestation.
+    needs: [release, bundle, attest-artefacts]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
@@ -840,8 +842,10 @@ jobs:
   # ---------------------------------------------------------------------------
   attest-artefacts:
     name: Attest released artefacts
-    needs: produce-sbom
-    if: inputs.mode != 'dry-run'
+    needs: [produce-sbom, bundle]
+    # The bundle is available for cut/recut; promote still attests the SBOM
+    # without waiting on the intentionally skipped bundle job.
+    if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.bundle.result == 'success')
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
     permissions:
@@ -855,7 +859,16 @@ jobs:
           name: sbom-cyclonedx
           path: release-artefacts
 
+      - name: Download the published bundle artefact
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bundle-artefacts-amd64
+          path: release-artefacts
+
       - name: Attest the file artefacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
+          # Includes the SBOM for every non-dry-run mode and the release bundle
+          # tarball plus its manifest/checksum files for cut/recut.
           subject-path: release-artefacts/*
