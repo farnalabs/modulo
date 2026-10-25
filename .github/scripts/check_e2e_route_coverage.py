@@ -92,9 +92,7 @@ def normalise_route(route: str) -> str | None:
         return None
     static = [seg for seg in route.split("/") if seg and not seg.startswith(":")]
     normalised = "/" + "/".join(static)
-    if normalised == "/" or not static:
-        return "/"
-    return normalised.rstrip("/")
+    return "/" if normalised == "/" or not static else normalised.rstrip("/")
 
 
 def load_spec_texts() -> dict[str, str]:
@@ -158,7 +156,7 @@ def main(argv: list[str]) -> int:
             )
             return 2
         specs = load_spec_texts()
-    except (OSError, FileNotFoundError) as exc:
+    except OSError as exc:
         print(f"E2E route coverage gate: input error: {exc}", file=sys.stderr)
         return 2
 
