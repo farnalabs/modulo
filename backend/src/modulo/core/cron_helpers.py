@@ -6265,6 +6265,7 @@ def _build_re_dispatch_predicate(
     stale_window: int,
     capacity_redispatch_seconds: int,
     enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
+    include_node_started_executor_lost: bool = True,
 ) -> Any:
     """Build the dispatcher_reconcile re-dispatch predicate (F3c + F6a).
 
@@ -6327,6 +6328,17 @@ def _build_re_dispatch_predicate(
     ``_reconcile_one_row`` (same split as F6a's no-job + committed-decision
     guards), and the re-dispatch is always ``resume_run`` — checkpoint resume,
     never re-execution (FAR-1649).
+
+    ``include_node_started_executor_lost`` (default True) controls the
+    FAR-1803 visibility-only leg. That leg selects the node-started /
+    dead-executor class so ``dispatcher_reconcile`` can COUNT it
+    (``node_started_executor_lost``), but ``_reconcile_one_row`` returns
+    without re-dispatching it — terminalisation belongs to the age gate or the
+    FAR-1808 marker sweep. A caller that needs "will this row actually be
+    RECOVERED?" rather than "will the reconciler see it?" must pass False:
+    the marker sweep does exactly that, otherwise the visibility leg shadows
+    FAR-1808's bounded reclaim and such a row's marker is kept until the 25h
+    staleness cap instead of the 2h node-started bound.
     """
     from sqlalchemy import and_, not_, or_
 
@@ -6504,15 +6516,24 @@ def _build_re_dispatch_predicate(
         # — its own leg below owns the ``resume_run`` recovery (FAR-1728), so
         # this leg must never shadow it. A non-saq row is out of scope: the
         # stale_run_recovery sweep's ``worker_lost`` arm owns those.
-        and_(
-            Run.status == "running",
-            Run.dispatcher == "saq",
-            Run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED,
-            or_(
-                Run.heartbeat_at.is_(None),
-                Run.heartbeat_at < func_now_minus(stale_window),
-            ),
-            not_(Run.guardrail_override_resume_pending.is_(True)),
+        # Visibility-only: omitted when ``include_node_started_executor_lost``
+        # is False (the D8 sweep asks "will it be recovered?", not "is it
+        # counted?" — see the docstring).
+        *(
+            [
+                and_(
+                    Run.status == "running",
+                    Run.dispatcher == "saq",
+                    Run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED,
+                    or_(
+                        Run.heartbeat_at.is_(None),
+                        Run.heartbeat_at < func_now_minus(stale_window),
+                    ),
+                    not_(Run.guardrail_override_resume_pending.is_(True)),
+                )
+            ]
+            if include_node_started_executor_lost
+            else []
         ),
         # FAR-2122 — a node-started run WITHOUT an SAQ dispatcher identity (the
         # dispatcherless orphan class `_SWEEP_ORPHANED_RUNS_SQL` otherwise
@@ -6623,6 +6644,7 @@ def reconciler_recovery_predicate(
     nodeless_window: int,
     enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
     early_detect_minutes: int | None,
+    include_node_started_executor_lost: bool = True,
 ) -> Any:
     """The reconciler's COMPOSED recovery predicate (single source, qa F3).
 
@@ -6631,7 +6653,13 @@ def reconciler_recovery_predicate(
     marker sweep composes the SAME object (imported from here — parity by
     construction), so a run the reconciler would re-dispatch can never have its
     dispatch marker swept: the composition lives in ONE place instead of being
-    re-assembled (and silently drifted) at both call sites. This also fixes
+    re-assembled (and silently drifted) at both call sites.
+
+    ``include_node_started_executor_lost`` defaults True (the reconciler scan
+    must see the FAR-1803 class to count it). The D8 sweep passes False: that
+    leg is visibility-only and never re-dispatches, so judged "recoverable" it
+    would keep a dead-executor node-started marker until the 25h cap and
+    shadow FAR-1808's bounded reclaim. This also fixes
     the sweep's recoverability evaluation: the previous sweep evaluated the
     branches AND-composed, so a fresh-heartbeat nodeless zombie (matched ONLY
     by the nodeless branch, excluded by the stale branch) was misjudged
@@ -6652,6 +6680,7 @@ def reconciler_recovery_predicate(
             stale_window=stale_window,
             capacity_redispatch_seconds=capacity_redispatch_seconds,
             enqueue_failed_redispatch_seconds=enqueue_failed_redispatch_seconds,
+            include_node_started_executor_lost=include_node_started_executor_lost,
         ),
         _nodeless_zombie_predicate(nodeless_window),
     ]
