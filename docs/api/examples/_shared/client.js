@@ -6,9 +6,11 @@
 // tripped SonarCloud's copy-paste duplication gate. It now lives here once.
 
 let BASE_URL = process.env.MODULO_URL || "http://localhost:8000";
-while (BASE_URL.endsWith("/")) {
-  BASE_URL = BASE_URL.slice(0, -1);
+let baseUrlEnd = BASE_URL.length;
+while (baseUrlEnd > 0 && BASE_URL[baseUrlEnd - 1] === "/") {
+  baseUrlEnd -= 1;
 }
+BASE_URL = BASE_URL.slice(0, baseUrlEnd);
 const EMAIL = process.env.MODULO_EMAIL;
 const PASSWORD = process.env.MODULO_PASSWORD;
 
