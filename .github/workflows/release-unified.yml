@@ -257,17 +257,22 @@ jobs:
           fi
           echo "Found CI run: ${RUN_ID}"
 
-          # Wait for the run to complete if it's still in progress
-          for i in {1..60}; do
+          # Wait up to 45 minutes: the backend test suite can take about 30 minutes,
+          # so the old 10-minute bound rejected legitimate CI before it finished.
+          POLL_INTERVAL_SECONDS=10
+          MAX_WAIT_SECONDS=2700
+          MAX_POLLS=$((MAX_WAIT_SECONDS / POLL_INTERVAL_SECONDS))
+          STATUS=""
+          for ((poll=1; poll<=MAX_POLLS; poll++)); do
             STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}" --jq '.status')
             if [ "$STATUS" = "completed" ]; then
               break
             fi
-            echo "CI run ${RUN_ID} still in progress (status: ${STATUS}), waiting... (${i}/60)"
-            sleep 10
+            echo "CI run ${RUN_ID} still in progress (status: ${STATUS}), waiting... (${poll}/${MAX_POLLS}; ${POLL_INTERVAL_SECONDS}s interval)"
+            sleep "$POLL_INTERVAL_SECONDS"
           done
           if [ "$STATUS" != "completed" ]; then
-            echo "::error::Timed out waiting for CI run ${RUN_ID} to complete (status: ${STATUS}). Refusing to proceed."
+            echo "::error::Timed out after ${MAX_WAIT_SECONDS}s waiting for CI run ${RUN_ID} to complete (last status: ${STATUS}). Refusing to proceed."
             exit 1
           fi
 
