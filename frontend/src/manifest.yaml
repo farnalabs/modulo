@@ -1028,6 +1028,9 @@ elements:
       - testid: dashboard-run-activity
         type: element
         dynamic_testid: false
+      - testid: dashboard-recent-runs
+        type: element
+        dynamic_testid: false
       - testid: notifications-panel-toggle
         type: button
         dynamic_testid: false
