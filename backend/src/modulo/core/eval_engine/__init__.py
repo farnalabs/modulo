@@ -65,8 +65,31 @@ _DELIMITER_STRIP_PATTERN = re.compile(
 #: fail-open and lose the error outcome — D6).
 _DETAIL_MAX_LENGTH = 2000
 
-# Pattern detects potential ReDoS: nested quantifiers like (a+)+, (a*)*, (a|b)+, ((a+)+)+
-_RE_NESTED_QUANTIFIER = re.compile(r"\(\s*[^)]*[+*][^)]*\s*\)[+*]")
+
+def _has_nested_quantifier(pattern: str) -> bool:
+    """Return whether ``pattern`` is a nested-quantifier ReDoS shape, e.g. ``(a+)+``.
+
+    Detects ``(a+)+``, ``(a*)*``, ``(a|b)+`` and ``((a+)+)+``. A regex must not
+    do this detection: a backtracking pattern can itself be stalled by a
+    hostile eval pattern, and both shapes it has taken here were flagged by
+    SonarCloud — super-linear (``python:S8786``) as written on ``main`` and
+    exponential (``python:S5852``) after this branch rewrote it. This scan is
+    linear in ``len(pattern)`` and uses no regular expression.
+    """
+    seen_open_group = False
+    quantifier_in_group = False
+    for index, char in enumerate(pattern):
+        if char == "(":
+            seen_open_group = True
+        elif char == ")":
+            if quantifier_in_group and pattern[index + 1 : index + 2] in ("+", "*"):
+                return True
+            seen_open_group = False
+            quantifier_in_group = False
+        elif char in "+*" and seen_open_group:
+            quantifier_in_group = True
+    return False
+
 
 _SCORE_PASS = 1.0
 _SCORE_FAIL = 0.0
@@ -510,7 +533,7 @@ class EvalEngine:
                 eval_id=eval_def.id,
                 detail=f"Regex pattern exceeds maximum length ({_MAX_REGEX_PATTERN_LENGTH})",
             )
-        if _RE_NESTED_QUANTIFIER.search(pattern_raw):
+        if _has_nested_quantifier(pattern_raw):
             return _fail_result(
                 run_id=run_id,
                 node_id=eval_def.node_id or "",
