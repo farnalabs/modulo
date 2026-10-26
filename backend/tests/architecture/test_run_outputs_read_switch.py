@@ -34,6 +34,8 @@ import ast
 import symtable
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
 
 COLUMNS = ("outputs_json", "node_telemetry_json", "raw_output_markers")
@@ -179,14 +181,13 @@ def test_no_legacy_blob_reads_outside_the_repo():
     getattr_violations: list[str] = []
     raw_text_violations: list[str] = []
 
-    for path in sorted(SRC.rglob("*.py")):
+    for path, source in iter_source_text(SRC):
         rel = path.relative_to(SRC).as_posix()
         if "migrations" in path.parts:
             continue
         try:
-            source = path.read_text(encoding="utf-8")
             tree = ast.parse(source)
-        except (SyntaxError, UnicodeDecodeError, OSError):
+        except (SyntaxError, UnicodeDecodeError):
             continue
 
         whole_file_allowed = rel in _WHOLE_FILE_ALLOWLIST

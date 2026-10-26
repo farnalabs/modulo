@@ -80,6 +80,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 _API_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "modulo" / "api"
 _API_PREFIX = "modulo.api"
 _AUTH_ROOT = Path(__file__).resolve().parent.parent.parent / "src" / "modulo" / "auth"
@@ -270,11 +272,11 @@ class _ApiIndex:
         for root, prefix, root_name in roots:
             if not root.exists():
                 continue
-            for path in sorted(root.rglob("*.py")):
+            for path, source in iter_source_text(root):
                 rel_within_root = path.relative_to(root).as_posix()
                 rel = f"{root_name}/{rel_within_root}"
                 module = _module_of_rel(rel_within_root, prefix)
-                tree = ast.parse(path.read_text(encoding="utf-8"))
+                tree = ast.parse(source, filename=str(path))
                 self.trees[module] = tree
                 self.rels[module] = rel
                 self.defs.setdefault(module, {})

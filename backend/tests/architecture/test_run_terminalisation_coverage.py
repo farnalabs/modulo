@@ -94,6 +94,8 @@ from typing import Any
 
 import pytest
 
+from tests.unit._source_scan import iter_source_text
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 SRC_DIR = BACKEND_DIR / "src" / "modulo"
 SAQ_WORKER_PATH = SRC_DIR / "core" / "saq_worker.py"
@@ -451,10 +453,10 @@ def _periodic_root_names() -> set[str]:
 def _call_graph() -> dict[str, set[str]]:
     """Module-level function name -> the names its body calls (all of src/modulo)."""
     graph: dict[str, set[str]] = {}
-    for path in sorted(SRC_DIR.rglob("*.py")):
+    for path, source in iter_source_text(SRC_DIR):
         if "migrations" in path.parts:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = ast.parse(source, filename=str(path))
         for node in tree.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -488,10 +490,10 @@ def _reachable_from_periodic() -> set[str]:
 
 def _module_level_function_names() -> set[str]:
     names: set[str] = set()
-    for path in sorted(SRC_DIR.rglob("*.py")):
+    for path, source in iter_source_text(SRC_DIR):
         if "migrations" in path.parts:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = ast.parse(source, filename=str(path))
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 names.add(node.name)
