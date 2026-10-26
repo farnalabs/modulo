@@ -144,6 +144,14 @@ function isManifest(obj: unknown): obj is Manifest {
   )
 }
 
+function resolveSystemAdminOnly(
+  route: ManifestRoute,
+  group: ManifestSidebarGroup,
+): true | undefined {
+  if (route.system_admin_only || group.system_admin_only) return true
+  return undefined
+}
+
 function buildSidebarGroups(): NavGroup[] {
   if (!isManifest(manifest)) {
     console.error('[navigation] manifest is invalid — missing routes or sidebar_groups')
@@ -181,9 +189,9 @@ function buildSidebarGroups(): NavGroup[] {
       requiredPermissions: route.required_permissions ?? null,
       requiredFeatureFlag: route.feature_flag ?? null,
       // FAR-1796: the route entry ORs with its group's flag, mirroring the
-      // router's hydrateManifestMeta derivation. Boolean OR is deliberate: `??`
-      // would let a `false` route flag shadow a `true` group flag.
-      systemAdminOnly: Boolean(route.system_admin_only || group.system_admin_only) || undefined, // NOSONAR: deliberate Boolean OR - `false` must not shadow a group's `true`
+      // router's hydrateManifestMeta derivation. A true on either signal gates
+      // the item; a false route flag must not shadow a true group flag.
+      systemAdminOnly: resolveSystemAdminOnly(route, group),
 
     })
   }
