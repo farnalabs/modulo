@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import ast
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from modulo.core.mcp.scope_validator import READ_ONLY_TOOLS, TOOL_SCOPE_REQUIREMENTS
+from tests.unit._source_scan import iter_source_text
 
 _EXPECTED_TOOLS = frozenset(
     {
@@ -283,12 +283,6 @@ _PREFERENCES_WRITE_ALLOWED = frozenset({Path("db", "crud", "account.py")})
 _HITL_EMAIL_KEY_ALLOWED = frozenset({Path("db", "crud", "account.py"), Path("core", "hitl_email_alerts.py")})
 
 
-def _iter_source_files() -> Iterator[Path]:
-    for path in sorted(_SRC_ROOT.rglob("*.py")):
-        if "__pycache__" not in path.parts:
-            yield path
-
-
 def test_account_row_lock_only_in_approved_sites() -> None:
     """A locked Account read (session.get(Account, ..., with_for_update=True))
     appears ONLY in the shared preferences helper and the lock-only quota read.
@@ -296,8 +290,8 @@ def test_account_row_lock_only_in_approved_sites() -> None:
     bypasses the single-writer discipline (FAR-620 spec item 14)."""
     pattern = re.compile(r"session\.get\(\s*Account\b[^)]*with_for_update\s*=\s*True")
     found: set[Path] = set()
-    for path in _iter_source_files():
-        if pattern.search(path.read_text(encoding="utf-8")):
+    for path, source in iter_source_text(_SRC_ROOT):
+        if pattern.search(source):
             found.add(path.relative_to(_SRC_ROOT))
     assert found == _ACCOUNT_LOCK_ALLOWED, (
         f"locked Account reads found outside the approved set: {sorted(map(str, found - _ACCOUNT_LOCK_ALLOWED))}; "
@@ -312,8 +306,8 @@ def test_account_preferences_writes_only_in_shared_helper() -> None:
     assigning the column directly."""
     pattern = re.compile(r"\.preferences\s*=")
     found: set[Path] = set()
-    for path in _iter_source_files():
-        if pattern.search(path.read_text(encoding="utf-8")):
+    for path, source in iter_source_text(_SRC_ROOT):
+        if pattern.search(source):
             found.add(path.relative_to(_SRC_ROOT))
     assert found == _PREFERENCES_WRITE_ALLOWED, (
         f"direct Account.preferences writes found outside the shared helper: "
@@ -327,8 +321,7 @@ def test_hitl_email_key_literal_confined_to_owner_and_reader() -> None:
     re-importing reader). me.py routes through the helper - it (and every
     other surface) must never re-declare the key."""
     found: set[Path] = set()
-    for path in _iter_source_files():
-        text = path.read_text(encoding="utf-8")
+    for path, text in iter_source_text(_SRC_ROOT):
         if '"hitl_email"' in text or "'hitl_email'" in text:
             found.add(path.relative_to(_SRC_ROOT))
     assert found == _HITL_EMAIL_KEY_ALLOWED, (

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from modulo.core.feature_flags import _KNOWN_FLAGS
 from modulo.core.seed_data.catalog import FLAGS
+from tests.unit._source_scan import iter_source_text
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -63,8 +64,7 @@ def _collect_backend_refs() -> set[str]:
     names: set[str] = set()
     if not _BACKEND_SRC.is_dir():
         return names
-    for path in sorted(_BACKEND_SRC.rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
+    for path, text in iter_source_text(_BACKEND_SRC):
         for pat in _BACKEND_PATTERNS:
             names.update(pat.findall(text))
     return names
@@ -101,10 +101,10 @@ def _non_registry_text() -> str:
     parts: list[str] = []
     # Backend non-registry .py files
     if _BACKEND_SRC.is_dir():
-        for path in sorted(_BACKEND_SRC.rglob("*.py")):
+        for path, text in iter_source_text(_BACKEND_SRC):
             if path in _REGISTRY_FILES:
                 continue
-            parts.append(path.read_text(encoding="utf-8"))
+            parts.append(text)
     # Frontend .vue/.ts files (excluding tests)
     if _FRONTEND_SRC.is_dir():
         for path in sorted(_FRONTEND_SRC.rglob("*")):

@@ -46,6 +46,8 @@ from pathlib import Path
 
 from alembic.script import ScriptDirectory
 
+from tests.unit._source_scan import iter_source_text
+
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATIONS_DIR = _VERSIONS_DIR.parent
 
@@ -78,8 +80,8 @@ def _parse_down_revision(value: ast.expr, path: Path) -> str | tuple[str, ...] |
     raise AssertionError(f"{path.name}: down_revision has an unsupported form")
 
 
-def _read_revision(path: Path) -> tuple[str, str | tuple[str, ...] | None]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def _read_revision(path: Path, source: str) -> tuple[str, str | tuple[str, ...] | None]:
+    tree = ast.parse(source, filename=str(path))
     revision: str | None = None
     down_revision: str | tuple[str, ...] | None = None
     for node in tree.body:
@@ -124,10 +126,10 @@ def assert_single_linear_head(script: ScriptDirectory, *, versions_dir: Path | N
     """
     scan_dir = _VERSIONS_DIR if versions_dir is None else versions_dir
     declared: dict[str, tuple[Path, str | tuple[str, ...] | None]] = {}
-    for path in sorted(scan_dir.rglob("*.py")):
+    for path, source in iter_source_text(scan_dir):
         if path.name == "__init__.py" or path.name.startswith("_"):
             continue
-        revision, down_revision = _read_revision(path)
+        revision, down_revision = _read_revision(path, source)
         if revision in declared:
             raise AssertionError(
                 f"duplicate revision id {revision!r} declared by both {declared[revision][0].name} and {path.name}"

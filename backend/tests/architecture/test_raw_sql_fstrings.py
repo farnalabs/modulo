@@ -12,17 +12,19 @@ second layer of defense beyond pre-commit hooks.
 import re
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
 
 
 def _iter_py_files(root: Path):
-    for path in root.rglob("*.py"):
+    for path, source in iter_source_text(root):
         # Skip only files *under* a `migrations` directory, relative to the scan
         # root: the checkout root may itself contain a `migrations` component,
         # and a file literally named `migrations.py` is not a migration.
         if any(part == "migrations" for part in path.relative_to(root).parts[:-1]):
             continue
-        yield path
+        yield path, source
 
 
 # Only match a call to the *identifier* `text` — `(?<![A-Za-z0-9_])` prevents
@@ -36,11 +38,7 @@ RAWSQL_CALLS = re.compile(
 
 def test_no_raw_sql_fstrings():
     violations = []
-    for path in _iter_py_files(SRC):
-        try:
-            content = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
+    for path, content in _iter_py_files(SRC):
         for i, line in enumerate(content.splitlines(), 1):
             if RAWSQL_CALLS.search(line):
                 violations.append(f"  {path.relative_to(SRC)}:{i}  {line.strip()[:100]}")

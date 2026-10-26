@@ -33,9 +33,10 @@ that exported them. It does **not** prove that the recorded facts are true, that
 the sensors that captured them are infallible, or anything about execution that
 happened outside Modulo. A signed chain is still a chain of *observations*.
 
-Use the phrase **"offline-verifiable evidence"** - never the bare claim
-"independently verifiable" - until the capability this document describes is
-actually shipped.
+Use the phrase **"offline-verifiable evidence"** rather than the bare claim
+"independently verifiable": the artefact proves authorship, integrity and
+reproducibility against a pre-published key, not that the recorded facts are
+independently true.
 
 ## How a pack is produced
 

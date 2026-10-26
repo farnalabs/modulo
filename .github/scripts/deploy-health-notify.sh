@@ -28,6 +28,11 @@
 # recovery email between an escalation and its recovery. A lookup that cannot
 # be read is skipped, never trusted.
 #
+# FAR-2159: a tick that read only SOME of its required inputs is UNKNOWN too
+# (`deploy_health._overall_healthy`), so it takes THIS same path -- no email is
+# sent and a live alert stays open. That is deliberate: a recovery must never
+# be inferred from figures the tick did not read.
+#
 # Inputs (all via env: -- never interpolated into the shell):
 #   WORKFLOW_NAME       workflow whose run history holds the state vector
 #   VERDICT_STEP_NAME   step whose conclusion encodes the previous verdict
@@ -63,6 +68,8 @@ WORKFLOW_NAME="${WORKFLOW_NAME:-}"
 VERDICT_STEP_NAME="${VERDICT_STEP_NAME:-}"
 CURRENT_HEALTHY="${CURRENT_HEALTHY:-}"
 VERDICT_JSON="${VERDICT_JSON:-}"
+UNKNOWN_VERDICT="unknown"
+export UNKNOWN_VERDICT
 RUN_URL="${RUN_URL:-}"
 DEPLOY_URL="${DEPLOY_URL:-}"
 
@@ -82,9 +89,12 @@ if [[ ! -f "$EVALUATOR" ]]; then
   exit 1
 fi
 
-# ---- 0. An evaluation that produced nothing cannot infer a transition. ----
+# ---- 0. An evaluation that produced no verdict cannot infer a transition. ----
+# Both UNKNOWN shapes land here: a tick that measured nothing (FAR-2157) and a
+# PARTIAL read that missed a required input (FAR-2159). Neither may close an
+# alert, so neither sends anything.
 if [[ -z "$CURRENT_HEALTHY" ]]; then
-  echo "::warning::Deploy health could not be evaluated this cycle (UNKNOWN) - no transition can be inferred, so no email is sent. The run still warns; an UNKNOWN previous verdict never suppresses the next alert."
+  echo "::warning::Deploy health could not be evaluated this cycle (UNKNOWN - nothing was readable, or the tick was a partial read missing a required input) - no transition can be inferred, so no email is sent. A live alert therefore stays open. The run still warns; an UNKNOWN previous verdict never suppresses the next alert."
   emit_output action none
   exit 0
 fi
@@ -92,7 +102,7 @@ fi
 # ---- 1. Previous verdict: this workflow's most recent completed run. ----
 PREV_VERDICT="${PREVIOUS_VERDICT:-}"
 if [[ -z "$PREV_VERDICT" ]]; then
-  PREV_VERDICT="unknown"
+  PREV_VERDICT="$UNKNOWN_VERDICT"
   if [[ -n "${REPOSITORY:-}" ]] && [[ -n "$WORKFLOW_NAME" ]] && command -v gh >/dev/null 2>&1; then
     PREV_RUNS="$(gh run list --repo "$REPOSITORY" --workflow "$WORKFLOW_NAME" --limit 10 \
       --json databaseId,status,conclusion,createdAt 2>/dev/null)" || PREV_RUNS=""
@@ -130,9 +140,9 @@ PY
           LOOKED_UP=$((LOOKED_UP + 1))
           PREV_JOBS_FILE="$(mktemp)"
           if gh api "repos/$REPOSITORY/actions/runs/$PREV_ID/jobs" > "$PREV_JOBS_FILE" 2>/dev/null; then
-            RUN_VERDICT="$(python3 "$EVALUATOR" previous-verdict --jobs-json "$PREV_JOBS_FILE")" || RUN_VERDICT="unknown"
+            RUN_VERDICT="$(python3 "$EVALUATOR" previous-verdict --jobs-json "$PREV_JOBS_FILE")" || RUN_VERDICT="$UNKNOWN_VERDICT"
             rm -f "$PREV_JOBS_FILE"
-            if [[ "$RUN_VERDICT" != "unknown" ]]; then
+            if [[ "$RUN_VERDICT" != "$UNKNOWN_VERDICT" ]]; then
               PREV_VERDICT="$RUN_VERDICT"
               echo "Previous verdict read from run $PREV_ID."
               break
@@ -143,7 +153,7 @@ PY
             echo "::warning::Could not read run ${PREV_ID}'s jobs - skipping it rather than trusting it."
           fi
         done <<< "$PREV_IDS"
-        if [[ "$PREV_VERDICT" = "unknown" ]]; then
+        if [[ "$PREV_VERDICT" = "$UNKNOWN_VERDICT" ]]; then
           echo "::warning::No measured previous verdict found in this workflow's recent runs - treating it as UNKNOWN, which alerts rather than suppresses."
         fi
       else
@@ -204,6 +214,8 @@ from email.utils import formatdate
 HOST = "smtppro.zoho.eu"
 PORT_STARTTLS = 587
 PORT_SSL = 465
+STARTTLS_LABEL = f"{PORT_STARTTLS}"
+SSL_LABEL = f"{PORT_SSL}"
 
 user = os.environ["ZOHO_SMTP_USER"]
 password = os.environ["ZOHO_SMTP_PASS"]
@@ -249,7 +261,10 @@ except Exception as first_error:
         send(PORT_SSL, use_ssl=True)
     except Exception as second_error:
         print(
-            scrub(f"SMTP send failed on 587 ({first_error}) and 465 ({second_error})"),
+            scrub(
+                f"SMTP send failed on {STARTTLS_LABEL} ({first_error}) "
+                f"and {SSL_LABEL} ({second_error})"
+            ),
             file=sys.stderr,
         )
         sys.exit(1)

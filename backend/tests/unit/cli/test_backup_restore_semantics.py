@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -273,6 +274,24 @@ def test_record_last_backup_helper_is_roundtrip_stable(tmp_path: Path) -> None:
     hmac_key = bytes(range(32))
     after = load_state(data_dir / "state.json", hmac_key)
     assert after.last_backup_at == "2026-09-10T00:00:00+00:00"
+
+
+def test_record_last_backup_swallows_an_unexpected_failure_with_its_traceback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The broad catch-all must never break a backup — and an unknown failure
+    is a bug, so it is logged at ERROR level WITH the traceback."""
+    data_dir = _seed_data_dir(tmp_path)
+    with (
+        patch("modulo.launcher.state.save_state", side_effect=RuntimeError("boom")),
+        caplog.at_level(logging.ERROR, logger=backup_mod._log.name),
+    ):
+        _record_last_backup(data_dir, "2026-09-10T00:00:00+00:00")
+
+    records = [r for r in caplog.records if "backup_timestamp_unexpected_failure" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert records[0].exc_info is not None
 
 
 @pytest.mark.skipif(os.name != "posix", reason="0600 artifact modes are POSIX-only")

@@ -36,6 +36,7 @@ import respx
 from modulo.connectors.base import ConnectorBase
 from modulo.connectors.github import GitHubConnector
 from modulo.connectors.security import _MASK, CredentialRedactor
+from tests.unit._source_scan import iter_source_text
 
 #: Classes allowed to rely on the no-credential default from
 #: ``ConnectorBase``. Everything else must override ``_credential_values``
@@ -311,10 +312,8 @@ def test_connector_source_contains_no_raw_echo_details() -> None:
     root = pathlib.Path(pkg.__file__).parent  # type: ignore[arg-type, union-attr]
     assert root.is_dir(), f"connector package directory missing: {root}"
     offenders: list[str] = []
-    for path in sorted(root.rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
-        for finding in scan_detail_regions(path.read_text(encoding="utf-8")):
+    for path, source in iter_source_text(root):
+        for finding in scan_detail_regions(source):
             offenders.append(f"{path.relative_to(root)} {finding}")
     assert not offenders, (
         "Raw (unredacted) error-echo detail constructions in modulo/connectors (FAR-1651): "

@@ -7,19 +7,21 @@ or conditional) execute at import time and can crash on cold bootstrap.
 import ast
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
 
 
 def test_no_module_level_side_effects():
     violations = []
-    for path in SRC.rglob("*.py"):
+    for path, source in iter_source_text(SRC):
         if "migrations" in path.parts:
             continue
         if path.name == "__init__.py":
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError, OSError):
+            tree = ast.parse(source)
+        except (SyntaxError, UnicodeDecodeError):
             continue
         for node in tree.body:
             # Skip imports, defs, classes, assignments, type aliases, decorators

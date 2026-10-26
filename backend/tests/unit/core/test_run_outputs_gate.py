@@ -52,6 +52,7 @@ from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
 from modulo.db.rls import set_rls_org
+from tests.unit._source_scan import iter_source_text
 
 _SRC = Path(__file__).resolve().parent.parent.parent.parent / "src" / "modulo"
 
@@ -527,11 +528,11 @@ def _update_run_status_call_sites() -> set[tuple[str, str, bool]]:
             self.generic_visit(node)
 
     findings: set[tuple[str, str, bool]] = set()
-    for path in sorted(_SRC.rglob("*.py")):
+    for path, source in iter_source_text(_SRC):
         rel = path.relative_to(_SRC).as_posix()
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (SyntaxError, UnicodeDecodeError, OSError):  # pragma: no cover
+            tree = ast.parse(source, filename=str(path))
+        except (SyntaxError, UnicodeDecodeError):  # pragma: no cover
             continue
         visitor = Visitor()
         visitor._rel = rel  # type: ignore[attr-defined]

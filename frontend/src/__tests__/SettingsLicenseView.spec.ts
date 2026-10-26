@@ -255,10 +255,11 @@ describe('SettingsLicenseView', () => {
     // server restart" instruction is gone for BOTH scopes.
     expect(text).not.toContain('requires a server restart')
     expect(text).not.toContain('restart to take full effect')
-    // Org scope: written to the org row, so it is durable.
+    // Both scopes are persisted now (FAR-2158): the org key in the org row and
+    // the instance-wide key in system_config, so neither note claims memory-only.
     expect(text).toContain('survives a restart or redeploy')
-    // System scope: in memory only, and the durable alternative is named.
-    expect(text).toContain('held in memory only')
+    expect(text).not.toContain('held in memory only')
+    // MODULO_LICENSE_KEY survives only as the deployment-wide alternative.
     expect(text).toContain('MODULO_LICENSE_KEY')
   })
 
@@ -282,7 +283,7 @@ describe('SettingsLicenseView', () => {
     expect(description).not.toContain('held in memory only')
   })
 
-  it('the apply dialog warns the SYSTEM scope is lost on restart and names MODULO_LICENSE_KEY', async () => {
+  it('the apply dialog states the SYSTEM scope is durable and names MODULO_LICENSE_KEY', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
 
@@ -297,8 +298,9 @@ describe('SettingsLicenseView', () => {
 
     const description = wrapper.find('.formdialog-description').text()
     expect(description).toContain('instance-wide license key')
-    expect(description).toContain('held in memory only')
+    expect(description).toContain('survives a restart or redeploy')
     expect(description).toContain('MODULO_LICENSE_KEY')
+    expect(description).not.toContain('held in memory only')
     expect(description).not.toContain('requires a server restart')
   })
 

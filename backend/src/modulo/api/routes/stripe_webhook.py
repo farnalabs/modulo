@@ -271,7 +271,7 @@ async def stripe_webhook(
             try:
                 resolve_starts_at(starts_at)
             except StartsAtRejectedError as exc:
-                _log.error(
+                _log.exception(
                     "stripe.webhook.starts_at_rejected event=%s event_id=%s reason=%s value=%r detail=%s",
                     event_type,
                     event["id"],

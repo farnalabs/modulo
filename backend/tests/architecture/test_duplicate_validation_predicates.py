@@ -176,6 +176,8 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 SRC_DIR = BACKEND_DIR / "src" / "modulo"
 BASELINE_PATH = Path(__file__).resolve().parent / "duplicate_validation_predicate_baseline.txt"
@@ -230,11 +232,11 @@ _DATA_ACCESS_PREFIXES = (
 def _tree_sources() -> list[tuple[str, str]]:
     """Every in-scope ``(relpath, source)`` under ``src/modulo``."""
     sources: list[tuple[str, str]] = []
-    for path in sorted(SRC_DIR.rglob("*.py")):
+    for path, source in iter_source_text(SRC_DIR):
         rel = path.relative_to(SRC_DIR).as_posix()
         if rel.startswith(_SKIP_PREFIXES) or _SKIP_PARTS & set(path.relative_to(SRC_DIR).parts):
             continue
-        sources.append((rel, path.read_text(encoding="utf-8")))
+        sources.append((rel, source))
     return sources
 
 

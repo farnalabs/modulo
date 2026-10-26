@@ -1080,7 +1080,6 @@ router.onError((err) => {
       return
     }
     window.location.reload()
-    return
   }
 })
 
