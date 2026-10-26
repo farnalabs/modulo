@@ -1,46 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import { ref, type Ref } from 'vue'
 
-// Mock useDataFetch to avoid vue-query executing the fetcher during setup
-// (which triggers a TDZ error because the component declares filterTriggerType
-// AFTER calling useDataFetch).
-let mockData: Ref<unknown>
-let mockLoading: Ref<boolean>
-let mockError: Ref<string | null>
-let mockLoadFn: () => Promise<void>
-
-vi.mock('../composables/useDataFetch', () => ({
-  useDataFetch: (
-    _fetcher: () => Promise<{ data?: unknown; error?: unknown }>,
-  ) => {
-    mockData = ref(undefined) as Ref<unknown>
-    mockLoading = ref(false) as Ref<boolean>
-    mockError = ref(null) as Ref<string | null>
-    mockLoadFn = async () => {
-      mockLoading.value = true
-      mockError.value = null
-      try {
-        const result = await _fetcher()
-        if (result.error) {
-          mockError.value = typeof result.error === 'string'
-            ? result.error
-            : JSON.stringify(result.error)
-        } else {
-          mockData.value = result.data
-        }
-      } catch (e: unknown) {
-        mockError.value = e instanceof Error ? e.message : 'Failed to load'
-      } finally {
-        mockLoading.value = false
-      }
-    }
-    // Defer initial load to after setup completes
-    void Promise.resolve().then(() => mockLoadFn())
-    return { data: mockData, loading: mockLoading, error: mockError, load: mockLoadFn }
-  },
-}))
-
+// useDataFetch is deliberately NOT mocked: vue-query subscribes during setup,
+// so the real composable exercises the component's module-initialisation order.
+// Mocking it hid a TDZ ReferenceError on the initial fetch (FAR-2173).
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn().mockResolvedValue({
@@ -97,11 +60,27 @@ describe('SettingsTriggerEventLogView', () => {
     expect(wrapper.text()).toContain('Try adjusting your filters')
   })
 
+  it('loads the event log on mount without a TDZ error (FAR-2173)', async () => {
+    getMock.mockResolvedValue({
+      data: { items: [makeEvent()], total: 1, next_cursor: null },
+      error: undefined,
+    })
+    const wrapper = mount(SettingsTriggerEventLogView)
+    await flushPromises()
+    // The initial fetch must not hit the temporal dead zone on the filter refs.
+    expect(wrapper.text()).not.toContain("Cannot access 'filterTriggerType' before initialization")
+    expect(wrapper.text()).toContain('webhook')
+    expect(getMock).toHaveBeenCalledWith(
+      '/api/v1/admin/trigger-events',
+      expect.objectContaining({ params: { query: { limit: 50 } } }),
+    )
+  })
+
   it('shows loading spinner while fetching', async () => {
     getMock.mockReturnValue(new Promise(() => {}))
-    mount(SettingsTriggerEventLogView)
+    const wrapper = mount(SettingsTriggerEventLogView)
     await flushPromises()
-    expect(mockLoading.value).toBe(true)
+    expect(wrapper.find('.animate-spin').exists()).toBe(true)
   })
 
   it('shows error alert when load fails', async () => {
