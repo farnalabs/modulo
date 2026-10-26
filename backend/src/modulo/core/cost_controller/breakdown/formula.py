@@ -53,8 +53,8 @@ _TOKEN_RE = re.compile(
                                              #   whitespace here — it surfaces as
                                              #   unexpected_character, no silent juxtaposition)
     (?:
-        (?P<number>\d+(?:\.\d+)?|\.\d+) |
-        (?P<ident>[A-Za-z_]\w*) |
+        (?P<number>\d+\.\d+|\d+|\.\d+) |
+        (?P<ident>[A-Za-z_][A-Za-z0-9_]*) |
         (?P<op>[+\-*/]) |
         (?P<paren>[()]) |
         (?P<bad>.)

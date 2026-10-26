@@ -11048,6 +11048,53 @@ def _is_node_started_executor_lost_row(row: Any, stale_window: int) -> bool:
     return (datetime.now(UTC) - heartbeat).total_seconds() > stale_window
 
 
+async def _reconcile_node_started_executor_lost(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    row: Any,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    enqueue_failed_redispatched: int,
+    stale_window: int,
+) -> int | None:
+    """Handle a stale executor after its first node started, if applicable."""
+    if not _is_node_started_executor_lost_row(row, stale_window):
+        return None
+    deadline: datetime | None = None
+    if _is_node_started_no_progress_row(row):
+        node_budget = _row_node_budget_seconds(row)
+        deadline = _node_started_deadline(row, node_budget_seconds=node_budget)
+        if (
+            deadline is not None
+            and datetime.now(UTC) >= deadline
+            and await _fail_node_deadline_run(
+                session,
+                row.id,
+                org_id,
+                summary,
+                stale_window=stale_window,
+                node_budget_seconds=node_budget,
+            )
+        ):
+            terminalized_run_ids.append((row.id, org_id))
+            return enqueue_failed_redispatched
+    summary["node_started_executor_lost"] += 1
+    _log.warning(
+        "dispatcher_reconcile.node_started_executor_lost run=%s org=%s dispatch_phase=%s "
+        "claim_count=%s heartbeat_at=%s node_deadline=%s — node-started row whose executor "
+        "heartbeat is stale; held back from re-dispatch (re-execution unsafe). "
+        "Reaped at its node deadline when it has zero progress (FAR-1999), "
+        "otherwise terminalised by the age gate at the bound (FAR-1803)",
+        row.id,
+        org_id,
+        getattr(row, "dispatch_phase", None),
+        getattr(row, "claim_count", None),
+        getattr(row, "heartbeat_at", None),
+        deadline.isoformat() if deadline is not None else None,
+    )
+    return enqueue_failed_redispatched
+
+
 async def _reconcile_one_row(
     session: AsyncSession,
     q: RedisQueue,
@@ -11097,40 +11144,17 @@ async def _reconcile_one_row(
     # progress) keeps the old hold-and-report path and is left to the age gate
     # — which remains the safety net if this reaper cannot act (e.g. no time
     # anchor).
-    if _is_node_started_executor_lost_row(row, stale_window):
-        deadline: datetime | None = None
-        if _is_node_started_no_progress_row(row):
-            node_budget = _row_node_budget_seconds(row)
-            deadline = _node_started_deadline(row, node_budget_seconds=node_budget)
-            if (
-                deadline is not None
-                and datetime.now(UTC) >= deadline
-                and await _fail_node_deadline_run(
-                    session,
-                    row.id,
-                    org_id,
-                    summary,
-                    stale_window=stale_window,
-                    node_budget_seconds=node_budget,
-                )
-            ):
-                terminalized_run_ids.append((row.id, org_id))
-                return enqueue_failed_redispatched
-        summary["node_started_executor_lost"] += 1
-        _log.warning(
-            "dispatcher_reconcile.node_started_executor_lost run=%s org=%s dispatch_phase=%s "
-            "claim_count=%s heartbeat_at=%s node_deadline=%s — node-started row whose executor "
-            "heartbeat is stale; held back from re-dispatch (re-execution unsafe). "
-            "Reaped at its node deadline when it has zero progress (FAR-1999), "
-            "otherwise terminalised by the age gate at the bound (FAR-1803)",
-            row.id,
-            org_id,
-            getattr(row, "dispatch_phase", None),
-            getattr(row, "claim_count", None),
-            getattr(row, "heartbeat_at", None),
-            deadline.isoformat() if deadline is not None else None,
-        )
-        return enqueue_failed_redispatched
+    node_started_result = await _reconcile_node_started_executor_lost(
+        session,
+        org_id,
+        row,
+        summary,
+        terminalized_run_ids,
+        enqueue_failed_redispatched,
+        stale_window,
+    )
+    if node_started_result is not None:
+        return node_started_result
     # FAR-873: early-detect for fresh-heartbeat nodeless zombies.  Fire BEFORE
     # the full nodeless repair so a wedged-worker zombie is re-dispatched ~20
     # min sooner.  The throttle uses the FULL nodeless_window (not the
