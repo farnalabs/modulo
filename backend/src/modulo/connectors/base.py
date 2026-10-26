@@ -1066,15 +1066,15 @@ class ConnectorBase(ABC):
         return CredentialRedactor(self._credential_values()).redact(text)
 
     @abstractmethod
-    async def health_check(self) -> HealthResult:
+    async def health_check(self) -> HealthResult:  # NOSONAR python:S7503 — async connector capability contract
         """Verify connectivity and credential validity."""
 
     @abstractmethod
-    async def query(self, _q: ConnectorQuery) -> ConnectorResult:
+    async def query(self, _q: ConnectorQuery) -> ConnectorResult:  # NOSONAR python:S7503 — async capability
         """Read data from the external tool."""
 
     @abstractmethod
-    async def write(self, _payload: ConnectorPayload) -> dict[str, Any]:
+    async def write(self, _payload: ConnectorPayload) -> dict[str, Any]:  # NOSONAR python:S7503 — async capability
         """Write data to the external tool. Returns the created/updated resource."""
 
     def on_unknown_for(self, _resource: str) -> str:
@@ -1115,7 +1115,7 @@ class ConnectorBase(ABC):
         """
         return False
 
-    async def compensate(
+    async def compensate(  # NOSONAR python:S7503 — async connector compensation capability contract
         self,
         operation: CompensationOperation,  # NOSONAR S1172 - public compensation hook keyword contract
         *,

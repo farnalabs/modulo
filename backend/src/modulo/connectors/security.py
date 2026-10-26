@@ -217,7 +217,7 @@ def redact_exc(
             new = _rebuild_httpx_request_error(exc, message, secrets)
         else:
             new = _rebuild_generic_error(exc, message)
-    except Exception:  # NOSONAR S112 - a rebuild failure of ANY type must still fail closed, not leak the credential
+    except Exception:  # NOSONAR python:S112 — any rebuild failure must fail closed, not leak the credential
         # Deliberately broad: ``_rebuild_generic_error`` calls an arbitrary
         # vendor ``type(exc)(message)`` constructor, which can raise anything
         # (e.g. ``KeyError`` from an exotic ``__init__``). Narrowing this to a
@@ -280,7 +280,7 @@ def redacting(method: Callable[..., Any]) -> Callable[..., Any]:
     """
 
     @functools.wraps(method)
-    async def wrapper(  # NOSONAR S7503 - preserves async connector method seam
+    async def wrapper(  # NOSONAR python:S7503 — preserves the async connector method seam
         self: Any, *args: Any, **kwargs: Any
     ) -> Any:
         redactor: CredentialRedactor = self._redactor
