@@ -8,10 +8,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.run import get_dialect_name
 from modulo.db.models.system_config import SystemConfig
 
 
-def _dialect_insert(session: AsyncSession) -> Any:
+async def _dialect_insert(session: AsyncSession) -> Any:
     """Dialect-appropriate ``INSERT`` factory with ``ON CONFLICT`` support.
 
     Postgres is the production backend; SQLite keeps the atomic upsert
@@ -19,8 +20,13 @@ def _dialect_insert(session: AsyncSession) -> Any:
     ``sqlite_insert`` split as ``crud.run_node_outputs``). MariaDB is
     deliberately refused: its ``INSERT ... ON DUPLICATE KEY UPDATE`` has
     different semantics, so it must not silently take the Postgres path.
+
+    The dialect is read through the shared await-tolerant ``get_dialect_name``
+    helper: ``AsyncSession.get_bind`` is sync on a real session, but a test
+    double that presents it as an ``AsyncMock`` returns an awaitable, and
+    reading ``.dialect`` off that coroutine raises ``AttributeError``.
     """
-    dialect = session.get_bind().dialect.name
+    dialect = await get_dialect_name(session)
     if dialect == "postgresql":
         return pg_insert
     if dialect == "sqlite":
@@ -73,7 +79,7 @@ async def set_config(
     # re-SELECT. No existence-check-gated UPDATE branch exists, so the TOFU
     # invariant above holds for every caller, concurrent or sequential.
     insert_stmt = (
-        _dialect_insert(session)(SystemConfig)
+        (await _dialect_insert(session))(SystemConfig)
         .values(key=key, value=value, updated_by=updated_by)
         .on_conflict_do_nothing(index_elements=["key"])
     )
@@ -108,7 +114,7 @@ async def update_config(
     # cannot be lost between reads; Postgres applies the conflict-target update
     # under its own row lock.
     stmt = (
-        _dialect_insert(session)(SystemConfig)
+        (await _dialect_insert(session))(SystemConfig)
         .values(key=key, value=value, updated_by=updated_by)
         .on_conflict_do_update(
             index_elements=["key"],
