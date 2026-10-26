@@ -329,7 +329,7 @@ function decodeLicenceKeyPayload(raw: string): Record<string, unknown> | null {
   if (!segment) return null
   try {
     const binary = decodeBase64Url(segment)
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    const bytes = Uint8Array.from(binary, (char) => char.codePointAt(0) ?? 0)
     return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
   } catch {
     return null

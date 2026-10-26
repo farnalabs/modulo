@@ -639,13 +639,22 @@ function rowActions(u: UserItem) {
 
 function validateEmailAndName(): string {
   const { email, display_name } = newUser.value
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (!email || !isValidEmail(email)) {
     return t('views.AdminUsersView.please_enter_a_valid_email_address')
   }
   if (!display_name || !display_name.trim()) {
     return t('views.AdminUsersView.display_name_is_required')
   }
   return ''
+}
+
+function isValidEmail(email: string): boolean {
+  const atIndex = email.indexOf('@')
+  if (atIndex <= 0 || atIndex !== email.lastIndexOf('@') || atIndex === email.length - 1) return false
+  const domain = email.slice(atIndex + 1)
+  const dotIndex = domain.indexOf('.')
+  const hasWhitespace = Array.from(email).some(character => character.trim() !== character)
+  return dotIndex > 0 && dotIndex < domain.length - 1 && !hasWhitespace
 }
 
 function generatePassword() {
