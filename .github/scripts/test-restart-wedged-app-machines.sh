@@ -83,6 +83,10 @@ chmod +x "${BIN_DIR}/fly"
 
 PASS=0
 FAIL=0
+EXIT_CODE_LABEL="exit code"
+NO_RESTART_LABEL="no restart"
+NO_DESTROY_LABEL="no destroy"
+WARNINGS_LABEL="warns"
 
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
@@ -138,7 +142,7 @@ PY
 # --- 1. Wedged app machine is restarted -------------------------------------
 run_case "started app machine with critical app_liveness is restarted" \
   "$(machine_json "${WEDGED_MACHINE_ID}" started app "${APP_LIVENESS_CHECK}" "${CRITICAL_STATUS}")"
-assert_eq "exit code" "0" "${RC}"
+assert_eq "${EXIT_CODE_LABEL}" "0" "${RC}"
 assert_eq "restarted machine" "${WEDGED_MACHINE_ID}" "${RESTARTED}"
 assert_eq "no destroy after a successful restart" "" "${DESTROYED}"
 assert_eq "wedged machine log captured before restart" \
@@ -159,55 +163,55 @@ assert_eq "redacted log keeps its diagnostic content" "1" \
 # --- 2. Healthy app machine is left alone -----------------------------------
 run_case "healthy app machine is not restarted" \
   "$(machine_json "${WEDGED_MACHINE_ID}" started app "${APP_LIVENESS_CHECK}" "${PASSING_STATUS}")"
-assert_eq "exit code" "0" "${RC}"
-assert_eq "no restart" "" "${RESTARTED}"
+assert_eq "${EXIT_CODE_LABEL}" "0" "${RC}"
+assert_eq "${NO_RESTART_LABEL}" "" "${RESTARTED}"
 assert_eq "no log fetch for a healthy machine" "" "${LOGGED}"
 
 # --- 3. Worker-group machine is never restarted -----------------------------
 run_case "critical worker machine is not restarted" \
   "$(machine_json "${WORKER_MACHINE_ID}" started worker "${APP_LIVENESS_CHECK}" "${CRITICAL_STATUS}")"
-assert_eq "no restart" "" "${RESTARTED}"
+assert_eq "${NO_RESTART_LABEL}" "" "${RESTARTED}"
 
 # --- 4. Deployment-scoped servicecheck is never the trigger -----------------
 run_case "critical servicecheck alone does not restart" \
   "$(machine_json "${WEDGED_MACHINE_ID}" started app "${SERVICE_CHECK}" "${CRITICAL_STATUS}")"
-assert_eq "no restart" "" "${RESTARTED}"
+assert_eq "${NO_RESTART_LABEL}" "" "${RESTARTED}"
 
 # --- 5. Non-started machine is not restarted --------------------------------
 run_case "stopped machine is not restarted" \
   "$(machine_json "${WEDGED_MACHINE_ID}" stopped app "${APP_LIVENESS_CHECK}" "${CRITICAL_STATUS}")"
-assert_eq "no restart" "" "${RESTARTED}"
+assert_eq "${NO_RESTART_LABEL}" "" "${RESTARTED}"
 
 # --- 6. Unreadable machine list: warn, no action, exit 0 --------------------
 run_case "failed machine list is best-effort no-op" "__FAIL__"
-assert_eq "exit code" "0" "${RC}"
-assert_eq "no restart" "" "${RESTARTED}"
-assert_eq "warns" "1" "$(printf '%s' "${OUTPUT}" | grep -c '::warning::' || true)"
+assert_eq "${EXIT_CODE_LABEL}" "0" "${RC}"
+assert_eq "${NO_RESTART_LABEL}" "" "${RESTARTED}"
+assert_eq "${WARNINGS_LABEL}" "1" "$(printf '%s' "${OUTPUT}" | grep -c '::warning::' || true)"
 
 # --- 7. Unparseable machine list: warn, no action, exit 0 -------------------
 run_case "unparseable machine list is best-effort no-op" "not-json"
-assert_eq "exit code" "0" "${RC}"
-assert_eq "no restart" "" "${RESTARTED}"
+assert_eq "${EXIT_CODE_LABEL}" "0" "${RC}"
+assert_eq "${NO_RESTART_LABEL}" "" "${RESTARTED}"
 
 # --- 8. Failed restart destroys the machine so the retry can replace it -----
 run_case "failed restart destroys the machine for replacement" \
   "$(machine_json "${WEDGED_MACHINE_ID}" started app "${APP_LIVENESS_CHECK}" "${CRITICAL_STATUS}")" 1
-assert_eq "exit code" "0" "${RC}"
+assert_eq "${EXIT_CODE_LABEL}" "0" "${RC}"
 assert_eq "restart attempted" "${WEDGED_MACHINE_ID}" "${RESTARTED}"
 assert_eq "destroyed machine" "${WEDGED_MACHINE_ID}" "${DESTROYED}"
-assert_eq "warns" "1" "$(printf '%s' "${OUTPUT}" | grep -c '::warning::' || true)"
+assert_eq "${WARNINGS_LABEL}" "1" "$(printf '%s' "${OUTPUT}" | grep -c '::warning::' || true)"
 
 # --- 9. Failed destroy is best-effort: warning + exit 0 ---------------------
 run_case "failed destroy does not mask the deploy attempt" \
   "$(machine_json "${WEDGED_MACHINE_ID}" started app "${APP_LIVENESS_CHECK}" "${CRITICAL_STATUS}")" 1 1
-assert_eq "exit code" "0" "${RC}"
+assert_eq "${EXIT_CODE_LABEL}" "0" "${RC}"
 assert_eq "destroy attempted" "${WEDGED_MACHINE_ID}" "${DESTROYED}"
-assert_eq "warns" "2" "$(printf '%s' "${OUTPUT}" | grep -c '::warning::' || true)"
+assert_eq "${WARNINGS_LABEL}" "2" "$(printf '%s' "${OUTPUT}" | grep -c '::warning::' || true)"
 
 # --- 10. No wedge means no restart and no destroy ---------------------------
 run_case "healthy app machine is never destroyed" \
   "$(machine_json "${WEDGED_MACHINE_ID}" started app "${APP_LIVENESS_CHECK}" "${PASSING_STATUS}")"
-assert_eq "no destroy" "" "${DESTROYED}"
+assert_eq "${NO_DESTROY_LABEL}" "" "${DESTROYED}"
 
 echo ""
 echo "=== summary: ${PASS} passed, ${FAIL} failed ==="
