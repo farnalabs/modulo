@@ -651,7 +651,8 @@ class TestFetchLatestDeployRunUrl:
             first = await _fetch_latest_deploy_run_url(settings)
             second = await _fetch_latest_deploy_run_url(settings)
 
-        assert first == second == "https://github.com/o/r/actions/runs/7"
+        assert first == "https://github.com/o/r/actions/runs/7"
+        assert second == first
         factory.assert_awaited_once()
 
     async def test_expired_cache_refetches(self, monkeypatch: pytest.MonkeyPatch) -> None:
