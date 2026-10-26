@@ -521,7 +521,7 @@ class TestCheckMigrationsDivergence:
         diverged = DivergenceCheckResult(
             diverged=True,
             db_revisions={"0001", "0099"},
-            repo_revisions={"0001"},
+            repo_revisions={"0001", "0100"},
             orphaned_revisions={"0099"},
             detail="diverged",
         )
@@ -534,11 +534,11 @@ class TestCheckMigrationsDivergence:
             patch("modulo.api.routes.health.ScriptDirectory") as script_cls,
             patch("modulo.api.routes.health.check_migration_divergence", return_value=diverged),
         ):
-            script_cls.from_config.return_value.get_heads.return_value = {"0001", "0002"}
+            script_cls.from_config.return_value.get_heads.return_value = {"0001", "0100"}
             result = await _check_migrations()
         detail = result.detail or ""
         assert result.status == "degraded"
-        assert "pending migrations: 0002" in detail
+        assert "pending migrations: 0100" in detail
         assert "DIVERGENCE" in detail
         assert "0099" in detail
 
@@ -1252,10 +1252,10 @@ class TestMigrationsDivergence:
         settings = _make_settings()
         divergent = DivergenceCheckResult(
             diverged=True,
-            db_revisions={"0001", "0099"},
+            db_revisions={"0001", "0000"},
             repo_revisions={"0001"},
-            orphaned_revisions={"0099"},
-            detail="Migration divergence detected: 0099",
+            orphaned_revisions={"0000"},
+            detail="Migration divergence detected: 0000",
         )
         script = MagicMock()
         script.get_heads.return_value = ["0001"]
@@ -1263,7 +1263,7 @@ class TestMigrationsDivergence:
             patch("modulo.api.routes.health.get_settings", return_value=settings),
             patch(
                 "modulo.api.routes.health.get_or_create_engine",
-                return_value=_fake_migrations_engine(["0001", "0099"]),
+                return_value=_fake_migrations_engine(["0001", "0000"]),
             ),
             patch("modulo.api.routes.health.ScriptDirectory.from_config", return_value=script),
             patch("modulo.api.routes.health.check_migration_divergence", return_value=divergent),
@@ -1271,7 +1271,7 @@ class TestMigrationsDivergence:
             result = await _check_migrations()
         assert result.status == "degraded"
         assert "DIVERGENCE" in result.detail
-        assert "0099" in result.detail
+        assert "0000" in result.detail
 
     async def test_divergence_check_failure_is_logged_and_fail_open(self) -> None:
         settings = _make_settings()
