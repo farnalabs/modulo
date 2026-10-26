@@ -193,6 +193,12 @@ The manual playbook. Run it when either trigger fires:
 treat 1-3 as REQUIRED, not optional - an endangered release stays listed
 only while it is being rolled forward.
 
+**Version pin reference (Docker Compose production):**
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `TAG` | Modulo image version (required, no default) | `v0.4.0` |
+
 ### Application Rollback
 
 ```bash

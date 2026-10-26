@@ -55,6 +55,10 @@ jobs:
           E2E_PROD_ADMIN_PASSWORD: ${{ secrets.E2E_PROD_ADMIN_PASSWORD }}
         run: |
           if [ -z "$E2E_PROD_ADMIN_EMAIL" ] || [ -z "$E2E_PROD_ADMIN_PASSWORD" ]; then
+            # FAR-2157: this is the monitor's "did nothing" path. Record it
+            # machine-readably (a step output the marker step below reads) so a
+            # green run can never be mistaken for "the chain was verified".
+            echo "authenticated=false" >> "$GITHUB_OUTPUT"
             echo "::warning::E2E_PROD_ADMIN_EMAIL/E2E_PROD_ADMIN_PASSWORD not set - skipping audit-chain monitor (FAR-1468)."
             exit 0
           fi
@@ -84,6 +88,7 @@ jobs:
 
           echo "::add-mask::$TOKEN"
           echo "MODULO_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "authenticated=true" >> "$GITHUB_OUTPUT"
           echo "admin login OK - JWT access token acquired for the audit-chain checks"
 
       # Check 1 - integrity: recompute the hash chain server-side.
@@ -403,3 +408,27 @@ jobs:
             -H "Content-Type: application/json" \
             -H "Authorization: $LINEAR_API_KEY" \
             -d "$BODY" || echo "::warning::Failed to create Linear ticket"
+
+      # FAR-2157: the monitor's "did nothing" path must be legible, not green
+      # silence. When the admin credentials are absent the two checks above
+      # skip and the job concludes SUCCESS - indistinguishable, in run
+      # history, from a cycle that verified the chain. This step runs ONLY on
+      # that no-op path, so its presence is the durable machine-readable
+      # signal (the jobs API exposes step names and conclusions, not job
+      # outputs), and it writes a summary a reader cannot miss. The job still
+      # concludes success by design (the documented monitor convention: a
+      # not-yet-configured secret must not red-queue the workflow); what
+      # changes is that the run now SAYS it did nothing.
+      - name: Record the NOT RUN monitor cycle (FAR-2157)
+        if: always() && steps.auth.outputs.authenticated == 'false'
+        shell: bash
+        run: |
+          echo "::notice::AUDIT-CHAIN MONITOR NOT RUN - no admin credentials, so neither the integrity nor the continuity check ran. This green run is NOT evidence that the audit chain was verified (FAR-2157)."
+          {
+            echo "## NOT RUN — audit-chain monitor had no credentials (FAR-2157)"
+            echo ""
+            echo "Neither check ran: E2E_PROD_ADMIN_EMAIL / E2E_PROD_ADMIN_PASSWORD are not configured."
+            echo "This run concludes success by design (a missing secret must not red-queue the"
+            echo "monitor), but it verified NOTHING. Configure the secrets to restore coverage."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0

@@ -23,7 +23,10 @@ Two measured conditions, either of which makes deploy health UNHEALTHY:
    ``failure_threshold`` (default 2) consecutive *failed* completed runs of
    ``deploy.yml``. ``cancelled`` runs are NOT failures (a superseded deploy is
    normal and must not inflate the streak), so the walk stops at any
-   non-failure outcome.
+   non-failure outcome. A THROTTLED run (``deploy_job_conclusion ==
+   "skipped"``) deployed nothing, so it is neither: it is neutral and the walk
+   continues past it (FAR-2152) - otherwise a throttled no-op sitting between
+   two real failures would break the streak and suppress the alert.
 
 A single flaky deploy therefore never alerts, and neither does a prod that is
 merely inside the grace window (the throttle batches up to 3h, staging E2E
@@ -61,6 +64,9 @@ DEPLOY_RUNS_WINDOW = 15
 
 #: The step whose conclusion is the durable previous-verdict state vector.
 VERDICT_STEP_NAME = "Fail the run when deploy health is unhealthy"
+
+#: ``deploy_job_conclusion`` values meaning "the lookup could not tell".
+_ATTEMPT_UNKNOWN = frozenset({"", "unknown", "missing", "none", "null"})
 
 HEALTHY = "healthy"
 UNHEALTHY = "unhealthy"
@@ -305,7 +311,17 @@ def _classify_failure_stages(
     if not deploy_jobs or streak <= 0:
         return []
     stages: list[dict[str, str]] = []
-    for run in completed[:streak]:
+    counted = 0
+    for run in completed:
+        if counted >= streak:
+            break
+        # Mirror consecutive_failures: a throttled no-op is neutral (skip it),
+        # and any other non-failure ends the streak.
+        if deploy_attempted(run) is False:
+            continue
+        if str(run.get("conclusion") or "").lower() != "failure":
+            break
+        counted += 1
         run_id = str(run.get("databaseId") or "")
         jobs = deploy_jobs.get(run_id) if run_id else None
         if not jobs:
@@ -329,15 +345,43 @@ def _parse_timestamp(raw: str) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
+def deploy_attempted(run: dict[str, Any]) -> bool | None:
+    """``True``/``False`` when the run's deploy attempt is known, else ``None``.
+
+    FAR-2152: a throttled run concludes SUCCESS but every job (including
+    ``Deploy to app.modulo.run``) is skipped - it deployed nothing. Reading the
+    run conclusion alone counts that no-op as a success, which breaks a streak
+    of real deploy failures and delays the alert.
+
+    ``deploy_job_conclusion`` is attached by
+    ``.github/scripts/deploy_run_attempts.py``. When it is absent or
+    unreadable the answer is ``None`` and the caller falls back to the run
+    conclusion (never to "not attempted" - an unreadable lookup must not hide a
+    real failure).
+    """
+    raw = run.get("deploy_job_conclusion")
+    if raw is None:
+        return None
+    conclusion = str(raw).strip().lower()
+    if conclusion in _ATTEMPT_UNKNOWN:
+        return None
+    return conclusion != "skipped"
+
+
 def consecutive_failures(runs: Sequence[dict[str, Any]]) -> int:
     """Leading *failed* completed runs, newest first.
 
     ``cancelled`` (a superseded/duplicate deploy), ``success`` and any other
-    outcome end the streak without contributing to it.
+    outcome end the streak without contributing to it. A run that deployed
+    NOTHING (a throttled no-op, ``deploy_job_conclusion == "skipped"``) is
+    NEUTRAL: it neither feeds the streak nor breaks it, so a throttled run
+    between two real failures cannot suppress the alert (FAR-2152).
     """
     streak = 0
     for run in runs:
         if str(run.get("status") or "").lower() != "completed":
+            continue
+        if deploy_attempted(run) is False:
             continue
         if str(run.get("conclusion") or "").lower() == "failure":
             streak += 1
@@ -353,6 +397,10 @@ def _completed_runs(runs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
 def _latest_failure(runs: Sequence[dict[str, Any]]) -> dict[str, str]:
     for run in runs:
         if str(run.get("status") or "").lower() != "completed":
+            continue
+        # FAR-2152: a throttled no-op is neutral here too - it must not stop
+        # the walk before the real failed deploy it sits above.
+        if deploy_attempted(run) is False:
             continue
         if str(run.get("conclusion") or "").lower() != "failure":
             break
@@ -464,6 +512,14 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 
+#: The step each escalation workflow runs ONLY when a tick measured nothing
+#: (``healthy`` is empty). Its presence is the durable machine-readable
+#: "UNKNOWN" marker: without it, an unmeasured tick skips the verdict step and
+#: its run is recorded as HEALTHY by ``_verdict_from_step`` (FAR-2157). Both
+#: workflows must use this exact name - an architecture test pins it.
+UNKNOWN_VERDICT_STEP_NAME = "Record the unmeasured tick (FAR-2157)"
+
+
 def _verdict_from_step(step: dict[str, Any]) -> str:
     """Map one verdict step's conclusion onto a previous-verdict value."""
     conclusion = str(step.get("conclusion") or "").lower()
@@ -474,13 +530,33 @@ def _verdict_from_step(step: dict[str, Any]) -> str:
     return UNKNOWN
 
 
-def parse_previous_verdict(jobs_payload: dict[str, Any] | None) -> str:
-    """The previous run's verdict, from the verdict step's conclusion.
+def _has_unknown_marker(jobs_payload: dict[str, Any] | None) -> bool:
+    """True when the run carries the UNKNOWN-tick marker step (FAR-2157).
 
+    ``True`` is authoritative: the workflow ran that step, which it does only
+    when the tick's ``healthy`` output was empty, i.e. nothing was measured.
+    A tick that measured nothing must never be read back as a healthy verdict
+    - the transition email would then silently swallow the recovery.
+    """
+    for job in (jobs_payload or {}).get("jobs") or []:
+        for step in job.get("steps") or []:
+            if step.get("name") == UNKNOWN_VERDICT_STEP_NAME:
+                return True
+    return False
+
+
+def parse_previous_verdict(jobs_payload: dict[str, Any] | None) -> str:
+    """The previous run's verdict, from its steps.
+
+    A run that carries the UNKNOWN-tick marker measured nothing, so its actual
+    state is unknown (FAR-2157) - that check comes first, because such a run
+    SKIPS the verdict step and would otherwise read as healthy. Otherwise
     ``failure`` -> the previous run evaluated unhealthy; ``skipped`` -> it
     evaluated healthy (the step's condition was false); anything else, or no
     such step (a run from an older workflow definition), -> UNKNOWN.
     """
+    if _has_unknown_marker(jobs_payload):
+        return UNKNOWN
     for job in (jobs_payload or {}).get("jobs") or []:
         for step in job.get("steps") or []:
             if step.get("name") == VERDICT_STEP_NAME:

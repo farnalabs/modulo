@@ -146,6 +146,17 @@ curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/insta
 bash modulo-install.sh
 ```
 
+**Versioned install (recommended for production):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
+VERSION=bundle-v0.4.0 bash modulo-install.sh
+```
+
+Replace `bundle-v0.4.0` with the bundle tag you intend to run. The `VERSION`
+variable pins the exact bundle release tag (see the [release process](docs/release-process.md)
+for the version convention).
+
 The installer verifies every byte it downloads (SHA256SUMS plus a signed
 release manifest) before executing anything, lays the bundle out under
 `~/.local/opt/modulo/` (with a `current` symlink that later upgrades

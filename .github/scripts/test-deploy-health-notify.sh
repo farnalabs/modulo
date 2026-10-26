@@ -218,6 +218,104 @@ assert_eq "exit code (best-effort)" 0 "$RC"
 assert_contains "warning names the missing secrets" "NO email was sent" "$OUT"
 echo ""
 
+# ---- FAR-2157: the previous-verdict walk skips unmeasured ticks ------------
+# A tick that measured nothing carries the UNKNOWN-tick marker step and skips
+# the verdict step; reading only the most recent completed run recorded it as
+# HEALTHY, which swallowed the recovery email. These cases drive the real
+# lookup with a fake `gh` so the walk is exercised (the cases above override
+# PREVIOUS_VERDICT and never reach it).
+mkdir -p "$WORK/bin"
+
+python3 - "$WORK" <<'PY2'
+import json
+import sys
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+from pathlib import Path
+
+work = Path(sys.argv[1])
+loader = SourceFileLoader("deploy_health", ".github/scripts/deploy_health.py")
+module = module_from_spec(spec_from_loader("deploy_health", loader))
+sys.modules["deploy_health"] = module
+loader.exec_module(module)
+
+# 201 = the NEWEST previous run: measured nothing (UNKNOWN marker, no verdict step).
+# 202 = the run before it: measured UNHEALTHY (verdict step failed).
+(work / "jobs-201.json").write_text(
+    json.dumps({"jobs": [{"steps": [{"name": module.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "success"}]}]}),
+    encoding="utf-8",
+)
+(work / "jobs-202.json").write_text(
+    json.dumps(
+        {"jobs": [{"steps": [{"name": module.VERDICT_STEP_NAME, "conclusion": "failure"}]}]}
+    ),
+    encoding="utf-8",
+)
+(work / "runs.json").write_text(
+    json.dumps(
+        [
+            {"databaseId": 201, "status": "completed", "conclusion": "success"},
+            {"databaseId": 202, "status": "completed", "conclusion": "failure"},
+        ]
+    ),
+    encoding="utf-8",
+)
+PY2
+
+cat > "$WORK/bin/gh" <<'FAKEGH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" = "run" && "${2:-}" = "list" ]]; then
+  printf '%s' "${FAKE_RUNS:-[]}"
+  exit 0
+fi
+if [[ "${1:-}" = "api" ]]; then
+  id="$(printf '%s' "${2:-}" | sed -E 's#.*/runs/([0-9]+)/jobs#\1#')"
+  case "$id" in
+    201) cat "${FAKE_JOBS_DIR}/jobs-201.json" ;;
+    202) cat "${FAKE_JOBS_DIR}/jobs-202.json" ;;
+    *) echo '{"jobs":[]}' ;;
+  esac
+  exit 0
+fi
+exit 1
+FAKEGH
+chmod +x "$WORK/bin/gh"
+
+run_notify_lookup() {
+  # run_notify_lookup <healthy> <verdict-json> -- real run-history lookup path
+  local healthy="$1" verdict="$2"
+  env -i \
+    PATH="$WORK/bin:$PATH" \
+    HOME="$HOME" \
+    DRY_RUN=1 \
+    CURRENT_HEALTHY="$healthy" \
+    VERDICT_JSON="$verdict" \
+    WORKFLOW_NAME="Deploy: Staleness Watchdog" \
+    VERDICT_STEP_NAME="Fail the run when deploy health is unhealthy" \
+    REPOSITORY="farnalabs/modulo" \
+    GITHUB_RUN_ID="999" \
+    FAKE_RUNS="$(cat "$WORK/runs.json")" \
+    FAKE_JOBS_DIR="$WORK" \
+    RUN_URL="https://github.com/farnalabs/modulo/actions/runs/999" \
+    DEPLOY_URL="https://github.com/farnalabs/modulo/actions/workflows/deploy.yml" \
+    bash "$NOTIFY"
+}
+
+echo "Case 10: an unmeasured tick between an alert and its recovery no longer swallows the recovery"
+OUT="$(run_notify_lookup true "$WORK/healthy.json" 2>&1)"
+assert_contains "walk skips the unmeasured run" "Run 201 measured nothing (UNKNOWN)" "$OUT"
+assert_contains "walk finds the measured unhealthy verdict" "Previous verdict read from run 202." "$OUT"
+assert_contains "recovery email still sent" "DEPLOY HEALTH RECOVERED" "$OUT"
+echo ""
+
+echo "Case 11: an unmeasured tick between two unhealthy ticks does not re-send the alert"
+OUT="$(run_notify_lookup false "$WORK/unhealthy.json" 2>&1)"
+assert_contains "walk finds the measured unhealthy verdict" "Previous verdict read from run 202." "$OUT"
+assert_contains "no duplicate alert" "No transition" "$OUT"
+assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+echo ""
+
 echo "=== passed: $PASS, failed: $FAIL ==="
 if [[ "$FAIL" -ne 0 ]]; then
   exit 1
