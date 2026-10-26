@@ -498,6 +498,25 @@ def _resolve_redaction_leaf(redacted: dict[str, Any], segments: Sequence[str]) -
     return current
 
 
+def _apply_redaction_pattern(
+    redacted: dict[str, Any],
+    pattern: CorrectionRedactionPattern,
+) -> None:
+    """Apply a single redaction pattern to the redacted payload (mutates in place)."""
+    segments = [segment for segment in pattern.path.split(".") if segment]
+    if not segments:
+        return
+    regex = _compile_redaction_regex(pattern)
+    if regex is None:
+        return
+    parent = _resolve_redaction_leaf(redacted, segments)
+    if parent is None:
+        return
+    leaf = parent.get(segments[-1])
+    if isinstance(leaf, str):
+        parent[segments[-1]] = regex.sub(pattern.replacement, leaf)
+
+
 def redact_payload(
     payload: Mapping[str, Any],
     patterns: Sequence[CorrectionRedactionPattern | Mapping[str, Any]],
@@ -512,18 +531,7 @@ def redact_payload(
     redacted = copy.deepcopy(dict(payload))
     for raw in patterns:
         pattern = _coerce_redaction_pattern(raw)
-        segments = [segment for segment in pattern.path.split(".") if segment]
-        if not segments:
-            continue
-        regex = _compile_redaction_regex(pattern)
-        if regex is None:
-            continue
-        parent = _resolve_redaction_leaf(redacted, segments)
-        if parent is None:
-            continue
-        leaf = parent.get(segments[-1])
-        if isinstance(leaf, str):
-            parent[segments[-1]] = regex.sub(pattern.replacement, leaf)
+        _apply_redaction_pattern(redacted, pattern)
     return redacted
 
 
@@ -609,13 +617,8 @@ class CorrectionBackend(Protocol):
     async def invoke(self, messages: list[Any], **kwargs: Any) -> Any: ...
 
 
-def _parse_structured_output(raw: str, schema: dict[str, Any]) -> dict[str, Any]:
-    """Parse *raw* as JSON and validate against *schema* (strict).
-
-    Raises:
-        CorrectionConfigError: when the produced output is not valid JSON or
-            does not satisfy the correction's strict output schema.
-    """
+def _parse_json_output(raw: str) -> dict[str, Any]:
+    """Parse raw string as JSON, ensuring it's a non-empty dict."""
     text = (raw or "").strip()
     if not text:
         raise CorrectionConfigError("correction backend produced empty output")
@@ -625,15 +628,32 @@ def _parse_structured_output(raw: str, schema: dict[str, Any]) -> dict[str, Any]
         raise CorrectionConfigError(f"correction backend produced invalid JSON: {exc}") from None
     if not isinstance(parsed, dict):
         raise CorrectionConfigError("correction backend output must be a JSON object")
-    if schema:
-        from jsonschema import SchemaError, ValidationError, validate
+    return parsed
 
-        try:
-            validate(parsed, schema)
-        except ValidationError as exc:
-            raise CorrectionConfigError(f"correction output violates output_schema: {exc.message}") from None
-        except SchemaError as exc:
-            raise CorrectionConfigError(f"correction output_schema is malformed: {exc.message}") from None
+
+def _validate_against_schema(parsed: dict[str, Any], schema: dict[str, Any]) -> None:
+    """Validate parsed output against the JSON schema."""
+    if not schema:
+        return
+    from jsonschema import SchemaError, ValidationError, validate
+
+    try:
+        validate(parsed, schema)
+    except ValidationError as exc:
+        raise CorrectionConfigError(f"correction output violates output_schema: {exc.message}") from None
+    except SchemaError as exc:
+        raise CorrectionConfigError(f"correction output_schema is malformed: {exc.message}") from None
+
+
+def _parse_structured_output(raw: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """Parse *raw* as JSON and validate against *schema* (strict).
+
+    Raises:
+        CorrectionConfigError: when the produced output is not valid JSON or
+            does not satisfy the correction's strict output schema.
+    """
+    parsed = _parse_json_output(raw)
+    _validate_against_schema(parsed, schema)
     return parsed
 
 
@@ -828,20 +848,32 @@ def _revalidate_pii(produced_output: dict[str, Any]) -> EvalResult:
     )
 
 
+def _walk_dict_strings(payload: dict[str, Any], regex: re.Pattern[str]) -> str | None:
+    """Walk a dictionary for matching string leaves."""
+    for value in payload.values():
+        found = _walk_strings(value, regex)
+        if found is not None:
+            return found
+    return None
+
+
+def _walk_list_strings(payload: list[Any], regex: re.Pattern[str]) -> str | None:
+    """Walk a list for matching string leaves."""
+    for value in payload:
+        found = _walk_strings(value, regex)
+        if found is not None:
+            return found
+    return None
+
+
 def _walk_strings(payload: Any, regex: re.Pattern[str]) -> str | None:
     """Return the first matching string leaf, or ``None`` (deep scan)."""
     if isinstance(payload, str):
         return payload if regex.search(payload) else None
     if isinstance(payload, dict):
-        for value in payload.values():
-            found = _walk_strings(value, regex)
-            if found is not None:
-                return found
-    elif isinstance(payload, list):
-        for value in payload:
-            found = _walk_strings(value, regex)
-            if found is not None:
-                return found
+        return _walk_dict_strings(payload, regex)
+    if isinstance(payload, list):
+        return _walk_list_strings(payload, regex)
     return None
 
 
@@ -1281,6 +1313,51 @@ async def run_single_node_correction(
     return _resolved_outcome(ctx, produced_redacted, revalidation, output_metric)
 
 
+async def _run_regex_revalidation(
+    engine: EvalEngine,
+    produced_output: dict[str, Any],
+    config: dict[str, Any],
+) -> EvalResult:
+    """Run REGEX family revalidation."""
+    return _revalidate_regex(
+        engine,
+        produced_output,
+        pattern=str(config.get("pattern") or ""),
+        field=str(config.get("field") or ""),
+    )
+
+
+async def _run_model_judge_revalidation(
+    engine: EvalEngine,
+    produced_output: dict[str, Any],
+    config: dict[str, Any],
+    correction: CorrectionDefinition,
+    judge_callable: ModelJudgeCallable | None,
+) -> EvalResult:
+    """Run MODEL_JUDGE family revalidation."""
+    return _revalidate_model_judge(
+        engine,
+        produced_output,
+        judge_callable=judge_callable,
+        rubric=str(config.get("rubric") or "does the corrected output still contain the guarded data?"),
+        threshold=float(config.get("threshold", 0.5)),
+        model_backend_id=(
+            str(correction.revalidation_model_backend_id) if correction.revalidation_model_backend_id else None
+        ),
+    )
+
+
+def _build_revalidation_config(
+    correction: CorrectionDefinition,
+    revalidation_config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the merged revalidation config."""
+    config: dict[str, Any] = dict(correction.revalidation_config or {})
+    if revalidation_config:
+        config.update(revalidation_config)
+    return config
+
+
 async def _run_different_family_revalidation(
     engine: EvalEngine,
     produced_output: dict[str, Any],
@@ -1291,30 +1368,12 @@ async def _run_different_family_revalidation(
     judge_callable: ModelJudgeCallable | None,
 ) -> EvalResult:
     """Run the different-family re-validation detector over the produced output."""
-    # The definition's ``revalidation_config`` (from the guardrail's correction
-    # config block) is the default; a caller-supplied config overrides it.
-    config: dict[str, Any] = dict(correction.revalidation_config or {})
-    if revalidation_config:
-        config.update(revalidation_config)
+    config = _build_revalidation_config(correction, revalidation_config)
     try:
         if family == CorrectionDetectorFamily.REGEX:
-            return _revalidate_regex(
-                engine,
-                produced_output,
-                pattern=str(config.get("pattern") or ""),
-                field=str(config.get("field") or ""),
-            )
+            return await _run_regex_revalidation(engine, produced_output, config)
         if family == CorrectionDetectorFamily.MODEL_JUDGE:
-            return _revalidate_model_judge(
-                engine,
-                produced_output,
-                judge_callable=judge_callable,
-                rubric=str(config.get("rubric") or "does the corrected output still contain the guarded data?"),
-                threshold=float(config.get("threshold", 0.5)),
-                model_backend_id=(
-                    str(correction.revalidation_model_backend_id) if correction.revalidation_model_backend_id else None
-                ),
-            )
+            return await _run_model_judge_revalidation(engine, produced_output, config, correction, judge_callable)
         return _revalidate_pii(produced_output)
     except asyncio.CancelledError:
         raise

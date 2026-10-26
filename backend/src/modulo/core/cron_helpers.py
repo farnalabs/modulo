@@ -1864,6 +1864,44 @@ async def fire_cron_trigger(
         )
 
 
+async def _validate_cron_trigger(
+    session: AsyncSession, trigger_id: uuid.UUID, org_id: uuid.UUID, pipeline_id: uuid.UUID
+) -> tuple[Any, dict[str, Any] | None]:
+    """Validate a cron trigger and return (trigger, skip_dict) or (None, skip_dict)."""
+    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from modulo.core.run_admission import evaluate_backpressure
+    from modulo.db.models.trigger import Trigger
+
+    key1, key2 = _uuid_to_lock_keys(trigger_id)
+    lock_result = await session.execute(text(_SQL_TRY_ADVISORY_LOCK), {"key1": key1, "key2": key2})
+    if not lock_result.scalar_one():
+        return None, {"status": "skipped", "reason": "trigger_busy"}
+
+    trigger = (
+        await session.execute(
+            select(Trigger).where(
+                Trigger.id == trigger_id,
+                Trigger.organisation_id == org_id,
+                Trigger.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if trigger is None or not trigger.active:
+        return None, {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+    if await _org_is_paused_degraded(session, org_id):
+        return None, {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+    active_count = await _count_active_runs(session, trigger_id)
+    if active_count >= trigger.max_concurrent_runs:
+        return trigger, await _concurrency_limit_skip(session, trigger, org_id, active_count)
+    backpressured, bp_reason = await evaluate_backpressure(session, pipeline_id=pipeline_id)
+    if backpressured:
+        return trigger, await _backpressure_skip(session, trigger, org_id, bp_reason)
+    skip = await _cron_spend_gate_skip(session, trigger, org_id)
+    if skip is not None:
+        return trigger, skip
+    return trigger, None
+
+
 async def _fire_cron_trigger_in_session(
     session: AsyncSession,
     *,
@@ -1876,38 +1914,16 @@ async def _fire_cron_trigger_in_session(
 ) -> dict[str, Any]:
     from sqlalchemy import update
 
-    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-    from modulo.core.run_admission import evaluate_backpressure
     from modulo.db.crud.run import create_run
     from modulo.db.models.trigger import Trigger
 
     await _set_rls_org(session, org_id)
-    key1, key2 = _uuid_to_lock_keys(trigger_id)
-    lock_result = await session.execute(text(_SQL_TRY_ADVISORY_LOCK), {"key1": key1, "key2": key2})
-    if not lock_result.scalar_one():
-        return {"status": "skipped", "reason": "trigger_busy"}
-    trigger = (
-        await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == org_id,
-                Trigger.deleted_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
-    if trigger is None or not trigger.active:
-        return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-    if await _org_is_paused_degraded(session, org_id):
-        return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
-    active_count = await _count_active_runs(session, trigger_id)
-    if active_count >= trigger.max_concurrent_runs:
-        return await _concurrency_limit_skip(session, trigger, org_id, active_count)
-    backpressured, bp_reason = await evaluate_backpressure(session, pipeline_id=pipeline_id)
-    if backpressured:
-        return await _backpressure_skip(session, trigger, org_id, bp_reason)
-    skip = await _cron_spend_gate_skip(session, trigger, org_id)
+    trigger, skip = await _validate_cron_trigger(session, trigger_id, org_id, pipeline_id)
     if skip is not None:
         return skip
+    if trigger is None:
+        return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+
     try:
         async with session.begin_nested():
             if snapshot_id is None:
@@ -1934,6 +1950,7 @@ async def _fire_cron_trigger_in_session(
     except PipelineNotRunnableError as exc:
         _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
         return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
+
     event = await _log_event(session, trigger=trigger, org_id=org_id, result="accepted", run_id=run.id)
     values: dict[str, Any] = {"last_fired_at": datetime.now(UTC)}
     if advance_next_fire_at:
@@ -4413,49 +4430,66 @@ async def _enqueue_suite_run_fire(
     return True
 
 
-async def _process_one_due_polling_row(
+def _parse_connector_instance_id(config: dict[str, Any]) -> uuid.UUID | None:
+    """Parse connector_instance_id from config, returning None if invalid."""
+    ci_id_str = config.get("connector_instance_id")
+    try:
+        return uuid.UUID(str(ci_id_str)) if ci_id_str else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_poll_interval(config: dict[str, Any]) -> int:
+    """Parse poll_interval_seconds from config, defaulting to 60."""
+    try:
+        return max(int(config.get("poll_interval_seconds") or 60), 1)
+    except (ValueError, TypeError):
+        return 60
+
+
+def _is_suite_run(row: Any) -> bool:
+    """Check if the row is a suite_run."""
+    return getattr(row, "run_kind", "run") == "suite_run"
+
+
+async def _advance_and_check_polling(
+    session: AsyncSession,
+    row: Any,
+    interval: int,
+) -> bool:
+    """Advance polling next_fire_at and return True if successful."""
+    try:
+        return await _advance_polling_next_fire(session, row.id, interval)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: polling advance failed %s", row.id)
+        return False
+
+
+async def _handle_missing_connector_polling(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    row: Any,
+    interval: int,
+    summary: dict[str, Any],
+) -> None:
+    """Handle polling trigger with missing connector instance."""
+    await _polling_missing_connector(session, org_id, row, interval, summary)
+
+
+async def _process_polling_fire(
     session: AsyncSession,
     q: RedisQueue,
     now: datetime,
     org_id: uuid.UUID,
     org_paused: bool,
     row: Any,
+    config: dict[str, Any],
+    connector_instance_id: uuid.UUID,
     summary: dict[str, Any],
 ) -> None:
-    """Advance + enqueue ONE due polling row (one epoch each, atomic)."""
-    config = row.config_json or {}
-    ci_id_str = config.get("connector_instance_id")
-    try:
-        connector_instance_id = uuid.UUID(str(ci_id_str)) if ci_id_str else None
-    except (ValueError, TypeError):
-        connector_instance_id = None
-    try:
-        interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-    except (ValueError, TypeError):
-        _log.warning(
-            "fire_due_triggers: invalid poll_interval_seconds for trigger %s, using default",
-            row.id,
-        )
-        interval = 60
-    is_suite_run = getattr(row, "run_kind", "run") == "suite_run"
-    if connector_instance_id is None and not is_suite_run:
-        # Missing connector instance — log poll_error and advance
-        # (mirrors the legacy beat _fetch_due_triggers behaviour). A suite_run
-        # polling row is exempt: it resolves its own dataset/backend from the
-        # trigger config and needs no connector instance.
-        await _polling_missing_connector(session, org_id, row, interval, summary)
-        return
-
-    summary["polling_due"] += 1
-    try:
-        advanced = await _advance_polling_next_fire(session, row.id, interval)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception("fire_due_triggers: polling advance failed %s", row.id)
-        return
-    if not advanced:
-        return
+    """Enqueue polling fire job."""
     if org_paused:
         summary["polling_skipped_paused"] += 1
         return
@@ -4467,6 +4501,33 @@ async def _process_one_due_polling_row(
             message=f"fire_due_triggers: enqueue failed for polling trigger {row.id}",
             context={"trigger_id": str(row.id), "trigger_type": "polling"},
         )
+
+
+async def _process_one_due_polling_row(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    org_paused: bool,
+    row: Any,
+    summary: dict[str, Any],
+) -> None:
+    """Advance + enqueue ONE due polling row (one epoch each, atomic)."""
+    config = row.config_json or {}
+    connector_instance_id = _parse_connector_instance_id(config)
+    interval = _parse_poll_interval(config)
+    is_suite_run = _is_suite_run(row)
+
+    if connector_instance_id is None and not is_suite_run:
+        await _handle_missing_connector_polling(session, org_id, row, interval, summary)
+        return
+
+    summary["polling_due"] += 1
+
+    if not await _advance_and_check_polling(session, row, interval):
+        return
+
+    await _process_polling_fire(session, q, now, org_id, org_paused, row, config, connector_instance_id, summary)
 
 
 async def _process_due_polling_rows(
@@ -4594,44 +4655,52 @@ async def _process_one_due_report_row(
         )
 
 
-async def _process_one_ongoing_row(
+def _parse_ongoing_interval(config: dict[str, Any]) -> int:
+    """Parse scan_interval_seconds from config, defaulting to 60."""
+    return max(int(config.get("scan_interval_seconds") or 60), 60)
+
+
+def _is_suite_run_ongoing(row: Any) -> bool:
+    """Check if the ongoing row is a suite_run."""
+    return getattr(row, "run_kind", "run") == "suite_run"
+
+
+async def _advance_and_check_ongoing(
     session: AsyncSession,
-    q: RedisQueue,
-    now: datetime,
-    org_id: uuid.UUID,
-    org_paused: bool,
     row: Any,
-    ongoing_latest_snapshots: dict[uuid.UUID, uuid.UUID],
-    summary: dict[str, Any],
-    ongoing_enqueued: int,
-) -> int:
-    """Advance + enqueue ONE due ongoing row; returns 1 when a job was enqueued."""
-    config = row.config_json or {}
-    interval = max(int(config.get("scan_interval_seconds") or 60), 60)
-    summary["ongoing_due"] += 1
+    interval: int,
+) -> bool:
+    """Advance ongoing next_fire_at and return True if this machine owns the epoch."""
     try:
-        if not await _advance_ongoing_next_fire(session, row.id, interval):
-            return 0  # another machine advanced this epoch
+        return await _advance_ongoing_next_fire(session, row.id, interval)
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("fire_due_triggers: ongoing advance failed %s", row.id)
-        return 0
-    if org_paused:
-        # SKIP-not-defer: the epoch is consumed (advance above)
-        # but no fire job is enqueued.
-        summary["ongoing_skipped_paused"] += 1
-        return 0
-    if ongoing_enqueued >= ONGOING_MAX_ENQUEUE_PER_TICK:
-        # Per-tick enqueue cap — defer to the next tick. The
-        # advance already happened (no double-fire).
-        return 0
-    if getattr(row, "run_kind", "run") == "suite_run":
-        # FAR-377: a suite_run ongoing row routes to the SuiteRun fire job
-        # (mirroring the cron scan) — it builds a SuiteRun, never a pipeline
-        # ``Run``. The suite run resolves its own dataset/backend; no snapshot id.
-        return 1 if await _enqueue_suite_run_fire(q, now, org_id, row, summary, "ongoing_enqueued") else 0
-    snapshot_id = _resolve_snapshot_id(row, ongoing_latest_snapshots)
+        return False
+
+
+async def _handle_paused_ongoing(summary: dict[str, Any]) -> int:
+    """Handle paused ongoing trigger - consume epoch but skip enqueue."""
+    summary["ongoing_skipped_paused"] += 1
+    return 0
+
+
+def _check_ongoing_enqueue_cap(ongoing_enqueued: int) -> bool:
+    """Check if ongoing enqueue per-tick cap is reached."""
+    return ongoing_enqueued >= ONGOING_MAX_ENQUEUE_PER_TICK
+
+
+async def _enqueue_ongoing_fire(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    row: Any,
+    snapshot_id: uuid.UUID | None,
+    summary: dict[str, Any],
+) -> int:
+    """Enqueue ongoing fire job, return 1 if successful."""
     try:
         job_id = await _enqueue_fire_job_async(
             q,
@@ -4659,6 +4728,38 @@ async def _process_one_ongoing_row(
             context={"trigger_id": str(row.id), "trigger_type": "ongoing"},
         )
         return 0
+
+
+async def _process_one_ongoing_row(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    org_paused: bool,
+    row: Any,
+    ongoing_latest_snapshots: dict[uuid.UUID, uuid.UUID],
+    summary: dict[str, Any],
+    ongoing_enqueued: int,
+) -> int:
+    """Advance + enqueue ONE due ongoing row; returns 1 when a job was enqueued."""
+    config = row.config_json or {}
+    interval = _parse_ongoing_interval(config)
+    summary["ongoing_due"] += 1
+
+    if not await _advance_and_check_ongoing(session, row, interval):
+        return 0
+
+    if org_paused:
+        return await _handle_paused_ongoing(summary)
+
+    if _check_ongoing_enqueue_cap(ongoing_enqueued):
+        return 0
+
+    if _is_suite_run_ongoing(row):
+        return 1 if await _enqueue_suite_run_fire(q, now, org_id, row, summary, "ongoing_enqueued") else 0
+
+    snapshot_id = _resolve_snapshot_id(row, ongoing_latest_snapshots)
+    return await _enqueue_ongoing_fire(session, q, now, org_id, row, snapshot_id, summary)
 
 
 # ---------------------------------------------------------------------------
@@ -5352,6 +5453,46 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     )
 
 
+def _check_basic_nodeless_conditions(row: Any) -> bool:
+    """Check basic conditions for nodeless zombie."""
+    if row.status != "running":
+        return False
+    if row.node_token_usage is not None or not row.outputs_absent:
+        return False
+    return row.started_at is not None
+
+
+def _check_dispatch_phase_excludes(row: Any) -> bool:
+    """Check if dispatch_phase excludes this row from nodeless (FAR-1649)."""
+    if not hasattr(row, "dispatch_phase"):
+        return False
+    if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:  # noqa: SIM103
+        return False
+    return True
+
+
+def _check_age_gate(row: Any, age_minutes: int) -> bool:
+    """Check if row passes the age gate."""
+    now = datetime.now(UTC)
+    age_seconds = (now - row.started_at).total_seconds()
+    return age_seconds > age_minutes * 60
+
+
+def _check_in_flight_shield(row: Any, age_seconds: float) -> bool:
+    """Check in-flight shield (FAR-1088 F3/W-B)."""
+    attempt_age_seconds = age_seconds
+    dispatched_at = getattr(row, "dispatched_at", None)
+    if dispatched_at is not None:
+        now = datetime.now(UTC)
+        attempt_age_seconds = min(attempt_age_seconds, (now - dispatched_at).total_seconds())
+    return not (attempt_age_seconds <= _nodeless_in_flight_floor_seconds() and _has_live_dispatch_marker(row))
+
+
+def _check_checkpoints_absent(row: Any) -> bool:
+    """Check checkpoints_absent flag."""
+    return bool(getattr(row, "checkpoints_absent", False))
+
+
 def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     """Row-level re-check that a selected row matched the nodeless branch.
 
@@ -5392,7 +5533,7 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     the run-level ``started_at`` anchor (pre-FAR-1088 behaviour). Both
     ``_reconcile_nodeless_repair`` and the FAR-873 early-detect branch gate on
     this function, so the failure-coverage carve-out still only ever sees
-    genuinely zero-node, not-in-flight rows.
+    genuinely zero-node, not in-flight rows.
 
     FAR-1649: the durable ``first_node_dispatched`` phase (FAR-1422) proves a
     node STARTED even though no super-step completed — the re-dispatch
@@ -5406,39 +5547,19 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     pre-node state — stays repairable, mirroring the SQL
     ``dispatch_phase IS NULL`` arm.
     """
-    if row.status != "running":
+    if not _check_basic_nodeless_conditions(row):
         return False
-    if row.node_token_usage is not None or not row.outputs_absent:
+    if not _check_dispatch_phase_excludes(row):
         return False
-    if row.started_at is None:
+    if not _check_age_gate(row, age_minutes):
         return False
-    # FAR-1649: a durably-recorded first-node start is not zero-node. A row
-    # that does not expose the column at all fails CLOSED (exactly like the
-    # checkpoints_absent leg below) — a future row source that forgets the
-    # column can never re-dispatch a possibly-executed run.
-    if not hasattr(row, "dispatch_phase"):
-        return False
-    if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
-        return False
+
     now = datetime.now(UTC)
     age_seconds = (now - row.started_at).total_seconds()
-    if age_seconds <= age_minutes * 60:
+    if not _check_in_flight_shield(row, age_seconds):
         return False
-    # FAR-1088 F3: the SHIELD (not the age gate) is per-attempt. The anchor is
-    # max(started_at, dispatched_at); taking the MINIMUM of the two ages is the
-    # same comparison without a datetime-vs-datetime max() — dispatched_at is
-    # rewritten on every dispatch (dispatch._record_dispatched, before
-    # enqueue), so the fresher stamp wins and attempt-2's shield window runs
-    # from ITS dispatch rather than from attempt-1's started_at.
-    attempt_age_seconds = age_seconds
-    dispatched_at = getattr(row, "dispatched_at", None)
-    if dispatched_at is not None:
-        attempt_age_seconds = min(attempt_age_seconds, (now - dispatched_at).total_seconds())
-    if attempt_age_seconds <= _nodeless_in_flight_floor_seconds() and _has_live_dispatch_marker(row):
-        return False
-    # Checkpoint leg LAST so the specific legs above stay the rejecting reason
-    # for rows that carry them (keeps the per-leg tests discriminating).
-    return bool(getattr(row, "checkpoints_absent", False))
+
+    return _check_checkpoints_absent(row)
 
 
 async def _fresh_row_is_node_started_or_gone(session: AsyncSession, run_id: uuid.UUID) -> bool:
@@ -5696,6 +5817,149 @@ def _is_nodeless_redispatch_throttled(row: Any, nodeless_window: int) -> bool:
     return bool((datetime.now(UTC) - dispatched_at).total_seconds() <= nodeless_window * 60)
 
 
+def _compute_zombie_timing(run: Any) -> tuple[float | None, float | None, float | None, float | None]:
+    """Compute timing metrics for a zombie run."""
+    zombie_age_minutes: float | None = None
+    started_at = getattr(run, "started_at", None)
+    if started_at is not None:
+        zombie_age_minutes = max((datetime.now(UTC) - started_at).total_seconds() / 60, 0.0)
+
+    dispatched_at = getattr(run, "dispatched_at", None)
+    saq_queue_wait_seconds: float | None = None
+    if dispatched_at is not None and started_at is not None:
+        saq_queue_wait_seconds = max((started_at - dispatched_at).total_seconds(), 0.0)
+
+    claim_count = getattr(run, "claim_count", None)
+    phase_entered_at = getattr(run, "dispatch_phase_entered_at", None)
+    if phase_entered_at is not None and phase_entered_at.tzinfo is None:
+        phase_entered_at = phase_entered_at.replace(tzinfo=UTC)
+
+    completed_at = datetime.now(UTC)
+    dispatch_phase_elapsed: float | None = None
+    if phase_entered_at is not None:
+        dispatch_phase_elapsed = max((completed_at - phase_entered_at).total_seconds(), 0.0)
+
+    return zombie_age_minutes, saq_queue_wait_seconds, claim_count, dispatch_phase_elapsed
+
+
+def _build_zombie_error_detail(
+    run: Any,
+    detail_lead: str,
+    phase_text: str,
+    pipeline_id: uuid.UUID | None,
+    trigger_id: uuid.UUID | None,
+    claim_count: Any,
+) -> str:
+    """Build the error_detail string for a zombie run."""
+    return "{lead}; pipeline={pipeline}, trigger={trigger}, claim_count={claims}, {phase})".format(
+        lead=detail_lead,
+        pipeline=str(pipeline_id) if pipeline_id is not None else "unknown",
+        trigger=str(trigger_id) if trigger_id is not None else "unknown",
+        claims=claim_count if claim_count is not None else "unknown",
+        phase=phase_text,
+    )
+
+
+def _build_zombie_phase_text(dispatch_phase: str | None, dispatch_phase_elapsed: float | None) -> tuple[str, str]:
+    """Build phase text for error_detail and log."""
+    dispatch_phase_text = dispatch_phase if dispatch_phase is not None else "unknown"
+    phase_text = f"dispatch_phase={dispatch_phase_text}"
+    if dispatch_phase_elapsed is not None:
+        phase_text += f" dispatch_phase_elapsed={dispatch_phase_elapsed:.1f}s"
+    phase_log_text = f"{dispatch_phase_elapsed:.1f}s" if dispatch_phase_elapsed is not None else "unknown"
+    return phase_text, phase_log_text
+
+
+def _log_zombie_terminalization(
+    node_started: bool,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    claim_count: Any,
+    pipeline_id: uuid.UUID | None,
+    trigger_id: uuid.UUID | None,
+    dispatch_phase_text: str,
+    phase_log_text: str,
+    zombie_age_minutes: float | None,
+    saq_queue_wait_seconds: float | None,
+    dispatched_at: Any,
+    started_at: Any,
+) -> None:
+    """Emit alert-grade log for zombie terminalization."""
+    if node_started:
+        log_event = "dispatcher_reconcile.node_started_terminalized"
+        log_tail = (
+            "terminal-failed; first node STARTED but no super-step completed within the "
+            "nodeless window (node-started row — NOT a zero-node zombie)"
+        )
+    else:
+        log_event = "dispatcher_reconcile.claimed_but_never_dispatched"
+        log_tail = "terminal-failed; SAQ claimed this run but no node was ever dispatched"
+
+    _log.error(
+        "%s run=%s org=%s claim_count=%s "
+        "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
+        "zombie_age_minutes=%s saq_queue_wait_seconds=%s "
+        "dispatched_at=%s started_at=%s — %s",
+        log_event,
+        run_id,
+        org_id,
+        claim_count,
+        pipeline_id,
+        trigger_id,
+        dispatch_phase_text,
+        phase_log_text,
+        f"{zombie_age_minutes:.0f}" if zombie_age_minutes is not None else "unknown",
+        f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown",
+        dispatched_at.isoformat() if dispatched_at is not None else "None",
+        started_at.isoformat() if started_at is not None else "None",
+        log_tail,
+    )
+
+
+async def _ingest_zombie_error(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    node_started: bool,
+    run_id: uuid.UUID,
+    pipeline_id: uuid.UUID | None,
+    trigger_id: uuid.UUID | None,
+    claim_count: Any,
+    dispatch_phase: str | None,
+    dispatch_phase_elapsed: float | None,
+    zombie_age_minutes: float | None,
+    saq_queue_wait_seconds: float | None,
+    dispatched_at: Any,
+    started_at: Any,
+) -> None:
+    """Ingest SAQ error event for zombie terminalization."""
+    if node_started:
+        stable_message = (
+            "dispatcher_reconcile: node-started zombie terminal-failed "
+            "(first node STARTED but no super-step completed within the nodeless window)"
+        )
+    else:
+        stable_message = _NODELESS_ZOMBIE_STABLE_MESSAGE
+
+    await _ingest_saq_error(
+        session,
+        org_id,
+        function="dispatcher_reconcile",
+        message=stable_message,
+        context={
+            "run_id": str(run_id),
+            "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+            "trigger_id": str(trigger_id) if trigger_id is not None else None,
+            "claim_count": claim_count,
+            "dispatch_phase": dispatch_phase,
+            "dispatch_phase_elapsed": dispatch_phase_elapsed,
+            "zombie_age_minutes": zombie_age_minutes,
+            "saq_queue_wait_seconds": saq_queue_wait_seconds,
+            "dispatched_at": dispatched_at.isoformat() if dispatched_at is not None else None,
+            "started_at": started_at.isoformat() if started_at is not None else None,
+        },
+    )
+
+
 async def _fail_nodeless_run(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -5738,52 +6002,16 @@ async def _fail_nodeless_run(
     run = await session.get(Run, run_id)
     if run is None or run.status != "running":
         return
-    zombie_age_minutes: float | None = None
+
+    zombie_age_minutes, saq_queue_wait_seconds, claim_count, dispatch_phase_elapsed = _compute_zombie_timing(run)
     started_at = getattr(run, "started_at", None)
-    if started_at is not None:
-        zombie_age_minutes = max((datetime.now(UTC) - started_at).total_seconds() / 60, 0.0)
-    # FAR-873: claim→dispatch gap observability. dispatched_at records when
-    # dispatch_run enqueued the SAQ job (BEFORE the claim); started_at records
-    # when the executor claimed the run (claim_run_async). The gap between
-    # dispatched_at and started_at is the SAQ queue wait; the gap between
-    # started_at and now is the wasted zombie age. Both make the stall
-    # attributable per-run in seconds instead of an hour of forensics.
     dispatched_at = getattr(run, "dispatched_at", None)
-    saq_queue_wait_seconds: float | None = None
-    if dispatched_at is not None and started_at is not None:
-        saq_queue_wait_seconds = max((started_at - dispatched_at).total_seconds(), 0.0)
-    claim_count = getattr(run, "claim_count", None)
     pipeline_id = getattr(run, "pipeline_id", None)
     trigger_id = getattr(run, "trigger_id", None)
-    # FAR-1088: the run's LAST recorded dispatch phase — read straight off the
-    # already-loaded row's columns (no cross-module string protocol) — says
-    # WHERE the claim stalled. A NULL phase renders as ``unknown`` so "no
-    # phase was ever recorded" is unmistakable, never silently omitted.
     dispatch_phase = getattr(run, "dispatch_phase", None)
-    dispatch_phase_text = dispatch_phase if dispatch_phase is not None else "unknown"
-    phase_entered_at = getattr(run, "dispatch_phase_entered_at", None)
-    if phase_entered_at is not None and phase_entered_at.tzinfo is None:
-        # Defensive: a naive timestamp must never raise inside the repair.
-        phase_entered_at = phase_entered_at.replace(tzinfo=UTC)
-    completed_at = datetime.now(UTC)
-    dispatch_phase_elapsed: float | None = None
-    if phase_entered_at is not None:
-        dispatch_phase_elapsed = max((completed_at - phase_entered_at).total_seconds(), 0.0)
-    phase_text = f"dispatch_phase={dispatch_phase_text}"
-    if dispatch_phase_elapsed is not None:
-        phase_text += f" dispatch_phase_elapsed={dispatch_phase_elapsed:.1f}s"
-    phase_log_text = f"{dispatch_phase_elapsed:.1f}s" if dispatch_phase_elapsed is not None else "unknown"
-    run.status = "failed"
-    run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
-    # FAR-1088: include pipeline_id, trigger_id, claim_count, and the dispatch
-    # phase in the error_detail so the terminal-failed run is diagnosable from
-    # the error alone — a future regression on a specific pipeline/trigger is
-    # attributable in seconds instead of requiring TriggerEvent forensics.
-    # FAR-1649: a durably-recorded first-node start contradicts "dispatched no
-    # node" — the selection legs now exclude such rows, but a phase that
-    # transitioned between the SELECT and this chokepoint re-read must never
-    # produce the self-contradicting label that caused the FAR-1649
-    # misdiagnosis; say what the row actually proves.
+
+    phase_text, phase_log_text = _build_zombie_phase_text(dispatch_phase, dispatch_phase_elapsed)
+
     node_started = dispatch_phase == PHASE_FIRST_NODE_DISPATCHED
     if node_started:
         detail_lead = (
@@ -5795,85 +6023,183 @@ async def _fail_nodeless_run(
         detail_lead = (
             "Claimed by SAQ but dispatched no node within the nodeless window (dispatcher_reconcile zombie repair"
         )
-    run.error_detail = "{lead}; pipeline={pipeline}, trigger={trigger}, claim_count={claims}, {phase})".format(
-        lead=detail_lead,
-        pipeline=str(pipeline_id) if pipeline_id is not None else "unknown",
-        trigger=str(trigger_id) if trigger_id is not None else "unknown",
-        claims=claim_count if claim_count is not None else "unknown",
-        phase=phase_text,
-    )
+
+    completed_at = datetime.now(UTC)
+    run.status = "failed"
+    run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
+    run.error_detail = _build_zombie_error_detail(run, detail_lead, phase_text, pipeline_id, trigger_id, claim_count)
     run.completed_at = completed_at
-    # FAR-1649 qa finding 4: all THREE observability legs (counter, alert-grade
-    # log, ingested stable error message) must describe the row that actually
-    # arrived. A node-started row is NOT "claimed but never dispatched" — a
-    # node DID start — so it gets its own counter, log event and error group
-    # instead of inflating/labeling the zero-node class.
+
     if node_started:
         summary["node_started_terminalized"] += 1
     else:
         summary["claimed_but_never_dispatched"] += 1
-    # Alert-grade: these runs burned their full retry budget without ever
-    # executing a node — the environment (worker or sandbox) that claimed them
-    # is degraded. ERROR level + the wasted age makes the burst visible.
-    age_text = f"{zombie_age_minutes:.0f}" if zombie_age_minutes is not None else "unknown"
-    queue_wait_text = f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown"
-    if node_started:
-        log_event = "dispatcher_reconcile.node_started_terminalized"
-        log_tail = (
-            "terminal-failed; first node STARTED but no super-step completed within the "
-            "nodeless window (node-started row — NOT a zero-node zombie)"
-        )
-    else:
-        log_event = "dispatcher_reconcile.claimed_but_never_dispatched"
-        log_tail = "terminal-failed; SAQ claimed this run but no node was ever dispatched"
-    _log.error(
-        "%s run=%s org=%s claim_count=%s "
-        "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
-        "zombie_age_minutes=%s saq_queue_wait_seconds=%s "
-        "dispatched_at=%s started_at=%s — %s",
-        log_event,
+
+    _log_zombie_terminalization(
+        node_started,
         run_id,
         org_id,
         claim_count,
         pipeline_id,
         trigger_id,
-        dispatch_phase_text,
+        dispatch_phase if dispatch_phase is not None else "unknown",
         phase_log_text,
-        age_text,
-        queue_wait_text,
-        dispatched_at.isoformat() if dispatched_at is not None else "None",
-        started_at.isoformat() if started_at is not None else "None",
-        log_tail,
+        zombie_age_minutes,
+        saq_queue_wait_seconds,
+        dispatched_at,
+        started_at,
     )
-    if node_started:
-        stable_message = (
-            "dispatcher_reconcile: node-started zombie terminal-failed "
-            "(first node STARTED but no super-step completed within the nodeless window)"
+
+    await _ingest_zombie_error(
+        session,
+        org_id,
+        node_started,
+        run_id,
+        pipeline_id,
+        trigger_id,
+        claim_count,
+        dispatch_phase,
+        dispatch_phase_elapsed,
+        zombie_age_minutes,
+        saq_queue_wait_seconds,
+        dispatched_at,
+        started_at,
+    )
+
+
+async def _check_node_deadline_zero_progress(run: Any, session: AsyncSession) -> bool:
+    """Check if a run meets the zero-progress premise for node deadline reaping."""
+    from sqlalchemy import select as sa_select
+
+    if getattr(run, "dispatch_phase", None) != PHASE_FIRST_NODE_DISPATCHED:
+        return False
+    if run.node_token_usage is not None:
+        return False
+    flags = (
+        await session.execute(
+            sa_select(
+                _final_row_absent_expr().label("outputs_absent"),
+                _checkpoint_absent_expr().label("checkpoints_absent"),
+            ).where(Run.id == run.id)
         )
-    else:
-        # FAR-1715: SHARED constant — the stale_run_recovery zero-progress
-        # sweep emits the same message so both writers land in ONE Error
-        # Dashboard group (see ``_NODELESS_ZOMBIE_STABLE_MESSAGE``).
-        stable_message = _NODELESS_ZOMBIE_STABLE_MESSAGE
+    ).one()
+    return flags.outputs_absent and flags.checkpoints_absent
+
+
+def _compute_node_deadline_timing(run: Any, now: datetime) -> tuple[float | None, float | None, str, str]:
+    """Compute timing metrics for node deadline reaping."""
+    started_at = _as_utc(getattr(run, "started_at", None))
+    age_minutes = max((now - started_at).total_seconds() / 60, 0.0) if started_at is not None else None
+    phase_entered = _as_utc(getattr(run, "dispatch_phase_entered_at", None))
+    phase_elapsed = max((now - phase_entered).total_seconds(), 0.0) if phase_entered is not None else None
+    age_text = f"{age_minutes:.0f}" if age_minutes is not None else "unknown"
+    phase_text = f"{phase_elapsed:.1f}s" if phase_elapsed is not None else "unknown"
+    return age_minutes, phase_elapsed, age_text, phase_text
+
+
+def _build_node_deadline_error_detail(
+    run: Any,
+    node_budget_seconds: int,
+    deadline: datetime,
+    phase_text: str,
+) -> str:
+    """Build the error_detail for node deadline reaping."""
+    return (
+        "Node started (dispatch_phase=first_node_dispatched) but produced no node envelope "
+        f"(no checkpoint, output or token usage) by its node deadline ({node_budget_seconds}s "
+        f"from {deadline.isoformat()}); reaped by dispatcher_reconcile's durable node-deadline "
+        f"bound (FAR-1999). pipeline={run.pipeline_id}, trigger={run.trigger_id}, "
+        f"claim_count={run.claim_count}, dispatch_phase_elapsed={phase_text}"
+    )
+
+
+async def _terminalize_node_deadline_run(
+    session: AsyncSession,
+    run: Any,
+    org_id: uuid.UUID,
+    summary: dict[str, Any],
+    now: datetime,
+    node_budget_seconds: int,
+    deadline: datetime,
+    age_minutes: float | None,
+    phase_elapsed: float | None,
+    age_text: str,
+    phase_text: str,
+) -> None:
+    """Terminalize a run at its node deadline."""
+    run.status = "failed"
+    run.error_code = _NODE_DEADLINE_EXCEEDED_ERROR_CODE
+    run.node_deadline_watchdog_fired_count = int(run.node_deadline_watchdog_fired_count or 0) + 1
+    run.error_detail = _build_node_deadline_error_detail(run, node_budget_seconds, deadline, phase_text)
+    run.completed_at = now
+    await session.flush()
+
+    await persist_terminal_triage_marker(
+        session,
+        run_id=run.id,
+        organisation_id=org_id,
+        error_code=_NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+        reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+    )
+    summary["node_deadline_reaped"] += 1
+
+
+def _log_node_deadline_reaped(
+    run: Any,
+    org_id: uuid.UUID,
+    claim_count: Any,
+    phase_text: str,
+    age_text: str,
+    node_budget_seconds: int,
+    deadline: datetime,
+) -> None:
+    """Log node deadline reaping."""
+    _log.error(
+        "dispatcher_reconcile.node_deadline_reaped run=%s org=%s pipeline=%s trigger=%s "
+        "claim_count=%s dispatch_phase_elapsed=%s run_age_minutes=%s node_budget_seconds=%d "
+        "deadline=%s — node started but no node envelope arrived; terminal-failed "
+        "(never re-dispatched: re-execution unsafe)",
+        run.id,
+        org_id,
+        run.pipeline_id,
+        run.trigger_id,
+        claim_count,
+        phase_text,
+        age_text,
+        node_budget_seconds,
+        deadline.isoformat(),
+    )
+
+
+async def _ingest_node_deadline_error(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    pipeline_id: uuid.UUID | None,
+    trigger_id: uuid.UUID | None,
+    claim_count: Any,
+    dispatch_phase: str | None,
+    dispatch_phase_elapsed: float | None,
+    run_age_minutes: float | None,
+    node_budget_seconds: int,
+    node_deadline: datetime,
+) -> None:
+    """Ingest SAQ error for node deadline reaping."""
     await _ingest_saq_error(
         session,
         org_id,
         function="dispatcher_reconcile",
-        # STABLE message (no run id): one error group whose occurrence count IS
-        # the alert signal for the class; the run id rides in context_json.
-        message=stable_message,
+        message=_NODE_DEADLINE_REAP_STABLE_MESSAGE,
         context={
             "run_id": str(run_id),
-            "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+            "pipeline_id": str(pipeline_id),
             "trigger_id": str(trigger_id) if trigger_id is not None else None,
             "claim_count": claim_count,
-            # FAR-1088: where the claim stalled, per the run row's own columns.
             "dispatch_phase": dispatch_phase,
             "dispatch_phase_elapsed": dispatch_phase_elapsed,
-            "zombie_age_minutes": zombie_age_minutes,
-            "saq_queue_wait_seconds": saq_queue_wait_seconds,
-            "dispatched_at": dispatched_at.isoformat() if dispatched_at is not None else None,
-            "started_at": started_at.isoformat() if started_at is not None else None,
+            "run_age_minutes": run_age_minutes,
+            "node_budget_seconds": node_budget_seconds,
+            "node_deadline": node_deadline.isoformat(),
         },
     )
 
@@ -5928,8 +6254,6 @@ async def _fail_node_deadline_run(
 
     Returns ``True`` when the run was terminalised by this call.
     """
-    from sqlalchemy import select as sa_select
-
     from modulo.db.models.run import Run
 
     run = await session.get(Run, run_id, with_for_update=True)
@@ -5937,90 +6261,52 @@ async def _fail_node_deadline_run(
         return False
     if not _is_node_started_executor_lost_row(run, stale_window):
         return False
-    # The ORM row carries the phase/status/token fields but NOT the reconcile
-    # flags (``outputs_absent`` / ``checkpoints_absent``), so the zero-progress
-    # premise is checked in two steps rather than through the scan-row helper.
-    if getattr(run, "dispatch_phase", None) != PHASE_FIRST_NODE_DISPATCHED:
+    if not await _check_node_deadline_zero_progress(run, session):
         return False
-    if run.node_token_usage is not None:
-        return False
-    flags = (
-        await session.execute(
-            sa_select(
-                _final_row_absent_expr().label("outputs_absent"),
-                _checkpoint_absent_expr().label("checkpoints_absent"),
-            ).where(Run.id == run_id)
-        )
-    ).one()
-    if not flags.outputs_absent or not flags.checkpoints_absent:
-        # A node reported after the scan snapshot: the zero-progress premise no
-        # longer holds. Leave the row to the normal progress/age machinery.
-        return False
+
     now = datetime.now(UTC)
     deadline = _node_started_deadline(run, node_budget_seconds=node_budget_seconds)
     if deadline is None or now < deadline:
         return False
-    started_at = _as_utc(getattr(run, "started_at", None))
-    age_minutes = max((now - started_at).total_seconds() / 60, 0.0) if started_at is not None else None
-    phase_entered = _as_utc(getattr(run, "dispatch_phase_entered_at", None))
-    phase_elapsed = max((now - phase_entered).total_seconds(), 0.0) if phase_entered is not None else None
-    age_text = f"{age_minutes:.0f}" if age_minutes is not None else "unknown"
-    phase_text = f"{phase_elapsed:.1f}s" if phase_elapsed is not None else "unknown"
-    run.status = "failed"
-    run.error_code = _NODE_DEADLINE_EXCEEDED_ERROR_CODE
-    run.node_deadline_watchdog_fired_count = int(run.node_deadline_watchdog_fired_count or 0) + 1
-    run.error_detail = (
-        "Node started (dispatch_phase=first_node_dispatched) but produced no node envelope "
-        f"(no checkpoint, output or token usage) by its node deadline ({node_budget_seconds}s "
-        f"from {deadline.isoformat()}); reaped by dispatcher_reconcile's durable node-deadline "
-        f"bound (FAR-1999). pipeline={run.pipeline_id}, trigger={run.trigger_id}, "
-        f"claim_count={run.claim_count}, dispatch_phase_elapsed={phase_text}"
-    )
-    run.completed_at = now
-    await session.flush()
-    # FAR-1886 B1: the reaper terminalises a run whose executor is gone, so
-    # there is no in-process attempt marker left to project. Persist the
-    # synthetic run-level entry (best-effort; the terminalisation above is
-    # already in this transaction).
-    await persist_terminal_triage_marker(
+
+    age_minutes, phase_elapsed, age_text, phase_text = _compute_node_deadline_timing(run, now)
+
+    await _terminalize_node_deadline_run(
         session,
-        run_id=run_id,
-        organisation_id=org_id,
-        error_code=_NODE_DEADLINE_EXCEEDED_ERROR_CODE,
-        reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
-    )
-    summary["node_deadline_reaped"] += 1
-    _log.error(
-        "dispatcher_reconcile.node_deadline_reaped run=%s org=%s pipeline=%s trigger=%s "
-        "claim_count=%s dispatch_phase_elapsed=%s run_age_minutes=%s node_budget_seconds=%d "
-        "deadline=%s — node started but no node envelope arrived; terminal-failed "
-        "(never re-dispatched: re-execution unsafe)",
-        run_id,
+        run,
         org_id,
-        run.pipeline_id,
-        run.trigger_id,
+        summary,
+        now,
+        node_budget_seconds,
+        deadline,
+        age_minutes,
+        phase_elapsed,
+        age_text,
+        phase_text,
+    )
+
+    _log_node_deadline_reaped(
+        run,
+        org_id,
         run.claim_count,
         phase_text,
         age_text,
         node_budget_seconds,
-        deadline.isoformat(),
+        deadline,
     )
-    await _ingest_saq_error(
+
+    await _ingest_node_deadline_error(
         session,
         org_id,
-        function="dispatcher_reconcile",
-        message=_NODE_DEADLINE_REAP_STABLE_MESSAGE,
-        context={
-            "run_id": str(run_id),
-            "pipeline_id": str(run.pipeline_id),
-            "trigger_id": str(run.trigger_id) if run.trigger_id is not None else None,
-            "claim_count": run.claim_count,
-            "dispatch_phase": run.dispatch_phase,
-            "dispatch_phase_elapsed": phase_elapsed,
-            "run_age_minutes": age_minutes,
-            "node_budget_seconds": node_budget_seconds,
-            "node_deadline": deadline.isoformat(),
-        },
+        run.id,
+        run.pipeline_id,
+        run.trigger_id,
+        run.claim_count,
+        run.dispatch_phase,
+        phase_elapsed,
+        age_minutes,
+        node_budget_seconds,
+        deadline,
     )
     return True
 

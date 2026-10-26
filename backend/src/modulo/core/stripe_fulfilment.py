@@ -158,6 +158,73 @@ def _as_aware(instant: datetime) -> datetime:
     return instant if instant.tzinfo is not None else instant.replace(tzinfo=UTC)
 
 
+def _parse_starts_at_value(value: str) -> datetime:
+    """Parse a starts_at value, raising StartsAtRejectedError on failure."""
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise StartsAtRejectedError(
+            REASON_STARTS_AT_MALFORMED,
+            f"The chosen licence start {value!r} is not a valid ISO 8601 date (expected e.g. 2027-03-12), "
+            "so no licence was issued.",
+            value=value,
+        ) from exc
+
+
+def _is_date_only(value: str) -> bool:
+    """Check if the value is a date-only (no time component)."""
+    return "T" not in value and " " not in value
+
+
+def _check_past_start(
+    start: datetime,
+    reference: datetime,
+    value: str,
+    date_only: bool,
+) -> None:
+    """Raise StartsAtRejectedError if start is in the past."""
+    if date_only:
+        if start.date() < reference.date():
+            raise StartsAtRejectedError(
+                REASON_STARTS_AT_IN_PAST,
+                f"The chosen licence start {value} has already passed (today is {reference.date().isoformat()}); "
+                "a licence cannot start in the past, so no licence was issued.",
+                value=value,
+            )
+    elif start < reference:
+        raise StartsAtRejectedError(
+            REASON_STARTS_AT_IN_PAST,
+            f"The chosen licence start {value} has already passed (now is {reference.isoformat()}); "
+            "a licence cannot start in the past, so no licence was issued.",
+            value=value,
+        )
+
+
+def _check_future_horizon(
+    start: datetime,
+    reference: datetime,
+    value: str,
+    date_only: bool,
+) -> None:
+    """Raise StartsAtRejectedError if start exceeds the allowed horizon."""
+    horizon = reference + timedelta(days=STARTS_AT_MAX_AHEAD_DAYS)
+    if date_only:
+        if start.date() > horizon.date():
+            raise StartsAtRejectedError(
+                REASON_STARTS_AT_TOO_FAR_AHEAD,
+                f"The chosen licence start {value} is more than {STARTS_AT_MAX_AHEAD_DAYS} days ahead; "
+                f"the latest allowed start is {horizon.date().isoformat()}, so no licence was issued.",
+                value=value,
+            )
+    elif start > horizon:
+        raise StartsAtRejectedError(
+            REASON_STARTS_AT_TOO_FAR_AHEAD,
+            f"The chosen licence start {value} is more than {STARTS_AT_MAX_AHEAD_DAYS} days ahead; "
+            f"the latest allowed start is {horizon.isoformat()}, so no licence was issued.",
+            value=value,
+        )
+
+
 def resolve_starts_at(raw: str | None, *, now: datetime | None = None) -> datetime | None:
     """Validate a customer-chosen licence start and return it as an aware instant.
 
@@ -184,53 +251,15 @@ def resolve_starts_at(raw: str | None, *, now: datetime | None = None) -> dateti
     value = (raw or "").strip()
     if not value:
         return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as exc:
-        raise StartsAtRejectedError(
-            REASON_STARTS_AT_MALFORMED,
-            f"The chosen licence start {value!r} is not a valid ISO 8601 date (expected e.g. 2027-03-12), "
-            "so no licence was issued.",
-            value=value,
-        ) from exc
 
+    parsed = _parse_starts_at_value(value)
     start = _as_aware(parsed)
     reference = _as_aware(now) if now is not None else datetime.now(UTC)
-    # ``2027-03-12`` (no time component) is a calendar choice, not an instant:
-    # compare it by date so "today" stays valid all day.
-    date_only = "T" not in value and " " not in value
-    horizon = reference + timedelta(days=STARTS_AT_MAX_AHEAD_DAYS)
+    date_only = _is_date_only(value)
 
-    if date_only:
-        if start.date() < reference.date():
-            raise StartsAtRejectedError(
-                REASON_STARTS_AT_IN_PAST,
-                f"The chosen licence start {value} has already passed (today is {reference.date().isoformat()}); "
-                "a licence cannot start in the past, so no licence was issued.",
-                value=value,
-            )
-        if start.date() > horizon.date():
-            raise StartsAtRejectedError(
-                REASON_STARTS_AT_TOO_FAR_AHEAD,
-                f"The chosen licence start {value} is more than {STARTS_AT_MAX_AHEAD_DAYS} days ahead; "
-                f"the latest allowed start is {horizon.date().isoformat()}, so no licence was issued.",
-                value=value,
-            )
-    else:
-        if start < reference:
-            raise StartsAtRejectedError(
-                REASON_STARTS_AT_IN_PAST,
-                f"The chosen licence start {value} has already passed (now is {reference.isoformat()}); "
-                "a licence cannot start in the past, so no licence was issued.",
-                value=value,
-            )
-        if start > horizon:
-            raise StartsAtRejectedError(
-                REASON_STARTS_AT_TOO_FAR_AHEAD,
-                f"The chosen licence start {value} is more than {STARTS_AT_MAX_AHEAD_DAYS} days ahead; "
-                f"the latest allowed start is {horizon.isoformat()}, so no licence was issued.",
-                value=value,
-            )
+    _check_past_start(start, reference, value, date_only)
+    _check_future_horizon(start, reference, value, date_only)
+
     return start
 
 
