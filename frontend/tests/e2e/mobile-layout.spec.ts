@@ -88,7 +88,6 @@ const DEACTIVATED_ROUTES: Record<string, string> = {
   '/admin/system/orgs': 'system_admin_only — route entry flag; e2e identities have no is_system_admin claim',
   '/admin/housekeeping': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
   '/admin/run-retention': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
-  '/settings/email': 'system_admin_only — SYSTEM sidebar group; e2e identities have no is_system_admin claim',
   '/settings/observability': 'system_admin_only — SYSTEM sidebar group',
   '/admin/feature-flags': 'system_admin_only — SYSTEM sidebar group',
   '/settings/error-forwarders': 'system_admin_only — SYSTEM sidebar group',

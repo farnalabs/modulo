@@ -1,23 +1,15 @@
-import { test, expect, loginForSystemRoute, isDevModeTarget } from './setup/fixtures'
+import { test, expect, loginAsAdmin, isDevModeTarget } from './setup/fixtures'
 
 test.describe('Settings Email', { tag: "@regression" }, () => {
   test('renders the Email Settings page', { tag: "@regression" }, async ({ page, env }) => {
-    const systemAdmin = await loginForSystemRoute(page, env)
-    if (env.name === 'local') {
-      // Registered after login so it is not shadowed by setupLocalMockApi's
-      // catch-all (Playwright matches the last registered route first).
-      await page.route('**/api/v1/email/config*', (route) => {
-        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ smtp_host: 'smtp.example.com', smtp_port: 587, from_address: 'noreply@example.com', encryption: 'tls', enabled: true }) })
-      })
-    }
+    // Email delivery is organisation-scoped, so /settings/email lives in the
+    // ADMIN sidebar group behind required_roles: [admin] (not the SYSTEM group,
+    // which is system-admin-only). The staging/prod e2e identity is a regular
+    // org admin and therefore reaches the page; loginForSystemRoute's extra
+    // is_system_admin claim is no longer needed here.
+    await loginAsAdmin(page, env)
     await page.goto('/settings/email')
-    if (!systemAdmin) {
-      // FAR-938: the SYSTEM sidebar group is system-admin-only. The staging/prod
-      // e2e identity is a regular org admin, so the router guard redirects to '/'.
-      await expect(page).toHaveURL(/\/$/)
-      await expect(page.locator('h1')).toContainText('Dashboard')
-      return
-    }
+    await expect(page).toHaveURL(/\/settings\/email$/)
     await expect(page.locator('h1')).toContainText('Email Settings')
   })
 })
