@@ -2324,6 +2324,9 @@ def _db_shell_sqlalchemy_response(
     return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
 
 
+# semgrep: ignore -- PEP 692 TypeParamTuple syntax not supported by semgrep parser (track upstream)
+
+
 async def _run_db_shell[**TOOL_SHELL_P](
     fn: Callable[TOOL_SHELL_P, Awaitable[dict[str, Any]]],
     cfg: _DbShellConfig,
