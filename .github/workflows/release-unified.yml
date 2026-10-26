@@ -216,6 +216,68 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
+      # Assert schema-freshness gate passed on the commit to be tagged.
+      # Runs for cut and recut (promote uses the validated RC which already passed).
+      # -----------------------------------------------------------------------
+      - name: Assert schema-freshness gate green on target commit
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Determine the commit that will be tagged.
+          if [ "${{ inputs.mode }}" = "cut" ]; then
+            # For cut: the version bump was just pushed to main, so the target is origin/main
+            TARGET_SHA="$(git rev-parse origin/main)"
+            echo "Cut mode: checking schema-freshness on origin/main (${TARGET_SHA})"
+          else
+            # For recut: the target is the current origin/main (will be fetched in recut step)
+            git fetch origin main
+            TARGET_SHA="$(git rev-parse origin/main)"
+            echo "Recut mode: checking schema-freshness on origin/main (${TARGET_SHA})"
+          fi
+
+          # Query the latest workflow run for the target SHA and check schema-freshness.
+          # We look for the most recent 'ci.yml' run on this SHA.
+          echo "Checking CI run for ${TARGET_SHA}..."
+          RUN_ID=$(gh api repos/${{ github.repository }}/actions/runs \
+            --jq '.workflow_runs[] | select(.head_sha == "'${TARGET_SHA}'" and .name == "CI") | .id' \
+            | head -n1)
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No CI workflow run found for commit ${TARGET_SHA}. Cannot verify schema-freshness gate."
+            exit 1
+          fi
+          echo "Found CI run: ${RUN_ID}"
+
+          # Wait for the run to complete if it's still in progress
+          for i in {1..60}; do
+            STATUS=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID} --jq '.status')
+            if [ "$STATUS" = "completed" ]; then
+              break
+            fi
+            echo "CI run ${RUN_ID} still in progress (status: ${STATUS}), waiting... (${i}/60)"
+            sleep 10
+          done
+
+          # Check the schema-freshness job conclusion
+          SCHEMA_JOB=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs \
+            --jq '.jobs[] | select(.name == "Schema freshness") | {conclusion: .conclusion, name: .name}')
+          if [ -z "$SCHEMA_JOB" ]; then
+            echo "::error::Schema freshness job not found in CI run ${RUN_ID}"
+            exit 1
+          fi
+          SCHEMA_CONCLUSION=$(echo "$SCHEMA_JOB" | jq -r '.conclusion')
+          echo "Schema freshness job conclusion: ${SCHEMA_CONCLUSION}"
+
+          if [ "$SCHEMA_CONCLUSION" != "success" ]; then
+            echo "::error::Schema freshness gate did not pass (conclusion: ${SCHEMA_CONCLUSION}) on commit ${TARGET_SHA}. Refusing to tag."
+            exit 1
+          fi
+          echo "Schema freshness gate passed on ${TARGET_SHA}."
+
+      # -----------------------------------------------------------------------
       # Version bump (cut only). The publication hold is established first so
       # publish-images cannot publish stable latest during the main push below.
       # The later release-freeze tag remains the authoritative release boundary.
@@ -729,6 +791,26 @@ jobs:
           name: bundle-artefacts-amd64
           path: release-artefacts
 
+      - name: Dump OpenAPI schema from backend
+        working-directory: backend
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///./modulo-gen-test.db"
+          SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          MODULO_CSRF_ENABLED: "false"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/gen_openapi.py <<'EOF'
+          import os, json, sys
+          sys.tracebacklimit = 0
+          from modulo.api.main import app
+          with open("../release-artefacts/openapi.json", "w", encoding="utf-8") as f:
+              json.dump(app.openapi(), f, ensure_ascii=False)
+          print(f"Schema: {os.path.getsize('../release-artefacts/openapi.json')} bytes")
+          EOF
+          uv run --no-build --no-sync python /tmp/gen_openapi.py
+
       - name: Create GitHub Release with assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -755,6 +837,7 @@ jobs:
             "release-artefacts/SHA256SUMS"
             "release-artefacts/RELEASE_MANIFEST.json"
             "release-artefacts/RELEASE_MANIFEST.json.sig"
+            "release-artefacts/openapi.json"
           )
           for asset in "${ASSETS[@]}"; do
             if [ ! -f "$asset" ]; then
