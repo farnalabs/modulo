@@ -752,6 +752,23 @@ async def _check_migrations() -> CheckResult:
             _log.exception("health._check_migrations divergence check failed")
             divergence_check_failed = True
 
+        # Migration-compatibility check: compare the DB's current head revision
+        # against the image's known head revisions. If the DB is ahead of the
+        # image (has a revision the image doesn't know), report degraded with
+        # a clear "image revision lag" message.
+        # We sort both sets to get deterministic "latest" revisions for the
+        # message. Revision IDs are zero-padded (e.g. "0333"), so lexicographic
+        # sort works for ordering.
+        applied_sorted = sorted(applied)
+        heads_sorted = sorted(heads)
+        db_head = applied_sorted[-1] if applied_sorted else "none"
+        image_head = heads_sorted[-1] if heads_sorted else "none"
+
+        # Check if DB has a revision the image doesn't know (DB ahead of image)
+        if db_head != "none" and image_head != "none" and db_head > image_head:
+            lag_msg = f"migrations: degraded (image revision lag: DB at {db_head}, image knows up to {image_head})"
+            return "degraded", lag_msg
+
         pending = heads - applied
         parts: list[str] = []
         if pending:
