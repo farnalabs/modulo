@@ -96,6 +96,13 @@
                 amount: formatMoney(unassignedSpend, currencyCode),
               }) }}
             </p>
+            <p
+              v-else-if="unassignedUnavailable"
+              class="mt-3 text-xs text-warning-text"
+              data-testid="cost-team-unattributed-unavailable"
+            >
+              {{ $t('views.AdminCostBreakdownView.unattributed_spend_unavailable') }}
+            </p>
           </template>
         </Card>
 
@@ -186,13 +193,20 @@ const { loading, error: loadError, data, load: loadData } = useDataFetch(
 
 const items = computed<CostReportRow[]>(() => (data.value as CostReportResponse | undefined)?.items ?? [])
 
-function parseReportAmount(value: string | null | undefined): number {
-  if (value == null) return 0
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : 0
-}
+const unassignedRaw = computed<string | null | undefined>(() => (data.value as CostReportResponse | undefined)?.org_unassigned_components)
 
-const unassignedSpend = computed(() => parseReportAmount((data.value as CostReportResponse | undefined)?.org_unassigned_components))
+const unassignedSpend = computed(() => {
+  const raw = unassignedRaw.value
+  if (raw == null) return 0
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : 0
+})
+
+const unassignedUnavailable = computed(() => {
+  const raw = unassignedRaw.value
+  return raw == null || !Number.isFinite(Number(raw))
+})
+
 const hasUnattributedSpend = computed(() => unassignedSpend.value > 0)
 
 const tableRows = computed<TeamTableRow[]>(() => items.value.map(item => ({

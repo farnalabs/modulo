@@ -595,7 +595,8 @@ describe('AdminCostBreakdownView', () => {
               { entity_id: 'team-1', entity_name: 'Alpha', total_spend_usd: 250.0, total_runs: 10 },
             ],
             org_unassigned_components: '5.5',
-            org_total: '255.5',
+            legacy_total: '99.99',
+            org_total: '355.49',
           },
           error: undefined,
         })
@@ -633,6 +634,10 @@ describe('AdminCostBreakdownView', () => {
     expect(unattributed.exists()).toBe(true)
     expect(unattributed.text()).toContain('$5.50')
     expect(unattributed.text()).toContain('unassigned component spend')
+    // legacy_total is NOT excluded from team rows (team-owned legacy spend is
+    // written to the owner team's ledger row), so it must never be disclosed here.
+    expect(unattributed.text()).not.toContain('99.99')
+    expect(unattributed.text()).not.toContain('legacy')
   })
 
   it('omits the unattributed line when the reporting amounts are absent or unparseable', async () => {
@@ -672,6 +677,49 @@ describe('AdminCostBreakdownView', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="cost-team-unattributed"]').exists()).toBe(false)
+    const unavailable = wrapper.find('[data-testid="cost-team-unattributed-unavailable"]')
+    expect(unavailable.exists()).toBe(true)
+    expect(unavailable.text()).toContain('could not be loaded')
+  })
+
+  it('shows neither disclosure line when unassigned spend is a genuine zero', async () => {
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({
+          data: {
+            period: 'month',
+            group_by: 'team',
+            items: [
+              { entity_id: 'team-1', entity_name: 'Alpha', total_spend_usd: 10.0, total_runs: 1 },
+            ],
+            org_unassigned_components: '0',
+          },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/analytics/query') {
+        return Promise.resolve({ data: { buckets: [] }, error: undefined })
+      }
+      if (path === '/api/v1/admin/costs/anomalies') {
+        return Promise.resolve({ data: [], error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="cost-team-unattributed"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="cost-team-unattributed-unavailable"]').exists()).toBe(false)
   })
 
   it('discloses unassigned spend even when there are no team rows', async () => {

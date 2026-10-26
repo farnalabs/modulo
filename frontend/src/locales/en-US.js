@@ -2631,6 +2631,7 @@ export default {
       "per_team_cost_breakdown": "Per-Team Cost Breakdown",
       "monthly_spend_run_count_and_avg_by_team": "Monthly spend, run count, and average cost per run for team-attributed runs",
       "unattributed_spend_line": "Excluded from team rows: {amount} of unassigned component spend.",
+      "unattributed_spend_unavailable": "Unassigned component spend could not be loaded for this report.",
       "no_team_cost_data_available": "No team cost data available.",
       "team": "Team",
       "total_spend": "Total Spend",
