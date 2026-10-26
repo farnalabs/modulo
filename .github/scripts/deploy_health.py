@@ -45,7 +45,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -310,6 +310,36 @@ def _summarize_failure_stages(failure_stages: Sequence[dict[str, str]]) -> str:
     return ", ".join(f"{count} {stage}" for stage, count in sorted(stage_counts.items()))
 
 
+def _streak_failure_runs(
+    completed: Sequence[dict[str, Any]],
+    streak: int,
+) -> Iterator[dict[str, Any]]:
+    """The first ``streak`` failed runs, newest first, skipping neutral no-ops.
+
+    Mirrors :func:`consecutive_failures`: a throttled no-op is neutral (skip
+    it), and any other non-failure ends the streak.
+    """
+    counted = 0
+    for run in completed:
+        if counted >= streak:
+            break
+        if deploy_attempted(run) is False:
+            continue
+        if str(run.get("conclusion") or "").lower() != "failure":
+            break
+        counted += 1
+        yield run
+
+
+def _run_failure_stage(
+    run: dict[str, Any],
+    deploy_jobs: dict[str, dict[str, str]],
+) -> str:
+    run_id = str(run.get("databaseId") or "")
+    jobs = deploy_jobs.get(run_id) if run_id else None
+    return _classify_failure_stage(jobs) if jobs else "unknown"
+
+
 def _classify_failure_stages(
     completed: Sequence[dict[str, Any]],
     streak: int,
@@ -324,22 +354,8 @@ def _classify_failure_stages(
     if not deploy_jobs or streak <= 0:
         return []
     stages: list[dict[str, str]] = []
-    counted = 0
-    for run in completed:
-        if counted >= streak:
-            break
-        # Mirror consecutive_failures: a throttled no-op is neutral (skip it),
-        # and any other non-failure ends the streak.
-        if deploy_attempted(run) is False:
-            continue
-        if str(run.get("conclusion") or "").lower() != "failure":
-            break
-        counted += 1
-        run_id = str(run.get("databaseId") or "")
-        jobs = deploy_jobs.get(run_id) if run_id else None
-        if not jobs:
-            continue
-        stage = _classify_failure_stage(jobs)
+    for run in _streak_failure_runs(completed, streak):
+        stage = _run_failure_stage(run, deploy_jobs)
         if stage != "unknown":
             stages.append({"sha": _short(str(run.get("headSha") or "")), "stage": stage})
     return stages
