@@ -17,6 +17,12 @@
 # introduced. An unreadable / missing previous verdict is UNKNOWN, which never
 # suppresses an alert.
 #
+# The name IS forwarded to `deploy_health.py previous-verdict --step-name`; the
+# evaluator's own default is the STALENESS step, so a workflow whose verdict
+# step is named differently MUST set VERDICT_STEP_NAME. A mismatch does not
+# fail loudly - it reads the previous verdict as UNKNOWN, which loses the
+# recovery email and re-alerts on every tick (FAR-2177).
+#
 # FAR-2157: a tick whose evaluation is UNKNOWN runs neither the verdict step
 # nor a healthy verdict -- it runs the workflow's UNKNOWN-tick marker step,
 # which `deploy_health.parse_previous_verdict` reads as UNKNOWN. The lookup
@@ -28,7 +34,10 @@
 #
 # Inputs (all via env: -- never interpolated into the shell):
 #   WORKFLOW_NAME       workflow whose run history holds the state vector
-#   VERDICT_STEP_NAME   step whose conclusion encodes the previous verdict
+#   VERDICT_STEP_NAME   step whose conclusion encodes the previous verdict;
+#                       forwarded to `deploy_health.py previous-verdict
+#                       --step-name` (the evaluator defaults to the staleness
+#                       step, so the watchdog MUST name its own)
 #   CURRENT_HEALTHY     "true" | "false" | "" (UNKNOWN)
 #   VERDICT_JSON        path to the Verdict JSON (deploy_health.py --verdict-out)
 #   RUN_URL, DEPLOY_URL links included in the email
@@ -130,7 +139,8 @@ PY
           LOOKED_UP=$((LOOKED_UP + 1))
           PREV_JOBS_FILE="$(mktemp)"
           if gh api "repos/$REPOSITORY/actions/runs/$PREV_ID/jobs" > "$PREV_JOBS_FILE" 2>/dev/null; then
-            RUN_VERDICT="$(python3 "$EVALUATOR" previous-verdict --jobs-json "$PREV_JOBS_FILE")" || RUN_VERDICT="$UNKNOWN_VERDICT"
+            RUN_VERDICT="$(python3 "$EVALUATOR" previous-verdict --jobs-json "$PREV_JOBS_FILE" \
+              --step-name "$VERDICT_STEP_NAME")" || RUN_VERDICT="$UNKNOWN_VERDICT"
             rm -f "$PREV_JOBS_FILE"
             if [[ "$RUN_VERDICT" != "$UNKNOWN_VERDICT" ]]; then
               PREV_VERDICT="$RUN_VERDICT"

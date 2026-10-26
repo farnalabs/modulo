@@ -510,6 +510,62 @@ def test_parse_previous_verdict_without_the_step_is_unknown() -> None:
     assert health.parse_previous_verdict({}) == health.UNKNOWN
 
 
+#: The step names the workflows REALLY use. These are deliberately literals, not
+#: ``health.VERDICT_STEP_NAME``: building a fixture from the module constant is
+#: what hid the defect - the watchdog's step is named differently, so a fixture
+#: carrying the constant's name passed while the watchdog's previous verdict
+#: resolved to UNKNOWN (FAR-2177).
+WATCHDOG_VERDICT_STEP = "Fail the run when the deploy watchdog is unhealthy"
+STALENESS_VERDICT_STEP = "Fail the run when deploy health is unhealthy"
+
+
+def test_parse_previous_verdict_reads_the_watchdogs_step_name() -> None:
+    """FAR-2177: the watchdog names its verdict step differently.
+
+    Pinned to one literal name, the resolver read the watchdog's previous
+    verdict as UNKNOWN, which lost its recovery email and re-alerted on every
+    tick instead of once per transition.
+    """
+    failed = {"jobs": [{"steps": [{"name": WATCHDOG_VERDICT_STEP, "conclusion": "failure"}]}]}
+    healthy = {"jobs": [{"steps": [{"name": WATCHDOG_VERDICT_STEP, "conclusion": "skipped"}]}]}
+    assert health.parse_previous_verdict(failed, WATCHDOG_VERDICT_STEP) == health.UNHEALTHY
+    assert health.parse_previous_verdict(healthy, WATCHDOG_VERDICT_STEP) == health.HEALTHY
+    # The same payload under the default name stays UNKNOWN: the two differ.
+    assert health.parse_previous_verdict(failed) == health.UNKNOWN
+
+
+def test_parse_previous_verdict_keeps_the_staleness_step_name() -> None:
+    """The staleness check passes no name and resolves via the default."""
+    payload = {"jobs": [{"steps": [{"name": STALENESS_VERDICT_STEP, "conclusion": "failure"}]}]}
+    assert health.parse_previous_verdict(payload) == health.UNHEALTHY
+    assert health.parse_previous_verdict(payload, STALENESS_VERDICT_STEP) == health.UNHEALTHY
+    # An empty name (an unset workflow env) falls back to the default.
+    assert health.parse_previous_verdict(payload, "") == health.UNHEALTHY
+
+
+def test_parse_previous_verdict_with_an_unknown_step_name_is_unknown() -> None:
+    """A name that matches nothing must never be read as a verdict."""
+    payload = {"jobs": [{"steps": [{"name": WATCHDOG_VERDICT_STEP, "conclusion": "failure"}]}]}
+    assert health.parse_previous_verdict(payload, "Some Other Step") == health.UNKNOWN
+
+
+def test_cli_previous_verdict_forwards_the_step_name(tmp_path: Path, capsys: Any) -> None:
+    """The CLI seam the notify script calls must forward ``--step-name``."""
+    jobs_path = tmp_path / "jobs.json"
+    jobs_path.write_text(
+        json.dumps({"jobs": [{"steps": [{"name": WATCHDOG_VERDICT_STEP, "conclusion": "failure"}]}]}),
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+    exit_code = health.main(["previous-verdict", "--jobs-json", str(jobs_path), "--step-name", WATCHDOG_VERDICT_STEP])
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == health.UNHEALTHY
+    # Without the flag the staleness default applies and cannot see that step.
+    capsys.readouterr()
+    assert health.main(["previous-verdict", "--jobs-json", str(jobs_path)]) == 0
+    assert capsys.readouterr().out.strip() == health.UNKNOWN
+
+
 # ---------------------------------------------------------------------------
 # The emails a human receives
 # ---------------------------------------------------------------------------

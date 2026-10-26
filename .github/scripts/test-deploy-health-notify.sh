@@ -37,6 +37,15 @@ RECOVERY_SUBJECT="DEPLOY HEALTH RECOVERED"
 WORKFLOW_NAME="Deploy: Staleness Watchdog"
 DEPLOY_URL="https://github.com/farnalabs/modulo/actions/workflows/deploy.yml"
 
+# The verdict-step names the workflows REALLY use, per workflow. The fixtures
+# below MUST be built from these and never from deploy_health.VERDICT_STEP_NAME:
+# that constant is only the STALENESS default, so a fixture built from it
+# passes while the watchdog's previous verdict resolves to UNKNOWN - which is
+# exactly how FAR-2177 shipped (no recovery email, an alert every tick).
+WATCHDOG_VERDICT_STEP="Fail the run when the deploy watchdog is unhealthy"
+STALENESS_VERDICT_STEP="Fail the run when deploy health is unhealthy"
+export WATCHDOG_VERDICT_STEP STALENESS_VERDICT_STEP
+
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
   if [[ "$expected" == "$actual" ]]; then
@@ -151,7 +160,7 @@ run_notify() {
     PREVIOUS_VERDICT="$previous" \
     VERDICT_JSON="$verdict" \
     WORKFLOW_NAME="$WORKFLOW_NAME" \
-    VERDICT_STEP_NAME="Fail the run when the deploy watchdog is unhealthy" \
+    VERDICT_STEP_NAME="$WATCHDOG_VERDICT_STEP" \
     RUN_URL="https://github.com/farnalabs/modulo/actions/runs/1" \
     DEPLOY_URL="$DEPLOY_URL" \
     "$@" \
@@ -232,6 +241,7 @@ mkdir -p "$WORK/bin"
 
 python3 - "$WORK" <<'PY2'
 import json
+import os
 import sys
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -243,16 +253,35 @@ module = module_from_spec(spec_from_loader("deploy_health", loader))
 sys.modules["deploy_health"] = module
 loader.exec_module(module)
 
+# The workflows' real step names, defined once in the shell above.
+WATCHDOG_VERDICT_STEP = os.environ["WATCHDOG_VERDICT_STEP"]
+STALENESS_VERDICT_STEP = os.environ["STALENESS_VERDICT_STEP"]
+
+# The module constant must remain the STALENESS default. If it drifts, the
+# fixtures below (built from the real names) would stop proving anything.
+if module.VERDICT_STEP_NAME != STALENESS_VERDICT_STEP:
+    raise SystemExit(
+        "test-deploy-health-notify: deploy_health.VERDICT_STEP_NAME is "
+        f"{module.VERDICT_STEP_NAME!r}, expected the staleness step "
+        f"{STALENESS_VERDICT_STEP!r} - update the names above."
+    )
+if module.VERDICT_STEP_NAME == WATCHDOG_VERDICT_STEP:
+    raise SystemExit(
+        "test-deploy-health-notify: the two workflows must name their verdict "
+        "steps differently, or this suite cannot catch a missing --step-name."
+    )
+
 # 201 = the NEWEST previous run: measured nothing (UNKNOWN marker, no verdict step).
 # 202 = the run before it: measured UNHEALTHY (verdict step failed).
+# The verdict step carries the WATCHDOG's real name - the name the notify step
+# forwards. Building it from module.VERDICT_STEP_NAME (the STALENESS default)
+# is what made the pre-FAR-2177 wiring look green.
 (work / "jobs-201.json").write_text(
     json.dumps({"jobs": [{"steps": [{"name": module.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "success"}]}]}),
     encoding="utf-8",
 )
 (work / "jobs-202.json").write_text(
-    json.dumps(
-        {"jobs": [{"steps": [{"name": module.VERDICT_STEP_NAME, "conclusion": "failure"}]}]}
-    ),
+    json.dumps({"jobs": [{"steps": [{"name": WATCHDOG_VERDICT_STEP, "conclusion": "failure"}]}]}),
     encoding="utf-8",
 )
 (work / "runs.json").write_text(
@@ -294,7 +323,7 @@ run_notify_lookup() {
     CURRENT_HEALTHY="$healthy" \
     VERDICT_JSON="$verdict" \
     WORKFLOW_NAME="$WORKFLOW_NAME" \
-    VERDICT_STEP_NAME="Fail the run when the deploy watchdog is unhealthy" \
+    VERDICT_STEP_NAME="$WATCHDOG_VERDICT_STEP" \
     REPOSITORY="farnalabs/modulo" \
     GITHUB_RUN_ID="999" \
     FAKE_RUNS="$(cat "$WORK/runs.json")" \
