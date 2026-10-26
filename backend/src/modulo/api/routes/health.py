@@ -37,6 +37,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -58,6 +59,7 @@ from modulo.api.dependencies import get_or_create_engine
 from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
 from modulo.core.cron_helpers import DISPATCHER_RECONCILE_TICK_SECONDS, read_dispatcher_reconcile_stats
 from modulo.core.health_alerts import report_event_loop_stall_attribution
+from modulo.core.ssrf import pinned_async_client
 from modulo.db.migration_guard import DivergenceCheckResult, check_migration_divergence
 from modulo.settings import Settings, break_glass_boot_findings, get_settings, resolve_instance_identity
 from modulo.version import get_version
@@ -202,6 +204,60 @@ _CRON_STALE_SECONDS = 2 * _FIRE_DUE_CRON_CADENCE_SECONDS
 # Break-glass watchdog state, published at boot by the lifespan and exposed on
 # /healthz as ADVISORY only — it never flips readiness.
 _break_glass_watchdog: dict[str, str] = {"status": "ok", "detail": "break-glass watchdog not run at boot"}
+
+# Cache for the latest deploy workflow run URL (5-minute TTL to avoid hammering GitHub API).
+_DEPLOY_RUN_URL_CACHE: tuple[str, float] | None = None  # (url, cached_at)
+_DEPLOY_RUN_URL_CACHE_TTL_SECONDS = 300  # 5 minutes
+
+
+async def _fetch_latest_deploy_run_url() -> str | None:
+    """Fetch the latest 'Deploy: Staging + Prod' workflow run URL from GitHub API.
+
+    Returns the HTML URL of the most recent run, or None if unavailable.
+    Cached for 5 minutes to avoid excessive GitHub API calls.
+    """
+    global _DEPLOY_RUN_URL_CACHE
+    now = time.time()
+
+    # Return cached value if still valid
+    if _DEPLOY_RUN_URL_CACHE is not None:
+        url, cached_at = _DEPLOY_RUN_URL_CACHE
+        if now - cached_at < _DEPLOY_RUN_URL_CACHE_TTL_SECONDS:
+            return url
+
+    # No valid cache — fetch from GitHub API
+    github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_REVIEWBOT_PAT")
+    if not github_token:
+        _log.debug("No GITHUB_TOKEN or GITHUB_REVIEWBOT_PAT available for deploy run URL fetch")
+        return None
+
+    try:
+        client = await pinned_async_client("https://api.github.com", timeout=10.0)
+        try:
+            headers = {
+                "Authorization": f"Bearer {github_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+            response = await client.get(
+                "/repos/farnalabs/modulo/actions/runs",
+                params={"workflow": "Deploy: Staging + Prod", "per_page": 1},
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+            runs = data.get("workflow_runs", [])
+            if runs:
+                html_url = runs[0].get("html_url")
+                if isinstance(html_url, str):
+                    _DEPLOY_RUN_URL_CACHE = (html_url, now)
+                    return html_url
+            return None
+        finally:
+            await client.aclose()
+    except Exception as exc:
+        _log.warning("Failed to fetch latest deploy run URL: %s", exc)
+        return None
 
 
 def set_break_glass_watchdog(status: str, detail: str) -> None:
@@ -763,9 +819,14 @@ async def _check_migrations() -> CheckResult:
             # the report without blocking readiness.
             parts.append("divergence check could not run (exception raised, see logs)")
         elif divergence is not None and divergence.diverged:
-            parts.append(
+            divergence_msg = (
                 f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}"
             )
+            # Include the latest deploy run URL for correlation
+            deploy_run_url = await _fetch_latest_deploy_run_url()
+            if deploy_run_url:
+                divergence_msg += f" | latest deploy: {deploy_run_url}"
+            parts.append(divergence_msg)
         if not parts:
             return "ok", "migrations up to date"
         return "degraded", "; ".join(parts)
