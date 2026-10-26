@@ -9,6 +9,7 @@ import pytest
 
 from modulo.core.product_analytics.consent import (
     apply_consent_action,
+    coerce_switch_value,
     default_consent_state,
     get_product_analytics_block,
     is_egress_allowed,
@@ -248,6 +249,24 @@ class TestEgressGate:
 
 
 # ---------------------------------------------------------------------------
+# Stored/env switch-value coercion
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceSwitchValue:
+    """Only explicitly truthy values turn the switch ON; everything else is OFF."""
+
+    @pytest.mark.parametrize("value", [True, 1, -2, 3.5, "1", "true", " YES "])
+    def test_truthy_values_are_on(self, value: object) -> None:
+        assert coerce_switch_value(value) is True
+
+    @pytest.mark.parametrize("value", [False, 0, 0.0, "", "false", "0", "no", [], {}, None])
+    def test_everything_else_is_off(self, value: object) -> None:
+        """Including the containers: ``bool(value)`` must never be the semantics."""
+        assert coerce_switch_value(value) is False
+
+
+# ---------------------------------------------------------------------------
 # Partner carve-out
 # ---------------------------------------------------------------------------
 
@@ -281,3 +300,13 @@ class TestPartnerLicenseClaim:
 
     def test_malformed_license_returns_false(self) -> None:
         assert partner_license_requires_analytics("not a dict") is False
+
+    def test_unreadable_license_is_fail_safe(self) -> None:
+        """A licence whose claims access raises must log and return False, never escape."""
+
+        class _RaisingClaims:
+            @property
+            def claims(self) -> dict[str, object]:
+                raise RuntimeError("malformed licence")
+
+        assert partner_license_requires_analytics(_RaisingClaims()) is False

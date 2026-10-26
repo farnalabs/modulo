@@ -579,6 +579,68 @@ describe('AdminProductAnalyticsView', () => {
     expect(mockGet).not.toHaveBeenCalled()
   })
 
+  it('shows the save error when the switch write throws', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'off',
+        instance_enabled: false,
+        instance_switch_source: 'default',
+        licence_requires_analytics: false,
+        warning: null,
+      },
+      error: undefined,
+    })
+    // A thrown request (network failure / abort) must surface the same error
+    // state as a resolved error envelope, and must not refetch.
+    mockPut.mockRejectedValue(new Error('network down'))
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    mockGet.mockClear()
+    await wrapper.find('[data-testid="instance-switch-toggle"]').trigger('change')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="instance-switch-error"]').exists()).toBe(true)
+    expect(mockGet).not.toHaveBeenCalled()
+  })
+
+  it('exposes a null view and the unknown level when transparency is absent', async () => {
+    // The store leaves ``transparency`` null when the API returns no body. The
+    // view's computed projections must tolerate that rather than assume data.
+    mockGet.mockResolvedValue({ data: null, error: undefined })
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { view: unknown; consentLevelLabel: string }
+    expect(vm.view).toBeNull()
+    expect(vm.consentLevelLabel).toContain('Unknown')
+    expect(wrapper.find('[data-testid="consent-level"]').exists()).toBe(false)
+  })
+
   it('renders egress allowed badge when egress_allowed is true', async () => {
     mockGet.mockResolvedValue({
       data: {
