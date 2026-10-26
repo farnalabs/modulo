@@ -11,6 +11,9 @@
 #   unknown  -> unhealthy : alert (UNKNOWN never suppresses)
 #   unknown  -> unknown   : no email, loud warning
 #   unhealthy-> healthy   : no SMTP configured -> loud warning, no silent skip
+#   measured healthy / unhealthy previous runs carry the UNKNOWN marker step
+#   SKIPPED; only an executed conclusion counts, so those ticks are read as
+#   measured (FAR-2176) and a live alert is neither re-sent nor lost.
 #
 # No network, no GitHub, no SMTP: the script runs with DRY_RUN=1, which
 # resolves the transition and renders the real email body without sending.
@@ -241,13 +244,42 @@ loader.exec_module(module)
 
 # 201 = the NEWEST previous run: measured nothing (UNKNOWN marker, no verdict step).
 # 202 = the run before it: measured UNHEALTHY (verdict step failed).
+# Both carry the marker step as the API really returns it. A MEASURED tick
+# defines the marker step too, but skipped - and presence alone must not read
+# as "it ran" (FAR-2176), or 202 reads as UNKNOWN and the walk loses the alert.
 (work / "jobs-201.json").write_text(
     json.dumps({"jobs": [{"steps": [{"name": module.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "success"}]}]}),
     encoding="utf-8",
 )
 (work / "jobs-202.json").write_text(
     json.dumps(
-        {"jobs": [{"steps": [{"name": module.VERDICT_STEP_NAME, "conclusion": "failure"}]}]}
+        {
+            "jobs": [
+                {
+                    "steps": [
+                        {"name": module.VERDICT_STEP_NAME, "conclusion": "failure"},
+                        {"name": module.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "skipped"},
+                    ]
+                }
+            ]
+        }
+    ),
+    encoding="utf-8",
+)
+# 203 = a measured HEALTHY tick (the live shape of run 40316916204): the verdict
+# step is skipped, and so is the marker step.
+(work / "jobs-203.json").write_text(
+    json.dumps(
+        {
+            "jobs": [
+                {
+                    "steps": [
+                        {"name": module.VERDICT_STEP_NAME, "conclusion": "skipped"},
+                        {"name": module.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "skipped"},
+                    ]
+                }
+            ]
+        }
     ),
     encoding="utf-8",
 )
@@ -258,6 +290,10 @@ loader.exec_module(module)
             {"databaseId": 202, "status": "completed", "conclusion": "failure"},
         ]
     ),
+    encoding="utf-8",
+)
+(work / "runs-healthy.json").write_text(
+    json.dumps([{"databaseId": 203, "status": "completed", "conclusion": "success"}]),
     encoding="utf-8",
 )
 PY2
@@ -272,6 +308,7 @@ elif [[ "${1:-}" = "api" ]]; then
   case "$id" in
     201) cat "${FAKE_JOBS_DIR}/jobs-201.json" ;;
     202) cat "${FAKE_JOBS_DIR}/jobs-202.json" ;;
+    203) cat "${FAKE_JOBS_DIR}/jobs-203.json" ;;
     *) echo '{"jobs":[]}' ;;
   esac
 else
@@ -281,8 +318,8 @@ FAKEGH
 chmod +x "$WORK/bin/gh"
 
 run_notify_lookup() {
-  # run_notify_lookup <healthy> <verdict-json> -- real run-history lookup path
-  local healthy="$1" verdict="$2"
+  # run_notify_lookup <healthy> <verdict-json> [runs-json] -- real run-history lookup path
+  local healthy="$1" verdict="$2" runs_file="${3:-$WORK/runs.json}"
   env -i \
     PATH="$WORK/bin:$PATH" \
     HOME="$HOME" \
@@ -293,7 +330,7 @@ run_notify_lookup() {
     VERDICT_STEP_NAME="Fail the run when deploy health is unhealthy" \
     REPOSITORY="farnalabs/modulo" \
     GITHUB_RUN_ID="999" \
-    FAKE_RUNS="$(cat "$WORK/runs.json")" \
+    FAKE_RUNS="$(cat "$runs_file")" \
     FAKE_JOBS_DIR="$WORK" \
     RUN_URL="https://github.com/farnalabs/modulo/actions/runs/999" \
     DEPLOY_URL="https://github.com/farnalabs/modulo/actions/workflows/deploy.yml" \
@@ -312,6 +349,18 @@ OUT="$(run_notify_lookup false "$WORK/unhealthy.json" 2>&1)"
 assert_contains "walk finds the measured unhealthy verdict" "Previous verdict read from run 202." "$OUT"
 assert_contains "no duplicate alert" "No transition" "$OUT"
 assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+echo ""
+
+# FAR-2176: the previous run is a MEASURED healthy tick that still carries the
+# marker step (skipped). Presence alone labelled it UNKNOWN even though it was a
+# real healthy verdict; the transition decision must rest on the classified
+# verdict, not on a misreading. (The email outcome for this pair is the same -
+# both HEALTHY and UNKNOWN alert on an unhealthy current tick - so the assertion
+# pins the classification the walk reports.)
+echo "Case 12: a measured healthy previous run (marker step skipped) is read as healthy"
+OUT="$(run_notify_lookup false "$WORK/unhealthy.json" "$WORK/runs-healthy.json" 2>&1)"
+assert_contains "walk reads the measured healthy verdict" "Previous verdict read from run 203." "$OUT"
+assert_contains "alert still sent on the transition" "DEPLOY HEALTH UNHEALTHY" "$OUT"
 echo ""
 
 echo "=== passed: $PASS, failed: $FAIL ==="

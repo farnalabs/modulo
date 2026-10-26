@@ -15,8 +15,12 @@ its ``outputs`` - verified against the live API on 2026-10-26, where a job's
 keys contained ``steps`` and no ``outputs``. So "this run did nothing" is
 recorded as a step that runs ONLY on the no-op path (the pattern
 ``deploy_run_attempts.py`` and the k8s-conformance staleness job already use),
-and every consumer reads step presence, never a job output. A future edit that
-replaces the marker with a job output silently disarms the signal.
+and every consumer reads that step's CONCLUSION, never a job output. Presence
+alone is not a signal: the API returns every defined step, including the ones a
+step-level ``if:`` skipped, so a consumer that reads presence calls every
+measured tick a no-op (FAR-2176, measured against live run 40316916204). A
+future edit that replaces the marker with a job output silently disarms the
+signal.
 
 Three fixes:
 
