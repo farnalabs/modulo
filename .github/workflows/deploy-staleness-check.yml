@@ -172,6 +172,27 @@ jobs:
 
           jobs_data = {}
           fetch_failures = 0
+
+          def parse_paginated_jobs(raw):
+              """Flatten ``gh api --paginate`` output (one JSON value per page)."""
+              decoder = json.JSONDecoder()
+              values = []
+              text = raw.strip()
+              index = 0
+              while index < len(text):
+                  while index < len(text) and text[index].isspace():
+                      index += 1
+                  if index >= len(text):
+                      break
+                  value, index = decoder.raw_decode(text, index)
+                  if isinstance(value, list):
+                      values.extend(value)
+                  else:
+                      values.append(value)
+              if not values:
+                  raise json.JSONDecodeError("empty jobs payload", text, 0)
+              return values
+
           for run in runs:
               if str(run.get("status") or "").lower() != "completed":
                   continue
@@ -182,7 +203,8 @@ jobs:
                   continue
               try:
                   result = subprocess.run(
-                      ["gh", "api", f"repos/{repository}/actions/runs/{run_id}/jobs",
+                      ["gh", "api", "--paginate",
+                       f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100",
                        "--jq", "[.jobs[] | {name: .name, conclusion: .conclusion}]"],
                       capture_output=True, text=True, timeout=30, check=False,
                   )
@@ -195,7 +217,7 @@ jobs:
                   print(f"::warning::could not read jobs for run {run_id} (exit {result.returncode})")
                   continue
               try:
-                  jobs = json.loads(result.stdout)
+                  jobs = parse_paginated_jobs(result.stdout)
               except json.JSONDecodeError as exc:
                   fetch_failures += 1
                   print(f"::warning::unparseable jobs JSON for run {run_id}: {exc}")

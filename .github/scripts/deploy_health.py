@@ -221,45 +221,55 @@ def _short(sha: str) -> str:
     return (sha or "").strip()[:7]
 
 
-# Map deploy.yml job names to failure stage categories.
+# Map deploy.yml jobs to failure stage categories.
+#
+# The keys are GitHub's ``jobs[].name`` DISPLAY names, not the YAML job IDs:
+# the staleness workflow builds its job map from the API's jobs payload, which
+# only carries the display name. Keying this map by YAML IDs made the
+# classifier a silent no-op in production - no key ever matched, every failure
+# classified ``unknown`` and was dropped, so ``failure_stages`` was always
+# empty. ``test_deploy_health.py`` parses deploy.yml and asserts these exact
+# display names, so a rename in the workflow fails CI instead of silently
+# disabling classification again.
 JOB_TO_STAGE: dict[str, str] = {
-    # Deploy throttle (skip-vs-deploy decision; a failure here blocks the run)
-    "deploy-throttle": "deploy_throttle",
-    # Pre-deploy lint/typecheck/unit jobs
-    "backend-lint": "pre_deploy_lint",
-    "backend-unit": "pre_deploy_lint",
-    "frontend-checks": "pre_deploy_lint",
-    # Integration tests
-    "integration-tests": "integration_test",
-    # Security audit (semgrep, pip-audit)
-    "security-audit": "pre_deploy_lint",
-    # Aggregate gate that fails when any pre-deploy child failed
-    "pre-deploy-gate": "pre_deploy_gate",
-    # Staging deploy (includes migration rehearsal and pre-migrate)
-    "deploy-staging": "migration",
-    # Staging E2E tests
-    "staging-e2e": "staging_e2e",
-    # Production deploy
-    "deploy-production": "migration",
-    # Prod smoke tests: a SEPARATE job (deploy.yml, needs deploy-production),
-    # which is the one stage where prod is deployed but broken.
-    "prod-smoke": "prod_smoke",
+    # Job id: deploy-throttle (skip-vs-deploy decision; blocks the run)
+    "Deploy throttle (batch deploys)": "deploy_throttle",
+    # Job ids: backend-lint / backend-unit / frontend-checks (pre-deploy checks)
+    "Pre-deploy: Backend lint": "pre_deploy_lint",
+    "Pre-deploy: Backend unit tests": "pre_deploy_lint",
+    "Pre-deploy: Frontend checks": "pre_deploy_lint",
+    # Job id: integration-tests
+    "Pre-deploy: Integration tests": "integration_test",
+    # Job id: security-audit (semgrep, pip-audit)
+    "Pre-deploy: Security audit": "pre_deploy_lint",
+    # Job id: pre-deploy-gate (aggregate gate failing when a child failed)
+    "Pre-deploy gate": "pre_deploy_gate",
+    # Job id: deploy-staging (includes migration rehearsal and pre-migrate)
+    "Deploy to staging": "migration",
+    # Job id: staging-e2e
+    "Staging E2E (smoke + WCAG + regression)": "staging_e2e",
+    # Job id: deploy-production
+    "Deploy to app.modulo.run": "migration",
+    # Job id: prod-smoke, a SEPARATE job (needs deploy-production) - the one
+    # stage where prod is deployed but broken.
+    "Prod smoke tests": "prod_smoke",
 }
 
-# The order deploy.yml runs its jobs in. Earlier stages block later ones, so the
-# first failure in this order is the one that stopped the run.
+# The order deploy.yml runs its jobs in, as the same ``jobs[].name`` display
+# names. Earlier stages block later ones, so the first failure in this order is
+# the one that stopped the run.
 DEPLOYMENT_ORDER: tuple[str, ...] = (
-    "deploy-throttle",
-    "backend-lint",
-    "backend-unit",
-    "frontend-checks",
-    "integration-tests",
-    "security-audit",
-    "pre-deploy-gate",
-    "deploy-staging",
-    "staging-e2e",
-    "deploy-production",
-    "prod-smoke",
+    "Deploy throttle (batch deploys)",
+    "Pre-deploy: Backend lint",
+    "Pre-deploy: Backend unit tests",
+    "Pre-deploy: Frontend checks",
+    "Pre-deploy: Integration tests",
+    "Pre-deploy: Security audit",
+    "Pre-deploy gate",
+    "Deploy to staging",
+    "Staging E2E (smoke + WCAG + regression)",
+    "Deploy to app.modulo.run",
+    "Prod smoke tests",
 )
 
 
@@ -274,6 +284,9 @@ def _classify_failure_stage(job_conclusions: dict[str, str]) -> str:
     :data:`DEPLOYMENT_ORDER`, since that is the failure that blocked the run.
     Any failed job outside the known order is then considered, so an unmapped
     job cannot mask a later mappable failure.
+
+    ``job_conclusions`` is the wire shape produced by the staleness workflow:
+    GitHub job DISPLAY names (``jobs[].name``) mapped to conclusions.
     """
     for job_name in DEPLOYMENT_ORDER:
         stage = JOB_TO_STAGE.get(job_name)
