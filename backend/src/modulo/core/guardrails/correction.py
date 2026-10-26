@@ -614,7 +614,7 @@ class CorrectionBackend(Protocol):
     never guardrail config or vault secrets.
     """
 
-    async def invoke(  # NOSONAR S7503 - async backend capability contract
+    async def invoke(  # NOSONAR S7503 - async backend contract  # pragma: no branch - type-only stub
         self, messages: list[Any], **kwargs: Any
     ) -> Any: ...
 
