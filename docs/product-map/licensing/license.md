@@ -56,9 +56,15 @@ Licensing manages Ed25519-signed license keys and the Community / Team tier gate
 the feature set for its tier, gates Team-scoped surfaces (SSO, team RBAC, audit viewer,
 admin spend limits) with a 402 when absent or expired, and backs the admin license-status,
 tier-catalogue and feature-flag inspection endpoints. (The public, unauthenticated
-`/api/v1/license` surface resolves the deployment-level licence ladder - the in-memory
-licence, then a verified env-var key - and reports community / `is_valid: false` when
-neither is valid; see Behaviours.)
+`/api/v1/license` surface resolves the deployment-level licence ladder - the persisted
+system licence, then a verified env-var key - and reports community / `is_valid: false`
+when neither is valid; see Behaviours.)
+
+Both licence scopes are durable. An organisation key lives in
+`org.settings_json["license_key"]`; the instance-wide key is persisted in the RLS-free
+instance `system_config` row `system_license_key`, restored at startup, and refreshed
+into the API and the SAQ worker on a short TTL, so an install survives a restart or
+redeploy and both processes resolve the same tier.
 
 ## Trust anchor
 
@@ -136,7 +142,8 @@ the deployment would reject.
 - [x] The public, unauthenticated `/api/v1/license` surface resolves the REAL
       deployment-level licence through the canonical ladder (rungs 2-3 of
       `feature_flags._resolve_paid_plan`; the endpoint is org-less so the
-      org-level rung does not apply): an in-memory licence (`store_license`)
+      org-level rung does not apply): a system licence (installed through
+      `store_license`, persisted in `system_config` and restored at startup)
       reports its own tier/features with `is_valid: true`; otherwise a
       present env-var key is only trusted after `parse_and_verify`
       (Ed25519 signature + expiry) and an unverifiable key falls through;
@@ -221,6 +228,28 @@ the deployment would reject.
       `test_sso_licence_degradation.py`,
       `test_sso.py::TestSamlEnvLicenceIndependence`; FAR-2059/FAR-2060)
 
+- [x] Both licence scopes are durable and the precedence order is explicit
+      (FAR-2153). The organisation key is stored in
+      `org.settings_json["license_key"]`; the instance-wide key is persisted in
+      the RLS-free instance `system_config` row `system_license_key` (both
+      slots - active and a future-dated successor - are kept, so installing a
+      successor does not drop the licence the instance runs on today). The
+      persisted system licence is restored at startup and re-read
+      TTL-throttled (`SYSTEM_LICENSE_REFRESH_TTL_SECONDS`, 15s), so an install
+      made in one process is visible to the API and to the SAQ worker without a
+      restart, and a rolling deploy no longer discards it. Resolution is
+      first-valid-rung-wins: org key → persisted system install →
+      `MODULO_LICENSE_KEY` → Community, so an explicit operator install
+      overrides the deployment's env key and `MODULO_LICENSE_KEY` remains a
+      deployment-wide floor/alternative, not a requirement. `DELETE
+      /api/v1/admin/license` deletes the persisted row FIRST (a failed write
+      fails the request rather than returning a removal a restart would undo),
+      then clears the in-memory slot and busts every cached `license:{org_id}`
+      entry, so resolution falls back to the env key and then Community
+      (`backend/src/modulo/core/license.py`,
+      `backend/src/modulo/core/feature_flags.py`,
+      `backend/src/modulo/api/routes/admin_license.py`, FAR-2153)
+
 ## Known Gaps
 
 - **License-driven gating is not applied to EVERY registered `feat-*` surface**
@@ -236,6 +265,8 @@ the deployment would reject.
   cited above.
 
 ## QA History
+
+- 2026-10-26: **FAR-2158** - synced this entry to the FAR-2153 persistence change. Both licence scopes are now durable (org key in `org.settings_json`, instance-wide key in the `system_config` row `system_license_key`), restored at startup and refreshed into the API and the SAQ worker within `SYSTEM_LICENSE_REFRESH_TTL_SECONDS` (15s). Corrected the stale statements that described the system licence as in-memory only, recorded the precedence order (org → persisted system install → `MODULO_LICENSE_KEY` → Community) and the durable `DELETE /api/v1/admin/license` behaviour. Status stays `partial` (the universal-gating deferral is unchanged).
 
 - 2026-10-25: **Improve Architecture product-map walk** - fixed the admin feature-flag registry's org-level licence rung to verify the signed key (including expiry) before setting `has_license_key`, matching the canonical licence ladder. Added regression coverage for valid, malformed and expired org keys; malformed and expired keys now report `has_license_key: false` instead of being trusted on presence. Status stays `partial` (the manifest's universal-gating deferral is unchanged).
 
