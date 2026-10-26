@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import time
 import tomllib
-import venv
 from pathlib import Path
-from urllib.request import Request, urlopen
 
 import pytest
 
@@ -31,20 +30,12 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
-BUILD_WHEELS = {
-    "pip": {
-        "version": "26.2.2",
-        "url": "https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl",
-        "hash": "sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70",
-        "size": 1819850,
-    },
-    "setuptools": {
-        "version": "84.2.1",
-        "url": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
-        "hash": "sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2",
-        "size": 876263,
-    },
+BUILD_CONSTRAINTS = {
+    "pip": ("26.2.2", "sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"),
+    "setuptools": ("84.2.1", "sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"),
 }
+OPT_IN_DEADLINE_SECONDS = 600
+SUBPROCESS_TIMEOUT_SECONDS = 120
 
 
 def _workflow_text() -> str:
@@ -59,17 +50,33 @@ def _locked_packages() -> dict[str, dict[str, object]]:
     }
 
 
-def _download_and_verify(url: str, expected_hash: str, expected_size: int, destination: Path) -> None:
-    request = Request(url, headers={"User-Agent": "modulo-release-bundle-security-test"})  # noqa: S310
-    digest = hashlib.sha256()
-    size = 0
-    with urlopen(request, timeout=30) as response, destination.open("wb") as output:  # noqa: S310
-        while chunk := response.read(1024 * 1024):
-            size += len(chunk)
-            digest.update(chunk)
-            output.write(chunk)
-    assert size == expected_size, f"{destination.name}: size {size} != locked {expected_size}"
-    assert digest.hexdigest() == expected_hash.removeprefix("sha256:"), f"{destination.name}: SHA-256 mismatch"
+def _workflow_build_constraints(text: str) -> dict[str, tuple[str, str]]:
+    match = re.search(r"cat > .*? <<'EOF'(?P<body>.*?)\n\s*EOF", text, re.DOTALL)
+    assert match is not None
+    return {
+        name: (version, f"sha256:{digest}")
+        for name, version, digest in re.findall(
+            r"^\s*(pip|setuptools)==([^\s]+) --hash=sha256:([0-9a-f]{64})$",
+            match.group("body"),
+            re.MULTILINE,
+        )
+    }
+
+
+def _sync_command(uv: str) -> list[str]:
+    return [
+        uv,
+        "sync",
+        "--frozen",
+        "--no-dev",
+        "--no-build",
+        "--no-install-package",
+        "ibm-cos-sdk",
+        "--no-install-package",
+        "ibm-cos-sdk-core",
+        "--no-install-package",
+        "ibm-cos-sdk-s3transfer",
+    ]
 
 
 def _python_in(venv_root: Path) -> Path:
@@ -82,9 +89,27 @@ def _site_packages(venv_root: Path) -> Path:
     return candidates[0]
 
 
-def _run_uv(uv: str, python: Path, *arguments: str, timeout: int = 300) -> None:
-    command = [uv, "pip", "install", "--python", str(python), *arguments]
-    subprocess.run(command, cwd=python.parent.parent, check=True, timeout=timeout)  # noqa: S603
+def _run_process(command: list[str], cwd: Path, deadline: float, env: dict[str, str]) -> None:
+    remaining = deadline - time.monotonic()
+    assert remaining > 0, "release security test exceeded its total wall-clock deadline"
+    process = subprocess.Popen(  # noqa: S603
+        command,
+        cwd=cwd,
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        process.wait(timeout=min(SUBPROCESS_TIMEOUT_SECONDS, remaining))
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, 9)
+        process.wait(timeout=10)
+        raise AssertionError(f"subprocess exceeded its deadline: {command[0]}") from None
+    assert process.returncode == 0, f"command failed with exit {process.returncode}: {command}"
+
+
+def _direct_url(site_packages: Path, distribution: str) -> dict[str, object]:
+    metadata = next(site_packages.glob(f"{distribution.replace('-', '_')}-*.dist-info"))
+    return json.loads((metadata / "direct_url.json").read_text(encoding="utf-8"))
 
 
 def test_locked_ibm_cos_archives_have_expected_urls_hashes_sizes_and_versions() -> None:
@@ -136,77 +161,82 @@ def test_bundle_excludes_the_three_source_packages_before_global_sync() -> None:
     assert excluded == EXPECTED_PACKAGES
 
 
-def test_bundle_ibm_install_is_executable_and_offline_after_global_sync() -> None:
+@pytest.mark.release_bundle_security
+def test_bundle_ibm_install_is_executable_and_provenance_verified() -> None:
+    """Exercise the exact release boundary; opt in because it downloads/builds packages."""
     if os.environ.get("RUN_RELEASE_BUNDLE_SECURITY_TESTS") != "1":
         pytest.skip("set RUN_RELEASE_BUNDLE_SECURITY_TESTS=1 to run the release security test")
-    """Exercise the release boundary; opt in because it downloads/builds packages."""
     uv = shutil.which("uv")
-    global_venv = BACKEND_ROOT / ".venv"
-    if uv is None or not global_venv.is_dir():
-        pytest.skip("requires uv and the global backend .venv produced by uv sync")
+    assert uv is not None, "release security test requires uv"
 
+    workflow_constraints = _workflow_build_constraints(_workflow_text())
+    assert workflow_constraints == BUILD_CONSTRAINTS
     locked = _locked_packages()
+    deadline = time.monotonic() + OPT_IN_DEADLINE_SECONDS
     with tempfile.TemporaryDirectory(prefix="modulo-release-security-") as temporary:
         root = Path(temporary)
-        downloads = root / "downloads"
-        downloads.mkdir()
-        for package in locked.values():
-            archive = package["sdist"]
-            destination = downloads / Path(archive["url"]).name
-            _download_and_verify(archive["url"], archive["hash"], archive["size"], destination)
-        for wheel in BUILD_WHEELS.values():
-            destination = downloads / Path(wheel["url"]).name
-            _download_and_verify(wheel["url"], wheel["hash"], wheel["size"], destination)
+        project = root / "backend"
+        project.mkdir()
+        shutil.copy2(BACKEND_ROOT / "pyproject.toml", project / "pyproject.toml")
+        shutil.copy2(LOCKFILE, project / "uv.lock")
+        shutil.copytree(BACKEND_ROOT / "src", project / "src")
+        env = {**os.environ, "PYTHONNOUSERSITE": "1", "UV_CACHE_DIR": str(root / "uv-cache")}
 
-        isolated_venv = root / "venv"
-        venv.EnvBuilder(with_pip=False, clear=True, symlinks=True).create(isolated_venv)
-        python = _python_in(isolated_venv)
-        global_site = next(global_venv.glob("lib/python*/site-packages"), None)
-        assert global_site is not None, "global backend .venv has no site-packages directory"
-        _site_packages(isolated_venv).joinpath("global_sync.pth").write_text(f"{global_site}\n", encoding="utf-8")
+        _run_process(_sync_command(uv), project, deadline, env)
+        python = _python_in(project / ".venv")
+        site_packages = _site_packages(project / ".venv")
+        assert site_packages.is_relative_to(project / ".venv")
 
         constraints = root / "build-constraints.txt"
-        constraints.write_text(
-            "\n".join(
-                f"{name}=={wheel['version']} \\\n  --hash={wheel['hash']}" for name, wheel in BUILD_WHEELS.items()
-            )
-            + "\n",
-            encoding="utf-8",
+        constraint_lines = [
+            f"{name}=={version} \\\n  --hash={digest}" for name, (version, digest) in BUILD_CONSTRAINTS.items()
+        ]
+        constraints.write_text("\n".join(constraint_lines) + "\n", encoding="utf-8")
+        install_match = re.search(
+            r"uv pip install --python \.venv/bin/python(?P<args>.*?)\n\n          BUNDLE=",
+            _workflow_text(),
+            re.DOTALL,
         )
-        _run_uv(
-            uv,
-            python,
-            "--no-index",
-            "--find-links",
-            str(downloads),
-            "--require-hashes",
-            "--no-deps",
-            "-r",
-            str(constraints),
+        assert install_match is not None
+        requirements = re.findall(
+            r"'([^']+ @ https://files\.pythonhosted\.org/[^']+#sha256=[0-9a-f]{64})'",
+            install_match.group(0),
         )
-
-        _run_uv(
+        install_args = [
             uv,
-            python,
-            "--no-index",
-            "--find-links",
-            str(downloads),
+            "pip",
+            "install",
+            "--python",
+            str(python),
             "--require-build-hashes",
             "--build-constraints",
             str(constraints),
             "--no-deps",
-            *(str(downloads / Path(package["sdist"]["url"]).name) for package in locked.values()),
-        )
+            *requirements,
+        ]
+        _run_process(install_args, project, deadline, env)
+
+        for package in EXPECTED_PACKAGES:
+            metadata = next(site_packages.glob(f"{package.replace('-', '_')}-*.dist-info"))
+            assert metadata.is_relative_to(site_packages)
+            assert (metadata / "METADATA").read_text(encoding="utf-8").find("Version: 2.14.3") >= 0
+            provenance = _direct_url(site_packages, package)
+            expected = locked[package]["sdist"]
+            assert provenance["url"] == expected["url"]
+            archive_info = provenance.get("archive_info", {})
+            if archive_info:
+                assert archive_info["hash"] == expected["hash"].replace(":", "=")
 
         code = (
-            "import importlib.metadata, sys; "
+            "import importlib.metadata, pathlib, sys; "
+            "site = pathlib.Path(sys.argv[1]).resolve(); "
+            "dist = importlib.metadata.distribution('ibm-cos-sdk'); "
+            "assert pathlib.Path(dist.locate_file('')).resolve().is_relative_to(site); "
             "assert importlib.metadata.version('ibm-cos-sdk') == '2.14.3'; "
             "import ibm_boto3, ibm_botocore, ibm_s3transfer; "
-            "names = ('jmespath', 'python-dateutil', 'requests', 'urllib3'); "
-            "assert all("
-            "str(importlib.metadata.distribution(name).locate_file('')).startswith(sys.argv[1]) "
-            "for name in names)"
+            "modules = (ibm_boto3, ibm_botocore, ibm_s3transfer); "
+            "assert all(pathlib.Path(module.__file__).resolve().is_relative_to(site) for module in modules); "
+            "paths = (entry for entry in sys.path if entry and 'site-packages' in entry); "
+            "assert all(pathlib.Path(entry).resolve().is_relative_to(site) for entry in paths)"
         )
-        subprocess.run(  # noqa: S603
-            [str(python), "-c", code, str(global_site)], check=True, timeout=30
-        )
+        _run_process([str(python), "-c", code, str(site_packages)], project, deadline, env)
