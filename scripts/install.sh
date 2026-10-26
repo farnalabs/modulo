@@ -61,7 +61,7 @@
 #     └── modulo-<version>-linux-<arch>/      (single top-level directory)
 #         ├── VERSION                         (the release tag, e.g. bundle-v0.1.0)
 #         ├── SHA256SUMS                      (sha256 over every shipped file)
-#         ├── launcher                        (FAR-671: real launcher; placeholder for now)
+#         ├── launcher                        (native launcher wrapper)
 #         ├── runtime/                        (python-build-standalone CPython tree)
 #         ├── pg/                             (PostgreSQL server + client binaries)
 #         ├── redis/                          (redis-server + redis-cli)
@@ -634,4 +634,4 @@ elif [[ "${bin_on_path}" -eq 0 ]]; then
   info "Start a new shell (or: source ~/.bashrc) to pick up the updated PATH."
 fi
 info ""
-info "The bundle ships a placeholder launcher until the real launcher lands (FAR-671); running 'modulo' will say so until then."
+info "The bundle includes the native launcher; 'modulo --help' is ready to run."
