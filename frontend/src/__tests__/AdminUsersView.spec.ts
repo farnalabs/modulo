@@ -481,6 +481,29 @@ describe('AdminUsersView', () => {
     })
   })
 
+  it('submits an invite without an expiry and still surfaces the link', async () => {
+    mockPost.mockResolvedValue({
+      id: 'inv-3',
+      invite_url: 'https://app.test/accept-invite#token=noexp',
+    })
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="admin-users-add-user"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-mode-invite"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-create-email"]').setValue('invitee2@example.com')
+    await wrapper.find('[data-testid="admin-users-create-display-name"]').setValue('Invitee Two')
+    await wrapper.find('form').trigger('submit')
+    await vi.waitFor(() => {
+      const cred = wrapper.find('[data-testid="admin-users-credential-value"]')
+      expect(cred.exists()).toBe(true)
+      expect(cred.text()).toContain('token=noexp')
+    })
+  })
+
   it('shows an inline error when sending an invite fails', async () => {
     mockPost.mockRejectedValue(new Error('A user with this email already exists in this organisation'))
     const wrapper = mountView()
