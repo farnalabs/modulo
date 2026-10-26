@@ -411,9 +411,9 @@ def _is_executable_python_line(line: str) -> bool:
     # quotes, no other code around it).
     if (
         (stripped.startswith("'''") and stripped.endswith("'''"))
-        or (stripped.startswith('\"\"\"') and stripped.endswith('\"\"\"'))
+        or (stripped.startswith('"""') and stripped.endswith('"""'))
         or (stripped.startswith("'") and stripped.endswith("'") and "\n" not in stripped[1:-1])
-        or (stripped.startswith('\"') and stripped.endswith('\"') and "\n" not in stripped[1:-1])
+        or (stripped.startswith('"') and stripped.endswith('"') and "\n" not in stripped[1:-1])
     ):
         return False
     try:
@@ -480,9 +480,10 @@ def _is_executable_js_line(line: str) -> bool:
 
 def _triple_quote_at(line: str, index: int) -> str | None:
     """Return the triple-quote delimiter starting at *index*, else ``None``."""
-    for quote in ('"""', "'''"):
-        if line.startswith(quote, index):
-            return quote
+    if line.startswith('"""', index):
+        return '"""'
+    if line.startswith("'''", index):
+        return "'''"
     return None
 
 
@@ -2694,15 +2695,28 @@ def _evaluate_changed_lines(
 
     results: list[GateResult] = []
     try:
-        for language, report in (("Python", python_report), ("JavaScript", effective_js_report)):
+        # Python evaluation
+        results.append(
+            evaluate(
+                "Python",
+                python_report,
+                args.compare_branch,
+                args.fail_under,
+                allow_missing=args.allow_missing_reports,
+                branch_fail_under=args.branch_fail_under,
+                js_src_root=js_src_root,
+                allow_deletion_only=args.allow_deletion_only,
+            )
+        )
+        # JavaScript evaluation (if report exists)
+        if effective_js_report is not None:
             results.append(
                 evaluate(
-                    language,
-                    report,
+                    "JavaScript",
+                    effective_js_report,
                     args.compare_branch,
                     args.fail_under,
-                    allow_missing=args.allow_missing_reports
-                    or (language == "JavaScript" and args.allow_missing_js_report),
+                    allow_missing=args.allow_missing_reports or args.allow_missing_js_report,
                     branch_fail_under=args.branch_fail_under,
                     js_src_root=js_src_root,
                     allow_deletion_only=args.allow_deletion_only,
@@ -2742,14 +2756,15 @@ def _check_project_floors(python_report: Path | None, js_report: Path | None) ->
     if js_report is not None and js_report.exists():
         js_numbers = _load_js_coverage(str(js_report))
 
-    present = [numbers for numbers in (python_numbers, js_numbers) if numbers is not None]
-    if not present:
+    failure = False
+    if python_numbers is not None:
+        failure |= _enforce(python_numbers) == 1
+    if js_numbers is not None:
+        failure |= _enforce(js_numbers) == 1
+    if python_numbers is None and js_numbers is None:
         return False
 
     print("=== Project-wide Coverage Floor (ratchet) ===")
-    failure = False
-    for numbers in present:
-        failure |= _enforce(numbers) == 1
     print(
         f"  Floors: MIN_PROJECT_LINE_COVERAGE={MIN_PROJECT_LINE_COVERAGE}%, "
         f"MIN_PROJECT_BRANCH_COVERAGE={MIN_PROJECT_BRANCH_COVERAGE}%"
