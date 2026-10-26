@@ -1,8 +1,15 @@
-import { test, expect, loginForSystemRoute, isDevModeTarget } from './setup/fixtures'
+import { test, expect, loginAsAdmin, loginForSystemRoute, isDevModeTarget } from './setup/fixtures'
 
 test.describe('Settings Email', { tag: "@regression" }, () => {
   test('renders the Email Settings page', { tag: "@regression" }, async ({ page, env }) => {
-    await loginForSystemRoute(page, env)
+    // Email delivery is organisation-scoped (the API lives under
+    // /api/v1/admin/org/{org_id}), so /settings/email lives in the ADMIN
+    // sidebar group behind required_roles: [admin] (#2455 moved it out of the
+    // system-admin-only SYSTEM group). The staging/prod e2e identity is a
+    // regular org admin and therefore reaches the page;
+    // loginForSystemRoute's extra is_system_admin claim is no longer needed
+    // here.
+    await loginAsAdmin(page, env)
     if (env.name === 'local') {
       // Registered after login so it is not shadowed by setupLocalMockApi's
       // catch-all (Playwright matches the last registered route first).
@@ -11,10 +18,7 @@ test.describe('Settings Email', { tag: "@regression" }, () => {
       })
     }
     await page.goto('/settings/email')
-    // Email delivery is organisation-scoped (the API lives under
-    // /api/v1/admin/org/{org_id}), so #2455 moved this route into the ADMIN
-    // sidebar group. The staging/prod e2e identity is a regular org admin and
-    // must now reach the page rather than be redirected to the dashboard.
+    await expect(page).toHaveURL(/\/settings\/email$/)
     await expect(page.locator('h1')).toContainText('Email Settings')
   })
 })
