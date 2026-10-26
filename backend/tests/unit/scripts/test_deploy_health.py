@@ -247,7 +247,7 @@ def test_deploy_jobs_are_plumbed_into_evaluate() -> None:
 
 def test_failure_stages_are_empty_without_jobs_data() -> None:
     verdict = _verdict(runs=[_run("failure"), _run("failure")])
-    assert verdict.failure_stages == []
+    assert not verdict.failure_stages
     assert "failure stages" not in verdict.reason
 
 
@@ -299,7 +299,7 @@ def test_failure_stages_render_in_reason_counts() -> None:
 def test_unknown_stage_run_is_skipped() -> None:
     runs = [_run("failure", sha="abc1234", run_id=41)]
     deploy_jobs = {"41": {"some-unmapped-job": "failure"}}
-    assert _verdict(runs=runs, deploy_jobs=deploy_jobs).failure_stages == []
+    assert not _verdict(runs=runs, deploy_jobs=deploy_jobs).failure_stages
 
 
 def test_cli_evaluate_reads_jobs_json(tmp_path: Path) -> None:
