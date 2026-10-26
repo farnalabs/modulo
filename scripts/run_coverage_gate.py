@@ -943,7 +943,7 @@ def _old_file_lines(compare_branch: str, filepath: str) -> list[str]:
     # first_line is fullmatch-bounded to hex by _MERGE_BASE_SHA_RE and
     # safe_path is regex-bounded by _safe_repo_path before reaching argv.
     try:
-        shown = subprocess.run(  # NOSONAR - sha is [0-9a-f]{7,64} fullmatch, path bounded, no shell
+        shown = subprocess.run(  # NOSONAR - sha is [\da-f]{7,64} fullmatch, path bounded, no shell
             ["git", "show", f"{first_line}:{safe_path}"],
             capture_output=True,
             text=True,

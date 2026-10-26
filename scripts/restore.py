@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import getpass
 import hashlib
 import os
@@ -348,7 +347,7 @@ def _restore_from_archive(args: argparse.Namespace, passphrase: str, db_url: str
         print("Temp directory cleaned up.")
 
 
-async def main() -> None:  # NOSONAR python:S7503 - async CLI entrypoint retained for embedding callers
+def main() -> None:
     args = parse_args()
     _validate_restore_args(args)
 
@@ -364,4 +363,4 @@ async def main() -> None:  # NOSONAR python:S7503 - async CLI entrypoint retaine
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
