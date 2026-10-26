@@ -98,12 +98,18 @@ export function isDemoSession(): boolean {
   return localStorage.getItem(DEMO_SESSION_KEY) === '1'
 }
 
-export function setDemoSession(...[active]: [boolean]): void {
-  if (active) {
-    localStorage.setItem(DEMO_SESSION_KEY, '1')
-  } else {
-    localStorage.removeItem(DEMO_SESSION_KEY)
-  }
+function enableDemoSession(): void {
+  localStorage.setItem(DEMO_SESSION_KEY, '1')
+}
+
+function disableDemoSession(): void {
+  localStorage.removeItem(DEMO_SESSION_KEY)
+}
+
+const DEMO_SESSION_ACTIONS: readonly [() => void, () => void] = [disableDemoSession, enableDemoSession]
+
+export function setDemoSession(...args: [boolean]): void {
+  DEMO_SESSION_ACTIONS[Number(args[0])]()
 }
 
 // Persisted signal that a demo session has ended involuntarily (expiry, forced

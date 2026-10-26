@@ -31,9 +31,7 @@ function getConfig(): ActiveConfig {
 }
 
 export function createErrorTracker(config?: ErrorTrackerConfig): ErrorTracker {
-  if (!_instance) {
-    _instance = new ErrorTracker(config)
-  }
+  _instance ??= new ErrorTracker(config)
   return _instance
 }
 
