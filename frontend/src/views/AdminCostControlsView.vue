@@ -1,12 +1,15 @@
 <template>
   <div data-theme="agent" class="page-wide">
-    <PageTabs :tabs="[
-      { label: 'Overview', to: '/admin/costs' },
-      { label: 'Spend Limits', to: '/admin/costs/limits' },
-      { label: 'Cost Components', to: '/admin/costs/components' },
-      { label: 'Cost Controls', to: '/admin/costs/controls' },
-    ]" />
-    <PageHeader :title="$t('views.AdminCostBreakdownView.cost_controls')" :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')" />
+    <PageHeader
+      :title="$t('views.AdminCostBreakdownView.cost_controls')"
+      :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')"
+      :tabs="[
+        { label: 'Overview', to: '/admin/costs' },
+        { label: 'Spend Limits', to: '/admin/costs/limits' },
+        { label: 'Cost Components', to: '/admin/costs/components' },
+        { label: 'Cost Controls', to: '/admin/costs/controls' },
+      ]"
+    />
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
       <div class="space-y-6">
@@ -245,7 +248,6 @@ import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
 import Select from '../components/shared/AppSelect.vue'
-import PageTabs from "../components/PageTabs.vue"
 import { formatMoney } from '../lib/money'
 
 const planStore = usePlanStore()

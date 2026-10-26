@@ -1,12 +1,15 @@
 <template>
   <div data-theme="agent" class="page-wide">
-    <PageTabs :tabs="[
-      { label: $t('views.AdminCostBreakdownView.tabs_overview'), to: '/admin/costs' },
-      { label: $t('views.AdminCostBreakdownView.tabs_spend_limits'), to: '/admin/costs/limits' },
-      { label: $t('views.AdminCostBreakdownView.tabs_cost_components'), to: '/admin/costs/components' },
-      { label: $t('views.AdminCostBreakdownView.tabs_cost_controls'), to: '/admin/costs/controls' },
-    ]" />
-    <PageHeader :title="$t('views.AdminCostBreakdownView.cost_breakdown')" :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')" />
+    <PageHeader
+      :title="$t('views.AdminCostBreakdownView.cost_breakdown')"
+      :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')"
+      :tabs="[
+        { label: $t('views.AdminCostBreakdownView.tabs_overview'), to: '/admin/costs' },
+        { label: $t('views.AdminCostBreakdownView.tabs_spend_limits'), to: '/admin/costs/limits' },
+        { label: $t('views.AdminCostBreakdownView.tabs_cost_components'), to: '/admin/costs/components' },
+        { label: $t('views.AdminCostBreakdownView.tabs_cost_controls'), to: '/admin/costs/controls' },
+      ]"
+    />
 
     <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
       <div class="space-y-6">
@@ -151,7 +154,6 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Card from 'primevue/card'
 import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
-import PageTabs from "../components/PageTabs.vue"
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 
