@@ -1244,6 +1244,9 @@ elements:
       - testid: admin-connectors-type-select
         type: select
         dynamic_testid: false
+      - testid: admin-connectors-types-error
+        type: element
+        dynamic_testid: false
       - testid: admin-connectors-description-input
         type: input
         dynamic_testid: false
@@ -1290,6 +1293,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: connectors-preview-section
+        type: element
+        dynamic_testid: false
+      - testid: connectors-preview-summary
         type: element
         dynamic_testid: false
       - testid: feature-gate
