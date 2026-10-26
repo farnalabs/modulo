@@ -992,19 +992,25 @@ export interface paths {
         post: operations["upload_license_api_v1_admin_license_post"];
         /**
          * Remove License
-         * @description Remove the instance-wide (system-scope) licence (FAR-2110).
+         * @description Remove the instance-wide (system-scope) licence (FAR-2110 / FAR-2153).
          *
          *     The counterpart of :func:`upload_license`: ``POST`` stores a verified key
-         *     in the process-wide in-memory licence store, and this route clears it, so
-         *     an operator who installed a key by mistake (or wants to return the
-         *     deployment to Community) no longer has to restart the process.
+         *     in the process-wide in-memory licence store AND the instance-scope
+         *     ``system_config`` row, and this route removes both, so an operator who
+         *     installed a key by mistake (or wants to return the deployment to Community)
+         *     no longer has to restart the process.
          *
-         *     Two mutations are required for the change to be visible immediately:
+         *     Three mutations are required for the change to be complete and visible:
          *
-         *     1. ``clear_license()`` empties the in-memory store — the rung
+         *     1. ``clear_persisted_system_license()`` deletes the durable row. This is
+         *        done FIRST: if the DB write fails the request fails rather than
+         *        reporting a removal that a restart would undo. It is also what makes the
+         *        removal reach the SAQ worker, which re-reads the row on its own cadence.
+         *     2. ``clear_license()`` empties the in-memory store — the rung
          *        ``core.feature_flags.resolve_effective_license`` reads on every plan
-         *        resolution, so every subsequent resolution falls through to Community.
-         *     2. ``invalidate_license_status_cache`` deletes every cached
+         *        resolution, so every subsequent resolution falls through to the env key
+         *        (the deployment floor) and then Community.
+         *     3. ``invalidate_license_status_cache`` deletes every cached
          *        ``license:{org_id}`` status entry. The admin status cache holds the
          *        RESOLVED effective licence for each org (60s TTL), and any org without
          *        its own key was caching the system licence, so a removal without the
