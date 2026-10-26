@@ -219,11 +219,21 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
-      - name: uv sync and stage backend into the bundle
+      # NOSONAR githubactions:S8541: ibm-cos-sdk and pytest-bdd are locked
+      # source distributions without wheels, so `--no-build` hard-fails the
+      # sync on a cold uv cache. `--frozen` locks the exact revisions, so the
+      # builds are deterministic and trusted (no untrusted setup scripts
+      # execute). Kept as an inline `run:` scalar (not a `|` block) because
+      # SonarCloud only sees `# NOSONAR` as a YAML comment on the flagged line
+      # when it is not inside a block scalar.
+      - name: Sync backend dependencies for the bundle
+        working-directory: backend
+        run: uv sync --frozen --no-dev  # NOSONAR
+
+      - name: Stage backend into the bundle
+        working-directory: backend
         run: |
           set -euo pipefail
-          cd backend
-
           # Keep the global --no-build supply-chain boundary. These three IBM
           # COS packages are the only locked sdist-only dependencies; install
           # their exact locked archives separately below with build hashes.
@@ -246,7 +256,6 @@ jobs:
             'ibm-cos-sdk @ https://files.pythonhosted.org/packages/98/b8/b99f17ece72d4bccd7e75539b9a294d0f73ace5c6c475d8f2631afd6f65b/ibm_cos_sdk-2.14.3.tar.gz#sha256=643b6f2aa1683adad7f432df23407d11ae5adb9d9ad01214115bee77dc64364a' \
             'ibm-cos-sdk-core @ https://files.pythonhosted.org/packages/7e/45/80c23aa1e13175a9deefe43cbf8e853a3d3bfc8dfa8b6d6fe83e5785fe21/ibm_cos_sdk_core-2.14.3.tar.gz#sha256=85dee7790c92e8db69bf39dae4c02cac211e3c1d81bb86e64fa2d1e929674623' \
             'ibm-cos-sdk-s3transfer @ https://files.pythonhosted.org/packages/f3/ff/c9baf0997266d398ae08347951a2970e5e96ed6232ed0252f649f2b9a7eb/ibm_cos_sdk_s3transfer-2.14.3.tar.gz#sha256=2251ebfc4a46144401e431f4a5d9f04c262a0d6f95c88a8e71071da056e55f72'
-
           BUNDLE="../build/${BUNDLE_ROOT}"
           mkdir -p "$BUNDLE/backend"
           cp -a src "$BUNDLE/backend/src"

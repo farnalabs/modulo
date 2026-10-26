@@ -1386,6 +1386,12 @@ elements:
       - testid: cost-team-table
         type: element
         dynamic_testid: false
+      - testid: cost-team-unattributed
+        type: element
+        dynamic_testid: false
+      - testid: cost-team-unattributed-unavailable
+        type: element
+        dynamic_testid: false
       - testid: cost-anomalies-error
         type: element
         dynamic_testid: false
@@ -2981,6 +2987,21 @@ elements:
         dynamic_testid: false
       - testid: compliance-evidence-index-artifact-count
         type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-identifier-label
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-snapshot-link
+        type: link
+        dynamic_testid: false
+      - testid: compliance-evidence-index-copy-identifier
+        type: button
+        dynamic_testid: false
+      - testid: compliance-evidence-index-identifier-details
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-copy-error
+        type: alert
         dynamic_testid: false
       - testid: compliance-evidence-index-customer-responsibility
         type: element
@@ -6792,6 +6813,7 @@ features:
         behaviours:
             # Cost report + run-cost aggregation (GET /api/v1/admin/costs)
             - "[x] The cost report aggregates org spend for the selected period (day/week/month/year) and groups by team or org; each item carries total_spend_usd, total_runs, a summed per-component breakdown (cost components resolved per environment) and per-org annotations, and the response surfaces org_total / org_run_count / legacy_total / has_more plus org_unassigned_components"
+            - "[x] The /admin/costs Per-Team Cost Breakdown card reads group_by=team&period=month, renders the team-attributed ledger rows with refused/clamped annotations and a derived average per run, and discloses the response's org_unassigned_components (component spend from runs with no team) — showing an explicit unavailable state when that bucket is absent or corrupt — so the bucket is never silently omitted from the breakdown (frontend/src/views/AdminCostBreakdownView.vue, frontend/src/__tests__/AdminCostBreakdownView.spec.ts)"
             - "[x] An invalid group_by or period query param is rejected with 422 (pattern-constrained, no silent fallback)"
             - "[x] The cost endpoints are admin-only: operators/viewers are refused 403 and an unauthenticated caller 401 (require_permission cost.manage)"
 
@@ -6859,7 +6881,7 @@ features:
             - "[x] Migration 0320_evidence_redaction_rules creates evidence_redaction_rules (OrgScoped + soft-delete, UNIQUE (organisation_id, key_pattern, role), role CHECK in admin/operator/viewer), applies the four-step RLS pattern, and seeds the mandatory catch-all row key_pattern='*' / role='viewer' / redacted_fields='{sensitive_output, internal_metadata}' for every existing organisation"
             - "[x] The /evidence route renders under the MONITOR sidebar group; EvidenceView.vue fetches the already-redacted payload and renders it as-is with NO client-side redaction or conditional field hiding, with i18n-backed strings and role=status/aria-live status regions (frontend/src/views/EvidenceView.vue, frontend/src/manifest.yaml)"
             - "[x] The /admin/evidence-redaction route (ADMIN sidebar group) renders AdminEvidenceRedactionView.vue, which lists the org's rules and creates/edits them through the PUT /api/v1/evidence/redaction-rules upsert keyed on (key_pattern, role): creating needs an unused pair and at least one redacted class (both rejected inline before any request), editing keeps key_pattern/role immutable and changes only redacted_fields, and the page has no delete surface; redacted_fields is limited to the backend REDACTION_CLASS_FIELDS vocabulary (an unrecognised stored class stays visible so it can be removed, and an unrecognised stored role is shown read-only with Save disabled). The seeded '*' / viewer catch-all is shown as mandatory, and the page explains the per-role fail-closed default — it configures the SERVER boundary only and never redacts or hides evidence values client-side (frontend/src/views/AdminEvidenceRedactionView.vue, frontend/src/manifest.yaml)"
-            - "[x] The /admin/compliance/evidence-index route fetches GET /api/v1/compliance/evidence-index with the compliance.evidence_index.read permission, renders pack metadata, framework coverage counts, present/absent/customer-supplied artefacts, identifiers/locations/provenance/mapping row IDs, missing artefact warnings and the human-only lower-bound warning; customer-responsibility rows are explained as customer-owned records because the API intentionally omits them (frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
+            - "[x] The /admin/compliance/evidence-index route fetches GET /api/v1/compliance/evidence-index with the compliance.evidence_index.read permission, renders pack metadata, framework coverage counts, present/absent/customer-supplied artefacts, identifiers/locations/provenance/mapping row IDs, missing artefact warnings and the human-only lower-bound warning; a pipeline-snapshot identifier renders as a concise 'Pipeline snapshot v{n}' label with the app-wide short id, a link to that exact version and the raw identifier kept selectable behind a details disclosure plus a copy action, while every other identifier stays verbatim; customer-responsibility rows are explained as customer-owned records because the API intentionally omits them (frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
             - "[x] The canonical /admin/compliance/evidence-index route renders ComplianceEvidenceIndexView.vue for the compliance evidence index, and the deprecated /admin/evidence route remains a compatibility alias to that same view; both routes use GET /api/v1/compliance/evidence-index to show pack metadata, completeness, missing artefact types, and each indexed artefact's status, provenance, record count, and location (frontend/src/router/index.ts, frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
         deferrals:
             - "Risk/Assessment (sub-scope B, FAR-941) is a separate ticket and is not part of this entry; the decision-record NULL-duplicate grouping (acceptance criteria 12-14) belongs to the decision-record read path and is not implemented here"
