@@ -51,6 +51,17 @@ jobs:
       actions: read
     outputs:
       should_deploy: ${{ steps.check.outputs.should_deploy }}
+      # FAR-2152: the machine-readable "did this run deploy?" signal, emitted
+      # in lockstep with should_deploy on EVERY branch of the check step
+      # (`deployed=true` for a run that will execute the deploy pipeline,
+      # `deployed=false` for every path that deploys nothing). Every
+      # downstream job that assumes a deploy happened gates on THIS, never on
+      # the run conclusion: a throttled run concludes SUCCESS while shipping
+      # nothing (2026-10-25: four "successful" deploy runs deployed nothing
+      # and in `gh run list` were indistinguishable from real deploys).
+      # A structural test (test_workflow_structure.py) pins the lockstep and
+      # the downstream gating so this cannot silently regress.
+      deployed: ${{ steps.check.outputs.deployed }}
       # Legibility outputs (no job gates on these): WHY the throttle skipped
       # (in_progress | interval_throttled; empty when deploying) and WHEN the
       # next deploy is expected. A throttled run still concludes SUCCESS —
@@ -205,6 +216,7 @@ jobs:
           if [ "$FORCE_DEPLOY" = "true" ]; then
             {
               echo "should_deploy=true"
+              echo "deployed=true"
               echo "skip_reason="
               echo "next_deploy="
             } >> "$GITHUB_OUTPUT"
@@ -234,6 +246,7 @@ jobs:
           if [ -n "$IN_PROGRESS" ]; then
             {
               echo "should_deploy=false"
+              echo "deployed=false"
               echo "skip_reason=in_progress"
             } >> "$GITHUB_OUTPUT"
             # Next deploy: as soon as the in-progress run concludes - an exact
@@ -241,7 +254,7 @@ jobs:
             # fabricated timestamp.
             echo "next_deploy=after run ${IN_PROGRESS} finishes (it is deploying now)" >> "$GITHUB_OUTPUT"
             echo "::notice::A deploy run is already in progress (run $IN_PROGRESS) - batching; skipping this run so it does not cancel the in-progress deploy. This run will NOT deploy; expected next deploy: after run $IN_PROGRESS finishes."
-            write_verdict "NO - this run deploys nothing (batched)" "another deploy run is already in progress (run ${IN_PROGRESS}); batching instead of competing with it" "after run ${IN_PROGRESS} finishes (it is deploying now)"
+            write_verdict "NO DEPLOY — batched behind an in-progress run (FAR-954)" "another deploy run is already in progress (run ${IN_PROGRESS}); batching instead of competing with it" "after run ${IN_PROGRESS} finishes (it is deploying now)"
             exit 0
           fi
 
@@ -250,6 +263,7 @@ jobs:
           if [[ "$COMMIT_MSG" =~ ^(fix\(deploy(ment)?\)|fix\(ci\)|infra\(deploy\)|ci:) ]]; then
             {
               echo "should_deploy=true"
+              echo "deployed=true"
               echo "skip_reason="
               echo "next_deploy="
             } >> "$GITHUB_OUTPUT"
@@ -265,13 +279,28 @@ jobs:
           # push and starve real deploys (observed 2026-08-08: prod stuck on the
           # 10:52 build for 4h while every later run skipped against the previous
           # skipped run).
+          #
+          # FAR-2152: the anchor is a JOB conclusion, never the RUN conclusion.
+          # This is what makes the livelock (a throttled success resetting the
+          # window that throttled it) impossible: on a throttled run the
+          # "Deploy to app.modulo.run" job is SKIPPED, so it can never be the
+          # anchor. Verified against the 2026-10-25 run history: the throttle
+          # anchored on run 40183128848 (created 10:02:33Z, deploy job
+          # `success`), skipped four re-dispatch runs at 11:24-12:44Z, then
+          # passed at 13:02:14Z — anchor + 3h, exactly. The repeated throttled
+          # runs were the deploy watchdog's ~35-min re-dispatches, not
+          # self-perpetuation. A structural test pins this input so a future
+          # edit cannot swap in a run-level read.
           LAST=""
           for RID in $(gh run list --repo "${{ github.repository }}" \
             --workflow "Deploy: Staging + Prod" \
             --limit 50 \
             --json databaseId --jq '.[].databaseId' 2>/dev/null || echo ""); do
             [ "$RID" = "${{ github.run_id }}" ] && continue
-            DEPLOY_JOB_CONCLUSION="$(gh api "repos/${{ github.repository }}/actions/runs/$RID/jobs" \
+            # per_page=100: the deploy job must be found even if the job list
+            # grows past the API's default page of 30 (a silent miss would
+            # anchor on a stale/failed run instead of the real deploy).
+            DEPLOY_JOB_CONCLUSION="$(gh api "repos/${{ github.repository }}/actions/runs/$RID/jobs?per_page=100" \
               --jq '[.jobs[] | select(.name == "Deploy to app.modulo.run") | .conclusion] | .[0] // empty' 2>/dev/null || echo "")"
             if [ "$DEPLOY_JOB_CONCLUSION" = "success" ]; then
               LAST="$(gh api "repos/${{ github.repository }}/actions/runs/$RID" \
@@ -283,6 +312,7 @@ jobs:
           if [ -z "$LAST" ]; then
             {
               echo "should_deploy=true"
+              echo "deployed=true"
               echo "skip_reason="
               echo "next_deploy="
             } >> "$GITHUB_OUTPUT"
@@ -294,8 +324,11 @@ jobs:
             DIFF_H=$(( (NOW_TS - LAST_TS) / 3600 ))
             echo "hours_since_deploy=${DIFF_H}"
             if [ "$DIFF_H" -lt "$INTERVAL_HOURS" ]; then
-              echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-              echo "skip_reason=interval_throttled" >> "$GITHUB_OUTPUT"
+              {
+                echo "should_deploy=false"
+                echo "deployed=false"
+                echo "skip_reason=interval_throttled"
+              } >> "$GITHUB_OUTPUT"
               # Next eligible deploy = anchor + interval, computed from the
               # SAME anchor the skip just used (never re-derived - see the
               # stale-anchor bug in the comment above the loop).
@@ -303,10 +336,11 @@ jobs:
               NEXT_AT="$(date -u -d "@$NEXT_TS" +%Y-%m-%dT%H:%MZ)"
               echo "next_deploy=${NEXT_AT} (last deploy + ${INTERVAL_HOURS}h interval)" >> "$GITHUB_OUTPUT"
               echo "::notice::Last deploy attempt ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. This run will NOT deploy; next deploy eligible at ${NEXT_AT} (UTC). Use workflow_dispatch force_deploy=true to bypass now."
-              write_verdict "NO - this run deploys nothing (throttled)" "last production deploy was ${DIFF_H}h ago, under the ${INTERVAL_HOURS}h throttle interval" "${NEXT_AT} UTC (last deploy + ${INTERVAL_HOURS}h); sooner only via workflow_dispatch force_deploy=true"
+              write_verdict "NO DEPLOY — throttled (FAR-954)" "last production deploy was ${DIFF_H}h ago, under the ${INTERVAL_HOURS}h throttle interval" "${NEXT_AT} UTC (last deploy + ${INTERVAL_HOURS}h); sooner only via workflow_dispatch force_deploy=true"
             else
               {
                 echo "should_deploy=true"
+                echo "deployed=true"
                 echo "skip_reason="
                 echo "next_deploy="
               } >> "$GITHUB_OUTPUT"
@@ -326,7 +360,7 @@ jobs:
   backend-lint:
     name: "Pre-deploy: Backend lint"
     needs: [deploy-throttle]
-    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 20
     steps:
@@ -375,7 +409,7 @@ jobs:
   backend-unit:
     name: "Pre-deploy: Backend unit tests"
     needs: [deploy-throttle]
-    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 60
     steps:
@@ -426,7 +460,7 @@ jobs:
   frontend-checks:
     name: "Pre-deploy: Frontend checks"
     needs: [deploy-throttle]
-    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 30
     steps:
@@ -499,7 +533,7 @@ jobs:
   integration-tests:
     name: "Pre-deploy: Integration tests"
     needs: [deploy-throttle]
-    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 90
     steps:
@@ -604,7 +638,7 @@ jobs:
   security-audit:
     name: "Pre-deploy: Security audit"
     needs: [deploy-throttle]
-    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 20
     steps:
@@ -727,10 +761,12 @@ jobs:
 
   pre-deploy-gate:
     name: Pre-deploy gate
-    needs: [backend-lint, backend-unit, frontend-checks, integration-tests, security-audit]
+    needs: [deploy-throttle, backend-lint, backend-unit, frontend-checks, integration-tests, security-audit]
     # The gate only means something when the children actually ran - a throttled
     # run skips all five pre-deploy jobs, so the gate must stay skipped too.
-    if: always() && needs.backend-lint.result != 'skipped'
+    # FAR-2152: gated on the throttle's `deployed` signal (never on the run
+    # conclusion) so a run that deploys nothing cannot reach a gate at all.
+    if: always() && needs.deploy-throttle.outputs.deployed == 'true' && needs.backend-lint.result != 'skipped'
     runs-on: ubicloud-standard-2
     timeout-minutes: 5
     steps:
@@ -785,7 +821,7 @@ jobs:
     # a missed one is not.
     #
     # Condition: at least one job failed or was cancelled AND the deploy was
-    # actually attempted (deploy-throttle succeeded with should_deploy == 'true').
+    # actually attempted (deploy-throttle succeeded with deployed == 'true').
     # A throttled run skips every downstream job (all results 'skipped'), so it
     # can never match (no 'failure' or 'cancelled' exists). deploy-throttle
     # failing itself is signalled loudly to the Actions tab (see the audit
@@ -802,7 +838,7 @@ jobs:
     # This job sends the Branch Fixer webhook pointing at main
     # (branchName: main, prNumber: 0). The Branch Fixer creates its own fix
     # branch from main, diagnoses the failure, fixes it, and raises the PR.
-    if: always() && needs.deploy-throttle.outputs.should_deploy == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    if: always() && needs.deploy-throttle.outputs.deployed == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubicloud-standard-2
     steps:
       # A minimal checkout provides scripts/dispatch_with_retry.sh — the
@@ -1066,6 +1102,10 @@ jobs:
     # outputs; it was already a transitive dependency via pre-deploy-gate, so
     # the graph's behaviour is unchanged.
     needs: [deploy-throttle, pre-deploy-gate]
+    # FAR-2152: explicit throttle gate. Previously this job relied on its
+    # needs being skipped (implicit success()); the `deployed` signal makes
+    # the intent checkable by the structural guard.
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     # 180 min budget: build (~15m) + rehearsal (~40m) + pre-migrate (~40m) +
     # deploy (~15m) + health gate (~45m) + margin. Without this, the GitHub
@@ -2228,7 +2268,9 @@ jobs:
     # outputs; it was already a transitive dependency via deploy-staging, so
     # the graph's behaviour is unchanged.
     needs: [deploy-throttle, deploy-staging]
-    if: github.event.inputs.skip_staging_e2e != 'true'
+    # FAR-2152: never run E2E for a run that deployed nothing, and keep the
+    # documented skip_staging_e2e bypass (a deploy-only path).
+    if: needs.deploy-throttle.outputs.deployed == 'true' && github.event.inputs.skip_staging_e2e != 'true'
     timeout-minutes: 90
     runs-on: ubicloud-standard-2
     defaults:
@@ -2326,7 +2368,14 @@ jobs:
     # the graph's behaviour is unchanged (the always() condition below is
     # untouched).
     needs: [deploy-throttle, pre-deploy-gate, staging-e2e]
-    if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
+    # FAR-2152: THE production gate. `always()` plus the skip_staging_e2e
+    # bypass used to make this job reachable in a THROTTLED run (skip_staging_e2e
+    # skips staging-e2e, whose result then does not block the `always()`
+    # branch) - i.e. `workflow_dispatch -f skip_staging_e2e=true` could deploy
+    # to production while the throttle said "deploy nothing". The `deployed`
+    # signal is a hard precondition here; the structural guard in
+    # test_workflow_structure.py fails if this gate is removed.
+    if: always() && needs.deploy-throttle.outputs.deployed == 'true' && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     # 180 min budget: same structure as deploy-staging (build + rehearsal +
     # pre-migrate + deploy + health gate). Without this, the GitHub default
@@ -3499,7 +3548,7 @@ jobs:
     # outputs; it was already a transitive dependency via deploy-production,
     # so the graph's behaviour is unchanged.
     needs: [deploy-throttle, deploy-production]
-    if: always() && needs.deploy-production.result == 'success'
+    if: always() && needs.deploy-throttle.outputs.deployed == 'true' && needs.deploy-production.result == 'success'
     runs-on: ubicloud-standard-2
     # 30 min budget: checkout + pnpm install + playwright install + smoke
     # tests (step-level 10 min timeout). Without this, the GitHub default
@@ -3653,7 +3702,7 @@ jobs:
             # conclusion (annotations never do).
             echo "::warning::THROTTLED — NO DEPLOYMENT PERFORMED. Production is unchanged (running ${PROD_SHA}). Reason: ${REASON} Next deploy expected: ${NEXT_LINE}. This run will conclude SUCCESS but NO deployment happened. Use workflow_dispatch force_deploy=true to deploy now."
             cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          ## Deploy Pipeline: THROTTLED — NO DEPLOYMENT
+          ## NO DEPLOY — throttled (FAR-954)
 
           **Status:** This run was **THROTTLED** and **NO DEPLOYMENT was performed**.
           **Reason:** ${REASON}
@@ -3720,7 +3769,7 @@ jobs:
           - **Infrastructure failures** (deploy-staging, deploy-production): routed to Branch Fixer as triage + deploy-watchdog re-dispatches + deploy-staleness-check escalates
           - **ALL deploy-stage failures** (FAR-912): `notify-deploy-failure` now fires on ANY downstream failure (pre-deploy-gate, deploy-staging, staging-e2e, deploy-production, prod-smoke) — the broad catch-all dispatch for the Branch Fixer; the per-stage notify-* jobs add stage-specific feedback
           - **Notification-only jobs** (notify-*): always succeed; their purpose IS the signal
-          - **Throttled runs** (FAR-954): when `deploy-throttle` outputs `should_deploy=false`, all downstream jobs are skipped. The `deploy-throttle-status` job produces a loud summary annotation. No notification dispatches fire (nothing to fix).
+          - **Throttled runs** (FAR-954 / FAR-2152): when `deploy-throttle` outputs `deployed=false`, every downstream job is gated off and skipped (including `deploy-production` - its `always()` condition now requires `deployed == 'true'`). The `deploy-throttle-status` job leads the summary with `NO DEPLOY — throttled (FAR-954)`. No notification dispatches fire (nothing to fix). A throttled run still concludes SUCCESS, so never read the run conclusion as "deployed" - read `deploy-throttle.outputs.deployed` or production's build SHA.
 
           ### Adding a new job?
           1. If it can fail and block a deploy, ensure `notify-deploy-failure` covers it (FAR-912: this job now fires on ANY downstream failure)

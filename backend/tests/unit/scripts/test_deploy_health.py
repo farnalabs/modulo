@@ -46,8 +46,15 @@ def _prod(*, sha: str = "7b1c064000", age_hours: float = 0.5) -> dict[str, Any]:
     return {"git_sha": sha, "build_timestamp": built.strftime("%Y-%m-%dT%H:%M:%SZ")}
 
 
-def _run(conclusion: str, *, status: str = "completed", sha: str = "aaaaaaa", title: str = "") -> dict[str, Any]:
-    return {
+def _run(
+    conclusion: str,
+    *,
+    status: str = "completed",
+    sha: str = "aaaaaaa",
+    title: str = "",
+    deploy_job: str | None = None,
+) -> dict[str, Any]:
+    run: dict[str, Any] = {
         "databaseId": 1,
         "status": status,
         "conclusion": conclusion,
@@ -55,6 +62,9 @@ def _run(conclusion: str, *, status: str = "completed", sha: str = "aaaaaaa", ti
         "displayTitle": title,
         "url": f"https://github.com/farnalabs/modulo/actions/runs/{sha}",
     }
+    if deploy_job is not None:
+        run["deploy_job_conclusion"] = deploy_job
+    return run
 
 
 def _verdict(
@@ -111,6 +121,57 @@ def test_success_breaks_the_streak() -> None:
     verdict = _verdict(runs=[_run("failure"), _run("success"), _run("failure")])
     assert verdict.consecutive_failures == 1
     assert verdict.healthy is True
+
+
+def test_throttled_noop_does_not_break_a_failure_streak() -> None:
+    """FAR-2152: a throttled run is SUCCESS at run level but skipped the deploy job.
+
+    Counting that no-op as a success breaks the streak and delays the alert, so
+    the run must be NEUTRAL: neither a success nor a failure.
+    """
+    verdict = _verdict(
+        runs=[
+            _run("failure"),
+            _run("success", deploy_job="skipped"),
+            _run("failure"),
+        ]
+    )
+    assert verdict.consecutive_failures == 2
+    assert verdict.healthy is False
+
+
+def test_throttled_noops_are_skipped_when_finding_the_latest_failure() -> None:
+    """The reported "latest failure" must be the real failed deploy, not a no-op."""
+    verdict = _verdict(
+        runs=[
+            _run("failure", sha="bbbbbbb", title="real failure"),
+            _run("success", sha="ccccccc", deploy_job="skipped"),
+        ]
+    )
+    assert verdict.consecutive_failures == 1
+    assert verdict.last_failed.get("sha") == "bbbbbbb"
+    assert verdict.last_failed.get("title") == "real failure"
+
+
+def test_unreadable_deploy_job_falls_back_to_the_run_conclusion() -> None:
+    """Enrichment failure must NOT invent a deploy or hide a failure.
+
+    The field is absent whenever the lookup could not be read; the walk then
+    keeps its pre-FAR-2152 behaviour (a success breaks the streak).
+    """
+    verdict = _verdict(runs=[_run("failure"), _run("success"), _run("failure")])
+    assert verdict.consecutive_failures == 1
+
+
+def test_real_success_with_deploy_job_success_still_breaks_the_streak() -> None:
+    verdict = _verdict(
+        runs=[
+            _run("failure"),
+            _run("success", deploy_job="success"),
+            _run("failure"),
+        ]
+    )
+    assert verdict.consecutive_failures == 1
 
 
 def test_in_progress_runs_are_skipped_not_counted() -> None:

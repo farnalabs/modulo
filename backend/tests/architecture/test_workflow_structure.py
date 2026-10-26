@@ -1655,3 +1655,263 @@ def test_deploy_watchdog_ticket_leg_is_gated_on_the_health_verdict() -> None:
         msg = "  state-vector step must FAIL only on healthy == 'false' (otherwise the run is never red)"
         violations.append(msg)
     assert not violations, "watchdog ticket leg is not gated on the health verdict:\n" + "\n".join(violations)
+
+
+# --- FAR-2152: a throttled deploy must never read as a deploy ---------------
+#
+# A throttled `deploy.yml` run concludes SUCCESS while shipping nothing and
+# skipping every pre-deploy gate. In `gh run list` it is indistinguishable from
+# a real deploy (2026-10-25: four "successful" runs between 12:03Z and 12:44Z
+# deployed nothing, so a four-hour regression stayed invisible). The workflow
+# now publishes a machine-readable `deployed` signal from the throttle and
+# gates every deploy-assuming job on it. These tests pin that wiring: the run
+# conclusion is never the gate, the throttled path keeps its NO DEPLOY marker,
+# and a future edit cannot re-open the production path for a throttled run.
+
+DEPLOY_YML = WORKFLOWS / "deploy.yml"
+
+#: The throttle's decision step - the ONLY place `deployed` may be emitted.
+THROTTLE_CHECK_STEP = "Check last deploy attempt time"
+
+#: The machine-readable "did this run deploy?" gate every downstream job uses.
+DEPLOYED_GATE = "needs.deploy-throttle.outputs.deployed == 'true'"
+
+#: The marker a throttled run's summary must lead with (FAR-954, kept).
+NO_DEPLOY_MARKER = "NO DEPLOY — throttled"
+
+#: The five atomic pre-deploy gates. Nothing may deploy while one is skipped.
+PRE_DEPLOY_GATE_JOBS = (
+    "backend-lint",
+    "backend-unit",
+    "frontend-checks",
+    "integration-tests",
+    "security-audit",
+)
+
+#: Every job that assumes a deploy happened must gate on DEPLOYED_GATE.
+DEPLOY_ASSUMING_JOBS = (
+    *PRE_DEPLOY_GATE_JOBS,
+    "pre-deploy-gate",
+    "deploy-staging",
+    "staging-e2e",
+    "deploy-production",
+    "prod-smoke",
+    "notify-deploy-failure",
+)
+
+
+def _deploy_jobs() -> dict:
+    jobs = _load_yaml(DEPLOY_YML).get("jobs") or {}
+    assert isinstance(jobs, dict), "deploy.yml: jobs is not a mapping"
+    return jobs
+
+
+def _throttle_script() -> str:
+    return str(_step_named(DEPLOY_YML, THROTTLE_CHECK_STEP).get("run") or "")
+
+
+def test_deploy_throttle_emits_deployed_in_lockstep_with_should_deploy() -> None:
+    """Every branch of the throttle must publish `deployed` alongside `should_deploy`.
+
+    The `deployed` output is the gate downstream jobs read; a branch that
+    writes only `should_deploy` leaves `deployed` empty, and an empty gate is
+    neither true nor false - the job silently stops running (or, worse, a
+    future `!= 'false'`-shaped gate starts). Emit both on every path.
+    """
+    script = _throttle_script()
+    violations: list[str] = []
+    for value in ("true", "false"):
+        should_writes = script.count(f'echo "should_deploy={value}"')
+        deployed_writes = script.count(f'echo "deployed={value}"')
+        if should_writes != deployed_writes:
+            msg = f"  should_deploy={value} written {should_writes}x but deployed={value} {deployed_writes}x"
+            violations.append(msg)
+    if 'echo "should_deploy=' not in script:
+        violations.append("  the throttle step no longer writes should_deploy at all")
+    # The job output must expose the step's `deployed` value.
+    outputs = (_deploy_jobs().get("deploy-throttle") or {}).get("outputs") or {}
+    if str(outputs.get("deployed") or "") != "${{ steps.check.outputs.deployed }}":
+        msg = f"  deploy-throttle.outputs.deployed is {outputs.get('deployed')!r}, expected the check step's output"
+        violations.append(msg)
+    assert not violations, "deploy.yml throttle does not emit deployed in lockstep:\n" + "\n".join(violations)
+
+
+def test_production_deploy_is_unreachable_with_deployed_false() -> None:
+    """`deploy-production` must be hard-gated on `deployed == 'true'`.
+
+    This is the exact hole FAR-2152 found: the job's `always()` condition plus
+    the documented `skip_staging_e2e` bypass made it reachable in a THROTTLED
+    run (`workflow_dispatch -f skip_staging_e2e=true` skips staging-e2e, whose
+    result then does not block the `always()` branch) - a throttle bypass that
+    deployed production while the throttle said "deploy nothing".
+    """
+    job = _deploy_jobs().get("deploy-production") or {}
+    condition = str(job.get("if") or "")
+    needs = job.get("needs") or []
+    violations: list[str] = []
+    if DEPLOYED_GATE not in condition:
+        violations.append(f"  deploy-production if does not require {DEPLOYED_GATE!r} (got {condition!r})")
+    if "deploy-throttle" not in needs:
+        violations.append(f"  deploy-production does not declare deploy-throttle in needs (got {needs!r})")
+    # The bypass must be ANDed with the gate, never able to stand alone.
+    if (
+        "skip_staging_e2e" in condition
+        and DEPLOYED_GATE in condition
+        and condition.index(DEPLOYED_GATE) > condition.index("skip_staging_e2e")
+    ):
+        violations.append("  the skip_staging_e2e bypass is evaluated before the deployed gate")
+    assert not violations, "a throttled run can reach the production deploy step:\n" + "\n".join(violations)
+
+
+def test_every_deploy_assuming_job_is_gated_on_deployed() -> None:
+    """Every deploy-assuming job reads the `deployed` signal, not the run result.
+
+    A job gated on `always()` + a sibling result (or on nothing at all, relying
+    on an implicit `success()`) is reachable whenever the sibling chain happens
+    to line up - which is how a throttled run skipped every pre-deploy gate
+    while still concluding success.
+    """
+    jobs = _deploy_jobs()
+    violations: list[str] = []
+    for job_id in DEPLOY_ASSUMING_JOBS:
+        job = jobs.get(job_id)
+        if not isinstance(job, dict):
+            violations.append(f"  deploy.yml: job {job_id!r} is missing - update this guard deliberately")
+            continue
+        condition = str(job.get("if") or "")
+        needs = job.get("needs") or []
+        if DEPLOYED_GATE not in condition:
+            violations.append(f"  {job_id}: if does not require {DEPLOYED_GATE!r} (got {condition!r})")
+        if "deploy-throttle" not in needs:
+            violations.append(f"  {job_id}: needs does not include deploy-throttle (got {needs!r})")
+    assert not violations, "deploy-assuming jobs are not gated on deployed:\n" + "\n".join(violations)
+
+
+def test_no_pre_deploy_gate_can_be_skipped_while_deploying() -> None:
+    """A run with `deployed == 'true'` must not be able to skip a pre-deploy gate.
+
+    The five atomic gates must carry NOTHING but the deployed gate in their
+    `if:` - any extra condition is another way to skip a gate while still
+    shipping. `staging-e2e` is the one documented exception (the
+    `skip_staging_e2e` dispatch input), and it must be ANDed with the gate.
+    """
+    jobs = _deploy_jobs()
+    allowed_extra = {"staging-e2e": "skip_staging_e2e"}
+    violations: list[str] = []
+    for job_id in PRE_DEPLOY_GATE_JOBS:
+        condition = str((jobs.get(job_id) or {}).get("if") or "")
+        if condition != DEPLOYED_GATE:
+            violations.append(f"  {job_id}: if must be exactly {DEPLOYED_GATE!r}, got {condition!r}")
+    for job_id, extra in allowed_extra.items():
+        condition = str((jobs.get(job_id) or {}).get("if") or "")
+        if extra not in condition:
+            violations.append(f"  {job_id}: documented bypass {extra!r} disappeared from its condition")
+        if DEPLOYED_GATE not in condition:
+            violations.append(f"  {job_id}: documented bypass is not ANDed with {DEPLOYED_GATE!r}")
+    assert not violations, "a pre-deploy gate can be skipped while deploying:\n" + "\n".join(violations)
+
+
+def test_throttled_path_keeps_the_no_deploy_marker() -> None:
+    """The throttled path must still say, in plain words, that nothing deployed.
+
+    FAR-954 made the run legible; FAR-2152 must not lose that while adding the
+    machine-readable gate. Both the job display name and the step summary have
+    to carry the marker, so a reader scanning the Actions UI cannot mistake a
+    green throttled run for a deploy.
+    """
+    throttle_status = _deploy_jobs().get("deploy-throttle-status") or {}
+    display_name = str(throttle_status.get("name") or "")
+    summary = str(_step_named(DEPLOY_YML, "Write throttle/deploy summary annotation").get("run") or "")
+    script = _throttle_script()
+    violations: list[str] = []
+    if "THROTTLED - NO DEPLOY" not in display_name:
+        violations.append(f"  deploy-throttle-status name lost 'THROTTLED - NO DEPLOY' (got {display_name!r})")
+    if NO_DEPLOY_MARKER not in summary:
+        violations.append(f"  the run summary no longer leads with {NO_DEPLOY_MARKER!r}")
+    if f'write_verdict "{NO_DEPLOY_MARKER}' not in script:
+        msg = f"  the throttle's own verdict summary no longer leads with {NO_DEPLOY_MARKER!r}"
+        violations.append(msg)
+    assert not violations, "the throttled path lost its NO DEPLOY marker:\n" + "\n".join(violations)
+
+
+def test_throttle_anchor_is_the_deploy_job_conclusion_not_the_run_conclusion() -> None:
+    """The throttle window anchors on a JOB conclusion, never a RUN conclusion.
+
+    FAR-2152's suspected livelock: if the throttle counted *successful runs*, a
+    throttled success would reset the window that throttled it and the pipeline
+    would never deploy again. It does not - it requires the
+    "Deploy to app.modulo.run" JOB to have concluded `success`, and a throttled
+    run skips that job (`skipped`), so a throttled run can never be the anchor.
+    Verified against the 2026-10-25 history: the throttle anchored on run
+    40183128848 (created 10:02:33Z, deploy job success), skipped the 11:24-12:44Z
+    re-dispatches, and passed at 13:02:14Z - anchor + 3h exactly.
+
+    Pin the input and the arithmetic so a future edit cannot reintroduce the
+    livelock by reading the run's own conclusion.
+    """
+    script = _throttle_script()
+    violations: list[str] = []
+    if 'select(.name == "Deploy to app.modulo.run") | .conclusion' not in script:
+        violations.append("  the anchor no longer selects the Deploy to app.modulo.run JOB conclusion")
+    if 'DEPLOY_JOB_CONCLUSION" = "success"' not in script:
+        violations.append("  the anchor no longer requires the deploy job to have concluded success")
+    if "--json databaseId,conclusion" in script:
+        msg = "  the run list now fetches a run-level conclusion - a throttled success could reset its own window"
+        violations.append(msg)
+    # The arithmetic the anchor feeds: strictly-less-than throttles, and the
+    # next-eligible time is derived from the SAME anchor.
+    if "DIFF_H=$(( (NOW_TS - LAST_TS) / 3600 ))" not in script:
+        violations.append("  the hours-since-deploy arithmetic changed shape")
+    if 'if [ "$DIFF_H" -lt "$INTERVAL_HOURS" ]' not in script:
+        violations.append("  the throttle no longer skips on a strict DIFF_H < INTERVAL_HOURS")
+    if "NEXT_TS=$((LAST_TS + INTERVAL_HOURS * 3600))" not in script:
+        violations.append("  next-deploy time is no longer derived from the same anchor")
+    if "--jq '.created_at'" not in script:
+        violations.append("  the anchor timestamp is no longer the run's created_at")
+    assert not violations, "the throttle anchor is not a real-deploy signal:\n" + "\n".join(violations)
+
+
+def test_production_deploy_still_verifies_the_shipped_sha() -> None:
+    """A deploying run must still prove production serves what it shipped.
+
+    The `deployed=true` gate must not weaken the existing artefact check: the
+    production job compares the live `/api/v1/deployment` git_sha against the
+    commit it deployed and FAILS on a mismatch.
+    """
+    # The staging job has a same-named step; scope to the production job.
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+    step = next(s for s in production_steps if isinstance(s, dict) and s.get("name") == "Check deployed SHA")
+    run = str(step.get("run") or "")
+    violations: list[str] = []
+    for needle in ("steps.git.outputs.git-sha", "SHA MISMATCH", '"deployed_sha=$deployedSha"'):
+        if needle not in run:
+            violations.append(f"  the deployed-SHA check lost {needle!r}")
+    if "exit 1" not in run:
+        violations.append("  a SHA mismatch no longer fails the step")
+    assert not violations, "the production SHA verification was weakened:\n" + "\n".join(violations)
+
+
+def test_deploy_consumers_classify_a_throttled_noop_by_the_deploy_job() -> None:
+    """Both escalation consumers read the deploy JOB, not the run's colour.
+
+    A throttled run's RUN conclusion is success. The consumers that count a
+    failure streak (the staleness check's evaluator and the deploy watchdog's
+    inline walk) must enrich the run records with the "Deploy to app.modulo.run"
+    job conclusion, or a throttled no-op between two real failures breaks the
+    streak and suppresses the alert (FAR-2152).
+    """
+    health_script = (REPO / ".github" / "scripts" / "deploy_health.py").read_text(encoding="utf-8")
+    violations: list[str] = []
+    if "deploy_job_conclusion" not in health_script:
+        violations.append("  deploy_health.py no longer reads deploy_job_conclusion")
+    # The staleness check hands the enriched records to deploy_health.py, so
+    # its load-bearing evidence is the enrichment call.
+    if "deploy_run_attempts.py enrich" not in _code(DEPLOY_STALENESS_YML.read_text(encoding="utf-8")):
+        violations.append("  deploy-staleness-check.yml: does not call the deploy-run enrichment")
+    # The watchdog classifies the streak inline, so it must read the field.
+    watchdog = _code(DEPLOY_WATCHDOG_YML.read_text(encoding="utf-8"))
+    if "deploy_run_attempts.py enrich" not in watchdog:
+        violations.append("  deploy-watchdog.yml: does not call the deploy-run enrichment")
+    if "deploy_job_conclusion" not in watchdog:
+        violations.append("  deploy-watchdog.yml: does not consume the deploy job conclusion")
+    assert not violations, "deploy consumers can misread a throttled no-op as a deploy:\n" + "\n".join(violations)
