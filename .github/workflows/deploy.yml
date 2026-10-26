@@ -500,6 +500,14 @@ jobs:
     name: "Pre-deploy: Integration tests"
     needs: [deploy-throttle]
     if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    # Dedicated runner isolation is not available in the current repository
+    # runner inventory: the hosted pool exposes only ubicloud-standard-2 and
+    # ubicloud-standard-4 labels, with no integration-specific runner group or
+    # label. Do not invent a label here: an unavailable label leaves every
+    # deploy queued indefinitely. Keep the known-good hosted label until a
+    # runner group is provisioned and its label is confirmed in repository
+    # settings; then this job can move to that label without changing its test
+    # contract.
     runs-on: ubicloud-standard-2
     timeout-minutes: 90
     steps:
