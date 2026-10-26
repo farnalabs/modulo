@@ -348,7 +348,7 @@ def _restore_from_archive(args: argparse.Namespace, passphrase: str, db_url: str
         print("Temp directory cleaned up.")
 
 
-async def main() -> None:
+async def main() -> None:  # NOSONAR python:S7503 - async CLI entrypoint retained for embedding callers
     args = parse_args()
     _validate_restore_args(args)
 

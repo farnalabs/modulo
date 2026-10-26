@@ -283,10 +283,11 @@ _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 _OLD_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@")
 # ``diff --git a/<old> b/<new>`` — per-file header in a multi-file ``git diff``
 # output.  Group 2 (the b/ side) is the file's current path, which is the key
-# the rest of the gate uses for changed files.
+# the rest of the gate uses for changed files.  The parser uses rpartition()
+# rather than this pattern because git paths may contain spaces.
 # A git object id produced by ``git merge-base`` (fullmatch-bounded before it
 # is embedded in a ``git show <sha>:<path>`` argument).
-_MERGE_BASE_SHA_RE = re.compile(r"[0-9a-f]{7,64}")
+_MERGE_BASE_SHA_RE = re.compile(r"[\da-f]{7,64}", re.ASCII)
 
 
 # ``git diff`` filter and language pathspecs for changed-file discovery.
