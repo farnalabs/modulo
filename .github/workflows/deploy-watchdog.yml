@@ -106,10 +106,19 @@ jobs:
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          # These two values are passed as env, NOT interpolated
+          # inside the `run:` script. A `run:` scalar containing any `${{ }}`
+          # is treated as an expression template and hard-capped at 21,000
+          # characters; this watchdog's script is ~22k and therefore failed to
+          # parse (workflow file issue, zero jobs) on every push once the
+          # FAR-2139 escalation logic pushed it over the cap. With no `${{ }}`
+          # in the script the scalar stays a plain literal, so future comment
+          # growth cannot silently break the workflow again.
+          REPO: ${{ github.repository }}
+          GRACE_HOURS: ${{ vars.STALENESS_GRACE_HOURS || 6 }}
         run: |
           set -o pipefail
 
-          REPO="${{ github.repository }}"
           DEPLOY_WORKFLOW="deploy.yml"
           PROD_APP="app-modulo"
           PROD_URL="https://app.modulo.run"
@@ -120,7 +129,7 @@ jobs:
           CONSECUTIVE_FAILURE_CAP=3
           # Shared staleness grace, used only for the figures block of the
           # transition email (the staleness check owns the age measurement).
-          GRACE_HOURS="${{ vars.STALENESS_GRACE_HOURS || 6 }}"
+          # (GRACE_HOURS comes from the step env above.)
 
           # ---- 0. The verdict the escalation legs read (FAR-2139) ----
           # deploy-watchdog escalates through ONE structured verdict instead of
