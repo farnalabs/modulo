@@ -54,7 +54,7 @@ services:
     # worker services here: keeping the workers inside this container is what
     # guarantees they receive exactly the environment below, and it is what
     # makes this artifact "all-in-one" rather than an API-only image.
-    image: ghcr.io/farnalabs/modulo:${TAG:-latest}
+    image: ghcr.io/farnalabs/modulo:${TAG:?TAG is required - set the Modulo version you intend to run}
     ports:
       - "${PORT:-80}:80"
     # The project-directory .env is BOTH compose's interpolation source (for
