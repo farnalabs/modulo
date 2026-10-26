@@ -84,6 +84,7 @@ export default {
       "loading": "Loading risk assessment...",
       "load_failed": "Could not load risk assessment. Try again.",
       "pipelines_load_failed": "Could not load the pipeline list. Try again.",
+      "pipelines_truncated": "The pipeline list is too large to load in full; some pipelines may not be selectable. Narrow the run history or retry.",
       "empty_title": "No risk evidence",
       "empty_description": "No evidence rows match the current filters.",
       "summary_title": "Summary",

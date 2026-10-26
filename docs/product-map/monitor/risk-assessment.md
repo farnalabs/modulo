@@ -44,6 +44,16 @@ formatted value columns. All strings are i18n-backed and status regions use
 - [x] Facet filters (key prefix, pipeline, time window, action) drive
       server-side filtering through the risk assessment store and update URL
       query params for deep-linking
+- [x] The pipeline facet loads EVERY selectable pipeline, not just the first
+      page: the list endpoint ignores ``limit`` and caps ``page_size`` at 100,
+      so the view walks the offset pages (``page_size=100``, bounded at 20
+      pages) and accumulates the results. A failure on any page after the first
+      surfaces the facet error instead of publishing the prefix collected so far
+      (a partial dropdown silently hides pipelines from the filter); running
+      past the page budget labels the list as truncated rather than presenting
+      it as complete
+      (`frontend/src/views/RiskAssessmentView.vue`,
+      `frontend/src/__tests__/RiskAssessmentView.spec.ts`)
 - [x] Summary card displays total rows and per-action counts (block, warn,
       continue, escalate) with facet degradation indicator and time window note
 - [x] Sortable table renders evidence rows with timestamp, key, action badge,
@@ -57,3 +67,17 @@ formatted value columns. All strings are i18n-backed and status regions use
 - Risk assessment write paths (policy gate decisions, risk rules CRUD) are
   tracked under FAR-941 follow-up; this entry covers the read-only dashboard
   surface only
+
+## QA History
+
+- 2026-10-26: **Improve Architecture product-map walk** - fixed MAJOR
+  (behaviour-adversarial / Lens 9 List B - *listed but vacuously covered*): the
+  pipeline facet requested `GET /api/v1/pipelines` with `{ limit: 100, page: 1 }`,
+  but that endpoint has no `limit` parameter and defaults `page_size` to 20, so
+  the filter dropdown silently offered only the first 20 pipelines on any
+  instance with more. The existing spec pinned the wrong request shape
+  (`limit: 100`), so the bug was asserted as correct. The view now walks the
+  offset pages (`page_size=100`, bounded at 20 pages), refuses to publish a
+  partial list when a later page fails, and explicitly labels exhaustion of the
+  page budget. Regression tests cover the page walk, the mid-walk failure (no
+  partial options) and the truncation label.

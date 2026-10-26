@@ -100,7 +100,7 @@ describe('RiskAssessmentView', () => {
     const wrapper = await mountView()
 
     expect(mockGet).toHaveBeenCalledWith('/api/v1/pipelines', {
-      params: { query: { limit: 100, page: 1 } },
+      params: { query: { page: 1, page_size: 100 } },
     })
     expect(mockGet).toHaveBeenCalledWith('/api/v1/evidence/risk-assessment', {
       params: { query: { days: 7, limit: 100 } },
@@ -297,6 +297,124 @@ describe('RiskAssessmentView', () => {
     const wrapper = await mountView()
 
     expect(wrapper.find('[data-testid="risk-assessment-pipelines-error-message"]').text()).toBe('Could not load the pipeline list. Try again.')
+  })
+
+  it('walks every pipeline page so the facet can select pipelines beyond the first page', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/pipelines') {
+        const page = mockGet.mock.calls.filter(([p]) => p === '/api/v1/pipelines').length
+        if (page === 1) {
+          return Promise.resolve(
+            ok({
+              items: [{ id: 'p-1', name: 'Alpha' }],
+              total: 2,
+              page: 1,
+              page_size: 100,
+              next_cursor: null,
+              has_more: true,
+            }),
+          )
+        }
+        return Promise.resolve(
+          ok({
+            items: [{ id: 'p-2', name: 'Beta' }],
+            total: 2,
+            page: 2,
+            page_size: 100,
+            next_cursor: null,
+            has_more: false,
+          }),
+        )
+      }
+      return Promise.resolve(ok(projectionResponse()))
+    })
+    setRouteQuery()
+
+    const wrapper = await mountView()
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/pipelines', {
+      params: { query: { page: 1, page_size: 100 } },
+    })
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/pipelines', {
+      params: { query: { page: 2, page_size: 100 } },
+    })
+    const options = wrapper
+      .find('[data-testid="risk-assessment-pipeline"]')
+      .findAll('option')
+      .map((option) => option.text())
+    expect(options).toEqual(['All pipelines', 'Alpha', 'Beta'])
+  })
+
+  it('never publishes a partial pipeline list when a later page fails', async () => {
+    let pipelineCalls = 0
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/pipelines') {
+        pipelineCalls += 1
+        if (pipelineCalls === 1) {
+          return Promise.resolve(
+            ok({
+              items: [{ id: 'p-1', name: 'Alpha' }],
+              total: 2,
+              page: 1,
+              page_size: 100,
+              next_cursor: null,
+              has_more: true,
+            }),
+          )
+        }
+        return Promise.resolve({
+          data: undefined,
+          error: { detail: 'Pipeline page failed' },
+          response: { ok: false, status: 500 },
+        })
+      }
+      return Promise.resolve(ok(projectionResponse()))
+    })
+    setRouteQuery()
+
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-testid="risk-assessment-pipelines-error-message"]').text()).toBe(
+      'Could not load the pipeline list. Try again.',
+    )
+    const options = wrapper
+      .find('[data-testid="risk-assessment-pipeline"]')
+      .findAll('option')
+      .map((option) => option.text())
+    expect(options).toEqual(['All pipelines'])
+  })
+
+  it('labels a truncated pipeline list instead of presenting it as complete', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/pipelines') {
+        const page = mockGet.mock.calls.filter(([p]) => p === '/api/v1/pipelines').length
+        return Promise.resolve(
+          ok({
+            items: [{ id: `p-${page}`, name: `Pipeline ${page}` }],
+            total: 999,
+            page,
+            page_size: 100,
+            next_cursor: null,
+            has_more: true,
+          }),
+        )
+      }
+      return Promise.resolve(ok(projectionResponse()))
+    })
+    setRouteQuery()
+
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-testid="risk-assessment-pipelines-error-message"]').text()).toBe(
+      'The pipeline list is too large to load in full; some pipelines may not be selectable. Narrow the run history or retry.',
+    )
+    const options = wrapper
+      .find('[data-testid="risk-assessment-pipeline"]')
+      .findAll('option')
+      .map((option) => option.text())
+    // All 20 pages (the bound) were collected before the truncation label.
+    expect(options).toHaveLength(21)
+    expect(options[20]).toBe('Pipeline 20')
   })
 
   it('exposes every gate action in the facet', async () => {
