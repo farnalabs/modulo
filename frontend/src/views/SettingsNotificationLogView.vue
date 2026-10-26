@@ -165,6 +165,15 @@ const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)
 const nextCursor = ref<string | null>(null)
 
+// Filter refs must be declared BEFORE the useDataFetch call: vue-query
+// subscribes during setup, so the fetcher runs immediately and reads these
+// refs. Declaring them after caused a TDZ ReferenceError on the initial fetch
+// (FAR-2173 — surfaced in production as "Cannot access 'Z' before
+// initialization" after minification, the same defect class as FAR-608).
+const filterStatus = ref('__all__')
+const filterDateFrom = ref('')
+const filterDateTo = ref('')
+
 const { loading, error, data: responseData, load: loadDeliveries } = useDataFetch(
   async () => {
     const params: DeliveryLogQuery = { limit: 50 }
@@ -184,10 +193,6 @@ const { loading, error, data: responseData, load: loadDeliveries } = useDataFetc
 
 const items = computed(() => responseData.value?.items ?? [])
 const total = computed(() => responseData.value?.total ?? 0)
-
-const filterStatus = ref('__all__')
-const filterDateFrom = ref('')
-const filterDateTo = ref('')
 
 function formatTimestamp(ts: string | null): string {
   if (!ts) return '—'
