@@ -541,6 +541,7 @@ markers = [
     "real_ssrf_dns: opt out of the autouse SSRF DNS shim so the real fail-closed guard runs",
     "docker: marks tests that require a live Docker engine (excluded from default CI lanes; run explicitly via -m docker)",
     "posix_only: suite executes a shipped shell script under a real POSIX shell (executable-bit semantics, a POSIX PATH and jq) - skipped on Windows by the single platform gate in tests/conftest.py, runs for real on Linux CI (FAR-2070)",
+    "release_bundle_security: opt-in executable release supply-chain verification",
     "far-1487: FAR-1487 HITL reject-terminates behaviour - scenarios assert the intended behaviour, not yet shipped behaviour",
     "delivered: BDD scenario status tag",
     "goal-alice-connector-swap: BDD goal tag (persona journey)",
