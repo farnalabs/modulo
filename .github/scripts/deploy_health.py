@@ -82,9 +82,11 @@ class Verdict:
     prod_build_ts: str = "unknown"
     runs_considered: int = 0
     last_failed: dict[str, str] = field(default_factory=dict)
-    #: Failure stage classifications for each failed run in the streak.
-    #: Maps run SHA (short) -> failure stage category.
-    failure_stages: dict[str, str] = field(default_factory=dict)
+    #: Failure stage classifications for the failed runs in the streak, in run
+    #: order (newest first). Each entry is ``{"sha": <short sha>, "stage":
+    #: <category>}``. A list rather than a dict keyed by SHA so two failed
+    #: reruns of the same commit contribute two entries instead of collapsing.
+    failure_stages: list[dict[str, str]] = field(default_factory=list)
     #: A short condition label for the subject line when neither of the two
     #: shared conditions applies (e.g. the watchdog could not re-dispatch).
     summary: str = ""
@@ -99,49 +101,64 @@ class Verdict:
     #: still in flight).
     recovery_detail: str = ""
 
+    def _stale_condition(self) -> str:
+        if not self.stale:
+            return ""
+        if self.age_hours is None:
+            return (
+                f"production is serving {self.prod_sha} (behind origin/main {self.main_sha}) "
+                "but its build timestamp is missing or unparseable, so staleness cannot be "
+                f"confirmed against the {self.grace_hours}h grace window"
+            )
+        return (
+            f"production is serving {self.prod_sha}, built {self.age_hours}h ago "
+            f"(>= {self.grace_hours}h grace), while origin/main HEAD is {self.main_sha}"
+        )
+
+    def _failure_condition(self) -> str:
+        if self.consecutive_failures < self.failure_threshold:
+            return ""
+        latest = self.last_failed.get("sha") or "unknown"
+        title = self.last_failed.get("title") or ""
+        return (
+            f"the Deploy: Staging + Prod workflow has {self.consecutive_failures} consecutive "
+            f"failed runs (threshold {self.failure_threshold}, over the last "
+            f"{self.runs_considered} completed runs); latest failure {latest} {title}".strip()
+        )
+
+    def _failure_stages_condition(self) -> str:
+        if not self.failure_stages:
+            return ""
+        return f"failure stages: {_summarize_failure_stages(self.failure_stages)}"
+
+    def _default_reason(self) -> str:
+        if self.healthy is None:
+            return "deploy health could not be evaluated this cycle (no deploy-run or production metadata was readable)"
+        if self.healthy is False:
+            # A caller-measured unhealthy condition that the shared pair
+            # cannot express must never fall through to the healthy
+            # sentence below.
+            return self.summary or "an unnamed deploy-health condition is unmet"
+        return (
+            "all measured deploy-health conditions are healthy: production is within the "
+            f"{self.grace_hours}h grace window and fewer than {self.failure_threshold} consecutive "
+            "deploy runs have failed"
+        )
+
     @property
     def reason(self) -> str:
         """Every failing condition, naming its figures and the window."""
         parts: list[str] = list(self.notes)
-        if self.stale:
-            if self.age_hours is None:
-                parts.append(
-                    f"production is serving {self.prod_sha} (behind origin/main {self.main_sha}) "
-                    "but its build timestamp is missing or unparseable, so staleness cannot be "
-                    f"confirmed against the {self.grace_hours}h grace window"
-                )
-            else:
-                parts.append(
-                    f"production is serving {self.prod_sha}, built {self.age_hours}h ago "
-                    f"(>= {self.grace_hours}h grace), while origin/main HEAD is {self.main_sha}"
-                )
-        if self.consecutive_failures >= self.failure_threshold:
-            latest = self.last_failed.get("sha") or "unknown"
-            title = self.last_failed.get("title") or ""
-            parts.append(
-                f"the Deploy: Staging + Prod workflow has {self.consecutive_failures} consecutive "
-                f"failed runs (threshold {self.failure_threshold}, over the last "
-                f"{self.runs_considered} completed runs); latest failure {latest} {title}".strip()
+        parts.extend(
+            condition
+            for condition in (
+                self._stale_condition(),
+                self._failure_condition(),
+                self._failure_stages_condition(),
             )
-        if self.failure_stages:
-            parts.append(f"failure stages: {_summarize_failure_stages(self.failure_stages)}")
-        if not parts:
-            if self.healthy is None:
-                return (
-                    "deploy health could not be evaluated this cycle "
-                    "(no deploy-run or production metadata was readable)"
-                )
-            if self.healthy is False:
-                # A caller-measured unhealthy condition that the shared pair
-                # cannot express must never fall through to the healthy
-                # sentence below.
-                return self.summary or "an unnamed deploy-health condition is unmet"
-            return (
-                "all measured deploy-health conditions are healthy: production is within the "
-                f"{self.grace_hours}h grace window and fewer than {self.failure_threshold} consecutive "
-                "deploy runs have failed"
-            )
-        return "; ".join(parts)
+            if condition
+        )
+        return "; ".join(parts) if parts else self._default_reason()
 
     def as_dict(self) -> dict[str, Any]:
         """The verdict as JSON-serialisable data (handed to the email renderer)."""
@@ -200,6 +217,8 @@ def _short(sha: str) -> str:
 
 # Map deploy.yml job names to failure stage categories.
 JOB_TO_STAGE: dict[str, str] = {
+    # Deploy throttle (skip-vs-deploy decision; a failure here blocks the run)
+    "deploy-throttle": "deploy_throttle",
     # Pre-deploy lint/typecheck/unit jobs
     "backend-lint": "pre_deploy_lint",
     "backend-unit": "pre_deploy_lint",
@@ -208,52 +227,66 @@ JOB_TO_STAGE: dict[str, str] = {
     "integration-tests": "integration_test",
     # Security audit (semgrep, pip-audit)
     "security-audit": "pre_deploy_lint",
+    # Aggregate gate that fails when any pre-deploy child failed
+    "pre-deploy-gate": "pre_deploy_gate",
     # Staging deploy (includes migration rehearsal and pre-migrate)
     "deploy-staging": "migration",
     # Staging E2E tests
     "staging-e2e": "staging_e2e",
     # Production deploy
     "deploy-production": "migration",
-    # Note: prod-smoke is not a separate job; smoke tests run as part of
-    # deploy-production's post-deploy health gate. If a separate job is
-    # added in the future, map it to "prod_smoke".
+    # Prod smoke tests: a SEPARATE job (deploy.yml, needs deploy-production),
+    # which is the one stage where prod is deployed but broken.
+    "prod-smoke": "prod_smoke",
 }
+
+# The order deploy.yml runs its jobs in. Earlier stages block later ones, so the
+# first failure in this order is the one that stopped the run.
+DEPLOYMENT_ORDER: tuple[str, ...] = (
+    "deploy-throttle",
+    "backend-lint",
+    "backend-unit",
+    "frontend-checks",
+    "integration-tests",
+    "security-audit",
+    "pre-deploy-gate",
+    "deploy-staging",
+    "staging-e2e",
+    "deploy-production",
+    "prod-smoke",
+)
+
+
+def _failed(conclusion: str | None) -> bool:
+    return str(conclusion or "").lower() in ("failure", "cancelled")
 
 
 def _classify_failure_stage(job_conclusions: dict[str, str]) -> str:
     """Classify a failed run by the first failed job in deployment order.
 
-    The deployment order is: pre-deploy jobs -> deploy-staging -> staging-e2e
-    -> deploy-production. We return the stage category of the first failed job
-    in this order, since that represents the blocking failure.
+    We return the stage category of the first failed job in
+    :data:`DEPLOYMENT_ORDER`, since that is the failure that blocked the run.
+    Any failed job outside the known order is then considered, so an unmapped
+    job cannot mask a later mappable failure.
     """
-    # Order matters: earlier stages block later ones.
-    deployment_order = [
-        "backend-lint",
-        "backend-unit",
-        "frontend-checks",
-        "integration-tests",
-        "security-audit",
-        "pre-deploy-gate",
-        "deploy-staging",
-        "staging-e2e",
-        "deploy-production",
-    ]
-    for job_name in deployment_order:
-        conclusion = str(job_conclusions.get(job_name) or "").lower()
-        if conclusion in ("failure", "cancelled"):
-            return JOB_TO_STAGE.get(job_name, "unknown")
-    # If we couldn't determine from known jobs, check all jobs
+    for job_name in DEPLOYMENT_ORDER:
+        stage = JOB_TO_STAGE.get(job_name)
+        if stage and _failed(job_conclusions.get(job_name)):
+            return stage
     for job_name, conclusion in job_conclusions.items():
-        if str(conclusion or "").lower() in ("failure", "cancelled"):
-            return JOB_TO_STAGE.get(job_name, "unknown")
+        stage = JOB_TO_STAGE.get(job_name)
+        if stage and _failed(conclusion):
+            return stage
     return "unknown"
 
 
-def _summarize_failure_stages(failure_stages: dict[str, str]) -> str:
+def _summarize_failure_stages(failure_stages: Sequence[dict[str, str]]) -> str:
     """Render per-run failure stages as a comma-separated category count."""
     stage_counts: dict[str, int] = {}
-    for stage in failure_stages.values():
+    for entry in failure_stages:
+        stage = entry.get("stage", "")
+        if not stage:
+            continue
         stage_counts[stage] = stage_counts.get(stage, 0) + 1
     return ", ".join(f"{count} {stage}" for stage, count in sorted(stage_counts.items()))
 
@@ -262,18 +295,25 @@ def _classify_failure_stages(
     completed: Sequence[dict[str, Any]],
     streak: int,
     deploy_jobs: dict[str, dict[str, str]] | None,
-) -> dict[str, str]:
-    """Classify each failed run in the streak by its blocking failure stage."""
+) -> list[dict[str, str]]:
+    """Classify each failed run in the streak by its blocking failure stage.
+
+    ``deploy_jobs`` maps a run's ``databaseId`` (as a string) to that run's
+    job name -> conclusion. Keying by run id rather than head SHA keeps reruns
+    of the same commit distinct, so two failed reruns produce two entries.
+    """
     if not deploy_jobs or streak <= 0:
-        return {}
-    failure_stages: dict[str, str] = {}
+        return []
+    stages: list[dict[str, str]] = []
     for run in completed[:streak]:
-        run_sha = _short(str(run.get("headSha") or ""))
-        if run_sha and run_sha in deploy_jobs:
-            stage = _classify_failure_stage(deploy_jobs[run_sha])
-            if stage != "unknown":
-                failure_stages[run_sha] = stage
-    return failure_stages
+        run_id = str(run.get("databaseId") or "")
+        jobs = deploy_jobs.get(run_id) if run_id else None
+        if not jobs:
+            continue
+        stage = _classify_failure_stage(jobs)
+        if stage != "unknown":
+            stages.append({"sha": _short(str(run.get("headSha") or "")), "stage": stage})
+    return stages
 
 
 def _parse_timestamp(raw: str) -> datetime | None:
@@ -356,6 +396,20 @@ def _overall_healthy(*, staleness_evaluated: bool, runs_evaluated: bool, stale: 
     return not (stale or failing)
 
 
+def _read_sources(
+    main: dict[str, Any] | None,
+    prod: dict[str, Any] | None,
+    deploy_runs: Sequence[dict[str, Any]] | None,
+) -> tuple[str, str, str, bool, list[dict[str, Any]]]:
+    """Normalise the raw sources into the figures and completed-run list."""
+    main_sha = _short(str((main or {}).get("sha") or ""))
+    prod_sha = _short(str((prod or {}).get("git_sha") or ""))
+    prod_ts = str((prod or {}).get("build_timestamp") or "")
+    runs_evaluated = deploy_runs is not None
+    completed = _completed_runs(list(deploy_runs or []))
+    return main_sha, prod_sha, prod_ts, runs_evaluated, completed
+
+
 def evaluate(
     *,
     main: dict[str, Any] | None,
@@ -373,28 +427,20 @@ def evaluate(
     any readable source at all the verdict is ``None`` (unknown) so no
     transition is inferred from nothing.
 
-    ``deploy_jobs`` maps run SHA (short) -> job name -> conclusion for failed
-    runs, used to classify the failure stage. If omitted or None, failure
-    stages will be empty.
+    ``deploy_jobs`` maps a failed run's ``databaseId`` (as a string) to that
+    run's job name -> conclusion, used to classify the failure stage. If
+    omitted or None, failure stages will be empty.
     """
-    main_sha = _short(str((main or {}).get("sha") or ""))
-    prod_sha = _short(str((prod or {}).get("git_sha") or ""))
-    prod_ts = str((prod or {}).get("build_timestamp") or "")
-
+    main_sha, prod_sha, prod_ts, runs_evaluated, completed = _read_sources(main, prod, deploy_runs)
     stale, age_hours, staleness_evaluated = _staleness(main_sha, prod_sha, prod_ts, now=now, grace_hours=grace_hours)
-
-    runs_evaluated = deploy_runs is not None
-    completed = _completed_runs(list(deploy_runs or []))
     streak = consecutive_failures(completed)
     failing = runs_evaluated and streak >= failure_threshold
-
     healthy = _overall_healthy(
         staleness_evaluated=staleness_evaluated,
         runs_evaluated=runs_evaluated,
         stale=stale,
         failing=failing,
     )
-
     failure_stages = _classify_failure_stages(completed, streak, deploy_jobs)
 
     return Verdict(
@@ -626,7 +672,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     evaluate_parser.add_argument("--main-json")
     evaluate_parser.add_argument("--prod-json")
     evaluate_parser.add_argument("--runs-json")
-    evaluate_parser.add_argument("--jobs-json", help="JSON file with job conclusions per run SHA")
+    evaluate_parser.add_argument("--jobs-json", help="JSON file with job conclusions per run databaseId")
     evaluate_parser.add_argument("--grace-hours", type=int, default=GRACE_HOURS_DEFAULT)
     evaluate_parser.add_argument("--failure-threshold", type=int, default=FAILURE_THRESHOLD_DEFAULT)
     evaluate_parser.add_argument("--now", help="ISO timestamp (tests); defaults to now")

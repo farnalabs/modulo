@@ -139,46 +139,62 @@ jobs:
             echo "::warning::Deploy health check could not list deploy.yml runs (gh API error) - the consecutive-failure half is UNKNOWN this cycle."
           fi
 
-          # Fetch job conclusions for failed runs to classify failure stages
+          # Fetch job conclusions for failed runs to classify failure stages.
+          # Keyed by run databaseId (not head SHA) so reruns of the same commit
+          # stay distinct. Best effort: a per-run fetch failure is logged and
+          # skipped, never fatal to the health step.
           if [ -f "$WORK/runs.json" ]; then
-          python3 - "$WORK/runs.json" "$WORK/jobs.json" "$REPOSITORY" "$GH_TOKEN" <<'PYEOF'
+          python3 - "$WORK/runs.json" "$WORK/jobs.json" "$REPOSITORY" <<'PYEOF'
           import json
-          import sys
           import subprocess
+          import sys
 
-          runs_path = sys.argv[1]
-          jobs_path = sys.argv[2]
-          repository = sys.argv[3]
-          gh_token = sys.argv[4]
+          runs_path, jobs_path, repository = sys.argv[1], sys.argv[2], sys.argv[3]
 
-          with open(runs_path, encoding="utf-8") as f:
-              runs = json.load(f)
+          with open(runs_path, encoding="utf-8") as handle:
+              runs = json.load(handle)
 
           jobs_data = {}
+          fetch_failures = 0
           for run in runs:
-              if str(run.get("status") or "").lower() == "completed" and str(run.get("conclusion") or "").lower() == "failure":
-                  run_id = run.get("databaseId")
-                  if not run_id:
-                      continue
-                  run_sha = (run.get("headSha") or "")[:7]
-                  # Fetch job conclusions for this run
-                  try:
-                      result = subprocess.run(
-                          ["gh", "api", f"repos/{repository}/actions/runs/{run_id}/jobs",
-                           "--jq", "[.jobs[] | {name: .name, conclusion: .conclusion}]"],
-                          capture_output=True, text=True, timeout=30, env={**__import__("os").environ, "GH_TOKEN": gh_token}
-                      )
-                      if result.returncode == 0 and result.stdout.strip():
-                          jobs = json.loads(result.stdout)
-                          job_conclusions = {job["name"]: job["conclusion"] for job in jobs if job.get("name") and job.get("conclusion")}
-                          if job_conclusions:
-                              jobs_data[run_sha] = job_conclusions
-                  except Exception:
-                      pass  # Best effort; if we can't get jobs, we'll skip classification for this run
+              if str(run.get("status") or "").lower() != "completed":
+                  continue
+              if str(run.get("conclusion") or "").lower() != "failure":
+                  continue
+              run_id = run.get("databaseId")
+              if not run_id:
+                  continue
+              try:
+                  result = subprocess.run(
+                      ["gh", "api", f"repos/{repository}/actions/runs/{run_id}/jobs",
+                       "--jq", "[.jobs[] | {name: .name, conclusion: .conclusion}]"],
+                      capture_output=True, text=True, timeout=30, check=False,
+                  )
+              except Exception as exc:  # noqa: BLE001 - best effort by design
+                  fetch_failures += 1
+                  print(f"::warning::could not fetch jobs for run {run_id}: {exc}")
+                  continue
+              if result.returncode != 0 or not result.stdout.strip():
+                  fetch_failures += 1
+                  print(f"::warning::could not read jobs for run {run_id} (exit {result.returncode})")
+                  continue
+              try:
+                  jobs = json.loads(result.stdout)
+              except json.JSONDecodeError as exc:
+                  fetch_failures += 1
+                  print(f"::warning::unparseable jobs JSON for run {run_id}: {exc}")
+                  continue
+              job_conclusions = {
+                  job["name"]: job["conclusion"]
+                  for job in jobs
+                  if job.get("name") and job.get("conclusion")
+              }
+              if job_conclusions:
+                  jobs_data[str(run_id)] = job_conclusions
 
-          with open(jobs_path, "w", encoding="utf-8") as f:
-              json.dump(jobs_data, f)
-          print(f"Fetched job conclusions for {len(jobs_data)} failed run(s).")
+          with open(jobs_path, "w", encoding="utf-8") as handle:
+              json.dump(jobs_data, handle)
+          print(f"Fetched job conclusions for {len(jobs_data)} failed run(s); {fetch_failures} fetch failure(s).")
           PYEOF
           else
             echo "{}" > "$WORK/jobs.json"
@@ -239,12 +255,15 @@ jobs:
           GRACE="${{ steps.health.outputs.grace_hours }}"
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          # Read failure stages from verdict JSON
-          FAILURE_STAGES=$(jq -r '.failure_stages // {} | to_entries | map("\(.key): \(.value)") | join("\\n")' "$VERDICT_JSON" 2>/dev/null || echo "")
+          # Read failure stages from verdict JSON. join("\n") emits REAL
+          # newlines so the create path (echo -e) and the append path
+          # (printf %s) render identical line breaks instead of a run-on
+          # literal backslash-n in the appended comment.
+          FAILURE_STAGES=$(jq -r '.failure_stages // [] | map("\(.sha): \(.stage)") | join("\n")' "$VERDICT_JSON" 2>/dev/null || echo "")
+          FAILURE_STAGES_SECTION=""
           if [ -n "$FAILURE_STAGES" ]; then
-            FAILURE_STAGES_SECTION="Failure stages:\n${FAILURE_STAGES}\n"
-          else
-            FAILURE_STAGES_SECTION=""
+            # printf -v keeps the trailing newline (command substitution strips it).
+            printf -v FAILURE_STAGES_SECTION 'Failure stages:\n%s\n' "$FAILURE_STAGES"
           fi
 
           TITLE="DEPLOY STARVATION: prod stale ${HEAD_AGE}h (FAR-910)"

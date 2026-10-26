@@ -46,9 +46,16 @@ def _prod(*, sha: str = "7b1c064000", age_hours: float = 0.5) -> dict[str, Any]:
     return {"git_sha": sha, "build_timestamp": built.strftime("%Y-%m-%dT%H:%M:%SZ")}
 
 
-def _run(conclusion: str, *, status: str = "completed", sha: str = "aaaaaaa", title: str = "") -> dict[str, Any]:
+def _run(
+    conclusion: str,
+    *,
+    status: str = "completed",
+    sha: str = "aaaaaaa",
+    title: str = "",
+    run_id: int = 1,
+) -> dict[str, Any]:
     return {
-        "databaseId": 1,
+        "databaseId": run_id,
         "status": status,
         "conclusion": conclusion,
         "headSha": sha,
@@ -64,6 +71,7 @@ def _verdict(
     runs: list[dict[str, Any]] | None = None,
     grace_hours: int = 6,
     failure_threshold: int = 2,
+    deploy_jobs: dict[str, dict[str, str]] | None = None,
 ) -> Any:
     return health.evaluate(
         main=_main() if main is None else main,
@@ -72,6 +80,7 @@ def _verdict(
         now=_NOW,
         grace_hours=grace_hours,
         failure_threshold=failure_threshold,
+        deploy_jobs=deploy_jobs,
     )
 
 
@@ -125,6 +134,141 @@ def test_failure_at_the_end_of_the_window_still_counts() -> None:
     verdict = _verdict(runs=runs)
     assert verdict.consecutive_failures == health.DEPLOY_RUNS_WINDOW
     assert verdict.healthy is False
+
+
+# ---------------------------------------------------------------------------
+# Failure-stage classification (FAR-2156)
+# ---------------------------------------------------------------------------
+
+
+def test_job_to_stage_covers_every_deploy_job() -> None:
+    """Every ordered deploy job maps to a stage, and prod-smoke is included."""
+    assert set(health.DEPLOYMENT_ORDER) <= set(health.JOB_TO_STAGE)
+    assert health.JOB_TO_STAGE["prod-smoke"] == "prod_smoke"
+    assert health.JOB_TO_STAGE["pre-deploy-gate"] == "pre_deploy_gate"
+
+
+def test_first_failed_job_in_deployment_order_wins() -> None:
+    """An earlier failure is the blocker even when a later stage also failed."""
+    stage = health._classify_failure_stage(
+        {"deploy-staging": "success", "integration-tests": "failure", "staging-e2e": "failure"}
+    )
+    assert stage == "integration_test"
+
+
+def test_prod_smoke_only_failure_is_classified() -> None:
+    """The one stage where prod is deployed but broken must not be dropped."""
+    stage = health._classify_failure_stage({"deploy-production": "success", "prod-smoke": "failure"})
+    assert stage == "prod_smoke"
+
+
+def test_pre_deploy_gate_failure_is_classified() -> None:
+    assert health._classify_failure_stage({"pre-deploy-gate": "failure"}) == "pre_deploy_gate"
+
+
+def test_unknown_failed_job_is_dropped() -> None:
+    assert health._classify_failure_stage({"some-unmapped-job": "failure"}) == "unknown"
+
+
+def test_fallback_skips_unmapped_to_a_later_mappable_job(monkeypatch: Any) -> None:
+    """An unmapped failure must not mask a mappable one outside the order."""
+    monkeypatch.setitem(health.JOB_TO_STAGE, "future-job", "integration_test")
+    stage = health._classify_failure_stage({"unmapped-job": "failure", "future-job": "failure"})
+    assert stage == "integration_test"
+
+
+def test_deploy_jobs_are_plumbed_into_evaluate() -> None:
+    runs = [_run("failure", sha="abc1234", run_id=11), _run("failure", sha="def5678", run_id=12)]
+    deploy_jobs = {
+        "11": {"backend-lint": "failure"},
+        "12": {"staging-e2e": "failure"},
+    }
+    verdict = _verdict(runs=runs, deploy_jobs=deploy_jobs)
+    assert verdict.failure_stages == [
+        {"sha": "abc1234", "stage": "pre_deploy_lint"},
+        {"sha": "def5678", "stage": "staging_e2e"},
+    ]
+
+
+def test_failure_stages_are_empty_without_jobs_data() -> None:
+    verdict = _verdict(runs=[_run("failure"), _run("failure")])
+    assert verdict.failure_stages == []
+    assert "failure stages" not in verdict.reason
+
+
+def test_reruns_of_the_same_sha_each_count() -> None:
+    """Two reruns of one commit are two failures, not one collapsed entry."""
+    runs = [
+        _run("failure", sha="same123", run_id=21),
+        _run("failure", sha="same123", run_id=22),
+    ]
+    deploy_jobs = {"21": {"backend-lint": "failure"}, "22": {"backend-lint": "failure"}}
+    verdict = _verdict(runs=runs, deploy_jobs=deploy_jobs)
+    assert len(verdict.failure_stages) == 2
+    assert "failure stages: 2 pre_deploy_lint" in verdict.reason
+
+
+def test_failure_stages_render_in_reason_counts() -> None:
+    runs = [
+        _run("failure", sha="aaa1111", run_id=31),
+        _run("failure", sha="bbb2222", run_id=32),
+        _run("failure", sha="ccc3333", run_id=33),
+    ]
+    deploy_jobs = {
+        "31": {"backend-lint": "failure"},
+        "32": {"backend-lint": "failure"},
+        "33": {"prod-smoke": "failure"},
+    }
+    verdict = _verdict(runs=runs, deploy_jobs=deploy_jobs)
+    assert "failure stages: 2 pre_deploy_lint, 1 prod_smoke" in verdict.reason
+    assert verdict.as_dict()["failure_stages"] == verdict.failure_stages
+    assert json.loads(verdict.as_outputs["failure_stages"]) == verdict.failure_stages
+
+
+def test_unknown_stage_run_is_skipped() -> None:
+    runs = [_run("failure", sha="abc1234", run_id=41)]
+    deploy_jobs = {"41": {"some-unmapped-job": "failure"}}
+    assert _verdict(runs=runs, deploy_jobs=deploy_jobs).failure_stages == []
+
+
+def test_cli_evaluate_reads_jobs_json(tmp_path: Path) -> None:
+    main_path = tmp_path / "main.json"
+    prod_path = tmp_path / "prod.json"
+    runs_path = tmp_path / "runs.json"
+    jobs_path = tmp_path / "jobs.json"
+    verdict_path = tmp_path / "verdict.json"
+
+    main_path.write_text(json.dumps(_main()), encoding="utf-8")
+    prod_path.write_text(json.dumps(_prod(sha="7b1c064000", age_hours=46)), encoding="utf-8")
+    runs_path.write_text(
+        json.dumps([_run("failure", sha="abc1234", run_id=51), _run("failure", sha="def5678", run_id=52)]),
+        encoding="utf-8",
+    )
+    jobs_path.write_text(json.dumps({"51": {"deploy-staging": "failure"}}), encoding="utf-8")
+
+    assert (
+        health.main(
+            [
+                "evaluate",
+                "--main-json",
+                str(main_path),
+                "--prod-json",
+                str(prod_path),
+                "--runs-json",
+                str(runs_path),
+                "--jobs-json",
+                str(jobs_path),
+                "--now",
+                "2026-10-25T12:00:00Z",
+                "--verdict-out",
+                str(verdict_path),
+            ]
+        )
+        == 0
+    )
+
+    written = json.loads(verdict_path.read_text(encoding="utf-8"))
+    assert written["failure_stages"] == [{"sha": "abc1234", "stage": "migration"}]
 
 
 # ---------------------------------------------------------------------------
