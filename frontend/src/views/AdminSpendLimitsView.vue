@@ -1,12 +1,15 @@
 <template>
   <div data-theme="agent" class="page-wide">
-    <PageTabs :tabs="[
-      { label: 'Overview', to: '/admin/costs' },
-      { label: 'Spend Limits', to: '/admin/costs/limits' },
-      { label: 'Cost Components', to: '/admin/costs/components' },
-      { label: 'Cost Controls', to: '/admin/costs/controls' },
-    ]" />
-    <PageHeader :title="$t('views.AdminCostBreakdownView.spend_limits')" :subtitle="$t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level')" />
+    <PageHeader
+      :title="$t('views.AdminCostBreakdownView.spend_limits')"
+      :subtitle="$t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level')"
+      :tabs="[
+        { label: 'Overview', to: '/admin/costs' },
+        { label: 'Spend Limits', to: '/admin/costs/limits' },
+        { label: 'Cost Components', to: '/admin/costs/components' },
+        { label: 'Cost Controls', to: '/admin/costs/controls' },
+      ]"
+    />
 
     <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled>
       <div class="space-y-6">
@@ -190,7 +193,6 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Card from 'primevue/card'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
-import PageTabs from "../components/PageTabs.vue"
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 import type { components } from '../lib/api/schema'

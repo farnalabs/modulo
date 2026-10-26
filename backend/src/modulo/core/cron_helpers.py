@@ -1389,7 +1389,7 @@ async def _log_ongoing_event(
 
 
 async def _ingest_saq_error(
-    session: Any,
+    session: Any,  # NOSONAR S1172 - retained caller-session seam; ingestion owns its transaction
     org_id: uuid.UUID,
     *,
     function: str,
@@ -2760,10 +2760,10 @@ async def _resolve_ongoing_snapshot(
 
 
 async def _dispatch_ongoing_runs(
-    q_or_none: Any,
+    q_or_none: Any,  # NOSONAR S1172 - retained queue seam for caller/test compatibility
     org_id: uuid.UUID,
     run_ids: list[uuid.UUID],
-    redis_client: AsyncRedis | None = None,
+    redis_client: AsyncRedis | None = None,  # NOSONAR S1172 - retained Redis seam for caller/test compatibility
 ) -> list[dict[str, Any]]:
     """Queue phase of the ongoing top-up — dispatch each created run to SAQ.
 
@@ -3740,7 +3740,7 @@ async def _rollback_catchup_advance(
 
 
 @asynccontextmanager
-async def _bound_org(org_id: uuid.UUID) -> AsyncIterator[None]:
+async def _bound_org(org_id: uuid.UUID) -> AsyncIterator[None]:  # NOSONAR S7503 - async context-manager seam
     """Bind *org_id* into ``org_id_var`` for one per-org tick (FAR-1484).
 
     ``fire_due_triggers`` is an org-less SYSTEM cron at the job level — the
@@ -4685,7 +4685,7 @@ async def _advance_and_check_ongoing(
         return False
 
 
-async def _handle_paused_ongoing(summary: dict[str, Any]) -> int:
+def _handle_paused_ongoing(summary: dict[str, Any]) -> int:
     """Handle paused ongoing trigger - consume epoch but skip enqueue."""
     summary["ongoing_skipped_paused"] += 1
     return 0
@@ -4755,7 +4755,7 @@ async def _process_one_ongoing_row(
         return 0
 
     if org_paused:
-        return await _handle_paused_ongoing(summary)
+        return _handle_paused_ongoing(summary)
 
     if _check_ongoing_enqueue_cap(ongoing_enqueued):
         return 0
@@ -10447,7 +10447,9 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
     return {"scanned": scanned, "corrected": corrected}
 
 
-async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any]) -> None:
+async def _run_reconcile_sweeps(  # NOSONAR S3776 - sweep orchestrator delegates each arm
+    redis_client: AsyncRedis, summary: dict[str, Any]
+) -> None:
     """FAR-189/FAR-190 compensating sweeps + the healthz stats write (best-effort)."""
     try:
         classification = await run_classification_reconcile()
@@ -11382,7 +11384,7 @@ async def _reconcile_node_started_executor_lost(
     return enqueue_failed_redispatched
 
 
-async def _reconcile_one_row(
+async def _reconcile_one_row(  # NOSONAR S3776 - ordered reconciliation state machine delegates each repair arm
     session: AsyncSession,
     q: RedisQueue,
     redis_client: AsyncRedis,

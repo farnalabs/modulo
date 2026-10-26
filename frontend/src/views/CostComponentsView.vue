@@ -1,17 +1,21 @@
 <template>
   <div data-theme="agent" class="page-wide">
-    <PageTabs :tabs="[
-      { label: 'Overview', to: '/admin/costs' },
-      { label: 'Spend Limits', to: '/admin/costs/limits' },
-      { label: 'Cost Components', to: '/admin/costs/components' },
-      { label: 'Cost Controls', to: '/admin/costs/controls' },
-    ]" />
-    <div class="flex items-center justify-between">
-      <PageHeader :title="$t('views.CostComponentsView.cost_components')" :subtitle="$t('views.CostComponentsView.configure_the_named_cost_components_that_make_up_a_runs_cost')" />
-      <Button class="border-primary/30 hover:border-primary/60" data-testid="cost-components-add" @click="openCreate">
-        {{ $t('views.CostComponentsView.add_component') }}
-      </Button>
-    </div>
+    <PageHeader
+      :title="$t('views.CostComponentsView.cost_components')"
+      :subtitle="$t('views.CostComponentsView.configure_the_named_cost_components_that_make_up_a_runs_cost')"
+      :tabs="[
+        { label: 'Overview', to: '/admin/costs' },
+        { label: 'Spend Limits', to: '/admin/costs/limits' },
+        { label: 'Cost Components', to: '/admin/costs/components' },
+        { label: 'Cost Controls', to: '/admin/costs/controls' },
+      ]"
+    >
+      <template #right>
+        <Button class="border-primary/30 hover:border-primary/60" data-testid="cost-components-add" @click="openCreate">
+          {{ $t('views.CostComponentsView.add_component') }}
+        </Button>
+      </template>
+    </PageHeader>
 
     <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
 
@@ -253,7 +257,6 @@ import Card from 'primevue/card'
 import InputText from 'primevue/inputtext'
 import { DataTable } from '../components/ui/data-table'
 import Select from '../components/shared/AppSelect.vue'
-import PageTabs from '../components/PageTabs.vue'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 

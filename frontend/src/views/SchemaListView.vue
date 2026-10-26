@@ -1,11 +1,14 @@
 <template>
   <div class="page-wide">
-    <PageTabs :tabs="[
-      { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
-      { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
-      { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
-    ]" />
-    <PageHeader :title="$t('views.SchemaListView.schemas')" :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')" />
+    <PageHeader
+      :title="$t('views.SchemaListView.schemas')"
+      :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')"
+      :tabs="[
+        { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+        { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+        { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
+      ]"
+    />
 
     <div class="flex flex-1 min-h-0">
       <!-- Folder sidebar -->
@@ -269,7 +272,6 @@ import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import Menu from 'primevue/menu'
 import Select from '../components/shared/AppSelect.vue'
-import PageTabs from "../components/PageTabs.vue"
 
 type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse'] & {
   folder_id?: string | null
@@ -312,10 +314,9 @@ async function loadSchemaCounts() {
   try {
     const { data } = await api.GET('/api/v1/schemas/counts')
     if (!data) return
-    folderSchemaCounts.value = { __all__: data.total }
-    if (data.by_folder) {
-      folderSchemaCounts.value = { ...data.by_folder, __all__: data.total }
-    }
+    folderSchemaCounts.value = data.by_folder
+      ? { ...data.by_folder, __all__: data.total }
+      : { __all__: data.total }
   } catch {
     console.warn('Failed to load schema counts')
   }

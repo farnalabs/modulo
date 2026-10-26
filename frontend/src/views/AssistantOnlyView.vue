@@ -415,6 +415,11 @@ onMounted(async () => {
   background-color: hsl(var(--primary));
   animation: assistant-live-pulse 1.5s ease-in-out infinite;
 }
+@media (prefers-reduced-motion: reduce) {
+  .assistant-live-dot {
+    animation: none;
+  }
+}
 @keyframes assistant-live-pulse {
   0%,
   100% {

@@ -5,12 +5,16 @@ import PageHeader from '../components/shared/PageHeader.vue'
 const RIGHT_SLOT_FILTERS = '<span data-testid="right-slot-content">Filters</span>'
 
 function mountPageHeader(
-  props: { title: string; subtitle?: string; backLink?: string; dataTestId?: string },
-  options: { rightSlot?: string; routerPush?: ReturnType<typeof vi.fn> } = {},
+  props: { title: string; subtitle?: string; backLink?: string; dataTestId?: string; tabs?: { label: string; to: string }[] },
+  options: { defaultSlot?: string; rightSlot?: string; routerPush?: ReturnType<typeof vi.fn>; attrs?: Record<string, string> } = {},
 ) {
   return mount(PageHeader, {
     props,
-    slots: options.rightSlot ? { right: options.rightSlot } : {},
+    attrs: options.attrs,
+    slots: {
+      ...(options.defaultSlot ? { default: options.defaultSlot } : {}),
+      ...(options.rightSlot ? { right: options.rightSlot } : {}),
+    },
     global: { mocks: { $router: { push: options.routerPush ?? vi.fn() } } },
   })
 }
@@ -45,6 +49,37 @@ describe('PageHeader', () => {
     expect(backButton.exists()).toBe(true)
     await backButton.trigger('click')
     expect(routerPush).toHaveBeenCalledWith('/pipelines')
+  })
+
+  it('renders the default slot below the subtitle', () => {
+    const wrapper = mountPageHeader({ title: 'Runs' }, { defaultSlot: '<span data-testid="default-slot-content">Tabs</span>' })
+    expect(wrapper.find('[data-testid="default-slot-content"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="default-slot-content"]').element.parentElement?.className).toContain('mt-4')
+  })
+
+  it('renders tabs through the shared header contract', () => {
+    const wrapper = mount(PageHeader, {
+      props: {
+        title: 'Runs',
+        tabs: [{ label: 'Overview', to: '/runs' }, { label: 'History', to: '/runs/history' }],
+      },
+      global: {
+        mocks: { $router: { push: vi.fn() } },
+        stubs: {
+          PageTabs: {
+            props: ['tabs'],
+            template: '<nav data-testid="shared-tabs">{{ tabs.map((tab) => tab.label).join(",") }}</nav>',
+          },
+        },
+      },
+    })
+    expect(wrapper.find('[data-testid="shared-tabs"]').text()).toBe('Overview,History')
+  })
+
+  it('forwards arbitrary attributes to the header element', () => {
+    const wrapper = mountPageHeader({ title: 'Runs' }, { attrs: { 'aria-label': 'Run navigation', 'data-extra': 'forwarded' } })
+    expect(wrapper.find('header').attributes('aria-label')).toBe('Run navigation')
+    expect(wrapper.find('header').attributes('data-extra')).toBe('forwarded')
   })
 
   it('renders #right slot content', () => {

@@ -93,14 +93,7 @@
 
       <section class="space-y-3" aria-labelledby="evidence-index-coverage-heading" data-testid="compliance-evidence-index-coverage">
         <h2 id="evidence-index-coverage-heading" class="text-lg font-semibold">{{ $t('views.ComplianceEvidenceIndex.coverage_heading') }}</h2>
-        <!-- NOSONAR: A focusable named scroll region is required for keyboard users to reach and scroll this table. -->
-        <div
-          class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          role="region"
-          aria-labelledby="evidence-index-coverage-heading"
-          tabindex="0"
-          data-testid="compliance-evidence-index-coverage-scroll"
-        >
+        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-labelledby="evidence-index-coverage-heading" tabindex="0" data-testid="compliance-evidence-index-coverage-scroll"> <!-- NOSONAR: This named, focusable scroll region preserves keyboard access to the wide table. -->
           <table class="w-full text-left text-sm">
             <thead>
               <tr class="border-b bg-muted/50">
@@ -127,14 +120,7 @@
             {{ $t('views.ComplianceEvidenceIndex.artifact_count', { count: indexData.artifacts.length }) }}
           </p>
         </div>
-        <!-- NOSONAR: A focusable named scroll region is required for keyboard users to reach and scroll this table. -->
-        <div
-          class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          role="region"
-          aria-labelledby="evidence-index-artifacts-heading"
-          tabindex="0"
-          data-testid="compliance-evidence-index-artifacts-scroll"
-        >
+        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-labelledby="evidence-index-artifacts-heading" tabindex="0" data-testid="compliance-evidence-index-artifacts-scroll"> <!-- NOSONAR: This named, focusable scroll region preserves keyboard access to the wide table. -->
           <table class="w-full min-w-[1050px] text-left text-sm">
             <thead>
               <tr class="border-b bg-muted/50">

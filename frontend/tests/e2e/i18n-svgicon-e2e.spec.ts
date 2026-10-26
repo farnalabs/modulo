@@ -25,12 +25,13 @@ test.describe('i18n Keys & SvgIcon Regression', () => {
       }
     })
 
-    // /settings/email is organisation-scoped and lives in the ADMIN sidebar
-    // group behind required_roles: [admin] (#2455 moved it out of the
-    // system-admin-only SYSTEM group), so the plain org-admin staging identity
-    // reaches the page. Assert the surface was actually reached rather than
-    // letting a redirect make this test pass without rendering the Mail/File
-    // icons it means to check (FAR-1919).
+    // /settings/email is organisation-scoped (the API lives under
+    // /api/v1/admin/org/{org_id}) and lives in the ADMIN sidebar group behind
+    // required_roles: [admin] (#2455 moved it out of the system-admin-only
+    // SYSTEM group), so the plain org-admin staging identity reaches the page.
+    // Assert the surface was actually reached rather than letting a redirect
+    // make this test pass without rendering the Mail/File icons it means to
+    // check (FAR-1919).
     await loginAsAdmin(page, env)
     await page.goto('/settings/email')
     await expect(page).toHaveURL(/\/settings\/email$/)

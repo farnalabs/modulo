@@ -128,7 +128,7 @@
       </div>
 
       <template v-else>
-        <div class="flex items-center justify-between gap-4">
+        <div class="flex min-h-10 items-center justify-between gap-4">
           <div>
             <p class="text-sm font-medium">{{ $t('views.AdminOrgSettingsView.mcp_authority_toggle') }}</p>
             <p class="text-xs text-muted-foreground" data-testid="org-mcp-authority-status">{{ mcpAuthorityStatus }}</p>
