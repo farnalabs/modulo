@@ -52,7 +52,7 @@ const mockManifest = vi.hoisted(() => ({
     '/settings/sso': { name: 'settings-sso', breadcrumb: 'SSO', sidebar_group: 'admin', sidebar_order: 3, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/hitl-review': { name: 'settings-hitl-review', breadcrumb: 'HITL Review', sidebar_group: 'admin', sidebar_order: 4, type: 'page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'private_preview' },
     '/settings/error-forwarders': { name: 'settings-error-forwarders', breadcrumb: 'Error Forwarders', sidebar_group: 'system', sidebar_order: 2, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
-    '/settings/email': { name: 'settings-email', breadcrumb: 'Email', sidebar_group: 'system', sidebar_order: 3, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/settings/email': { name: 'settings-email', breadcrumb: 'Email', sidebar_group: 'admin', sidebar_order: 13, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/admin/assistant': { name: 'admin-assistant', breadcrumb: 'Assistant config', sidebar_group: 'admin', sidebar_order: 7, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/assistant': { name: 'settings-assistant', breadcrumb: 'Assistant skills', sidebar_group: 'admin', sidebar_order: 8, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
     '/admin/users': { name: 'admin-users', breadcrumb: 'Users', sidebar_group: 'admin', sidebar_order: 9, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
@@ -119,6 +119,14 @@ describe('navigation.ts', () => {
     expect(navGroups[2].id).toBe('configure')
     expect(navGroups[3].id).toBe('admin')
     expect(navGroups[4].id).toBe('system')
+  })
+
+  it('keeps organisation email settings in the admin group, not the system-admin-only group', () => {
+    const admin = navGroups.find((group) => group.id === 'admin')!
+    const system = navGroups.find((group) => group.id === 'system')!
+
+    expect(admin.items.some((item) => item.to === '/settings/email')).toBe(true)
+    expect(system.items.some((item) => item.to === '/settings/email')).toBe(false)
   })
 
   it('items within groups are sorted by sidebar_order', () => {

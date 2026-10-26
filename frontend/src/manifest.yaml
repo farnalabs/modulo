@@ -530,8 +530,12 @@ routes:
         breadcrumb: Email
         parent: /
         product_map: [feat-notifications]
-        sidebar_group: system
-        sidebar_order: 3
+        # Email delivery is organisation-scoped (the API is under
+        # /api/v1/admin/org/{org_id}), so org admins must reach it. The SYSTEM
+        # group is instance-wide and system-admin-only; placing this route there
+        # made the router reject ordinary organisation admins.
+        sidebar_group: admin
+        sidebar_order: 13
         type: form_page
         deprecated: false
 
