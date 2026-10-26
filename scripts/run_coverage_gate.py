@@ -847,14 +847,19 @@ def _split_diff_by_file(diff_text: str) -> Iterator[tuple[str, list[str]]]:
     for modified files).  The yielded lines are everything after the header
     up to the next one: file metadata (``index``/``---``/``+++``) and hunks.
     """
+    prefix = "diff --git a/"
     current: str | None = None
     lines: list[str] = []
     for raw in diff_text.splitlines():
-        header = re.fullmatch(r"diff --git a/(.+) b/(.+)", raw)
-        if header:
+        new_path: str | None = None
+        if raw.startswith(prefix):
+            old_path, separator, candidate = raw[len(prefix) :].rpartition(" b/")
+            if separator and old_path and candidate:
+                new_path = candidate
+        if new_path is not None:
             if current is not None:
                 yield current, lines
-            current = header.group(2)
+            current = new_path
             lines = []
         elif current is not None:
             lines.append(raw)

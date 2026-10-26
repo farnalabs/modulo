@@ -22,8 +22,9 @@ class ReleaseValidationError(ValueError):
 
 def _version(tag: str) -> tuple[int, int, int]:
     match = re.fullmatch(
-        r"bundle-v(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)",
+        r"bundle-v(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)",
         tag,
+        re.ASCII,
     )
     if match is None:
         raise ReleaseValidationError(f"tag must match bundle-vX.Y.Z exactly: {tag}")
