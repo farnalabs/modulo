@@ -308,3 +308,29 @@ jobs:
           # ticket step above still executes.
           echo "::error::Deploy health UNHEALTHY: ${CONSECUTIVE} consecutive failed deploy run(s) (threshold ${FAILURE_THRESHOLD}), production ${PROD_SHA} at ${AGE_HOURS:-unknown}h (grace ${GRACE_HOURS}h) behind origin/main ${MAIN_SHA}."
           exit 1
+
+      # FAR-2157: a tick that measured NOTHING must not read back as healthy.
+      # When every source was unreadable the evaluator returns healthy=None,
+      # the verdict step above is skipped, and the run concludes SUCCESS - in
+      # run history that is indistinguishable from a healthy tick, so the
+      # NEXT tick's transition email treats it as a healthy verdict and can
+      # silently swallow the recovery email (an alert that is never closed).
+      # This step runs ONLY on the unmeasured path; its presence is the
+      # durable machine-readable signal `deploy_health.parse_previous_verdict`
+      # reads (the jobs API exposes step names and conclusions, not outputs).
+      # It still concludes success: an unmeasurable tick is not a deploy
+      # failure, and the ::warning::s above name what could not be read.
+      - name: Record the unmeasured tick (FAR-2157)
+        if: always() && steps.health.outputs.healthy == ''
+        shell: bash
+        run: |
+          echo "::warning::NO MEASUREMENT — deploy health could not be evaluated this tick, so this green run is NOT a healthy verdict (FAR-2157). The next tick treats it as UNKNOWN."
+          {
+            echo "## NOT MEASURED — deploy health UNKNOWN (FAR-2157)"
+            echo ""
+            echo "Every source this tick needed was unreadable, so neither the staleness nor"
+            echo "the consecutive-failure half was evaluated. This run concludes success because"
+            echo "an unmeasurable tick is not a deploy failure - it is NOT evidence that"
+            echo "production is healthy. No transition email is inferred from it."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
