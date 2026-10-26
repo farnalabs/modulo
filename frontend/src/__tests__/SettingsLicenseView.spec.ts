@@ -184,6 +184,20 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.text()).toContain('Team license key active')
   })
 
+  it('renders a non-ISO expiry verbatim instead of Invalid Date', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, { ...mockLicenseTeam, expires_at: 'not-a-date' }, mockFlagsTeam)
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: dialogStubs },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('not-a-date')
+    expect(wrapper.text()).not.toContain('Invalid Date')
+  })
+
   it('does not render per-feature checklist (simplified UI)', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)

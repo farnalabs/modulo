@@ -628,6 +628,33 @@ describe('SchemaListView', () => {
     expect(mockPush).toHaveBeenCalledWith({ name: 'schema-editor', params: { id: '1' } })
   })
 
+  it('applies per-folder schema counts from the counts endpoint', async () => {
+    const { api } = await import('../lib/api/client')
+    const getMockApi = api.GET as ReturnType<typeof vi.fn>
+    const originalGet = getMockApi.getMockImplementation()
+    getMockApi.mockImplementation((url: string) => {
+      if (url === '/api/v1/schemas/counts') {
+        return Promise.resolve({
+          data: { by_folder: { 'folder-1': 2 }, total: 5 },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: { items: [], total: 0, page: 1, page_size: 100 }, error: undefined })
+    })
+    try {
+      const wrapper = mountView()
+      await flushPromises()
+      await nextTick()
+
+      expect(wrapper.findComponent(FolderTree).props('itemCounts')).toEqual({
+        'folder-1': 2,
+        __all__: 5,
+      })
+    } finally {
+      getMockApi.mockImplementation(originalGet as (...args: unknown[]) => unknown)
+    }
+  })
+
   it('keeps rendering when the schema-counts request fails, warning instead of crashing', async () => {
     const { api } = await import('../lib/api/client')
     const getMockApi = api.GET as ReturnType<typeof vi.fn>
