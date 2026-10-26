@@ -449,9 +449,8 @@
      own animations/transitions at higher specificity, so without it the reset
      would lose and reduce-motion users would still get the motion. */
   :where(:root, :root :not(html), :root::before, :root :not(html)::before, :root::after, :root :not(html)::after) {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    animation: none !important;
+    transition: none !important;
   }
 }
 @media (prefers-reduced-motion: no-preference) {

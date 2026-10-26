@@ -385,7 +385,7 @@ def _generate_and_verify_license(
 
     validation = parse_and_verify(license_key)
     if not validation.valid or validation.license_data is None:
-        _log.error(
+        _log.exception(
             "stripe.fulfilment.generated_license_failed_verification event_id=%s error=%s "
             "reason=%s hint=%s — unverifiable key not emailed; event left unclaimed so Stripe's "
             "retries re-attempt. The signing key (MODULO_LICENSE_PRIVATE_KEY) and the trust "
