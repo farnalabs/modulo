@@ -83,7 +83,7 @@
             </Button>
           </div>
           <p class="text-xs text-muted-foreground">
-            {{ $t('views.SettingsLicenseView.restart_note') }}
+            {{ $t('views.SettingsLicenseView.org_license_note') }}
           </p>
         </div>
       </div>
@@ -124,7 +124,7 @@
             </Button>
           </div>
           <p class="text-xs text-muted-foreground">
-            {{ $t('views.SettingsLicenseView.restart_note') }}
+            {{ $t('views.SettingsLicenseView.system_license_note') }}
           </p>
         </div>
       </div>
@@ -137,7 +137,7 @@
     <FormDialog
       v-model:open="applyDialogOpen"
       :title="applyScope === 'system' ? $t('views.SettingsLicenseView.install_license_title') : $t('views.SettingsLicenseView.apply_license_title')"
-      :description="$t('views.SettingsLicenseView.apply_license_description')"
+      :description="applyDialogDescription"
       :confirmText="applyScope === 'system' ? $t('views.SettingsLicenseView.install_system_license') : $t('views.SettingsLicenseView.confirm_apply')"
       :loading="applying"
       @confirm="confirmApply"
@@ -284,6 +284,22 @@ const applying = ref(false)
 const applyDialogOpen = ref(false)
 // Which scope the open confirmation dialog installs into.
 const applyScope = ref<'org' | 'system'>('org')
+
+/**
+ * FAR-2142: the two scopes differ in DURABILITY, so one confirmation text
+ * cannot describe both honestly.
+ *
+ * An organisation key is written to `org.settings_json["license_key"]` (a
+ * database row), so it survives a restart. The instance-wide key is held only
+ * in the API process's memory (`core.license.store_license`), so a restart or
+ * redeploy discards it unless `MODULO_LICENSE_KEY` is also configured — the
+ * operator needs to know that BEFORE they rely on it.
+ */
+const applyDialogDescription = computed(() =>
+  applyScope.value === 'system'
+    ? t('views.SettingsLicenseView.apply_license_description_system')
+    : t('views.SettingsLicenseView.apply_license_description_org')
+)
 
 const removing = ref(false)
 const removeDialogOpen = ref(false)
