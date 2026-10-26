@@ -1405,10 +1405,14 @@ async def _ingest_saq_error(
     never raises — error ingestion must not
     crash the scheduler tick.
 
+    ``session`` is accepted for caller symmetry but deliberately unused because
+    ingestion opens its own transaction.
+
     If ``org_id`` is the nil UUID (system error without tenant context), the
     error is logged and skipped — the ``error_events`` FK constraint requires
     a real organisation row.
     """
+    del session
     if org_id == SYSTEM_ORG_ID:
         _log.error(
             "SAQ system error (no tenant context) — skipping DB ingest: function=%s message=%s",
