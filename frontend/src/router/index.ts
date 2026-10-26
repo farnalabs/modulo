@@ -925,9 +925,8 @@ export async function enforceRoleTierVisibility(
   }
 
   const needsTierOrVisibility =
-    to.meta?.requiredTier ||
-    to.meta?.visibility === 'private_preview' ||
-    to.meta?.visibility === 'in_dev'
+    to.meta?.requiredTier ??
+    (to.meta?.visibility === 'private_preview' || to.meta?.visibility === 'in_dev')
 
   if (needsTierOrVisibility) {
     const planStore = usePlanStore()
