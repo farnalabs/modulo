@@ -5,7 +5,7 @@ All functions require RLS org context to be set by the caller.
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, Required, TypedDict, Unpack
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -216,6 +216,33 @@ async def list_library_primitives(
     return await _page_by_offset(session, conditions=conditions, page=page, page_size=page_size)
 
 
+class CreateLibraryPrimitiveOptions(TypedDict, total=False):
+    """Keyword-only options accepted by :func:`create_library_primitive` (python:S107).
+
+    Grouped behind ``**options: Unpack[CreateLibraryPrimitiveOptions]`` so the
+    function stays inside the S107 parameter budget without changing a single
+    caller. The ten ``Required`` keys were keyword parameters WITHOUT defaults
+    before the grouping, so omitting one must still fail loudly (``TypeError``,
+    exactly like a missing keyword parameter) instead of persisting a silent
+    default — ``visibility`` in particular must never default itself. The two
+    remaining keys keep their original defaults; the body applies them via
+    ``options.get(name, default)``.
+    """
+
+    source_url: Required[str | None]
+    forked_from: Required[uuid.UUID | None]
+    checksum: Required[str | None]
+    ed25519_signature: Required[str | None]
+    verified: Required[bool | None]
+    download_count: Required[int | None]
+    average_rating: Required[float | None]
+    review_count: Required[int | None]
+    owner_team_id: Required[uuid.UUID | None]
+    visibility: Required[str]
+    auto_update: bool
+    tier: str
+
+
 async def create_library_primitive(
     session: AsyncSession,
     *,
@@ -229,20 +256,29 @@ async def create_library_primitive(
     version: str,
     tags: list[str],
     content_json: dict[str, Any],
-    source_url: str | None,
-    forked_from: uuid.UUID | None,
-    checksum: str | None,
-    ed25519_signature: str | None,
-    verified: bool | None,
-    download_count: int | None,
-    average_rating: float | None,
-    review_count: int | None,
-    owner_team_id: uuid.UUID | None,
-    visibility: str,
     account_id: uuid.UUID | None,
-    auto_update: bool = True,
-    tier: str = "native",
+    **options: Unpack[CreateLibraryPrimitiveOptions],
 ) -> LibraryPrimitive:
+    """Create a library primitive; required metadata rides on the option group."""
+    try:
+        source_url = options["source_url"]
+        forked_from = options["forked_from"]
+        checksum = options["checksum"]
+        ed25519_signature = options["ed25519_signature"]
+        verified = options["verified"]
+        download_count = options["download_count"]
+        average_rating = options["average_rating"]
+        review_count = options["review_count"]
+        owner_team_id = options["owner_team_id"]
+        visibility = options["visibility"]
+    except KeyError as exc:
+        raise TypeError(f"create_library_primitive() missing required keyword argument: {exc.args[0]!r}") from None
+    auto_update = options.get("auto_update", True)
+    tier = options.get("tier", "native")
+    unknown_options = set(options) - set(CreateLibraryPrimitiveOptions.__annotations__)
+    if unknown_options:
+        raise TypeError(f"unexpected create_library_primitive options: {sorted(unknown_options)}")
+
     primitive = LibraryPrimitive(
         organisation_id=org_id,
         source=source,

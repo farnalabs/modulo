@@ -1,7 +1,7 @@
 """Org-scoped CRUD for EnvironmentProfile."""
 
 import uuid
-from typing import Any
+from typing import Any, TypedDict, Unpack
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError
@@ -42,24 +42,53 @@ def validate_profile_workspace_network(config_json: dict[str, Any] | None) -> No
         validate_workspace_network(str(raw))
 
 
+class CreateEnvironmentProfileOptions(TypedDict, total=False):
+    """Keyword-only options accepted by :func:`create_environment_profile` (python:S107).
+
+    Grouped behind ``**options: Unpack[CreateEnvironmentProfileOptions]`` so
+    the function stays inside the S107 parameter budget without changing a
+    single caller: every option keeps its exact name, type and default, and
+    mypy still type-checks each keyword at the call site. ``total=False``
+    models the defaults; the body applies them via ``options.get(name,
+    default)``.
+    """
+
+    description: str | None
+    image_ref: str | None
+    capabilities: list[str] | None
+    config_json: dict[str, Any] | None
+    network_policy: str
+    initialisation_strategy: str
+    secret_refs: list[str] | None
+    persistence_policy: str
+    owner_team_id: uuid.UUID | None
+    visibility: str
+
+
 async def create_environment_profile(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
     name: str,
     account_id: uuid.UUID,
-    description: str | None = None,
     provider_type: str,
-    image_ref: str | None = None,
-    capabilities: list[str] | None = None,
-    config_json: dict[str, Any] | None = None,
-    network_policy: str = "outbound",
-    initialisation_strategy: str = "git_clone",
-    secret_refs: list[str] | None = None,
-    persistence_policy: str = "ephemeral",
-    owner_team_id: uuid.UUID | None = None,
-    visibility: str = "org",
+    **options: Unpack[CreateEnvironmentProfileOptions],
 ) -> EnvironmentProfile:
+    """Create an environment profile; optional metadata rides on the option group."""
+    description = options.get("description")
+    image_ref = options.get("image_ref")
+    capabilities = options.get("capabilities")
+    config_json = options.get("config_json")
+    network_policy = options.get("network_policy", "outbound")
+    initialisation_strategy = options.get("initialisation_strategy", "git_clone")
+    secret_refs = options.get("secret_refs")
+    persistence_policy = options.get("persistence_policy", "ephemeral")
+    owner_team_id = options.get("owner_team_id")
+    visibility = options.get("visibility", "org")
+    unknown_options = set(options) - set(CreateEnvironmentProfileOptions.__annotations__)
+    if unknown_options:
+        raise TypeError(f"unexpected create_environment_profile options: {sorted(unknown_options)}")
+
     validate_runner_docker_persistence(provider_type, persistence_policy)
     validate_profile_workspace_network(config_json)
     profile = EnvironmentProfile(
