@@ -50,7 +50,7 @@ BLIND_THRESHOLD="${BLIND_THRESHOLD:-1}"
 LOOKUP_BUDGET="${LOOKUP_BUDGET:-12}"
 
 if [[ ! -f "$EVALUATOR" ]]; then
-  echo "::error::The shared audit-chain escalation evaluator is missing ($EVALUATOR) - the blind-cycle escalation cannot run." >&2
+  printf '%s\n' "::error::The shared audit-chain escalation evaluator is missing ($EVALUATOR) - the blind-cycle escalation cannot run." >&2
   exit 1
 fi
 
@@ -96,7 +96,7 @@ run_evaluate() {
 
   if [[ -z "$runs_file" ]]; then
     # Fail LOUD, never healthy: the evaluator escalates the current blind cycle.
-    echo "::error::Could not read the audit-chain monitor's run history - the escalation state is UNKNOWN. A blind cycle still escalates rather than being assumed healthy (FAR-2160)." >&2
+    printf '%s\n' "::error::Could not read the audit-chain monitor's run history - the escalation state is UNKNOWN. A blind cycle still escalates rather than being assumed healthy (FAR-2160)." >&2
     history_read="false"
   else
     local run_rows
@@ -146,7 +146,7 @@ PY
         gh api "repos/$REPOSITORY/actions/runs/$run_id/jobs" > "$jobs_file" 2>/dev/null || rm -f "$jobs_file"
       fi
       if [[ ! -f "$jobs_file" ]]; then
-        echo "::warning::Could not read run ${run_id}'s jobs - treating the previous state as UNKNOWN, which escalates rather than suppresses."
+        printf '%s\n' "::warning::Could not read run ${run_id}'s jobs - treating the previous state as UNKNOWN, which escalates rather than suppresses."
         incomplete="true"
         break
       fi
@@ -158,7 +158,7 @@ PY
         --run-url "$run_url")" || record=""
       rm -f "$jobs_file"
       if [[ -z "$record" ]]; then
-        echo "::warning::Could not classify run ${run_id} - treating the previous state as UNKNOWN."
+        printf '%s\n' "::warning::Could not classify run ${run_id} - treating the previous state as UNKNOWN."
         incomplete="true"
         break
       fi
@@ -186,7 +186,7 @@ PY
   fi
 
   if ! jq -s '.' "$history_ndjson" > "$state_dir/history.json" 2>/dev/null; then
-    echo "::error::Could not assemble the audit-chain run-history state - escalating rather than assuming healthy." >&2
+    printf '%s\n' "::error::Could not assemble the audit-chain run-history state - escalating rather than assuming healthy." >&2
     printf '[]\n' > "$state_dir/history.json"
     history_read="false"
   fi
@@ -211,7 +211,7 @@ run_email() {
   local run_url="${RUN_URL:-}"
 
   if [[ ! -f "$state_json" ]]; then
-    echo "::error::Audit-monitor email transition ($action) but the state JSON is missing ($state_json) - cannot render the email." >&2
+    printf '%s\n' "::error::Audit-monitor email transition ($action) but the state JSON is missing ($state_json) - cannot render the email." >&2
     exit 1
   fi
 
@@ -220,7 +220,7 @@ run_email() {
     --state-json "$state_json" \
     --action "$action" \
     --run-url "$run_url")" || {
-    echo "::error::Could not render the audit-monitor email payload." >&2
+    printf '%s\n' "::error::Could not render the audit-monitor email payload." >&2
     exit 1
   }
   local subject body
@@ -236,7 +236,7 @@ run_email() {
   if [[ -z "${ZOHO_SMTP_USER:-}" ]] || [[ -z "${ZOHO_SMTP_PASS:-}" ]] || [[ -z "${ISSUE_NOTIFY_EMAIL:-}" ]]; then
     # Best-effort channel: unconfigured is reported, never silently green. The
     # Linear ticket leg still fires.
-    echo "::warning::Audit-monitor transition ($action) but ZOHO_SMTP_USER / ZOHO_SMTP_PASS / ISSUE_NOTIFY_EMAIL are not configured - NO email was sent. Configure the same secrets issue-notify.yml uses."
+    printf '%s\n' "::warning::Audit-monitor transition ($action) but ZOHO_SMTP_USER / ZOHO_SMTP_PASS / ISSUE_NOTIFY_EMAIL are not configured - NO email was sent. Configure the same secrets issue-notify.yml uses."
     exit 0
   fi
 
@@ -308,7 +308,7 @@ case "$MODE" in
   evaluate) run_evaluate ;;
   email) run_email ;;
   *)
-    echo "::error::unknown mode '$MODE' (expected evaluate or email)" >&2
+    printf '%s\n' "::error::unknown mode '$MODE' (expected evaluate or email)" >&2
     exit 2
     ;;
 esac
