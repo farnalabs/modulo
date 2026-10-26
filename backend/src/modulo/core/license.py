@@ -66,6 +66,7 @@ import inspect
 import json
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -762,20 +763,22 @@ async def read_persisted_license_state(session: Any) -> PersistedLicenseState:
     return _state_from_value(value)
 
 
-async def _write_persisted_license_state(session: Any, state: PersistedLicenseState) -> None:
-    """Upsert the persisted instance licence (last-writer-wins; a deliberate write)."""
-    from sqlalchemy import select
+async def _write_persisted_license_state(
+    session: Any, state: PersistedLicenseState, *, updated_by: uuid.UUID | None = None
+) -> None:
+    """Upsert the persisted instance licence through the shared atomic crud path.
 
-    from modulo.db.models.system_config import SystemConfig
+    Delegates to :func:`modulo.db.crud.system_config.update_config`, whose
+    single ``INSERT ... ON CONFLICT DO UPDATE`` is race-free: two concurrent
+    first-installs cannot both observe ``row is None`` and race a unique(key)
+    ``IntegrityError`` on commit (the select-then-add-or-update pattern the crud
+    docstring warns against). Imported lazily, the same rationale as the model
+    import it replaces, so ``modulo.core.license`` stays importable without the
+    ORM.
+    """
+    from modulo.db.crud.system_config import update_config
 
-    result = await session.execute(select(SystemConfig).where(SystemConfig.key == SYSTEM_LICENSE_CONFIG_KEY))
-    row = result.scalar_one_or_none()
-    value = _value_from_state(state)
-    if row is None:
-        session.add(SystemConfig(key=SYSTEM_LICENSE_CONFIG_KEY, value=value))
-    else:
-        row.value = value
-    await session.flush()
+    await update_config(session, SYSTEM_LICENSE_CONFIG_KEY, _value_from_state(state), updated_by=updated_by)
 
 
 def _install_persisted_state(state: PersistedLicenseState) -> None:
@@ -785,7 +788,9 @@ def _install_persisted_state(state: PersistedLicenseState) -> None:
     _persisted_state_checked_at = time.monotonic()
 
 
-async def persist_installed_system_license(session: Any, raw_key: str, *, parked: bool) -> PersistedLicenseState:
+async def persist_installed_system_license(
+    session: Any, raw_key: str, *, parked: bool, updated_by: uuid.UUID | None = None
+) -> PersistedLicenseState:
     """Persist an operator install of the instance-scope licence.
 
     ``parked`` is the install's ``is_parked`` verdict. A PARKED (future-start)
@@ -794,6 +799,10 @@ async def persist_installed_system_license(session: Any, raw_key: str, *, parked
     successor's start. An immediately-active install replaces the ACTIVE slot;
     it preserves a parked successor, because :func:`store_license` leaves that
     slot alone and the persisted state must equal what memory will hold.
+
+    ``updated_by`` is the installing account's id, stamped on the ``system_config``
+    row so the durable record carries who installed the licence (the in-memory
+    audit event alone does not survive a restart).
 
     Writes in the caller's transaction when there is one, else its own; the
     process's observed state is updated only after the write returns, so a
@@ -808,7 +817,7 @@ async def persist_installed_system_license(session: Any, raw_key: str, *, parked
         state = PersistedLicenseState(active_key=raw_key, parked_key=parked_key)
 
     async def _write() -> None:
-        await _write_persisted_license_state(session, state)
+        await _write_persisted_license_state(session, state, updated_by=updated_by)
 
     await _run_in_transaction(session, _write)
     _install_persisted_state(state)
@@ -819,18 +828,13 @@ async def clear_persisted_system_license(session: Any) -> bool:
     """Delete the persisted instance licence; returns whether a row existed.
 
     Idempotent: a missing row is not an error (the licence may never have been
-    persisted, or another process may already have removed it).
+    persisted, or another process may already have removed it). Reuses the
+    shared crud delete helper rather than forking its select-then-delete.
     """
-    from sqlalchemy import delete, select
-
-    from modulo.db.models.system_config import SystemConfig
+    from modulo.db.crud.system_config import delete_config
 
     async def _delete() -> bool:
-        existing = await session.execute(select(SystemConfig.id).where(SystemConfig.key == SYSTEM_LICENSE_CONFIG_KEY))
-        if existing.scalar_one_or_none() is None:
-            return False
-        await session.execute(delete(SystemConfig).where(SystemConfig.key == SYSTEM_LICENSE_CONFIG_KEY))
-        return True
+        return await delete_config(session, SYSTEM_LICENSE_CONFIG_KEY)
 
     removed = await _run_in_transaction(session, _delete)
     _install_persisted_state(PersistedLicenseState())

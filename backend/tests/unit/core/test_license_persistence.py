@@ -24,6 +24,7 @@ The tests prove, against a real (SQLite) database:
 from __future__ import annotations
 
 import time
+import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -165,6 +166,27 @@ async def test_install_survives_a_restart(session: AsyncSession) -> None:
     assert restored.tier == "team"
     assert resolve_effective_license(_settings(), None) is not None
     assert resolve_effective_license(_settings(), None).tier == "team"
+
+
+async def test_install_stamps_the_installing_account_on_the_persisted_row(session: AsyncSession) -> None:
+    """The durable row records WHO installed the licence (review MINOR).
+
+    The route also emits an ``license_uploaded`` audit event, but that does not
+    survive a restart; the ``system_config`` row is the durable record, so it
+    must carry ``updated_by``.
+    """
+    from sqlalchemy import select
+
+    account_id = uuid.uuid4()
+    key = _key()
+    await persist_installed_system_license(session, key, parked=False, updated_by=account_id)
+
+    async with session.begin():
+        row = (
+            await session.execute(select(SystemConfig).where(SystemConfig.key == license_mod.SYSTEM_LICENSE_CONFIG_KEY))
+        ).scalar_one()
+
+    assert row.updated_by == account_id
 
 
 # ── 2. Worker context resolves the same tier as the API ─────────────────────

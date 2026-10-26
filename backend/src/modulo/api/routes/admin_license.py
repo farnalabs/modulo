@@ -589,7 +589,7 @@ async def upload_license(
     req: LicenseUploadRequest,
     settings: Annotated[Settings, Depends(get_settings)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    _: Annotated[TenantPrincipal, require_system_permission(PERM_SYSTEM_CONFIG_MANAGE)],
+    principal: Annotated[TenantPrincipal, require_system_permission(PERM_SYSTEM_CONFIG_MANAGE)],
 ) -> LicenseUploadResponse | JSONResponse:
     try:
         validation = parse_and_verify(req.license_key)
@@ -617,7 +617,9 @@ async def upload_license(
     # on the next deploy and is invisible to the worker. Writing first means a
     # failed write surfaces as an error and leaves this process on its old
     # licence, rather than reporting success for an install that will vanish.
-    await persist_installed_system_license(session, req.license_key, parked=is_parked(data))
+    await persist_installed_system_license(
+        session, req.license_key, parked=is_parked(data), updated_by=principal.user_id
+    )
     store_license(req.license_key, data)
     # A system-licence change can flip the effective resolution of EVERY org
     # that falls back to the system licence, so bust every cached entry. The

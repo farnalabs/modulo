@@ -23,6 +23,10 @@ def mock_session() -> AsyncMock:
     session.flush = AsyncMock()
     session.delete = AsyncMock()
     session.begin_nested = AsyncMock()
+    # Sync ``AsyncSession`` surface the CRUD reads to pick its ON CONFLICT
+    # dialect (``pg_insert`` vs ``sqlite_insert``); Postgres is the production
+    # backend, so the doubled bind reports it.
+    session.get_bind.return_value.dialect.name = "postgresql"
     execute_result = MagicMock()
     execute_result.scalar_one_or_none.return_value = None
     execute_result.scalars.return_value.all.return_value = []
@@ -158,6 +162,17 @@ class TestSystemConfigCRUD:
         assert "ON CONFLICT" in str(insert_stmt)
         assert "DO UPDATE" in str(insert_stmt)
 
+    async def test_update_config_rejects_an_unsupported_dialect(self, mock_session: AsyncMock) -> None:
+        """No silent fallback to the Postgres statement on an unknown backend.
+
+        ``sqlite`` and ``postgresql`` are the supported backends; anything else
+        must fail loudly rather than emit a statement the backend cannot run.
+        """
+        mock_session.get_bind.return_value.dialect.name = "mysql"
+
+        with pytest.raises(NotImplementedError, match="mysql"):
+            await update_config(mock_session, "key", "value")
+
     async def test_set_config_with_updated_by(self, mock_session: AsyncMock) -> None:
         account_id = uuid.uuid4()
         stored = SystemConfig(key="key", value="val", updated_by=account_id)
@@ -188,6 +203,7 @@ class TestSystemConfigCRUD:
         """
         session = AsyncMock(spec=AsyncSession)
         session.add = MagicMock()
+        session.get_bind.return_value.dialect.name = "postgresql"
 
         winner_row = SystemConfig(key="race_key", value="concurrent-winner-value")
         select_none = MagicMock()

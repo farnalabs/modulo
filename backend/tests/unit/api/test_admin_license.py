@@ -1262,6 +1262,7 @@ class TestSystemLicencePersistence:
         assert persist.await_args is not None
         assert persist.await_args.args[1] == key
         assert persist.await_args.kwargs["parked"] is False
+        assert persist.await_args.kwargs["updated_by"] == _TEST_ACCOUNT_ID
         assert get_license() is not None
 
     def test_upload_reports_a_parked_successor_to_the_persister(
