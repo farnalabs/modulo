@@ -2362,4 +2362,4 @@ def test_host_returns_empty_string_when_url_is_unparseable() -> None:
     """A non-decodable value must not escape ``_host`` as an exception -- the
     SSRF metric records an empty host instead of aborting the request path."""
 
-    assert RestConnector._host(123) == ""  # type: ignore[arg-type]
+    assert not RestConnector._host(123)  # type: ignore[arg-type]

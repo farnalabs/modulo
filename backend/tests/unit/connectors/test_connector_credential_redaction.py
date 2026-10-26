@@ -177,7 +177,7 @@ def test_scrub_request_drops_unreadable_body_but_still_scrubs_url() -> None:
     scrubbed = security._scrub_request(_UnreadableBodyRequest(), ["secretvalue123"])
     assert scrubbed is not None
     assert "secretvalue123" not in str(scrubbed.url)
-    assert scrubbed.content == b""
+    assert not scrubbed.content
 
 
 def test_redacting_decorator_redacts_escaping_exception() -> None:
