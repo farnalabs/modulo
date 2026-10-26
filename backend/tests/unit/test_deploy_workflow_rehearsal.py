@@ -173,7 +173,7 @@ def test_release_identity_step_passes_gh_token_to_its_gh_api_calls() -> None:
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["attest-artefacts"]
-    assert job["needs"] == ["produce-sbom", "bundle"]
+    assert job["needs"] == ["produce-sbom", "bundle", "release"]
     names = _step_names(job["steps"])
     assert "Download the SBOM artefact" in names
     assert "Download the published bundle artefact" in names
