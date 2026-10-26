@@ -260,7 +260,22 @@ class TestCoerceSwitchValue:
     def test_truthy_values_are_on(self, value: object) -> None:
         assert coerce_switch_value(value) is True
 
-    @pytest.mark.parametrize("value", [False, 0, 0.0, "", "false", "0", "no", [], {}, None])
+    @pytest.mark.parametrize(
+        "value",
+        [False, 0, 0.0, "", "false", "0", "no", [], {}, None],
+        ids=[
+            "false",
+            "zero",
+            "zero_float",
+            "empty_str",
+            "str_false",
+            "str_zero",
+            "str_no",
+            "empty_list",
+            "empty_dict",
+            "none",
+        ],
+    )
     def test_everything_else_is_off(self, value: object) -> None:
         """Including the containers: ``bool(value)`` must never be the semantics."""
         assert coerce_switch_value(value) is False
