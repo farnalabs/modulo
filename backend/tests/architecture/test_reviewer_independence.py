@@ -135,7 +135,7 @@ class TestLlmJudgeSoftSignal:
         assert "no verdict was produced" in detail
 
     def test_shared_backend_gap_is_documented_in_architecture(self) -> None:
-        """architecture.md records that an llm_judge may share a model backend."""
+        """architecture.md records that a model_judge may share a model backend."""
         architecture = _read("docs/architecture.md")
         assert "may share a model backend with the node under evaluation" in architecture
         assert "soft signal only, never a correctness gate" in architecture
@@ -143,7 +143,7 @@ class TestLlmJudgeSoftSignal:
     def test_shared_backend_gap_is_documented_in_core_principles(self) -> None:
         """core-principles.md records the shared-backend soft-signal caveat."""
         principles = _read("docs/core-principles.md")
-        assert "llm_judge" in principles
+        assert EvalType.MODEL_JUDGE.value in principles
         assert "may share a model backend" in principles
 
     def test_audit_records_the_shared_backend_gap(self) -> None:

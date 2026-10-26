@@ -95,7 +95,7 @@ Post-node automated quality checks. Runs before any HITL gate check on the same 
 
 | Type | Description |
 |------|-------------|
-| `llm_judge` | LLM-as-judge – passes agent output to a model for scoring (soft signal only, never a correctness gate) |
+| `model_judge` | LLM-as-judge – passes agent output to a model for scoring (soft signal only, never a correctness gate) |
 | `regex` | Pattern match against output (shape only) |
 | `json_schema` | Validate output against a JSON Schema (shape only) |
 | `custom_function` | User-defined Python function |
@@ -104,7 +104,7 @@ Post-node automated quality checks. Runs before any HITL gate check on the same 
 
 Each eval has a pass threshold and failure behaviour: `warn` (soft – run continues) or `block` (hard – run fails at this node). Eval results feed into the Feedback System.
 
-**Reviewer Independence Note (FAR-2031):** `llm_judge` evals may share a model backend with the node under evaluation – the `ModelBackendHub` decrypts credentials once per run and the same backend ID can be referenced by both the node and its eval. This is acceptable because `llm_judge` is explicitly a soft-signal eval (default `failure_behaviour: "warn"`), the evaluated content is wrapped with a guard instruction and delimiters to prevent prompt injection, and `human_set` evals provide the trustworthy correctness path. For correctness-critical gates, use `human_set` evals.
+**Reviewer Independence Note (FAR-2031):** `model_judge` evals may share a model backend with the node under evaluation – the `ModelBackendHub` decrypts credentials once per run and the same backend ID can be referenced by both the node and its eval. This is acceptable because `model_judge` is explicitly a soft-signal eval (default `failure_behaviour: "warn"`), the evaluated content is wrapped with a guard instruction and delimiters to prevent prompt injection, and `human_set` evals provide the trustworthy correctness path. For correctness-critical gates, use `human_set` evals.
 
 ### HITL Manager (`modulo/core/hitl_manager/`)
 
@@ -337,7 +337,7 @@ The reference-integrity guard test (`tests/architecture/test_feature_flag_refere
    c. The agent's Jinja2 prompt is rendered (sandboxed environment) with `run_context` and previous outputs
    d. The LLM is called through the model backend
    e. Output is validated against the output Schema
-   f. EvalEngine runs configured evals (llm_judge, regex, json_schema, custom_function)
+   f. EvalEngine runs configured evals (model_judge, regex, json_schema, custom_function, human_set)
    g. If eval fails with `block` behaviour, run enters `failed` state
    h. If the outgoing edge has a HITL gate, `interrupt()` pauses the run
 
