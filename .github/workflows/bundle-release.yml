@@ -181,6 +181,7 @@ jobs:
 
           # PostgreSQL server + client (pg_dump/pg_isready/psql live in the
           # client deb) into pg/bin + pg/share.
+          mkdir -p debx/pg-server debx/pg-client debx/redis-server debx/redis-tools
           dpkg-deb -x downloads/postgresql-16.deb debx/pg-server
           dpkg-deb -x downloads/postgresql-client-16.deb debx/pg-client
           mkdir -p "$BUNDLE/pg/share"
