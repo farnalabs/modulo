@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict, Unpack
 
 from fastapi import HTTPException, status
 from sqlalchemy import ColumnElement, Connection, delete, func, select, text, update
@@ -278,31 +278,55 @@ async def audit_circuit_breaker_threshold_change(
     return True
 
 
+class CreatePipelineOptions(TypedDict, total=False):
+    """Optional keyword arguments accepted by :func:`create_pipeline`."""
+
+    description: str | None
+    visibility: str
+    owner_team_id: uuid.UUID | None
+    max_concurrent_runs: int
+    lock_wait_timeout_seconds: int
+    node_timeout_seconds: int
+    hitl_review_window_seconds: int | None
+    queue_timeout_seconds: int | None
+    run_context_defaults: dict[str, Any] | None
+    default_autonomy_level: str
+    max_autonomy_level: str | None
+    max_duration_seconds: int | None
+    stale_run_timeout_minutes: int
+    folder_id: uuid.UUID | None
+    circuit_breaker_threshold: Decimal | float | None
+    business_owner_id: uuid.UUID | None
+    reliability_owner_id: uuid.UUID | None
+    request_id: str | None
+
+
 async def create_pipeline(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
     name: str,
     account_id: uuid.UUID,
-    description: str | None = None,
-    visibility: str = "org",
-    owner_team_id: uuid.UUID | None = None,
-    max_concurrent_runs: int = 5,
-    lock_wait_timeout_seconds: int = 300,
-    node_timeout_seconds: int = 300,
-    hitl_review_window_seconds: int | None = None,
-    queue_timeout_seconds: int | None = None,
-    run_context_defaults: dict[str, Any] | None = None,
-    default_autonomy_level: str = "manual_approval",
-    max_autonomy_level: str | None = None,
-    max_duration_seconds: int | None = None,
-    stale_run_timeout_minutes: int = 30,
-    folder_id: uuid.UUID | None = None,
-    circuit_breaker_threshold: Decimal | float | None = None,
-    business_owner_id: uuid.UUID | None = None,
-    reliability_owner_id: uuid.UUID | None = None,
-    request_id: str | None = None,
+    **options: Unpack[CreatePipelineOptions],
 ) -> Pipeline:
+    description = options.get("description")
+    visibility = options.get("visibility", "org")
+    owner_team_id = options.get("owner_team_id")
+    max_concurrent_runs = options.get("max_concurrent_runs", 5)
+    lock_wait_timeout_seconds = options.get("lock_wait_timeout_seconds", 300)
+    node_timeout_seconds = options.get("node_timeout_seconds", 300)
+    hitl_review_window_seconds = options.get("hitl_review_window_seconds")
+    queue_timeout_seconds = options.get("queue_timeout_seconds")
+    run_context_defaults = options.get("run_context_defaults")
+    default_autonomy_level = options.get("default_autonomy_level", "manual_approval")
+    max_autonomy_level = options.get("max_autonomy_level")
+    max_duration_seconds = options.get("max_duration_seconds")
+    stale_run_timeout_minutes = options.get("stale_run_timeout_minutes", 30)
+    folder_id = options.get("folder_id")
+    circuit_breaker_threshold = options.get("circuit_breaker_threshold")
+    business_owner_id = options.get("business_owner_id")
+    reliability_owner_id = options.get("reliability_owner_id")
+    request_id = options.get("request_id")
     if folder_id is not None:
         from modulo.db.models.pipeline_folder import PipelineFolder
 
