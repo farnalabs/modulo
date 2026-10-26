@@ -217,7 +217,7 @@ def redact_exc(
             new = _rebuild_httpx_request_error(exc, message, secrets)
         else:
             new = _rebuild_generic_error(exc, message)
-    except Exception:  # NOSONAR python:S112 — any rebuild failure must fail closed, not leak the credential
+    except Exception:  # NOSONAR — python:S112: fail closed for arbitrary vendor constructors
         # Deliberately broad: ``_rebuild_generic_error`` calls an arbitrary
         # vendor ``type(exc)(message)`` constructor, which can raise anything
         # (e.g. ``KeyError`` from an exotic ``__init__``). Narrowing this to a
@@ -349,7 +349,7 @@ class CredentialRedactor:
             yield
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # NOSONAR python:S112 — connector boundary must redact every ordinary exception
+        except Exception as exc:  # NOSONAR — python:S112: connector boundary must redact every ordinary exception
             repaired = redact_exc(
                 exc,
                 self._secrets,
