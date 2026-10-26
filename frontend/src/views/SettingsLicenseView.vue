@@ -191,6 +191,7 @@ import { useCurrentUser } from '../composables/useCurrentUser'
 import Button from 'primevue/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import { decodeBase64Url } from '../lib/jwt'
 import { usePlanStore } from '../stores/planStore'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -332,9 +333,7 @@ function decodeLicenceKeyPayload(raw: string): Record<string, unknown> | null {
   const segment = raw.trim().split('.')[0]
   if (!segment) return null
   try {
-    const normalised = segment.replaceAll('-', '+').replaceAll('_', '/')
-    const padded = normalised + '='.repeat((4 - (normalised.length % 4)) % 4)
-    const binary = atob(padded)
+    const binary = decodeBase64Url(segment)
     const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
     return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
   } catch {

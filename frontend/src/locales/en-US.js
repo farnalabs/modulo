@@ -3253,7 +3253,6 @@ export default {
       "get_team_license": "Get a Team License",
       "licensed_to": "Licensed to",
       "expires": "Expires",
-      "never": "never",
       "license_key": "License Key",
       "tier_upgrade_sentence": "You are currently on the {currentTier} tier. Upgrade to {teamTier} to unlock all features.",
       "org_license_note": "Takes effect immediately, is saved for this organisation, and survives a restart or redeploy. A key dated to start later becomes active on its start date.",
