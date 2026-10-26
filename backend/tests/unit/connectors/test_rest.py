@@ -2356,3 +2356,10 @@ def test_item_summary_falls_back_when_repr_raises_unexpected_exception() -> None
         {"auth_mode": "bearer", "token": "t"},
     )
     assert c._item_summary(ExplodingRepr()) == "<ExplodingRepr>"
+
+
+def test_host_returns_empty_string_when_url_is_unparseable() -> None:
+    """A non-decodable value must not escape ``_host`` as an exception -- the
+    SSRF metric records an empty host instead of aborting the request path."""
+
+    assert RestConnector._host(123) == ""  # type: ignore[arg-type]

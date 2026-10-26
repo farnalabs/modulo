@@ -160,6 +160,26 @@ def test_redact_exc_fails_closed_when_rebuild_raises_any_exception(
     assert "***" in str(repaired)
 
 
+def test_scrub_request_drops_unreadable_body_but_still_scrubs_url() -> None:
+    # ``request.content`` can raise (a consumed/exotic stream). The scrubbed
+    # copy must still be produced with the credential-bearing URL/headers
+    # redacted -- the unreadable body is dropped, never the whole scrub.
+
+    class _UnreadableBodyRequest:
+        method = "GET"
+        url = "https://api.example.com/items?token=secretvalue123"
+        headers = httpx.Headers({"authorization": "Bearer secretvalue123"})
+
+        @property
+        def content(self) -> bytes:
+            raise RuntimeError("stream already consumed")
+
+    scrubbed = security._scrub_request(_UnreadableBodyRequest(), ["secretvalue123"])
+    assert scrubbed is not None
+    assert "secretvalue123" not in str(scrubbed.url)
+    assert scrubbed.content == b""
+
+
 def test_redacting_decorator_redacts_escaping_exception() -> None:
     class Obj:
         def __init__(self) -> None:
