@@ -139,10 +139,26 @@ jobs:
             echo "::warning::Deploy health check could not list deploy.yml runs (gh API error) - the consecutive-failure half is UNKNOWN this cycle."
           fi
 
+          # FAR-2152: a throttled run concludes SUCCESS but skipped
+          # "Deploy to app.modulo.run" - it deployed nothing. Enrich the run
+          # records with the deploy JOB's conclusion so the consecutive-failure
+          # walk classifies an ATTEMPT by the artefact, not by the run's colour.
+          # Fails open: without the field the evaluator falls back to run
+          # conclusions (the pre-FAR-2152 behaviour).
+          RUNS_INPUT="$WORK/runs.json"
+          if [ -f "$WORK/runs.json" ]; then
+            if python3 .github/scripts/deploy_run_attempts.py enrich \
+                --runs-json "$WORK/runs.json" --out "$WORK/runs-enriched.json" --repo "$REPOSITORY"; then
+              RUNS_INPUT="$WORK/runs-enriched.json"
+            else
+              echo "::warning::Deploy health check could not enrich the deploy run history with deploy-job conclusions - falling back to run conclusions this cycle (a throttled no-op may read as a success)."
+            fi
+          fi
+
           python3 .github/scripts/deploy_health.py evaluate \
             --main-json "$WORK/main.json" \
             --prod-json "$WORK/prod.json" \
-            --runs-json "$WORK/runs.json" \
+            --runs-json "$RUNS_INPUT" \
             --grace-hours "$GRACE_HOURS" \
             --failure-threshold "$FAILURE_THRESHOLD" \
             --github-output "$GITHUB_OUTPUT" \

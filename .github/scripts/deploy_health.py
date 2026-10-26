@@ -23,7 +23,10 @@ Two measured conditions, either of which makes deploy health UNHEALTHY:
    ``failure_threshold`` (default 2) consecutive *failed* completed runs of
    ``deploy.yml``. ``cancelled`` runs are NOT failures (a superseded deploy is
    normal and must not inflate the streak), so the walk stops at any
-   non-failure outcome.
+   non-failure outcome. A THROTTLED run (``deploy_job_conclusion ==
+   "skipped"``) deployed nothing, so it is neither: it is neutral and the walk
+   continues past it (FAR-2152) - otherwise a throttled no-op sitting between
+   two real failures would break the streak and suppress the alert.
 
 A single flaky deploy therefore never alerts, and neither does a prod that is
 merely inside the grace window (the throttle batches up to 3h, staging E2E
@@ -61,6 +64,9 @@ DEPLOY_RUNS_WINDOW = 15
 
 #: The step whose conclusion is the durable previous-verdict state vector.
 VERDICT_STEP_NAME = "Fail the run when deploy health is unhealthy"
+
+#: ``deploy_job_conclusion`` values meaning "the lookup could not tell".
+_ATTEMPT_UNKNOWN = frozenset({"", "unknown", "missing", "none", "null"})
 
 HEALTHY = "healthy"
 UNHEALTHY = "unhealthy"
@@ -204,15 +210,43 @@ def _parse_timestamp(raw: str) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
+def deploy_attempted(run: dict[str, Any]) -> bool | None:
+    """``True``/``False`` when the run's deploy attempt is known, else ``None``.
+
+    FAR-2152: a throttled run concludes SUCCESS but every job (including
+    ``Deploy to app.modulo.run``) is skipped - it deployed nothing. Reading the
+    run conclusion alone counts that no-op as a success, which breaks a streak
+    of real deploy failures and delays the alert.
+
+    ``deploy_job_conclusion`` is attached by
+    ``.github/scripts/deploy_run_attempts.py``. When it is absent or
+    unreadable the answer is ``None`` and the caller falls back to the run
+    conclusion (never to "not attempted" - an unreadable lookup must not hide a
+    real failure).
+    """
+    raw = run.get("deploy_job_conclusion")
+    if raw is None:
+        return None
+    conclusion = str(raw).strip().lower()
+    if conclusion in _ATTEMPT_UNKNOWN:
+        return None
+    return conclusion != "skipped"
+
+
 def consecutive_failures(runs: Sequence[dict[str, Any]]) -> int:
     """Leading *failed* completed runs, newest first.
 
     ``cancelled`` (a superseded/duplicate deploy), ``success`` and any other
-    outcome end the streak without contributing to it.
+    outcome end the streak without contributing to it. A run that deployed
+    NOTHING (a throttled no-op, ``deploy_job_conclusion == "skipped"``) is
+    NEUTRAL: it neither feeds the streak nor breaks it, so a throttled run
+    between two real failures cannot suppress the alert (FAR-2152).
     """
     streak = 0
     for run in runs:
         if str(run.get("status") or "").lower() != "completed":
+            continue
+        if deploy_attempted(run) is False:
             continue
         if str(run.get("conclusion") or "").lower() == "failure":
             streak += 1
@@ -228,6 +262,10 @@ def _completed_runs(runs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
 def _latest_failure(runs: Sequence[dict[str, Any]]) -> dict[str, str]:
     for run in runs:
         if str(run.get("status") or "").lower() != "completed":
+            continue
+        # FAR-2152: a throttled no-op is neutral here too - it must not stop
+        # the walk before the real failed deploy it sits above.
+        if deploy_attempted(run) is False:
             continue
         if str(run.get("conclusion") or "").lower() != "failure":
             break

@@ -201,7 +201,10 @@ jobs:
           }
 
           # ---- 1. Deploy-run state: is a deploy already trying? ----
-          RUNS_JSON="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --branch main --limit 10 --json status,conclusion 2>/dev/null)" || RUNS_JSON=""
+          # databaseId is needed to read each run's "Deploy to app.modulo.run"
+          # job conclusion (FAR-2152: a throttled no-op's RUN conclusion is
+          # success, so run-level data alone cannot tell a deploy from a skip).
+          RUNS_JSON="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --branch main --limit 10 --json databaseId,status,conclusion 2>/dev/null)" || RUNS_JSON=""
           if [ -z "$RUNS_JSON" ]; then
             echo "::warning::Deploy-staleness watchdog: could not list deploy.yml runs (gh API error) - failing safe, no dispatch. Next tick retries. Verdict is UNKNOWN, never 'no failures'."
             emit_verdict "" "" "the watchdog could not list deploy.yml runs, so it cannot tell whether deploys are failing"
@@ -447,43 +450,65 @@ jobs:
           # would cap the re-dispatch after just 3 throttle events, even though
           # no deploy was attempted. Filter them out of the consecutive-failure
           # check: only runs where the deploy job actually ran and failed count.
+          # FAR-2152: attach each completed run's "Deploy to app.modulo.run"
+          # JOB conclusion. A throttled run's RUN conclusion is success while
+          # its deploy job is skipped - it deployed nothing. The enrichment
+          # fails open: without the field the walk below falls back to the run
+          # conclusion (the pre-FAR-2152 behaviour).
+          if [ -n "$RUNS_JSON" ]; then
+            RUNS_JSON_FILE="$(mktemp)"
+            ENRICHED_RUNS_FILE="$(mktemp)"
+            printf '%s' "$RUNS_JSON" > "$RUNS_JSON_FILE"
+            if python3 .github/scripts/deploy_run_attempts.py enrich \
+                --runs-json "$RUNS_JSON_FILE" --out "$ENRICHED_RUNS_FILE" --repo "$REPO"; then
+              RUNS_JSON="$(cat "$ENRICHED_RUNS_FILE")"
+            else
+              echo "::warning::deploy-watchdog: could not enrich the deploy run history with deploy-job conclusions - the failure streak uses run conclusions this tick (a throttled no-op may read as a success)."
+            fi
+            rm -f "$RUNS_JSON_FILE" "$ENRICHED_RUNS_FILE"
+          fi
+
           RECENT_JSON="$(PAYLOAD="$RUNS_JSON" python3 - <<'PYEOF'
           import json, os
           try:
               runs = json.loads(os.environ["PAYLOAD"])
           except Exception:
               runs = []
-          completed = [r for r in runs if r.get("status") == "completed"][:3]
-          # FAR-954: filter out throttled runs (all jobs skipped = no deploy
-          # attempted). A throttled run's conclusion is "success" but every
-          # job was skipped — it is NOT a failure or a success; it is a no-op.
-          # Only count runs that actually attempted the deploy (either
-          # succeeded or failed).
+
+          def attempted(r):
+              """True/False when known, None when the enrichment is absent."""
+              raw = r.get("deploy_job_conclusion")
+              if raw is None:
+                  return None
+              value = str(raw).strip().lower()
+              if value in ("", "unknown", "missing", "none", "null"):
+                  return None
+              return value != "skipped"
+
+          # FAR-954 / FAR-2152: a throttled run (deploy job SKIPPED) deployed
+          # nothing. With the job conclusion we can now tell it apart from a
+          # real success, so it is NEUTRAL - skipped entirely rather than
+          # counted as "ok" (which would break a streak of real failures) or
+          # as a failure (which would cap the re-dispatch on no-ops).
+          completed = [r for r in runs if r.get("status") == "completed"]
+          attempted_runs = [r for r in completed if attempted(r) is not False][:3]
           conclusions = []
-          for r in completed:
+          for r in attempted_runs:
               c = r.get("conclusion") or "none"
               if c == "success":
-                  # Could be a real success OR a throttled no-op.
-                  # A throttled run has conclusion "success" but every
-                  # downstream job was skipped. We cannot distinguish from
-                  # the run-level data alone, but a throttled run is not
-                  # harmful to count — it does not advance the throttle
-                  # window (deploy.yml anchor only counts real deploys), so
-                  # counting it as "ok" just means the cap is not reached.
-                  # The staleness-check independently escalates if prod
-                  # stays stale.
                   conclusions.append("success")
               elif c == "failure":
                   conclusions.append("failure")
-              else:
-                  # skipped, cancelled — not a real attempt, skip
-                  pass
+              # skipped, cancelled — not a real attempt, skip
           all_failed = len(conclusions) == 3 and all(c != "success" for c in conclusions)
           # The leading failure streak over COMPLETED runs (newest first), for
-          # the shared email renderer's figures. Bounded by the same window.
+          # the shared email renderer's figures. A throttled no-op is neutral:
+          # the walk continues past it instead of breaking the streak.
           streak = 0
           for r in runs:
               if r.get("status") != "completed":
+                  continue
+              if attempted(r) is False:
                   continue
               if (r.get("conclusion") or "") == "failure":
                   streak += 1
@@ -492,7 +517,7 @@ jobs:
           print(json.dumps({
               "all_failed": all_failed,
               "failed_streak": streak,
-              "runs_considered": len([r for r in runs if r.get("status") == "completed"]),
+              "runs_considered": len(completed),
           }))
           PYEOF
           )" || RECENT_JSON=""
