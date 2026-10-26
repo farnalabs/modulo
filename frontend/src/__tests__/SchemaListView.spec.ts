@@ -318,6 +318,35 @@ describe('SchemaListView', () => {
     expect(patchMock).toHaveBeenCalledWith('/api/v1/schemas/2/folder', { folder_id: null })
   })
 
+  it('sets the drag payload and move effect when a schema drag starts, and tolerates a missing dataTransfer', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const dataTransfer = { setData: vi.fn(), effectAllowed: 'none' }
+    await wrapper.find('[data-testid="schema-row-1"]').trigger('dragstart', { dataTransfer })
+    expect(dataTransfer.setData).toHaveBeenCalledWith('text/plain', '1')
+    expect(dataTransfer.effectAllowed).toBe('move')
+
+    // The drag guard must not throw when the event carries no dataTransfer.
+    await wrapper.find('[data-testid="schema-row-1"]').trigger('dragstart', { dataTransfer: null })
+  })
+
+  it('renders the selected-folder breadcrumb for a known folder and hides it for an unknown id', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const tree = wrapper.findComponent(FolderTree)
+    tree.vm.$emit('select-folder', 'folder-1')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="schema-list-all-schemas"]').exists()).toBe(true)
+
+    tree.vm.$emit('select-folder', 'folder-unknown')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="schema-list-all-schemas"]').exists()).toBe(false)
+  })
+
   it('shows folders-specific error copy when folders fail to load', async () => {
     // First get() call is the FolderTree's own folder fetch; the second is
     // this view's loadFolders — reject that one to surface folderError.
