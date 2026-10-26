@@ -73,19 +73,51 @@ const pipelinesError = ref<string | null>(null)
 
 const filters = ref<RiskAssessmentFilters>(defaultRiskAssessmentFilters())
 
+// The pipeline list endpoint ignores `limit` and caps `page_size` at 100; the
+// facet therefore has to page through the offset API or it silently renders
+// only the first page (20 items by default) of selectable pipelines.
+const PIPELINES_PAGE_SIZE = 100
+const PIPELINES_MAX_PAGES = 20
+
+interface PipelinePage {
+  items: Pipeline[]
+  hasMore: boolean
+}
+
+async function fetchPipelinePage(page: number): Promise<PipelinePage> {
+  const { data, error: responseError, response } = await api.GET('/api/v1/pipelines', {
+    params: { query: { page, page_size: PIPELINES_PAGE_SIZE } },
+  })
+  if (responseError || !response?.ok) {
+    throw new Error(t('views.RiskAssessmentView.pipelines_load_failed'))
+  }
+  return {
+    items: data?.items ?? [],
+    hasMore: Boolean(data?.has_more),
+  }
+}
+
 async function loadPipelines(): Promise<void> {
   pipelinesError.value = null
   try {
-    const { data, error: responseError, response } = await api.GET('/api/v1/pipelines', {
-      params: { query: { limit: 100, page: 1 } },
-    })
-    if (responseError || !response?.ok) {
-      throw new Error(t('views.RiskAssessmentView.pipelines_load_failed'))
+    const collected: Pipeline[] = []
+    for (let page = 1; page <= PIPELINES_MAX_PAGES; page += 1) {
+      const result = await fetchPipelinePage(page)
+      collected.push(...result.items)
+      if (!result.hasMore) {
+        pipelines.value = collected
+        return
+      }
     }
-    pipelines.value = data?.items ?? []
+    // Exhausting the page budget with pages still available means the list we
+    // have is a prefix. Say so rather than dressing it up as the whole set (a
+    // missing pipeline is an unfilterable facet, not an empty one).
+    pipelines.value = collected
+    pipelinesError.value = t('views.RiskAssessmentView.pipelines_truncated')
   } catch {
-    // Non-fatal: the projection still loads, but the operator must know the
-    // pipeline facet is empty because its source failed (never a silent warn).
+    // A page failure must not publish the prefix collected so far: a partial
+    // dropdown silently hides pipelines. Keep the previous list, surface the
+    // failure, and let the retry replace it.
     pipelinesError.value = t('views.RiskAssessmentView.pipelines_load_failed')
   }
 }
