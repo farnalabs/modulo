@@ -719,6 +719,45 @@ def _load_repo_heads(settings: Settings) -> set[str]:
     return set(_REPO_HEADS_CACHE)
 
 
+def _migration_image_lag_detail(applied: set[str], heads: set[str]) -> str | None:
+    """Degraded detail when the DB's head is AHEAD of this image's known heads.
+
+    The running image cannot serve a schema it does not know about, so a DB
+    migrated by a newer release reports degraded. Revision IDs are
+    zero-padded (e.g. ``0333``), so ``max`` orders them correctly.
+
+    Returns ``None`` when the DB is at or BEHIND the image head: a behind DB
+    keeps the pre-existing "pending migrations" path, never this one.
+    """
+    db_head = max(applied, default="none")
+    image_head = max(heads, default="none")
+    if db_head == "none" or image_head == "none" or db_head <= image_head:
+        return None
+    return f"migrations: degraded (image revision lag: DB at {db_head}, image knows up to {image_head})"
+
+
+def _migration_detail_parts(
+    applied: set[str],
+    heads: set[str],
+    divergence: DivergenceCheckResult | None,
+    divergence_check_failed: bool,
+) -> list[str]:
+    """Detail fragments for pending and repo-vs-DB diverging migrations."""
+    parts: list[str] = []
+    pending = heads - applied
+    if pending:
+        parts.append(f"pending migrations: {', '.join(sorted(pending))}")
+    if divergence_check_failed:
+        # FAR-925: the divergence guard itself crashed — report degraded
+        # (not ok) so this state cannot be mistaken for "checked and clean".
+        # Fail-open: the check is advisory, so a crashed guard degrades
+        # the report without blocking readiness.
+        parts.append("divergence check could not run (exception raised, see logs)")
+    elif divergence is not None and divergence.diverged:
+        parts.append(f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}")
+    return parts
+
+
 async def _check_migrations() -> CheckResult:
     settings = get_settings()
     timeout = _per_check_timeout(settings, "modulo_health_migrations_timeout_seconds")
@@ -752,37 +791,13 @@ async def _check_migrations() -> CheckResult:
             _log.exception("health._check_migrations divergence check failed")
             divergence_check_failed = True
 
-        # Migration-compatibility check: compare the DB's current head revision
-        # against the image's known head revisions. If the DB is ahead of the
-        # image (has a revision the image doesn't know), report degraded with
-        # a clear "image revision lag" message.
-        # We sort both sets to get deterministic "latest" revisions for the
-        # message. Revision IDs are zero-padded (e.g. "0333"), so lexicographic
-        # sort works for ordering.
-        applied_sorted = sorted(applied)
-        heads_sorted = sorted(heads)
-        db_head = applied_sorted[-1] if applied_sorted else "none"
-        image_head = heads_sorted[-1] if heads_sorted else "none"
+        # Migration-compatibility check (FAR-2156): a DB ahead of the image is
+        # reported degraded before the pending/divergence detail is assembled.
+        lag_detail = _migration_image_lag_detail(applied, heads)
+        if lag_detail is not None:
+            return "degraded", lag_detail
 
-        # Check if DB has a revision the image doesn't know (DB ahead of image)
-        if db_head != "none" and image_head != "none" and db_head > image_head:
-            lag_msg = f"migrations: degraded (image revision lag: DB at {db_head}, image knows up to {image_head})"
-            return "degraded", lag_msg
-
-        pending = heads - applied
-        parts: list[str] = []
-        if pending:
-            parts.append(f"pending migrations: {', '.join(sorted(pending))}")
-        if divergence_check_failed:
-            # FAR-925: the divergence guard itself crashed — report degraded
-            # (not ok) so this state cannot be mistaken for "checked and clean".
-            # Fail-open: the check is advisory, so a crashed guard degrades
-            # the report without blocking readiness.
-            parts.append("divergence check could not run (exception raised, see logs)")
-        elif divergence is not None and divergence.diverged:
-            parts.append(
-                f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}"
-            )
+        parts = _migration_detail_parts(applied, heads, divergence, divergence_check_failed)
         if not parts:
             return "ok", "migrations up to date"
         return "degraded", "; ".join(parts)
