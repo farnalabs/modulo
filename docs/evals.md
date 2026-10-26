@@ -13,9 +13,13 @@ correctness path.
 | `regex` | Pattern match on an output field | **Shape** (text matches a pattern) | No – shape only |
 | `json_schema` | JSON Schema validation | **Shape / structure** of an object | No – shape only |
 | `custom_function` | User-supplied callable | Whatever the function checks | Depends on the function |
-| `llm_judge` | An LLM grades the output | **Soft** quality/similarity signal | No – circular + injection-prone |
+| `model_judge` | An LLM grades the output | **Soft** quality/similarity signal | No – circular + injection-prone |
 | `guardrail` | Deterministic data-safety check on input | **Input safety** (regex/json_schema on input payload) | N/A – not routed through EvalEngine |
 | `human_set` | A registered, versioned, **human-authored** assertion set | **Correctness** (semantic invariants + business rules) | **Yes** |
+
+`model_judge` is the canonical eval-type name. It was renamed from `llm_judge`
+(ADR 066 D2), and the eval create/update API accepts only `model_judge`; a
+legacy `llm_judge` row is migrated to `model_judge` by the schema migration.
 
 ## Why evals must be non-circular
 
@@ -29,11 +33,11 @@ perfectly valid JSON with `category: "billing", priority: "low"` and pass a
 `json_schema` check even when a human would flag that combination as wrong. Shape
 checks are necessary but never sufficient.
 
-### `llm_judge` is a soft signal, vulnerable to injection
-`llm_judge` asks a model to score another model's output. Two problems:
+### `model_judge` is a soft signal, vulnerable to injection
+`model_judge` asks a model to score another model's output. Two problems:
 
 1. **It is circular.** LLM-judging-LLM inherits the same failure modes it is
-   meant to catch. A passing `llm_judge` score is a *weak, approximate* signal,
+   meant to catch. A passing `model_judge` score is a *weak, approximate* signal,
    not evidence of correctness.
 2. **It is injection-prone.** An injection payload embedded in the agent output
    can instruct the judge to return a passing score. The engine mitigates
@@ -42,7 +46,7 @@ checks are necessary but never sufficient.
    *instruction* leakage – it cannot guarantee the judge's *correctness*
    assessment is right.
 
-`llm_judge` is useful as a **soft** signal (e.g. flagging candidates for human
+`model_judge` is useful as a **soft** signal (e.g. flagging candidates for human
 review) but must never be the sole gate for a claim of correctness.
 
 ### Human-authored eval sets are the trustworthy path
@@ -96,7 +100,7 @@ A representative agent task: a support-message classification agent emits JSON
 
 Assertions 1–4 are things `json_schema` *could* express; assertion 5 (the
 consistency rule) and the overall composition are what make the set a
-**correctness** check rather than a shape check, and what no `llm_judge` can be
+**correctness** check rather than a shape check, and what no `model_judge` can be
 trusted to enforce.
 
 ## Authoring a new human eval set
@@ -120,7 +124,7 @@ loudly (it never silently passes) – see `run_human_eval_set`.
   `pipeline_engine/node_runner.py`.
 * **Feedback evals** – ad-hoc evals via `EvalEngine.standalone_evaluate`.
 
-`llm_judge` evals require a resolved judge callable (a *different* model backend
+`model_judge` evals require a resolved judge callable (a *different* model backend
 than the one under test, where possible). `human_set` evals require no model –
 they are pure Python.
 
@@ -381,7 +385,7 @@ Two endpoints:
 
 Leaderboards and time-series rank and aggregate on **pass-rate only** – the
 `passed` boolean, never the raw `score` column. A raw score is not comparable
-across differing `eval_type` (an `llm_judge` 0.8 and a `regex` 0.6 measure
+across differing `eval_type` (a `model_judge` 0.8 and a `regex` 0.6 measure
 different things), so every aggregation **partitions by `eval_type`** and rolls
 up by *counting passes*, never by *averaging scores*. A mixed-`eval_type` axis
 is never ranked on a raw score:
