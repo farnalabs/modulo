@@ -1313,7 +1313,7 @@ async def run_single_node_correction(
     return _resolved_outcome(ctx, produced_redacted, revalidation, output_metric)
 
 
-async def _run_regex_revalidation(
+def _run_regex_revalidation(
     engine: EvalEngine,
     produced_output: dict[str, Any],
     config: dict[str, Any],
@@ -1327,7 +1327,7 @@ async def _run_regex_revalidation(
     )
 
 
-async def _run_model_judge_revalidation(
+def _run_model_judge_revalidation(
     engine: EvalEngine,
     produced_output: dict[str, Any],
     config: dict[str, Any],
@@ -1371,9 +1371,9 @@ async def _run_different_family_revalidation(
     config = _build_revalidation_config(correction, revalidation_config)
     try:
         if family == CorrectionDetectorFamily.REGEX:
-            return await _run_regex_revalidation(engine, produced_output, config)
+            return _run_regex_revalidation(engine, produced_output, config)
         if family == CorrectionDetectorFamily.MODEL_JUDGE:
-            return await _run_model_judge_revalidation(engine, produced_output, config, correction, judge_callable)
+            return _run_model_judge_revalidation(engine, produced_output, config, correction, judge_callable)
         return _revalidate_pii(produced_output)
     except asyncio.CancelledError:
         raise
@@ -1531,6 +1531,7 @@ async def resume_interrupted_correction(
     mid-resume, the outcome is ``correction_interrupted`` (the caller records
     it).
     """
+    del _guardrail, _backend
     engine = engine or EvalEngine()
     state = dict(state or {})
     produced_raw = state.get("produced_output")
