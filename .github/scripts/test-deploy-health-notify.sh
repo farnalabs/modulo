@@ -11,6 +11,11 @@
 #   unknown  -> unhealthy : alert (UNKNOWN never suppresses)
 #   unknown  -> unknown   : no email, loud warning
 #   unhealthy-> healthy   : no SMTP configured -> loud warning, no silent skip
+#   measured healthy / unhealthy previous runs carry the UNKNOWN marker step
+#   SKIPPED; only an executed conclusion counts, so those ticks are read as
+#   measured (FAR-2176) and a live alert is neither re-sent nor lost. A tick
+#   that read only PART of its required inputs runs that same marker step
+#   (FAR-2159), so the walk skips it rather than trusting a half verdict.
 #
 # No network, no GitHub, no SMTP: the script runs with DRY_RUN=1, which
 # resolves the transition and renders the real email body without sending.
@@ -36,15 +41,6 @@ ALERT_SUBJECT="DEPLOY HEALTH UNHEALTHY"
 RECOVERY_SUBJECT="DEPLOY HEALTH RECOVERED"
 WORKFLOW_NAME="Deploy: Staleness Watchdog"
 DEPLOY_URL="https://github.com/farnalabs/modulo/actions/workflows/deploy.yml"
-
-# The verdict-step names the workflows REALLY use, per workflow. The fixtures
-# below MUST be built from these and never from deploy_health.VERDICT_STEP_NAME:
-# that constant is only the STALENESS default, so a fixture built from it
-# passes while the watchdog's previous verdict resolves to UNKNOWN - which is
-# exactly how FAR-2177 shipped (no recovery email, an alert every tick).
-WATCHDOG_VERDICT_STEP="Fail the run when the deploy watchdog is unhealthy"
-STALENESS_VERDICT_STEP="Fail the run when deploy health is unhealthy"
-export WATCHDOG_VERDICT_STEP STALENESS_VERDICT_STEP
 
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
@@ -104,6 +100,18 @@ healthy = module.evaluate(
 )
 (work / "healthy.json").write_text(json.dumps(healthy.as_dict()), encoding="utf-8")
 
+# FAR-2159: production was readable and current, but the run history was not.
+# The tick is UNKNOWN, never healthy, so it can never close an open alert.
+partial = module.evaluate(
+    main={"sha": "4db7af2000"},
+    prod={"git_sha": "4db7af2000", "build_timestamp": "2026-10-25T11:30:00Z"},
+    deploy_runs=None,
+    now=now,
+)
+if partial.healthy is not None:
+    raise SystemExit(f"a partially readable tick must be UNKNOWN, got healthy={partial.healthy!r}")
+(work / "partial.json").write_text(json.dumps(partial.as_dict()), encoding="utf-8")
+
 unhealthy = module.evaluate(
     main={"sha": "4db7af2000"},
     prod={"git_sha": "7b1c064000", "build_timestamp": "2026-10-23T13:00:00Z"},
@@ -160,7 +168,6 @@ run_notify() {
     PREVIOUS_VERDICT="$previous" \
     VERDICT_JSON="$verdict" \
     WORKFLOW_NAME="$WORKFLOW_NAME" \
-    VERDICT_STEP_NAME="$WATCHDOG_VERDICT_STEP" \
     RUN_URL="https://github.com/farnalabs/modulo/actions/runs/1" \
     DEPLOY_URL="$DEPLOY_URL" \
     "$@" \
@@ -206,6 +213,14 @@ assert_contains "warning emitted" "::warning::" "$OUT"
 assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
 echo ""
 
+echo "Case 6b: a PARTIAL read takes the UNKNOWN path - no recovery, alert stays open"
+OUT="$(run_notify "" unhealthy "$WORK/partial.json" 2>&1)"
+assert_contains "warning emitted" "::warning::" "$OUT"
+assert_contains "warning says the alert stays open" "live alert therefore stays open" "$OUT"
+assert_not_contains "no recovery email" "DEPLOY HEALTH RECOVERED" "$OUT"
+assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+echo ""
+
 echo "Case 7: watchdog's own condition (shared renderer, caller-measured detail)"
 OUT="$(run_notify false healthy "$WORK/watchdog.json" 2>&1)"
 assert_contains "alert subject names the watchdog condition" "watchdog could not re-dispatch deploy.yml" "$OUT"
@@ -239,61 +254,198 @@ echo ""
 # PREVIOUS_VERDICT and never reach it).
 mkdir -p "$WORK/bin"
 
-python3 - "$WORK" <<'PY2'
+# ONE payload builder for every previous-run shape the walk must tell apart,
+# with every step name read from the committed WORKFLOWS (never from
+# `deploy_health`'s constants). A fixture built from a constant cannot catch a
+# step-name divergence: it follows the parser's spelling while the workflow
+# moves, and every case stays green while the lookup resolves UNKNOWN in
+# production (the FAR-2177 shape). BOTH escalation workflows that run this
+# notify step are modelled, because each names its verdict step differently and
+# each must forward its OWN name.
+#
+# The builder must SUCCEED: a partially built fixture set would leave every
+# walk case failing for the wrong reason (an unbound shell variable), which
+# reads like a product defect instead of the fixture problem it is.
+if ! python3 - "$WORK" <<'PY2'
 import json
-import os
+import re
+import shlex
 import sys
-from importlib.machinery import SourceFileLoader
-from importlib.util import module_from_spec, spec_from_loader
+from collections.abc import Callable
 from pathlib import Path
 
 work = Path(sys.argv[1])
-loader = SourceFileLoader("deploy_health", ".github/scripts/deploy_health.py")
-module = module_from_spec(spec_from_loader("deploy_health", loader))
-sys.modules["deploy_health"] = module
-loader.exec_module(module)
 
-# The workflows' real step names, defined once in the shell above.
-WATCHDOG_VERDICT_STEP = os.environ["WATCHDOG_VERDICT_STEP"]
-STALENESS_VERDICT_STEP = os.environ["STALENESS_VERDICT_STEP"]
+STALENESS = Path(".github/workflows/deploy-staleness-check.yml")
+WATCHDOG = Path(".github/workflows/deploy-watchdog.yml")
 
-# The module constant must remain the STALENESS default. If it drifts, the
-# fixtures below (built from the real names) would stop proving anything.
-if module.VERDICT_STEP_NAME != STALENESS_VERDICT_STEP:
-    raise SystemExit(
-        "test-deploy-health-notify: deploy_health.VERDICT_STEP_NAME is "
-        f"{module.VERDICT_STEP_NAME!r}, expected the staleness step "
-        f"{STALENESS_VERDICT_STEP!r} - update the names above."
+
+def steps(path: Path) -> list[tuple[str, str]]:
+    """(name, body) for every `- name:` step, read without a YAML dependency."""
+    text = path.read_text(encoding="utf-8")
+    parts = re.split(r"(?m)^\s*- name: (.*)$", text)
+    return [(parts[i].strip().strip("\"'"), parts[i + 1]) for i in range(1, len(parts) - 1, 2)]
+
+
+def only_step(path: Path, matches: Callable[[str], bool], what: str) -> tuple[str, str]:
+    hits = [(name, body) for name, body in steps(path) if matches(body)]
+    if len(hits) != 1:
+        raise SystemExit(
+            f"{path.name}: expected exactly one {what}, found {[name for name, _ in hits]!r} - "
+            "the fixture cannot model a workflow whose steps it cannot identify"
+        )
+    return hits[0]
+
+
+def env_value(body: str, key: str) -> str:
+    match = re.search(rf"(?m)^\s*{key}: (.*)$", body)
+    if match is None:
+        raise SystemExit(f"the shared notify step no longer sets {key}")
+    return match.group(1).strip().strip("\"'")
+
+
+def workflow_model(path: Path) -> dict[str, str]:
+    """The names ONE escalation workflow really uses, read from its YAML.
+
+    The verdict step is the step that FAILS the run on an unhealthy tick, the
+    UNKNOWN-tick marker is the step gated on an empty verdict, and the notify
+    step is the one running the shared script. Nothing here is read from
+    `deploy_health`'s constants.
+    """
+    verdict_step, _ = only_step(
+        path,
+        lambda body: ".outputs.healthy == 'false'" in body and "exit 1" in body,
+        "verdict step",
     )
-if module.VERDICT_STEP_NAME == WATCHDOG_VERDICT_STEP:
+    marker_step, _ = only_step(path, lambda body: ".outputs.healthy == ''" in body, "UNKNOWN-tick marker step")
+    _, notify = only_step(
+        path,
+        lambda body: "run: bash .github/scripts/deploy-health-notify.sh" in body,
+        "step running the shared notify script",
+    )
+    forwarded = env_value(notify, "VERDICT_STEP_NAME")
+    # The name the workflow FORWARDS to the lookup must be the step it actually
+    # DEFINES, or its previous verdict is silently UNKNOWN on every tick - the
+    # recovery email is lost and the alert repeats every tick (FAR-2177). This
+    # is the guard FAR-2176 added, applied to BOTH workflows.
+    if forwarded != verdict_step:
+        raise SystemExit(
+            f"{path.name}: the notify step forwards VERDICT_STEP_NAME={forwarded!r} "
+            f"but the workflow defines its verdict step as {verdict_step!r} - the "
+            "previous verdict would silently read as UNKNOWN (FAR-2177)."
+        )
+    return {
+        "workflow_name": env_value(notify, "WORKFLOW_NAME"),
+        "verdict_step": verdict_step,
+        "marker_step": marker_step,
+    }
+
+
+STALENESS_MODEL = workflow_model(STALENESS)
+WATCHDOG_MODEL = workflow_model(WATCHDOG)
+
+# The two workflows must name their verdict steps DIFFERENTLY, or a fixture
+# cannot prove that the FORWARDED name is what resolves the previous verdict.
+if STALENESS_MODEL["verdict_step"] == WATCHDOG_MODEL["verdict_step"]:
     raise SystemExit(
-        "test-deploy-health-notify: the two workflows must name their verdict "
-        "steps differently, or this suite cannot catch a missing --step-name."
+        "the escalation workflows name their verdict steps identically - this suite "
+        "cannot then catch a missing or ignored --step-name (FAR-2177)"
+    )
+# ... and they must agree on the UNKNOWN-tick marker, because the parser
+# matches that one literal name for every workflow.
+if STALENESS_MODEL["marker_step"] != WATCHDOG_MODEL["marker_step"]:
+    raise SystemExit(
+        "the escalation workflows disagree on the UNKNOWN-tick marker step "
+        f"({STALENESS_MODEL['marker_step']!r} vs {WATCHDOG_MODEL['marker_step']!r}) - "
+        "parse_previous_verdict matches one literal name"
     )
 
-# 201 = the NEWEST previous run: measured nothing (UNKNOWN marker, no verdict step).
-# 202 = the run before it: measured UNHEALTHY (verdict step failed).
-# The verdict step carries the WATCHDOG's real name - the name the notify step
-# forwards. Building it from module.VERDICT_STEP_NAME (the STALENESS default)
-# is what made the pre-FAR-2177 wiring look green.
-(work / "jobs-201.json").write_text(
-    json.dumps({"jobs": [{"steps": [{"name": module.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "success"}]}]}),
-    encoding="utf-8",
-)
-(work / "jobs-202.json").write_text(
-    json.dumps({"jobs": [{"steps": [{"name": WATCHDOG_VERDICT_STEP, "conclusion": "failure"}]}]}),
-    encoding="utf-8",
-)
-(work / "runs.json").write_text(
-    json.dumps(
-        [
-            {"databaseId": 201, "status": "completed", "conclusion": "success"},
-            {"databaseId": 202, "status": "completed", "conclusion": "failure"},
-        ]
+
+def jobs_payload(*, model: dict[str, str], marker: str, verdict: str | None = None) -> dict:
+    """The jobs API's view of one previous run.
+
+    ``marker`` is the UNKNOWN-tick marker step's conclusion: ``"executed"`` (the
+    tick recorded no verdict) or ``"skipped"`` (the tick measured). ``verdict``
+    is the verdict step's conclusion, or ``None`` when the tick skipped it.
+    GitHub returns EVERY defined step, so a measured tick carries the marker
+    step too, merely skipped - the shape FAR-2176 is about. ``model`` supplies
+    the workflow's OWN step names, so a run is modelled in the shape that
+    workflow really produces.
+    """
+    if marker == "executed":
+        marker_conclusion = "success"
+    elif marker == "skipped":
+        marker_conclusion = "skipped"
+    else:
+        raise SystemExit(f"jobs_payload: unknown marker state {marker!r} (executed | skipped)")
+    payload = [{"name": model["marker_step"], "conclusion": marker_conclusion}]
+    if verdict is not None:
+        payload.append({"name": model["verdict_step"], "conclusion": verdict})
+    return {"jobs": [{"steps": payload}]}
+
+
+FIXTURES = {
+    # ---- the staleness check (whose verdict step carries the DEFAULT name) ----
+    # 201: measured NOTHING - the marker ran, the verdict step never did.
+    "jobs-201": jobs_payload(model=STALENESS_MODEL, marker="executed"),
+    # 202: measured UNHEALTHY - marker skipped, verdict failed.
+    "jobs-202": jobs_payload(model=STALENESS_MODEL, marker="skipped", verdict="failure"),
+    # 203: measured HEALTHY (the live shape of run 40316916204) - both skipped.
+    "jobs-203": jobs_payload(model=STALENESS_MODEL, marker="skipped", verdict="skipped"),
+    # 204: a PARTIAL read (FAR-2159) - a required input was unreadable, so the
+    # tick reached no verdict and ran the SAME marker step. The jobs API cannot
+    # tell it from 201, and both must read back as UNKNOWN.
+    "jobs-204": jobs_payload(model=STALENESS_MODEL, marker="executed"),
+    # ---- the deploy watchdog (its verdict step is named DIFFERENTLY) ----
+    # 301: measured UNHEALTHY - resolvable only through the forwarded
+    # --step-name (FAR-2177); under the evaluator's default it reads UNKNOWN.
+    "jobs-301": jobs_payload(model=WATCHDOG_MODEL, marker="skipped", verdict="failure"),
+    # 303: measured NOTHING - the watchdog's own unmeasured-tick shape.
+    "jobs-303": jobs_payload(model=WATCHDOG_MODEL, marker="executed"),
+}
+for stem, payload in FIXTURES.items():
+    (work / f"{stem}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+RUNS = {
+    # An unmeasured tick above the measured unhealthy verdict it must not hide.
+    "runs.json": [201, 202],
+    # A PARTIAL read above that same verdict: the same walk, FAR-2159 shape.
+    "runs-partial.json": [204, 202],
+    # A single measured healthy tick.
+    "runs-healthy.json": [203],
+    # A single watchdog run whose verdict step only the forwarded name matches.
+    "runs-watchdog-unhealthy.json": [301],
+    # A watchdog unmeasured tick above that same verdict.
+    "runs-watchdog-unmeasured.json": [303, 301],
+}
+for stem, ids in RUNS.items():
+    (work / stem).write_text(
+        json.dumps([{"databaseId": run_id, "status": "completed", "conclusion": "success"} for run_id in ids]),
+        encoding="utf-8",
+    )
+
+(work / "step-names.env").write_text(
+    "".join(
+        f"{key}={shlex.quote(value)}\n"
+        for key, value in (
+            ("STALENESS_WORKFLOW_NAME", STALENESS_MODEL["workflow_name"]),
+            ("STALENESS_VERDICT_STEP", STALENESS_MODEL["verdict_step"]),
+            ("WATCHDOG_WORKFLOW_NAME", WATCHDOG_MODEL["workflow_name"]),
+            ("WATCHDOG_VERDICT_STEP", WATCHDOG_MODEL["verdict_step"]),
+        )
     ),
     encoding="utf-8",
 )
 PY2
+then
+  echo "FATAL: the previous-run fixtures could not be built (see the error above) - the walk cases cannot run." >&2
+  exit 1
+fi
+
+# The names just read out of the workflow - the shell cases use these rather
+# than re-typing them, so a rename reaches the fixtures too.
+# shellcheck source=/dev/null
+. "$WORK/step-names.env"
 
 cat > "$WORK/bin/gh" <<'FAKEGH'
 #!/usr/bin/env bash
@@ -305,6 +457,10 @@ elif [[ "${1:-}" = "api" ]]; then
   case "$id" in
     201) cat "${FAKE_JOBS_DIR}/jobs-201.json" ;;
     202) cat "${FAKE_JOBS_DIR}/jobs-202.json" ;;
+    203) cat "${FAKE_JOBS_DIR}/jobs-203.json" ;;
+    204) cat "${FAKE_JOBS_DIR}/jobs-204.json" ;;
+    301) cat "${FAKE_JOBS_DIR}/jobs-301.json" ;;
+    303) cat "${FAKE_JOBS_DIR}/jobs-303.json" ;;
     *) echo '{"jobs":[]}' ;;
   esac
 else
@@ -314,19 +470,42 @@ FAKEGH
 chmod +x "$WORK/bin/gh"
 
 run_notify_lookup() {
-  # run_notify_lookup <healthy> <verdict-json> -- real run-history lookup path
-  local healthy="$1" verdict="$2"
+  # run_notify_lookup <healthy> <verdict-json> [runs-json] [workflow]
+  #
+  # `workflow` selects WHICH escalation workflow's real env the notify step is
+  # given: `staleness` (default) or `watchdog`. WORKFLOW_NAME and
+  # VERDICT_STEP_NAME are read out of that workflow's YAML above, so the lookup
+  # forwards exactly what the workflow forwards and the payloads the builder
+  # emitted are the shapes it really produces. The watchdog's name differs from
+  # the evaluator default, so its cases only pass if --step-name is forwarded
+  # (FAR-2177).
+  local healthy="$1" verdict="$2" runs_file="${3:-$WORK/runs.json}" workflow="${4:-staleness}"
+  local workflow_name verdict_step
+  case "$workflow" in
+    staleness)
+      workflow_name="$STALENESS_WORKFLOW_NAME"
+      verdict_step="$STALENESS_VERDICT_STEP"
+      ;;
+    watchdog)
+      workflow_name="$WATCHDOG_WORKFLOW_NAME"
+      verdict_step="$WATCHDOG_VERDICT_STEP"
+      ;;
+    *)
+      echo "run_notify_lookup: unknown workflow '$workflow' (staleness | watchdog)" >&2
+      return 2
+      ;;
+  esac
   env -i \
     PATH="$WORK/bin:$PATH" \
     HOME="$HOME" \
     DRY_RUN=1 \
     CURRENT_HEALTHY="$healthy" \
     VERDICT_JSON="$verdict" \
-    WORKFLOW_NAME="$WORKFLOW_NAME" \
-    VERDICT_STEP_NAME="$WATCHDOG_VERDICT_STEP" \
+    WORKFLOW_NAME="$workflow_name" \
+    VERDICT_STEP_NAME="$verdict_step" \
     REPOSITORY="farnalabs/modulo" \
     GITHUB_RUN_ID="999" \
-    FAKE_RUNS="$(cat "$WORK/runs.json")" \
+    FAKE_RUNS="$(cat "$runs_file")" \
     FAKE_JOBS_DIR="$WORK" \
     RUN_URL="https://github.com/farnalabs/modulo/actions/runs/999" \
     DEPLOY_URL="$DEPLOY_URL" \
@@ -345,6 +524,58 @@ OUT="$(run_notify_lookup false "$WORK/unhealthy.json" 2>&1)"
 assert_contains "walk finds the measured unhealthy verdict" "Previous verdict read from run 202." "$OUT"
 assert_contains "no duplicate alert" "No transition" "$OUT"
 assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+echo ""
+
+# FAR-2176: the previous run is a MEASURED healthy tick that still carries the
+# marker step (skipped). Presence alone labelled it UNKNOWN even though it was a
+# real healthy verdict; the transition decision must rest on the classified
+# verdict, not on a misreading. (The email outcome for this pair is the same -
+# both HEALTHY and UNKNOWN alert on an unhealthy current tick - so the assertion
+# pins the classification the walk reports.)
+echo "Case 12: a measured healthy previous run (marker step skipped) is read as healthy"
+OUT="$(run_notify_lookup false "$WORK/unhealthy.json" "$WORK/runs-healthy.json" 2>&1)"
+assert_contains "walk reads the measured healthy verdict" "Previous verdict read from run 203." "$OUT"
+assert_contains "alert still sent on the transition" "DEPLOY HEALTH UNHEALTHY" "$OUT"
+echo ""
+
+# FAR-2159: a tick that could read only SOME of its required inputs reached no
+# verdict, so it runs the SAME marker step as a tick that measured nothing and
+# must be walked past identically - a partial read must never be mistaken for a
+# measured verdict (it would close a live alert with figures nobody read).
+echo "Case 13: a PARTIAL-read tick is walked past, not read as a measured verdict"
+OUT="$(run_notify_lookup true "$WORK/healthy.json" "$WORK/runs-partial.json" 2>&1)"
+assert_contains "walk skips the partial read" "Run 204 measured nothing (UNKNOWN)" "$OUT"
+assert_contains "walk finds the measured unhealthy verdict" "Previous verdict read from run 202." "$OUT"
+assert_contains "recovery email still sent" "DEPLOY HEALTH RECOVERED" "$OUT"
+echo ""
+
+# ---- FAR-2177: the watchdog's verdict step has a DIFFERENT name -------------
+# The deploy watchdog names its verdict step "Fail the run when the deploy
+# watchdog is unhealthy", which is NOT the evaluator's default. Before the
+# notify step forwarded --step-name, every watchdog previous verdict read
+# UNKNOWN: the recovery email was never sent (an alert that could never be
+# closed) and the escalation repeated on every tick. These cases forward the
+# watchdog's own names, read out of its YAML above - so they fail if the
+# forwarding is removed, and they fail if the fixture is built from the wrong
+# step name.
+echo "Case 14: the watchdog's previous verdict resolves through the forwarded step name"
+OUT="$(run_notify_lookup true "$WORK/healthy.json" "$WORK/runs-watchdog-unhealthy.json" watchdog 2>&1)"
+assert_contains "walk reads the watchdog's verdict step" "Previous verdict read from run 301." "$OUT"
+assert_contains "recovery email sent on the transition" "DEPLOY HEALTH RECOVERED" "$OUT"
+echo ""
+
+echo "Case 15: a repeated watchdog escalation is suppressed, not re-alerted every tick"
+OUT="$(run_notify_lookup false "$WORK/unhealthy.json" "$WORK/runs-watchdog-unhealthy.json" watchdog 2>&1)"
+assert_contains "walk reads the watchdog's verdict step" "Previous verdict read from run 301." "$OUT"
+assert_contains "no duplicate alert" "No transition" "$OUT"
+assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+echo ""
+
+echo "Case 16: a watchdog unmeasured tick is walked past under the forwarded name"
+OUT="$(run_notify_lookup true "$WORK/healthy.json" "$WORK/runs-watchdog-unmeasured.json" watchdog 2>&1)"
+assert_contains "walk skips the watchdog's unmeasured tick" "Run 303 measured nothing (UNKNOWN)" "$OUT"
+assert_contains "walk finds the measured unhealthy verdict" "Previous verdict read from run 301." "$OUT"
+assert_contains "recovery email still sent" "DEPLOY HEALTH RECOVERED" "$OUT"
 echo ""
 
 echo "=== passed: $PASS, failed: $FAIL ==="

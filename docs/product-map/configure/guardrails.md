@@ -52,7 +52,7 @@ compensation, and single-node self-correction. Built on the eval engine
 
 - [x] A guardrail is bound as an `EvalDefinition` with `eval_type="guardrail"`;
       detection is DETERMINISTIC and PURE – only the `regex` and `json_schema`
-      eval types are usable, and the engine raises on a `llm_judge` /
+      eval types are usable, and the engine raises on a `model_judge` /
       `custom_function` guardrail misrouting
 - [x] Four actions with distinct semantics: `observe` computes + validates +
       discards + logs a would-block result (shadow mode); `warn` logs the

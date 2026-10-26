@@ -30,6 +30,16 @@ name: "Native: release smoke + canary (bundle-v*)"
 #
 # Rollback tooling: workflow_dispatch with rollback_version; the manual
 # playbook (triggers + actions) lives in docs/upgrade-process.md.
+#
+# MANUAL DISPATCH REQUIRES A TARGET (FAR-2161). Supply ONE of:
+#   canary_version=bundle-vX.Y.Z   -> the canary leg (published artifact + N-1 upgrade)
+#   rollback_version=bundle-vX.Y.Z -> the rollback-target verification leg
+# An argument-free dispatch runs NO verification at all: release-smoke is
+# push-only, canary requires canary_version, rollback-verify requires
+# rollback_version, so the run would shrink to canary-housekeeping and conclude
+# GREEN having checked nothing (the FAR-2152 class). `dispatch-guard` therefore
+# rejects it with an ::error:: naming both inputs before any verification job
+# could be reached. Scheduled and tag-push behaviour is unchanged.
 
 on:
   push:
@@ -63,6 +73,31 @@ permissions:
   contents: read
 
 jobs:
+  # FAR-2161: a manual dispatch with NEITHER input would run no verification
+  # job (release-smoke is push-only; canary needs canary_version; rollback-verify
+  # needs rollback_version) and still conclude success, because
+  # canary-housekeeping is `if: always()` and both of its steps skip when the
+  # canary job is skipped. Reject that dispatch loudly instead of reporting a
+  # green run that checked nothing. Deliberately a standalone job: giving it a
+  # `needs` edge would skip the scheduled canary too (a needed job that does not
+  # run skips its dependants), changing scheduled behaviour.
+  dispatch-guard:
+    name: Reject an argument-free dispatch (FAR-2161)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (the guard script lives in the repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Require canary_version or rollback_version
+        env:
+          ROLLBACK_VERSION: ${{ inputs.rollback_version }}
+          CANARY_VERSION: ${{ inputs.canary_version }}
+        run: python3 .github/scripts/native_smoke_dispatch_guard.py
+
   release-smoke:
     name: Release smoke (exact artifact)
     if: github.event_name == 'push'

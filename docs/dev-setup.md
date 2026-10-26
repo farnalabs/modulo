@@ -14,7 +14,7 @@ See [Deployment](deployment.md) for production deployment.
 ## Required Tools
 
 - Python 3.12+
-- Node.js 20+ (CI pins 22) with `pnpm` - the repo pins `pnpm@11.28.7` in
+- Node.js 20+ (CI pins 22) with `pnpm` - the repo pins `pnpm@11.28.8` in
   `frontend/package.json` (`packageManager`), so use pnpm rather than npm
 - Docker Desktop (for local Postgres/Redis)
 - UV package manager, 0.11.13 to match the Docker image pin
@@ -42,7 +42,7 @@ and `VITE_*` values are inlined into the client bundle). A shell-exported
 Most Playwright specs run only in the post-deploy staging `@regression` gate.
 That left the specs asserting rendered CSS, design tokens and layout invisible
 to PR CI: a token change passed every check, landed on `main`, and only failed
-after the staging deploy — blocking the deploy train (FAR-2016's
+after the staging deploy, blocking the deploy train (FAR-2016's
 `json-viewer` light-mode probe; FAR-1913/FAR-2028's mobile-layout axe
 `color-contrast`).
 
@@ -52,13 +52,13 @@ specs against the local mock target on every frontend PR:
 | Spec | Why it is in the slice |
 |---|---|
 | `json-viewer.spec.ts` | Design-token colours (incl. the light-mode probe) and long-value geometry |
-| `staging-wcag.spec.ts` | WCAG AA axe audit (contrast/token class). Misleadingly named — it runs against the local target |
+| `staging-wcag.spec.ts` | WCAG AA axe audit (contrast/token class). Misleadingly named, but it runs against the local target |
 | `filter-bar-overlay.spec.ts` | Dropdown overlay anchoring |
 | `select-clipping-container.spec.ts` | Overlay escapes clipping ancestors; portalled to body |
 | `pipeline-editor-select-overlay.spec.ts` | Editor Selects portal out of the clipped editor column |
 
 Measured cost: **19 tests, ~2 min** locally (serial), versus ~313 tests / ~11
-min for the full suite against a deployed target. It is *additive* — the
+min for the full suite against a deployed target. It is *additive*: the
 staging `@regression` gate is unchanged.
 
 The selection lives in `frontend/scripts/e2e-visual-slice.mjs`. `--check`
@@ -66,7 +66,7 @@ scans every `@regression` spec for visual-assertion markers and fails if a
 spec is neither in the slice nor in an explicit `STAGING_ONLY` list carrying a
 reason. This prevents silent under-selection: adding a visual spec without
 classifying it is a PR failure, not a quiet coverage gap. The slice is not
-changed-path gated on purpose — a path filter can miss a spec whose subject
+changed-path gated on purpose: a path filter can miss a spec whose subject
 changed without a matching path, and an under-selecting selector reads as
 coverage.
 

@@ -441,9 +441,15 @@ def test_unparseable_build_timestamp_with_prod_behind_fires() -> None:
 
 
 def test_missing_prod_metadata_is_unknown_not_a_false_alarm() -> None:
+    """Unreadable prod metadata is UNKNOWN, not "no staleness" (FAR-2159).
+
+    The run history was readable and clean, but the tick could not compare
+    production against main at all, so it has no basis for an all-clear.
+    """
     verdict = _verdict(prod={}, runs=[])
     assert verdict.stale is False
-    assert verdict.healthy is True
+    assert verdict.healthy is None
+    assert verdict.missing_inputs == ("prod_sha",)
 
 
 # ---------------------------------------------------------------------------
@@ -466,10 +472,126 @@ def test_no_readable_source_is_unknown() -> None:
 
 
 def test_unreadable_run_list_does_not_count_as_zero_failures() -> None:
-    """An absent run list is UNKNOWN; the staleness half still decides."""
+    """An absent run list is UNKNOWN, never "no failures" (FAR-2159).
+
+    The staleness half being readable does not license a healthy verdict: the
+    tick measured only HALF of what the verdict depends on. Scoring it healthy
+    is what let a later tick's transition email send a recovery - closing a
+    live alert - from a run history nobody read.
+    """
     verdict = health.evaluate(main=_main(), prod=_prod(), deploy_runs=None, now=_NOW)
-    assert verdict.healthy is True
+    assert verdict.healthy is None
     assert verdict.consecutive_failures == 0
+    assert verdict.missing_inputs == ("deploy_runs",)
+    assert health.resolve_action(verdict.healthy, health.UNHEALTHY) == "none"
+
+
+# ---------------------------------------------------------------------------
+# FAR-2159: the required-input policy (a partial read is UNKNOWN)
+# ---------------------------------------------------------------------------
+
+
+def test_full_read_with_no_failing_condition_is_healthy() -> None:
+    """Both halves read, nothing firing: the only shape that may be HEALTHY."""
+    verdict = _verdict(runs=[_run("success")])
+    assert not verdict.missing_inputs
+    assert verdict.healthy is True
+
+
+def test_full_read_with_a_failing_condition_is_unhealthy() -> None:
+    verdict = _verdict(runs=[_run("failure"), _run("failure")])
+    assert not verdict.missing_inputs
+    assert verdict.healthy is False
+
+
+def test_partial_read_with_no_failing_condition_is_unknown_never_healthy() -> None:
+    """PROVE-THE-FIX (FAR-2159): the staleness half read, the run history not.
+
+    Before the fix this returned ``healthy is True`` - a partial read scored as
+    a pass from evidence that only covered half the verdict.
+    """
+    verdict = health.evaluate(main=_main(), prod=_prod(age_hours=0.5), deploy_runs=None, now=_NOW)
+    assert verdict.healthy is None
+    assert verdict.missing_inputs == ("deploy_runs",)
+
+
+def test_partial_read_names_every_missing_required_input() -> None:
+    """Two unreadable sources are both named, not collapsed into one."""
+    verdict = health.evaluate(main=None, prod=None, deploy_runs=None, now=_NOW)
+    assert verdict.healthy is None
+    assert verdict.missing_inputs == ("deploy_runs", "main_sha", "prod_sha")
+    assert "deploy_runs" in verdict.reason
+    assert "main_sha" in verdict.reason
+    assert "prod_sha" in verdict.reason
+    assert "could not be evaluated" in verdict.reason
+
+
+def test_partial_read_of_an_unhealthy_tick_still_escalates() -> None:
+    """A confirmed finding is never downgraded to UNKNOWN - that suppresses it.
+
+    Production is measurably 46h stale, so the tick HAS positive evidence. The
+    unreadable run history leaves the verdict unhealthy (with the partial read
+    named), and the transition still alerts.
+    """
+    verdict = health.evaluate(main=_main(), prod=_prod(age_hours=46), deploy_runs=None, now=_NOW)
+    assert verdict.healthy is False
+    assert verdict.stale is True
+    assert verdict.missing_inputs == ("deploy_runs",)
+    assert "PARTIAL READ" in verdict.reason
+    assert health.resolve_action(verdict.healthy, health.HEALTHY) == "alert"
+
+
+def test_partial_read_never_closes_a_live_alert() -> None:
+    """UNKNOWN sends nothing, so the open incident is left open."""
+    verdict = health.evaluate(main=_main(), prod=_prod(), deploy_runs=None, now=_NOW)
+    assert health.resolve_action(verdict.healthy, health.UNHEALTHY) == "none"
+    assert health.resolve_action(verdict.healthy, health.UNKNOWN) == "none"
+
+
+def test_partial_read_is_never_reported_as_a_healthy_output() -> None:
+    """The GitHub step output is empty, so the UNKNOWN-tick marker runs."""
+    verdict = health.evaluate(main=_main(), prod=_prod(), deploy_runs=None, now=_NOW)
+    assert not verdict.as_outputs["healthy"]
+    assert verdict.as_outputs["missing_inputs"] == "deploy_runs"
+
+
+def test_every_verdict_field_is_classified_as_an_input_or_derived() -> None:
+    """Structural guard (FAR-2159): no figure reaches the verdict unclassified.
+
+    The required-input policy only holds if every figure the verdict carries is
+    traceable to a classified input or to an explicitly derived one. A new
+    field forces its author to decide whether a tick may be scored healthy
+    without reading it.
+    """
+    classified = {spec.verdict_field for spec in health.INPUT_CLASSIFICATION}
+    fields = set(health.Verdict.__dataclass_fields__)
+
+    unclassified = sorted(fields - classified - health.DERIVED_VERDICT_FIELDS)
+    assert not unclassified, (
+        "verdict field(s) with no input classification and no DERIVED_VERDICT_FIELDS entry: " + ", ".join(unclassified)
+    )
+    dangling = sorted((classified | health.DERIVED_VERDICT_FIELDS) - fields)
+    assert not dangling, "classification names verdict field(s) that do not exist: " + ", ".join(dangling)
+    assert not (classified & health.DERIVED_VERDICT_FIELDS), "a verdict field cannot be both an input and derived"
+
+
+def test_every_classified_input_exists_on_the_availability_record() -> None:
+    """A classified input the record cannot report would silently never be missing."""
+    record_fields = set(health.AvailableInputs.__dataclass_fields__)
+    unknown = sorted({spec.input_name for spec in health.INPUT_CLASSIFICATION} - record_fields)
+    assert not unknown, "classified input(s) with no AvailableInputs field: " + ", ".join(unknown)
+
+
+def test_required_inputs_are_derived_from_the_classification() -> None:
+    """The policy list is computed from the registry, so the two cannot drift."""
+    assert {spec.classification for spec in health.INPUT_CLASSIFICATION} <= {health.REQUIRED, health.ADVISORY}
+    assert (
+        frozenset(spec.input_name for spec in health.INPUT_CLASSIFICATION if spec.classification == health.REQUIRED)
+        == health.REQUIRED_INPUTS
+    )
+    assert frozenset({"main_sha", "prod_sha", "deploy_runs"}) == health.REQUIRED_INPUTS
+    # The advisory inputs must never block a verdict on their own.
+    assert not ({"prod_build_ts", "deploy_jobs"} & health.REQUIRED_INPUTS)
 
 
 # ---------------------------------------------------------------------------
@@ -524,14 +646,28 @@ def test_parse_previous_verdict_reads_the_watchdogs_step_name() -> None:
 
     Pinned to one literal name, the resolver read the watchdog's previous
     verdict as UNKNOWN, which lost its recovery email and re-alerted on every
-    tick instead of once per transition.
+    tick instead of once per transition. Each payload also carries the
+    UNKNOWN-tick marker SKIPPED, which is the shape a measured tick really has
+    (FAR-2176) - so this test fails too if mere marker PRESENCE is treated as
+    the signal.
     """
-    failed = {"jobs": [{"steps": [{"name": WATCHDOG_VERDICT_STEP, "conclusion": "failure"}]}]}
-    healthy = {"jobs": [{"steps": [{"name": WATCHDOG_VERDICT_STEP, "conclusion": "skipped"}]}]}
-    assert health.parse_previous_verdict(failed, WATCHDOG_VERDICT_STEP) == health.UNHEALTHY
-    assert health.parse_previous_verdict(healthy, WATCHDOG_VERDICT_STEP) == health.HEALTHY
+
+    def jobs(conclusion: str) -> dict[str, Any]:
+        return {
+            "jobs": [
+                {
+                    "steps": [
+                        {"name": health.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "skipped"},
+                        {"name": WATCHDOG_VERDICT_STEP, "conclusion": conclusion},
+                    ]
+                }
+            ]
+        }
+
+    assert health.parse_previous_verdict(jobs("failure"), WATCHDOG_VERDICT_STEP) == health.UNHEALTHY
+    assert health.parse_previous_verdict(jobs("skipped"), WATCHDOG_VERDICT_STEP) == health.HEALTHY
     # The same payload under the default name stays UNKNOWN: the two differ.
-    assert health.parse_previous_verdict(failed) == health.UNKNOWN
+    assert health.parse_previous_verdict(jobs("failure")) == health.UNKNOWN
 
 
 def test_parse_previous_verdict_keeps_the_staleness_step_name() -> None:
@@ -879,10 +1015,116 @@ def test_markerless_skipped_verdict_step_still_reads_as_healthy() -> None:
 def test_marker_does_not_make_an_unhealthy_run_unknown() -> None:
     """An unhealthy tick fails the verdict step and never runs the marker leg.
 
-    Guards against a marker check that swallows a real failure if both appear.
+    Guards against a marker check that lets the SKIPPED marker step (which every
+    measured tick carries) swallow a real failure. FAR-2176: before the fix this
+    returned UNKNOWN, so an already-unhealthy pipeline re-alerted every tick.
     """
     payload = _jobs(
         {"name": health.VERDICT_STEP_NAME, "conclusion": "failure"},
         {"name": health.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "skipped"},
     )
-    assert health.parse_previous_verdict(payload) == health.UNKNOWN
+    assert health.parse_previous_verdict(payload) == health.UNHEALTHY
+
+
+# --- FAR-2176: a step's PRESENCE is not "it ran" -----------------------------
+
+
+def _api_step(name: str, conclusion: str, number: int) -> dict[str, Any]:
+    """One step exactly as the Actions jobs API returns it (skipped included).
+
+    A skipped step is still ``status: "completed"`` with a ``conclusion`` of
+    ``"skipped"`` and populated timestamps - so ``status`` is not the
+    discriminator either; only the conclusion says whether it ran.
+    """
+    return {
+        "name": name,
+        "status": "completed",
+        "conclusion": conclusion,
+        "number": number,
+        "started_at": "2026-10-26T11:41:40Z",
+        "completed_at": "2026-10-26T11:41:40Z",
+    }
+
+
+def _measured_run(*, verdict_conclusion: str) -> dict[str, Any]:
+    """A MEASURED tick: verdict step decides, marker step present-but-skipped.
+
+    This is the real wire shape of a healthy run (40316916204: verdict step
+    ``skipped``, marker step ``skipped``) and of an unhealthy one (verdict step
+    ``failure``, marker step ``skipped``).
+    """
+    return _jobs(
+        _api_step(health.VERDICT_STEP_NAME, verdict_conclusion, 7),
+        _api_step(health.UNKNOWN_VERDICT_STEP_NAME, "skipped", 8),
+    )
+
+
+def test_skipped_marker_step_is_not_an_unknown_tick() -> None:
+    """FAR-2176, the real skipped-step shape: presence is not "it ran".
+
+    GitHub returns every DEFINED step in ``jobs[].steps``, including the ones a
+    step-level ``if:`` skipped. Both escalation workflows define the marker step
+    unconditionally, so a measured tick carries it with ``conclusion:
+    "skipped"``. Reading presence made a HEALTHY run read as UNKNOWN - and an
+    UNKNOWN previous verdict always alerts, so an already-unhealthy pipeline
+    re-alerted on every tick.
+    """
+    healthy_run = _measured_run(verdict_conclusion="skipped")
+    assert health.parse_previous_verdict(healthy_run) == health.HEALTHY
+
+    unhealthy_run = _measured_run(verdict_conclusion="failure")
+    assert health.parse_previous_verdict(unhealthy_run) == health.UNHEALTHY
+
+
+def test_executed_marker_step_still_reads_as_unknown() -> None:
+    """The genuine UNKNOWN tick keeps the FAR-2157 behaviour.
+
+    The marker step only EXECUTES on the unmeasured path, so a success (or a
+    failure of the recorder itself, which still means no verdict was reached)
+    is authoritative - UNKNOWN never becomes healthy.
+    """
+    unmeasured = _jobs(
+        _api_step(health.VERDICT_STEP_NAME, "skipped", 7),
+        _api_step(health.UNKNOWN_VERDICT_STEP_NAME, "success", 8),
+    )
+    assert health.parse_previous_verdict(unmeasured) == health.UNKNOWN
+
+    # A marker that RAN AND FAILED is still an executed marker. The verdict step
+    # is present here on purpose: it is DEFINED on every run, so narrowing the
+    # rule to ``conclusion == "success"`` would stop recognising the failed
+    # marker and fall through to this skipped verdict step - HEALTHY, which is
+    # the silent suppression FAR-2157 exists to prevent.
+    failed_recorder = _jobs(
+        _api_step(health.VERDICT_STEP_NAME, "skipped", 7),
+        _api_step(health.UNKNOWN_VERDICT_STEP_NAME, "failure", 8),
+    )
+    assert health.parse_previous_verdict(failed_recorder) == health.UNKNOWN
+
+
+def test_measured_step_shapes_drive_exactly_one_transition() -> None:
+    """FAR-2176: the real step shapes yield ONE email per transition.
+
+    Composes the two halves the workflows use - ``parse_previous_verdict`` on
+    the previous run's steps, then ``resolve_action`` - because the alert-fatigue
+    defect lived in their interaction, not in either alone.
+    """
+    healthy_previous = health.parse_previous_verdict(_measured_run(verdict_conclusion="skipped"))
+    unhealthy_previous = health.parse_previous_verdict(_measured_run(verdict_conclusion="failure"))
+    unmeasured_previous = health.parse_previous_verdict(
+        _jobs(_api_step(health.UNKNOWN_VERDICT_STEP_NAME, "success", 8))
+    )
+
+    # unhealthy -> unhealthy: the incident is already open, so no second email.
+    assert health.resolve_action(False, unhealthy_previous) == "none"
+    # healthy -> unhealthy: entering the condition sends ONE alert.
+    assert health.resolve_action(False, healthy_previous) == "alert"
+    # unhealthy -> healthy: ONE recovery closes the incident.
+    assert health.resolve_action(True, unhealthy_previous) == "recovery"
+
+    # A genuine UNKNOWN tick is unchanged (FAR-2157): it never suppresses the
+    # alert it precedes...
+    assert unmeasured_previous == health.UNKNOWN
+    assert health.resolve_action(False, unmeasured_previous) == "alert"
+    # ...and an unmeasured CURRENT tick still sends nothing, leaving a live
+    # alert open rather than inventing a recovery.
+    assert health.resolve_action(None, health.UNHEALTHY) == "none"
