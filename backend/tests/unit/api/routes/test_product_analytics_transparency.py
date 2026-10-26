@@ -1,34 +1,38 @@
-"""Unit tests for the product-analytics transparency endpoint (GET /transparency).
+"""Unit tests for the product-analytics transparency + instance-switch routes.
 
-The endpoint reports the instance's REAL product-analytics posture. These tests
+The endpoints report the instance's REAL product-analytics posture. These tests
 pin that every field is sourced from the state a feature actually writes:
 
-* ``instance_enabled`` / ``enforcement_enabled`` run the REAL shared helpers
-  (``consent.is_instance_analytics_enabled`` /
-  ``consent.is_license_enforcement_enabled``) with only their ``get_config`` DB
-  seam patched — so the bool/string coercion and env fallback the dump gate
-  inherits are exercised here too (a stored ``"false"`` must be OFF, not
-  fail-open).
+* ``instance_enabled`` / ``instance_switch_source`` / ``licence_requires_analytics``
+  run the REAL shared resolver (``consent.resolve_instance_analytics_switch``)
+  with only its ``get_config`` DB seam and the licence read patched — so the
+  fail-closed coercion, the env fallback and the licence-derived default the
+  dump gate inherits are exercised here too (a stored ``"false"`` must be OFF).
 * ``last_successful_dump_at`` / ``dump_count_total`` read the exact keys the
-  metrics dump writes (``DUMP_WATERMARK_KEY`` /
-  ``DUMP_COUNT_KEY``).
+  metrics dump writes (``DUMP_WATERMARK_KEY`` / ``DUMP_COUNT_KEY``).
 * ``consent_level`` is the caller's organisation real consent level
   (``org.settings_json["product_analytics"]["level"]``) — the PREFERRED source.
   When the caller org cannot be resolved the endpoint reports an INSTANCE-level
   posture (``all`` if any active org has opted in, else ``off``) instead of a
   hardcoded ``off`` (FAR-1635).
+* ``PUT /instance-switch`` writes/clears the stored operator value, records the
+  change in the org-independent system audit ledger, and returns the resulting
+  effective state (an explicit operator value always wins; clearing restores
+  the licence-derived default).
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from tests.unit.api.mock_session import configure_rls_preamble
+from tests.unit.api.mock_session import configure_mock_session, configure_rls_preamble
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes import product_analytics_transparency as pat_module
@@ -40,13 +44,18 @@ from modulo.api.routes.product_analytics_transparency import (
 from modulo.api.routes.product_analytics_transparency import router as transparency_router
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.audit_coverage import audit_session
 from modulo.core.product_analytics.constants import (
     DUMP_COUNT_KEY,
     DUMP_WATERMARK_KEY,
     INSTANCE_SWITCH_KEY,
     LEVEL_ALL,
     LEVEL_OFF,
-    LICENSE_ENFORCEMENT_KILL_SWITCH_KEY,
+    PARTNER_LICENSE_CLAIM,
+    SWITCH_SOURCE_DEFAULT,
+    SWITCH_SOURCE_ENV,
+    SWITCH_SOURCE_LICENSE,
+    SWITCH_SOURCE_OPERATOR,
 )
 
 app = FastAPI()
@@ -86,6 +95,36 @@ _UNSET = object()
 
 _ORG_ALL = {"product_analytics": {"level": LEVEL_ALL}}
 _ORG_OFF = {"product_analytics": {"level": LEVEL_OFF}}
+
+_SWITCH_URL = "/api/v1/product-analytics/instance-switch"
+
+
+def _licence(*, claim: bool = True) -> SimpleNamespace:
+    """A minimal LicenseData-like object carrying a signed ``raw_payload``."""
+    return SimpleNamespace(raw_payload={PARTNER_LICENSE_CLAIM: claim})
+
+
+@pytest.fixture(autouse=True)
+def _default_no_licence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No installed licence by default; licence tests override this seam."""
+    monkeypatch.setattr("modulo.core.product_analytics.consent.get_license", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session() -> AsyncGenerator[None, None]:
+    """The ``audited()`` dependency writes on a fresh session (real engine in prod).
+
+    No database exists in the unit tier, so stub that seam; the dependency (and
+    its request/principal resolution) still runs around the PUT.
+    """
+
+    async def _override() -> AsyncGenerator[AsyncMock, None]:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        yield session
+
+    app.dependency_overrides[audit_session] = _override
+    yield
+    app.dependency_overrides.pop(audit_session, None)
 
 
 def _config(value: object) -> MagicMock:
@@ -156,6 +195,22 @@ def _make_session(
     return session
 
 
+def _write_session(org_settings: object = _ORG_ALL) -> AsyncMock:
+    """Session double for the PUT: every statement succeeds, the org resolves.
+
+    The CRUD writers and the system-audit append are patched in the write tests,
+    so ``execute`` only has to serve the ``_resolve_org`` lookup.
+    """
+    session = AsyncMock()
+    configure_rls_preamble(session)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(return_value=_org_result(org_settings))
+    return session
+
+
 def _client(
     principal: AuthenticatedPrincipal = _SYSTEM_ADMIN,
     session: AsyncMock | None = None,
@@ -170,7 +225,7 @@ def _restore_overrides() -> None:
 
 
 def _consent_get_config(values: dict[str, object]):
-    """A ``consent.get_config`` replacement keyed by the instance switch / kill switch."""
+    """A ``consent.get_config`` replacement keyed by the instance-switch setting."""
 
     async def _get(session: object, key: str) -> MagicMock | None:
         if key in values:
@@ -256,9 +311,9 @@ class TestDefaults:
         assert body["dump_count_total"] == 0
         assert body["consent_level"] == LEVEL_OFF
         assert body["instance_enabled"] is False
-        # The license-enforcement kill switch is ABSENT by default, which the
-        # real helper reads as "enforced" (matching the authz_enforce convention).
-        assert body["enforcement_enabled"] is True
+        # No operator setting and no licence claim: the default source is OFF.
+        assert body["instance_switch_source"] == SWITCH_SOURCE_DEFAULT
+        assert body["licence_requires_analytics"] is False
         assert body["egress_allowed"] is False
         assert body["warning"] is None
         _restore_overrides()
@@ -273,7 +328,7 @@ class TestDefaults:
 
 
 # ---------------------------------------------------------------------------
-# Real instance switch / enforcement sources
+# Real instance switch sources (operator -> licence default)
 # ---------------------------------------------------------------------------
 
 
@@ -285,6 +340,7 @@ class TestRealInstanceSwitch:
         with sources[0], sources[1]:
             body = _request(client)
         assert body["instance_enabled"] is False
+        assert body["instance_switch_source"] == SWITCH_SOURCE_OPERATOR
         _restore_overrides()
 
     @pytest.mark.parametrize("stored", [True, "1", "true", "yes"])
@@ -294,6 +350,7 @@ class TestRealInstanceSwitch:
         with sources[0], sources[1]:
             body = _request(client)
         assert body["instance_enabled"] is True
+        assert body["instance_switch_source"] == SWITCH_SOURCE_OPERATOR
         _restore_overrides()
 
     def test_env_fallback_when_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -303,30 +360,144 @@ class TestRealInstanceSwitch:
         with sources[0], sources[1]:
             body = _request(client)
         assert body["instance_enabled"] is True
+        assert body["instance_switch_source"] == SWITCH_SOURCE_ENV
         _restore_overrides()
 
-    @pytest.mark.parametrize(
-        ("stored", "expected"),
-        [
-            (None, True),  # absent kill switch = enforced
-            (False, True),
-            ("false", True),
-            (True, False),  # kill switch ON = enforcement off
-            ("1", False),
-        ],
-    )
-    def test_enforcement_follows_kill_switch(
-        self,
-        stored: object,
-        expected: bool,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+    def test_licence_claim_sets_the_default_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "modulo.core.product_analytics.consent.get_license",
+            lambda: _licence(claim=True),
+        )
         client = _client()
-        consent_values = {} if stored is None else {LICENSE_ENFORCEMENT_KILL_SWITCH_KEY: stored}
-        sources = _patch_sources(consent_values=consent_values, monkeypatch=monkeypatch)
+        sources = _patch_sources(monkeypatch=monkeypatch)
         with sources[0], sources[1]:
             body = _request(client)
-        assert body["enforcement_enabled"] is expected
+        assert body["instance_enabled"] is True
+        assert body["instance_switch_source"] == SWITCH_SOURCE_LICENSE
+        assert body["licence_requires_analytics"] is True
+        _restore_overrides()
+
+    def test_operator_off_vetoes_the_licence_claim(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "modulo.core.product_analytics.consent.get_license",
+            lambda: _licence(claim=True),
+        )
+        client = _client()
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: False}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["instance_enabled"] is False
+        assert body["instance_switch_source"] == SWITCH_SOURCE_OPERATOR
+        assert body["licence_requires_analytics"] is True
+        _restore_overrides()
+
+
+# ---------------------------------------------------------------------------
+# The system-admin write path (PUT /instance-switch)
+# ---------------------------------------------------------------------------
+
+
+class TestInstanceSwitchWrite:
+    def test_system_admin_sets_explicit_value_and_is_audited(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_write_session())
+        stored: dict[str, object] = {}
+
+        async def _fake_update(_session: object, key: str, value: object, updated_by: object = None) -> MagicMock:
+            stored[key] = value
+            return MagicMock()
+
+        sources = _patch_sources(monkeypatch=monkeypatch)
+        with (
+            sources[0],
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new=AsyncMock(side_effect=_consent_get_config(stored)),
+            ),
+            patch.object(pat_module, "update_config", new=AsyncMock(side_effect=_fake_update)),
+            patch.object(pat_module, "append_system_audit_event", new=AsyncMock()) as audit,
+        ):
+            resp = client.put(_SWITCH_URL, json={"enabled": True})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["instance_enabled"] is True
+        assert body["instance_switch_source"] == SWITCH_SOURCE_OPERATOR
+        audit.assert_awaited_once()
+        payload = audit.await_args.kwargs["payload_json"]
+        assert payload["action"] == "set"
+        assert payload["operator_value"] is True
+        assert payload["effective_enabled"] is True
+        _restore_overrides()
+
+    def test_clearing_restores_the_licence_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "modulo.core.product_analytics.consent.get_license",
+            lambda: _licence(claim=True),
+        )
+        client = _client(session=_write_session())
+        stored: dict[str, object] = {INSTANCE_SWITCH_KEY: False}
+
+        async def _fake_delete(_session: object, key: str) -> bool:
+            return stored.pop(key, None) is not None
+
+        sources = _patch_sources(monkeypatch=monkeypatch)
+        with (
+            sources[0],
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new=AsyncMock(side_effect=_consent_get_config(stored)),
+            ),
+            patch.object(pat_module, "delete_config", new=AsyncMock(side_effect=_fake_delete)),
+            patch.object(pat_module, "append_system_audit_event", new=AsyncMock()) as audit,
+        ):
+            resp = client.put(_SWITCH_URL, json={"enabled": None})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["instance_enabled"] is True
+        assert body["instance_switch_source"] == SWITCH_SOURCE_LICENSE
+        assert audit.await_args.kwargs["payload_json"]["action"] == "cleared"
+        _restore_overrides()
+
+    def test_clearing_with_nothing_stored_is_audited_as_already_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A PUT null that deletes no row is a real no-op, and says so.
+
+        The action must distinguish "cleared a stored override" from "there was
+        nothing to clear" - the latter is what a licence/default/env-resolved
+        switch reports, and it must never be recorded as a change.
+        """
+        client = _client(session=_write_session())
+        stored: dict[str, object] = {}
+
+        async def _fake_delete(_session: object, key: str) -> bool:
+            return stored.pop(key, None) is not None
+
+        sources = _patch_sources(monkeypatch=monkeypatch)
+        with (
+            sources[0],
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new=AsyncMock(side_effect=_consent_get_config(stored)),
+            ),
+            patch.object(pat_module, "delete_config", new=AsyncMock(side_effect=_fake_delete)),
+            patch.object(pat_module, "append_system_audit_event", new=AsyncMock()) as audit,
+        ):
+            resp = client.put(_SWITCH_URL, json={"enabled": None})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["instance_switch_source"] == SWITCH_SOURCE_DEFAULT
+        payload = audit.await_args.kwargs["payload_json"]
+        assert payload["action"] == "already_default"
+        assert payload["operator_value"] is None
+        assert payload["effective_enabled"] is False
+        assert payload["source"] == SWITCH_SOURCE_DEFAULT
+        _restore_overrides()
+
+    def test_non_system_admin_gets_403(self) -> None:
+        client = _client(_NON_SYSTEM_ADMIN, session=_write_session())
+        resp = client.put(_SWITCH_URL, json={"enabled": True})
+        assert resp.status_code == 403
         _restore_overrides()
 
 

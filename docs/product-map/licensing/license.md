@@ -7,7 +7,6 @@ code:
   - backend/src/modulo/core/license_signing.py
   - backend/src/modulo/core/feature_flags.py
   - backend/src/modulo/core/stripe_fulfilment.py
-  - backend/src/modulo/core/product_analytics/license_enforcement.py
   - backend/src/modulo/api/routes/admin_license.py
   - backend/src/modulo/api/routes/admin_tiers.py
   - backend/src/modulo/api/routes/admin_feature_flags.py

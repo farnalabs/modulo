@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -151,7 +152,7 @@ class TestGetConsentingOrgs:
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        result = await _get_consenting_orgs(mock_session)
         assert len(result) == 1
         assert result[0]["id"] == org_id_1
         assert result[0]["level_changed_at"] == date(2026, 8, 15)
@@ -163,7 +164,7 @@ class TestGetConsentingOrgs:
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        result = await _get_consenting_orgs(mock_session)
         assert result == []
 
     @pytest.mark.asyncio
@@ -179,7 +180,7 @@ class TestGetConsentingOrgs:
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        result = await _get_consenting_orgs(mock_session)
         assert result[0]["level_changed_at"] == date(2026, 7, 1)
 
     @pytest.mark.asyncio
@@ -205,7 +206,7 @@ class TestGetConsentingOrgs:
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        result = await _get_consenting_orgs(mock_session)
         assert result[0]["level_changed_at"] == date(2026, 8, 15)
 
     @pytest.mark.asyncio
@@ -221,7 +222,7 @@ class TestGetConsentingOrgs:
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        result = await _get_consenting_orgs(mock_session)
         assert len(result) == 1
         assert result[0]["level_changed_at"] is None
 
@@ -238,42 +239,23 @@ class TestGetConsentingOrgs:
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        result = await _get_consenting_orgs(mock_session)
         assert result == []
 
 
-class TestGetConsentingOrgsLicenseEnforcement:
-    """Partner carve-out (design §6): a degraded org is excluded from the dump.
+class TestGetConsentingOrgsIsConsentOnly:
+    """The dump loop is deliberately dumb: consent is its ONLY per-org filter.
 
-    ``should_degrade_to_community`` implies a non-``all`` level, so the consent
-    predicate alone would already exclude these rows — the enforcement filter is
-    defence-in-depth for that overlap (and for any future level that counts as
-    consenting while still degrading). These tests pin the filter by forcing the
-    degrade verdict on an otherwise-consenting row.
+    FAR-2063 deleted the old partner "degrade to Community" branch. It was
+    unreachable behind the consent guard (only ``all`` rows reached it, while
+    the degrade predicate required a level that is not ``all``), so CI had been
+    asserting a branch that could not execute. These tests assert the filter the
+    code actually runs - no mocked predicate - and pin the signature so the
+    enforcement argument cannot return.
     """
 
     @pytest.mark.asyncio
-    async def test_degraded_consenting_org_is_excluded(self) -> None:
-        rows = [
-            MagicMock(
-                id="eeee-5555",
-                settings_json={"product_analytics": {"level": "all"}},
-            ),
-        ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
-
-        with patch(
-            "modulo.core.product_analytics.metrics_dump.should_degrade_to_community",
-            return_value=True,
-        ):
-            result = await _get_consenting_orgs(mock_session, enforcement_active=True)
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_non_degraded_consenting_org_is_kept(self) -> None:
+    async def test_consenting_org_is_kept(self) -> None:
         rows = [
             MagicMock(
                 id="ffff-6666",
@@ -285,20 +267,16 @@ class TestGetConsentingOrgsLicenseEnforcement:
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        with patch(
-            "modulo.core.product_analytics.metrics_dump.should_degrade_to_community",
-            return_value=False,
-        ):
-            result = await _get_consenting_orgs(mock_session, enforcement_active=True)
+        result = await _get_consenting_orgs(mock_session)
         assert len(result) == 1
         assert result[0]["id"] == "ffff-6666"
 
     @pytest.mark.asyncio
-    async def test_enforcement_off_skips_degrade_check(self) -> None:
+    async def test_non_consenting_org_is_dropped(self) -> None:
         rows = [
             MagicMock(
                 id="gggg-7777",
-                settings_json={"product_analytics": {"level": "all"}},
+                settings_json={"product_analytics": {"level": "off"}},
             ),
         ]
         mock_result = MagicMock()
@@ -306,12 +284,12 @@ class TestGetConsentingOrgsLicenseEnforcement:
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
 
-        with patch(
-            "modulo.core.product_analytics.metrics_dump.should_degrade_to_community",
-            side_effect=AssertionError("must not consult the degrade helper when enforcement is off"),
-        ):
-            result = await _get_consenting_orgs(mock_session, enforcement_active=False)
-        assert len(result) == 1
+        result = await _get_consenting_orgs(mock_session)
+        assert result == []
+
+    def test_takes_only_a_session(self) -> None:
+        params = list(inspect.signature(_get_consenting_orgs).parameters)
+        assert params == ["session"]
 
 
 # --- ISO date/datetime parsing ---
@@ -575,11 +553,6 @@ class TestMetricsDumpSkipConditions:
                 return_value=[],
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
                 "modulo.settings.get_settings",
                 return_value=MagicMock(),
             ),
@@ -611,11 +584,6 @@ class TestMetricsDumpSkipConditions:
                 "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=orgs,
-            ),
-            patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
             ),
             patch(
                 "modulo.core.product_analytics.metrics_dump.read_system_config",
@@ -682,11 +650,6 @@ class TestSystemSessionFactory:
                 new_callable=AsyncMock,
                 return_value=[],
             ),
-            patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
             patch("modulo.settings.get_settings", return_value=MagicMock()),
         ):
             result = await metrics_dump({})
@@ -727,11 +690,6 @@ class TestSystemSessionFactory:
                 new_callable=AsyncMock,
                 return_value=[],
             ) as get_orgs,
-            patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
             patch("modulo.settings.get_settings", return_value=MagicMock()),
         ):
             result = await metrics_dump({})
@@ -891,19 +849,23 @@ class TestCheckInstanceSwitch:
     """``_check_instance_switch`` delegates to ``consent.is_instance_analytics_enabled``.
 
     These tests exercise the REAL shared helper (only its ``get_config`` DB seam
-    is patched) so they pin the semantics the dump gate inherits: bool/string-aware
-    coercion — the stored string ``"false"`` must NOT read as enabled — and the
-    ``MODULO_PRODUCT_ANALYTICS_ENABLED`` env fallback.
+    and the licence read are patched) so they pin the semantics the dump gate
+    inherits: fail-closed bool/string coercion — the stored string ``"false"``
+    must NOT read as enabled — the ``MODULO_PRODUCT_ANALYTICS_ENABLED`` env
+    fallback, and the licence-derived default.
     """
 
     @pytest.mark.asyncio
     async def test_bool_true_returns_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
-        with patch(
-            "modulo.core.product_analytics.consent.get_config",
-            new_callable=AsyncMock,
-            return_value=MagicMock(value=True),
+        with (
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new_callable=AsyncMock,
+                return_value=MagicMock(value=True),
+            ),
+            patch("modulo.core.product_analytics.consent.get_license", return_value=None),
         ):
             assert await _check_instance_switch(factory) is True
 
@@ -912,21 +874,28 @@ class TestCheckInstanceSwitch:
         """Regression: a stored string ``"false"`` is OFF, never truthy (fail-open)."""
         monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
-        with patch(
-            "modulo.core.product_analytics.consent.get_config",
-            new_callable=AsyncMock,
-            return_value=MagicMock(value="false"),
+        with (
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new_callable=AsyncMock,
+                return_value=MagicMock(value="false"),
+            ),
+            patch("modulo.core.product_analytics.consent.get_license", return_value=None),
         ):
             assert await _check_instance_switch(factory) is False
 
     @pytest.mark.asyncio
     async def test_absent_key_env_unset_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Absent setting + no licence claim + no env: OFF, so no egress path runs."""
         monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
-        with patch(
-            "modulo.core.product_analytics.consent.get_config",
-            new_callable=AsyncMock,
-            return_value=None,
+        with (
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch("modulo.core.product_analytics.consent.get_license", return_value=None),
         ):
             assert await _check_instance_switch(factory) is False
 
@@ -935,12 +904,100 @@ class TestCheckInstanceSwitch:
         """The env fallback the consent surface honours must gate the dump too."""
         monkeypatch.setenv("MODULO_PRODUCT_ANALYTICS_ENABLED", "true")
         factory = _FakeSessionFactory()
-        with patch(
-            "modulo.core.product_analytics.consent.get_config",
-            new_callable=AsyncMock,
-            return_value=None,
+        with (
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch("modulo.core.product_analytics.consent.get_license", return_value=None),
         ):
             assert await _check_instance_switch(factory) is True
+
+    @pytest.mark.asyncio
+    async def test_licence_required_default_enables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Absent setting + a licence carrying the claim: ON (licence supplies the default)."""
+        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        factory = _FakeSessionFactory()
+        licence = MagicMock()
+        licence.raw_payload = {"product_analytics_required": True}
+        with (
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch("modulo.core.product_analytics.consent.get_license", return_value=licence),
+        ):
+            assert await _check_instance_switch(factory) is True
+
+
+class TestEffectiveSwitchGatesDump:
+    """The REAL switch resolution gates ``metrics_dump`` (no mocked gate).
+
+    This is the end-to-end proof that the effective switch - including the
+    licence-derived default - decides whether any egress path runs at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_effective_switch_off_never_collects_or_sends(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        factory = _FakeSessionFactory()
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.core.saq_worker._make_system_session_factory", return_value=factory),
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch("modulo.core.product_analytics.consent.get_license", return_value=None),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                new_callable=AsyncMock,
+                side_effect=AssertionError("the dump must not collect orgs when the switch is OFF"),
+            ) as collect,
+            patch("modulo.settings.get_settings", return_value=MagicMock()),
+        ):
+            result = await metrics_dump({})
+
+        assert result["skipped"] == "instance_switch_off"
+        collect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_licence_required_default_opens_the_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        factory = _FakeSessionFactory()
+        licence = MagicMock()
+        licence.raw_payload = {"product_analytics_required": True}
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.core.saq_worker._make_system_session_factory", return_value=factory),
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch("modulo.core.product_analytics.consent.get_license", return_value=licence),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as collect,
+            patch("modulo.settings.get_settings", return_value=MagicMock()),
+        ):
+            result = await metrics_dump({})
+
+        assert result["skipped"] == "no_consenting_orgs"
+        collect.assert_awaited_once()
 
 
 # --- _should_dump_now with now=None ---
@@ -1026,7 +1083,7 @@ class TestResolveStartDate:
         mock_result.__iter__ = MagicMock(return_value=iter([row]))
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
-        orgs = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        orgs = await _get_consenting_orgs(mock_session)
         assert orgs[0]["level_changed_at"] == date(2026, 8, 1)
 
         factory = _FakeSessionFactory()
@@ -1425,11 +1482,6 @@ class TestMetricsDumpSuccess:
                 return_value=orgs,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
                 "modulo.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
@@ -1509,11 +1561,6 @@ class TestMetricsDumpSuccess:
                 return_value=[{"id": "org-1", "level_changed_at": None}],
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
                 "modulo.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=today.isoformat(),
@@ -1549,11 +1596,6 @@ class TestMetricsDumpSuccess:
                 "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=orgs,
-            ),
-            patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
             ),
             patch(
                 "modulo.core.product_analytics.metrics_dump.read_system_config",
@@ -1617,11 +1659,6 @@ class TestDumpCount:
                 return_value=orgs,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
                 "modulo.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 return_value=None,
@@ -1682,11 +1719,6 @@ class TestDumpCount:
                 return_value=orgs,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
                 "modulo.core.product_analytics.metrics_dump.read_system_config",
                 new_callable=AsyncMock,
                 side_effect=_read,
@@ -1738,11 +1770,6 @@ class TestDumpCount:
                 "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
                 new_callable=AsyncMock,
                 return_value=[],
-            ),
-            patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
             ),
             patch(
                 "modulo.core.product_analytics.metrics_dump.write_system_config",
@@ -1834,7 +1861,7 @@ class TestGetConsentingOrgsExtended:
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        result = await _get_consenting_orgs(mock_session)
         assert result == []
 
     @pytest.mark.asyncio
@@ -1851,7 +1878,7 @@ class TestGetConsentingOrgsExtended:
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        result = await _get_consenting_orgs(mock_session)
         assert len(result) == 1
         assert result[0]["id"] == "org-good"
 
@@ -1864,7 +1891,7 @@ class TestGetConsentingOrgsExtended:
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        result = await _get_consenting_orgs(mock_session)
         assert result == []
 
     @pytest.mark.asyncio
@@ -1879,7 +1906,7 @@ class TestGetConsentingOrgsExtended:
         mock_result.__iter__ = MagicMock(return_value=iter(rows))
         mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session, enforcement_active=False)
+        result = await _get_consenting_orgs(mock_session)
         assert len(result) == 1
         assert result[0]["level_changed_at"] == date(2026, 1, 1)
 

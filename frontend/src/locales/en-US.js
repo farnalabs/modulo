@@ -614,7 +614,7 @@ export default {
       "delivery_status": "Delivery Status",
       "last_successful_dump": "Last Successful Dump",
       "total_dumps": "Total Dumps",
-      "consent_and_enforcement": "Consent & Enforcement",
+      "consent_and_enforcement": "Consent & Egress",
       "consent_level": "Consent Level",
       "egress": "Telemetry Egress",
       "egress_allowed": "Allowed",
@@ -625,9 +625,16 @@ export default {
       "instance_switch": "Instance Switch",
       "enabled": "Enabled",
       "disabled": "Disabled",
-      "enforcement": "Enforcement",
-      "active": "Active",
-      "inactive": "Inactive"
+      "licence": "Licence",
+      "licence_required": "Required",
+      "licence_not_required": "Not required",
+      "instance_switch_control": "Instance Switch",
+      "instance_switch_label": "Enable product analytics for this instance",
+      "use_licence_default": "Use licence default",
+      "switch_source_operator": "This switch was set explicitly on this instance. Your choice always wins, including turning it off when your licence requires analytics.",
+      "switch_source_environment": "This switch is set by the MODULO_PRODUCT_ANALYTICS_ENABLED environment variable. Change that variable on the deployment to override it - it cannot be cleared from here.",
+      "switch_source_licence": "On because your licence requires it — you can turn it off.",
+      "switch_source_default": "Off by default. Turn it on to share aggregate usage metrics."
     },
     "AdminCostControlsView": {
       "failed_to_save_currency": "Failed to save currency",

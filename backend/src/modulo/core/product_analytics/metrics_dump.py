@@ -37,10 +37,6 @@ from modulo.core.product_analytics.constants import (
     DUMP_WATERMARK_KEY,
     coerce_dump_count,
 )
-from modulo.core.product_analytics.license_enforcement import (
-    is_enforcement_active,
-    should_degrade_to_community,
-)
 from modulo.core.product_analytics.vendor_client import VendorClient
 
 _log = logging.getLogger(__name__)
@@ -230,12 +226,11 @@ async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
         _log.info("product_analytics.instance_switch_off")
         return {"skipped": "instance_switch_off", "staging_purged": staging_purged}
 
-    # Check license enforcement status (partner carve-out) and find consenting
-    # orgs in ONE session: the enforcement flag feeds the org filter, so they
-    # share a transaction instead of opening two back-to-back sessions.
+    # Collect the consenting organisations. The loop is deliberately dumb: the
+    # instance switch (above) is the only instance-level gate, and per-org
+    # consent is the only per-org gate. Analytics never changes an org's tier.
     async with factory() as session, session.begin():
-        enforcement_active = await is_enforcement_active(session)
-        orgs = await _get_consenting_orgs(session, enforcement_active)
+        orgs = await _get_consenting_orgs(session)
     if not orgs:
         _log.info("product_analytics.no_consenting_orgs")
         return {"skipped": "no_consenting_orgs", "staging_purged": staging_purged}
@@ -357,20 +352,28 @@ async def _check_instance_switch(factory: Any) -> bool:
     """Return True when the instance-level analytics master switch is ON.
 
     Delegates to :func:`consent.is_instance_analytics_enabled` so the dump gate
-    applies the SAME semantics as the consent surface: a bool/string-aware
-    coercion (``"false"`` / ``"0"`` / ``"no"`` are OFF) and the
-    ``MODULO_PRODUCT_ANALYTICS_ENABLED`` env-var fallback. A bare ``bool()``
-    on the raw stored value previously treated the stored string ``"false"`` as
-    truthy and ran the dump while the consent surface reported the switch OFF
-    (fail-open), and ignored the env fallback the surface honours. The
-    transparency endpoint now delegates to the SAME helper, so the reported
-    switch and the dump gate cannot disagree.
+    applies the SAME precedence as every other reader: an explicit operator
+    value (stored ``system_config`` then the ``MODULO_PRODUCT_ANALYTICS_ENABLED``
+    env var) wins, otherwise the installed licence's ``product_analytics_required``
+    claim supplies the default, otherwise OFF. The coercion is fail-closed
+    (``"false"`` / ``"0"`` / ``"no"`` are OFF), so a stored string can never run
+    the dump while the consent surface reports the switch OFF. The transparency
+    endpoint delegates to the same helper, so the reported switch and the dump
+    gate cannot disagree.
     """
     async with factory() as session, session.begin():
         return await is_instance_analytics_enabled(session)
 
 
-async def _get_consenting_orgs(session: AsyncSession, enforcement_active: bool) -> list[dict[str, Any]]:
+async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
+    """Return the active organisations that have consented to the ``all`` level.
+
+    Deliberately the ONLY per-org filter: read the level through the shared
+    canonical predicate so the dump's consent set and the transparency
+    endpoint's reported posture cannot drift (both call
+    ``consent.is_org_consenting``). Nothing here inspects a licence or a plan
+    tier.
+    """
     from modulo.db.models.organisation import Organisation
 
     result = await session.execute(
@@ -378,18 +381,7 @@ async def _get_consenting_orgs(session: AsyncSession, enforcement_active: bool) 
     )
     orgs: list[dict[str, Any]] = []
     for row in result:
-        # Read the level through the shared canonical predicate so the dump's
-        # consent set and the transparency endpoint's reported posture cannot
-        # drift (both call ``consent.is_org_consenting``).
         if not is_org_consenting(row.settings_json):
-            continue
-        # Apply license enforcement: partner licenses with product_analytics_required
-        # claim degrade orgs that haven't opted in to "all" (FAR-1636 / design §6).
-        if enforcement_active and should_degrade_to_community(row, enforcement_active):
-            _log.debug(
-                "product_analytics.license_degrade_skip",
-                extra={"org_id": str(row.id)},
-            )
             continue
         pa = (row.settings_json or {}).get("product_analytics", {})
         level_changed_at = pa.get("level_changed_at")

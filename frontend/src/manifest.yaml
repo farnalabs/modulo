@@ -2321,10 +2321,22 @@ elements:
       - testid: instance-enabled
         type: element
         dynamic_testid: false
-      - testid: enforcement-enabled
+      - testid: licence-requires-analytics
         type: element
         dynamic_testid: false
       - testid: egress-allowed
+        type: element
+        dynamic_testid: false
+      - testid: instance-switch-toggle
+        type: input
+        dynamic_testid: false
+      - testid: instance-switch-source
+        type: element
+        dynamic_testid: false
+      - testid: instance-switch-reset
+        type: button
+        dynamic_testid: false
+      - testid: instance-switch-error
         type: element
         dynamic_testid: false
       - testid: product-analytics-consent-prompt
@@ -7221,15 +7233,15 @@ features:
         description: Product usage and adoption analytics for system administrators
         status: partial
         behaviours:
-            - "[ ] The product analytics page does not yet show in-product usage and adoption metrics for system administrators - it renders only the transparency endpoint's delivery/consent/enforcement fields (frontend/src/views/AdminProductAnalyticsView.vue), which now reflect real state"
-            - "[x] Consent and enforcement toggles are configurable per instance"
+            - "[ ] The product analytics page does not yet show in-product usage and adoption metrics for system administrators - it renders only the transparency endpoint's delivery/consent fields (frontend/src/views/AdminProductAnalyticsView.vue), which now reflect real state"
+            - "[x] The instance-level analytics switch is configurable by a system admin, per instance: PUT /api/v1/product-analytics/instance-switch writes or clears system_config.product_analytics_enabled, audits the change in the org-independent system ledger, and is driven by the switch control on /admin/product-analytics (an explicit operator value always wins; clearing an operator-set value restores the licence-derived default. An environment-sourced switch is owned by MODULO_PRODUCT_ANALYTICS_ENABLED and has no stored row, so no reset control is offered for it - changing the env var is the only way to override it)"
             - "[x] Metrics scheduling ships: a jittered daily metrics-dump SAQ system cron (core/product_analytics/metrics_dump.py) gates the per-instance dump window on the stored jitter offset and intersects it with the consented validity window, then delivers the batch to the vendor ingest endpoint with a stable persisted watermark"
             - "[x] The transparency endpoint (GET /api/v1/product-analytics/transparency) derives the instance's data-residency posture: egress_allowed is true ONLY when the instance-level switch AND an explicit 'all' consent are both on (core/product_analytics/consent.py), so telemetry egress is fail-closed by default (personas/marcus-ciso.feature)"
-            - "[x] The transparency endpoint reports the instance's real product-analytics state - instance_enabled/enforcement_enabled delegate to the shared consent helpers (is_instance_analytics_enabled / is_license_enforcement_enabled), last_successful_dump_at and dump_count_total read the keys the metrics dump writes (constants.DUMP_WATERMARK_KEY / DUMP_COUNT_KEY, the latter incremented once per successful non-skipped dump), and consent_level reads the caller's org settings_json - so /admin/product-analytics no longer renders static defaults"
+            - "[x] The transparency endpoint reports the instance's real product-analytics state - instance_enabled, instance_switch_source and licence_requires_analytics come from the shared resolver (consent.resolve_instance_analytics_switch); last_successful_dump_at and dump_count_total read the keys the metrics dump writes (constants.DUMP_WATERMARK_KEY / DUMP_COUNT_KEY, the latter incremented once per successful non-skipped dump); consent_level reads the caller's org settings_json - so /admin/product-analytics no longer renders static defaults"
             - "[x] The transparency endpoint's consent_level/egress_allowed are scoped per organisation (the caller's own org, the preferred source) with an instance-level fallback when the caller org cannot be resolved - all if any active org has opted in, else off (FAR-1635)"
             - "[x] Staged frontend events are consumed and purged end to end (FAR-1717) - the daily metrics_dump aggregates metrics_staging rows into the payload's event_counts section (_aggregate_staged_events) and every cron tick purges consumed rows (watermark past their date) plus rows older than the 30-day retention bound via _purge_staging, served by the plain index ix_metrics_staging_recorded_at (migration 0304); turning the org level off (admin PUT or prompt decline) purges its staged rows immediately"
             - "[x] The frontend event-capture composable is initialised in the app root (FAR-1718) - App.vue calls initProductAnalytics wired to productAnalyticsStore.isOptedIn as the live consent function, and curated track() call sites ship for pipeline create/run start, schema create, connector add, model-backend add, trigger create, eval create and HITL claim/approve/reject; no page_view event exists - per-route data is not captured client or server side; each event_id is a per-session prefix plus a monotonic counter, so a page reload (or a second tab) restarts the counter under a NEW prefix and its events cannot collide with the earlier session's IDs under the backend's (organisation_id, event_id) dedup (frontend/src/composables/useProductAnalytics.ts, useProductAnalytics.spec.ts)"
-            - "[ ] License/plan eligibility gating is not wired into request-time routes: the effective-plan resolution (core/feature_flags.py resolve_plan_context / require_feature) never consults should_degrade_to_community, so a degraded org keeps its paid tier on API routes. The daily DUMP half DOES apply the partner product_analytics_required carve-out - metrics_dump reads license_enforcement.is_enforcement_active once per run and _get_consenting_orgs excludes orgs where should_degrade_to_community fires - so only the route half remains (docs/product-map/admin/product-analytics.md)"
+            - "[x] Analytics never degrades an organisation's plan or tier. The partner product_analytics_required claim is CONTRACTUAL: it only supplies the DEFAULT for the instance switch when no operator value exists (consent.resolve_instance_analytics_switch), and metrics_dump collects consenting orgs with no licence/tier inspection. A partner that disables the dump is breaching a contract, which is a conversation, not a software control"
             - "[ ] An in-product analytics export/administration surface (self-serve downloadable org metrics, configurable reporting schedule, or an in-app analytics warehouse) is not shipped — telemetry export is vendor-bound"
         deferrals:
             - "In-product analytics export and scheduling administration is tracked under feat-product-analytics; a self-hosted analytics warehouse is feat-analytics scope"

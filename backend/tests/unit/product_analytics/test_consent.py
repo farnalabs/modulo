@@ -4,20 +4,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.product_analytics import consent as consent_module
 from modulo.core.product_analytics.consent import (
     apply_consent_action,
+    coerce_switch_value,
     default_consent_state,
     get_product_analytics_block,
     is_egress_allowed,
-    is_license_enforcement_enabled,
-    is_partner_carve_out_active,
     is_prompt_eligible,
-    kill_switch_disables_enforcement,
     partner_license_requires_analytics,
     set_level,
 )
@@ -253,11 +249,46 @@ class TestEgressGate:
 
 
 # ---------------------------------------------------------------------------
+# Stored/env switch-value coercion
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceSwitchValue:
+    """Only explicitly truthy values turn the switch ON; everything else is OFF."""
+
+    @pytest.mark.parametrize("value", [True, 1, -2, 3.5, "1", "true", " YES "])
+    def test_truthy_values_are_on(self, value: object) -> None:
+        assert coerce_switch_value(value) is True
+
+    @pytest.mark.parametrize(
+        "value",
+        [False, 0, 0.0, "", "false", "0", "no", [], {}, None],
+        ids=[
+            "false",
+            "zero",
+            "zero_float",
+            "empty_str",
+            "str_false",
+            "str_zero",
+            "str_no",
+            "empty_list",
+            "empty_dict",
+            "none",
+        ],
+    )
+    def test_everything_else_is_off(self, value: object) -> None:
+        """Including the containers: ``bool(value)`` must never be the semantics."""
+        assert coerce_switch_value(value) is False
+
+
+# ---------------------------------------------------------------------------
 # Partner carve-out
 # ---------------------------------------------------------------------------
 
 
-class TestPartnerCarveOut:
+class TestPartnerLicenseClaim:
+    """``product_analytics_required`` now drives the switch DEFAULT, not enforcement."""
+
     def test_license_with_required_claim(self) -> None:
         license_data = SimpleNamespace(claims={PARTNER_LICENSE_CLAIM: True})
         assert partner_license_requires_analytics(license_data) is True
@@ -270,6 +301,11 @@ class TestPartnerCarveOut:
         license_data = SimpleNamespace(claims={PARTNER_LICENSE_CLAIM: False})
         assert partner_license_requires_analytics(license_data) is False
 
+    def test_license_data_raw_payload_is_read(self) -> None:
+        """A real LicenseData has no ``claims`` attr - read its signed payload."""
+        license_data = SimpleNamespace(raw_payload={PARTNER_LICENSE_CLAIM: True})
+        assert partner_license_requires_analytics(license_data) is True
+
     def test_dict_license_with_claim(self) -> None:
         license_data = {PARTNER_LICENSE_CLAIM: True}
         assert partner_license_requires_analytics(license_data) is True
@@ -280,110 +316,12 @@ class TestPartnerCarveOut:
     def test_malformed_license_returns_false(self) -> None:
         assert partner_license_requires_analytics("not a dict") is False
 
-    def test_carve_out_active_when_required_and_not_all(self) -> None:
-        license_data = SimpleNamespace(claims={PARTNER_LICENSE_CLAIM: True})
-        assert is_partner_carve_out_active(license_data, LEVEL_OFF) is True
+    def test_unreadable_license_is_fail_safe(self) -> None:
+        """A licence whose claims access raises must log and return False, never escape."""
 
-    def test_carve_out_inactive_when_level_is_all(self) -> None:
-        license_data = SimpleNamespace(claims={PARTNER_LICENSE_CLAIM: True})
-        assert is_partner_carve_out_active(license_data, LEVEL_ALL) is False
+        class _RaisingClaims:
+            @property
+            def claims(self) -> dict[str, object]:
+                raise RuntimeError("malformed licence")
 
-    def test_carve_out_inactive_when_not_required(self) -> None:
-        license_data = SimpleNamespace(claims={})
-        assert is_partner_carve_out_active(license_data, LEVEL_OFF) is False
-
-
-# ---------------------------------------------------------------------------
-# License enforcement kill switch (bool-inversion regression, consent.py:223)
-# ---------------------------------------------------------------------------
-
-
-class _Config:
-    def __init__(self, value: object) -> None:
-        self.value = value
-
-
-class TestLicenseEnforcementKillSwitch:
-    """Lock in the truth table for is_license_enforcement_enabled.
-
-    The kill switch defaults to ENFORCED when absent (matching
-    authz_enforce convention). A boolean/string ``true`` DISABLES enforcement;
-    ``false`` re-enables it. This is the regression test for the bool-inversion
-    fix (consent.py:223) — currently inert until FAR-361, but the contract must
-    not drift.
-    """
-
-    async def test_absent_key_enforces(self) -> None:
-        session = AsyncMock()
-        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=None)):
-            assert await is_license_enforcement_enabled(session) is True
-
-    async def test_bool_true_disables(self) -> None:
-        session = AsyncMock()
-        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config(True))):
-            assert await is_license_enforcement_enabled(session) is False
-
-    async def test_bool_false_enforces(self) -> None:
-        session = AsyncMock()
-        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config(False))):
-            assert await is_license_enforcement_enabled(session) is True
-
-    async def test_str_true_disables(self) -> None:
-        session = AsyncMock()
-        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("true"))):
-            assert await is_license_enforcement_enabled(session) is False
-
-    async def test_str_false_enforces(self) -> None:
-        session = AsyncMock()
-        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("false"))):
-            assert await is_license_enforcement_enabled(session) is True
-
-    async def test_str_yes_disables(self) -> None:
-        session = AsyncMock()
-        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("yes"))):
-            assert await is_license_enforcement_enabled(session) is False
-
-    async def test_str_no_enforces(self) -> None:
-        session = AsyncMock()
-        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("no"))):
-            assert await is_license_enforcement_enabled(session) is True
-
-    async def test_str_zero_enforces(self) -> None:
-        session = AsyncMock()
-        with patch.object(consent_module, "get_config", new=AsyncMock(return_value=_Config("0"))):
-            assert await is_license_enforcement_enabled(session) is True
-
-
-class TestKillSwitchValueParsing:
-    """The single canonical parser shared by both enforcement helpers (FAR-1636)."""
-
-    @pytest.mark.parametrize(
-        "stored",
-        [True, "true", "TRUE", "1", "yes", "Yes", " yes "],
-        ids=["bool_true", "str_true", "str_TRUE", "str_one", "str_yes", "str_Yes", "str_padded_yes"],
-    )
-    def test_truthy_spellings_disable_enforcement(self, stored: object) -> None:
-        assert kill_switch_disables_enforcement(stored) is True
-
-    @pytest.mark.parametrize(
-        "stored",
-        [False, "false", "FALSE", "0", "no", "No", "", "off"],
-        ids=["bool_false", "str_false", "str_FALSE", "str_zero", "str_no", "str_No", "str_empty", "str_off"],
-    )
-    def test_everything_else_leaves_enforcement_enabled(self, stored: object) -> None:
-        assert kill_switch_disables_enforcement(stored) is False
-
-    @pytest.mark.parametrize(
-        "stored",
-        [0, 1, None, [], {}],
-        ids=["int_zero", "int_one", "none", "empty_list", "empty_dict"],
-    )
-    def test_non_bool_non_str_values_fall_back_to_truthiness(self, stored: object) -> None:
-        """A stored value that is neither bool nor str uses truthiness (never truthy-by-shape).
-
-        The kill-switch column may hold any JSON shape (integer, null, list).
-        Only an explicitly truthy bool or a recognised string turns the switch
-        on, so every other shape must read through ``bool(value)`` — a
-        non-empty list must never be treated as "kill switch on".
-        """
-        assert kill_switch_disables_enforcement(stored) is bool(stored)
+        assert partner_license_requires_analytics(_RaisingClaims()) is False

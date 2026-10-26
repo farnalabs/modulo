@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import path from 'path'
 import { parse } from '@vue/compiler-sfc'
-import { baseParse, NodeTypes } from '@vue/compiler-dom'
+import { parse as parseTemplate, NodeTypes } from '@vue/compiler-dom'
 
 /**
  * Guard test: every routed view must have exactly one root element in its
@@ -16,6 +16,13 @@ import { baseParse, NodeTypes } from '@vue/compiler-dom'
  * block. Root elements are then counted from the compiled template AST, which
  * is robust to tags whose attribute values contain `>` and to self-closing
  * tags.
+ *
+ * The AST is produced with `@vue/compiler-dom`'s `parse`, NOT compiler-core's
+ * `baseParse` (which that package also re-exports): only the DOM parser applies
+ * the HTML parser options, so only it knows that void elements (`<input>`,
+ * `<br>`, `<img>`, ...) are legitimately unclosed. `baseParse` defaults
+ * `isVoidTag` to "never", so a view containing a void element threw
+ * "Element is missing end tag" (surfaced by FAR-2063).
  */
 const viewsDir = path.resolve(__dirname, '../views')
 
@@ -25,7 +32,7 @@ const viewsDir = path.resolve(__dirname, '../views')
  * root element (with surrounding whitespace) still counts as exactly one root.
  */
 function countRootElements(templateContent: string): number {
-  const ast = baseParse(templateContent, { comments: true })
+  const ast = parseTemplate(templateContent, { comments: true })
   return ast.children.filter((node) => {
     if (node.type === NodeTypes.COMMENT) return false
     if (node.type === NodeTypes.TEXT) return node.content.trim().length > 0

@@ -16,10 +16,12 @@ vi.mock('../lib/formatDate', () => ({
 }))
 
 const mockGet = vi.fn()
+const mockPut = vi.fn()
 
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: (...args: unknown[]) => mockGet(...args),
+    PUT: (...args: unknown[]) => mockPut(...args),
   },
 }))
 
@@ -30,6 +32,7 @@ describe('AdminProductAnalyticsView', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     mockGet.mockResolvedValue({ data: null, error: undefined })
+    mockPut.mockResolvedValue({ data: null, error: undefined })
   })
 
   it('renders the page header with title and subtitle', async () => {
@@ -103,7 +106,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: false,
-        enforcement_enabled: false,
         warning: 'not_reaching_farnalabs',
       },
       error: undefined,
@@ -135,7 +137,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: false,
-        enforcement_enabled: false,
         warning: null,
       },
       error: undefined,
@@ -167,7 +168,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 42,
         consent_level: 'all',
         instance_enabled: true,
-        enforcement_enabled: true,
         egress_allowed: true,
         warning: null,
       },
@@ -203,7 +203,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: false,
-        enforcement_enabled: false,
         warning: null,
       },
       error: undefined,
@@ -235,7 +234,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'all',
         instance_enabled: false,
-        enforcement_enabled: false,
         warning: null,
       },
       error: undefined,
@@ -269,7 +267,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: false,
-        enforcement_enabled: false,
         warning: null,
       },
       error: undefined,
@@ -303,7 +300,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: '',
         instance_enabled: false,
-        enforcement_enabled: false,
         warning: null,
       },
       error: undefined,
@@ -336,7 +332,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: true,
-        enforcement_enabled: false,
         warning: null,
       },
       error: undefined,
@@ -370,7 +365,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: false,
-        enforcement_enabled: false,
         warning: null,
       },
       error: undefined,
@@ -397,14 +391,15 @@ describe('AdminProductAnalyticsView', () => {
     expect(badge.text()).toContain('Disabled')
   })
 
-  it('renders enforcement active badge', async () => {
+  it('renders licence required badge when the licence requires analytics', async () => {
     mockGet.mockResolvedValue({
       data: {
         last_successful_dump_at: null,
         dump_count_total: 0,
         consent_level: 'off',
-        instance_enabled: false,
-        enforcement_enabled: true,
+        instance_enabled: true,
+        instance_switch_source: 'licence',
+        licence_requires_analytics: true,
         warning: null,
       },
       error: undefined,
@@ -426,19 +421,20 @@ describe('AdminProductAnalyticsView', () => {
     await flushPromises()
     await nextTick()
 
-    const badge = wrapper.find('[data-testid="enforcement-enabled"]')
+    const badge = wrapper.find('[data-testid="licence-requires-analytics"]')
     expect(badge.classes()).toContain('badge-context-purple')
-    expect(badge.text()).toContain('Active')
+    expect(badge.text()).toContain('Required')
   })
 
-  it('renders enforcement inactive badge', async () => {
+  it('renders licence not-required badge and the off-by-default copy', async () => {
     mockGet.mockResolvedValue({
       data: {
         last_successful_dump_at: null,
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: false,
-        enforcement_enabled: false,
+        instance_switch_source: 'default',
+        licence_requires_analytics: false,
         warning: null,
       },
       error: undefined,
@@ -460,9 +456,280 @@ describe('AdminProductAnalyticsView', () => {
     await flushPromises()
     await nextTick()
 
-    const badge = wrapper.find('[data-testid="enforcement-enabled"]')
+    const badge = wrapper.find('[data-testid="licence-requires-analytics"]')
     expect(badge.classes()).toContain('badge-status-muted')
-    expect(badge.text()).toContain('Inactive')
+    expect(badge.text()).toContain('Not required')
+    expect(wrapper.find('[data-testid="instance-switch-source"]').text()).toContain('Off by default')
+  })
+
+  it('shows the licence-required explanatory copy and lets the operator turn it off', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'off',
+        instance_enabled: true,
+        instance_switch_source: 'licence',
+        licence_requires_analytics: true,
+        warning: null,
+      },
+      error: undefined,
+    })
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="instance-switch-source"]').text()).toContain(
+      'On because your licence requires it',
+    )
+    // A licence-derived value is not an operator override, so there is nothing
+    // to "reset" - the toggle is the way to veto it.
+    expect(wrapper.find('[data-testid="instance-switch-reset"]').exists()).toBe(false)
+
+    const toggle = wrapper.find('[data-testid="instance-switch-toggle"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    // jsdom does not flip a checkbox on ``trigger('change')``; set the DOM
+    // state the way a real click would, then fire the handler.
+    ;(toggle.element as HTMLInputElement).checked = false
+    await toggle.trigger('change')
+
+    expect(mockPut).toHaveBeenCalledWith('/api/v1/product-analytics/instance-switch', {
+      body: { enabled: false },
+    })
+  })
+
+  it('clears an explicit override back to the licence default', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'off',
+        instance_enabled: false,
+        instance_switch_source: 'operator',
+        licence_requires_analytics: true,
+        warning: null,
+      },
+      error: undefined,
+    })
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="instance-switch-reset"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="instance-switch-reset"]').trigger('click')
+
+    expect(mockPut).toHaveBeenCalledWith('/api/v1/product-analytics/instance-switch', {
+      body: { enabled: null },
+    })
+  })
+
+  it('offers no reset for an environment-sourced switch (the env var owns it)', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'off',
+        instance_enabled: true,
+        instance_switch_source: 'environment',
+        licence_requires_analytics: false,
+        warning: null,
+      },
+      error: undefined,
+    })
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="instance-switch-source"]').text()).toContain(
+      'MODULO_PRODUCT_ANALYTICS_ENABLED',
+    )
+    // An env-sourced switch has no stored system_config row, so a reset would
+    // be a silent backend no-op while the copy claims an effect. Never render it.
+    expect(wrapper.find('[data-testid="instance-switch-reset"]').exists()).toBe(false)
+    expect((wrapper.find('[data-testid="instance-switch-toggle"]').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('shows the save error and does not refetch when the switch write fails', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'off',
+        instance_enabled: false,
+        instance_switch_source: 'operator',
+        licence_requires_analytics: false,
+        warning: null,
+      },
+      error: undefined,
+    })
+    mockPut.mockResolvedValue({ data: undefined, error: { status: 503, detail: 'Unavailable' } })
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    mockGet.mockClear()
+    const toggle = wrapper.find('[data-testid="instance-switch-toggle"]')
+    // A real click flips the DOM before the request fires. The failed save must
+    // re-assert the committed value, or the control keeps showing the user's
+    // rejected flip.
+    ;(toggle.element as HTMLInputElement).checked = true
+    await toggle.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="instance-switch-error"]').exists()).toBe(true)
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    expect(mockGet).not.toHaveBeenCalled()
+  })
+
+  it('shows the save error when the switch write throws', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'off',
+        instance_enabled: false,
+        instance_switch_source: 'default',
+        licence_requires_analytics: false,
+        warning: null,
+      },
+      error: undefined,
+    })
+    // A thrown request (network failure / abort) must surface the same error
+    // state as a resolved error envelope, and must not refetch.
+    mockPut.mockRejectedValue(new Error('network down'))
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    mockGet.mockClear()
+    await wrapper.find('[data-testid="instance-switch-toggle"]').trigger('change')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="instance-switch-error"]').exists()).toBe(true)
+    expect(mockGet).not.toHaveBeenCalled()
+  })
+
+  it('skips the retired toggle when the view unmounts mid-save', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'off',
+        instance_enabled: false,
+        instance_switch_source: 'operator',
+        licence_requires_analytics: false,
+        warning: null,
+      },
+      error: undefined,
+    })
+    // Hold the write open so the component can be torn down while it is in
+    // flight. Vue nulls template refs on unmount, so the `finally` must skip
+    // the detached element rather than throw on it.
+    let resolvePut!: (value: unknown) => void
+    mockPut.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePut = resolve
+      }),
+    )
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const toggle = wrapper.find('[data-testid="instance-switch-toggle"]')
+    ;(toggle.element as HTMLInputElement).checked = true
+    await toggle.trigger('change')
+
+    wrapper.unmount()
+    resolvePut({ data: null, error: undefined })
+    await flushPromises()
+
+    // The save ran to completion (initial fetch + the post-write refetch) and
+    // the unmounted toggle was left untouched — no detached-element write.
+    expect(mockGet).toHaveBeenCalledTimes(2)
+  })
+
+  it('exposes a null view and the unknown level when transparency is absent', async () => {
+    // The store leaves ``transparency`` null when the API returns no body. The
+    // view's computed projections must tolerate that rather than assume data.
+    mockGet.mockResolvedValue({ data: null, error: undefined })
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { view: unknown; consentLevelLabel: string }
+    expect(vm.view).toBeNull()
+    expect(vm.consentLevelLabel).toContain('Unknown')
+    expect(wrapper.find('[data-testid="consent-level"]').exists()).toBe(false)
   })
 
   it('renders egress allowed badge when egress_allowed is true', async () => {
@@ -472,7 +739,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'all',
         instance_enabled: true,
-        enforcement_enabled: false,
         egress_allowed: true,
         warning: null,
       },
@@ -504,7 +770,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: false,
-        enforcement_enabled: false,
         egress_allowed: false,
         warning: null,
       },
@@ -554,7 +819,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: false,
-        enforcement_enabled: false,
         warning: null,
       },
       error: undefined,
@@ -577,9 +841,10 @@ describe('AdminProductAnalyticsView', () => {
     await nextTick()
 
     const sections = wrapper.findAll('.section-card')
-    expect(sections.length).toBe(2)
+    expect(sections.length).toBe(3)
     expect(sections[0].text()).toContain('Delivery Status')
-    expect(sections[1].text()).toContain('Consent & Enforcement')
+    expect(sections[1].text()).toContain('Consent & Egress')
+    expect(sections[2].text()).toContain('Instance Switch')
   })
 
   it('formatDate returns dash for invalid date', async () => {
@@ -589,7 +854,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: false,
-        enforcement_enabled: false,
         warning: null,
       },
       error: undefined,
@@ -662,7 +926,6 @@ describe('AdminProductAnalyticsView', () => {
         dump_count_total: 0,
         consent_level: 'off',
         instance_enabled: false,
-        enforcement_enabled: false,
         warning: null,
       },
       error: undefined,
