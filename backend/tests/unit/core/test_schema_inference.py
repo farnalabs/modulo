@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from modulo.core.schema_registry._common import parse_schema_from_response
+from modulo.core.schema_registry._common import invoke_and_parse, parse_schema_from_response
 from modulo.core.schema_registry.inference import (
     _INFERENCE_SYSTEM_PROMPT,
     SchemaInferenceError,
@@ -445,3 +445,37 @@ class TestSchemaInferenceService:
         assert result == expected
         assert backend.invoke_count == 3
         assert mock_sleep.await_count == 2
+
+
+class TestInvokeAndParseArgumentContract:
+    """The historical ``timeout=`` alias and the option guard on ``invoke_and_parse``."""
+
+    async def test_accepts_timeout_seconds_keyword(self) -> None:
+        parsed = await invoke_and_parse(
+            _FakeBackend(response='{"ok": true}'),
+            [],
+            timeout_seconds=5.0,
+            error_cls=SchemaInferenceError,
+            context="test",
+        )
+        assert parsed["ok"] is True
+
+    async def test_missing_timeout_raises_type_error(self) -> None:
+        with pytest.raises(TypeError):
+            await invoke_and_parse(
+                _FakeBackend(response="{}"),
+                [],
+                error_cls=SchemaInferenceError,
+                context="test",
+            )
+
+    async def test_unknown_options_raise_type_error(self) -> None:
+        with pytest.raises(TypeError):
+            await invoke_and_parse(
+                _FakeBackend(response="{}"),
+                [],
+                timeout_seconds=5.0,
+                error_cls=SchemaInferenceError,
+                context="test",
+                unexpected=True,
+            )

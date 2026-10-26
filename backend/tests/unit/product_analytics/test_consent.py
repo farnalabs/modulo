@@ -131,6 +131,23 @@ class TestPromptEligibility:
         }
         assert is_prompt_eligible(consent) is True
 
+    def test_dismissed_with_unparseable_prompted_at_is_eligible(self) -> None:
+        consent = {
+            **default_consent_state(),
+            "prompted": PROMPTED_DISMISSED,
+            "prompted_at": "not-a-timestamp",
+        }
+        assert is_prompt_eligible(consent) is True
+
+    def test_dismissed_with_naive_datetime_is_treated_as_utc(self) -> None:
+        naive_prompted_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=8)
+        consent = {
+            **default_consent_state(),
+            "prompted": PROMPTED_DISMISSED,
+            "prompted_at": naive_prompted_at,
+        }
+        assert is_prompt_eligible(consent) is True
+
 
 # ---------------------------------------------------------------------------
 # Consent transitions

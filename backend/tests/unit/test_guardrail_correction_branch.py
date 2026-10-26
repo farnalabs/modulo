@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from modulo.core.eval_engine import EvalDefinition
+from modulo.core.eval_engine import EvalDefinition, EvalResult
 from modulo.core.guardrails.correction import (
     CorrectionConfigError,
     CorrectionDefinition,
@@ -33,7 +33,9 @@ from modulo.core.guardrails.correction import (
     _prior_metric_is_strictly_worse,
     _resolve_redaction_leaf,
     _resume_revalidation_failure,
+    _revalidate_pii,
     _revalidation_backend_error,
+    _run_different_family_revalidation,
     build_idempotency_key,
     convergence_verdict,
     fingerprint_state,
@@ -771,3 +773,58 @@ def test_correction_outcome_defaults():
     assert outcome.revalidation_result is None
     assert outcome.needs_human_review is False
     assert not outcome.state
+
+
+# ---------------------------------------------------------------------------
+# _revalidate_pii — list traversal (extracted helpers, FAR-366)
+# ---------------------------------------------------------------------------
+
+
+def test_revalidate_pii_finds_match_nested_in_list():
+    """A PII match inside a list leaf is discovered by the deep scan."""
+    result = _revalidate_pii({"items": [{"note": f"token ghp_{'a' * 24}"}]})
+    assert result.passed is False
+
+
+def test_revalidate_pii_passes_when_list_leaves_are_clean():
+    """Walking a clean list returns None, so the re-validation passes."""
+    result = _revalidate_pii({"items": [{"note": "all clear"}, "also clear"]})
+    assert result.passed is True
+
+
+# ---------------------------------------------------------------------------
+# _run_different_family_revalidation — REGEX family routing
+# ---------------------------------------------------------------------------
+
+
+async def test_run_different_family_revalidation_routes_regex_family():
+    """REGEX family routes through the regex revalidator and inverts its verdict."""
+    engine = MagicMock()
+    engine.evaluate.return_value = EvalResult(
+        run_id=uuid.uuid4(), node_id="correction", eval_id=uuid.uuid4(), passed=True
+    )
+    correction = CorrectionDefinition(
+        id="c1",
+        guardrail_id="g1",
+        model_backend_id="m1",
+        revalidation_detector_family=CorrectionDetectorFamily.REGEX,
+        revalidation_config={"pattern": "secret", "field": "output"},
+    )
+
+    result = await _run_different_family_revalidation(
+        engine,
+        {"output": "no secret here"},
+        family=CorrectionDetectorFamily.REGEX,
+        correction=correction,
+        revalidation_config=None,
+        judge_callable=None,
+    )
+
+    assert result.passed is False
+    engine.evaluate.assert_called_once()
+
+
+def test_revalidate_pii_ignores_non_traversable_scalar_leaves():
+    """A scalar leaf that is neither str/dict/list is not a PII match."""
+    result = _revalidate_pii({"count": 42, "flag": True})
+    assert result.passed is True

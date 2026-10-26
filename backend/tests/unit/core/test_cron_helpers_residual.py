@@ -2879,3 +2879,58 @@ async def test_run_reconcile_sweeps_records_drift_sweep(
     await ch._run_reconcile_sweeps(redis_client, summary)
     assert summary.get("drift_sweep_scanned") == 3
     assert summary.get("drift_sweep_corrected") == 2
+
+
+# ---------------------------------------------------------------------------
+# Extracted nodeless-zombie helpers + cron fire guard (FAR-366 refactor)
+# ---------------------------------------------------------------------------
+
+
+def test_check_age_gate_rejects_missing_started_at():
+    """A row with no ``started_at`` can never pass the nodeless age gate."""
+    assert ch._check_age_gate(SimpleNamespace(started_at=None), 20) is False
+
+
+def test_compute_zombie_timing_without_started_at_or_dispatch():
+    """A run with no ``started_at`` yields no age and no queue wait."""
+    run = SimpleNamespace(started_at=None, dispatched_at=None, claim_count=2, dispatch_phase_entered_at=None)
+    zombie_age_minutes, saq_queue_wait_seconds, claim_count, dispatch_phase_elapsed = ch._compute_zombie_timing(run)
+    assert zombie_age_minutes is None
+    assert saq_queue_wait_seconds is None
+    assert claim_count == 2
+    assert dispatch_phase_elapsed is None
+
+
+def test_compute_zombie_timing_reports_queue_wait_when_dispatched():
+    """``started_at`` + ``dispatched_at`` produces the SAQ queue wait."""
+    now = datetime.now(UTC)
+    run = SimpleNamespace(
+        started_at=now,
+        dispatched_at=now - timedelta(seconds=30),
+        claim_count=1,
+        dispatch_phase_entered_at=None,
+    )
+    zombie_age_minutes, saq_queue_wait_seconds, claim_count, dispatch_phase_elapsed = ch._compute_zombie_timing(run)
+    assert zombie_age_minutes is not None
+    assert zombie_age_minutes >= 0.0
+    assert saq_queue_wait_seconds is not None
+    assert 29.0 <= saq_queue_wait_seconds <= 31.0
+    assert claim_count == 1
+    assert dispatch_phase_elapsed is None
+
+
+async def test_fire_cron_trigger_in_session_missing_trigger_skips(monkeypatch: pytest.MonkeyPatch):
+    """A validator that yields no trigger and no skip still produces a skip."""
+    monkeypatch.setattr(ch, "_validate_cron_trigger", AsyncMock(return_value=(None, None)))
+
+    result = await ch._fire_cron_trigger_in_session(
+        _MockSession(),
+        trigger_id=TRIGGER_A,
+        org_id=ORG,
+        pipeline_id=PIPELINE,
+        cron_expression="* * * * *",
+        snapshot_id=None,
+        advance_next_fire_at=True,
+    )
+
+    assert result == {"status": "skipped", "reason": "trigger_inactive_or_missing"}
