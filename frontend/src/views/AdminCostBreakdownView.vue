@@ -87,6 +87,15 @@
                 </template>
               </DataTable>
             </div>
+            <p
+              v-if="hasUnattributedSpend"
+              class="mt-3 text-xs text-muted-foreground"
+              data-testid="cost-team-unattributed"
+            >
+              {{ $t('views.AdminCostBreakdownView.unattributed_spend_line', {
+                amount: formatMoney(unassignedSpend, currencyCode),
+              }) }}
+            </p>
           </template>
         </Card>
 
@@ -176,6 +185,15 @@ const { loading, error: loadError, data, load: loadData } = useDataFetch(
 )
 
 const items = computed<CostReportRow[]>(() => (data.value as CostReportResponse | undefined)?.items ?? [])
+
+function parseReportAmount(value: string | null | undefined): number {
+  if (value == null) return 0
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const unassignedSpend = computed(() => parseReportAmount((data.value as CostReportResponse | undefined)?.org_unassigned_components))
+const hasUnattributedSpend = computed(() => unassignedSpend.value > 0)
 
 const tableRows = computed<TeamTableRow[]>(() => items.value.map(item => ({
   ...item,
