@@ -32,4 +32,4 @@ def test_iter_source_text_skips_a_file_removed_mid_scan(tmp_path: Path) -> None:
     assert next(files) == (tmp_path / "a.py", "A = 1\n")
 
     (tmp_path / "b.py").unlink()
-    assert list(files) == []
+    assert not list(files)
