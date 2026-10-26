@@ -52,19 +52,52 @@
             <div>
               <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminProductAnalyticsView.instance_switch') }}</span>
               <p class="mt-0.5">
-                <span :class="store.transparency.instance_enabled ? 'badge badge-status-success' : 'badge badge-status-muted'" data-testid="instance-enabled">
-                  {{ store.transparency.instance_enabled ? $t('views.AdminProductAnalyticsView.enabled') : $t('views.AdminProductAnalyticsView.disabled') }}
+                <span :class="instanceEnabled ? 'badge badge-status-success' : 'badge badge-status-muted'" data-testid="instance-enabled">
+                  {{ instanceEnabled ? $t('views.AdminProductAnalyticsView.enabled') : $t('views.AdminProductAnalyticsView.disabled') }}
                 </span>
               </p>
             </div>
             <div>
-              <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminProductAnalyticsView.enforcement') }}</span>
+              <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminProductAnalyticsView.licence') }}</span>
               <p class="mt-0.5">
-                <span :class="store.transparency.enforcement_enabled ? 'badge badge-context-purple' : 'badge badge-status-muted'" data-testid="enforcement-enabled">
-                  {{ store.transparency.enforcement_enabled ? $t('views.AdminProductAnalyticsView.active') : $t('views.AdminProductAnalyticsView.inactive') }}
+                <span :class="licenceRequiresAnalytics ? 'badge badge-context-purple' : 'badge badge-status-muted'" data-testid="licence-requires-analytics">
+                  {{ licenceRequiresAnalytics ? $t('views.AdminProductAnalyticsView.licence_required') : $t('views.AdminProductAnalyticsView.licence_not_required') }}
                 </span>
               </p>
             </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard :title="$t('views.AdminProductAnalyticsView.instance_switch_control')">
+          <div class="space-y-3">
+            <p class="text-sm text-muted-foreground" data-testid="instance-switch-source">
+              {{ switchSourceCopy }}
+            </p>
+            <div class="flex flex-wrap items-center gap-3">
+              <label class="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  data-testid="instance-switch-toggle"
+                  :checked="instanceEnabled"
+                  :disabled="saving"
+                  @change="onToggle"
+                >
+                <span>{{ $t('views.AdminProductAnalyticsView.instance_switch_label') }}</span>
+              </label>
+              <button
+                v-if="hasExplicitOperatorValue"
+                type="button"
+                class="rounded-lg border border-input px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+                data-testid="instance-switch-reset"
+                :disabled="saving"
+                @click="onReset"
+              >
+                {{ $t('views.AdminProductAnalyticsView.use_licence_default') }}
+              </button>
+            </div>
+            <p v-if="saveError" class="text-sm text-destructive" data-testid="instance-switch-error" aria-live="assertive">
+              {{ saveError }}
+            </p>
           </div>
         </SectionCard>
       </div>
@@ -73,7 +106,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { parseISO } from 'date-fns'
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
@@ -81,21 +114,87 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { useProductAnalyticsStore } from '../stores/productAnalyticsStore'
 import { formatDateShort } from '../lib/formatDate'
+import { formatApiError } from '../lib/api/formatError'
+import { api } from '../lib/api/client'
 import { useI18n } from 'vue-i18n'
+
+/**
+ * The fields this view reads from the transparency response. Declared locally
+ * (rather than widening the store's own interface) so the view - the only
+ * consumer of the switch provenance - owns the contract it renders.
+ */
+type SwitchSource = 'operator' | 'environment' | 'licence' | 'default'
+
+interface TransparencyView {
+  consent_level: string
+  instance_enabled: boolean
+  instance_switch_source: SwitchSource
+  licence_requires_analytics: boolean
+  egress_allowed: boolean
+}
 
 const store = useProductAnalyticsStore()
 const { t } = useI18n()
+const saving = ref(false)
+const saveError = ref<string | null>(null)
+
+const view = computed<TransparencyView | null>(
+  () => (store.transparency as unknown as TransparencyView | null) ?? null,
+)
 
 const consentLevelLabel = computed(() => {
   const map: Record<string, string> = {
     all: t('views.AdminProductAnalyticsView.level_all'),
     off: t('views.AdminProductAnalyticsView.level_off'),
   }
-  return map[store.transparency?.consent_level ?? ''] || store.transparency?.consent_level || t('views.AdminProductAnalyticsView.level_unknown')
+  return map[view.value?.consent_level ?? ''] || view.value?.consent_level || t('views.AdminProductAnalyticsView.level_unknown')
 })
 
 // The transparency endpoint returns ``egress_allowed`` on ``TransparencyData``.
-const egressAllowed = computed(() => store.transparency?.egress_allowed === true)
+const egressAllowed = computed(() => view.value?.egress_allowed === true)
+const instanceEnabled = computed(() => view.value?.instance_enabled === true)
+const licenceRequiresAnalytics = computed(() => view.value?.licence_requires_analytics === true)
+
+// An explicit operator value (stored or env) can be cleared, restoring the
+// licence-derived default. A licence/default value needs no "reset".
+const hasExplicitOperatorValue = computed(
+  () => view.value?.instance_switch_source === 'operator' || view.value?.instance_switch_source === 'environment',
+)
+
+const switchSourceCopy = computed(() => {
+  const source = view.value?.instance_switch_source ?? 'default'
+  return t(`views.AdminProductAnalyticsView.switch_source_${source}`)
+})
+
+async function saveSwitch(enabled: boolean | null): Promise<void> {
+  saving.value = true
+  saveError.value = null
+  try {
+    const { error } = await api.PUT('/api/v1/product-analytics/instance-switch', {
+      body: { enabled },
+    })
+    if (error) {
+      saveError.value = formatApiError(error)
+      return
+    }
+    // Re-read the full transparency state so the badge, source copy and the
+    // reset affordance all reflect the committed value.
+    await store.fetchTransparency()
+  } catch (e: unknown) {
+    saveError.value = formatApiError(e)
+  } finally {
+    saving.value = false
+  }
+}
+
+function onToggle(event: Event): void {
+  const target = event.target as HTMLInputElement
+  void saveSwitch(target.checked)
+}
+
+function onReset(): void {
+  void saveSwitch(null)
+}
 
 onMounted(() => {
   store.fetchTransparency()

@@ -19,7 +19,9 @@ interface TransparencyData {
   dump_count_total: number
   consent_level: string
   instance_enabled: boolean
-  enforcement_enabled: boolean
+  //: operator | environment | licence | default
+  instance_switch_source: string
+  licence_requires_analytics: boolean
   egress_allowed: boolean
   warning: string | null
 }

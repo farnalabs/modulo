@@ -38,8 +38,10 @@ status: partial
 Product usage and adoption analytics for system administrators on
 `/admin/product-analytics`. The instance reports anonymised/consented usage metrics to
 the vendor via an HMAC-signed ingest endpoint; an instance identity and a transparency
-surface keep collection explicit, and license enforcement gates the reporting behind
-an eligible tier.
+surface keep collection explicit. The instance switch is operator-controlled, with a
+licence-derived default: a licence carrying `product_analytics_required` turns the
+default ON, but an explicit operator value always wins. Analytics never changes an
+organisation's plan or tier.
 
 ## Behaviours
 
@@ -63,30 +65,37 @@ an eligible tier.
       `consent.is_instance_analytics_enabled`, `core/product_analytics/consent.py`;
       the transparency endpoint now delegates to the same helper, so the reported
       switch and the dump gate cannot disagree)
-- [x] The daily dump applies the partner `product_analytics_required` carve-out:
-      `metrics_dump` reads the enforcement kill switch once per run
-      (`license_enforcement.is_enforcement_active`, fail-safe enforced) and
-      `_get_consenting_orgs` excludes orgs where
-      `should_degrade_to_community` fires, so a degraded org can never appear
-      in a vendor payload even if the consent predicate ever widens beyond
-      `all` (`core/product_analytics/metrics_dump.py`,
+- [x] The instance switch is operator-writable and licence-defaulted
+      (FAR-2063): a system admin writes/clears
+      `system_config["product_analytics_enabled"]` through
+      `PUT /api/v1/product-analytics/instance-switch` (audited in the
+      org-independent system ledger) or the switch control on the admin page.
+      `consent.resolve_instance_analytics_switch` applies the precedence:
+      stored operator value -> `MODULO_PRODUCT_ANALYTICS_ENABLED` -> the
+      licence's `product_analytics_required` claim (default ON) -> OFF. An
+      explicit operator value always wins, including OFF over a licence
+      (`core/product_analytics/consent.py`,
+      `api/routes/product_analytics_transparency.py`,
+      `tests/unit/product_analytics/test_license_enforcement.py`,
+      `tests/unit/api/routes/test_product_analytics_transparency.py`,
+      `frontend/src/views/AdminProductAnalyticsView.vue`)
+- [x] Analytics never degrades an organisation's plan or tier. The partner
+      `product_analytics_required` claim is contractual, not a software
+      control: it only supplies the switch DEFAULT, and the dump loop collects
+      consenting orgs with no licence/tier inspection
+      (`core/product_analytics/metrics_dump.py` `_get_consenting_orgs`,
       `tests/unit/product_analytics/test_metrics_dump.py`
-      `TestGetConsentingOrgsLicenseEnforcement`)
-- [ ] License/plan eligibility gating is not wired into request-time routes: the
-      effective-plan resolution (`core/feature_flags.py` `resolve_plan_context` /
-      `api/dependencies.py` `require_feature`) never consults `should_degrade_to_community`, so a
-      degraded org keeps its paid tier on API routes until that half lands.
-      The dump half above is done; the route half remains feature completion,
-      not a QA fix - tracked for a follow-up ticket.
+      `TestGetConsentingOrgsIsConsentOnly`). The former "degrade to Community"
+      machinery was deleted as unreachable.
 - [x] Identity and transparency endpoints disclose collection state and allow opt-out
       (`api/routes/product_analytics_identity.py`, `product_analytics_transparency.py`)
 - [x] The transparency endpoint reports the instance's REAL product-analytics
       posture, every field sourced from state a feature actually writes:
-      `instance_enabled` via `consent.is_instance_analytics_enabled` (bool/string
-      aware - a stored `"false"` is OFF, not fail-open - with the
-      `MODULO_PRODUCT_ANALYTICS_ENABLED` env fallback), `enforcement_enabled` via
-      `consent.is_license_enforcement_enabled` (the real kill switch; absent =
-      enforced), `last_successful_dump_at` / `dump_count_total` from the keys the
+      `instance_enabled` / `instance_switch_source` / `licence_requires_analytics`
+      via `consent.resolve_instance_analytics_switch` (fail-closed coercion - a
+      stored `"false"` is OFF - with the `MODULO_PRODUCT_ANALYTICS_ENABLED` env
+      fallback and the licence-derived default), `last_successful_dump_at` /
+      `dump_count_total` from the keys the
       metrics dump writes (`constants.DUMP_WATERMARK_KEY`,
       `metrics_dump.DUMP_COUNT_KEY`), and `consent_level` from the caller's
       organisation `settings_json` (read through `consent.org_consent_level`)
@@ -179,7 +188,7 @@ intentional, not an open question:
   enhancement (the instance aggregate is used only when the caller org is
   unknown).
 - The `/admin/product-analytics` page still cannot show in-product usage/adoption
-  metrics - it renders only the transparency endpoint's delivery/consent/enforcement
+  metrics - it renders only the transparency endpoint's delivery/consent/switch
   fields, which now reflect real state. An in-product analytics export/administration
   surface (self-serve downloads, configurable schedule, or a self-hosted warehouse)
   remains unshipped (warehouse scope sits under `feat-analytics`).
@@ -192,6 +201,22 @@ intentional, not an open question:
   payload-dedup contract change on the vendor side, not taken in FAR-1717.
 
 ## QA History
+- 2026-10-26: **FAR-2063 - instance switch write path + licence-derived default**.
+  The master switch had no writer (`product_analytics_enabled` was read in
+  several places and written by nothing) and the licence "enforcement" was
+  dead code: `_get_consenting_orgs` dropped every non-consenting org before the
+  `should_degrade_to_community` branch, which required exactly such an org, so
+  the branch was unreachable - and its test mocked the predicate to True, so CI
+  asserted a path that could not execute. Settled design: the switch is
+  operator-writable and licence-defaulted, and analytics never degrades a tier.
+  Added `PUT /api/v1/product-analytics/instance-switch` (system admin, audited
+  in the system ledger) and the switch UI on the admin page; added
+  `consent.resolve_instance_analytics_switch` (operator -> env -> licence ->
+  OFF); deleted `license_enforcement.py`, the kill switch, the carve-out helper
+  and the unreachable dump branch; replaced the mocked-predicate test with real
+  precedence tests plus a real-path proof that the dump never runs when the
+  effective switch is OFF. Documented `MODULO_PRODUCT_ANALYTICS_ENABLED` in the
+  configuration reference.
 - 2026-10-19: **Improve Architecture product-map walk** - fixed MAJOR
   (behaviour-adversarial / Lens 9 List B - *listed but vacuously covered*): the
   frontend event-capture composable generated `event_id` from a module-scoped
