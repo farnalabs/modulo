@@ -223,6 +223,28 @@ jobs:
         working-directory: backend
         run: |
           set -euo pipefail
+          # Keep the global --no-build supply-chain boundary. These three IBM
+          # COS packages are the only locked sdist-only dependencies; install
+          # their exact locked archives separately below with build hashes.
+          IBM_COS_BUILD_CONSTRAINTS="$(mktemp)"
+          trap 'rm -f "${IBM_COS_BUILD_CONSTRAINTS}"' EXIT
+          cat > "${IBM_COS_BUILD_CONSTRAINTS}" <<'EOF'
+          pip==26.2.2 --hash=sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70
+          setuptools==84.2.1 --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
+          EOF
+
+          uv sync --frozen --no-dev --no-build \
+            --no-install-package ibm-cos-sdk \
+            --no-install-package ibm-cos-sdk-core \
+            --no-install-package ibm-cos-sdk-s3transfer
+
+          uv pip install --python .venv/bin/python \
+            --require-build-hashes \
+            --build-constraints "${IBM_COS_BUILD_CONSTRAINTS}" \
+            --no-deps \
+            'ibm-cos-sdk @ https://files.pythonhosted.org/packages/98/b8/b99f17ece72d4bccd7e75539b9a294d0f73ace5c6c475d8f2631afd6f65b/ibm_cos_sdk-2.14.3.tar.gz#sha256=643b6f2aa1683adad7f432df23407d11ae5adb9d9ad01214115bee77dc64364a' \
+            'ibm-cos-sdk-core @ https://files.pythonhosted.org/packages/7e/45/80c23aa1e13175a9deefe43cbf8e853a3d3bfc8dfa8b6d6fe83e5785fe21/ibm_cos_sdk_core-2.14.3.tar.gz#sha256=85dee7790c92e8db69bf39dae4c02cac211e3c1d81bb86e64fa2d1e929674623' \
+            'ibm-cos-sdk-s3transfer @ https://files.pythonhosted.org/packages/f3/ff/c9baf0997266d398ae08347951a2970e5e96ed6232ed0252f649f2b9a7eb/ibm_cos_sdk_s3transfer-2.14.3.tar.gz#sha256=2251ebfc4a46144401e431f4a5d9f04c262a0d6f95c88a8e71071da056e55f72'
           BUNDLE="../build/${BUNDLE_ROOT}"
           mkdir -p "$BUNDLE/backend"
           cp -a src "$BUNDLE/backend/src"
