@@ -614,7 +614,9 @@ class CorrectionBackend(Protocol):
     never guardrail config or vault secrets.
     """
 
-    async def invoke(self, messages: list[Any], **kwargs: Any) -> Any: ...
+    async def invoke(  # NOSONAR S7503 - async backend capability contract
+        self, messages: list[Any], **kwargs: Any
+    ) -> Any: ...
 
 
 def _parse_json_output(raw: str) -> dict[str, Any]:
@@ -1358,7 +1360,7 @@ def _build_revalidation_config(
     return config
 
 
-async def _run_different_family_revalidation(
+async def _run_different_family_revalidation(  # NOSONAR S7503 - async seam preserves awaited revalidation API
     engine: EvalEngine,
     produced_output: dict[str, Any],
     *,
@@ -1410,7 +1412,7 @@ def _first_violating_guardrail(
     return None
 
 
-async def check_corrected_output_violates_guardrails(
+async def check_corrected_output_violates_guardrails(  # NOSONAR S7503 - async guardrail-check seam for awaited callers
     *,
     corrected_output: Mapping[str, Any],
     guardrails: Sequence[EvalDefinition],
