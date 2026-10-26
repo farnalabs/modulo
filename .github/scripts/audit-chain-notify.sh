@@ -96,7 +96,7 @@ run_evaluate() {
 
   if [[ -z "$runs_file" ]]; then
     # Fail LOUD, never healthy: the evaluator escalates the current blind cycle.
-    echo "::error::Could not read the audit-chain monitor's run history - the escalation state is UNKNOWN. A blind cycle still escalates rather than being assumed healthy (FAR-2160)."
+    echo "::error::Could not read the audit-chain monitor's run history - the escalation state is UNKNOWN. A blind cycle still escalates rather than being assumed healthy (FAR-2160)." >&2
     history_read="false"
   else
     local run_rows
@@ -186,7 +186,7 @@ PY
   fi
 
   if ! jq -s '.' "$history_ndjson" > "$state_dir/history.json" 2>/dev/null; then
-    echo "::error::Could not assemble the audit-chain run-history state - escalating rather than assuming healthy."
+    echo "::error::Could not assemble the audit-chain run-history state - escalating rather than assuming healthy." >&2
     printf '[]\n' > "$state_dir/history.json"
     history_read="false"
   fi
