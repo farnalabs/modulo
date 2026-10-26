@@ -237,6 +237,16 @@ here.
 
 ---
 
+## Modulo Website Version Display (Scope-Out Decision)
+
+**Decision recorded per FAR-1872 (d):** A grep of `modulo-website/src/**` found ZERO version strings and ZERO ghcr tags.
+
+**Explicit scope-out:** The marketing website (modulo.run, served from `modulo-website` repo) does not display version badges, changelog mirrors, or a downloads page in this release. This is a deliberate deferral — the website surfaces product capabilities and documentation; version-specific download/install links live in the product docs (`docs/deployment.md`, `docs/upgrade-process.md`, `docs/release-process.md`) and the GHCR package page.
+
+If a version badge, changelog mirror, or downloads page is desired for the website, it should be tracked as a separate feature ticket in the `modulo-website` repo.
+
+---
+
 ## Cross-Reference
 
 | Topic | Document |
