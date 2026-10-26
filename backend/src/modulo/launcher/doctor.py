@@ -41,7 +41,7 @@ Full-doctor checks (FAR-676):
 8.  ``state-integrity`` — state.json HMAC verification with DISTINCT corrupt
     (unreadable/torn) vs HMAC-mismatch (tampered/foreign-key) reporting.
 9.  ``secrets-permissions`` — the secrets file must be 0600 owner-only
-    (TODO(P3): Windows ACL seam reports an honest skip).
+    (Windows ACL seam reports an honest skip; tracked as deferred P3 work).
 10. ``ambient-pg-env`` — WARNING: ``PG*``/``DATABASE_URL``/``REDIS_URL``
     variables in the inherited environment could hijack bundled-binary
     invocations (the launcher scrubs them at boot; report so the operator
@@ -80,7 +80,8 @@ port re-assignment guidance printed after the sweep.
 Every predicate reused from the boot path (“doctor and boot must never
 disagree”): ``bootstrap_role._find_allow_list_violations``,
 ``health_checks.db_is_at_migration_head``, ``env_safety``, the supervisor
-lock/holder/manifest readers. TODO(P3): Windows privilege/ownership/ACL
+lock/holder/manifest readers. Windows privilege/ownership/ACL work is
+tracked as deferred P3 work;
 probes (uid/pwd/flock are POSIX) — reported as honest skips, never silent
 passes.
 """
@@ -204,14 +205,14 @@ class DoctorProbes:
     probe_redis: Callable[[], None]
     # True when the DB's alembic_version equals the head; raises -> failed.
     migrations_at_head: Callable[[], bool]
-    # POSIX uid or None on platforms without one (TODO(P3) Windows).
+    # POSIX uid or None on platforms without one (Windows support is deferred P3).
     effective_uid: Callable[[], int | None]
     # username for a uid, or None (unknown / platform seam).
     username_of_uid: Callable[[int], str | None]
     # owner username of *path*, or None when unknown.
     file_owner: Callable[[Path], str | None]
     # lowest permission bits of the secrets file (None = unknown platform /
-    # absent file; TODO(P3) Windows ACL seam returns None).
+    # absent file; Windows ACL support is deferred P3 work and returns None).
     secrets_mode: Callable[[Path], int | None] = field(default=lambda _data_dir: None)
     # names of launcher-hostile variables present in the inherited env.
     ambient_env_names: Callable[[], list[str]] = field(default=list)

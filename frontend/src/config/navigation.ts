@@ -171,18 +171,20 @@ function buildSidebarGroups(): NavGroup[] {
     }
     groupItems.push({
       to: path,
-      icon: routeConfigMap[route.name]?.icon || 'File',
-      label: route.breadcrumb || route.name,
-      labelKey: routeConfigMap[route.name]?.labelKey || `nav.${route.name}`,
-      exact: route.exact || undefined,
-      visibility: (route.visibility as 'public_preview' | 'private_preview' | 'in_dev') || undefined,
-      requiredRoles: route.required_roles || null,
-      requiredTier: route.required_tier || null,
-      requiredPermissions: route.required_permissions || null,
-      requiredFeatureFlag: route.feature_flag || null,
+      icon: routeConfigMap[route.name]?.icon ?? 'File',
+      label: route.breadcrumb ?? route.name,
+      labelKey: routeConfigMap[route.name]?.labelKey ?? `nav.${route.name}`,
+      exact: route.exact ?? undefined,
+      visibility: (route.visibility as 'public_preview' | 'private_preview' | 'in_dev') ?? undefined,
+      requiredRoles: route.required_roles ?? null,
+      requiredTier: route.required_tier ?? null,
+      requiredPermissions: route.required_permissions ?? null,
+      requiredFeatureFlag: route.feature_flag ?? null,
       // FAR-1796: the route entry ORs with its group's flag, mirroring the
-      // router's hydrateManifestMeta derivation.
-      systemAdminOnly: route.system_admin_only || group.system_admin_only || undefined,
+      // router's hydrateManifestMeta derivation. Boolean OR is deliberate: `??`
+      // would let a `false` route flag shadow a `true` group flag.
+      systemAdminOnly: Boolean(route.system_admin_only || group.system_admin_only) || undefined, // NOSONAR: deliberate Boolean OR - `false` must not shadow a group's `true`
+
     })
   }
 
@@ -199,10 +201,10 @@ function buildSidebarGroups(): NavGroup[] {
     .map(([id, sg]) => ({
       id,
       label: sg.label,
-      labelKey: sg.labelKey || groupLabelKeyMap[id] || `components.SidebarNav.group_${id}`,
+      labelKey: sg.labelKey ?? groupLabelKeyMap[id] ?? `components.SidebarNav.group_${id}`,
       items: itemsByGroup[id] ?? [],
       defaultCollapsed: !sg.default_expanded,
-      systemAdminOnly: sg.system_admin_only || undefined,
+      systemAdminOnly: sg.system_admin_only ?? undefined,
     }))
     .filter((g) => g.items.length > 0)
 }
