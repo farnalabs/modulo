@@ -15,17 +15,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
+_TAG_RE = re.compile(
+    r"bundle-v(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)",
+    re.ASCII,
+)
+
 
 class ReleaseValidationError(ValueError):
     """The supplied release JSON or tag is not a published bundle release."""
 
 
 def _version(tag: str) -> tuple[int, int, int]:
-    match = re.fullmatch(
-        r"bundle-v(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)",
-        tag,
-        re.ASCII,
-    )
+    match = _TAG_RE.fullmatch(tag)
     if match is None:
         raise ReleaseValidationError(f"tag must match bundle-vX.Y.Z exactly: {tag}")
     return tuple(int(match.group(part)) for part in ("major", "minor", "patch"))
