@@ -160,13 +160,14 @@
                         <router-link
                           v-if="identifier.href"
                           :to="identifier.href"
-                          :aria-label="$t('views.ComplianceEvidenceIndex.snapshot_open_label', { version: identifier.version })"
+                          :aria-label="$t('views.ComplianceEvidenceIndex.snapshot_open_label', { version: identifier.version, reference: identifier.reference })"
                           class="ml-1 underline hover:text-foreground"
                           data-testid="compliance-evidence-index-snapshot-link"
                         >{{ $t('views.ComplianceEvidenceIndex.snapshot_open') }}</router-link>
                         <button
                           type="button"
-                          :aria-label="$t('views.ComplianceEvidenceIndex.identifier_copy_label', { reference: identifier.reference })"
+                          :aria-label="identifierCopyLabel(identifier)"
+                          aria-live="polite"
                           class="ml-1 underline hover:text-foreground"
                           data-testid="compliance-evidence-index-copy-identifier"
                           @click="copyIdentifier(identifier.raw)"
@@ -310,9 +311,12 @@ async function copyIdentifier(identifier: string): Promise<void> {
  * other. When the detail is missing (or a future payload drops it) the label
  * still renders - only the navigation link is omitted rather than guessing.
  */
-function samplePipelineIds(artifact: ArtifactEntry): string[] {
+function samplePipelineIds(artifact: ArtifactEntry): (string | undefined)[] {
   const value = artifact.detail.sample_pipeline_ids
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+  // Map (not filter) so a non-string entry becomes undefined IN PLACE: the
+  // pairing is positional, and compacting the array would shift every later
+  // identifier onto the wrong pipeline (a misattribution, not a missing link).
+  return Array.isArray(value) ? value.map((item) => (typeof item === 'string' ? item : undefined)) : []
 }
 
 function identifierDisplays(artifact: ArtifactEntry): IdentifierDisplay[] {
@@ -327,10 +331,18 @@ function identifierDisplays(artifact: ArtifactEntry): IdentifierDisplay[] {
       raw,
       label: $t('views.ComplianceEvidenceIndex.snapshot_label', { version }),
       reference: shortId(snapshotId),
-      href: pipelineId ? `/pipelines/${pipelineId}/editor?snapshot=${snapshotId}` : null,
+      href: pipelineId
+        ? `/pipelines/${encodeURIComponent(pipelineId)}/editor?snapshot=${snapshotId}`
+        : null,
       version,
     }
   })
+}
+
+function identifierCopyLabel(display: IdentifierDisplay): string {
+  return display.raw === copiedIdentifier.value
+    ? $t('views.ComplianceEvidenceIndex.identifier_copied_label', { reference: display.reference })
+    : $t('views.ComplianceEvidenceIndex.identifier_copy_label', { reference: display.reference })
 }
 
 function statusClass(status: string): string {
