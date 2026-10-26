@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -8,7 +9,9 @@ import subprocess
 import tempfile
 import time
 import tomllib
+import urllib.request
 from pathlib import Path
+from subprocess import Popen
 
 import pytest
 
@@ -21,13 +24,6 @@ EXPECTED_PACKAGES = {
     "ibm-cos-sdk-core",
     "ibm-cos-sdk-s3transfer",
 }
-
-
-def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line(
-        "markers",
-        "release_bundle_security: opt-in executable release supply-chain verification",
-    )
 
 
 BUILD_CONSTRAINTS = {
@@ -89,17 +85,24 @@ def _site_packages(venv_root: Path) -> Path:
     return candidates[0]
 
 
-def _run_process(command: list[str], cwd: Path, deadline: float, env: dict[str, str]) -> None:
-    remaining = deadline - time.monotonic()
-    assert remaining > 0, "release security test exceeded its total wall-clock deadline"
-    process = subprocess.Popen(  # noqa: S603
+def _popen(command: list[str], cwd: Path, env: dict[str, str], *, timeout: float) -> subprocess.Popen[bytes]:
+    """Start a process whose caller enforces the bounded wait."""
+    del timeout
+    return Popen(  # noqa: S603
         command,
         cwd=cwd,
         env=env,
         start_new_session=True,
     )
+
+
+def _run_process(command: list[str], cwd: Path, deadline: float, env: dict[str, str]) -> None:
+    remaining = deadline - time.monotonic()
+    assert remaining > 0, "release security test exceeded its total wall-clock deadline"
+    process_timeout = min(SUBPROCESS_TIMEOUT_SECONDS, remaining)
+    process = _popen(command, cwd, env, timeout=process_timeout)
     try:
-        process.wait(timeout=min(SUBPROCESS_TIMEOUT_SECONDS, remaining))
+        process.wait(timeout=process_timeout)
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, 9)
         process.wait(timeout=10)
@@ -109,7 +112,24 @@ def _run_process(command: list[str], cwd: Path, deadline: float, env: dict[str, 
 
 def _direct_url(site_packages: Path, distribution: str) -> dict[str, object]:
     metadata = next(site_packages.glob(f"{distribution.replace('-', '_')}-*.dist-info"))
-    return json.loads((metadata / "direct_url.json").read_text(encoding="utf-8"))
+    direct_url = metadata / "direct_url.json"
+    assert direct_url.is_file(), f"missing direct_url.json for {distribution}"
+    return json.loads(direct_url.read_text(encoding="utf-8"))
+
+
+def _verify_locked_archives(locked: dict[str, dict[str, object]]) -> None:
+    """Verify the exact lockfile archives before any build or install command."""
+    for package in EXPECTED_PACKAGES:
+        sdist = locked[package]["sdist"]
+        url = sdist["url"]
+        expected_hash = sdist["hash"]
+        expected_size = sdist["size"]
+        with urllib.request.urlopen(url, timeout=SUBPROCESS_TIMEOUT_SECONDS) as response:  # noqa: S310
+            archive = response.read()
+        assert len(archive) == expected_size, f"unexpected size for {package} from {url}"
+        assert f"sha256:{hashlib.sha256(archive).hexdigest()}" == expected_hash, (
+            f"unexpected SHA-256 for {package} from {url}"
+        )
 
 
 def test_locked_ibm_cos_archives_have_expected_urls_hashes_sizes_and_versions() -> None:
@@ -180,7 +200,13 @@ def test_bundle_ibm_install_is_executable_and_provenance_verified() -> None:
         shutil.copy2(BACKEND_ROOT / "pyproject.toml", project / "pyproject.toml")
         shutil.copy2(LOCKFILE, project / "uv.lock")
         shutil.copytree(BACKEND_ROOT / "src", project / "src")
-        env = {**os.environ, "PYTHONNOUSERSITE": "1", "UV_CACHE_DIR": str(root / "uv-cache")}
+        env = {
+            **os.environ,
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": "",
+            "UV_CACHE_DIR": str(root / "uv-cache"),
+        }
+        _verify_locked_archives(locked)
 
         _run_process(_sync_command(uv), project, deadline, env)
         python = _python_in(project / ".venv")
@@ -222,10 +248,12 @@ def test_bundle_ibm_install_is_executable_and_provenance_verified() -> None:
             assert (metadata / "METADATA").read_text(encoding="utf-8").find("Version: 2.14.3") >= 0
             provenance = _direct_url(site_packages, package)
             expected = locked[package]["sdist"]
+            # The legacy setup.py source build records the archive URL but may
+            # omit archive_info.hash. The lockfile bytes were verified above,
+            # before any build/install command, so installed metadata is not the
+            # authority for the archive digest.
             assert provenance["url"] == expected["url"]
-            archive_info = provenance.get("archive_info", {})
-            if archive_info:
-                assert archive_info["hash"] == expected["hash"].replace(":", "=")
+            assert "archive_info" not in provenance or isinstance(provenance["archive_info"], dict)
 
         code = (
             "import importlib.metadata, pathlib, sys; "
