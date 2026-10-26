@@ -12,7 +12,7 @@ from modulo.model_backends.base import ModelBackendBase
 
 _log = logging.getLogger(__name__)
 
-_FENCE_RE = re.compile(r"```(?:\w+)?\s*\n(.*?)\n```", re.DOTALL)
+_FENCE_RE = re.compile(r"```[^\r\n`]*\r?\n(.*?)\r?\n```", re.DOTALL)
 
 
 def _safe_json_dumps(data: Any, indent: int = 2) -> str:
@@ -117,19 +117,26 @@ async def invoke_and_parse(
     backend: ModelBackendBase,
     messages: list[BaseMessage],
     *,
-    timeout: float,  # noqa: ASYNC109
+    timeout_seconds: float | None = None,
     error_cls: type[Exception],
     context: str,
+    **options: Any,
 ) -> dict[str, Any]:
+    # Keep accepting the historical ``timeout=`` keyword while avoiding a
+    # misleading timeout parameter in this retry loop's public signature.
+    if timeout_seconds is None:
+        timeout_seconds = options.pop("timeout", None)
+    if timeout_seconds is None or options:
+        raise TypeError("invoke_and_parse requires a timeout and accepts no other options")
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            response = await _invoke_backend_with_timeout(backend, messages, timeout_seconds=timeout)
+            response = await _invoke_backend_with_timeout(backend, messages, timeout_seconds=timeout_seconds)
         except asyncio.CancelledError:
             raise
         except TimeoutError:
             _handle_backend_timeout(
                 context,
-                timeout_seconds=timeout,
+                timeout_seconds=timeout_seconds,
                 attempt=attempt,
                 max_retries=_MAX_RETRIES,
                 error_cls=error_cls,

@@ -282,7 +282,7 @@ async def is_license_enforcement_enabled(session: AsyncSession) -> bool:
         config = await get_config(session, LICENSE_ENFORCEMENT_KILL_SWITCH_KEY)
     except SQLAlchemyError:
         _log.warning("product_analytics.kill_switch_read_failed", exc_info=True)
-        return True  # read failure = fail safe = enforced
+        return True
     if config is None:
         return True  # absent = enforced
     return not kill_switch_disables_enforcement(config.value)

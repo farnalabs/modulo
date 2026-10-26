@@ -47,20 +47,15 @@ class CostFormulaError(ValueError):
         super().__init__(message)
 
 
+# Whitespace is skipped explicitly in ``_tokenize`` so the token pattern stays
+# small and its ASCII-only identifier semantics remain obvious.
 _TOKEN_RE = re.compile(
-    r"""
-    [ \t\r\n\f\v]*                           # skip ASCII whitespace ONLY (NBSP is NOT
-                                             #   whitespace here — it surfaces as
-                                             #   unexpected_character, no silent juxtaposition)
-    (?:
-        (?P<number>\d+\.\d+|\d+|\.\d+) |
-        (?P<ident>[A-Za-z_][A-Za-z0-9_]*) |
-        (?P<op>[+\-*/]) |
-        (?P<paren>[()]) |
-        (?P<bad>.)
-    )
-    """,
-    re.VERBOSE | re.ASCII,
+    r"(?P<number>\d+\.\d+|\d+|\.\d+)|"
+    r"(?P<ident>[A-Za-z_]\w*)|"
+    r"(?P<op>[+\-*/])|"
+    r"(?P<paren>[()])|"
+    r"(?P<bad>.)",
+    re.ASCII,
 )
 
 
@@ -98,6 +93,9 @@ def _tokenize(formula: str) -> list[_Token]:
     pos = 0
     length = len(formula)
     while pos < length:
+        if formula[pos] in " \t\r\n\f\v":
+            pos += 1
+            continue
         match = _TOKEN_RE.match(formula, pos)
         if match is None:
             raise CostFormulaError("unexpected_character", "unexpected character in formula")
