@@ -87,6 +87,25 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.findAll('dl dd')).not.toHaveLength(0)
   })
 
+  it('makes every horizontally scrollable table a keyboard-reachable named region', async () => {
+    const wrapper = mountView()
+    await settle()
+
+    for (const testId of [
+      'compliance-evidence-index-coverage-scroll',
+      'compliance-evidence-index-artifacts-scroll',
+    ]) {
+      const region = wrapper.find(`[data-testid="${testId}"]`)
+      expect(region.exists()).toBe(true)
+      expect(region.attributes('tabindex')).toBe('0')
+      expect(region.attributes('role')).toBe('region')
+
+      const labelledBy = region.attributes('aria-labelledby')
+      expect(labelledBy).toBeTruthy()
+      expect(wrapper.find(`#${labelledBy}`).exists()).toBe(true)
+    }
+  })
+
   it('renders incomplete indexes and every missing artefact type', async () => {
     mockGet.mockResolvedValue({
       data: payload({ complete: false, missing_artifact_types: ['release_sbom', 'build_identity'], artifacts: [] }),
