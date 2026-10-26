@@ -286,6 +286,66 @@ def should_escalate(
     return consecutive_blind_cycles >= max(1, threshold)
 
 
+@dataclass(frozen=True)
+class _HistoryWalk:
+    """What walking the readable history back to its boundary established."""
+
+    prior_blind_streak: int
+    already_escalated: bool
+    boundary: str | None
+    complete: bool
+
+
+def _record_id(record: dict[str, Any]) -> str:
+    return str(record.get("id") or "")
+
+
+def _previous_blind(records: Sequence[dict[str, Any]], history_read: bool) -> bool | None:
+    if history_read and records:
+        return _blind_value(records[0].get("state"))
+    return None
+
+
+def _walk_history(records: Sequence[dict[str, Any]], history_exhausted: bool) -> _HistoryWalk:
+    """Count the blind streak backwards to the newest non-blind cycle.
+
+    A run of blind records that reaches the end of the readable window may be
+    longer than we can see, so it is only COMPLETE when the driver did not
+    report the window as exhausted.
+    """
+    streak = 0
+    escalated = False
+    for record in records:
+        if _blind_value(record.get("state")) is not True:
+            return _HistoryWalk(streak, escalated, _record_id(record) or None, True)
+        streak += 1
+        escalated = escalated or bool(record.get("escalated"))
+    if not records:
+        return _HistoryWalk(streak, escalated, None, True)
+    return _HistoryWalk(streak, escalated, _record_id(records[-1]) or None, not history_exhausted)
+
+
+def _consecutive_blind(current_blind: bool | None, prior_blind_streak: int) -> int | None:
+    if current_blind is True:
+        return 1 + prior_blind_streak
+    if current_blind is False:
+        return 0
+    return None
+
+
+def _incident_fields(
+    *,
+    history_read: bool,
+    already_escalated: bool,
+    boundary: str | None,
+    records: Sequence[dict[str, Any]],
+) -> tuple[bool | None, str]:
+    if not history_read:
+        return None, "unknown"
+    last_id = _record_id(records[-1]) if records else "baseline"
+    return already_escalated, boundary or last_id
+
+
 def evaluate(
     *,
     current_blind: bool | None,
@@ -302,42 +362,15 @@ def evaluate(
     due_threshold = max(1, int(threshold))
     records = [record for record in history if isinstance(record, dict)]
 
-    previous_blind: bool | None = None
-    if history_read and records:
-        previous_blind = _blind_value(records[0].get("state"))
-
-    prior_blind_streak = 0
-    already_escalated = False
-    boundary: str | None = None
-    complete = True
-    for record in records:
-        if _blind_value(record.get("state")) is True:
-            prior_blind_streak += 1
-            if bool(record.get("escalated")):
-                already_escalated = True
-            continue
-        boundary = str(record.get("id") or "") or None
-        break
-    else:
-        if records:
-            # Every record we could read is blind: the window is exhausted, so
-            # the streak may be longer than we can see.
-            complete = not history_exhausted
-            boundary = str(records[-1].get("id") or "") or None
-
-    if current_blind is True:
-        consecutive: int | None = 1 + prior_blind_streak
-    elif current_blind is False:
-        consecutive = 0
-    else:
-        consecutive = None
-
-    if not history_read:
-        already_escalated_value: bool | None = None
-        incident_id = "unknown"
-    else:
-        already_escalated_value = already_escalated
-        incident_id = boundary or (str(records[-1].get("id") or "") if records else "baseline")
+    previous_blind = _previous_blind(records, history_read)
+    walk = _walk_history(records, history_exhausted)
+    consecutive = _consecutive_blind(current_blind, walk.prior_blind_streak)
+    already_escalated_value, incident_id = _incident_fields(
+        history_read=history_read,
+        already_escalated=walk.already_escalated,
+        boundary=walk.boundary,
+        records=records,
+    )
 
     email_action = resolve_email_action(current_blind, previous_blind)
     escalate = should_escalate(
@@ -353,10 +386,10 @@ def evaluate(
         previous_blind=previous_blind,
         consecutive_blind_cycles=consecutive,
         threshold=due_threshold,
-        already_escalated=already_escalated,
+        already_escalated=walk.already_escalated,
         incident_id=incident_id,
         history_read=history_read,
-        history_exhausted=history_exhausted or not complete,
+        history_exhausted=history_exhausted or not walk.complete,
         email_action=email_action,
         escalate=escalate,
         reason=_reason(
