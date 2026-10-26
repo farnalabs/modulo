@@ -106,9 +106,15 @@
           />
 
           <div class="flex flex-wrap items-center gap-3">
-            <Button data-testid="license-verify-btn" severity="secondary" outlined :disabled="!newSystemLicenseKey.trim() || verifying" @click="verifyKey">
-              {{ verifying ? $t('views.SettingsLicenseView.verifying') : $t('views.SettingsLicenseView.verify_key') }}
-            </Button>
+            <!--
+              FAR-2154: there is ONE licence action per scope. The removed
+              "Verify Key" button called the same POST /api/v1/admin/license
+              that installs the key, so "verify" silently installed it and
+              busted the status cache — a verification that mutated live state.
+              Installing is the only meaningful operation, so the confirm
+              dialog is the review step (it shows the key's own claims before
+              committing) and no separate verify control exists.
+            -->
             <Button data-testid="license-apply-btn-system" :disabled="!newSystemLicenseKey.trim() || applying" @click="openSystemApplyDialog">
               {{ applying ? $t('views.SettingsLicenseView.applying') : $t('views.SettingsLicenseView.install_system_license') }}
             </Button>
@@ -123,24 +129,47 @@
         </div>
       </div>
 
-      <p
-        v-if="verifyResult"
-        class="text-sm"
-        :class="verifyResult.valid ? 'text-success-text' : 'text-destructive'"
-        aria-live="polite"
-      >
-        {{ verifyResult.message }}
+      <p v-if="licenceError" class="text-sm text-destructive" aria-live="polite">
+        {{ licenceError }}
       </p>
     </template>
 
     <FormDialog
       v-model:open="applyDialogOpen"
-      :title="$t('views.SettingsLicenseView.apply_license_title')"
+      :title="applyScope === 'system' ? $t('views.SettingsLicenseView.install_license_title') : $t('views.SettingsLicenseView.apply_license_title')"
       :description="applyDialogDescription"
-      :confirmText="$t('views.SettingsLicenseView.confirm_apply')"
+      :confirmText="applyScope === 'system' ? $t('views.SettingsLicenseView.install_system_license') : $t('views.SettingsLicenseView.confirm_apply')"
       :loading="applying"
       @confirm="confirmApply"
-    />
+    >
+      <!--
+        FAR-2154: the review step. Installing is the ONLY licence write, so the
+        operator sees what the key claims (decoded locally, unverified) before
+        the request that both validates and installs it.
+      -->
+      <div v-if="licenceKeyPreview" data-testid="licence-key-preview" class="space-y-2">
+        <dl class="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+          <div v-if="licenceKeyPreview.tier">
+            <dt class="text-xs text-muted-foreground">{{ $t('views.SettingsLicenseView.preview_tier') }}</dt>
+            <dd class="font-medium">{{ licenceKeyPreview.tier }}</dd>
+          </div>
+          <div v-if="licenceKeyPreview.expiresAt">
+            <dt class="text-xs text-muted-foreground">{{ $t('views.SettingsLicenseView.preview_expires') }}</dt>
+            <dd class="font-medium">{{ formatDate(licenceKeyPreview.expiresAt) }}</dd>
+          </div>
+          <div v-if="licenceKeyPreview.startsAt">
+            <dt class="text-xs text-muted-foreground">{{ $t('views.SettingsLicenseView.preview_starts') }}</dt>
+            <dd class="font-medium">{{ formatDate(licenceKeyPreview.startsAt) }}</dd>
+          </div>
+        </dl>
+        <p class="text-xs text-muted-foreground">
+          {{ $t('views.SettingsLicenseView.preview_unverified') }}
+        </p>
+      </div>
+      <p v-else class="text-sm text-muted-foreground">
+        {{ $t('views.SettingsLicenseView.preview_unreadable') }}
+      </p>
+    </FormDialog>
 
     <FormDialog
       v-model:open="removeDialogOpen"
@@ -162,6 +191,7 @@ import { useCurrentUser } from '../composables/useCurrentUser'
 import Button from 'primevue/button'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import { decodeBase64Url } from '../lib/jwt'
 import { usePlanStore } from '../stores/planStore'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -247,8 +277,9 @@ const orgLicenceUrl = computed(() => `/api/v1/admin/orgs/${orgId.value}/license`
 const newLicenseKey = ref('')
 const newSystemLicenseKey = ref('')
 
-const verifying = ref(false)
-const verifyResult = ref<{ valid: boolean; message: string } | null>(null)
+// Errors from any licence write (install/remove, either scope). A successful
+// install clears it; there is no "verify" result any more (FAR-2154).
+const licenceError = ref<string | null>(null)
 
 const applying = ref(false)
 const applyDialogOpen = ref(false)
@@ -289,41 +320,46 @@ function formatDate(iso: string): string {
 }
 
 /**
- * System-scope verify. `POST /api/v1/admin/license` is the instance-wide
- * install route (guarded by `system.config.manage`), so this control only
- * renders for a system admin — the card says so explicitly.
+ * Decode a licence key's payload segment for display only.
+ *
+ * The wire format is `<base64url(payload)>.<base64url(signature)>` (see
+ * `backend/src/modulo/core/license.py`). This reads the claims so the operator
+ * can review them in the confirmation dialog; it does NOT verify the
+ * signature and nothing is trusted from it — the install endpoint is what
+ * validates the key. Returns null on any decode/parse failure so an
+ * unreadable key still reaches the server's actionable error.
  */
-async function verifyKey() {
-  if (!newSystemLicenseKey.value.trim()) return
-  verifying.value = true
-  verifyResult.value = null
+function decodeLicenceKeyPayload(raw: string): Record<string, unknown> | null {
+  const segment = raw.trim().split('.')[0]
+  if (!segment) return null
   try {
-    const { data, error: err } = await (api as any).POST('/api/v1/admin/license', {
-      body: { license_key: newSystemLicenseKey.value.trim() },
-    })
-    if (err) {
-      // `err` is the response BODY (an object). `String(err)` rendered
-      // "[object Object]", swallowing the server's actionable detail — most
-      // importantly the anchor-mismatch hint on an install failure (FAR-2091).
-      verifyResult.value = { valid: false, message: formatApiError(err) }
-    } else {
-      verifyResult.value = {
-        valid: true,
-        message: t('views.SettingsLicenseView.valid_license_key', {
-          tier: data.tier,
-          expires: data.expires_at ? formatDate(data.expires_at) : t('views.SettingsLicenseView.never'),
-        }),
-      }
-    }
-  } catch (e: unknown) {
-    verifyResult.value = { valid: false, message: formatApiError(e) }
-  } finally {
-    verifying.value = false
+    const binary = decodeBase64Url(segment)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
+  } catch {
+    return null
   }
 }
 
+interface LicenceKeyPreview {
+  tier: string | null
+  expiresAt: string | null
+  startsAt: string | null
+}
+
+const licenceKeyPreview = computed<LicenceKeyPreview | null>(() => {
+  const raw = applyScope.value === 'system' ? newSystemLicenseKey.value : newLicenseKey.value
+  const payload = decodeLicenceKeyPayload(raw)
+  if (!payload) return null
+  const preview: LicenceKeyPreview = { tier: null, expiresAt: null, startsAt: null }
+  if (typeof payload.tier === 'string') preview.tier = payload.tier
+  if (typeof payload.expires_at === 'string') preview.expiresAt = payload.expires_at
+  if (typeof payload.starts_at === 'string') preview.startsAt = payload.starts_at
+  return preview
+})
+
 function openApplyDialog() {
-  verifyResult.value = null
+  licenceError.value = null
   applyScope.value = 'org'
   applyDialogOpen.value = true
 }
@@ -341,23 +377,23 @@ async function applyKey() {
       body: { license_key: newLicenseKey.value.trim() },
     })
     if (err) {
-      verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(err)}` }
+      licenceError.value = `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(err)}`
     } else {
       applyDialogOpen.value = false
-      verifyResult.value = null
+      licenceError.value = null
       newLicenseKey.value = ''
       await planStore.fetchPlan()
       await loadAll()
     }
   } catch (e: unknown) {
-    verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(e)}` }
+    licenceError.value = `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(e)}`
   } finally {
     applying.value = false
   }
 }
 
 function openSystemApplyDialog() {
-  verifyResult.value = null
+  licenceError.value = null
   applyScope.value = 'system'
   applyDialogOpen.value = true
 }
@@ -371,16 +407,16 @@ async function applySystemKey() {
       body: { license_key: newSystemLicenseKey.value.trim() },
     })
     if (err) {
-      verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(err)}` }
+      licenceError.value = `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(err)}`
     } else {
       applyDialogOpen.value = false
-      verifyResult.value = null
+      licenceError.value = null
       newSystemLicenseKey.value = ''
       await planStore.fetchPlan()
       await loadAll()
     }
   } catch (e: unknown) {
-    verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(e)}` }
+    licenceError.value = `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(e)}`
   } finally {
     applying.value = false
   }
@@ -402,14 +438,14 @@ async function removeLicense() {
   try {
     const { error: err } = await (api as any).DELETE(orgLicenceUrl.value)
     if (err) {
-      verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}` }
+      licenceError.value = `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}`
     } else {
       removeDialogOpen.value = false
       await planStore.fetchPlan()
       await loadAll()
     }
   } catch (e: unknown) {
-    verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(e)}` }
+    licenceError.value = `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(e)}`
   } finally {
     removing.value = false
   }
@@ -428,14 +464,14 @@ async function removeSystemLicense() {
   try {
     const { error: err } = await api.DELETE('/api/v1/admin/license')
     if (err) {
-      verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}` }
+      licenceError.value = `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}`
     } else {
       removeDialogOpen.value = false
       await planStore.fetchPlan()
       await loadAll()
     }
   } catch (e: unknown) {
-    verifyResult.value = { valid: false, message: `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(e)}` }
+    licenceError.value = `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(e)}`
   } finally {
     removing.value = false
   }

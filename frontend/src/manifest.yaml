@@ -5761,14 +5761,14 @@ elements:
       - testid: license-key-input-system
         type: textarea
         dynamic_testid: false
-      - testid: license-verify-btn
-        type: button
-        dynamic_testid: false
       - testid: license-apply-btn-system
         type: button
         dynamic_testid: false
       - testid: license-remove-btn-system
         type: button
+        dynamic_testid: false
+      - testid: licence-key-preview
+        type: element
         dynamic_testid: false
       - testid: licence-renewal-banner
         type: element

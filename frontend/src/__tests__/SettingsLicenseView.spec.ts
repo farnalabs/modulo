@@ -66,11 +66,12 @@ const dialogStubs = ['Dialog', 'DialogContent', 'DialogDescription', 'DialogFoot
 // Stub FormDialog so its @confirm handler (applyKey / removeLicense) can be
 // triggered without rendering the full primevue Dialog tree. The description
 // is rendered so a test can assert the scope-specific durability copy
-// (FAR-2142).
+// (FAR-2142), and the default slot is rendered so the install confirmation's
+// key preview is reachable (FAR-2154).
 const formDialogStub = {
   props: ['open', 'title', 'description', 'confirmText', 'loading'],
   emits: ['confirm'],
-  template: `<div v-if="open"><p class="formdialog-description">{{ description }}</p><button class="formdialog-confirm" @click="$emit('confirm')">{{ confirmText }}</button></div>`,
+  template: `<div v-if="open"><p class="formdialog-description">{{ description }}</p><slot /><button class="formdialog-confirm" @click="$emit('confirm')">{{ confirmText }}</button></div>`,
 }
 
 // Renders the renewal notice's dialog body + footer so the grace actions are
@@ -231,8 +232,11 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.find('[data-testid="licence-system-controls"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="licence-org-controls"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="license-remove-btn-system"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('Verify Key')
-    expect(wrapper.text()).toContain('Install System License')
+    // FAR-2154: the misleading "Verify Key" control is gone — the only licence
+    // write is install, behind a confirmation step.
+    expect(wrapper.find('[data-testid="license-verify-btn"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Verify Key')
+    expect(wrapper.text()).toContain('Install licence')
   })
 
   // ── FAR-2142: no restart instruction; durability stated per scope ────
@@ -312,22 +316,23 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.find('[data-testid="licence-system-controls"]').exists()).toBe(false)
   })
 
-  it('verifyKey shows a valid license message with an expiry date', async () => {
+  it('does not link to the removed /licence/claim page (FAR-2155)', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
-    ;(api.POST as any).mockResolvedValue({ data: { tier: 'team', expires_at: '2027-01-01' }, error: undefined })
 
     const wrapper = mount(SettingsLicenseView, {
-      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+      global: { plugins: [createPinia()], stubs: dialogStubs },
     })
     await nextTick(); await nextTick(); await nextTick()
-    await wrapper.find('[data-testid="license-key-input-system"]').setValue('some-key')
-    await wrapper.find('[data-testid="license-verify-btn"]').trigger('click')
-    await nextTick(); await flushPromises(); await nextTick()
-    expect(wrapper.text()).toContain('Valid license key')
+
+    const claimLinks = wrapper
+      .findAll('a')
+      .filter((anchor) => (anchor.attributes('href') ?? '').includes('/licence/claim'))
+    expect(claimLinks).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('Renewed early')
   })
 
-  it('verifyKey shows a never-expiry fallback when expires_at is absent', async () => {
+  it('has a single system licence action that installs only after confirmation (FAR-2154)', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
     ;(api.POST as any).mockResolvedValue({ data: { tier: 'team' }, error: undefined })
@@ -336,15 +341,111 @@ describe('SettingsLicenseView', () => {
       global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
     })
     await nextTick(); await nextTick(); await nextTick()
-    await wrapper.find('[data-testid="license-key-input-system"]').setValue('some-key')
-    await wrapper.find('[data-testid="license-verify-btn"]').trigger('click')
+
+    // Exactly one control that writes the instance-wide licence.
+    expect(wrapper.find('[data-testid="license-verify-btn"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="license-apply-btn-system"]')).toHaveLength(1)
+
+    await wrapper.find('[data-testid="license-key-input-system"]').setValue('system-key')
+    // Typing and opening the confirmation are not writes.
+    expect(api.POST).not.toHaveBeenCalled()
+    await wrapper.find('[data-testid="license-apply-btn-system"]').trigger('click')
     await nextTick(); await flushPromises(); await nextTick()
-    expect(wrapper.text()).toContain('never')
+    expect(api.POST).not.toHaveBeenCalled()
+
+    // Confirming is the single write.
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    expect(api.POST).toHaveBeenCalledWith('/api/v1/admin/license', {
+      body: { license_key: 'system-key' },
+    })
   })
 
-  it('verifyKey surfaces the server error detail instead of [object Object]', async () => {
+  it('shows the decoded key claims in the install confirmation before committing (FAR-2154)', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+    ;(api.POST as any).mockResolvedValue({ data: { tier: 'team' }, error: undefined })
+
+    // The wire format is <base64(payload)>.<base64(signature)> (license.py).
+    // Midday UTC keeps the rendered date stable across host timezones.
+    const payload = btoa(
+      JSON.stringify({
+        tier: 'team',
+        expires_at: '2027-01-01T12:00:00Z',
+        starts_at: '2026-12-01T12:00:00Z',
+      }),
+    )
+    const key = `${payload}.${btoa('signature')}`
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    await wrapper.find('[data-testid="license-key-input-system"]').setValue(key)
+    await wrapper.find('[data-testid="license-apply-btn-system"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    const preview = wrapper.find('[data-testid="licence-key-preview"]')
+    expect(preview.exists()).toBe(true)
+    expect(preview.text()).toContain('team')
+    expect(preview.text()).toContain('January 1, 2027')
+    expect(preview.text()).toContain('December 1, 2026')
+    // Nothing is written until the operator confirms the parsed details.
+    expect(api.POST).not.toHaveBeenCalled()
+  })
+
+  it('omits preview claims whose value is not a string (FAR-2154)', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+
+    // A well-formed payload whose claims are the wrong type must render an
+    // empty review list rather than leaking a raw value into the dialog.
+    const payload = btoa(JSON.stringify({ tier: 42, expires_at: null, starts_at: ['2026-12-01'] }))
+    const key = `${payload}.${btoa('signature')}`
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    await wrapper.find('[data-testid="license-key-input-system"]').setValue(key)
+    await wrapper.find('[data-testid="license-apply-btn-system"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    const preview = wrapper.find('[data-testid="licence-key-preview"]')
+    expect(preview.exists()).toBe(true)
+    expect(preview.text()).toContain('not yet verified')
+    expect(preview.text()).not.toContain('42')
+    expect(preview.text()).not.toContain('2026-12-01')
+  })
+
+  it('treats a key with no payload segment as unreadable (FAR-2154)', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    // `<signature>` with an empty payload segment: non-empty enough to open
+    // the dialog, but nothing to decode.
+    await wrapper.find('[data-testid="license-key-input-system"]').setValue('.signature')
+    await wrapper.find('[data-testid="license-apply-btn-system"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    expect(wrapper.find('[data-testid="licence-key-preview"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain("This key's details cannot be read here")
+  })
+
+  it('still installs a key whose payload cannot be decoded, and surfaces the server detail', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+    // The server is what verifies the key, so an undecodable key must still be
+    // installable — and its actionable ProblemDetail detail must reach the
+    // operator rather than "[object Object]" (FAR-2091).
     ;(api.POST as any).mockResolvedValue({
       data: null,
       error: {
@@ -359,9 +460,15 @@ describe('SettingsLicenseView', () => {
       global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
     })
     await nextTick(); await nextTick(); await nextTick()
-    await wrapper.find('[data-testid="license-key-input-system"]').setValue('some-key')
-    await wrapper.find('[data-testid="license-verify-btn"]').trigger('click')
+
+    await wrapper.find('[data-testid="license-key-input-system"]').setValue('not-a-valid-key')
+    await wrapper.find('[data-testid="license-apply-btn-system"]').trigger('click')
     await nextTick(); await flushPromises(); await nextTick()
+    expect(wrapper.find('[data-testid="licence-key-preview"]').exists()).toBe(false)
+
+    await wrapper.find('.formdialog-confirm').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+    expect(api.POST).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('Licence key is not signed by the configured trust anchor')
     expect(wrapper.text()).not.toContain('[object Object]')
   })
@@ -561,22 +668,6 @@ describe('SettingsLicenseView', () => {
   })
 
   // ── Guards on the two licence scopes (FAR-2104) ─────────────────────
-
-  it('verifyKey does nothing when the system key field is empty', async () => {
-    const { api } = await import('../lib/api/client')
-    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
-
-    const wrapper = mount(SettingsLicenseView, {
-      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
-    })
-    await nextTick(); await nextTick(); await nextTick()
-
-    // The button is disabled while the field is empty; the guard is the last
-    // line of defence for a programmatic call.
-    await (wrapper.vm as any).verifyKey()
-    expect(api.POST).not.toHaveBeenCalled()
-    expect(wrapper.text()).not.toContain('Valid license key')
-  })
 
   it('applyKey does nothing when the org key field is empty', async () => {
     const { api } = await import('../lib/api/client')
