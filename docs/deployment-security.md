@@ -399,6 +399,12 @@ trivy image ghcr.io/farnalabs/modulo:<version>
 trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:<version>
 ```
 
+**Version pin reference (Docker Compose production):**
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `TAG` | Modulo image version (required, no default) | `v0.4.0` |
+
 **SLAs** (from `docs/security/dependency-policy.md`):
 
 | Severity | Fix deadline |
@@ -569,6 +575,12 @@ Configure alerts for these events in your monitoring system:
    ```bash
    uv run scripts/backup.py --output /backups/pre-upgrade-$(date +%Y%m%d).tar.gz.enc
    ```
+
+**Version pin reference (Docker Compose production):**
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `TAG` | Modulo image version (required, no default) | `v0.4.0` |
 
 3. **Deploy the new image** (Docker Compose):
    ```bash

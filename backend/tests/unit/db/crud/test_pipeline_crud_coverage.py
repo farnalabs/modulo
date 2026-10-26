@@ -148,6 +148,17 @@ class TestCreatePipeline:
                 max_concurrent_runs=0,
             )
 
+    async def test_rejects_unknown_kwargs(self) -> None:
+        session = _mock_session()
+        with pytest.raises(ValueError, match="Unexpected keyword arguments for create_pipeline"):
+            await create_pipeline(
+                session,
+                org_id=uuid.uuid4(),
+                name="test",
+                account_id=uuid.uuid4(),
+                not_a_real_option=True,  # type: ignore[call-arg]
+            )
+
 
 # ---------------------------------------------------------------------------
 # list_pipelines

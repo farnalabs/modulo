@@ -2324,6 +2324,14 @@ def _db_shell_sqlalchemy_response(
     return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
 
 
+# Semgrep's parser cannot parse the PEP 695 type-parameter syntax below
+# (``_run_db_shell[**TOOL_SHELL_P]``), so it reports a one-line
+# ``PartialParsing`` skip for this file. There is no inline directive that
+# clears a parse failure (``nosemgrep`` only suppresses rule findings), so the
+# skip is instead tolerated by the FAR-1933 carve-out in
+# ``scripts/run_semgrep.py``.
+
+
 async def _run_db_shell[**TOOL_SHELL_P](
     fn: Callable[TOOL_SHELL_P, Awaitable[dict[str, Any]]],
     cfg: _DbShellConfig,

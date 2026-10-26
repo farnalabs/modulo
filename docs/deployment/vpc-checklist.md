@@ -65,12 +65,13 @@
 
 - [ ] **Image is pulled from VPC-internal registry** (ECR, GAR, ACR) – not Docker Hub
   - the shipped `deploy/compose/docker-compose.prod.yml` does **not** satisfy this out of
-    the box: it pins `ghcr.io/farnalabs/modulo:${TAG:-latest}`, `postgres:16-alpine` and
+    the box: it pins `ghcr.io/farnalabs/modulo:${TAG:?TAG is required - set the Modulo version you intend to run}`, `postgres:16-alpine` and
     `redis:8-alpine`. The last two are Docker Hub official images, so an air-gapped or
-    egress-restricted VPC cannot pull them.
+    egress-restricted VPC cannot pull them. The Modulo image now **requires** `TAG` to be
+    set (no default), so the compose file will refuse to start without it.
   - verify: `docker compose -f deploy/compose/docker-compose.prod.yml config | grep image`
-  - expected **baseline**: the three images above
-  - expected **compliant**: every image resolves to an internal registry URL, which means
+  - expected **baseline**: the verify command fails with "TAG is required" until `TAG` is set in the environment
+  - expected **compliant**: after setting `TAG=<version>`, every image resolves to an internal registry URL, which means
     mirroring all three into it (the Modulo image via the `${TAG}` variable, Postgres and
     Redis by mirroring the official images or pointing those service blocks at your own
     internal tags) before running the check again
