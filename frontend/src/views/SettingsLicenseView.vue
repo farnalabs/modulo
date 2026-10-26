@@ -211,10 +211,6 @@ const planStore = usePlanStore()
 const { canManageOrgLicence, canManageSystemLicence } = useLicenceAccess()
 const { orgId } = useCurrentUser()
 
-type LicenseMutation = (url: string, options?: { body?: { license_key: string } }) => Promise<{ error?: unknown }>
-const putLicense = api.PUT as unknown as LicenseMutation
-const deleteLicense = api.DELETE as unknown as ((url: string) => Promise<{ error?: unknown }>)
-
 const licenceError = ref<string | null>(null)
 
 // The wire shape is the generated OpenAPI type, never a hand-maintained copy:
@@ -276,9 +272,6 @@ async function loadAll(): Promise<void> {
   }
   await ownLicence.load()
 }
-
-/** The org-scoped write surface (`org.license.manage`, target-org admin). */
-const orgLicenceUrl = computed(() => `/api/v1/admin/orgs/${orgId.value}/license`)
 
 const newLicenseKey = ref('')
 const newSystemLicenseKey = ref('')
@@ -372,7 +365,8 @@ async function applyKey() {
   if (!newLicenseKey.value.trim() || !orgId.value) return
   applying.value = true
   try {
-    const { error: err } = await putLicense(orgLicenceUrl.value, {
+    const { error: err } = await api.PUT('/api/v1/admin/orgs/{org_id}/license', {
+      params: { path: { org_id: orgId.value } },
       body: { license_key: newLicenseKey.value.trim() },
     })
     if (err) {
@@ -435,7 +429,9 @@ async function removeLicense() {
   if (!orgId.value) return
   removing.value = true
   try {
-    const { error: err } = await deleteLicense(orgLicenceUrl.value)
+    const { error: err } = await api.DELETE('/api/v1/admin/orgs/{org_id}/license', {
+      params: { path: { org_id: orgId.value } },
+    })
     if (err) {
       licenceError.value = `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}`
     } else {

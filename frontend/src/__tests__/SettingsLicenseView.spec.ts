@@ -488,7 +488,8 @@ describe('SettingsLicenseView', () => {
     await wrapper.find('.formdialog-confirm').trigger('click')
     await nextTick(); await flushPromises(); await nextTick()
 
-    expect(api.PUT).toHaveBeenCalledWith('/api/v1/admin/orgs/org-1/license', {
+    expect(api.PUT).toHaveBeenCalledWith('/api/v1/admin/orgs/{org_id}/license', {
+      params: { path: { org_id: 'org-1' } },
       body: { license_key: 'org-key' },
     })
     expect(api.POST).not.toHaveBeenCalled()
@@ -528,9 +529,10 @@ describe('SettingsLicenseView', () => {
     await wrapper.find('.formdialog-confirm').trigger('click')
     await nextTick(); await flushPromises(); await nextTick()
 
+    expect(api.DELETE).toHaveBeenCalledTimes(1)
     expect(api.DELETE).toHaveBeenCalledWith('/api/v1/admin/license')
     // The org-scoped route is NOT touched by the system control.
-    expect(api.DELETE).not.toHaveBeenCalledWith('/api/v1/admin/orgs/org-1/license')
+    expect(api.DELETE).not.toHaveBeenCalledWith('/api/v1/admin/orgs/{org_id}/license', expect.anything())
   })
 
   it('removeSystemLicense surfaces an error when the API returns an error', async () => {
@@ -646,7 +648,9 @@ describe('SettingsLicenseView', () => {
     await wrapper.find('.formdialog-confirm').trigger('click')
     await nextTick(); await flushPromises(); await nextTick()
 
-    expect(api.DELETE).toHaveBeenCalledWith('/api/v1/admin/orgs/org-1/license')
+    expect(api.DELETE).toHaveBeenCalledWith('/api/v1/admin/orgs/{org_id}/license', {
+      params: { path: { org_id: 'org-1' } },
+    })
   })
 
   it('removeLicense surfaces an error when the API call throws', async () => {
