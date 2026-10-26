@@ -35,6 +35,7 @@ Every test reports actionable violations instead of a bare failure.
 
 from __future__ import annotations
 
+import re
 import sys
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -231,8 +232,19 @@ def test_deploy_health_consumer_walks_back_past_unmeasured_ticks() -> None:
     violations: list[str] = []
     if "while IFS= read -r PREV_ID" not in script:
         violations.append("  the previous-verdict lookup no longer walks the run history")
-    if 'if [[ "$RUN_VERDICT" != "unknown" ]]' not in script:
+    # The skip comparison may name the sentinel directly or through a shell
+    # variable (a de-duplication of the literal). Either is fine as long as the
+    # value it compares against really is "unknown" - naming a variable that
+    # holds something else would silently stop the walk.
+    skip = re.search(r'if \[\[ "\$RUN_VERDICT" != "(\$[A-Za-z_][A-Za-z0-9_]*|unknown)" \]\]', script)
+    if skip is None:
         violations.append("  the walk no longer skips UNKNOWN verdicts to reach a measured one")
+    elif skip.group(1).startswith("$"):
+        sentinel = re.escape(skip.group(1)[1:])
+        if not re.search(rf'^{sentinel}="unknown"$', script, re.MULTILINE):
+            violations.append(
+                f'  the walk compares RUN_VERDICT against {skip.group(1)}, which the script never defines as "unknown"'
+            )
     if "previous-verdict --jobs-json" not in script:
         violations.append("  the walk no longer asks the evaluator for the verdict")
     if "completed[0]" in script:
