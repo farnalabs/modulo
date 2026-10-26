@@ -20,6 +20,7 @@ import pytest
 
 import modulo.db.bootstrap as bootstrap_module
 from modulo.db.url_utils import derive_system_database_url, fix_database_url, split_postgres_sslmode
+from tests.unit._source_scan import iter_source_text
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEPLOY_SHIM = _REPO_ROOT / "deploy" / "fly" / "bootstrap_db.py"
@@ -188,8 +189,8 @@ def test_split_postgres_sslmode_has_exactly_one_definition() -> None:
     src_root = _REPO_ROOT / "backend" / "src"
     hits = sorted(
         path.relative_to(src_root).as_posix()
-        for path in src_root.rglob("*.py")
-        if "def split_postgres_sslmode" in path.read_text(encoding="utf-8")
+        for path, source in iter_source_text(src_root)
+        if "def split_postgres_sslmode" in source
     )
     assert hits == ["modulo/db/url_utils.py"], f"expected exactly one definition, found: {hits}"
     assert bootstrap_module.split_postgres_sslmode is split_postgres_sslmode

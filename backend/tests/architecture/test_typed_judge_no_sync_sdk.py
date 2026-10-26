@@ -22,6 +22,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 _BACKEND = Path(__file__).resolve().parents[2]
 _SOURCE = _BACKEND / "src" / "modulo"
 _TYPED_JUDGE_DIR = _SOURCE / "core" / "eval_engine" / "typed_judge"
@@ -125,11 +127,8 @@ def _violations_for_source(source: str) -> list[str]:
     return [*violations, *_call_violations(tree, aliases)]
 
 
-def _file_violations(path: Path) -> list[str]:
-    return [
-        f"{path.relative_to(_BACKEND)}: {violation}"
-        for violation in _violations_for_source(path.read_text(encoding="utf-8"))
-    ]
+def _file_violations(path: Path, source: str) -> list[str]:
+    return [f"{path.relative_to(_BACKEND)}: {violation}" for violation in _violations_for_source(source)]
 
 
 def test_the_guard_covers_the_judge_entry_points_and_subpackages() -> None:
@@ -143,7 +142,10 @@ def test_the_guard_covers_the_judge_entry_points_and_subpackages() -> None:
 
 
 def test_no_blocking_call_or_sync_sdk_is_used_on_the_judge_path() -> None:
-    offenders = [finding for path in _target_files() for finding in _file_violations(path)]
+    sources = list(iter_source_text(_TYPED_JUDGE_DIR)) + [
+        (path, path.read_text(encoding="utf-8")) for path in _JUDGE_MODULES
+    ]
+    offenders = [finding for path, source in sources for finding in _file_violations(path, source)]
 
     assert not offenders, "blocking/sync SDK pattern(s): " + ", ".join(offenders)
 

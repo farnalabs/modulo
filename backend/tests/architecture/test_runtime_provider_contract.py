@@ -16,6 +16,8 @@ They run without a database.
 import ast
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
 PACKAGE = SRC / "core" / "runtime_provider"
 
@@ -60,8 +62,8 @@ _ABC_METHODS = {
 _PROVIDER_HUB_FACTORIES = {"build_hub", "create_default_hub", "RuntimeProviderHub"}
 
 
-def _python_files() -> list[Path]:
-    return [p for p in SRC.rglob("*.py") if "migrations" not in p.parts]
+def _python_sources() -> list[tuple[Path, str]]:
+    return [(path, source) for path, source in iter_source_text(SRC) if "migrations" not in path.parts]
 
 
 def _imported_modules(tree: ast.Module) -> set[str]:
@@ -76,14 +78,14 @@ def _imported_modules(tree: ast.Module) -> set[str]:
 
 def test_concrete_providers_not_imported_outside_runtime_provider_package() -> None:
     violations: list[str] = []
-    for path in _python_files():
+    for path, source in _python_sources():
         rel = path.relative_to(SRC).as_posix()
         in_package = PACKAGE in path.parents or path.parent == PACKAGE
         if in_package:
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError, OSError):
+            tree = ast.parse(source)
+        except (SyntaxError, UnicodeDecodeError):
             continue
         for module in _imported_modules(tree):
             if module in _CONCRETE_MODULES:
@@ -102,14 +104,14 @@ def test_hub_consumers_call_only_abc_methods() -> None:
     those receivers are checked against the ABC/hub surface.
     """
     violations: list[str] = []
-    for path in _python_files():
+    for path, source in _python_sources():
         rel = path.relative_to(SRC).as_posix()
         in_package = PACKAGE in path.parents or path.parent == PACKAGE
         if in_package:
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError, OSError):
+            tree = ast.parse(source)
+        except (SyntaxError, UnicodeDecodeError):
             continue
         imported = _imported_modules(tree)
         if not any(m.startswith("modulo.core.runtime_provider") for m in imported):

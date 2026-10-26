@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = BACKEND_ROOT / "src" / "modulo"
 
@@ -33,11 +35,10 @@ _TABLE_DELETE_RE = re.compile(r"Evidence\.__table__.*\.delete", re.DOTALL)
 def _scan_tree(root: Path) -> list[str]:
     """Return one violation per offending file (matched patterns listed)."""
     violations: list[str] = []
-    for path in sorted(root.rglob("*.py")):
+    for path, source in iter_source_text(root):
         rel = path.relative_to(root).as_posix()
         if rel == _SANCTIONED_RELPATH:
             continue
-        source = path.read_text(encoding="utf-8")
         matched = [pattern for pattern in _ORM_PATTERNS if pattern in source]
         if _RAW_SQL_PATTERN.search(source):
             matched.append("DELETE FROM evidence (raw SQL)")

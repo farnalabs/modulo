@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from modulo.core.feature_flags import _KNOWN_FLAGS
+from tests.unit._source_scan import iter_source_text
 
 # Repo root: this file lives at backend/tests/unit/test_team_feature_parity.py
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -45,10 +46,7 @@ def _team_flag_names() -> set[str]:
 def _backend_files_text() -> str:
     if not _BACKEND_SRC.is_dir():
         return ""
-    parts: list[str] = []
-    for path in sorted(_BACKEND_SRC.rglob("*.py")):
-        parts.append(path.read_text(encoding="utf-8"))
-    return "\n".join(parts)
+    return "\n".join(source for _, source in iter_source_text(_BACKEND_SRC))
 
 
 def _frontend_files_text() -> str:

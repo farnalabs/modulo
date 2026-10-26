@@ -16,6 +16,8 @@ which is a legitimate (if rare) idiom and is not a by-name variable read.
 import ast
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
 
 
@@ -25,12 +27,12 @@ def _is_locals_call(node: ast.AST) -> bool:
 
 def test_no_locals_lookup():
     violations = []
-    for path in SRC.rglob("*.py"):
+    for path, source in iter_source_text(SRC):
         if "migrations" in path.parts:
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError, OSError):
+            tree = ast.parse(source)
+        except (SyntaxError, UnicodeDecodeError):
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute) and node.attr == "get" and _is_locals_call(node.value):

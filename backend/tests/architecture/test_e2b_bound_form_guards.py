@@ -24,6 +24,8 @@ instead of passing because it scanned nothing.
 import ast
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
 
 PROVIDER_MODULE = "core/runtime_provider/e2b.py"
@@ -46,8 +48,8 @@ SANCTIONED_APPLY_POLICY_HOSTS = frozenset({SANDBOX_POLICY_MODULE, PROVIDER_MODUL
 HOSTNAME = "api.e2b.app"
 
 
-def _python_files() -> list[Path]:
-    return [p for p in SRC.rglob("*.py") if "migrations" not in p.parts]
+def _python_sources() -> list[tuple[Path, str]]:
+    return [(path, source) for path, source in iter_source_text(SRC) if "migrations" not in path.parts]
 
 
 def _rel(path: Path) -> str:
@@ -83,11 +85,11 @@ def _is_absolute_e2b_module(module: str | None, level: int) -> bool:
 
 def test_no_e2b_imports_outside_the_provider_and_sanctioned_hosts() -> None:
     violations: list[str] = []
-    for path in _python_files():
+    for path, source in _python_sources():
         rel = _rel(path)
         if rel in SANCTIONED_E2B_IMPORT_HOSTS:
             continue
-        violations.extend(_e2b_import_violations(path.read_text(encoding="utf-8"), rel))
+        violations.extend(_e2b_import_violations(source, rel))
     assert not violations, (
         "ADR 040 T2a: the e2b SDK may only be imported by core/runtime_provider/e2b.py "
         "and the sanctioned kill/evidence hosts.\n"
@@ -146,11 +148,11 @@ def test_a21_apply_sandbox_policy_confined_to_its_host_modules() -> None:
     the bound form is ACTIVE (green) as of FAR-1050 R6.
     """
     violations: list[str] = []
-    for path in _python_files():
+    for path, source in _python_sources():
         rel = _rel(path)
         if rel in SANCTIONED_APPLY_POLICY_HOSTS:
             continue
-        violations.extend(_apply_policy_violations(path.read_text(encoding="utf-8"), rel))
+        violations.extend(_apply_policy_violations(source, rel))
     assert not violations, (
         "ADR 040 A21: apply_sandbox_policy may only be imported/called from "
         "core/pipeline_engine/sandbox_policy.py and core/runtime_provider/e2b.py.\n"
@@ -175,11 +177,11 @@ def test_a21_scanner_reports_a_planted_violation(tmp_path: Path) -> None:
 
 def test_api_e2b_app_hostname_confined_to_the_provider_module() -> None:
     violations: list[str] = []
-    for path in _python_files():
+    for path, source in _python_sources():
         rel = _rel(path)
         if rel == PROVIDER_MODULE:
             continue
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        for lineno, line in enumerate(source.splitlines(), start=1):
             if HOSTNAME in line:
                 violations.append(f"  {rel}:{lineno}: {HOSTNAME}")
     assert not violations, (
