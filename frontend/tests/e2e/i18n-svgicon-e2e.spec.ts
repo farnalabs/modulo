@@ -25,22 +25,14 @@ test.describe('i18n Keys & SvgIcon Regression', () => {
       }
     })
 
-    // /settings/email lives in the SYSTEM sidebar group (FAR-938), which the
-    // router gates on is_system_admin. `loginAsAdmin` issues a plain org-admin
-    // identity, so the route redirected to the Dashboard and this test passed
-    // vacuously — it never rendered the page whose Mail/File icons it means to
-    // check (FAR-1919). Use the system-route identity and assert the surface
-    // was actually reached.
-    const systemAdmin = await loginForSystemRoute(page, env)
+    // /settings/email is organisation-scoped (the API lives under
+    // /api/v1/admin/org/{org_id}) and now sits in the ADMIN sidebar group
+    // (#2455), so ordinary org admins can render it. Assert the surface was
+    // actually reached rather than letting the test pass without exercising
+    // the page whose Mail/File icons it means to check (FAR-1919).
+    await loginForSystemRoute(page, env)
     await page.goto('/settings/email')
-    if (systemAdmin) {
-      await expect(page.locator('h1')).toContainText('Email Settings')
-    } else {
-      // The staging/prod e2e identity is a regular org admin, so the SYSTEM
-      // route redirects — assert the documented redirect rather than letting
-      // the test pass without exercising anything.
-      await expect(page).toHaveURL(/\/$/)
-    }
+    await expect(page.locator('h1')).toContainText('Email Settings')
 
     await page.goto('/dashboard')
 
