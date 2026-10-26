@@ -139,7 +139,7 @@ def test_restore_from_archive_corrupt_exits(tmp_path, monkeypatch):
         mod._restore_from_archive(args, "pass", "db-url")
 
 
-async def test_main_resolves_passphrase_and_restores(tmp_path, monkeypatch):
+def test_main_resolves_passphrase_and_restores(tmp_path, monkeypatch):
     args = _args(tmp_path, full=True)
     monkeypatch.setattr(mod, "parse_args", lambda: args)
     monkeypatch.setattr(mod, "_validate_restore_args", lambda a: None)
@@ -150,7 +150,7 @@ async def test_main_resolves_passphrase_and_restores(tmp_path, monkeypatch):
     captured = {}
     monkeypatch.setattr(mod, "_restore_from_archive", lambda a, p, u: captured.update(args=a, passphrase=p, db_url=u))
 
-    await mod.main()
+    mod.main()
 
     assert captured["passphrase"] == "pw"
     assert captured["db_url"] == "db-url"

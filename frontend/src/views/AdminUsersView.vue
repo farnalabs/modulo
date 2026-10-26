@@ -86,12 +86,12 @@
             <td class="table-cell text-xs text-muted-foreground">{{ u.auth_provider || '—' }}</td>
             <td class="table-cell">
               <span v-if="!u.last_login" class="text-xs text-muted-foreground italic">{{ $t('views.AdminUsersView.never_logged_in') }}</span>
-              <span v-else class="text-xs text-muted-foreground" :title="formatDateShortWithTime(new Date(u.last_login))">
+              <span v-else class="text-xs text-muted-foreground" :title="formatDateShortWithTime(u.last_login)">
                 {{ formatRelativeTime(u.last_login) }}
               </span>
             </td>
             <td class="table-cell-numeric text-xs text-muted-foreground">
-              {{ u.created_at ? formatDateShort(new Date(u.created_at)) : '—' }}
+              {{ u.created_at ? formatDateShort(u.created_at) : '—' }}
             </td>
             <td class="table-cell-numeric">
               <TableActions :actions="rowActions(u)" />
@@ -166,10 +166,10 @@
               </td>
               <td class="table-cell capitalize">{{ inv.org_role }}</td>
               <td class="table-cell-numeric text-xs text-muted-foreground">
-                {{ formatDateShort(new Date(inv.created_at)) }}
+                {{ formatDateShort(inv.created_at) }}
               </td>
               <td class="table-cell-numeric text-xs text-muted-foreground">
-                {{ formatDateShort(new Date(inv.expires_at)) }}
+                {{ formatDateShort(inv.expires_at) }}
               </td>
               <td class="table-cell-numeric">
                 <Button severity="danger" outlined :disabled="actionLoading[inv.id]" data-testid="admin-invitations-revoke" @click="openRevoke(inv)">
@@ -527,7 +527,7 @@ const actionLoading = ref<Record<string, boolean>>({})
 let flashTimeout: ReturnType<typeof setTimeout> | null = null
 
 function initialOf(name: string): string {
-  return name.charAt(0).toUpperCase() || '?'
+  return Array.from(name)[0]?.toLocaleUpperCase() ?? '?'
 }
 
 function showFlash(type: 'success' | 'error', text: string) {
@@ -703,7 +703,7 @@ async function sendInvite() {
       'invite',
       data.invite_url,
       email,
-      data.expires_at ? formatDateShort(new Date(data.expires_at)) : '',
+      data.expires_at ? formatDateShort(data.expires_at) : '',
     )
     showFlash('success', t('views.AdminUsersView.invitation_sent', { email }))
   } catch (e: unknown) {

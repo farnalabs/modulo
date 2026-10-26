@@ -468,7 +468,7 @@ async def fulfil_team_purchase(
     try:
         chosen_start = resolve_starts_at(starts_at)
     except StartsAtRejectedError as exc:
-        _log.error(
+        _log.exception(
             "stripe.fulfilment.starts_at_rejected event_id=%s reason=%s value=%r detail=%s",
             event_id,
             exc.reason,

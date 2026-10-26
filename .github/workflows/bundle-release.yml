@@ -196,18 +196,26 @@ jobs:
           cp -a debx/redis-server/usr/bin/redis-server "$BUNDLE/redis/"
           cp -a debx/redis-tools/usr/bin/. "$BUNDLE/redis/"
 
-          # Launcher placeholder -- the real launcher binary is FAR-671.
-          # Deferred implementation: FAR-671 owns the actual launcher
-          # (process supervision, env scrub, boot contract per ADR 031
-          # Decisions 1-2). Keep this tracked placeholder until that work lands,
-          # plus PG share-dir relocation and venv rewiring to runtime/.
-          {
-            echo '#!/bin/sh'
-            echo '# PLACEHOLDER -- the Modulo launcher is implemented in FAR-671.'
-            echo '# The bundle layout is complete; the launcher wires it together.'
-            echo 'echo "Modulo bundle layout is present, but the launcher is not implemented yet (tracked as FAR-671)." >&2'
-            echo 'exit 1'
-          } > "$BUNDLE/launcher"
+          # Native bundle entrypoint. Keep this as a small POSIX wrapper so the
+          # shipped command uses the bundled CPython runtime and dependencies,
+          # while the implementation remains in modulo.cli.main.
+          cat > "$BUNDLE/launcher" <<'LAUNCHER'
+          #!/bin/sh
+          set -eu
+
+          case "$0" in
+            */*) launcher_dir=${0%/*} ;;
+            *) launcher_dir=. ;;
+          esac
+          BUNDLE_ROOT=$(CDPATH= cd -- "$launcher_dir" && pwd)
+          SITE_PACKAGES="$BUNDLE_ROOT/backend/.venv/lib/python3.12/site-packages"
+          export PATH="$BUNDLE_ROOT/runtime/bin:$BUNDLE_ROOT/pg/bin:$BUNDLE_ROOT/redis${PATH:+:$PATH}"
+          export PYTHONPATH="$BUNDLE_ROOT/backend/src:$SITE_PACKAGES"
+          export MODULO_BUNDLED_BIN_DIR="$BUNDLE_ROOT/pg/bin"
+
+          exec "$BUNDLE_ROOT/runtime/bin/python3" -c \
+            'from modulo.cli.main import cli; cli()' "$@"
+          LAUNCHER
           chmod 755 "$BUNDLE/launcher"
 
           echo "${{ inputs.rc_tag }}" > "$BUNDLE/RC_TAG"
@@ -239,6 +247,18 @@ jobs:
           cp -a src "$BUNDLE/backend/src"
           cp pyproject.toml uv.lock "$BUNDLE/backend/"
           cp -a .venv "$BUNDLE/backend/.venv"
+
+      - name: Smoke the bundled launcher
+        run: |
+          set -euo pipefail
+          BUNDLE="build/${BUNDLE_ROOT}"
+          test -x "$BUNDLE/launcher"
+          if grep -qF 'PLACEHOLDER' "$BUNDLE/launcher"; then
+            echo 'launcher still contains the retired placeholder' >&2
+            exit 1
+          fi
+          env -i HOME="$HOME" PATH="$BUNDLE/runtime/bin:$BUNDLE/pg/bin:$BUNDLE/redis" \
+            "$BUNDLE/launcher" apply --help
 
       - name: Set up Node + pnpm (pinned to match frontend/package.json)
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1

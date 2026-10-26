@@ -244,11 +244,11 @@ const subTabButtonRefs = ref<Record<SubTabKey, HTMLButtonElement | null>>({
 })
 
 function setTabButtonRef(tabId: string, el: Element | ComponentPublicInstance | null) {
-  tabButtonRefs.value[tabId] = el as HTMLButtonElement | null
+  tabButtonRefs.value[tabId] = el instanceof HTMLButtonElement ? el : null
 }
 
 function setSubTabButtonRef(key: SubTabKey, el: Element | ComponentPublicInstance | null) {
-  subTabButtonRefs.value[key] = el as HTMLButtonElement | null
+  subTabButtonRefs.value[key] = el instanceof HTMLButtonElement ? el : null
 }
 
 const activeSessionTabId = computed(() => {
