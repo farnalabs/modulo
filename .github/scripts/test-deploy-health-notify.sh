@@ -32,6 +32,10 @@ NO_TRANSITION_LOG="No transition"
 SUBJECT_FIELD='"subject"'
 NO_TRANSITION_LABEL="no transition logged"
 NO_EMAIL_LABEL="no email rendered"
+ALERT_SUBJECT="DEPLOY HEALTH UNHEALTHY"
+RECOVERY_SUBJECT="DEPLOY HEALTH RECOVERED"
+WORKFLOW_NAME="Deploy: Staleness Watchdog"
+DEPLOY_URL="https://github.com/farnalabs/modulo/actions/workflows/deploy.yml"
 
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
@@ -146,10 +150,10 @@ run_notify() {
     CURRENT_HEALTHY="$healthy" \
     PREVIOUS_VERDICT="$previous" \
     VERDICT_JSON="$verdict" \
-    WORKFLOW_NAME="Deploy: Staleness Watchdog" \
+    WORKFLOW_NAME="$WORKFLOW_NAME" \
     VERDICT_STEP_NAME="Fail the run when the deploy watchdog is unhealthy" \
     RUN_URL="https://github.com/farnalabs/modulo/actions/runs/1" \
-    DEPLOY_URL="https://github.com/farnalabs/modulo/actions/workflows/deploy.yml" \
+    DEPLOY_URL="$DEPLOY_URL" \
     "$@" \
     bash "$NOTIFY"
 }
@@ -165,7 +169,7 @@ echo ""
 
 echo "Case 2: healthy -> unhealthy (alert exactly once)"
 OUT="$(run_notify false healthy "$WORK/unhealthy.json" 2>&1)"
-assert_contains "alert subject" "DEPLOY HEALTH UNHEALTHY" "$OUT"
+assert_contains "alert subject" "$ALERT_SUBJECT" "$OUT"
 assert_contains "reason names the failure streak" "consecutive failed runs" "$OUT"
 assert_contains "reason names the stale production" "production is serving" "$OUT"
 echo ""
@@ -178,13 +182,13 @@ echo ""
 
 echo "Case 4: unhealthy -> healthy (recovery closes the alert)"
 OUT="$(run_notify true unhealthy "$WORK/healthy.json" 2>&1)"
-assert_contains "recovery subject" "DEPLOY HEALTH RECOVERED" "$OUT"
+assert_contains "recovery subject" "$RECOVERY_SUBJECT" "$OUT"
 assert_contains "recovery body" "Deploy health has RECOVERED" "$OUT"
 echo ""
 
 echo "Case 5: UNKNOWN previous -> unhealthy (never suppresses the first alert)"
 OUT="$(run_notify false unknown "$WORK/unhealthy.json" 2>&1)"
-assert_contains "alert still sent" "DEPLOY HEALTH UNHEALTHY" "$OUT"
+assert_contains "alert still sent" "$ALERT_SUBJECT" "$OUT"
 echo ""
 
 echo "Case 6: UNKNOWN current (no transition inferred, loud warning, no email)"
@@ -202,7 +206,7 @@ echo ""
 
 echo "Case 8: a watchdog recovery survives an in-flight deploy tick, with accurate wording"
 OUT="$(run_notify true unhealthy "$WORK/watchdog-recovery.json" 2>&1)"
-assert_contains "recovery emitted" "DEPLOY HEALTH RECOVERED" "$OUT"
+assert_contains "recovery emitted" "$RECOVERY_SUBJECT" "$OUT"
 assert_contains "subject names the real evidence" "not escalating (deploy in flight)" "$OUT"
 assert_not_contains "never claims production is current" "production is current at" "$OUT"
 echo ""
@@ -289,14 +293,14 @@ run_notify_lookup() {
     DRY_RUN=1 \
     CURRENT_HEALTHY="$healthy" \
     VERDICT_JSON="$verdict" \
-    WORKFLOW_NAME="Deploy: Staleness Watchdog" \
-    VERDICT_STEP_NAME="Fail the run when deploy health is unhealthy" \
+    WORKFLOW_NAME="$WORKFLOW_NAME" \
+    VERDICT_STEP_NAME="Fail the run when the deploy watchdog is unhealthy" \
     REPOSITORY="farnalabs/modulo" \
     GITHUB_RUN_ID="999" \
     FAKE_RUNS="$(cat "$WORK/runs.json")" \
     FAKE_JOBS_DIR="$WORK" \
     RUN_URL="https://github.com/farnalabs/modulo/actions/runs/999" \
-    DEPLOY_URL="https://github.com/farnalabs/modulo/actions/workflows/deploy.yml" \
+    DEPLOY_URL="$DEPLOY_URL" \
     bash "$NOTIFY"
 }
 
