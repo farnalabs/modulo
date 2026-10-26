@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { enableAutoUnmount, mount, flushPromises } from '@vue/test-utils'
+
+// The real composable installs a QueryClient/observer per mount; unmount every
+// wrapper so its timers and focus/online listeners cannot leak into a later
+// spec's shared api.GET mock.
+enableAutoUnmount(afterEach)
 
 // useDataFetch is deliberately NOT mocked: vue-query subscribes during setup,
-// so the real composable exercises the component's module-initialisation order.
+// so the real composable exercises the component's declaration order.
 // Mocking it hid a TDZ ReferenceError on the initial fetch (FAR-2173).
 vi.mock('../lib/api/client', () => ({
   api: {
@@ -70,9 +75,28 @@ describe('SettingsTriggerEventLogView', () => {
     // The initial fetch must not hit the temporal dead zone on the filter refs.
     expect(wrapper.text()).not.toContain("Cannot access 'filterTriggerType' before initialization")
     expect(wrapper.text()).toContain('webhook')
+    expect(getMock).toHaveBeenCalledTimes(1)
     expect(getMock).toHaveBeenCalledWith(
       '/api/v1/admin/trigger-events',
       expect.objectContaining({ params: { query: { limit: 50 } } }),
+    )
+  })
+
+  it('sends the selected filters through the real fetcher', async () => {
+    const wrapper = mount(SettingsTriggerEventLogView)
+    await flushPromises()
+    // The '__all__' sentinel must be dropped, not sent as a filter value.
+    const vm = wrapper.vm as unknown as { filterTriggerType: string; filterResult: string }
+    vm.filterTriggerType = 'webhook'
+    vm.filterResult = 'accepted'
+    await flushPromises()
+    await wrapper.find('[data-testid="settings-trigger-event-log-apply"]').trigger('click')
+    await flushPromises()
+    expect(getMock).toHaveBeenLastCalledWith(
+      '/api/v1/admin/trigger-events',
+      expect.objectContaining({
+        params: { query: { limit: 50, trigger_type: 'webhook', validation_result: 'accepted' } },
+      }),
     )
   })
 
