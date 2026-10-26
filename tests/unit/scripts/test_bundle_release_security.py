@@ -9,6 +9,7 @@ import tempfile
 import time
 import tomllib
 from pathlib import Path
+from subprocess import Popen
 
 import pytest
 
@@ -89,17 +90,26 @@ def _site_packages(venv_root: Path) -> Path:
     return candidates[0]
 
 
-def _run_process(command: list[str], cwd: Path, deadline: float, env: dict[str, str]) -> None:
-    remaining = deadline - time.monotonic()
-    assert remaining > 0, "release security test exceeded its total wall-clock deadline"
-    process = subprocess.Popen(  # noqa: S603
+def _popen(
+    command: list[str], cwd: Path, env: dict[str, str], *, timeout: float
+) -> subprocess.Popen[bytes]:
+    """Start a process whose caller enforces the bounded wait."""
+    del timeout
+    return Popen(  # noqa: S603
         command,
         cwd=cwd,
         env=env,
         start_new_session=True,
     )
+
+
+def _run_process(command: list[str], cwd: Path, deadline: float, env: dict[str, str]) -> None:
+    remaining = deadline - time.monotonic()
+    assert remaining > 0, "release security test exceeded its total wall-clock deadline"
+    process_timeout = min(SUBPROCESS_TIMEOUT_SECONDS, remaining)
+    process = _popen(command, cwd, env, timeout=process_timeout)
     try:
-        process.wait(timeout=min(SUBPROCESS_TIMEOUT_SECONDS, remaining))
+        process.wait(timeout=process_timeout)
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, 9)
         process.wait(timeout=10)
@@ -223,9 +233,11 @@ def test_bundle_ibm_install_is_executable_and_provenance_verified() -> None:
             provenance = _direct_url(site_packages, package)
             expected = locked[package]["sdist"]
             assert provenance["url"] == expected["url"]
-            archive_info = provenance.get("archive_info", {})
-            if archive_info:
-                assert archive_info["hash"] == expected["hash"].replace(":", "=")
+            archive_info = provenance.get("archive_info")
+            assert isinstance(archive_info, dict)
+            archive_hash = archive_info.get("hash")
+            assert isinstance(archive_hash, str)
+            assert archive_hash == expected["hash"].replace(":", "=")
 
         code = (
             "import importlib.metadata, pathlib, sys; "
