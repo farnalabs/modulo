@@ -991,6 +991,14 @@ class Settings(BaseSettings):
     modulo_health_migrations_timeout_seconds: float = Field(
         default=0.0, alias="MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS", ge=0.0, le=60
     )
+    # Readiness alert correlation (FAR-2156): when the migrations check reports
+    # repo-vs-DB divergence, the detail links the most recent run of this deploy
+    # workflow so an operator can jump straight to it. The defaults point at
+    # Modulo's own dogfood repo/instance; a self-hosted deployment sets these to
+    # its own fork and API base. An empty repo disables the lookup entirely.
+    modulo_deploy_run_repo: str = Field(default="farnalabs/modulo", alias="MODULO_DEPLOY_RUN_REPO")
+    modulo_deploy_run_workflow: str = Field(default="deploy.yml", alias="MODULO_DEPLOY_RUN_WORKFLOW")
+    modulo_deploy_run_api_base: str = Field(default="https://api.github.com", alias="MODULO_DEPLOY_RUN_API_BASE")
     # database-hygiene sub-check (FAR-1445). Unlike its neighbours this
     # override defaults to a NON-zero 1s: the probe is a single read of the
     # in-memory statistics views, so anything above a second means the

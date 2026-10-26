@@ -27,6 +27,7 @@ from modulo.api.routes.health import (
     _check_redis,
     _check_saq_workers,
     _check_system_crons,
+    _fetch_latest_deploy_run_url,
     _grade_db_hygiene,
     _live_worker_hostnames,
     _per_check_timeout,
@@ -64,8 +65,10 @@ def _reset_repo_heads_cache() -> Generator[None, None, None]:
     from modulo.api.routes import health as health_mod
 
     health_mod._REPO_HEADS_CACHE = None
+    health_mod._DEPLOY_RUN_URL_CACHE = None
     yield
     health_mod._REPO_HEADS_CACHE = None
+    health_mod._DEPLOY_RUN_URL_CACHE = None
 
 
 def _ok_check(name: str = "ok") -> CheckResult:
@@ -560,6 +563,220 @@ class TestCheckMigrationsDivergence:
         assert result.status == "degraded"
         assert result.detail is not None
         assert "could not run" in result.detail.lower()
+
+
+class _FakeGitHubResponse:
+    """Minimal httpx.Response double for the deploy-run lookup."""
+
+    def __init__(self, payload: dict | None = None, raise_exc: Exception | None = None) -> None:
+        self._payload = payload or {}
+        self._raise_exc = raise_exc
+
+    def raise_for_status(self) -> None:
+        if self._raise_exc is not None:
+            raise self._raise_exc
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeGitHubClient:
+    """Records requests and exposes the async-close contract the route uses."""
+
+    def __init__(self, response: _FakeGitHubResponse) -> None:
+        self._response = response
+        self.requests: list[dict] = []
+        self.closed = False
+
+    async def get(self, path: str, *, params: dict | None = None, headers: dict | None = None) -> _FakeGitHubResponse:
+        self.requests.append({"path": path, "params": params, "headers": headers})
+        return self._response
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class TestFetchLatestDeployRunUrl:
+    """FAR-2156: readiness divergence details link the latest deploy run.
+
+    The review gate requires every branch of the fetch (no token, HTTP error,
+    empty runs, success + cache, TTL expiry, negative cache) to be exercised.
+    """
+
+    @staticmethod
+    def _settings(monkeypatch: pytest.MonkeyPatch, **updates: object) -> Settings:
+        monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+        monkeypatch.delenv("GITHUB_REVIEWBOT_PAT", raising=False)
+        return _make_settings().model_copy(update=updates)
+
+    async def test_uses_path_based_workflow_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        settings = self._settings(monkeypatch)
+        client = _FakeGitHubClient(
+            _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/42"}]})
+        )
+        factory = AsyncMock(return_value=client)
+        with patch("modulo.api.routes.health.pinned_async_client", factory):
+            url = await _fetch_latest_deploy_run_url(settings)
+
+        assert url == "https://github.com/o/r/actions/runs/42"
+        # The review blocker: the workflow must be in the PATH, not a query
+        # param GitHub silently ignores.
+        assert client.requests[0]["path"] == "/repos/farnalabs/modulo/actions/workflows/deploy.yml/runs"
+        assert client.requests[0]["params"] == {"per_page": 1}
+        assert client.requests[0]["headers"]["Authorization"] == "Bearer test-token"
+        assert client.closed
+        assert factory.await_args.kwargs["base_url"] == "https://api.github.com"
+        assert factory.await_args.kwargs["timeout"] == 2.0
+
+    async def test_falls_back_to_get_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        settings = self._settings(monkeypatch)
+        client = _FakeGitHubClient(
+            _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/1"}]})
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.pinned_async_client", AsyncMock(return_value=client)),
+        ):
+            url = await _fetch_latest_deploy_run_url()
+
+        assert url == "https://github.com/o/r/actions/runs/1"
+
+    async def test_success_is_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        settings = self._settings(monkeypatch)
+        client = _FakeGitHubClient(
+            _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/7"}]})
+        )
+        factory = AsyncMock(return_value=client)
+        with patch("modulo.api.routes.health.pinned_async_client", factory):
+            first = await _fetch_latest_deploy_run_url(settings)
+            second = await _fetch_latest_deploy_run_url(settings)
+
+        assert first == second == "https://github.com/o/r/actions/runs/7"
+        factory.assert_awaited_once()
+
+    async def test_expired_cache_refetches(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.api.routes import health as health_mod
+
+        settings = self._settings(monkeypatch)
+        health_mod._DEPLOY_RUN_URL_CACHE = ("https://stale", time.time() - 301)
+        client = _FakeGitHubClient(
+            _FakeGitHubResponse({"workflow_runs": [{"html_url": "https://github.com/o/r/actions/runs/9"}]})
+        )
+        factory = AsyncMock(return_value=client)
+        with patch("modulo.api.routes.health.pinned_async_client", factory):
+            url = await _fetch_latest_deploy_run_url(settings)
+
+        assert url == "https://github.com/o/r/actions/runs/9"
+        factory.assert_awaited_once()
+
+    async def test_http_error_is_cached_negatively(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        settings = self._settings(monkeypatch)
+        client = _FakeGitHubClient(_FakeGitHubResponse(raise_exc=RuntimeError("502 Bad Gateway")))
+        factory = AsyncMock(return_value=client)
+        with patch("modulo.api.routes.health.pinned_async_client", factory):
+            first = await _fetch_latest_deploy_run_url(settings)
+            second = await _fetch_latest_deploy_run_url(settings)
+
+        assert first is None
+        assert second is None
+        factory.assert_awaited_once()
+        assert client.closed
+
+    async def test_empty_runs_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        settings = self._settings(monkeypatch)
+        client = _FakeGitHubClient(_FakeGitHubResponse({"workflow_runs": []}))
+        with patch("modulo.api.routes.health.pinned_async_client", AsyncMock(return_value=client)):
+            assert await _fetch_latest_deploy_run_url(settings) is None
+
+    async def test_non_string_html_url_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        settings = self._settings(monkeypatch)
+        client = _FakeGitHubClient(_FakeGitHubResponse({"workflow_runs": [{"html_url": 123}]}))
+        with patch("modulo.api.routes.health.pinned_async_client", AsyncMock(return_value=client)):
+            assert await _fetch_latest_deploy_run_url(settings) is None
+
+    async def test_empty_html_url_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        settings = self._settings(monkeypatch)
+        client = _FakeGitHubClient(_FakeGitHubResponse({"workflow_runs": [{"html_url": ""}]}))
+        with patch("modulo.api.routes.health.pinned_async_client", AsyncMock(return_value=client)):
+            assert await _fetch_latest_deploy_run_url(settings) is None
+
+    async def test_no_token_skips_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_REVIEWBOT_PAT", raising=False)
+        factory = AsyncMock()
+        with patch("modulo.api.routes.health.pinned_async_client", factory):
+            assert await _fetch_latest_deploy_run_url(_make_settings()) is None
+        factory.assert_not_awaited()
+
+    async def test_empty_repo_disables_lookup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+        factory = AsyncMock()
+        settings = _make_settings().model_copy(update={"modulo_deploy_run_repo": "  "})
+        with patch("modulo.api.routes.health.pinned_async_client", factory):
+            assert await _fetch_latest_deploy_run_url(settings) is None
+        factory.assert_not_awaited()
+
+    async def test_client_construction_failure_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        settings = self._settings(monkeypatch)
+        with patch(
+            "modulo.api.routes.health.pinned_async_client",
+            AsyncMock(side_effect=RuntimeError("pin failed")),
+        ):
+            assert await _fetch_latest_deploy_run_url(settings) is None
+
+    async def test_divergence_detail_includes_deploy_url(self) -> None:
+        settings = _make_settings()
+        diverged = DivergenceCheckResult(
+            diverged=True,
+            db_revisions={"0001", "0099"},
+            repo_revisions={"0001"},
+            orphaned_revisions={"0099"},
+            detail="diverged",
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch(
+                "modulo.api.routes.health.get_or_create_engine",
+                return_value=_FakeMigrationEngine(["0001", "0099"]),
+            ),
+            patch("modulo.api.routes.health.ScriptDirectory") as script_cls,
+            patch("modulo.api.routes.health.check_migration_divergence", return_value=diverged),
+            patch(
+                "modulo.api.routes.health._fetch_latest_deploy_run_url",
+                AsyncMock(return_value="https://github.com/o/r/actions/runs/77"),
+            ),
+        ):
+            script_cls.from_config.return_value.get_heads.return_value = {"0001"}
+            result = await _check_migrations()
+
+        assert result.detail is not None
+        assert "latest deploy: https://github.com/o/r/actions/runs/77" in result.detail
+
+    async def test_divergence_detail_omits_deploy_url_when_unavailable(self) -> None:
+        settings = _make_settings()
+        diverged = DivergenceCheckResult(
+            diverged=True,
+            db_revisions={"0001", "0099"},
+            repo_revisions={"0001"},
+            orphaned_revisions={"0099"},
+            detail="diverged",
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch(
+                "modulo.api.routes.health.get_or_create_engine",
+                return_value=_FakeMigrationEngine(["0001", "0099"]),
+            ),
+            patch("modulo.api.routes.health.ScriptDirectory") as script_cls,
+            patch("modulo.api.routes.health.check_migration_divergence", return_value=diverged),
+            patch("modulo.api.routes.health._fetch_latest_deploy_run_url", AsyncMock(return_value=None)),
+        ):
+            script_cls.from_config.return_value.get_heads.return_value = {"0001"}
+            result = await _check_migrations()
+
+        assert result.detail is not None
+        assert "DIVERGENCE" in result.detail
+        assert "latest deploy:" not in result.detail
 
 
 class _FakeStatsRedis:

@@ -205,59 +205,83 @@ _CRON_STALE_SECONDS = 2 * _FIRE_DUE_CRON_CADENCE_SECONDS
 # /healthz as ADVISORY only — it never flips readiness.
 _break_glass_watchdog: dict[str, str] = {"status": "ok", "detail": "break-glass watchdog not run at boot"}
 
-# Cache for the latest deploy workflow run URL (5-minute TTL to avoid hammering GitHub API).
-_DEPLOY_RUN_URL_CACHE: tuple[str, float] | None = None  # (url, cached_at)
+# Cache for the latest deploy workflow run URL. A success is cached for 5
+# minutes to avoid hammering the GitHub API; a failure is cached briefly so a
+# broken token / API outage cannot add a failed request to every ready probe.
+# The value is ``None`` for a cached negative result.
+_DEPLOY_RUN_URL_CACHE: tuple[str | None, float] | None = None  # (url or None, cached_at)
 _DEPLOY_RUN_URL_CACHE_TTL_SECONDS = 300  # 5 minutes
+_DEPLOY_RUN_URL_FAILURE_TTL_SECONDS = 60  # 1 minute
+# Deliberately well under the migrations probe's 5s default budget: a slow
+# GitHub API must not turn the DIVERGENCE detail into a generic probe timeout.
+_DEPLOY_RUN_URL_FETCH_TIMEOUT_SECONDS = 2.0
 
 
-async def _fetch_latest_deploy_run_url() -> str | None:
-    """Fetch the latest 'Deploy: Staging + Prod' workflow run URL from GitHub API.
+def _deploy_run_url_cache_ttl(url: str | None) -> float:
+    return _DEPLOY_RUN_URL_CACHE_TTL_SECONDS if url else _DEPLOY_RUN_URL_FAILURE_TTL_SECONDS
 
-    Returns the HTML URL of the most recent run, or None if unavailable.
-    Cached for 5 minutes to avoid excessive GitHub API calls.
+
+async def _fetch_latest_deploy_run_url(settings: Settings | None = None) -> str | None:
+    """Fetch the latest run URL of the configured deploy workflow from GitHub.
+
+    Returns the HTML URL of the most recent run, or None if unavailable. Uses
+    the path-based ``/actions/workflows/{id}/runs`` endpoint: the
+    ``/actions/runs?workflow=<name>`` filter is silently ignored by GitHub, so
+    the latter returns an unrelated workflow's run.
+
+    The repo, workflow file and API base are operator-configurable
+    (``MODULO_DEPLOY_RUN_*``) so a self-hosted deployment resolves to its own
+    fork rather than Modulo's dogfood repo; an empty repo disables the lookup.
+    Successes are cached for 5 minutes, failures for 1 minute.
     """
     global _DEPLOY_RUN_URL_CACHE
     now = time.time()
 
-    # Return cached value if still valid
     if _DEPLOY_RUN_URL_CACHE is not None:
-        url, cached_at = _DEPLOY_RUN_URL_CACHE
-        if now - cached_at < _DEPLOY_RUN_URL_CACHE_TTL_SECONDS:
-            return url
+        cached_url, cached_at = _DEPLOY_RUN_URL_CACHE
+        if now - cached_at < _deploy_run_url_cache_ttl(cached_url):
+            return cached_url
 
-    # No valid cache — fetch from GitHub API
+    settings = settings or get_settings()
+    repo = settings.modulo_deploy_run_repo.strip()
+    if not repo:
+        return None
+
     github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_REVIEWBOT_PAT")
     if not github_token:
         _log.debug("No GITHUB_TOKEN or GITHUB_REVIEWBOT_PAT available for deploy run URL fetch")
         return None
 
+    api_base = settings.modulo_deploy_run_api_base.rstrip("/")
+    path = f"/repos/{repo}/actions/workflows/{settings.modulo_deploy_run_workflow}/runs"
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    url: str | None = None
     try:
-        client = await pinned_async_client("https://api.github.com", timeout=10.0)
+        client = await pinned_async_client(
+            api_base,
+            base_url=api_base,
+            timeout=_DEPLOY_RUN_URL_FETCH_TIMEOUT_SECONDS,
+        )
         try:
-            headers = {
-                "Authorization": f"Bearer {github_token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            }
-            response = await client.get(
-                "/repos/farnalabs/modulo/actions/runs",
-                params={"workflow": "Deploy: Staging + Prod", "per_page": 1},
-                headers=headers,
-            )
+            response = await client.get(path, params={"per_page": 1}, headers=headers)
             response.raise_for_status()
-            data = response.json()
-            runs = data.get("workflow_runs", [])
+            runs = response.json().get("workflow_runs", [])
             if runs:
                 html_url = runs[0].get("html_url")
-                if isinstance(html_url, str):
-                    _DEPLOY_RUN_URL_CACHE = (html_url, now)
-                    return html_url
-            return None
+                if isinstance(html_url, str) and html_url:
+                    url = html_url
         finally:
             await client.aclose()
     except Exception as exc:
         _log.warning("Failed to fetch latest deploy run URL: %s", exc)
-        return None
+
+    _DEPLOY_RUN_URL_CACHE = (url, now)
+    return url
 
 
 def set_break_glass_watchdog(status: str, detail: str) -> None:
@@ -823,7 +847,7 @@ async def _check_migrations() -> CheckResult:
                 f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}"
             )
             # Include the latest deploy run URL for correlation
-            deploy_run_url = await _fetch_latest_deploy_run_url()
+            deploy_run_url = await _fetch_latest_deploy_run_url(settings)
             if deploy_run_url:
                 divergence_msg += f" | latest deploy: {deploy_run_url}"
             parts.append(divergence_msg)
