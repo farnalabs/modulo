@@ -140,16 +140,9 @@ def _pipeline_current_view(current: dict[str, Any], desired_view: dict[str, Any]
             # The API serialises the Numeric(14, 6) column as a float;
             # canonicalise both sides to 6dp so no false drift is reported.
             view[key] = quantize_circuit_breaker_threshold(current.get(key))
-        elif key in ("business_owner_id", "reliability_owner_id"):
-            # FAR-1161: accountability owners — both sides are UUID strings
-            # (or null); coerce so a UUID object and its string form hash alike.
-            value = current.get(key)
-            view[key] = None if value is None else str(value)
-        elif key == "environment_profile_id":
-            # FAR-1599: the binding hashes in the same UUID-string id-space as
-            # the owners — the desired side stringifies in managed_view, the
-            # current side arrives as the API's string (or null); the str()
-            # coercion defends against a UUID object in a test double.
+        elif key in ("environment_profile_id", "business_owner_id", "reliability_owner_id"):
+            # UUID-backed bindings use the same string representation on both
+            # sides, including when a test double supplies a UUID object.
             value = current.get(key)
             view[key] = None if value is None else str(value)
         else:

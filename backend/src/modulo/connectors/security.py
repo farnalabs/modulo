@@ -349,7 +349,7 @@ class CredentialRedactor:
             yield
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # NOSONAR python:S112 — connector boundary must redact every ordinary exception
             repaired = redact_exc(
                 exc,
                 self._secrets,

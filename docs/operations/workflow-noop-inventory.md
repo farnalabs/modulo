@@ -63,7 +63,7 @@ replaces a marker with a job output silently disarms the signal — the guard su
 | `merge-queue.yml` | Merge approved + green PRs | No approved PRs, or approved but none mergeable → merges nothing | **Added:** `NO MERGE` summary on both no-op paths (step presence on the no-op path) | **Added** | merge-queue-watchdog (already measures merged PRs) | **Masking (legibility) — fixed** |
 | `mutation-testing.yml` | Weekly mutation baseline | None | Fails loud | Report | Operator | Legitimate |
 | `native-gate0.yml` | Offline bundle boot proof on PRs | None — asserts every precondition | Fails loud | Log | PR checks | Legitimate (exemplar) |
-| `native-release-smoke.yml` | Install + smoke a published bundle | No published `bundle-v*` release → canary skip | `::notice::`, documented "honestly not applicable" | Log | `canary-housekeeping` deliberately treats it as not-applicable | Legitimate (documented) |
+| `native-release-smoke.yml` | Install + smoke a published bundle | (a) No published `bundle-v*` release → canary skip; (b) a `workflow_dispatch` with NEITHER `canary_version` NOR `rollback_version` → no verification job is eligible, so only housekeeping runs | (a) `::notice::`, documented "honestly not applicable"; (b) **Added:** `dispatch-guard` job fails with an `::error::` naming both inputs | (a) Log; (b) error annotation | (a) `canary-housekeeping` deliberately treats it as not-applicable; (b) operator | (a) Legitimate (documented); (b) **Masking — fixed (FAR-2161)** |
 | `pr-conflict-reconcile.yml` | Dispatch the fixer for conflicted PRs | `gh pr list` fails → fail-open skip | `api_failed` output + **Added:** NOTHING RECONCILED summary | **Added** | Operator | **Masking (minor) — fixed** |
 | `pr-review.yml` | Dispatch the PR reviewer | Draft / dedup / superseded / manual-delivery / fork → no dispatch | `ready=false` output + `::notice::` | Log | PR Housekeeper re-drives from the **review artefact** | Legitimate (consumer measures the artefact) |
 | `publish-images.yml` | Publish container images to GHCR | None | Fails loud | n/a | Operator | Legitimate |
@@ -94,7 +94,7 @@ Notes:
   their no-ops are covered by a consumer that measures the artefact (the review
   comment, the suite step conclusion, the merged PR), so no marker was added.
 
-## Fixed in this change
+## Fixes and their guards
 
 | Case | Fix | Guard |
 |---|---|---|
@@ -102,3 +102,4 @@ Notes:
 | Merge queue pass that merged nothing was silent | `NO MERGE` summary on both no-op paths | `test_merge_queue_no_approved_prs_pass_is_marked`, `test_merge_queue_nothing_mergeable_pass_is_marked` |
 | Audit-chain monitor blind cycle was green silence | `authenticated` output + NOT RUN marker step + summary | `test_audit_chain_monitor_missing_credentials_is_marked_not_run` |
 | Conflict reconciler blind cycle was silent | NOTHING RECONCILED summary on the API-failure path | `test_pr_conflict_reconcile_api_failure_is_marked` |
+| `native-release-smoke.yml` green run with no target | `dispatch-guard` job rejects an argument-free manual dispatch with an `::error::` naming `canary_version` / `rollback_version`; push and schedule paths untouched | `test_native_release_smoke_rejects_an_argument_free_dispatch`, `test_native_release_smoke_dispatch_paths_keep_their_own_gates` |

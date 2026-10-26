@@ -104,6 +104,18 @@ healthy = module.evaluate(
 )
 (work / "healthy.json").write_text(json.dumps(healthy.as_dict()), encoding="utf-8")
 
+# FAR-2159: production was readable and current, but the run history was not.
+# The tick is UNKNOWN, never healthy, so it can never close an open alert.
+partial = module.evaluate(
+    main={"sha": "4db7af2000"},
+    prod={"git_sha": "4db7af2000", "build_timestamp": "2026-10-25T11:30:00Z"},
+    deploy_runs=None,
+    now=now,
+)
+if partial.healthy is not None:
+    raise SystemExit(f"a partially readable tick must be UNKNOWN, got healthy={partial.healthy!r}")
+(work / "partial.json").write_text(json.dumps(partial.as_dict()), encoding="utf-8")
+
 unhealthy = module.evaluate(
     main={"sha": "4db7af2000"},
     prod={"git_sha": "7b1c064000", "build_timestamp": "2026-10-23T13:00:00Z"},
@@ -203,6 +215,14 @@ echo ""
 echo "Case 6: UNKNOWN current (no transition inferred, loud warning, no email)"
 OUT="$(run_notify "" unhealthy "$WORK/unhealthy.json" 2>&1)"
 assert_contains "warning emitted" "::warning::" "$OUT"
+assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+echo ""
+
+echo "Case 6b: a PARTIAL read takes the UNKNOWN path - no recovery, alert stays open"
+OUT="$(run_notify "" unhealthy "$WORK/partial.json" 2>&1)"
+assert_contains "warning emitted" "::warning::" "$OUT"
+assert_contains "warning says the alert stays open" "live alert therefore stays open" "$OUT"
+assert_not_contains "no recovery email" "DEPLOY HEALTH RECOVERED" "$OUT"
 assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
 echo ""
 

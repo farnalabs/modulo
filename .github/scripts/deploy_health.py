@@ -32,6 +32,15 @@ A single flaky deploy therefore never alerts, and neither does a prod that is
 merely inside the grace window (the throttle batches up to 3h, staging E2E
 adds ~2h).
 
+A tick that could read only SOME of its inputs is **UNKNOWN, never healthy**
+(FAR-2159). An absent input is not evidence of health: scoring a partial read
+as healthy let the transition email send a RECOVERY - closing a live alert -
+on figures the tick never measured. Every input the verdict depends on is
+classified REQUIRED or ADVISORY in :data:`INPUT_CLASSIFICATION`, and a tick
+missing any REQUIRED input can never be HEALTHY. A positively measured
+unhealthy condition still wins, because downgrading a confirmed failure streak
+to UNKNOWN would itself suppress an alert.
+
 The email is sent on a **transition**, and the previous verdict comes from the
 workflow's own run history (the verdict step in the previous run is
 ``failure`` when it was unhealthy and ``skipped`` when it was healthy) -- no
@@ -85,6 +94,117 @@ HEALTHY = "healthy"
 UNHEALTHY = "unhealthy"
 UNKNOWN = "unknown"
 
+#: A tick cannot reach a verdict at all without this input, so a tick missing
+#: one is UNKNOWN - never healthy (FAR-2159).
+REQUIRED = "required"
+
+#: A tick can still reach a verdict without this input; it only enriches the
+#: verdict (a missing timestamp fails loud, a missing job map drops a detail).
+ADVISORY = "advisory"
+
+
+@dataclass(frozen=True)
+class InputClassification:
+    """One measured input, and how the verdict depends on it.
+
+    ``input_name`` is the source the evaluator reads (the field name on
+    :class:`AvailableInputs`); ``verdict_field`` is the :class:`Verdict` field
+    that input feeds. Every Verdict field must be either a classified input or
+    listed in :data:`DERIVED_VERDICT_FIELDS` - a test pins that, so adding a
+    new figure to the verdict forces the author to decide whether a tick may be
+    scored healthy without reading it.
+    """
+
+    input_name: str
+    verdict_field: str
+    classification: str
+    why: str
+
+
+#: The single place the verdict's inputs are classified. The required-input
+#: policy consults this list (:data:`REQUIRED_INPUTS`), so it cannot drift into
+#: ad-hoc ``if x is None`` checks scattered through the evaluator.
+INPUT_CLASSIFICATION: tuple[InputClassification, ...] = (
+    InputClassification(
+        "main_sha",
+        "main_sha",
+        REQUIRED,
+        "the prod-vs-main comparison cannot run without origin/main's HEAD",
+    ),
+    InputClassification(
+        "prod_sha",
+        "prod_sha",
+        REQUIRED,
+        "the prod-vs-main comparison cannot run without production's build SHA",
+    ),
+    InputClassification(
+        "deploy_runs",
+        "consecutive_failures",
+        REQUIRED,
+        "without the run history a failure streak is unattempted, not absent",
+    ),
+    InputClassification(
+        "prod_build_ts",
+        "prod_build_ts",
+        ADVISORY,
+        "only the age figure needs it; a prod behind main with no timestamp fails loud as stale",
+    ),
+    InputClassification(
+        "deploy_jobs",
+        "failure_stages",
+        ADVISORY,
+        "only enriches the failure-stage breakdown; the streak itself does not need it",
+    ),
+)
+
+#: Inputs a tick may not be scored HEALTHY without.
+REQUIRED_INPUTS: frozenset[str] = frozenset(
+    spec.input_name for spec in INPUT_CLASSIFICATION if spec.classification == REQUIRED
+)
+
+#: Verdict fields that are NOT a directly-measured input: derived from the
+#: classified inputs, configuration, or supplied by the caller. A field that is
+#: in neither this set nor :data:`INPUT_CLASSIFICATION` has no health policy -
+#: a structural test fails on it rather than letting a figure slip in.
+DERIVED_VERDICT_FIELDS: frozenset[str] = frozenset(
+    {
+        "healthy",  # computed from every required input plus the two conditions
+        "stale",  # computed from the two SHAs + the build timestamp
+        "age_hours",  # computed from the build timestamp
+        "runs_considered",  # computed from the readable run list
+        "last_failed",  # computed from the readable run list
+        "failure_threshold",  # configuration
+        "grace_hours",  # configuration
+        "summary",  # caller-supplied condition label
+        "notes",  # caller-supplied measured detail
+        "recovery_detail",  # caller-supplied recovery wording
+        "missing_inputs",  # computed from input availability
+    }
+)
+
+
+@dataclass(frozen=True)
+class AvailableInputs:
+    """Which classified inputs one tick actually read.
+
+    Built once by :func:`_read_sources`; :func:`_overall_healthy` consults
+    :meth:`missing_required`, which in turn consults the registry - never a
+    hand-written list at the call site.
+    """
+
+    main_sha: str = ""
+    prod_sha: str = ""
+    prod_build_ts: str = ""
+    deploy_runs: bool = False
+    deploy_jobs: bool = False
+
+    def present(self, input_name: str) -> bool:
+        return bool(getattr(self, input_name))
+
+    def missing_required(self) -> tuple[str, ...]:
+        """Required inputs this tick could not read, in a stable order."""
+        return tuple(sorted(name for name in REQUIRED_INPUTS if not self.present(name)))
+
 
 @dataclass(frozen=True)
 class Verdict:
@@ -119,6 +239,10 @@ class Verdict:
     #: recovers into "no longer escalating", which can happen while a deploy is
     #: still in flight).
     recovery_detail: str = ""
+    #: Required inputs this tick could not read (FAR-2159). Non-empty means the
+    #: tick is a PARTIAL READ, so its verdict can never be HEALTHY; a positively
+    #: measured unhealthy condition still reports ``healthy is False``.
+    missing_inputs: tuple[str, ...] = ()
 
     def _stale_condition(self) -> str:
         if not self.stale:
@@ -150,8 +274,24 @@ class Verdict:
             return ""
         return f"failure stages: {_summarize_failure_stages(self.failure_stages)}"
 
+    def _partial_read_condition(self) -> str:
+        """Name a partial read that stands alongside a confirmed bad condition."""
+        if self.healthy is not False or not self.missing_inputs:
+            return ""
+        return (
+            "this tick is a PARTIAL READ: required input(s) missing ("
+            + ", ".join(self.missing_inputs)
+            + "), so no all-clear follows from it"
+        )
+
     def _default_reason(self) -> str:
         if self.healthy is None:
+            if self.missing_inputs:
+                return (
+                    "deploy health could not be evaluated this cycle: required input(s) missing ("
+                    + ", ".join(self.missing_inputs)
+                    + "), so this partially readable tick is UNKNOWN rather than healthy"
+                )
             return "deploy health could not be evaluated this cycle (no deploy-run or production metadata was readable)"
         if self.healthy is False:
             # A caller-measured unhealthy condition that the shared pair
@@ -174,6 +314,7 @@ class Verdict:
                 self._stale_condition(),
                 self._failure_condition(),
                 self._failure_stages_condition(),
+                self._partial_read_condition(),
             )
             if condition
         )
@@ -197,6 +338,7 @@ class Verdict:
             "summary": self.summary,
             "notes": list(self.notes),
             "recovery_detail": self.recovery_detail,
+            "missing_inputs": list(self.missing_inputs),
         }
 
     @property
@@ -222,6 +364,7 @@ class Verdict:
             "reason": self.reason,
             "summary": self.summary,
             "failure_stages": json.dumps(self.failure_stages),
+            "missing_inputs": ",".join(self.missing_inputs),
         }
 
 
@@ -461,28 +604,40 @@ def _staleness(
     *,
     now: datetime,
     grace_hours: int,
-) -> tuple[bool, int | None, bool]:
-    """``(stale, age_hours, evaluated)`` for the prod-vs-main comparison.
+) -> tuple[bool, int | None]:
+    """``(stale, age_hours)`` for the prod-vs-main comparison.
 
-    ``evaluated`` is False when either SHA is missing, so the caller can keep
-    the verdict UNKNOWN rather than inventing a healthy/stale answer.
+    An incomparable pair (either SHA missing) is ``(False, None)``: the tick
+    measured nothing about staleness, and :func:`_overall_healthy` scores that
+    UNKNOWN rather than healthy.
     """
-    evaluated = bool(main_sha and prod_sha)
-    if not evaluated or main_sha == prod_sha:
-        return False, None, evaluated
+    if not (main_sha and prod_sha) or main_sha == prod_sha:
+        return False, None
     built = _parse_timestamp(prod_ts)
     if built is None:
         # Prod IS behind main and we cannot say by how much: fail loud
         # rather than silently skip (the FAR-910 precedent).
-        return True, None, True
+        return True, None
     age_hours = int((now - built) / timedelta(hours=1))
-    return age_hours >= grace_hours, age_hours, True
+    return age_hours >= grace_hours, age_hours
 
 
-def _overall_healthy(*, staleness_evaluated: bool, runs_evaluated: bool, stale: bool, failing: bool) -> bool | None:
-    """``None`` when nothing was readable at all, else "not stale and not failing"."""
-    if not staleness_evaluated and not runs_evaluated:
-        return None
+def _overall_healthy(*, inputs: AvailableInputs, stale: bool, failing: bool) -> bool | None:
+    """The verdict, under the required-input policy.
+
+    POLICY (FAR-2159): a tick missing a REQUIRED input is UNKNOWN (``None``),
+    NEVER healthy. An absent input is not evidence of health - scoring a
+    partial read healthy let the transition email send a RECOVERY (closing a
+    live alert) on figures the tick never measured. UNKNOWN sends nothing and
+    keeps an alert open (:func:`resolve_action`), so it can neither close an
+    incident nor suppress the first alert.
+
+    A positively measured unhealthy condition still wins: a confirmed failure
+    streak or staleness is evidence in its own right, and returning UNKNOWN for
+    it would suppress an alert the tick did measure.
+    """
+    if inputs.missing_required():
+        return False if (stale or failing) else None
     return not (stale or failing)
 
 
@@ -490,14 +645,22 @@ def _read_sources(
     main: dict[str, Any] | None,
     prod: dict[str, Any] | None,
     deploy_runs: Sequence[dict[str, Any]] | None,
-) -> tuple[str, str, str, bool, list[dict[str, Any]]]:
-    """Normalise the raw sources into the figures and completed-run list."""
-    main_sha = _short(str((main or {}).get("sha") or ""))
-    prod_sha = _short(str((prod or {}).get("git_sha") or ""))
-    prod_ts = str((prod or {}).get("build_timestamp") or "")
-    runs_evaluated = deploy_runs is not None
-    completed = _completed_runs(list(deploy_runs or []))
-    return main_sha, prod_sha, prod_ts, runs_evaluated, completed
+    deploy_jobs: dict[str, dict[str, str]] | None,
+) -> tuple[AvailableInputs, list[dict[str, Any]]]:
+    """Normalise the raw sources into input availability and completed runs.
+
+    Availability is recorded per classified input; the required-input policy
+    is applied in :func:`_overall_healthy`, never by ad-hoc ``is None`` tests at
+    the call sites.
+    """
+    inputs = AvailableInputs(
+        main_sha=_short(str((main or {}).get("sha") or "")),
+        prod_sha=_short(str((prod or {}).get("git_sha") or "")),
+        prod_build_ts=str((prod or {}).get("build_timestamp") or ""),
+        deploy_runs=deploy_runs is not None,
+        deploy_jobs=bool(deploy_jobs),
+    )
+    return inputs, _completed_runs(list(deploy_runs or []))
 
 
 def evaluate(
@@ -512,25 +675,28 @@ def evaluate(
 ) -> Verdict:
     """Evaluate one tick's deploy health.
 
-    ``deploy_runs`` of ``None`` means the run list was unreadable (UNKNOWN, not
-    "no failures"). A partially readable tick evaluates what it can: without
-    any readable source at all the verdict is ``None`` (unknown) so no
-    transition is inferred from nothing.
+    ``deploy_runs`` of ``None`` means the run list was unreadable. A tick that
+    can read only SOME of its inputs is UNKNOWN, never healthy (FAR-2159): the
+    verdict is HEALTHY only when every REQUIRED input (see
+    :data:`INPUT_CLASSIFICATION`) was read and no condition fires. A positively
+    measured unhealthy condition still reports UNHEALTHY with the missing
+    inputs named in :attr:`Verdict.missing_inputs`.
 
     ``deploy_jobs`` maps a failed run's ``databaseId`` (as a string) to that
     run's job name -> conclusion, used to classify the failure stage. If
     omitted or None, failure stages will be empty.
     """
-    main_sha, prod_sha, prod_ts, runs_evaluated, completed = _read_sources(main, prod, deploy_runs)
-    stale, age_hours, staleness_evaluated = _staleness(main_sha, prod_sha, prod_ts, now=now, grace_hours=grace_hours)
-    streak = consecutive_failures(completed)
-    failing = runs_evaluated and streak >= failure_threshold
-    healthy = _overall_healthy(
-        staleness_evaluated=staleness_evaluated,
-        runs_evaluated=runs_evaluated,
-        stale=stale,
-        failing=failing,
+    inputs, completed = _read_sources(main, prod, deploy_runs, deploy_jobs)
+    stale, age_hours = _staleness(
+        inputs.main_sha,
+        inputs.prod_sha,
+        inputs.prod_build_ts,
+        now=now,
+        grace_hours=grace_hours,
     )
+    streak = consecutive_failures(completed)
+    failing = inputs.deploy_runs and streak >= failure_threshold
+    healthy = _overall_healthy(inputs=inputs, stale=stale, failing=failing)
     failure_stages = _classify_failure_stages(completed, streak, deploy_jobs)
 
     return Verdict(
@@ -540,12 +706,13 @@ def evaluate(
         failure_threshold=failure_threshold,
         age_hours=age_hours,
         grace_hours=grace_hours,
-        main_sha=main_sha or "unknown",
-        prod_sha=prod_sha or "unknown",
-        prod_build_ts=prod_ts or "unknown",
+        main_sha=inputs.main_sha or "unknown",
+        prod_sha=inputs.prod_sha or "unknown",
+        prod_build_ts=inputs.prod_build_ts or "unknown",
         runs_considered=len(completed),
         last_failed=_latest_failure(completed),
         failure_stages=failure_stages,
+        missing_inputs=inputs.missing_required(),
     )
 
 
@@ -554,8 +721,9 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 
-#: The step each escalation workflow runs ONLY when a tick measured nothing
-#: (``healthy`` is empty). Its presence is the durable machine-readable
+#: The step each escalation workflow runs ONLY when the tick produced no verdict
+#: (``healthy`` is empty): it measured nothing, or it could read only some of its
+#: required inputs (FAR-2159). Its presence is the durable machine-readable
 #: "UNKNOWN" marker: without it, an unmeasured tick skips the verdict step and
 #: its run is recorded as HEALTHY by ``_verdict_from_step`` (FAR-2157). Both
 #: workflows must use this exact name - an architecture test pins it.
@@ -576,8 +744,9 @@ def _has_unknown_marker(jobs_payload: dict[str, Any] | None) -> bool:
     """True when the run carries the UNKNOWN-tick marker step (FAR-2157).
 
     ``True`` is authoritative: the workflow ran that step, which it does only
-    when the tick's ``healthy`` output was empty, i.e. nothing was measured.
-    A tick that measured nothing must never be read back as a healthy verdict
+    when the tick's ``healthy`` output was empty, i.e. the tick reached no
+    verdict (nothing was measured, or only some required inputs were - FAR-2159).
+    A tick that reached no verdict must never be read back as a healthy verdict
     - the transition email would then silently swallow the recovery.
     """
     for job in (jobs_payload or {}).get("jobs") or []:
@@ -596,8 +765,9 @@ def parse_previous_verdict(jobs_payload: dict[str, Any] | None, step_name: str |
     name - needs no argument. The watchdog names its step differently and must
     pass it, or its previous verdict silently reads as UNKNOWN (FAR-2177).
 
-    A run that carries the UNKNOWN-tick marker measured nothing, so its actual
-    state is unknown (FAR-2157) - that check comes first, because such a run
+    A run that carries the UNKNOWN-tick marker reached no verdict - it measured
+    nothing, or only some of its required inputs (FAR-2159) - so its actual
+    state is unknown (FAR-2157). That check comes first, because such a run
     SKIPS the verdict step and would otherwise read as healthy. Otherwise
     ``failure`` -> the previous run evaluated unhealthy; ``skipped`` -> it
     evaluated healthy (the step's condition was false); anything else, or no
@@ -619,6 +789,9 @@ def resolve_action(current_healthy: bool | None, previous_verdict: str) -> str:
     UNKNOWN never suppresses the signal: an unreadable previous verdict alerts
     the current unhealthy state, and an unreadable current verdict sends
     nothing (the workflow warns loudly instead of inventing a transition).
+    That includes a PARTIAL read (FAR-2159): no recovery is ever inferred from
+    a tick that could not read all of its required inputs, so a live alert
+    stays open.
     """
     if current_healthy is None:
         return "none"
@@ -749,7 +922,11 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
     if verdict.healthy is False:
         print(f"::error::DEPLOY HEALTH UNHEALTHY: {verdict.reason}")
     elif verdict.healthy is None:
-        print("::warning::Deploy health could not be evaluated this cycle - no source was readable.")
+        missing = ", ".join(verdict.missing_inputs) or "none readable"
+        print(
+            "::warning::Deploy health could not be evaluated this cycle - required input(s) missing: "
+            f"{missing}. A partially readable tick is UNKNOWN, never healthy (FAR-2159)."
+        )
     else:
         print(f"::notice::Deploy health OK: {verdict.reason}")
     return 0

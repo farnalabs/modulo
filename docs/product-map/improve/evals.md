@@ -58,7 +58,7 @@ status: covered
 
 Evaluation definitions, the eval engine that scores node outputs, eval suites
 with regression alerting, pipeline coverage gap analysis, leaderboards, and the
-eval-proposals queue. An eval is a typed definition (`llm_judge`, `regex`,
+eval-proposals queue. An eval is a typed definition (`model_judge`, `regex`,
 `json_schema`, `custom_function`, or `human_set`) carrying an engine-internal
 `failure_behaviour` of `warn` or `block` (retired from the public REST/MCP
 surface + generated types on 2026-09-26 – FAR-1103 chunk 5a; it is no longer
@@ -69,7 +69,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
 
 ## Behaviours
 
-- [x] Five eval types: `llm_judge` (LLM-as-judge via ModelBackendHub),
+- [x] Five eval types: `model_judge` (LLM-as-judge via ModelBackendHub),
       `regex` (pattern match against an output field), `json_schema` (validate
       output against JSON Schema), `custom_function` (user-defined function),
       and `human_set` (registered, versioned, human-authored eval sets – the
@@ -173,7 +173,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
 
 ## Known Gaps
 
-- **`llm_judge` is a soft signal, injection-prone by design** – the guarded
+- **`model_judge` is a soft signal, injection-prone by design** – the guarded
   delimiters reduce prompt-injection risk but the trustworthy path for
   deterministic gating is `human_set` / regex / json_schema.
 - **No long-horizon eval-run scheduler in this surface** – suite execution is
