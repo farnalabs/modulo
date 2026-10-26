@@ -93,7 +93,13 @@
 
       <section class="space-y-3" aria-labelledby="evidence-index-coverage-heading" data-testid="compliance-evidence-index-coverage">
         <h2 id="evidence-index-coverage-heading" class="text-lg font-semibold">{{ $t('views.ComplianceEvidenceIndex.coverage_heading') }}</h2>
-        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm">
+        <div
+          class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          role="region"
+          aria-labelledby="evidence-index-coverage-heading"
+          tabindex="0"
+          data-testid="compliance-evidence-index-coverage-scroll"
+        >
           <table class="w-full text-left text-sm">
             <thead>
               <tr class="border-b bg-muted/50">
@@ -120,7 +126,13 @@
             {{ $t('views.ComplianceEvidenceIndex.artifact_count', { count: indexData.artifacts.length }) }}
           </p>
         </div>
-        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm">
+        <div
+          class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          role="region"
+          aria-labelledby="evidence-index-artifacts-heading"
+          tabindex="0"
+          data-testid="compliance-evidence-index-artifacts-scroll"
+        >
           <table class="w-full min-w-[1050px] text-left text-sm">
             <thead>
               <tr class="border-b bg-muted/50">
