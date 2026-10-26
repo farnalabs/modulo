@@ -7,13 +7,13 @@
     cursor: pointer;
   }
 
-  *:focus-visible {
+  :where(:root :not(html)):focus-visible {
     outline: 2px solid hsla(var(--ring) / 0.8);
     outline-offset: 2px;
   }
 
-  :where(:root, :root *),
-  :where(:root::before, :root *::before, :root::after, :root *::after) {
+  :where(:root, :root :not(html)),
+  :where(:root::before, :root :not(html)::before, :root::after, :root :not(html)::after) {
     border-color: hsl(var(--border));
   }
 }
@@ -448,7 +448,7 @@
   /* !important is required here: component-scoped <style> blocks declare their
      own animations/transitions at higher specificity, so without it the reset
      would lose and reduce-motion users would still get the motion. */
-  :where(:root, :root *, :root::before, :root *::before, :root::after, :root *::after) {
+  :where(:root, :root :not(html), :root::before, :root :not(html)::before, :root::after, :root :not(html)::after) {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
@@ -662,7 +662,7 @@
   font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
 }
 
-[data-theme="agent"] *:focus-visible {
+[data-theme="agent"] :where(:not(html)):focus-visible {
   outline: 2px solid hsl(var(--focus-ring));
   outline-offset: 2px;
 }
@@ -716,7 +716,7 @@ select option {
 }
 
 /* Firefox support */
-:where(html, html *) {
+:where(html, html :not(html)) {
   scrollbar-width: thin;
   scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
 }
