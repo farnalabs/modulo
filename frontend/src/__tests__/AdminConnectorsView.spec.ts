@@ -590,6 +590,64 @@ describe('AdminConnectorsView — FAR-617 add/delete/error-state coverage', () =
     expect(wrapper.text()).toContain('Recovered')
   })
 
+  it('a failed connector-types load surfaces an inline retry in the add form and recovers', async () => {
+    // Types are only needed by the add form — the page load itself must stay clean.
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/connectors/types') return { data: undefined, error: { detail: 'types backend down' } }
+      return { data: { items: [] }, error: undefined }
+    })
+    const wrapper = mountWithCapturingError()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-connectors-types-error"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="admin-connectors-add"]').trigger('click')
+    await nextTick()
+
+    const alert = wrapper.find('[data-testid="admin-connectors-types-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('types backend down')
+
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/connectors/types') {
+        return { data: { items: [{ id: 'rest', display_name: 'Generic REST' }] }, error: undefined }
+      }
+      return { data: { items: [] }, error: undefined }
+    })
+    await wrapper.find('[data-testid="error-retry"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-connectors-types-error"]').exists()).toBe(false)
+    const vm = wrapper.vm as unknown as { connectorTypes: { id: string; display_name: string }[] }
+    expect(vm.connectorTypes).toEqual([{ id: 'rest', display_name: 'Generic REST' }])
+  })
+
+  it('a thrown connector-types failure shows the inline retry and clears it when a retry returns no data', async () => {
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/connectors/types') throw new Error('network down')
+      return { data: { items: [] }, error: undefined }
+    })
+    const wrapper = mountWithCapturingError()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="admin-connectors-add"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-connectors-types-error"]').text()).toContain('network down')
+
+    mockGet.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/connectors/types') return { data: undefined, error: undefined }
+      return { data: { items: [] }, error: undefined }
+    })
+    await wrapper.find('[data-testid="error-retry"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-connectors-types-error"]').exists()).toBe(false)
+  })
+
   it('empty list renders the no-connectors empty state', async () => {
     const wrapper = mountView()
     await nextTick()

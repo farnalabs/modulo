@@ -37,6 +37,12 @@
                 data-testid="admin-connectors-name-input"
               />
             </div>
+            <ErrorAlert
+              v-if="typesError"
+              :message="typesError"
+              :on-retry="loadConnectorTypes"
+              data-testid="admin-connectors-types-error"
+            />
             <div>
               <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.type') }}</label>
               <Select
@@ -175,7 +181,7 @@
       </div>
 
       <details v-if="previewConnectors.length > 0" class="rounded-lg border bg-card" data-testid="connectors-preview-section">
-        <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+        <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground" data-testid="connectors-preview-summary">
           {{ $t('views.AdminConnectorsView.preview_connectors_count', { count: previewConnectors.length }, previewConnectors.length) }}
         </summary>
         <div class="overflow-x-auto border-t">
@@ -659,14 +665,24 @@ const { loading, error, data, load: loadConnectors } = useDataFetch(
 )
 
 const connectors = ref<ConnectorItem[]>([])
-const connectorTypes = ref<{id: string, display_name: string}[]>([])
+const connectorTypes = ref<components['schemas']['ConnectorTypeItem'][]>([])
+// STATE-2: a failed connector-types read leaves the Type select empty and makes
+// the add form unusable, so it renders inline with a Retry instead of being
+// silently swallowed as an unhandled rejection.
+const typesError = ref<string | null>(null)
 
 async function loadConnectorTypes() {
-  const resp = await api.GET('/api/v1/connectors/types')
-  if (resp.data?.items) {
-    connectorTypes.value = resp.data.items as {id: string, display_name: string}[]
+  typesError.value = null
+  try {
+    const { data: resp, error: err } = await api.GET('/api/v1/connectors/types')
+    if (err) {
+      typesError.value = formatApiError(err)
+      return
+    }
+    if (resp) connectorTypes.value = resp.items
+  } catch (e: unknown) {
+    typesError.value = formatApiError(e)
   }
-
 }
 
 watch(data, response => {
