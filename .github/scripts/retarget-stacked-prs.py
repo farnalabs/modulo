@@ -44,7 +44,7 @@ type PullRequest = dict[str, Any]
 class GhError(RuntimeError):
     """A `gh` invocation exited non-zero. Never swallowed."""
 
-    def __init__(self, args, returncode: int, stderr: str):
+    def __init__(self, args: Sequence[str], returncode: int, stderr: str):
         self.cmd = tuple(args)
         self.returncode = returncode
         self.stderr = (stderr or "").strip()
@@ -111,7 +111,7 @@ def fetch_open_prs(run_gh: GhRunner) -> list[PullRequest]:
     )
     if not raw.strip():
         raise ValueError("gh api returned no output for the open-PR query")
-    prs: list[dict] = []
+    prs: list[PullRequest] = []
     for pr in parse_concatenated(raw):
         base = (pr.get("base") or {}).get("ref")
         head = (pr.get("head") or {}).get("ref")
@@ -264,7 +264,7 @@ def _guard(
     """Retarget every reachable child PR; protect any base we could not retarget."""
     try:
         open_prs = fetch_open_prs(run_gh)
-    except (GhError, ValueError, json.JSONDecodeError, OSError) as exc:
+    except (GhError, ValueError, OSError) as exc:
         # FAIL SAFE: we could not verify which branches have child PRs, so we
         # protect EVERY slated branch -- the delete sweep skips them all. We
         # deliberately do not fail the step: the delete step is gated on
