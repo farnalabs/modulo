@@ -284,7 +284,6 @@ _OLD_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@")
 # ``diff --git a/<old> b/<new>`` — per-file header in a multi-file ``git diff``
 # output.  Group 2 (the b/ side) is the file's current path, which is the key
 # the rest of the gate uses for changed files.
-_DIFF_GIT_HEADER_RE = re.compile(r"^diff --git a/(.+) b/(.+)$")
 # A git object id produced by ``git merge-base`` (fullmatch-bounded before it
 # is embedded in a ``git show <sha>:<path>`` argument).
 _MERGE_BASE_SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -851,7 +850,7 @@ def _split_diff_by_file(diff_text: str) -> Iterator[tuple[str, list[str]]]:
     current: str | None = None
     lines: list[str] = []
     for raw in diff_text.splitlines():
-        header = _DIFF_GIT_HEADER_RE.match(raw)
+        header = re.fullmatch(r"diff --git a/(.+) b/(.+)", raw)
         if header:
             if current is not None:
                 yield current, lines

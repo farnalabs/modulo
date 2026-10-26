@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import getpass
 import hashlib
 import os
@@ -74,7 +75,7 @@ def _validate_executable(value: str, name: str) -> str:
     return resolved
 
 
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$", re.ASCII)
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*", re.ASCII)
 
 
 def _validate_identifier(value: str, name: str) -> str:
@@ -83,7 +84,7 @@ def _validate_identifier(value: str, name: str) -> str:
     Used for the database name that is interpolated into a ``psql -c`` SQL string
     (defense against SQL injection in the terminate-backends command, S8705).
     """
-    if not _IDENTIFIER_RE.match(value or ""):
+    if _IDENTIFIER_RE.fullmatch(value or "") is None:
         raise ValueError(f"invalid {name}: {value!r} is not a valid SQL identifier")
     return value
 
@@ -363,6 +364,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    import asyncio
-
     asyncio.run(main())
