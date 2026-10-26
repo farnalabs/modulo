@@ -82,6 +82,9 @@ class Verdict:
     prod_build_ts: str = "unknown"
     runs_considered: int = 0
     last_failed: dict[str, str] = field(default_factory=dict)
+    #: Failure stage classifications for each failed run in the streak.
+    #: Maps run SHA (short) -> failure stage category.
+    failure_stages: dict[str, str] = field(default_factory=dict)
     #: A short condition label for the subject line when neither of the two
     #: shared conditions applies (e.g. the watchdog could not re-dispatch).
     summary: str = ""
@@ -120,6 +123,13 @@ class Verdict:
                 f"failed runs (threshold {self.failure_threshold}, over the last "
                 f"{self.runs_considered} completed runs); latest failure {latest} {title}".strip()
             )
+        if self.failure_stages:
+            # Summarize failure stages across the streak
+            stage_counts: dict[str, int] = {}
+            for stage in self.failure_stages.values():
+                stage_counts[stage] = stage_counts.get(stage, 0) + 1
+            stage_summary = ", ".join(f"{count} {stage}" for stage, count in sorted(stage_counts.items()))
+            parts.append(f"failure stages: {stage_summary}")
         if not parts:
             if self.healthy is None:
                 return (
@@ -152,6 +162,7 @@ class Verdict:
             "prod_build_ts": self.prod_build_ts,
             "runs_considered": self.runs_considered,
             "last_failed": self.last_failed,
+            "failure_stages": self.failure_stages,
             "summary": self.summary,
             "notes": list(self.notes),
             "recovery_detail": self.recovery_detail,
@@ -179,6 +190,7 @@ class Verdict:
             "runs_considered": str(self.runs_considered),
             "reason": self.reason,
             "summary": self.summary,
+            "failure_stages": json.dumps(self.failure_stages),
         }
 
 
@@ -189,6 +201,58 @@ class Verdict:
 
 def _short(sha: str) -> str:
     return (sha or "").strip()[:7]
+
+
+# Map deploy.yml job names to failure stage categories.
+JOB_TO_STAGE: dict[str, str] = {
+    # Pre-deploy lint/typecheck/unit jobs
+    "backend-lint": "pre_deploy_lint",
+    "backend-unit": "pre_deploy_lint",
+    "frontend-checks": "pre_deploy_lint",
+    # Integration tests
+    "integration-tests": "integration_test",
+    # Security audit (semgrep, pip-audit)
+    "security-audit": "pre_deploy_lint",
+    # Staging deploy (includes migration rehearsal and pre-migrate)
+    "deploy-staging": "migration",
+    # Staging E2E tests
+    "staging-e2e": "staging_e2e",
+    # Production deploy
+    "deploy-production": "migration",
+    # Note: prod-smoke is not a separate job; smoke tests run as part of
+    # deploy-production's post-deploy health gate. If a separate job is
+    # added in the future, map it to "prod_smoke".
+}
+
+
+def _classify_failure_stage(job_conclusions: dict[str, str]) -> str:
+    """Classify a failed run by the first failed job in deployment order.
+
+    The deployment order is: pre-deploy jobs -> deploy-staging -> staging-e2e
+    -> deploy-production. We return the stage category of the first failed job
+    in this order, since that represents the blocking failure.
+    """
+    # Order matters: earlier stages block later ones.
+    deployment_order = [
+        "backend-lint",
+        "backend-unit",
+        "frontend-checks",
+        "integration-tests",
+        "security-audit",
+        "pre-deploy-gate",
+        "deploy-staging",
+        "staging-e2e",
+        "deploy-production",
+    ]
+    for job_name in deployment_order:
+        conclusion = str(job_conclusions.get(job_name) or "").lower()
+        if conclusion in ("failure", "cancelled"):
+            return JOB_TO_STAGE.get(job_name, "unknown")
+    # If we couldn't determine from known jobs, check all jobs
+    for job_name, conclusion in job_conclusions.items():
+        if str(conclusion or "").lower() in ("failure", "cancelled"):
+            return JOB_TO_STAGE.get(job_name, "unknown")
+    return "unknown"
 
 
 def _parse_timestamp(raw: str) -> datetime | None:
@@ -279,6 +343,7 @@ def evaluate(
     now: datetime,
     grace_hours: int = GRACE_HOURS_DEFAULT,
     failure_threshold: int = FAILURE_THRESHOLD_DEFAULT,
+    deploy_jobs: dict[str, dict[str, str]] | None = None,
 ) -> Verdict:
     """Evaluate one tick's deploy health.
 
@@ -286,6 +351,10 @@ def evaluate(
     "no failures"). A partially readable tick evaluates what it can: without
     any readable source at all the verdict is ``None`` (unknown) so no
     transition is inferred from nothing.
+
+    ``deploy_jobs`` maps run SHA (short) -> job name -> conclusion for failed
+    runs, used to classify the failure stage. If omitted or None, failure
+    stages will be empty.
     """
     main_sha = _short(str((main or {}).get("sha") or ""))
     prod_sha = _short(str((prod or {}).get("git_sha") or ""))
@@ -305,6 +374,16 @@ def evaluate(
         failing=failing,
     )
 
+    # Classify failure stages for each failed run in the streak
+    failure_stages: dict[str, str] = {}
+    if deploy_jobs and streak > 0:
+        for run in completed[:streak]:
+            run_sha = _short(str(run.get("headSha") or ""))
+            if run_sha and run_sha in deploy_jobs:
+                stage = _classify_failure_stage(deploy_jobs[run_sha])
+                if stage != "unknown":
+                    failure_stages[run_sha] = stage
+
     return Verdict(
         healthy=healthy,
         stale=stale,
@@ -317,6 +396,7 @@ def evaluate(
         prod_build_ts=prod_ts or "unknown",
         runs_considered=len(completed),
         last_failed=_latest_failure(completed),
+        failure_stages=failure_stages,
     )
 
 
@@ -468,6 +548,8 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
     deploy_runs = runs_raw if isinstance(runs_raw, list) else None
     main_raw = _load_json(args.main_json)
     prod_raw = _load_json(args.prod_json)
+    jobs_raw = _load_json(args.jobs_json) if args.jobs_json else None
+    deploy_jobs = jobs_raw if isinstance(jobs_raw, dict) else None
     verdict = evaluate(
         main=main_raw if isinstance(main_raw, dict) else None,
         prod=prod_raw if isinstance(prod_raw, dict) else None,
@@ -475,6 +557,7 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
         now=now,
         grace_hours=args.grace_hours,
         failure_threshold=args.failure_threshold,
+        deploy_jobs=deploy_jobs,
     )
     if args.verdict_out:
         Path(args.verdict_out).write_text(json.dumps(verdict.as_dict()), encoding="utf-8")
@@ -530,6 +613,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     evaluate_parser.add_argument("--main-json")
     evaluate_parser.add_argument("--prod-json")
     evaluate_parser.add_argument("--runs-json")
+    evaluate_parser.add_argument("--jobs-json", help="JSON file with job conclusions per run SHA")
     evaluate_parser.add_argument("--grace-hours", type=int, default=GRACE_HOURS_DEFAULT)
     evaluate_parser.add_argument("--failure-threshold", type=int, default=FAILURE_THRESHOLD_DEFAULT)
     evaluate_parser.add_argument("--now", help="ISO timestamp (tests); defaults to now")

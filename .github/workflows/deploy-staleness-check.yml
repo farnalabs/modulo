@@ -139,10 +139,56 @@ jobs:
             echo "::warning::Deploy health check could not list deploy.yml runs (gh API error) - the consecutive-failure half is UNKNOWN this cycle."
           fi
 
+          # Fetch job conclusions for failed runs to classify failure stages
+          if [ -f "$WORK/runs.json" ]; then
+            python3 - "$WORK/runs.json" "$WORK/jobs.json" "$REPOSITORY" "$GH_TOKEN" <<'PYEOF'
+            import json
+            import sys
+            import subprocess
+
+            runs_path = sys.argv[1]
+            jobs_path = sys.argv[2]
+            repository = sys.argv[3]
+            gh_token = sys.argv[4]
+
+            with open(runs_path, encoding="utf-8") as f:
+                runs = json.load(f)
+
+            jobs_data = {}
+            for run in runs:
+                if str(run.get("status") or "").lower() == "completed" and str(run.get("conclusion") or "").lower() == "failure":
+                    run_id = run.get("databaseId")
+                    if not run_id:
+                        continue
+                    run_sha = (run.get("headSha") or "")[:7]
+                    # Fetch job conclusions for this run
+                    try:
+                        result = subprocess.run(
+                            ["gh", "api", f"repos/{repository}/actions/runs/{run_id}/jobs",
+                             "--jq", "[.jobs[] | {name: .name, conclusion: .conclusion}]"],
+                            capture_output=True, text=True, timeout=30, env={**__import__("os").environ, "GH_TOKEN": gh_token}
+                        )
+                        if result.returncode == 0 and result.stdout.strip():
+                            jobs = json.loads(result.stdout)
+                            job_conclusions = {job["name"]: job["conclusion"] for job in jobs if job.get("name") and job.get("conclusion")}
+                            if job_conclusions:
+                                jobs_data[run_sha] = job_conclusions
+                    except Exception:
+                        pass  # Best effort; if we can't get jobs, we'll skip classification for this run
+
+            with open(jobs_path, "w", encoding="utf-8") as f:
+                json.dump(jobs_data, f)
+            print(f"Fetched job conclusions for {len(jobs_data)} failed run(s).")
+            PYEOF
+          else
+            echo "{}" > "$WORK/jobs.json"
+          fi
+
           python3 .github/scripts/deploy_health.py evaluate \
             --main-json "$WORK/main.json" \
             --prod-json "$WORK/prod.json" \
             --runs-json "$WORK/runs.json" \
+            --jobs-json "$WORK/jobs.json" \
             --grace-hours "$GRACE_HOURS" \
             --failure-threshold "$FAILURE_THRESHOLD" \
             --github-output "$GITHUB_OUTPUT" \
@@ -181,6 +227,7 @@ jobs:
         shell: bash
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          VERDICT_JSON: ${{ steps.health.outputs.verdict_json }}
         run: |
           if [ -z "$LINEAR_API_KEY" ]; then
             echo "LINEAR_API_KEY not set - skipping ticket (workflow failure still alerts via GitHub)."
@@ -192,15 +239,23 @@ jobs:
           GRACE="${{ steps.health.outputs.grace_hours }}"
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+          # Read failure stages from verdict JSON
+          FAILURE_STAGES=$(jq -r '.failure_stages // {} | to_entries | map("\(.key): \(.value)") | join("\\n")' "$VERDICT_JSON" 2>/dev/null || echo "")
+          if [ -n "$FAILURE_STAGES" ]; then
+            FAILURE_STAGES_SECTION="Failure stages:\n${FAILURE_STAGES}\n"
+          else
+            FAILURE_STAGES_SECTION=""
+          fi
+
           TITLE="DEPLOY STARVATION: prod stale ${HEAD_AGE}h (FAR-910)"
           # FAR-1407: dedupe KEY is the condition marker (title prefix), not
           # the run-specific figures in TITLE. One continuous starvation = one
           # open ticket + appended comments, not one ticket per cron run.
           MARKER="DEPLOY STARVATION"
-          DESC="Production deploy starvation detected at ${TS}.\nProd SHA: ${PROD_SHA:-unknown}\nMain HEAD: ${MAIN_SHA:-unknown}\nHours stale: ${HEAD_AGE:-unknown}h\nGrace window: ${GRACE:-6}h\nThe deploy pipeline has not released main's HEAD within the grace window.\nIf no deploy is in flight, force one: gh workflow run 'Deploy: Staging + Prod' --ref main -f force_deploy=true\nThe operator was also emailed on the health transition (FAR-2116), so this ticket is the durable queue record rather than the only signal."
+          DESC="Production deploy starvation detected at ${TS}.\nProd SHA: ${PROD_SHA:-unknown}\nMain HEAD: ${MAIN_SHA:-unknown}\nHours stale: ${HEAD_AGE:-unknown}h\nGrace window: ${GRACE:-6}h\n${FAILURE_STAGES_SECTION}The deploy pipeline has not released main's HEAD within the grace window.\nIf no deploy is in flight, force one: gh workflow run 'Deploy: Staging + Prod' --ref main -f force_deploy=true\nThe operator was also emailed on the health transition (FAR-2116), so this ticket is the durable queue record rather than the only signal."
           # Latest figures: appended to an existing open ticket instead of
           # creating a duplicate (FAR-1407).
-          UPDATE=$(printf 'Escalation still active at %s.\nProd SHA: %s\nMain HEAD: %s\nHours stale: %sh\nGrace window: %sh\nAppended by the deploy staleness check instead of opening a duplicate ticket (FAR-1407: dedupe on the condition, not the run).' "$TS" "${PROD_SHA:-unknown}" "${MAIN_SHA:-unknown}" "${HEAD_AGE:-unknown}" "${GRACE:-6}")
+          UPDATE=$(printf 'Escalation still active at %s.\nProd SHA: %s\nMain HEAD: %s\nHours stale: %sh\nGrace window: %sh\n%sAppended by the deploy staleness check instead of opening a duplicate ticket (FAR-1407: dedupe on the condition, not the run).' "$TS" "${PROD_SHA:-unknown}" "${MAIN_SHA:-unknown}" "${HEAD_AGE:-unknown}" "${GRACE:-6}" "${FAILURE_STAGES_SECTION}")
 
           # ---- FAR-1407: dedupe on the CONDITION, not the run ----
           # Search Linear for an existing OPEN ticket for this condition
