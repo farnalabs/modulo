@@ -588,6 +588,45 @@ describe('DashboardView branches — trendData', () => {
     expect(wrapper.text()).toContain('Dashboard')
     wrapper.unmount()
   })
+
+  it('renders the run activity no-data message for a single trend point', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+      if (url === '/api/v1/dashboard/trends') {
+        return Promise.resolve({
+          data: {
+            days: 7,
+            run_counts: [{ date: '2026-06-23', run_count: 1 }],
+            eval_pass_rates: [],
+            token_spend: [],
+            hitl_volume: [],
+            rejection_trend: [],
+            correlation: [],
+            feedback_volume: [],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/plan') {
+        return Promise.resolve({
+          data: {
+            ...mockPlanData,
+            flags: [
+              { name: 'dashboard_charts', currently_active: true },
+              { name: 'analytics_page', currently_active: true },
+            ],
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="dashboard-run-activity"]').text()).toContain('No data yet')
+    wrapper.unmount()
+  })
 })
 
 // ── summary.recent_runs empty vs populated ──────────────────────────────
@@ -613,6 +652,34 @@ describe('DashboardView branches — recent_runs', () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     expect(wrapper.text()).toContain('Deploy Pipeline')
+    wrapper.unmount()
+  })
+
+  it('does not badge non-string execution origins and renders an empty trigger safely', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            recent_runs: [{
+              ...mockSummaryData.recent_runs[0],
+              execution_origin: { source: 'dispatched' },
+              trigger_type: undefined,
+            }],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="dashboard-dispatched-run-1"]').exists()).toBe(false)
+    const triggerCell = wrapper.find('[data-testid="dashboard-recent-runs"] tbody tr td:last-child')
+    expect(triggerCell.exists()).toBe(true)
+    expect(triggerCell.text()).toBe('')
     wrapper.unmount()
   })
 })
