@@ -124,12 +124,7 @@ class Verdict:
                 f"{self.runs_considered} completed runs); latest failure {latest} {title}".strip()
             )
         if self.failure_stages:
-            # Summarize failure stages across the streak
-            stage_counts: dict[str, int] = {}
-            for stage in self.failure_stages.values():
-                stage_counts[stage] = stage_counts.get(stage, 0) + 1
-            stage_summary = ", ".join(f"{count} {stage}" for stage, count in sorted(stage_counts.items()))
-            parts.append(f"failure stages: {stage_summary}")
+            parts.append(f"failure stages: {_summarize_failure_stages(self.failure_stages)}")
         if not parts:
             if self.healthy is None:
                 return (
@@ -255,6 +250,32 @@ def _classify_failure_stage(job_conclusions: dict[str, str]) -> str:
     return "unknown"
 
 
+def _summarize_failure_stages(failure_stages: dict[str, str]) -> str:
+    """Render per-run failure stages as a comma-separated category count."""
+    stage_counts: dict[str, int] = {}
+    for stage in failure_stages.values():
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
+    return ", ".join(f"{count} {stage}" for stage, count in sorted(stage_counts.items()))
+
+
+def _classify_failure_stages(
+    completed: Sequence[dict[str, Any]],
+    streak: int,
+    deploy_jobs: dict[str, dict[str, str]] | None,
+) -> dict[str, str]:
+    """Classify each failed run in the streak by its blocking failure stage."""
+    if not deploy_jobs or streak <= 0:
+        return {}
+    failure_stages: dict[str, str] = {}
+    for run in completed[:streak]:
+        run_sha = _short(str(run.get("headSha") or ""))
+        if run_sha and run_sha in deploy_jobs:
+            stage = _classify_failure_stage(deploy_jobs[run_sha])
+            if stage != "unknown":
+                failure_stages[run_sha] = stage
+    return failure_stages
+
+
 def _parse_timestamp(raw: str) -> datetime | None:
     if not raw:
         return None
@@ -374,15 +395,7 @@ def evaluate(
         failing=failing,
     )
 
-    # Classify failure stages for each failed run in the streak
-    failure_stages: dict[str, str] = {}
-    if deploy_jobs and streak > 0:
-        for run in completed[:streak]:
-            run_sha = _short(str(run.get("headSha") or ""))
-            if run_sha and run_sha in deploy_jobs:
-                stage = _classify_failure_stage(deploy_jobs[run_sha])
-                if stage != "unknown":
-                    failure_stages[run_sha] = stage
+    failure_stages = _classify_failure_stages(completed, streak, deploy_jobs)
 
     return Verdict(
         healthy=healthy,
