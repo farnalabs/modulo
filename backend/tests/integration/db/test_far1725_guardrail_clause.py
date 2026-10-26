@@ -164,10 +164,17 @@ async def _insert_result(
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed) "
-                "VALUES (:id, :oid, :rid, :eid, :p)"
+                "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) "
+                "VALUES (:id, :oid, :rid, :eid, :p, :outcome)"
             ),
-            {"id": str(result_id), "oid": str(org_id), "rid": str(run_id), "eid": str(eval_id), "p": passed},
+            {
+                "id": str(result_id),
+                "oid": str(org_id),
+                "rid": str(run_id),
+                "eid": str(eval_id),
+                "p": passed,
+                "outcome": "pass" if passed else "fail",
+            },
         )
     return result_id
 

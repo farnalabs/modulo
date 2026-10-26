@@ -132,10 +132,17 @@ async def _insert_eval_result(engine: AsyncEngine, org_id, eval_id, run_id, pass
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed) "
-                "VALUES (:id, :oid, :rid, :eid, :passed)"
+                "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) "
+                "VALUES (:id, :oid, :rid, :eid, :passed, :outcome)"
             ),
-            {"id": str(result_id), "oid": str(org_id), "rid": str(run_id), "eid": str(eval_id), "passed": passed},
+            {
+                "id": str(result_id),
+                "oid": str(org_id),
+                "rid": str(run_id),
+                "eid": str(eval_id),
+                "passed": passed,
+                "outcome": "pass" if passed else "fail",
+            },
         )
     return result_id
 
@@ -245,8 +252,8 @@ class TestCrossOrgEnforcement:
                 with pytest.raises(IntegrityError):
                     await conn.execute(
                         text(
-                            "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed) "
-                            "VALUES (:id, :oid, :rid, :eid, true)"
+                            "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) "
+                            "VALUES (:id, :oid, :rid, :eid, true, 'pass')"
                         ),
                         {"id": str(uuid.uuid4()), "oid": str(org_b), "rid": str(run_b), "eid": str(eval_a)},
                     )
