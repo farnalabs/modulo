@@ -137,6 +137,26 @@ describe('AdminUsersView', () => {
     expect(wrapper.text()).toContain('Users')
   })
 
+  it('falls back to a "?" avatar initial when a user has no display name or email', async () => {
+    const healthyGet = mockGet.getMockImplementation()!
+    mockGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/users?')) {
+        return Promise.resolve({
+          items: [{ ...USERS_RESPONSE.items[0], id: 'u-anon', email: '', display_name: '' }],
+          total: 1,
+          page: 1,
+          page_size: 50,
+        })
+      }
+      return healthyGet(path)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('.avatar-ring').text()).toBe('?')
+  })
+
   it('shows a shared ErrorAlert with retry when the users load fails, and recovers on retry', async () => {
     const healthyGet = mockGet.getMockImplementation()!
     mockGet.mockImplementation((path: string) => {

@@ -258,13 +258,14 @@ const activeSessionTabId = computed(() => {
 
 // The tabpanels (#assistant-only-panel-*) only render when there is at least one tab
 // AND an active session; omit aria-controls when the controlled panel is absent.
-const panelsVisible = computed(() => tabsStore.tabs.length > 0 && !!store.activeSessionId)
+const panelsVisible = computed(() => tabsStore.tabs.length > 0 && Boolean(store.activeSessionId))
 
 // The session tab buttons live outside the tablist container (so the per-tab
 // close buttons are not owned by it); the tablist claims them via aria-owns.
-const sessionTabOwns = computed(() =>
-  tabsStore.tabs.map(t => `assistant-only-tab-button-${t.tabId}`).join(' ') || undefined
-)
+const sessionTabOwns = computed(() => {
+  const ids = tabsStore.tabs.map(t => `assistant-only-tab-button-${t.tabId}`).join(' ')
+  return ids || undefined
+})
 
 function onSessionTablistKeydown(event: KeyboardEvent, tab: AssistantTab) {
   const tabs = tabsStore.tabs

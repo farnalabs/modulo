@@ -1007,7 +1007,8 @@ interface ModelBackendItem {
 
 type DeterministicType = 'regex' | 'json_schema' | 'custom_function'
 
-const DETERMINISTIC_TYPES: DeterministicType[] = ['regex', 'json_schema', 'custom_function']
+const DETERMINISTIC_TYPE_OPTIONS: DeterministicType[] = ['regex', 'json_schema', 'custom_function']
+const DETERMINISTIC_TYPES = new Set<DeterministicType>(DETERMINISTIC_TYPE_OPTIONS)
 
 // A deterministic config is still authored as JSON, so each type gets a valid
 // starting document instead of a placeholder the user must retype.
@@ -1026,7 +1027,7 @@ const DETERMINISTIC_DEFAULTS: Record<DeterministicType, string> = {
 }
 
 // Stable 422 codes the judge write chokepoint emits (ADR 066 D4/D8).
-const JUDGE_WRITE_CODES = [
+const JUDGE_WRITE_CODES = new Set([
   'judge_config_invalid',
   'judge_config_typed_required',
   'judge_config_legacy_read_only',
@@ -1034,7 +1035,7 @@ const JUDGE_WRITE_CODES = [
   'judge_backend_not_found',
   'judge_backend_not_org_owned',
   'judge_backend_not_active',
-]
+])
 
 const selectedPipelineId = ref('__all__')
 const nodes = ref<GraphNode[]>([])
@@ -1120,7 +1121,7 @@ const mechanismOptions = computed(() => [
 ])
 
 const deterministicOptions = computed(() =>
-  DETERMINISTIC_TYPES.map((value) => ({
+  DETERMINISTIC_TYPE_OPTIONS.map((value) => ({
     value,
     label: t(`views.EvalEditorView.${value}`),
   })),
@@ -1146,7 +1147,7 @@ const modelBackendOptions = computed(() => [
   { value: '', label: t('views.EvalEditorView.judging.noBackendSelected') },
   ...modelBackends.value.map((backend) => ({
     value: backend.id,
-    label: `${backend.display_name || backend.name} — ${backend.provider} · ${backend.model_id}`,
+    label: `${backend.display_name ?? backend.name} — ${backend.provider} · ${backend.model_id}`,
   })),
 ])
 
@@ -1193,7 +1194,7 @@ const clientErrors = computed(() =>
 
 const serverConfigErrorHeading = computed(() => {
   const code = serverConfigError.value?.code
-  if (code && JUDGE_WRITE_CODES.includes(code)) {
+  if (code && JUDGE_WRITE_CODES.has(code)) {
     return t(`views.EvalEditorView.judging.serverErrors.${code}`)
   }
   return t('views.EvalEditorView.judging.serverErrors.generic')
@@ -1251,7 +1252,7 @@ function onMechanismChange(value: unknown): void {
 
 function onDeterministicTypeChange(value: unknown): void {
   const next = String(value) as DeterministicType
-  if (!DETERMINISTIC_TYPES.includes(next)) return
+  if (!DETERMINISTIC_TYPES.has(next)) return
   if (next === deterministicType.value) return
   rememberDeterministicDraft()
   deterministicType.value = next
@@ -1715,7 +1716,7 @@ async function startEdit(ev: EvalDefinition) {
       form.config_json = ''
     }
   } else {
-    deterministicType.value = DETERMINISTIC_TYPES.includes(ev.eval_type as DeterministicType)
+    deterministicType.value = DETERMINISTIC_TYPES.has(ev.eval_type as DeterministicType)
       ? (ev.eval_type as DeterministicType)
       : 'regex'
     form.config_json = JSON.stringify(ev.config_json, null, 2)
