@@ -799,11 +799,10 @@ def _record_last_backup(data_dir: Path, timestamp: str) -> None:
     except (OSError, ValueError, KeyError, TypeError) as exc:
         # Launcher state is an enhancement, never a backup blocker.
         _log.warning("backup_timestamp_not_recorded data_dir=%s error=%s", data_dir, exc)
-    except Exception as exc:
+    except Exception:
         # Broad catch-all must never break the backup itself — but it is NOT
         # collapsed into the specific tuple above: an unknown failure here is
         # a bug and deserves the traceback in the log, at ERROR level.
-        _log.error("backup_timestamp_not_recorded data_dir=%s error=%s", data_dir, exc)
         _log.exception("backup_timestamp_unexpected_failure data_dir=%s", data_dir)
 
 
