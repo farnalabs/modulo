@@ -2708,20 +2708,19 @@ def _evaluate_changed_lines(
                 allow_deletion_only=args.allow_deletion_only,
             )
         )
-        # JavaScript evaluation (if report exists)
-        if effective_js_report is not None:
-            results.append(
-                evaluate(
-                    "JavaScript",
-                    effective_js_report,
-                    args.compare_branch,
-                    args.fail_under,
-                    allow_missing=args.allow_missing_reports or args.allow_missing_js_report,
-                    branch_fail_under=args.branch_fail_under,
-                    js_src_root=js_src_root,
-                    allow_deletion_only=args.allow_deletion_only,
-                )
+        # JavaScript evaluation
+        results.append(
+            evaluate(
+                "JavaScript",
+                effective_js_report,
+                args.compare_branch,
+                args.fail_under,
+                allow_missing=args.allow_missing_reports or args.allow_missing_js_report,
+                branch_fail_under=args.branch_fail_under,
+                js_src_root=js_src_root,
+                allow_deletion_only=args.allow_deletion_only,
             )
+        )
     finally:
         if normalised_js_report is not None:
             with contextlib.suppress(OSError):
@@ -2756,11 +2755,6 @@ def _check_project_floors(python_report: Path | None, js_report: Path | None) ->
     if js_report is not None and js_report.exists():
         js_numbers = _load_js_coverage(str(js_report))
 
-    failure = False
-    if python_numbers is not None:
-        failure |= _enforce(python_numbers) == 1
-    if js_numbers is not None:
-        failure |= _enforce(js_numbers) == 1
     if python_numbers is None and js_numbers is None:
         return False
 
@@ -2771,6 +2765,11 @@ def _check_project_floors(python_report: Path | None, js_report: Path | None) ->
     )
     print("  Raise floors as coverage improves; never lower without justification.")
     print()
+    failure = False
+    if python_numbers is not None:
+        failure |= _enforce(python_numbers) == 1
+    if js_numbers is not None:
+        failure |= _enforce(js_numbers) == 1
     return failure
 
 

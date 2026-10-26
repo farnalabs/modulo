@@ -3484,3 +3484,32 @@ def test_missing_js_report_without_flag_fails(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert "missing coverage report" in out.lower()
+
+
+def test_no_js_report_flag_and_js_changed_lines_fails_closed(tmp_path, capsys):
+    """No --js-report + JS changed lines must fail closed, never skip the JS leg.
+
+    Regression guard: the JavaScript leg is evaluated unconditionally, so a
+    report that resolves to ``None`` reaches ``_missing_report_gate`` and fails
+    the gate instead of being silently dropped when no report is available.
+    """
+    py_report = tmp_path / "coverage.xml"
+    _write_healthy_python_report(py_report)
+
+    def fake_changed(_compare_branch: str, language: str) -> dict[str, int]:
+        return {"JavaScript": {"src/app.ts": 20}}.get(language, {})
+
+    with (
+        patch.object(mod, "_get_changed_production_files", side_effect=fake_changed),
+        patch.object(mod, "REPO_ROOT", tmp_path),
+        patch(
+            "sys.argv",
+            ["run_coverage_gate.py", "--compare-branch", "origin/main", "--python-report", str(py_report)],
+        ),
+    ):
+        rc = mod.main()
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "JavaScript" in out
+    assert "missing coverage report" in out.lower()
