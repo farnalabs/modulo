@@ -1236,8 +1236,10 @@ async def admin_update_user(
         )
 
     try:
-        transaction = session.begin_nested() if session.in_transaction() else session.begin()
-        async with transaction:
+        # This endpoint owns the mutation transaction.  A nested savepoint would
+        # release the role/deactivation writes when the surrounding request
+        # transaction is rolled back, so always use a durable top-level commit.
+        async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
 
             # SECURITY (#1188): verify the target has membership in the caller's org
@@ -1341,6 +1343,12 @@ async def admin_update_user(
                     .values(role=req.org_role)
                 )
 
+            # Refresh before the owning transaction commits.  The DI session
+            # uses autobegin=False, so a post-commit refresh would attempt an
+            # implicit transaction and fail after the durable write succeeded.
+            await session.refresh(target_membership)
+            org_role = target_membership.role
+
     except LastAdminLockoutError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -1358,11 +1366,6 @@ async def admin_update_user(
         _raise_this_feature_not_available()
 
     org_role = req.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
-    # Refresh the membership AFTER the tombstone writes committed — the bulk
-    # UPDATE does not refresh the in-session ORM object and (expire_on_commit
-    # off) a plain re-SELECT would return the same stale identity-map instance
-    # (gh-1794/FAR-533).
-    await session.refresh(target_membership)
     return _to_user_list_item(account, org_role, org_membership=target_membership)
 
 

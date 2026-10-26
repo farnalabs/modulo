@@ -460,7 +460,7 @@ def test_list_users_programming_error_501(api: tuple[TestClient, AsyncMock]) -> 
 # ── PUT /users/{user_id} ──
 
 
-def test_update_user_role_rolls_back_implicit_read_transaction(
+def test_update_user_role_uses_durable_top_level_transaction(
     api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client, session = api
@@ -472,8 +472,9 @@ def test_update_user_role_rolls_back_implicit_read_transaction(
     resp = client.put(f"/api/v1/admin/users/{_TARGET_USER_ID}", json={"org_role": "viewer"})
 
     assert resp.status_code == 200
-    session.begin_nested.assert_called_once()
-    assert membership.role == "runner"
+    session.begin.assert_called_once()
+    session.begin_nested.assert_not_called()
+    assert resp.json()["org_role"] == "viewer"
 
 
 def test_update_user_account_missing_404(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:

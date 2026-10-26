@@ -660,6 +660,7 @@ describe('AdminUsersView', () => {
     await flushPromises()
     await nextTick()
 
+    expect(wrapper.find('[data-testid="admin-users-role-u-1"]').attributes('append-to')).toBe('body')
     wrapper.vm.updateRole({ ...USERS_RESPONSE.items[0], id: 'u-1' }, 'operator')
     await flushPromises()
     await nextTick()
