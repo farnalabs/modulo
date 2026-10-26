@@ -107,6 +107,12 @@ jobs:
       - name: Validate requested release identity
         shell: bash
         env:
+          # The tag/object lookups below call `gh api`, which requires an
+          # explicit token in the step environment. Without it every RC
+          # dispatch fails in deploy-throttle before the throttle is even
+          # consulted; normal deploys exit above the `gh` calls, so CI cannot
+          # exercise the missing-token path.
+          GH_TOKEN: ${{ github.token }}
           REQUESTED_REF: ${{ github.event.inputs.release_ref }}
           REQUESTED_SHA: ${{ github.event.inputs.release_sha }}
         run: |

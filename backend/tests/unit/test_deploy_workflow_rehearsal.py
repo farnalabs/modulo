@@ -156,6 +156,20 @@ def test_release_identity_keeps_normal_deploy_outside_rc_validation() -> None:
     assert "release_ref must be an RC tag" in validation_script
 
 
+def test_release_identity_step_passes_gh_token_to_its_gh_api_calls() -> None:
+    """The RC identity lookup calls ``gh api``, which needs ``GH_TOKEN`` in the
+    step environment; without it every RC dispatch dies in deploy-throttle.
+    Normal deploys exit before the ``gh`` calls, so CI cannot catch it - this
+    structural assertion is the regression gate.
+    """
+    workflow = _workflow()
+    step_names = _step_names(workflow["jobs"]["deploy-throttle"]["steps"])
+    step = workflow["jobs"]["deploy-throttle"]["steps"][step_names.index("Validate requested release identity")]
+
+    assert "gh api" in step["run"]
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+
+
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["attest-artefacts"]
@@ -203,6 +217,24 @@ def test_native_release_smoke_n_minus_one_reuses_fail_closed_artifact_gates() ->
     assert script.index("SHA256SUMS") < script.index("bash scripts/install.sh")
     assert script.index("sha256sum") < script.index("bash scripts/install.sh")
     assert script.index("gh attestation verify") < script.index("bash scripts/install.sh")
+
+
+def test_native_release_smoke_has_exactly_one_fail_closed_n_minus_one_leg() -> None:
+    """N-1 is a canary-only leg. A second N-1 step must not creep into another
+    job: the old release-smoke copy was unreachable (``CANARY`` is set only on
+    the canary job, ``N_MINUS_1`` only resolved there) yet still read as a live
+    check, and it installed N-1 with a plain curl and no attestation gate.
+    """
+    workflow = yaml.safe_load(NATIVE_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+    legs = [
+        (job_id, step)
+        for job_id, job in workflow["jobs"].items()
+        for step in job.get("steps", [])
+        if step.get("name") == "N-1 upgrade leg (canary leg only)"
+    ]
+
+    assert [job_id for job_id, _step in legs] == ["canary"]
+    assert 'gh attestation verify "${n1_dir}/${n1_tarball}"' in legs[0][1]["run"]
 
 
 def test_native_release_smoke_uses_central_release_validator_for_all_consumers() -> None:
