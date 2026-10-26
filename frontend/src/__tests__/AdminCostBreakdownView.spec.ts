@@ -68,6 +68,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
+import StatCard from '../components/StatCard.vue'
 
 describe('AdminCostBreakdownView', () => {
   beforeEach(() => {
@@ -582,5 +583,44 @@ describe('AdminCostBreakdownView', () => {
     const alert = wrapper.find('[data-testid="cost-anomalies-error"]')
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toContain('Failed to dismiss anomaly')
+  })
+
+  it('uses the shared dashboard metric-label typography for the summary headings', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    // FAR-2175: the Costs metric headings are deliberately the same
+    // second-level label style as the Dashboard StatCard label - not the
+    // larger section-heading style. Pin the contract so a future heading
+    // sweep cannot silently diverge the two surfaces.
+    const dashboardLabelClasses = mount(StatCard, {
+      props: { label: 'Dashboard metric', value: 1 },
+    }).get('p').classes()
+
+    const metricLabels: Array<[string, string]> = [
+      ['cost-total-spend', 'Total Spend (This Month)'],
+      ['cost-avg-per-run', 'Avg Cost per Run'],
+      ['cost-per-successful-run', 'Cost per Successful Run'],
+      ['cost-total-runs', 'Total Runs'],
+    ]
+
+    for (const [testId, labelText] of metricLabels) {
+      const card = wrapper.get(`[data-testid="${testId}"]`).element.closest('.p-card')
+      expect(card).not.toBeNull()
+      const label = Array.from(card!.querySelectorAll('p, span')).find(
+        (element) => element.textContent?.trim() === labelText,
+      )
+      expect(label, `missing metric heading ${labelText}`).toBeTruthy()
+      expect(Array.from(label!.classList).sort()).toEqual([...dashboardLabelClasses].sort())
+    }
   })
 })
