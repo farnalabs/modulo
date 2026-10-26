@@ -348,6 +348,7 @@ def _restore_from_archive(args: argparse.Namespace, passphrase: str, db_url: str
 
 
 def main() -> None:
+    """Run the restore CLI synchronously; all work is blocking subprocess/file I/O."""
     args = parse_args()
     _validate_restore_args(args)
 
