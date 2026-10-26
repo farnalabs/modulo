@@ -23,6 +23,7 @@ The tests prove, against a real (SQLite) database:
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -442,3 +443,235 @@ async def test_worker_job_start_refreshes_the_persisted_licence(monkeypatch: pyt
     await saq_worker._before_process_hook({"job": SimpleNamespace(kwargs={"org_id": "org-1"})})
 
     assert refresh_calls == [False]
+
+
+# ── 11. Internal invariants (upgrade path, cache hits, fail-open edges) ─────
+
+
+class _AsyncSessionDouble:
+    """Minimal async context manager matching ``AsyncSessionLocal()`` usage."""
+
+    def begin(self) -> Self:
+        return self
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+
+def test_state_from_value_tolerates_a_bare_string_key() -> None:
+    """A build predating the two-slot value may have written just the key."""
+    assert license_mod._state_from_value("legacy-key") == PersistedLicenseState(active_key="legacy-key")
+    assert license_mod._state_from_value("") == PersistedLicenseState()
+    assert license_mod._state_from_value(None) == PersistedLicenseState()
+
+
+async def test_restoring_the_same_state_keeps_memory_unchanged(session: AsyncSession) -> None:
+    """A re-read of the state memory already holds must be a no-op (no churn)."""
+    key = _key()
+    await _install(session, key)
+
+    async with session.begin():
+        state = await restore_persisted_system_license(session, _settings())
+
+    assert license_mod._apply_persisted_state(state) is False
+    current = get_license()
+    assert current is not None
+    assert current.raw_key == key
+
+
+async def test_unverifiable_persisted_key_keeps_the_last_verified_licence(session: AsyncSession) -> None:
+    """An unreadable/corrupt persisted key must not silently downgrade memory."""
+    good_key = _key()
+    await _install(session, good_key)
+
+    stranger = generate_keypair()
+    unverifiable_key = encode_license_key(_payload(), stranger["private_key"])
+    await _write_state_directly(session, PersistedLicenseState(active_key=unverifiable_key))
+
+    license_mod._persisted_state_checked_at = 0.0  # force the re-read
+    changed = await refresh_persisted_system_license(session)
+
+    assert changed is False
+    current = get_license()
+    assert current is not None
+    assert current.raw_key == good_key
+
+
+async def test_refresh_clears_memory_when_another_process_removes_the_licence(session: AsyncSession) -> None:
+    """A non-empty -> empty transition is the explicit-removal signal."""
+    key = _key()
+    await _install(session, key)
+    assert get_license() is not None
+
+    await _write_state_directly(session, PersistedLicenseState())
+    license_mod._persisted_state_checked_at = 0.0
+
+    changed = await refresh_persisted_system_license(session)
+
+    assert changed is True
+    assert get_license() is None
+
+
+async def test_restore_clears_memory_when_the_store_was_emptied(session: AsyncSession) -> None:
+    """A restart that finds an emptied store must not keep a stale licence."""
+    key = _key()
+    await _install(session, key)
+    assert get_license() is not None
+    await _write_state_directly(session, PersistedLicenseState())
+
+    async with session.begin():
+        state = await restore_persisted_system_license(session, _settings())
+
+    assert state.is_empty()
+    assert get_license() is None
+
+
+async def test_restore_with_an_empty_store_leaves_a_fresh_process_empty(session: AsyncSession) -> None:
+    """The FIRST observation of empty must not be treated as a removal."""
+    async with session.begin():
+        state = await restore_persisted_system_license(session, _settings())
+
+    assert state.is_empty()
+    assert get_license() is None
+
+
+def test_refresh_is_due_before_the_first_read_and_after_the_ttl() -> None:
+    license_mod._persisted_state_checked_at = 0.0
+    assert license_mod.persisted_license_refresh_due() is True
+
+    license_mod._persisted_state_checked_at = time.monotonic()
+    assert license_mod.persisted_license_refresh_due() is False
+
+
+async def test_refresh_propagates_cancellation(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _cancel(*_args: Any, **_kwargs: Any) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(license_mod, "_run_in_transaction", _cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await refresh_persisted_system_license(session, force=True)
+
+
+async def test_plan_resolution_without_a_session_skips_the_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A session-free context (no DB) must not attempt the persisted re-read."""
+    key = _key()
+    data = license_mod.verify_license_key(key)
+    assert data is not None
+    sentinel = object()
+
+    async def _from_db(*_args: Any, **_kwargs: Any) -> object:
+        return sentinel
+
+    monkeypatch.setattr(feature_flags, "resolve_effective_license", lambda *_args: data)
+    monkeypatch.setattr(feature_flags.DbPlanContext, "from_db", staticmethod(_from_db))
+
+    plan = await feature_flags._resolve_paid_plan(_settings(), None, None)
+
+    assert plan is sentinel
+
+
+async def test_worker_job_start_propagates_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.core.saq_worker as saq_worker
+
+    async def _cancel(*_args: Any, **_kwargs: Any) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(license_mod, "persisted_license_refresh_due", lambda: True)
+    monkeypatch.setattr(license_mod, "refresh_persisted_system_license", _cancel)
+    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+
+    with pytest.raises(asyncio.CancelledError):
+        await saq_worker._before_process_hook({"job": SimpleNamespace(kwargs={"org_id": "org-1"})})
+
+
+async def test_worker_job_start_swallows_a_store_blip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A licence-store failure must never fail a job's start (fail-open)."""
+    import modulo.core.saq_worker as saq_worker
+
+    attempted: list[bool] = []
+
+    async def _boom(*_args: Any, **_kwargs: Any) -> None:
+        attempted.append(True)
+        raise RuntimeError("license store unavailable")
+
+    monkeypatch.setattr(license_mod, "persisted_license_refresh_due", lambda: True)
+    monkeypatch.setattr(license_mod, "refresh_persisted_system_license", _boom)
+    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+
+    await saq_worker._before_process_hook({"job": SimpleNamespace(kwargs={"org_id": "org-1"})})
+
+    assert attempted == [True]
+
+
+async def test_bootstrap_restores_a_persisted_licence(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.core.license_bootstrap as license_bootstrap
+
+    state = PersistedLicenseState(active_key="persisted-key")
+
+    async def _restore(_session: Any, _settings: Any) -> PersistedLicenseState:
+        return state
+
+    monkeypatch.setattr(license_mod, "restore_persisted_system_license", _restore)
+    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+
+    result = await license_bootstrap.restore_persisted_license(_settings())
+
+    assert result is state
+
+
+async def test_bootstrap_logs_when_no_licence_is_persisted(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.core.license_bootstrap as license_bootstrap
+
+    async def _restore(_session: Any, _settings: Any) -> PersistedLicenseState:
+        return PersistedLicenseState()
+
+    monkeypatch.setattr(license_mod, "restore_persisted_system_license", _restore)
+    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+
+    result = await license_bootstrap.restore_persisted_license(_settings())
+
+    assert result.is_empty()
+
+
+async def test_bootstrap_reraises_an_anchor_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.core.license_bootstrap as license_bootstrap
+
+    async def _restore(_session: Any, _settings: Any) -> PersistedLicenseState:
+        raise license_mod.PersistedLicenseAnchorError("dev anchor")
+
+    monkeypatch.setattr(license_mod, "restore_persisted_system_license", _restore)
+    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+
+    with pytest.raises(license_mod.PersistedLicenseAnchorError):
+        await license_bootstrap.restore_persisted_license(_settings())
+
+
+async def test_bootstrap_propagates_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.core.license_bootstrap as license_bootstrap
+
+    async def _restore(_session: Any, _settings: Any) -> PersistedLicenseState:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(license_mod, "restore_persisted_system_license", _restore)
+    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+
+    with pytest.raises(asyncio.CancelledError):
+        await license_bootstrap.restore_persisted_license(_settings())
+
+
+async def test_bootstrap_is_fail_open_on_a_store_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modulo.core.license_bootstrap as license_bootstrap
+
+    async def _restore(_session: Any, _settings: Any) -> PersistedLicenseState:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(license_mod, "restore_persisted_system_license", _restore)
+    monkeypatch.setattr("modulo.db.session.AsyncSessionLocal", lambda: _AsyncSessionDouble())
+
+    result = await license_bootstrap.restore_persisted_license(_settings())
+
+    assert result.is_empty()
