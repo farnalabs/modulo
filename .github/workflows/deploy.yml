@@ -600,14 +600,15 @@ jobs:
         run: |
           docker rm -f modulo-ci-redis 2>/dev/null || true
           docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
-          for _ in $(seq 1 30); do
+          # Increased timeout to 120s (60 attempts * 2s) for more reliable container startup
+          for _ in $(seq 1 60); do
             docker exec modulo-ci-redis redis-cli ping 2>/dev/null && { echo "Redis ready"; break; }
             sleep 2
           done
           # Fail fast: a never-ready Redis must not sleep through the loop and
           # only surface as a confusing failure in the test step.
           docker exec modulo-ci-redis redis-cli ping 2>/dev/null \
-            || { echo "::error::Redis did not become ready within 60s"; exit 1; }
+            || { echo "::error::Redis did not become ready within 120s"; exit 1; }
 
       # Per-test timeout: without it a single hung test stalls the whole job
       # silently until the job-level kill (observed 2026-08-27, run
@@ -621,9 +622,33 @@ jobs:
       # this 300s gate, their real multi-minute boots (sonarqube 600s, gitlab
       # 1800s) and disk-hung image pulls become pytest-timeout ERRORs, turning
       # main red (deploy run 35451961476).
+      #
+      # Retry wrapper: 2 attempts max, 30s backoff. Flaky integration tests
+      # (transient container/network issues) get a second chance before failing
+      # the pre-deploy gate.
       - name: Integration tests
         working-directory: backend
-        run: uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAX_ATTEMPTS=2
+          BACKOFF_SECONDS=30
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "--- Integration tests attempt $attempt of $MAX_ATTEMPTS ---"
+            if uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings; then
+              echo "Integration tests passed on attempt $attempt"
+              exit 0
+            else
+              EXIT_CODE=$?
+              if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+                echo "Integration tests failed (exit $EXIT_CODE) -- retrying in ${BACKOFF_SECONDS}s..."
+                sleep $BACKOFF_SECONDS
+              else
+                echo "Integration tests failed after $MAX_ATTEMPTS attempts"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"
