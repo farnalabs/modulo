@@ -659,6 +659,55 @@ describe('AdminProductAnalyticsView', () => {
     expect(mockGet).not.toHaveBeenCalled()
   })
 
+  it('skips the retired toggle when the view unmounts mid-save', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'off',
+        instance_enabled: false,
+        instance_switch_source: 'operator',
+        licence_requires_analytics: false,
+        warning: null,
+      },
+      error: undefined,
+    })
+    // Hold the write open so the component can be torn down while it is in
+    // flight. Vue nulls template refs on unmount, so the `finally` must skip
+    // the detached element rather than throw on it.
+    let resolvePut!: (value: unknown) => void
+    mockPut.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePut = resolve
+      }),
+    )
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const toggle = wrapper.find('[data-testid="instance-switch-toggle"]')
+    ;(toggle.element as HTMLInputElement).checked = true
+    await toggle.trigger('change')
+
+    wrapper.unmount()
+    resolvePut({ data: null, error: undefined })
+    await flushPromises()
+
+    // The save ran to completion (initial fetch + the post-write refetch) and
+    // the unmounted toggle was left untouched — no detached-element write.
+    expect(mockGet).toHaveBeenCalledTimes(2)
+  })
+
   it('exposes a null view and the unknown level when transparency is absent', async () => {
     // The store leaves ``transparency`` null when the API returns no body. The
     // view's computed projections must tolerate that rather than assume data.
