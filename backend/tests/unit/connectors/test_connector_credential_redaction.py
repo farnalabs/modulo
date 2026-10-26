@@ -21,6 +21,7 @@ import httpx
 import pytest
 import respx
 
+from modulo.connectors import security
 from modulo.connectors.base import ConnectorQuery
 from modulo.connectors.datadog import DatadogConnector
 from modulo.connectors.github import GitHubConnector, GitHubError
@@ -30,6 +31,7 @@ from modulo.connectors.linear import LinearConnector
 from modulo.connectors.n8n import N8NConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
 from modulo.connectors.security import (
+    CredentialRedactionError,
     CredentialRedactor,
     credential_values,
     redact_exc,
@@ -137,6 +139,45 @@ def test_redact_exc_preserves_httpx_request_error() -> None:
     repaired = CredentialRedactor(["secretvalue123"]).redact_exc(exc)
     assert isinstance(repaired, httpx.ConnectError)
     assert "secretvalue123" not in str(repaired)
+
+
+def test_redact_exc_fails_closed_when_rebuild_raises_any_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The rebuild calls an arbitrary vendor ``type(exc)(message)`` constructor,
+    # which can raise anything (here an exotic ``KeyError``). Credential
+    # redaction must never let that propagate the ORIGINAL credential-bearing
+    # message -- the fallback must stay sanitized whatever the rebuild raises.
+    exc = ValueError("boom secretvalue123")
+
+    def _explode(*_args: object, **_kwargs: object) -> Exception:
+        raise KeyError("vendor constructor exploded")
+
+    monkeypatch.setattr(security, "_rebuild_generic_error", _explode)
+    repaired = CredentialRedactor(["secretvalue123"]).redact_exc(exc)
+    assert isinstance(repaired, CredentialRedactionError)
+    assert "secretvalue123" not in str(repaired)
+    assert "***" in str(repaired)
+
+
+def test_scrub_request_drops_unreadable_body_but_still_scrubs_url() -> None:
+    # ``request.content`` can raise (a consumed/exotic stream). The scrubbed
+    # copy must still be produced with the credential-bearing URL/headers
+    # redacted -- the unreadable body is dropped, never the whole scrub.
+
+    class _UnreadableBodyRequest:
+        method = "GET"
+        url = "https://api.example.com/items?token=secretvalue123"
+        headers = httpx.Headers({"authorization": "Bearer secretvalue123"})
+
+        @property
+        def content(self) -> bytes:
+            raise RuntimeError("stream already consumed")
+
+    scrubbed = security._scrub_request(_UnreadableBodyRequest(), ["secretvalue123"])
+    assert scrubbed is not None
+    assert "secretvalue123" not in str(scrubbed.url)
+    assert not scrubbed.content
 
 
 def test_redacting_decorator_redacts_escaping_exception() -> None:
