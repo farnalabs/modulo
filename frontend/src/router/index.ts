@@ -925,7 +925,9 @@ export async function enforceRoleTierVisibility(
   }
 
   const needsTierOrVisibility =
-    to.meta?.requiredTier ??
+    // Boolean OR is deliberate: a falsy-but-present requiredTier must still
+    // trigger the tier/visibility guard rather than fail open via `??`.
+    Boolean(to.meta?.requiredTier) || // NOSONAR: fail closed on any falsy non-null requiredTier
     (to.meta?.visibility === 'private_preview' || to.meta?.visibility === 'in_dev')
 
   if (needsTierOrVisibility) {

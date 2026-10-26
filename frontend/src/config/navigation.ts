@@ -181,8 +181,10 @@ function buildSidebarGroups(): NavGroup[] {
       requiredPermissions: route.required_permissions ?? null,
       requiredFeatureFlag: route.feature_flag ?? null,
       // FAR-1796: the route entry ORs with its group's flag, mirroring the
-      // router's hydrateManifestMeta derivation.
-      systemAdminOnly: route.system_admin_only ?? group.system_admin_only ?? undefined,
+      // router's hydrateManifestMeta derivation. Boolean OR is deliberate: `??`
+      // would let a `false` route flag shadow a `true` group flag.
+      systemAdminOnly: Boolean(route.system_admin_only || group.system_admin_only) || undefined, // NOSONAR: deliberate Boolean OR - `false` must not shadow a group's `true`
+
     })
   }
 
