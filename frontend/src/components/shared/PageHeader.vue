@@ -1,5 +1,5 @@
 <template>
-  <header :data-testid="dataTestId" class="page-header">
+  <header v-bind="$attrs" :data-testid="dataTestId || $attrs['data-testid']" class="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
     <div class="flex min-w-0 flex-1 flex-col">
       <button type="button" v-if="backLink" class="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors" @click="$router.push(backLink)">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><polyline points="15 18 9 12 15 6"/></svg>
