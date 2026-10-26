@@ -83,6 +83,19 @@ jobs:
             ERR=$(head -c 500 /tmp/gh_pr_list_stderr.txt 2>/dev/null || true)
             echo "::warning::Failed to fetch open PRs from GitHub API (rc=$GH_RC). Reconciler cannot run this cycle.${ERR:+$'\n'}gh pr list stderr: $ERR"
             echo "api_failed=true" >> "${GITHUB_OUTPUT:-/dev/null}"
+            # FAR-2157: this is the reconciler's "did nothing" path. The green
+            # run is a legitimate fail-open (a transient API blip must not red
+            # the schedule), but it must SAY it reconciled nothing - otherwise
+            # it is indistinguishable from a pass that examined every PR.
+            # The durable machine-readable signal is the step summary plus this
+            # step's own presence on the no-op path; downstream steps already
+            # gate on `api_failed`.
+            {
+              echo "## NOTHING RECONCILED — could not read open PRs (FAR-2157)"
+              echo ""
+              echo "gh pr list failed (rc=$GH_RC), so no conflicted PR was examined or"
+              echo "dispatched this cycle. The next scheduled run retries."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 

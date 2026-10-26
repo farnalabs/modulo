@@ -570,3 +570,61 @@ def test_cli_email_round_trips_a_watchdog_verdict(tmp_path: Path, capsys: Any) -
     rendered = json.loads(capsys.readouterr().out)
     assert "watchdog could not re-dispatch deploy.yml" in rendered["subject"]
     assert "could not re-dispatch deploy.yml" in rendered["body"]
+
+
+# --- FAR-2157: an unmeasured tick is UNKNOWN, never healthy ------------------
+
+
+def _jobs(*steps: dict[str, Any]) -> dict[str, Any]:
+    return {"jobs": [{"name": "check-prod-staleness", "steps": list(steps)}]}
+
+
+def test_parse_previous_verdict_reads_the_unknown_marker_as_unknown() -> None:
+    """An UNKNOWN tick carries the marker step; it must never read as healthy.
+
+    A tick that measured nothing skips the verdict step, so its run used to be
+    indistinguishable from a healthy one in run history. The marker step is
+    what makes the two distinguishable, and the parser must prefer it over the
+    skipped verdict step.
+    """
+    payload = _jobs(
+        {"name": health.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "success"},
+        {"name": health.VERDICT_STEP_NAME, "conclusion": "skipped"},
+    )
+    assert health.parse_previous_verdict(payload) == health.UNKNOWN
+
+
+def test_unknown_marker_wins_even_when_the_verdict_step_ran() -> None:
+    """The marker is authoritative: a tick that measured nothing is UNKNOWN.
+
+    This also pins the ordering inside the parser. A future workflow that runs
+    the verdict step on an unmeasured tick would otherwise let a green verdict
+    step override the marker.
+    """
+    payload = _jobs(
+        {"name": health.VERDICT_STEP_NAME, "conclusion": "success"},
+        {"name": health.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "success"},
+    )
+    assert health.parse_previous_verdict(payload) == health.UNKNOWN
+
+
+def test_markerless_skipped_verdict_step_still_reads_as_healthy() -> None:
+    """A run from before the marker existed keeps the old, correct mapping.
+
+    A genuinely healthy tick skips the verdict step and carries no marker, so
+    it is HEALTHY - the marker must be additive, not a replacement.
+    """
+    payload = _jobs({"name": health.VERDICT_STEP_NAME, "conclusion": "skipped"})
+    assert health.parse_previous_verdict(payload) == health.HEALTHY
+
+
+def test_marker_does_not_make_an_unhealthy_run_unknown() -> None:
+    """An unhealthy tick fails the verdict step and never runs the marker leg.
+
+    Guards against a marker check that swallows a real failure if both appear.
+    """
+    payload = _jobs(
+        {"name": health.VERDICT_STEP_NAME, "conclusion": "failure"},
+        {"name": health.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "skipped"},
+    )
+    assert health.parse_previous_verdict(payload) == health.UNKNOWN

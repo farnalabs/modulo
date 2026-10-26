@@ -363,6 +363,14 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 
+#: The step each escalation workflow runs ONLY when a tick measured nothing
+#: (``healthy`` is empty). Its presence is the durable machine-readable
+#: "UNKNOWN" marker: without it, an unmeasured tick skips the verdict step and
+#: its run is recorded as HEALTHY by ``_verdict_from_step`` (FAR-2157). Both
+#: workflows must use this exact name - an architecture test pins it.
+UNKNOWN_VERDICT_STEP_NAME = "Record the unmeasured tick (FAR-2157)"
+
+
 def _verdict_from_step(step: dict[str, Any]) -> str:
     """Map one verdict step's conclusion onto a previous-verdict value."""
     conclusion = str(step.get("conclusion") or "").lower()
@@ -373,13 +381,33 @@ def _verdict_from_step(step: dict[str, Any]) -> str:
     return UNKNOWN
 
 
-def parse_previous_verdict(jobs_payload: dict[str, Any] | None) -> str:
-    """The previous run's verdict, from the verdict step's conclusion.
+def _has_unknown_marker(jobs_payload: dict[str, Any] | None) -> bool:
+    """True when the run carries the UNKNOWN-tick marker step (FAR-2157).
 
+    ``True`` is authoritative: the workflow ran that step, which it does only
+    when the tick's ``healthy`` output was empty, i.e. nothing was measured.
+    A tick that measured nothing must never be read back as a healthy verdict
+    - the transition email would then silently swallow the recovery.
+    """
+    for job in (jobs_payload or {}).get("jobs") or []:
+        for step in job.get("steps") or []:
+            if step.get("name") == UNKNOWN_VERDICT_STEP_NAME:
+                return True
+    return False
+
+
+def parse_previous_verdict(jobs_payload: dict[str, Any] | None) -> str:
+    """The previous run's verdict, from its steps.
+
+    A run that carries the UNKNOWN-tick marker measured nothing, so its actual
+    state is unknown (FAR-2157) - that check comes first, because such a run
+    SKIPS the verdict step and would otherwise read as healthy. Otherwise
     ``failure`` -> the previous run evaluated unhealthy; ``skipped`` -> it
     evaluated healthy (the step's condition was false); anything else, or no
     such step (a run from an older workflow definition), -> UNKNOWN.
     """
+    if _has_unknown_marker(jobs_payload):
+        return UNKNOWN
     for job in (jobs_payload or {}).get("jobs") or []:
         for step in job.get("steps") or []:
             if step.get("name") == VERDICT_STEP_NAME:

@@ -493,6 +493,21 @@ jobs:
           echo "No approved PRs to process."
           echo "Total open: ${{ steps.collect.outputs.all_count }}, approved: 0"
           echo "PRs need an APPROVED review from farnalabs or modulo-reviewbot."
+          # FAR-2157: an empty queue is a legitimate no-op, but a green merge
+          # pass that merged NOTHING is otherwise indistinguishable from one
+          # that merged twelve PRs. Say so, in the summary and with a marker
+          # phrase a reader can grep. The durable machine-readable signal is
+          # this step's own presence/conclusion (the jobs API exposes step
+          # names and conclusions, not job outputs): this step runs ONLY when
+          # the pass merged nothing, so it is present exactly on the no-op
+          # path. merge-queue-watchdog.yml independently measures the outcome
+          # (last merged PR, section 5), so no downstream gate is added here.
+          {
+            echo "## NO MERGE — no approved PRs this pass (FAR-2157)"
+            echo ""
+            echo "Total open PRs: ${{ steps.collect.outputs.all_count }}; approved-and-mergeable: 0."
+            echo "Nothing was merged. This is a no-op pass, not a merge pass."
+          } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
       - name: Merge PRs into merge-queue (oldest first)
@@ -1461,6 +1476,19 @@ jobs:
         if: steps.merge.outputs.merged_count == '0'
         run: |
           echo "No PRs could be merged into queue. Exiting."
+          # FAR-2157: same no-op legibility contract as the "no approved PRs"
+          # step above, for the other way a pass can merge nothing - approved
+          # PRs existed but none could be merged into the queue (CI pending /
+          # unknown, duplicates, conflicts). This step also runs ONLY on the
+          # no-op path, so its presence IS the machine-readable outcome; a
+          # successful pass that merged something skips it. The watchdog still
+          # measures the real artefact (merged PRs), never this run's colour.
+          {
+            echo "## NO MERGE — nothing could be merged this pass (FAR-2157)"
+            echo ""
+            echo "Approved-and-mergeable PRs collected: ${{ steps.collect.outputs.pr_count }}."
+            echo "Nothing was merged. A green run here is NOT evidence that the queue merged a PR."
+          } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
       - name: Push merge-queue branch (for reference)

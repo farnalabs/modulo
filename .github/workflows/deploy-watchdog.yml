@@ -746,3 +746,26 @@ jobs:
         run: |
           echo "::error::Deploy health UNHEALTHY: ${SUMMARY:-deploy watchdog escalation} (prod ${PROD_SHA:-unknown}, origin/main ${MAIN_SHA:-unknown}, ${CONSECUTIVE:-unknown} consecutive failed deploys). The operator was emailed on the transition (FAR-2139)."
           exit 1
+
+      # FAR-2157: the watchdog's UNKNOWN verdicts are recorded, never read back
+      # as healthy. Every path above emits an explicit verdict; the UNKNOWN
+      # ones (nothing readable) leave `healthy` empty, skip the verdict step
+      # below, and would otherwise be indistinguishable from a healthy tick in
+      # run history - which lets the NEXT tick's transition email treat them as
+      # healthy and silently swallow the recovery. This step runs ONLY when the
+      # verdict was UNKNOWN, and its presence is the durable machine-readable
+      # signal `deploy_health.parse_previous_verdict` reads.
+      - name: Record the unmeasured tick (FAR-2157)
+        if: always() && steps.watchdog.outputs.healthy == ''
+        shell: bash
+        run: |
+          echo "::warning::NO MEASUREMENT — the deploy watchdog could not evaluate deploy health this tick, so this green run is NOT a healthy verdict (FAR-2157). The next tick treats it as UNKNOWN."
+          {
+            echo "## NOT MEASURED — deploy watchdog UNKNOWN (FAR-2157)"
+            echo ""
+            echo "The watchdog could not read the state it needs (see the warnings above), so"
+            echo "it neither escalated nor cleared. This run concludes success because an"
+            echo "unmeasurable tick is not a deploy failure - it is NOT evidence that"
+            echo "production is healthy or that the watchdog was satisfied."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
