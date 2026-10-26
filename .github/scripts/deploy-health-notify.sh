@@ -26,6 +26,11 @@
 # silently swallowed the recovery email between an escalation and its
 # recovery. A lookup that cannot be read is skipped, never trusted.
 #
+# FAR-2159: a tick that read only SOME of its required inputs is UNKNOWN too
+# (`deploy_health._overall_healthy`), so it takes THIS same path -- no email is
+# sent and a live alert stays open. That is deliberate: a recovery must never
+# be inferred from figures the tick did not read.
+#
 # Inputs (all via env: -- never interpolated into the shell):
 #   WORKFLOW_NAME       workflow whose run history holds the state vector
 #   VERDICT_STEP_NAME   step whose conclusion encodes the previous verdict
@@ -80,9 +85,12 @@ if [[ ! -f "$EVALUATOR" ]]; then
   exit 1
 fi
 
-# ---- 0. An evaluation that produced nothing cannot infer a transition. ----
+# ---- 0. An evaluation that produced no verdict cannot infer a transition. ----
+# Both UNKNOWN shapes land here: a tick that measured nothing (FAR-2157) and a
+# PARTIAL read that missed a required input (FAR-2159). Neither may close an
+# alert, so neither sends anything.
 if [[ -z "$CURRENT_HEALTHY" ]]; then
-  echo "::warning::Deploy health could not be evaluated this cycle (UNKNOWN) - no transition can be inferred, so no email is sent. The run still warns; an UNKNOWN previous verdict never suppresses the next alert."
+  echo "::warning::Deploy health could not be evaluated this cycle (UNKNOWN - nothing was readable, or the tick was a partial read missing a required input) - no transition can be inferred, so no email is sent. A live alert therefore stays open. The run still warns; an UNKNOWN previous verdict never suppresses the next alert."
   emit_output action none
   exit 0
 fi
