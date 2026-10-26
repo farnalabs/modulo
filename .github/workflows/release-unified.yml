@@ -223,12 +223,12 @@ jobs:
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
+          MODE: ${{ inputs.mode }}
         shell: bash
         run: |
           set -euo pipefail
           # Determine the commit that will be tagged.
-          if [ "${{ inputs.mode }}" = "cut" ]; then
+          if [ "$MODE" = "cut" ]; then
             # For cut: the version bump was just pushed to main, so the target is origin/main
             TARGET_SHA="$(git rev-parse origin/main)"
             echo "Cut mode: checking schema-freshness on origin/main (${TARGET_SHA})"
@@ -242,8 +242,8 @@ jobs:
           # Query the latest workflow run for the target SHA and check schema-freshness.
           # We look for the most recent 'ci.yml' run on this SHA.
           echo "Checking CI run for ${TARGET_SHA}..."
-          RUN_ID=$(gh api repos/${{ github.repository }}/actions/runs \
-            --jq '.workflow_runs[] | select(.head_sha == "'${TARGET_SHA}'" and .name == "CI") | .id' \
+          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/runs" \
+            --jq '.workflow_runs[] | select(.head_sha == "'"${TARGET_SHA}"'" and .path == ".github/workflows/ci.yml") | .id' \
             | head -n1)
           if [ -z "$RUN_ID" ]; then
             echo "::error::No CI workflow run found for commit ${TARGET_SHA}. Cannot verify schema-freshness gate."
@@ -253,16 +253,20 @@ jobs:
 
           # Wait for the run to complete if it's still in progress
           for i in {1..60}; do
-            STATUS=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID} --jq '.status')
+            STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}" --jq '.status')
             if [ "$STATUS" = "completed" ]; then
               break
             fi
             echo "CI run ${RUN_ID} still in progress (status: ${STATUS}), waiting... (${i}/60)"
             sleep 10
           done
+          if [ "$STATUS" != "completed" ]; then
+            echo "::error::Timed out waiting for CI run ${RUN_ID} to complete (status: ${STATUS}). Refusing to proceed."
+            exit 1
+          fi
 
           # Check the schema-freshness job conclusion
-          SCHEMA_JOB=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs \
+          SCHEMA_JOB=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" \
             --jq '.jobs[] | select(.name == "Schema freshness") | {conclusion: .conclusion, name: .name}')
           if [ -z "$SCHEMA_JOB" ]; then
             echo "::error::Schema freshness job not found in CI run ${RUN_ID}"
@@ -790,6 +794,16 @@ jobs:
         with:
           name: bundle-artefacts-amd64
           path: release-artefacts
+
+      - name: Set up Python 3.12 for OpenAPI dump
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
 
       - name: Dump OpenAPI schema from backend
         working-directory: backend
