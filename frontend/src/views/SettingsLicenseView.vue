@@ -211,6 +211,12 @@ const planStore = usePlanStore()
 const { canManageOrgLicence, canManageSystemLicence } = useLicenceAccess()
 const { orgId } = useCurrentUser()
 
+type LicenseMutation = (url: string, options?: { body?: { license_key: string } }) => Promise<{ error?: unknown }>
+const putLicense = api.PUT as unknown as LicenseMutation
+const deleteLicense = api.DELETE as unknown as ((url: string) => Promise<{ error?: unknown }>)
+
+const licenceError = ref<string | null>(null)
+
 // The wire shape is the generated OpenAPI type, never a hand-maintained copy:
 // a renamed backend field fails `vue-tsc` here instead of rendering `undefined`.
 type LicenseStatus = components['schemas']['LicenseStatusResponse']
@@ -249,7 +255,7 @@ interface LicenceStatusSource {
 const providedLicence = inject<LicenceStatusSource | null>(LICENCE_STATUS_INJECTION_KEY, null)
 
 const ownLicence = useDataFetch<LicenseStatus>(
-  () => (api as any).GET('/api/v1/admin/license'),
+  () => api.GET('/api/v1/admin/license'),
   { initialValue: defaultLicense, immediate: providedLicence === null }
 )
 
@@ -276,10 +282,6 @@ const orgLicenceUrl = computed(() => `/api/v1/admin/orgs/${orgId.value}/license`
 
 const newLicenseKey = ref('')
 const newSystemLicenseKey = ref('')
-
-// Errors from any licence write (install/remove, either scope). A successful
-// install clears it; there is no "verify" result any more (FAR-2154).
-const licenceError = ref<string | null>(null)
 
 const applying = ref(false)
 const applyDialogOpen = ref(false)
@@ -312,11 +314,8 @@ const maskedKey = computed(() => {
 })
 
 function formatDate(iso: string): string {
-  try {
-    return format(new Date(iso), 'MMMM d, yyyy')
-  } catch {
-    return iso
-  }
+  const parsed = new Date(iso)
+  return Number.isNaN(parsed.getTime()) ? iso : format(parsed, 'MMMM d, yyyy')
 }
 
 /**
@@ -373,7 +372,7 @@ async function applyKey() {
   if (!newLicenseKey.value.trim() || !orgId.value) return
   applying.value = true
   try {
-    const { error: err } = await (api as any).PUT(orgLicenceUrl.value, {
+    const { error: err } = await putLicense(orgLicenceUrl.value, {
       body: { license_key: newLicenseKey.value.trim() },
     })
     if (err) {
@@ -403,18 +402,18 @@ async function applySystemKey() {
   if (!newSystemLicenseKey.value.trim()) return
   applying.value = true
   try {
-    const { error: err } = await (api as any).POST('/api/v1/admin/license', {
+    const { error: err } = await api.POST('/api/v1/admin/license', {
       body: { license_key: newSystemLicenseKey.value.trim() },
     })
     if (err) {
       licenceError.value = `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(err)}`
-    } else {
-      applyDialogOpen.value = false
-      licenceError.value = null
-      newSystemLicenseKey.value = ''
-      await planStore.fetchPlan()
-      await loadAll()
+      return
     }
+    applyDialogOpen.value = false
+    licenceError.value = null
+    newSystemLicenseKey.value = ''
+    await planStore.fetchPlan()
+    await loadAll()
   } catch (e: unknown) {
     licenceError.value = `${t('views.SettingsLicenseView.failed_to_apply')} ${formatApiError(e)}`
   } finally {
@@ -436,7 +435,7 @@ async function removeLicense() {
   if (!orgId.value) return
   removing.value = true
   try {
-    const { error: err } = await (api as any).DELETE(orgLicenceUrl.value)
+    const { error: err } = await deleteLicense(orgLicenceUrl.value)
     if (err) {
       licenceError.value = `${t('views.SettingsLicenseView.failed_to_remove')} ${formatApiError(err)}`
     } else {
