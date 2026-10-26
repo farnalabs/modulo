@@ -5770,9 +5770,6 @@ elements:
       - testid: license-remove-btn-system
         type: button
         dynamic_testid: false
-      - testid: licence-claim-link
-        type: element
-        dynamic_testid: false
       - testid: licence-renewal-banner
         type: element
         dynamic_testid: false
@@ -5781,9 +5778,6 @@ elements:
         dynamic_testid: false
       - testid: licence-renewal-install-action
         type: button
-        dynamic_testid: false
-      - testid: licence-renewal-claim-link
-        type: link
         dynamic_testid: false
       - testid: licence-grace-dialog
         type: element
