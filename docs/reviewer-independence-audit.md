@@ -73,17 +73,17 @@ This audit examines every review stage in Modulo to verify that reviewing agents
 | **Influence paths** | ✅ Author node cannot influence judge verdict – judge callable is built from eval config at eval time, not from node output. |
 
 **Architecture notes:**
-- `llm_judge` is explicitly documented as "soft signal only, never a correctness gate" (architecture.md)
+- `model_judge` is explicitly documented as "soft signal only, never a correctness gate" (architecture.md)
 - `failure_behaviour: "warn"` (default) allows run to continue; `"block"` raises `EvalBlockedError`
-- Judge callable built via `build_llm_judge_callable(hub, backend_id_str)` – uses shared `ModelBackendHub`
+- Judge callable built via `build_model_judge_callable(hub, backend_id_str)` – uses shared `ModelBackendHub`
 - Timeout bounds: `BACKEND_INVOKE_TIMEOUT_SECONDS=60s`, `SYNC_BRIDGE_TIMEOUT_SECONDS=75s` (fail-closed)
 
-**Gap:** An LLM-judge eval can be configured with the same `model_backend_id` as the node it evaluates, meaning the *same model instance* (with same credentials) judges its own output. This is acceptable for `llm_judge` because:
+**Gap:** An LLM-judge eval can be configured with the same `model_backend_id` as the node it evaluates, meaning the *same model instance* (with same credentials) judges its own output. This is acceptable for `model_judge` because:
 1. It is explicitly a soft signal (not a blocking gate by default)
 2. The guard instruction + delimiters prevent prompt injection
 3. Human-set evals (`human_set`) are the "trustworthy correctness path"
 
-**Recommendation:** Document this in eval engine docs; consider adding a validation warning when `llm_judge` eval uses same backend as node's `model_backend_id`.
+**Recommendation:** Document this in eval engine docs; consider adding a validation warning when a `model_judge` eval uses same backend as node's `model_backend_id`.
 
 ---
 
@@ -124,13 +124,13 @@ This audit examines every review stage in Modulo to verify that reviewing agents
 
 1. **`docs/architecture.md`** – Add note in Eval Engine section: "LLM-judge evals may share a model backend with the node under evaluation; they are soft-signal only. For correctness guarantees, use `human_set` evals."
 
-2. **`docs/core-principles.md`** – Principle 4 (Deterministic gates) already notes `llm_judge` is soft signal. No change needed.
+2. **`docs/core-principles.md`** – Principle 4 (Deterministic gates) already notes `model_judge` is soft signal. No change needed.
 
-3. **`docs/evals.md`** (if exists) – Document the shared-backend consideration for `llm_judge`.
+3. **`docs/evals.md`** – Document the shared-backend consideration for `model_judge`.
 
 ### B. Code Change (Optional – Validation Warning)
 
-In `backend/src/modulo/core/eval_engine/__init__.py` or graph validator: add a warning when an `llm_judge` eval definition references the same `model_backend_id` as its parent node's `model_backend_id`. This is a soft warning, not a block.
+In `backend/src/modulo/core/eval_engine/__init__.py` or graph validator: add a warning when a `model_judge` eval definition references the same `model_backend_id` as its parent node's `model_backend_id`. This is a soft warning, not a block.
 
 ---
 
@@ -147,4 +147,4 @@ The test `tests/architecture/test_reviewer_independence.py` asserts:
 
 ## Conclusion
 
-Modulo's review architecture provides **strong reviewer independence** by design. The only gap is the documented soft-signal nature of `llm_judge` evals potentially sharing a model backend – this is acceptable given the explicit design intent and the availability of `human_set` evals for correctness-critical gates.
+Modulo's review architecture provides **strong reviewer independence** by design. The only gap is the documented soft-signal nature of `model_judge` evals potentially sharing a model backend – this is acceptable given the explicit design intent and the availability of `human_set` evals for correctness-critical gates.

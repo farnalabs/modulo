@@ -1282,8 +1282,8 @@ def _probe_env_file_pinned() -> bool:
 
 
 def _probe_secrets_mode(root: Path) -> int | None:
-    # TODO(P3): Windows ACL equivalence (icacls); the POSIX stat bits are
-    # the P1a source of truth.
+    # Windows ACL equivalence (icacls) is not implemented; the POSIX stat bits
+    # are the P1a source of truth.
     if sys.platform == "win32":
         return None
     secrets_path = root / _SECRETS_FILENAME

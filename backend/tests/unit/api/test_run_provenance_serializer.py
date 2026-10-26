@@ -42,6 +42,7 @@ from typing import Any
 from uuid import uuid4
 
 from modulo.core.run_provenance import run_provenance_fields
+from tests.unit._source_scan import iter_source_text
 
 _BACKEND = Path(__file__).resolve().parents[3]
 _SRC = _BACKEND / "src" / "modulo"
@@ -61,11 +62,15 @@ _STATUS_KEY = "status"
 _RUN_RENDER_MARKERS = frozenset({"trigger_type", "provenance"})
 
 
-def _scope_files() -> list[Path]:
-    files: list[Path] = []
+def _iter_scope_sources() -> list[tuple[Path, str]]:
+    files: list[tuple[Path, str]] = []
     for scope in _SCOPE_DIRS:
-        files.extend(sorted(scope.rglob("*.py")))
+        files.extend(iter_source_text(scope))
     return files
+
+
+def _scope_files() -> list[Path]:
+    return [path for path, _source in _iter_scope_sources()]
 
 
 def _rel(path: Path) -> str:
@@ -113,8 +118,8 @@ def test_no_surface_hand_writes_the_execution_origin_key() -> None:
     new hand-rolled copy — or a regression to one — fails here by file:line.
     """
     offenders: list[str] = []
-    for path in _scope_files():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    for path, source in _iter_scope_sources():
+        tree = ast.parse(source, filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Dict):
                 if "execution_origin" in _literal_keys(node) and not _composes_serializer(node):
@@ -147,8 +152,8 @@ def test_run_shaped_payloads_compose_the_shared_serializer() -> None:
     scope — they are not claim-ready run surfaces.
     """
     missing: list[str] = []
-    for path in _scope_files():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    for path, source in _iter_scope_sources():
+        tree = ast.parse(source, filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Dict):
                 keys = _literal_keys(node)

@@ -15,7 +15,7 @@ if (!EMAIL || !PASSWORD) {
 }
 
 async function api(path, options = {}) {
-  if (typeof path !== "string" || !path.startsWith("/") || /^[a-z][a-z0-9+.-]*:\/\//i.test(path)) {
+  if (typeof path !== "string" || !path.startsWith("/") || path.includes("://")) {
     throw new Error(`Invalid API path: ${logSafe(path)}`);
   }
   // Pin the resolved URL to the configured base origin so a (future) caller

@@ -164,7 +164,11 @@ function buildSidebarGroups(): NavGroup[] {
       continue
     }
 
-    const groupItems = itemsByGroup[route.sidebar_group] ??= []
+    let groupItems = itemsByGroup[route.sidebar_group]
+    if (groupItems === undefined) {
+      groupItems = []
+      itemsByGroup[route.sidebar_group] = groupItems
+    }
     groupItems.push({
       to: path,
       icon: routeConfigMap[route.name]?.icon || 'File',

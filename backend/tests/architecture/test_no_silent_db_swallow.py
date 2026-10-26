@@ -23,6 +23,8 @@ An arm that does neither is a silent swallow and fails the test.
 import ast
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo" / "api"
 
 _LOG_METHODS = {"warning", "exception", "error", "info", "debug", "critical"}
@@ -89,10 +91,10 @@ def _handler_is_silent(handler: ast.ExceptHandler) -> bool:
 
 def test_no_silent_sqlalchemy_error_swallow() -> None:
     violations: list[str] = []
-    for path in sorted(SRC.rglob("*.py")):
+    for path, source in iter_source_text(SRC):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError, OSError):
+            tree = ast.parse(source)
+        except (SyntaxError, UnicodeDecodeError):
             continue
         for node in ast.walk(tree):
             if not isinstance(node, ast.ExceptHandler):

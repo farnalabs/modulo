@@ -287,14 +287,17 @@ const applyDialogOpen = ref(false)
 const applyScope = ref<'org' | 'system'>('org')
 
 /**
- * FAR-2142: the two scopes differ in DURABILITY, so one confirmation text
- * cannot describe both honestly.
+ * FAR-2142 / FAR-2158: the two scopes differ in SCOPE and PRECEDENCE, not
+ * durability.
  *
  * An organisation key is written to `org.settings_json["license_key"]` (a
- * database row), so it survives a restart. The instance-wide key is held only
- * in the API process's memory (`core.license.store_license`), so a restart or
- * redeploy discards it unless `MODULO_LICENSE_KEY` is also configured — the
- * operator needs to know that BEFORE they rely on it.
+ * database row) and the instance-wide key to the RLS-free `system_config` row
+ * (`core.license.persist_installed_system_license`), so both survive a restart
+ * or redeploy. The persisted system licence is restored at startup and
+ * refreshed into other processes within a short TTL, so the SAQ worker sees it
+ * too. The org key takes precedence over the instance-wide licence, which in
+ * turn overrides a deployment-wide `MODULO_LICENSE_KEY` — the operator needs to
+ * know that BEFORE they rely on it.
  */
 const applyDialogDescription = computed(() =>
   applyScope.value === 'system'
@@ -452,12 +455,14 @@ async function removeLicense() {
 }
 
 /**
- * Clear the INSTANCE-WIDE key — system admin only (FAR-2110).
+ * Clear the INSTANCE-WIDE key — system admin only (FAR-2110 / FAR-2153).
  *
- * `DELETE /api/v1/admin/license` clears the in-memory system licence and
- * busts every cached licence status server-side, so the deployment degrades
- * without a restart. Reloading the plan and the status is what the operator
- * sees change immediately.
+ * `DELETE /api/v1/admin/license` deletes the persisted `system_config` row
+ * before clearing the in-memory slot and busts every cached licence status
+ * server-side, so the removal is durable (it does not return on a restart) and
+ * the deployment degrades without one. Resolution then falls back to
+ * `MODULO_LICENSE_KEY`, then Community. Reloading the plan and the status is
+ * what the operator sees change immediately.
  */
 async function removeSystemLicense() {
   removing.value = true
