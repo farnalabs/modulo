@@ -37,7 +37,7 @@ replaces a marker with a job output silently disarms the signal — the guard su
 
 | Workflow | Substantive work | Path to success without it | Machine-readable outcome | Summary says so | Consumers of the conclusion | Classification |
 |---|---|---|---|---|---|---|
-| `audit-chain-monitor.yml` | Verify the audit chain + 24h continuity | No admin credentials → every check skips | **Added:** `authenticated=false` + NOT RUN marker step | **Added:** NOT RUN summary | Operator / run history | **Masking — fixed** |
+| `audit-chain-monitor.yml` | Verify the audit chain + 24h continuity | No admin credentials → every check skips | **Added:** `authenticated=false` + NOT RUN marker step | **Added:** NOT RUN summary | Operator / run history / **FAR-2160 escalation** (the next cycle reads the marker step's *conclusion* from run history) | **Masking — fixed; blind cycles escalate (FAR-2160)** |
 | `backup-restore-nightly.yml` | Backup → restore → downgrade → upgrade gate | None (every step runs) | Gate fails loudly | n/a | Operator | Legitimate |
 | `bdd.yml` | BDD/E2E suite | Docs/frontend-only PR → suite steps skip (`Detect changed paths`) | Step-level skip, documented | Log | PR checks (none required) | Legitimate no-op (nothing to run) |
 | `branch-fixer.yml` | Dispatch the Branch Fixer | None — always dispatches; a failed dispatch exits 1 | Dispatch result + fail | n/a | PR Housekeeper (re-drives from PR state) | Legitimate |
