@@ -1019,7 +1019,15 @@ def test_executed_marker_step_still_reads_as_unknown() -> None:
     )
     assert health.parse_previous_verdict(unmeasured) == health.UNKNOWN
 
-    failed_recorder = _jobs(_api_step(health.UNKNOWN_VERDICT_STEP_NAME, "failure", 8))
+    # A marker that RAN AND FAILED is still an executed marker. The verdict step
+    # is present here on purpose: it is DEFINED on every run, so narrowing the
+    # rule to ``conclusion == "success"`` would stop recognising the failed
+    # marker and fall through to this skipped verdict step - HEALTHY, which is
+    # the silent suppression FAR-2157 exists to prevent.
+    failed_recorder = _jobs(
+        _api_step(health.VERDICT_STEP_NAME, "skipped", 7),
+        _api_step(health.UNKNOWN_VERDICT_STEP_NAME, "failure", 8),
+    )
     assert health.parse_previous_verdict(failed_recorder) == health.UNKNOWN
 
 
