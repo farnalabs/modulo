@@ -173,7 +173,7 @@ def test_release_identity_step_passes_gh_token_to_its_gh_api_calls() -> None:
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["attest-artefacts"]
-    assert job["needs"] == ["produce-sbom", "bundle"]
+    assert job["needs"] == ["produce-sbom", "bundle", "release"]
     names = _step_names(job["steps"])
     assert "Download the SBOM artefact" in names
     assert "Download the published bundle artefact" in names
@@ -183,6 +183,39 @@ def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     assert bundle_download["if"] == "inputs.mode == 'cut' || inputs.mode == 'recut'"
     attest = job["steps"][names.index("Attest the file artefacts")]
     assert attest["with"]["subject-path"] == "release-artefacts/*"
+
+    digest_validation = job["steps"][names.index("Validate image digest outputs")]
+    assert digest_validation["if"] == "inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'"
+    assert "sha256:[0-9a-f]{64}" in digest_validation["run"]
+    assert digest_validation["env"] == {
+        "ALL_IN_ONE_DIGEST": "${{ needs.release.outputs.all_in_one_digest }}",
+        "BACKEND_DIGEST": "${{ needs.release.outputs.backend_digest }}",
+        "FRONTEND_DIGEST": "${{ needs.release.outputs.frontend_digest }}",
+        "RUNNER_OPENCODE_DIGEST": "${{ needs.release.outputs.runner_opencode_digest }}",
+    }
+
+    expected_images = {
+        "Attest all-in-one image": ("ghcr.io/${{ github.repository }}", "all_in_one_digest"),
+        "Attest backend image": ("ghcr.io/${{ github.repository }}/backend", "backend_digest"),
+        "Attest frontend image": ("ghcr.io/${{ github.repository }}/frontend", "frontend_digest"),
+        "Attest runner-opencode image": (
+            "ghcr.io/${{ github.repository }}/runner-opencode",
+            "runner_opencode_digest",
+        ),
+    }
+    for step_name, (subject_name, output_name) in expected_images.items():
+        image_attestation = job["steps"][names.index(step_name)]
+        assert image_attestation["if"] == digest_validation["if"]
+        assert image_attestation["with"] == {
+            "subject-name": subject_name,
+            "subject-digest": f"${{{{ needs.release.outputs.{output_name} }}}}",
+        }
+
+    verify = job["steps"][names.index("Verify image attestations")]
+    assert verify["if"] == digest_validation["if"]
+    assert verify["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert 'gh attestation verify "$subject" --repo "${{ github.repository }}"' in verify["run"]
+    assert verify["run"].count("ghcr.io/$image_name@$digest") == 1
 
 
 def test_native_release_smoke_verifies_release_tarball_attestation_before_install() -> None:
