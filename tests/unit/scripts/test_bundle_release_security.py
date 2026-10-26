@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+<<<<<<< HEAD
 import json
 import os
 import re
@@ -16,6 +17,14 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = REPO_ROOT / "backend"
 LOCKFILE = BACKEND_ROOT / "uv.lock"
+=======
+import re
+import tomllib
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+LOCKFILE = REPO_ROOT / "backend" / "uv.lock"
+>>>>>>> f6e296247 (fix: preserve bundle no-build boundary for IBM COS)
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "bundle-release.yml"
 EXPECTED_PACKAGES = {
     "ibm-cos-sdk",
@@ -24,6 +33,7 @@ EXPECTED_PACKAGES = {
 }
 
 
+<<<<<<< HEAD
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
@@ -39,16 +49,24 @@ OPT_IN_DEADLINE_SECONDS = 600
 SUBPROCESS_TIMEOUT_SECONDS = 120
 
 
+=======
+>>>>>>> f6e296247 (fix: preserve bundle no-build boundary for IBM COS)
 def _workflow_text() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
 
 
+<<<<<<< HEAD
 def _locked_packages() -> dict[str, dict[str, object]]:
     return {
+=======
+def test_locked_ibm_cos_archives_have_expected_urls_hashes_sizes_and_versions() -> None:
+    packages = {
+>>>>>>> f6e296247 (fix: preserve bundle no-build boundary for IBM COS)
         package["name"]: package
         for package in tomllib.loads(LOCKFILE.read_text(encoding="utf-8"))["package"]
         if package["name"] in EXPECTED_PACKAGES
     }
+<<<<<<< HEAD
 
 
 def _workflow_build_constraints(text: str) -> dict[str, tuple[str, str]]:
@@ -122,6 +140,8 @@ def _direct_url(site_packages: Path, distribution: str) -> dict[str, object]:
 
 def test_locked_ibm_cos_archives_have_expected_urls_hashes_sizes_and_versions() -> None:
     packages = _locked_packages()
+=======
+>>>>>>> f6e296247 (fix: preserve bundle no-build boundary for IBM COS)
     assert set(packages) == EXPECTED_PACKAGES
 
     for package in packages.values():
@@ -151,7 +171,15 @@ def test_bundle_keeps_global_no_build_and_only_allows_locked_ibm_cos_sources() -
 
     requirements = re.findall(r"'([^']+ @ https://files\.pythonhosted\.org/[^']+#sha256=[0-9a-f]{64})'", install_block)
     assert len(requirements) == len(EXPECTED_PACKAGES)
+<<<<<<< HEAD
     locked = {package["name"]: package["sdist"] for package in _locked_packages().values()}
+=======
+    locked = {
+        package["name"]: package["sdist"]
+        for package in tomllib.loads(LOCKFILE.read_text(encoding="utf-8"))["package"]
+        if package["name"] in EXPECTED_PACKAGES
+    }
+>>>>>>> f6e296247 (fix: preserve bundle no-build boundary for IBM COS)
     for requirement in requirements:
         name, url = requirement.split(" @ ", 1)
         package = name.split("==", 1)[0]
@@ -167,6 +195,7 @@ def test_bundle_excludes_the_three_source_packages_before_global_sync() -> None:
     assert sync_block is not None
     excluded = set(re.findall(r"--no-install-package ([^\s]+)", sync_block.group(0)))
     assert excluded == EXPECTED_PACKAGES
+<<<<<<< HEAD
 
 
 @pytest.mark.release_bundle_security
@@ -250,3 +279,5 @@ def test_bundle_ibm_install_is_executable_and_provenance_verified() -> None:
             "assert all(pathlib.Path(entry).resolve().is_relative_to(site) for entry in paths)"
         )
         _run_process([str(python), "-c", code, str(site_packages)], project, deadline, env)
+=======
+>>>>>>> f6e296247 (fix: preserve bundle no-build boundary for IBM COS)
