@@ -18,7 +18,7 @@ recorded as a step that runs ONLY on the no-op path (the pattern
 and every consumer reads step presence, never a job output. A future edit that
 replaces the marker with a job output silently disarms the signal.
 
-Three fixes:
+Fixes:
 
 * ``merge-queue.yml`` - a pass that merged nothing writes a ``NO MERGE``
   summary; the step itself runs only on that path.
@@ -29,6 +29,19 @@ Three fixes:
   back as a HEALTHY verdict and used to swallow the recovery email. The tick
   now records an UNKNOWN marker step, and ``deploy_health.parse_previous_verdict``
   reads it.
+
+The same class had one pure instance (FAR-2161): ``native-release-smoke.yml``
+accepted a manual ``workflow_dispatch`` with NEITHER ``canary_version`` nor
+``rollback_version``. Every verification job is then ineligible - release-smoke
+is push-only, canary requires ``canary_version``, rollback-verify requires
+``rollback_version`` - so only ``canary-housekeeping`` ran, its steps skipped on
+the skipped canary result, and the run concluded SUCCESS having verified
+nothing. Unlike the cases above this one is not a legitimate no-op (the operator
+asked for a release smoke), so it is REJECTED by a ``dispatch-guard`` job rather
+than marked: ``.github/scripts/native_smoke_dispatch_guard.py`` exits 1 with an
+``::error::`` naming both accepted inputs. Push and schedule behaviour must stay
+untouched, including the ``canary-housekeeping`` consumer of the
+"no bundle published" skip.
 
 Every test reports actionable violations instead of a bare failure.
 """
@@ -52,6 +65,7 @@ AUDIT_CHAIN_YML = WORKFLOWS / "audit-chain-monitor.yml"
 DEPLOY_STALENESS_YML = WORKFLOWS / "deploy-staleness-check.yml"
 DEPLOY_WATCHDOG_YML = WORKFLOWS / "deploy-watchdog.yml"
 PR_CONFLICT_YML = WORKFLOWS / "pr-conflict-reconcile.yml"
+NATIVE_SMOKE_YML = WORKFLOWS / "native-release-smoke.yml"
 NOTIFY_SCRIPT = REPO / ".github" / "scripts" / "deploy-health-notify.sh"
 
 # The step each escalation workflow runs ONLY when its verdict was UNKNOWN.
@@ -257,3 +271,163 @@ def test_pr_conflict_reconcile_api_failure_is_marked() -> None:
     if 'echo "api_failed=true"' not in script:
         violations.append("  the API-failure signal downstream steps gate on disappeared")
     assert not violations, "a blind reconcile cycle is not legible:\n" + "\n".join(violations)
+
+
+# --- native-release-smoke: an argument-free dispatch is REJECTED -------------
+
+
+def _native_smoke_guard_module() -> Any:
+    """Load ``native_smoke_dispatch_guard.py`` so the tests exercise its logic."""
+    path = next(
+        parent / ".github" / "scripts" / "native_smoke_dispatch_guard.py"
+        for parent in Path(__file__).resolve().parents
+        if (parent / ".github" / "scripts" / "native_smoke_dispatch_guard.py").exists()
+    )
+    loader = SourceFileLoader("native_smoke_dispatch_guard", str(path))
+    module = module_from_spec(spec_from_loader("native_smoke_dispatch_guard", loader))
+    sys.modules["native_smoke_dispatch_guard"] = module
+    loader.exec_module(module)
+    return module
+
+
+def _native_smoke_guard_step() -> dict:
+    """The `dispatch-guard` step that runs the rejection script."""
+    for step in _steps(NATIVE_SMOKE_YML):
+        if "native_smoke_dispatch_guard.py" in str(step.get("run") or ""):
+            return step
+    raise AssertionError(
+        "native-release-smoke.yml: no step runs .github/scripts/native_smoke_dispatch_guard.py - "
+        "an argument-free manual dispatch would conclude green without verifying anything"
+    )
+
+
+def test_native_release_smoke_rejects_an_argument_free_dispatch(monkeypatch: Any, capsys: Any) -> None:
+    """A dispatch naming neither input must FAIL with a message naming both.
+
+    The guard is behavioural, not a comment: with both inputs empty the script
+    exits 1 and emits an ``::error::`` annotation naming ``canary_version`` and
+    ``rollback_version``. A single input is accepted here because the dispatch
+    jobs' own ``if:`` gates decide which leg runs (pinned separately below).
+    """
+    guard = _native_smoke_guard_module()
+    violations: list[str] = []
+
+    # The pure verdict: argument-free is the ONLY rejected shape.
+    empty = guard.dispatch_error("", "")
+    if not empty:
+        violations.append("  dispatch_error('', '') no longer rejects an argument-free dispatch")
+    else:
+        for required in ("canary_version", "rollback_version"):
+            if required not in empty:
+                violations.append(f"  the rejection message does not name {required!r}")
+    for rollback, canary, label in (
+        ("", "bundle-v9.9.9", "canary_version only"),
+        ("bundle-v9.9.9", "", "rollback_version only"),
+        ("bundle-v9.9.9", "bundle-v9.9.9", "both inputs"),
+    ):
+        if guard.dispatch_error(rollback, canary) is not None:
+            violations.append(f"  a dispatch supplying {label} was rejected")
+    if guard.dispatch_error("  ", "  ") is None:
+        violations.append("  a whitespace-only dispatch was accepted (it names no target)")
+
+    # The env plumbing the workflow step relies on.
+    monkeypatch.delenv("CANARY_VERSION", raising=False)
+    monkeypatch.delenv("ROLLBACK_VERSION", raising=False)
+    if guard.main() != 1:
+        violations.append("  main() no longer exits 1 on an argument-free dispatch")
+    error_out = capsys.readouterr().out
+    if "::error::" not in error_out:
+        violations.append("  the rejection is not emitted as an ::error:: annotation")
+    for required in ("canary_version", "rollback_version"):
+        if required not in error_out:
+            violations.append(f"  the emitted error does not name {required!r}")
+    monkeypatch.setenv("CANARY_VERSION", "bundle-v9.9.9")
+    if guard.main() != 0:
+        violations.append("  main() rejects a dispatch that supplied canary_version")
+
+    # The workflow wiring: a standalone, dispatch-only, FIRST job.
+    workflow = _load_yaml(NATIVE_SMOKE_YML)
+    jobs = workflow.get("jobs") or {}
+    guard_job = jobs.get("dispatch-guard")
+    if not isinstance(guard_job, dict):
+        violations.append("  the dispatch-guard job disappeared")
+    else:
+        if str(guard_job.get("if") or "") != "github.event_name == 'workflow_dispatch'":
+            violations.append("  dispatch-guard must run on workflow_dispatch only (push/schedule untouched)")
+        if guard_job.get("needs"):
+            violations.append("  dispatch-guard must not depend on another job")
+        if next(iter(jobs)) != "dispatch-guard":
+            violations.append("  dispatch-guard is no longer the first job in the workflow")
+    for job_id, job in jobs.items():
+        if isinstance(job, dict) and "dispatch-guard" in str(job.get("needs") or ""):
+            violations.append(
+                f"  job {job_id!r} now needs dispatch-guard - a skipped needed job would skip the "
+                "scheduled canary and change scheduled behaviour"
+            )
+
+    step = _native_smoke_guard_step()
+    env = step.get("env") or {}
+    if env.get("CANARY_VERSION") != "${{ inputs.canary_version }}":
+        violations.append("  the guard step no longer maps CANARY_VERSION from inputs.canary_version")
+    if env.get("ROLLBACK_VERSION") != "${{ inputs.rollback_version }}":
+        violations.append("  the guard step no longer maps ROLLBACK_VERSION from inputs.rollback_version")
+
+    assert not violations, "an argument-free native-release-smoke dispatch can silently verify nothing:\n" + "\n".join(
+        violations
+    )
+
+
+def test_native_release_smoke_dispatch_paths_keep_their_own_gates() -> None:
+    """Each real path keeps exactly the gate that made it a verification.
+
+    The rejection is justified by these gates: release-smoke is push-only,
+    canary needs ``canary_version`` (and no ``rollback_version``), and
+    rollback-verify needs ``rollback_version``. The schedule path and the
+    ``canary-housekeeping`` consumer of the "no bundle published" skip must be
+    untouched, or the FAR-1736 not-applicable signal breaks.
+    """
+    workflow = _load_yaml(NATIVE_SMOKE_YML)
+    jobs = workflow.get("jobs") or {}
+    # PyYAML parses the bare key ``on`` as the boolean True.
+    on = workflow.get("on", workflow.get(True)) or {}
+    violations: list[str] = []
+
+    def job_if(job_id: str) -> str:
+        job = jobs.get(job_id)
+        if not isinstance(job, dict):
+            violations.append(f"  job {job_id!r} disappeared")
+            return ""
+        return str(job.get("if") or "")
+
+    release_smoke_if = job_if("release-smoke")
+    if release_smoke_if != "github.event_name == 'push'":
+        violations.append(f"  release-smoke gate changed: {release_smoke_if!r} (expected push-only)")
+
+    canary_if = job_if("canary")
+    for fragment in (
+        "github.event_name == 'schedule'",
+        "inputs.rollback_version == ''",
+        "inputs.canary_version != ''",
+    ):
+        if fragment not in canary_if:
+            violations.append(f"  canary gate lost {fragment!r}: {canary_if!r}")
+
+    rollback_if = job_if("rollback-verify")
+    for fragment in ("github.event_name == 'workflow_dispatch'", "inputs.rollback_version != ''"):
+        if fragment not in rollback_if:
+            violations.append(f"  rollback-verify gate lost {fragment!r}: {rollback_if!r}")
+
+    housekeeping = jobs.get("canary-housekeeping")
+    if not isinstance(housekeeping, dict):
+        violations.append("  canary-housekeeping disappeared - the no-bundle success has no consumer")
+    else:
+        if housekeeping.get("needs") != "canary":
+            violations.append("  canary-housekeeping no longer needs the canary job")
+        if str(housekeeping.get("if") or "") != "always()":
+            violations.append("  canary-housekeeping must keep `if: always()` to consume a skipped/failed canary")
+
+    for removed in ("push", "schedule", "workflow_dispatch"):
+        if removed not in on:
+            violations.append(f"  the {removed} trigger disappeared")
+
+    assert not violations, "native-release-smoke dispatch/schedule gating drifted:\n" + "\n".join(violations)
