@@ -5,7 +5,10 @@
 // (HTTP client, safe-logging helper, auth header builder, env setup), which
 // tripped SonarCloud's copy-paste duplication gate. It now lives here once.
 
-const BASE_URL = (process.env.MODULO_URL || "http://localhost:8000").replace(/\/+$/, "");
+let BASE_URL = process.env.MODULO_URL || "http://localhost:8000";
+while (BASE_URL.endsWith("/")) {
+  BASE_URL = BASE_URL.slice(0, -1);
+}
 const EMAIL = process.env.MODULO_EMAIL;
 const PASSWORD = process.env.MODULO_PASSWORD;
 
