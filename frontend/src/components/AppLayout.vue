@@ -258,7 +258,7 @@ async function openLicenceKeyInput() {
   if (route.name !== "settings-license") {
     await router.push({ name: "settings-license" });
   }
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  const findAndFocusInput = async (attempt: number): Promise<void> => {
     // The textarea's own ``data-testid`` — not PrimeVue's generated element
     // id, which changes with the rendered field order. The org-scoped input is
     // the primary target; the system-scoped one is the fallback for a principal
@@ -271,9 +271,12 @@ async function openLicenceKeyInput() {
       input.focus();
       return;
     }
+    if (attempt >= 119) return;
     await nextTick();
     await nextFrame();
-  }
+    await findAndFocusInput(attempt + 1);
+  };
+  await findAndFocusInput(0);
 }
 
 function nextFrame(): Promise<void> {

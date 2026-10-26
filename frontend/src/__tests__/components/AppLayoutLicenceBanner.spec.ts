@@ -306,6 +306,30 @@ describe('AppLayout licence renewal notice', () => {
     input.remove()
   })
 
+  it('stops polling after the bounded number of frames when the input never mounts', async () => {
+    const original = window.requestAnimationFrame
+    // Resolve frames immediately so the bounded poll can exhaust without
+    // waiting on jsdom's ~16ms rAF cadence.
+    const frame = vi.fn((callback: FrameRequestCallback) => {
+      callback(0)
+      return 0
+    })
+    ;(window as unknown as { requestAnimationFrame: unknown }).requestAnimationFrame = frame
+
+    try {
+      const wrapper = await mountShell()
+      await wrapper.get('[data-testid="licence-renewal-install-action"]').trigger('click')
+
+      await vi.waitFor(() => {
+        expect(frame).toHaveBeenCalledTimes(119)
+      })
+      expect(document.querySelector('[data-testid="license-key-input"]')).toBeNull()
+      wrapper.unmount()
+    } finally {
+      window.requestAnimationFrame = original
+    }
+  })
+
   it('falls back to a timer when requestAnimationFrame is unavailable', async () => {
     const original = window.requestAnimationFrame
     ;(window as unknown as { requestAnimationFrame: unknown }).requestAnimationFrame = undefined

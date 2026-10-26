@@ -4773,6 +4773,7 @@ export default {
       "expand_sidebar": "Expand sidebar",
       "user_profile_link": "User profile {label}",
       "main_navigation": "Main navigation",
+      "mobile_navigation": "Mobile navigation",
       "loading_navigation": "Loading navigation"
     },
     "SidebarFooter": {

@@ -788,6 +788,12 @@ function renderMarkdown(text: string): string {
 .assistant-messages {
   scroll-behavior: smooth;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-messages {
+    scroll-behavior: auto;
+  }
+}
 .assistant-msg {
   @apply flex gap-2 text-sm;
 }
@@ -831,7 +837,7 @@ function renderMarkdown(text: string): string {
   @apply flex justify-end pt-1;
 }
 .assistant-copy-btn {
-  @apply flex items-center justify-center rounded p-1 transition-colors;
+  @apply flex items-center justify-center rounded p-1 transition-colors motion-reduce:transition-none;
   color: hsl(var(--muted-foreground));
 }
 .assistant-copy-btn:hover {
@@ -846,7 +852,12 @@ function renderMarkdown(text: string): string {
   height: 6px;
   border-radius: 50%;
   background-color: hsl(var(--muted-foreground));
-  animation: stream-bounce 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .streaming-dot {
+    animation: stream-bounce 1.4s ease-in-out infinite;
+  }
 }
 .streaming-dot:nth-child(2) {
   animation-delay: 0.2s;

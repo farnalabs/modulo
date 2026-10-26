@@ -463,7 +463,7 @@ function validate(): boolean {
   }
   Object.assign(errors, found)
 
-  return !Object.values(errors).some(v => v)
+  return !Object.values(errors).some(Boolean)
 }
 
 // CRITICAL (FAR-466): dirtiness is tracked in two independent channels so the
