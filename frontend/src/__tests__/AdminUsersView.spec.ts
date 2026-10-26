@@ -337,6 +337,37 @@ describe('AdminUsersView', () => {
     expect(wrapper.find('[data-testid="admin-users-copy-error"]').exists()).toBe(false)
   })
 
+  // Far-366 replaced the inline email regex with a small validator. Exercise
+  // every rejection arm so each guard is covered: empty, missing/duplicate
+  // '@', a trailing '@', a domain without a dot, a leading/trailing dot, and
+  // embedded whitespace.
+  it.each([
+    ['', 'empty'],
+    ['not-an-email', 'missing at-sign'],
+    ['two@at@example.com', 'duplicate at-sign'],
+    ['trailing@', 'no domain'],
+    ['no-dot@example', 'domain without a dot'],
+    ['local@.com', 'dot at the start of the domain'],
+    ['trailing-dot@example.', 'dot at the end of the domain'],
+    ['white space@example.com', 'embedded whitespace'],
+  ])('rejects an invalid email (%#: %s) without creating a user', async (email) => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-users-create-email"]').setValue(email)
+    await wrapper.find('[data-testid="admin-users-create-display-name"]').setValue('Carol')
+    await wrapper.find('[data-testid="admin-users-create-password"]').setValue('Sup3rSecret!')
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Please enter a valid email address')
+    expect(mockPost).not.toHaveBeenCalled()
+  })
+
   it('shows a visible error state when the clipboard write is rejected', async () => {
     mockPost.mockResolvedValue({ id: 'u-new', email: 'carol@example.com', display_name: 'Carol', org_role: 'runner' })
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } })
