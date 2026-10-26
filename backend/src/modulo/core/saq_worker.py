@@ -2300,8 +2300,8 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
         "after_process": _after_process_hook,
         # FAR-250: register SQLAlchemy listeners + configure the EventBus
         # Redis broker, and hold a non-relaying Redis subscription. Flows
-        # through both `Worker(**settings())` (run_system_web) and the plain
-        # `python -m saq ...runs_settings` CLI — saq awaits async callables.
+        # through both the custom system-web runner and the plain SAQ CLI;
+        # SAQ awaits async lifecycle callbacks.
         "startup": _startup_event_bus_hook,
         # FAR-1627: on worker shutdown (SIGTERM drain -> cancel -> stop), hand
         # every still-in-flight run back for re-dispatch instead of letting it
@@ -2318,7 +2318,7 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
     }
 
 
-async def _before_process_hook(ctx: dict[str, Any]) -> None:
+async def _before_process_hook(ctx: dict[str, Any]) -> None:  # NOSONAR S7503 - SAQ async lifecycle callback seam
     """SAQ ``before_process`` hook — bind the job's organisation for ERROR capture (FAR-1417).
 
     ``Worker.process()`` awaits this hook BEFORE ``asyncio.create_task``-ing the
