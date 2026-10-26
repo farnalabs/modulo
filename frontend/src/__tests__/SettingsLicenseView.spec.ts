@@ -64,11 +64,13 @@ import SettingsLicenseView from '../views/SettingsLicenseView.vue'
 const dialogStubs = ['Dialog', 'DialogContent', 'DialogDescription', 'DialogFooter', 'DialogHeader', 'DialogTitle']
 
 // Stub FormDialog so its @confirm handler (applyKey / removeLicense) can be
-// triggered without rendering the full primevue Dialog tree.
+// triggered without rendering the full primevue Dialog tree. The description
+// is rendered so a test can assert the scope-specific durability copy
+// (FAR-2142).
 const formDialogStub = {
   props: ['open', 'title', 'description', 'confirmText', 'loading'],
   emits: ['confirm'],
-  template: `<button v-if="open" class="formdialog-confirm" @click="$emit('confirm')">{{ confirmText }}</button>`,
+  template: `<div v-if="open"><p class="formdialog-description">{{ description }}</p><button class="formdialog-confirm" @click="$emit('confirm')">{{ confirmText }}</button></div>`,
 }
 
 // Renders the renewal notice's dialog body + footer so the grace actions are
@@ -231,6 +233,69 @@ describe('SettingsLicenseView', () => {
     expect(wrapper.find('[data-testid="license-remove-btn-system"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Verify Key')
     expect(wrapper.text()).toContain('Install System License')
+  })
+
+  // ── FAR-2142: no restart instruction; durability stated per scope ────
+
+  it('never tells the operator a restart is required, and states each scope\'s durability', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: dialogStubs },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    const text = wrapper.text()
+    // Installing a key takes effect immediately, so the old "requires a
+    // server restart" instruction is gone for BOTH scopes.
+    expect(text).not.toContain('requires a server restart')
+    expect(text).not.toContain('restart to take full effect')
+    // Org scope: written to the org row, so it is durable.
+    expect(text).toContain('survives a restart or redeploy')
+    // System scope: in memory only, and the durable alternative is named.
+    expect(text).toContain('held in memory only')
+    expect(text).toContain('MODULO_LICENSE_KEY')
+  })
+
+  it('the apply dialog states durability for the ORGANISATION scope', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam)
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    await wrapper.find('textarea').setValue('org-key')
+    await wrapper.find('[data-testid="license-apply-btn"]').trigger('click')
+    await nextTick()
+
+    const description = wrapper.find('.formdialog-description').text()
+    expect(description).toContain("organisation's current license key")
+    expect(description).toContain('survives a restart or redeploy')
+    expect(description).not.toContain('requires a server restart')
+    expect(description).not.toContain('held in memory only')
+  })
+
+  it('the apply dialog warns the SYSTEM scope is lost on restart and names MODULO_LICENSE_KEY', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    await wrapper.find('[data-testid="license-key-input-system"]').setValue('system-key')
+    await wrapper.find('[data-testid="license-apply-btn-system"]').trigger('click')
+    await nextTick()
+
+    const description = wrapper.find('.formdialog-description').text()
+    expect(description).toContain('instance-wide license key')
+    expect(description).toContain('held in memory only')
+    expect(description).toContain('MODULO_LICENSE_KEY')
+    expect(description).not.toContain('requires a server restart')
   })
 
   it('a principal without org.license.manage gets neither control section', async () => {
