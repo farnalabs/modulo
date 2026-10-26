@@ -110,6 +110,12 @@ def _make_mock_session(existing: dict[str, str] | None = None) -> AsyncMock:
 
     session.execute = AsyncMock(side_effect=_execute)
     session.flush = AsyncMock()
+    # get_bind() is a SYNC AsyncSession method that the system_config upsert
+    # reads to pick its ON CONFLICT dialect; a bare AsyncMock child would
+    # return a never-awaited coroutine.
+    bind = MagicMock()
+    bind.dialect.name = "postgresql"
+    session.get_bind = MagicMock(return_value=bind)
 
     added: list = []
 

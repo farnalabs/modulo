@@ -472,8 +472,12 @@ def resolve_effective_license(settings: Any, org: Any | None) -> LicenseData | N
        its ``org_id`` claim is empty or names this org (FAR-2060). A mismatch is
        treated as absent at this rung: the key is real, but it licenses a
        different tenant.
-    2. System-level in-memory licence (``store_license()``)
-    3. System-level env-var key (``settings.modulo_license_key``)
+    2. System-level in-memory licence (``store_license()``) — the runtime install
+       persisted in ``system_config`` (FAR-2153) and restored at startup. This
+       rung OVERRIDES rung 3: an explicit operator install beats the deployment
+       env key, and removing it falls back to the env key.
+    3. System-level env-var key (``settings.modulo_license_key``) — the
+       deployment FLOOR.
 
     ONE walk, shared by ``_resolve_paid_plan`` (the plan context built here),
     ``admin_license._resolve_effective_license`` (the admin licence view) and
@@ -533,13 +537,27 @@ async def _resolve_paid_plan(settings: Any, session: Any, org: Any | None) -> Pl
 
     License ladder (first valid source wins, absent/invalid falls through):
     1. Org-level license key (from ``org.settings_json["license_key"]``)
-    2. System-level in-memory license (``store_license()``)
+    2. System-level in-memory license (``store_license()``; the
+       ``system_config`` install restored/refreshed from persistence)
     3. System-level env-var license (``settings.modulo_license_key``)
+
+    Rung 2 OVERRIDES rung 3: the deployment's env key is the FLOOR and an
+    explicit operator install is the override, so removing an install falls back
+    to the env key (FAR-2153). The persisted system licence is re-read here (TTL
+    throttled) before the walk, so a licence installed by another process
+    becomes visible in this one without a restart.
 
     The rung WALK is the shared session-free ``resolve_effective_license`` —
     only the session-backed context build is local to this function — so this
     ladder cannot drift from the admin licence view or ``GET /api/v1/plan``.
     """
+    if session is not None:
+        # FAR-2153: cross-process visibility. TTL-throttled and fail-open, so
+        # this is at most one indexed read per window and a DB blip cannot turn
+        # a plan resolution into an error.
+        from modulo.core.license import refresh_persisted_system_license
+
+        await refresh_persisted_system_license(session)
     data = resolve_effective_license(settings, org)
     if data is None:
         return None

@@ -847,6 +847,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     logger.info("startup.starting")
     await _run_boot_guards_and_seeds(settings)
+    # FAR-2153: restore the operator-installed (system-scope) licence from the
+    # instance store. Runs AFTER the schema is at head so the ``system_config``
+    # row is readable on a brand-new database; fail-open on a DB blip (the
+    # request-scoped refresh self-heals) and fail-closed on a trust-anchor miss.
+    from modulo.core.license_bootstrap import restore_persisted_license
+
+    await restore_persisted_license(settings)
     _register_shutdown_manager(settings)
 
     tasks = await _start_background_tasks(settings)

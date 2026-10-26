@@ -31,13 +31,43 @@ keeps verifying and keeps behaving identically. A key carrying a FUTURE
 ``starts_at`` is valid but not yet active: it is parked (see
 :func:`store_license`) and becomes the active licence when its start arrives,
 without operator action.
+
+INSTANCE-SCOPE PERSISTENCE (FAR-2153)
+-------------------------------------
+The system-scope licence is an INSTANCE setting, not an organisation one, so it
+is persisted in the RLS-free ``system_config`` key-value table (the same
+instance store that holds the product-analytics instance identity) under
+:data:`SYSTEM_LICENSE_CONFIG_KEY`. The in-memory slot
+(``_current_license`` / ``_parked_successor``) stays the fast read path; the
+persisted row is what makes an install survive a process restart (a rolling
+deploy discards process memory on every machine) and what lets the SAQ worker —
+a separate process — resolve the same tier as the API.
+
+PRECEDENCE. The persisted system licence is loaded into rung 2 of the ladder
+(``core.feature_flags.resolve_effective_license``), which sits ABOVE the
+deployment's ``MODULO_LICENSE_KEY`` (rung 3). So the env key is the deployment
+FLOOR, an explicit operator install OVERRIDES it, and removing the installed key
+falls back to the floor — then to Community. The org-level key (rung 1) still
+wins over both.
+
+A separate process observes an install made while it is running by re-reading
+the persisted row: :func:`refresh_persisted_system_license` is TTL-throttled,
+and both startup paths restore once at boot (``core.license_bootstrap``). The
+API also refreshes on its plan-resolution and admin-licence paths; the SAQ
+worker refreshes at the start of every job (``_before_process_hook``), which is
+the point at which it resolves a tier.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import inspect
 import json
 import logging
+import time
+import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -142,6 +172,68 @@ _current_license: LicenseData | None = None
 #: ``_current_license`` before its start, and :func:`get_license` promotes it
 #: when the start arrives.
 _parked_successor: LicenseData | None = None
+
+#: ``system_config`` key holding the persisted INSTANCE-SCOPE licence (FAR-2153).
+#:
+#: The value is a JSON object with the two in-memory slots:
+#: ``{"active": <raw key>|null, "parked": <raw key>|null}``. Both slots are kept
+#: because installing a future-start successor must not discard the licence the
+#: instance is running on today (FAR-2146): otherwise a deploy during the park
+#: window would drop a paying customer to Community until the successor starts.
+#:
+#: ``system_config`` is the existing instance store and has NO RLS (the app role
+#: owns it), which is what makes it readable from the SAQ worker as well as the
+#: API. The org-scope licence uses ``org.settings_json["license_key"]`` instead
+#: (FAR-2059) — never this key.
+SYSTEM_LICENSE_CONFIG_KEY = "system_license_key"
+
+#: How long this process may serve the in-memory slot before re-reading the
+#: persisted instance licence, in seconds.
+#:
+#: A licence installed while a process is running must become visible without a
+#: restart. The API re-reads on its plan-resolution and admin-licence paths; the
+#: worker re-reads at the start of every job (``_before_process_hook``), which
+#: is where it resolves a tier. The window is deliberately short (a licence
+#: change is rare, a stale tier is not acceptable) but non-zero so the read
+#: never lands on every request / every job.
+SYSTEM_LICENSE_REFRESH_TTL_SECONDS = 15.0
+
+
+@dataclass(frozen=True)
+class PersistedLicenseState:
+    """The two system-licence slots as persisted in ``system_config``.
+
+    ``active_key`` is the licence the instance runs on today; ``parked_key`` is
+    a verified future-start successor (FAR-2146). Either may be ``None``. The
+    state is compared by value so the refresh can tell "unchanged" from
+    "installed / rotated / removed" without re-verifying the key on every read.
+    """
+
+    active_key: str | None = None
+    parked_key: str | None = None
+
+    def is_empty(self) -> bool:
+        """Whether neither slot holds a licence (the Community configuration)."""
+        return self.active_key is None and self.parked_key is None
+
+
+class PersistedLicenseAnchorError(RuntimeError):
+    """A persisted licence cannot verify against this deployment's anchor.
+
+    Raised at startup, and deliberately FATAL, mirroring the env-var rule
+    (FAR-2091): outside debug a configured licence with only the built-in
+    development anchor can never verify, so booting would silently run a paying
+    customer on Community. The operator must set ``MODULO_LICENSE_PUBLIC_KEY``.
+    """
+
+
+#: The persisted state this process last observed; ``None`` = never observed.
+#: Used to detect a change made by another process (an install or a removal)
+#: without re-verifying an unchanged key on every refresh.
+_persisted_state: PersistedLicenseState | None = None
+
+#: Monotonic time of the last persisted-state read attempt (TTL throttle).
+_persisted_state_checked_at: float = 0.0
 
 _log = logging.getLogger(__name__)
 
@@ -592,6 +684,312 @@ def clear_license() -> None:
     global _current_license, _parked_successor
     _current_license = None
     _parked_successor = None
+
+
+# ---------------------------------------------------------------------------
+# Instance-scope persistence (FAR-2153)
+#
+# The functions below are the ONLY DB access in this module (lazy imports keep
+# ``modulo.core.license`` importable without the ORM). They are deliberately
+# separate from the memory setters above: a caller persists the target state
+# FIRST and installs it into memory only once the write has committed, so a
+# failed write can never leave this process believing in a licence that will
+# vanish on the next restart.
+# ---------------------------------------------------------------------------
+
+
+def _state_from_value(value: Any) -> PersistedLicenseState:
+    """Read a persisted ``SystemConfig.value`` into the two-slot state.
+
+    Tolerates a bare string (an earlier build could have written just the key)
+    as the active slot, so a deploy that upgrades across this change still
+    restores the licence.
+    """
+    if isinstance(value, dict):
+        active = value.get("active")
+        parked = value.get("parked")
+        return PersistedLicenseState(
+            active_key=active if isinstance(active, str) and active else None,
+            parked_key=parked if isinstance(parked, str) and parked else None,
+        )
+    if isinstance(value, str) and value:
+        return PersistedLicenseState(active_key=value)
+    return PersistedLicenseState()
+
+
+def _value_from_state(state: PersistedLicenseState) -> dict[str, str | None]:
+    """The JSON value persisted for ``state`` (both slots explicit)."""
+    return {"active": state.active_key, "parked": state.parked_key}
+
+
+async def _session_in_transaction(session: Any) -> bool:
+    """Whether ``session`` already owns a transaction (sync, or async double)."""
+    in_tx = session.in_transaction()
+    if inspect.isawaitable(in_tx):
+        in_tx = await in_tx
+    return bool(in_tx)
+
+
+async def _run_in_transaction[T](session: Any, operation: Callable[[], Awaitable[T]]) -> T:
+    """Run ``operation`` inside the caller's transaction, or a fresh one.
+
+    ``AsyncSession`` is yielded by the API with ``autobegin=False``, so a bare
+    ``execute`` would raise ``InvalidRequestError``; the worker's sessions may
+    already be in a transaction (a nested ``session.begin()`` would raise).
+    Mirrors ``FeatureFlagRegistry.load_from_db``'s contract.
+    """
+    if await _session_in_transaction(session):
+        return await operation()
+    async with session.begin():
+        return await operation()
+
+
+async def read_persisted_license_state(session: Any) -> PersistedLicenseState:
+    """Read the persisted instance licence (an EMPTY state when absent).
+
+    Callers must guarantee a transaction (see :func:`_run_in_transaction`).
+    """
+    from sqlalchemy import select
+
+    from modulo.db.models.system_config import SystemConfig
+
+    result = await session.execute(select(SystemConfig.value).where(SystemConfig.key == SYSTEM_LICENSE_CONFIG_KEY))
+    value = result.scalar_one_or_none()
+    # A test double may expose the scalar reader asynchronously (the same
+    # contract ``FeatureFlagRegistry.load_from_db`` honours for
+    # ``in_transaction``); a real ``CursorResult`` reader is synchronous.
+    if inspect.isawaitable(value):
+        value = await value
+    return _state_from_value(value)
+
+
+async def _write_persisted_license_state(
+    session: Any, state: PersistedLicenseState, *, updated_by: uuid.UUID | None = None
+) -> None:
+    """Upsert the persisted instance licence through the shared atomic crud path.
+
+    Delegates to :func:`modulo.db.crud.system_config.update_config`, whose
+    single ``INSERT ... ON CONFLICT DO UPDATE`` is race-free: two concurrent
+    first-installs cannot both observe ``row is None`` and race a unique(key)
+    ``IntegrityError`` on commit (the select-then-add-or-update pattern the crud
+    docstring warns against). Imported lazily, the same rationale as the model
+    import it replaces, so ``modulo.core.license`` stays importable without the
+    ORM.
+    """
+    from modulo.db.crud.system_config import update_config
+
+    await update_config(session, SYSTEM_LICENSE_CONFIG_KEY, _value_from_state(state), updated_by=updated_by)
+
+
+def _install_persisted_state(state: PersistedLicenseState) -> None:
+    """Record the state this process has just persisted (avoids an immediate re-read)."""
+    global _persisted_state, _persisted_state_checked_at
+    _persisted_state = state
+    _persisted_state_checked_at = time.monotonic()
+
+
+async def persist_installed_system_license(
+    session: Any, raw_key: str, *, parked: bool, updated_by: uuid.UUID | None = None
+) -> PersistedLicenseState:
+    """Persist an operator install of the instance-scope licence.
+
+    ``parked`` is the install's ``is_parked`` verdict. A PARKED (future-start)
+    successor is written to the parked slot and PRESERVES the active slot — the
+    licence the instance runs on today must survive the deploy that precedes its
+    successor's start. An immediately-active install replaces the ACTIVE slot;
+    it preserves a parked successor, because :func:`store_license` leaves that
+    slot alone and the persisted state must equal what memory will hold.
+
+    ``updated_by`` is the installing account's id, stamped on the ``system_config``
+    row so the durable record carries who installed the licence (the in-memory
+    audit event alone does not survive a restart).
+
+    Writes in the caller's transaction when there is one, else its own; the
+    process's observed state is updated only after the write returns, so a
+    failed commit leaves memory untouched (the route persists BEFORE it calls
+    :func:`store_license`).
+    """
+    if parked:
+        active_key = _current_license.raw_key if _current_license is not None else None
+        state = PersistedLicenseState(active_key=active_key, parked_key=raw_key)
+    else:
+        parked_key = _parked_successor.raw_key if _parked_successor is not None else None
+        state = PersistedLicenseState(active_key=raw_key, parked_key=parked_key)
+
+    async def _write() -> None:
+        await _write_persisted_license_state(session, state, updated_by=updated_by)
+
+    await _run_in_transaction(session, _write)
+    _install_persisted_state(state)
+    return state
+
+
+async def clear_persisted_system_license(session: Any) -> bool:
+    """Delete the persisted instance licence; returns whether a row existed.
+
+    Idempotent: a missing row is not an error (the licence may never have been
+    persisted, or another process may already have removed it). Reuses the
+    shared crud delete helper rather than forking its select-then-delete.
+    """
+    from modulo.db.crud.system_config import delete_config
+
+    async def _delete() -> bool:
+        return await delete_config(session, SYSTEM_LICENSE_CONFIG_KEY)
+
+    removed = await _run_in_transaction(session, _delete)
+    _install_persisted_state(PersistedLicenseState())
+    return removed
+
+
+def _verified_or_current(raw_key: str | None, current: LicenseData | None) -> LicenseData | None:
+    """Verify ``raw_key``; on failure KEEP the slot this process already has.
+
+    A persisted key that no longer verifies (an anchor change, a corrupt value)
+    must not be treated as "the operator removed the licence": dropping
+    capability is a silent downgrade, while keeping the last verified licence is
+    the safe direction. Absence (``raw_key is None``) is the explicit-removal
+    signal and does clear the slot.
+    """
+    if raw_key is None:
+        return None
+    if current is not None and current.raw_key == raw_key:
+        return current
+    data = verify_license_key(raw_key)
+    if data is None:
+        _log.warning("license.persisted_key_unverified")
+        return current
+    return data
+
+
+def restore_license_slots(active: LicenseData | None, parked: LicenseData | None) -> None:
+    """Set both in-memory licence slots from a persisted state.
+
+    The explicit two-slot setter the restore/refresh path needs: :func:`store_license`
+    can only place a key in a slot, so it cannot express "the parked successor
+    was removed while the active licence stays".
+    """
+    global _current_license, _parked_successor
+    _current_license = active
+    _parked_successor = parked
+
+
+def _apply_persisted_state(state: PersistedLicenseState) -> bool:
+    """Apply a non-empty persisted state to memory; returns whether anything changed."""
+    active = _verified_or_current(state.active_key, _current_license)
+    parked = _verified_or_current(state.parked_key, _parked_successor)
+    if active is _current_license and parked is _parked_successor:
+        return False
+    restore_license_slots(active, parked)
+    return True
+
+
+def _adopt_persisted_state(state: PersistedLicenseState) -> bool:
+    """Reconcile memory with an observed persisted state.
+
+    Only a TRANSITION from a known non-empty state to empty clears memory. That
+    is what keeps a licence installed directly through :func:`store_license`
+    (a unit test, or any future non-persisting caller) alive when the store has
+    never held one: the first observation of "empty" cannot be distinguished
+    from "never persisted", so it must not destroy capability.
+    """
+    global _persisted_state
+    previous = _persisted_state
+    if state == previous:
+        return False
+    if state.is_empty():
+        cleared = previous is not None and not previous.is_empty()
+        if cleared:
+            clear_license()
+            _log.info("license.persisted_removed")
+        _persisted_state = state
+        return cleared
+    changed = _apply_persisted_state(state)
+    _persisted_state = state
+    if changed:
+        _log.info(
+            "license.persisted_state_applied active=%s parked=%s",
+            state.active_key is not None,
+            state.parked_key is not None,
+        )
+    return changed
+
+
+async def restore_persisted_system_license(session: Any, settings: Any | None = None) -> PersistedLicenseState:
+    """Restore the persisted instance licence into this process at startup.
+
+    An empty store leaves memory alone (a fresh process has none, and a SAME-process
+    re-run must not wipe a directly-installed licence). A non-empty store is applied.
+
+    Outside debug, a persisted licence combined with only the built-in
+    DEVELOPMENT anchor raises :class:`PersistedLicenseAnchorError` — the same
+    fail-closed rule ``MODULO_LICENSE_KEY`` already has, applied to the licence
+    an operator installed at runtime.
+    """
+    global _persisted_state, _persisted_state_checked_at
+    state = await read_persisted_license_state(session)
+    if (
+        settings is not None
+        and not bool(getattr(settings, "debug", False))
+        and using_builtin_dev_anchor()
+        and not state.is_empty()
+    ):
+        raise PersistedLicenseAnchorError(DEV_ANCHOR_STARTUP_ERROR)
+    if state.is_empty():
+        if _persisted_state is not None and not _persisted_state.is_empty():
+            clear_license()
+    else:
+        _apply_persisted_state(state)
+    _persisted_state = state
+    _persisted_state_checked_at = time.monotonic()
+    return state
+
+
+def persisted_license_refresh_due() -> bool:
+    """Whether the TTL window has elapsed since the last persisted-state read.
+
+    Lets a caller that would otherwise open a DB session on a hot path (the
+    worker's per-job hook) skip the session entirely when the in-memory slot is
+    still fresh. :func:`refresh_persisted_system_license` re-checks the window,
+    so a race between the two is a redundant read at worst.
+    """
+    if _persisted_state_checked_at <= 0.0:
+        return True
+    return (time.monotonic() - _persisted_state_checked_at) >= SYSTEM_LICENSE_REFRESH_TTL_SECONDS
+
+
+async def refresh_persisted_system_license(session: Any, *, force: bool = False) -> bool:
+    """Re-read the persisted instance licence, TTL-throttled.
+
+    The cross-process visibility mechanism: a licence installed (or removed) by
+    ANOTHER process becomes visible here within ``SYSTEM_LICENSE_REFRESH_TTL_SECONDS``
+    without a restart. Reads are fail-open — a DB blip keeps the current memory
+    and is logged — because a licence cache miss must degrade to the last known
+    tier, never to an error on every plan resolution.
+
+    Returns whether memory changed.
+    """
+    global _persisted_state_checked_at
+    now = time.monotonic()
+    # Throttle on the attempt timestamp alone (not on the observed state): a
+    # persistently failing read must also honour the window, otherwise every
+    # plan resolution would retry AND log a traceback.
+    if (
+        not force
+        and _persisted_state_checked_at > 0.0
+        and (now - _persisted_state_checked_at) < (SYSTEM_LICENSE_REFRESH_TTL_SECONDS)
+    ):
+        return False
+    # Advance the throttle BEFORE the read so a persistently failing read is
+    # retried once per window, not once per call.
+    _persisted_state_checked_at = now
+    try:
+        state = await _run_in_transaction(session, lambda: read_persisted_license_state(session))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("license.persisted_state_read_failed", exc_info=True)
+        return False
+    return _adopt_persisted_state(state)
 
 
 def verify_license_key(key: str) -> LicenseData | None:
