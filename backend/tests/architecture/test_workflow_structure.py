@@ -1915,3 +1915,59 @@ def test_deploy_consumers_classify_a_throttled_noop_by_the_deploy_job() -> None:
     if "deploy_job_conclusion" not in watchdog:
         violations.append("  deploy-watchdog.yml: does not consume the deploy job conclusion")
     assert not violations, "deploy consumers can misread a throttled no-op as a deploy:\n" + "\n".join(violations)
+
+
+# --- a workflow must not exceed GitHub's expression-length cap ----
+
+#: GitHub hard-caps an expression template at 21,000 characters. A ``run:``
+#: scalar that contains any ``${{ }}`` interpolation is parsed as such a
+#: template, so a long script with interpolations is rejected at workflow-load
+#: time: the push creates a run with ZERO jobs and only a "workflow file issue"
+#: annotation, so no CI check ever executes.
+GITHUB_MAX_EXPRESSION_LENGTH = 21_000
+
+
+def test_interpolated_run_scripts_stay_under_the_expression_length_cap() -> None:
+    """A ``${{ }}``-interpolated ``run:`` script must stay <= 21,000 chars.
+
+    ``deploy-watchdog.yml`` crossed the cap when the FAR-2139 escalation logic
+    grew its inline step past 22k characters. Because that scalar interpolated
+    ``github.repository``, GitHub treated the whole script as an expression and
+    refused to load the workflow - every push on ``main`` produced a red run
+    with no jobs while the YAML itself (and actionlint) looked valid.
+
+    The fix is to pass interpolated values via the step's ``env:`` block, which
+    keeps the script a plain literal. This test fails if any workflow lets a
+    ``${{ }}``-bearing ``run:`` scalar grow past the cap again.
+    """
+    violations: list[str] = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        workflow = _load_yaml(path)
+        for job_id, job in (workflow.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for index, step in enumerate(job.get("steps") or []):
+                if not isinstance(step, dict):
+                    continue
+                run = step.get("run")
+                if not isinstance(run, str) or "${{" not in run:
+                    continue
+                if len(run) > GITHUB_MAX_EXPRESSION_LENGTH:
+                    label = step.get("name") or "step " + str(index)
+                    violations.append(
+                        "  "
+                        + path.name
+                        + ": job '"
+                        + str(job_id)
+                        + "' step '"
+                        + str(label)
+                        + "' run: is "
+                        + str(len(run))
+                        + " chars with ${{ }} interpolation (max "
+                        + str(GITHUB_MAX_EXPRESSION_LENGTH)
+                        + "); move the interpolated value into the step's env:"
+                    )
+    assert not violations, (
+        "workflow run: scripts exceed GitHub's 21,000-char expression cap, so "
+        "the workflow will fail to load and no CI job will run:\n" + "\n".join(violations)
+    )
