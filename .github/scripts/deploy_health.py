@@ -47,6 +47,13 @@ workflow's own run history (the verdict step in the previous run is
 state store is introduced. An UNKNOWN previous verdict (a crashed tick, a
 cancelled run, or the first run after this workflow changed) alerts rather than
 suppressing, so the first alert can never be swallowed.
+
+The verdict step's NAME is a per-workflow input (``previous-verdict
+--step-name``), because the two escalation workflows measure different things
+and name their steps differently. A resolver pinned to one literal name reads
+the other workflow's previous verdict as UNKNOWN, which loses its recovery
+email and re-alerts on every tick instead of once per transition (FAR-2177).
+:data:`VERDICT_STEP_NAME` is therefore only the DEFAULT.
 """
 
 from __future__ import annotations
@@ -71,7 +78,13 @@ FAILURE_THRESHOLD_DEFAULT = 2
 #: How many completed deploy runs the consecutive-failure walk considers.
 DEPLOY_RUNS_WINDOW = 15
 
-#: The step whose conclusion is the durable previous-verdict state vector.
+#: DEFAULT name of the step whose conclusion is the durable previous-verdict
+#: state vector. Each workflow names its own verdict step, so this is only a
+#: fallback: a caller whose step is named differently - the watchdog's is
+#: ``"Fail the run when the deploy watchdog is unhealthy"`` - MUST pass
+#: ``previous-verdict --step-name``. Otherwise its previous verdict can never
+#: resolve, its recovery email is lost and its alert repeats every tick
+#: (FAR-2177).
 VERDICT_STEP_NAME = "Fail the run when deploy health is unhealthy"
 
 #: ``deploy_job_conclusion`` values meaning "the lookup could not tell".
@@ -765,8 +778,14 @@ def _has_unknown_marker(jobs_payload: dict[str, Any] | None) -> bool:
     return False
 
 
-def parse_previous_verdict(jobs_payload: dict[str, Any] | None) -> str:
+def parse_previous_verdict(jobs_payload: dict[str, Any] | None, step_name: str | None = None) -> str:
     """The previous run's verdict, from its steps.
+
+    ``step_name`` is the workflow's OWN verdict-step name, as passed by
+    ``previous-verdict --step-name``. It defaults (and falls back when empty) to
+    :data:`VERDICT_STEP_NAME`, so the staleness check - whose step carries that
+    name - needs no argument. The watchdog names its step differently and must
+    pass it, or its previous verdict silently reads as UNKNOWN (FAR-2177).
 
     A run that RAN the UNKNOWN-tick marker reached no verdict - it measured
     nothing, or only some of its required inputs (FAR-2159) - so its actual
@@ -779,9 +798,10 @@ def parse_previous_verdict(jobs_payload: dict[str, Any] | None) -> str:
     """
     if _has_unknown_marker(jobs_payload):
         return UNKNOWN
+    target = step_name or VERDICT_STEP_NAME
     for job in (jobs_payload or {}).get("jobs") or []:
         for step in job.get("steps") or []:
-            if step.get("name") == VERDICT_STEP_NAME:
+            if step.get("name") == target:
                 return _verdict_from_step(step)
     return UNKNOWN
 
@@ -949,7 +969,7 @@ def _cmd_action(args: argparse.Namespace) -> int:
 
 def _cmd_previous_verdict(args: argparse.Namespace) -> int:
     payload = _load_json(args.jobs_json)
-    print(parse_previous_verdict(payload if isinstance(payload, dict) else None))
+    print(parse_previous_verdict(payload if isinstance(payload, dict) else None, args.step_name))
     return 0
 
 
@@ -992,6 +1012,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     previous_parser = sub.add_parser("previous-verdict", help="parse the previous run's verdict")
     previous_parser.add_argument("--jobs-json")
+    previous_parser.add_argument(
+        "--step-name",
+        default=VERDICT_STEP_NAME,
+        help="the workflow's own verdict-step name (defaults to VERDICT_STEP_NAME)",
+    )
     previous_parser.set_defaults(func=_cmd_previous_verdict)
 
     email_parser = sub.add_parser("email", help="render the alert/recovery email as JSON")
