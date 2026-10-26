@@ -460,9 +460,11 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
         return 2
     runs_raw = _load_json(args.runs_json)
     deploy_runs = runs_raw if isinstance(runs_raw, list) else None
+    main_raw = _load_json(args.main_json)
+    prod_raw = _load_json(args.prod_json)
     verdict = evaluate(
-        main=_load_json(args.main_json) if isinstance(_load_json(args.main_json), dict) else None,
-        prod=_load_json(args.prod_json) if isinstance(_load_json(args.prod_json), dict) else None,
+        main=main_raw if isinstance(main_raw, dict) else None,
+        prod=prod_raw if isinstance(prod_raw, dict) else None,
         deploy_runs=deploy_runs,
         now=now,
         grace_hours=args.grace_hours,

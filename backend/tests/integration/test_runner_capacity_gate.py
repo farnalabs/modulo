@@ -211,6 +211,40 @@ async def _run_row(
         return {"status": row.status, "error_code": row.error_code, "marker": row.sandbox_dispatch_state}
 
 
+async def _seed_root_checkpoint(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    thread_id: str,
+) -> None:
+    """Seed the RESUMABLE ROOT checkpoint (``checkpoint_ns = ''``) a
+    dispatcherless node-started run needs before FAR-2122's checkpoint-resume
+    recovery leg will pick it up.
+
+    The sweep folds the same precondition into its recoverability query
+    (``_root_checkpoint_present_expr``): a thread with no root checkpoint is
+    refused by ``_reconcile_one_row``, so its marker is NOT kept — it is
+    reclaimed by FAR-1808's bounded node-started bound instead. Seeding this
+    row is what makes a test exercise the genuinely recoverable class.
+    """
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        await session.execute(
+            text(
+                "INSERT INTO checkpoints "
+                "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, checkpoint, metadata) "
+                "VALUES (:oid, :tid, '', :cid, CAST(:cp AS jsonb), CAST(:md AS jsonb))"
+            ),
+            {
+                "oid": str(org_id),
+                "tid": thread_id,
+                "cid": str(uuid.uuid4()),
+                "cp": '{"state": "root"}',
+                "md": "{}",
+            },
+        )
+
+
 async def _seed_org_account(
     db_engine: AsyncEngine,
     name: str,
@@ -1111,13 +1145,15 @@ async def test_sweep_far1808_reclaims_node_started_leak_frees_slot(
     dead executor alive. Before the fix this row was kept live (row_fresh),
     so the leak assertion fails without the change.
 
-    ``dispatcher='saq'`` is the FAR-1808 production shape: the leaked row was
-    created by an e2b sandbox dispatch, and ``dispatch_run`` stamps the SAQ
-    dispatcher identity. The sweep's recoverability check must therefore not
-    treat it as recoverable. A DISPATCHERLESS node-started row
-    (``dispatcher IS NULL``) is a different class — FAR-2122 resumes it from
-    its checkpoint — so seeding no dispatcher would test that class instead
-    (its marker is correctly kept for the reconciler)."""
+    ``dispatcher='saq'`` is REQUIRED: FAR-1808/FAR-1803 own the SAQ-dispatched
+    node-started class, and it is the FAR-1808 production shape — the leaked
+    row was created by an e2b sandbox dispatch, and ``dispatch_run`` stamps the
+    SAQ dispatcher identity, so the sweep's recoverability check must not treat
+    it as recoverable. A dispatcherless (``dispatcher IS NULL``) node-started
+    row is a DIFFERENT class — FAR-2122's checkpoint-resume recovery leg, which
+    resumes it from its checkpoint — and the marker sweep must keep it (rule b).
+    Seeding the default NULL here made the row recoverable through that leg and
+    shadowed the reclaim."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1182,6 +1218,13 @@ async def test_sweep_far2122_keeps_dispatcherless_node_started_marker(
     construction — a row the reconciler would recover can never have its
     dispatch marker swept. Only the ``dispatcher='saq'`` shape (the e2b
     sandbox dispatch FAR-1808 reclaimed) is terminalised by the 2h bound.
+
+    The ROOT CHECKPOINT is REQUIRED: FAR-2122's recovery is conditional on a
+    resumable root checkpoint (``_reconcile_one_row`` refuses a checkpointless
+    row and leaves it to the orphan sweep), and the sweep folds that same
+    precondition into its recoverability query. A dispatcherless row WITHOUT
+    one is deliberately reclaimed at FAR-1808's bound — that shape is pinned by
+    :func:`test_sweep_far2122_checkpointless_dispatcherless_node_started_reclaimed`.
     """
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
@@ -1201,6 +1244,7 @@ async def test_sweep_far2122_keeps_dispatcherless_node_started_marker(
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
     )
+    await _seed_root_checkpoint(db_engine, org_id, _thread_id(org_id, run_id))
 
     result = await _sweep(db_engine)
     assert result["transitioned"] == 0, "FAR-2122's resume class must not be terminalised"
@@ -1208,6 +1252,49 @@ async def test_sweep_far2122_keeps_dispatcherless_node_started_marker(
     row = await _run_row(db_engine, org_id, run_id)
     assert row["status"] == "running"
     assert row["marker"] == marker, "the recoverable row's marker must survive the sweep"
+
+
+async def test_sweep_far2122_checkpointless_dispatcherless_node_started_reclaimed(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checkpointless dispatcherless node-started row is NOT recoverable.
+
+    The complement of
+    :func:`test_sweep_far2122_keeps_dispatcherless_node_started_marker`: with
+    no resumable ROOT checkpoint the reconciler refuses the row (it never
+    re-executes the started node), so the sweep must not keep its marker as
+    "recoverable" — FAR-1808's bounded reclaim owns it. Without the
+    checkpoint precondition in the sweep's recoverability query this row would
+    be kept until the 25h staleness cap and leak the org's sandbox slot.
+    """
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    _gate_flags(monkeypatch, flag_on=True)
+
+    org_id, user_id = await _seed_org_account(db_engine, "Far2122NoCheckpoint", cap=1)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeFar2122NoCheckpoint", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe)
+    marker = _node_started_marker(10)
+
+    run_id = await _seed_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        status="running",
+        marker=marker,
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+        heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
+    )
+
+    result = await _sweep(db_engine)
+    assert result["transitioned"] == 1, "a checkpointless dispatcherless row must be reclaimed"
+
+    row = await _run_row(db_engine, org_id, run_id)
+    assert row["status"] == "failed"
+    assert row["error_code"] == "worker_lost"
+    assert row["marker"] is None
 
 
 async def test_sweep_far1808_protects_live_node_started_run(
@@ -1222,7 +1309,10 @@ async def test_sweep_far1808_protects_live_node_started_run(
     ``updated_at`` is deliberately backdated (STALE): a dead-looking
     ``updated_at`` must NOT reclaim the run. Before the fix this row was
     reclaimed (row_fresh False from the stale ``updated_at``), so the
-    ``status == running`` assertion fails without the change."""
+    ``status == running`` assertion fails without the change.
+
+    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched class — see
+    the leak test's note on the FAR-2122 dispatcherless class."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1238,6 +1328,7 @@ async def test_sweep_far1808_protects_live_node_started_run(
         snap,
         status="running",
         marker=marker,
+        dispatcher="saq",
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC),
         updated_at=datetime.now(UTC) - timedelta(hours=9),
@@ -1256,7 +1347,10 @@ async def test_sweep_far1808_keeps_in_window_node_started_marker(
 ) -> None:
     """In-window case: a marker only 1h old (< the 2h bound) with a STALE
     ``heartbeat_at`` is kept live — the node may still legitimately be
-    running."""
+    running.
+
+    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched class — see
+    the leak test's note on the FAR-2122 dispatcherless class."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 
@@ -1272,6 +1366,7 @@ async def test_sweep_far1808_keeps_in_window_node_started_marker(
         snap,
         status="running",
         marker=marker,
+        dispatcher="saq",
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
         heartbeat_at=datetime.now(UTC) - timedelta(hours=9),
     )
@@ -1291,10 +1386,9 @@ async def test_sweep_far1808_watchdog_write_noops_after_reclaim(
     ``status='running'``-guarded terminal write on the same row no-ops (0 rows)
     — the dead executor can never resurrect or overwrite the terminal state.
 
-    Seeds ``dispatcher='saq'`` for the same FAR-1808 reason as
-    :func:`test_sweep_far1808_reclaims_node_started_leak_frees_slot`: the
-    dispatcherless node-started class belongs to FAR-2122's checkpoint-resume
-    recovery, so its marker is NOT swept."""
+    ``dispatcher='saq'`` pins the FAR-1808/FAR-1803 SAQ-dispatched production
+    shape — see the leak test's note on the FAR-2122 dispatcherless class,
+    whose marker is NOT swept."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     _gate_flags(monkeypatch, flag_on=True)
 

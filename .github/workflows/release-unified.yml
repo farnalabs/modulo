@@ -109,7 +109,7 @@ jobs:
             esac
             echo "Building $img..."
             docker buildx build \
-              --context "$context" \
+              "$context" \
               --file "$dockerfile" \
               --platform linux/amd64 \
               --push=false \
@@ -188,6 +188,7 @@ jobs:
       attestations: write
     outputs:
       rc_tag: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
+      ga_tag: ${{ steps.promote.outputs.ga_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -792,6 +793,78 @@ jobs:
           git tag -a "$BUNDLE_TAG" -m "Bundle release $BUNDLE_TAG"
           git push origin "$BUNDLE_TAG"
           echo "Pushed $BUNDLE_TAG at $(git rev-parse --short HEAD)"
+
+  # ---------------------------------------------------------------------------
+  # PyPI package publish (promote only). This is the repository's sole live
+  # PyPI publisher; the legacy release.yml workflow is a read-only migration
+  # wrapper and must never gain a second publisher.
+  # ---------------------------------------------------------------------------
+  publish-pypi:
+    name: Publish farnalabs-modulo to PyPI
+    needs: release
+    if: inputs.mode == 'promote'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.ga_tag }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+
+      - name: Build the Python distributions
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          uv build
+          test -n "$(find dist -maxdepth 1 -type f -print -quit)"
+          uvx --no-build --from twine==7.0.0 twine check dist/*
+
+      - name: Verify package metadata
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          uv run --no-project --no-sync --no-build python - <<'PY'
+          import email, glob, zipfile
+
+          wheel = glob.glob("dist/*.whl")
+          if len(wheel) != 1:
+              raise SystemExit(f"expected one wheel, found {wheel}")
+          with zipfile.ZipFile(wheel[0]) as archive:
+              metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
+              metadata = email.message_from_bytes(archive.read(metadata_name))
+          assert metadata["Name"] == "farnalabs-modulo"
+          assert metadata["License-Expression"] == "BUSL-1.1"
+          assert metadata["License-File"] == "LICENSE"
+          assert "License :: Other/Proprietary License" in metadata.get_all("Classifier", [])
+          print("Package metadata: name=farnalabs-modulo license=BUSL-1.1")
+          PY
+
+      - name: Smoke-test the wheel in a clean virtual environment
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/modulo-pypi-smoke
+          /tmp/modulo-pypi-smoke/bin/python -m pip install --disable-pip-version-check --no-cache-dir dist/*.whl
+          /tmp/modulo-pypi-smoke/bin/modulo apply --help
+
+      - name: Publish farnalabs-modulo via Trusted Publishing
+        # PyPI Trusted Publisher must be registered by a human for this
+        # repository, workflow and `pypi` environment before promote can upload.
+        uses: pypa/gh-action-pypi-publish@aef6c9b6e301dc803e1bc9133e9ce67ae9b0906b # v1.14.3
+        with:
+          packages-dir: backend/dist
+          attestations: true
 
   # ---------------------------------------------------------------------------
   # SBOM production (runs for ALL modes)

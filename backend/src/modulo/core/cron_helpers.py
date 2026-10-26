@@ -5628,42 +5628,54 @@ def _should_redispatch_nodeless(row: Any) -> bool:
     executor's ``_maybe_retry_after_policy`` (in-execute path) never passes
     it — nodes may have executed there.
     """
-    from modulo.core.pipeline_engine.executor import _retry_after_policy
-
     policy = getattr(row, "retry_policy", None)
     consumed = retry_executions_consumed(
         execution_attempt_count=getattr(row, "execution_attempt_count", 0),
     )
     if isinstance(policy, dict) and policy:
-        # ANY non-empty policy is a budget — its shared ``1 + max_retries``
-        # ceiling is the authority, never the configurable no-policy default.
-        # The shared matcher decides the event-specific budget first.
-        retry_budget = _retry_after_policy(policy, "stalled", "executor_stalled")
-        if retry_budget is not None:
-            return bool(consumed <= retry_budget)
-        on = policy.get("on")
-        if isinstance(on, list) and on:
-            # Non-empty `on` that does not cover "stall": the FAR-1088
-            # zero-node failure-coverage carve-out re-dispatches under the
-            # failure arm's own budget; any other uncovered trigger
-            # terminal-fails (never re-dispatch for a trigger it does not
-            # cover). Safe because this function only sees zero-node rows.
-            if "failure" in on:
-                failure_budget = _retry_after_policy(policy, "failed", "")
-                if failure_budget is not None:
-                    return bool(consumed <= failure_budget)
-            return False
-        # Non-empty policy with an absent / null / EMPTY `on` (e.g.
-        # ``{"max_retries": 0}`` and the GUI's no-op panel save
-        # ``{on: [], max_retries: 0, ...}``): the shared ceiling applies.
-        # ``max_retries: 0`` (and a malformed budget, normalised to 0) means
-        # exactly ONE execution — NOT the configurable four-retry default.
-        return not retry_budget_exhausted(policy, execution_attempt_count=consumed)
+        return _policy_allows_nodeless_redispatch(policy, consumed)
     # No policy object at all (``None`` / a non-dict / the empty ``{}`` column
     # default): re-dispatch while within the configurable budget
     # (SAQ_NODELESS_REDISPATCH_BUDGET, default 4 since FAR-812). The rate is
     # throttled in the repair branch (one re-dispatch per nodeless window).
     return bool(consumed <= int(get_settings().saq_nodeless_redispatch_budget))
+
+
+def _policy_on_allows_nodeless_redispatch(policy: dict[str, Any], on: list[Any], consumed: int) -> bool:
+    """Evaluate non-empty policy `on` list for zero-node nodeless redispatch (FAR-1088)."""
+    from modulo.core.pipeline_engine.executor import _retry_after_policy
+
+    # Non-empty `on` that does not cover "stall": the FAR-1088
+    # zero-node failure-coverage carve-out re-dispatches under the
+    # failure arm's own budget; any other uncovered trigger
+    # terminal-fails (never re-dispatch for a trigger it does not
+    # cover). Safe because this function only sees zero-node rows.
+    if "failure" in on:
+        failure_budget = _retry_after_policy(policy, "failed", "")
+        if failure_budget is not None:
+            return bool(consumed <= failure_budget)
+    return False
+
+
+def _policy_allows_nodeless_redispatch(policy: dict[str, Any], consumed: int) -> bool:
+    """Decide whether an explicit non-empty retry_policy dict allows nodeless redispatch."""
+    from modulo.core.pipeline_engine.executor import _retry_after_policy
+
+    # ANY non-empty policy is a budget — its shared ``1 + max_retries``
+    # ceiling is the authority, never the configurable no-policy default.
+    # The shared matcher decides the event-specific budget first.
+    retry_budget = _retry_after_policy(policy, "stalled", "executor_stalled")
+    if retry_budget is not None:
+        return bool(consumed <= retry_budget)
+    on = policy.get("on")
+    if isinstance(on, list) and on:
+        return _policy_on_allows_nodeless_redispatch(policy, on, consumed)
+    # Non-empty policy with an absent / null / EMPTY `on` (e.g.
+    # ``{"max_retries": 0}`` and the GUI's no-op panel save
+    # ``{on: [], max_retries: 0, ...}``): the shared ceiling applies.
+    # ``max_retries: 0`` (and a malformed budget, normalised to 0) means
+    # exactly ONE execution — NOT the configurable four-retry default.
+    return not retry_budget_exhausted(policy, execution_attempt_count=consumed)
 
 
 def _is_nodeless_redispatch_throttled(row: Any, nodeless_window: int) -> bool:
@@ -8957,6 +8969,9 @@ class _ReconcileOrgLimits:
     terminalize_max: int = _TERMINALIZE_UNLIMITED_ROWS
     early_detect_minutes: int | None = None
     row_budget: int | None = None
+    org_deadline_monotonic: float | None = None
+    row_defer_margin_seconds: float = _RECONCILE_ROW_DEFER_MARGIN_SECONDS
+    org_slice_seconds: float | None = None
 
 
 async def _dispatcher_reconcile_body(
@@ -9254,11 +9269,11 @@ async def _attempt_reconcile_org(
                     terminalize_max=ctx.terminalize_max,
                     early_detect_minutes=ctx.early_detect_minutes,
                     row_budget=row_budget,
+                    org_deadline_monotonic=org_deadline_monotonic,
+                    row_defer_margin_seconds=row_defer_margin_seconds,
+                    org_slice_seconds=org_slice_seconds,
                 ),
                 stage=stage,
-                org_deadline_monotonic=org_deadline_monotonic,
-                row_defer_margin_seconds=row_defer_margin_seconds,
-                org_slice_seconds=org_slice_seconds,
             )
     except TimeoutError:
         # FAR-1525: the org's pass raised a builtin TimeoutError. The
@@ -9657,6 +9672,172 @@ def _dispatcher_summary() -> dict[str, Any]:
     return summary
 
 
+async def _execute_reconcile_batch_terminalizers(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    tuning: ReconcileTuning,
+    terminalize_max: int,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    mark_stage: Callable[[str], None],
+) -> None:
+    """Run DB-only org-scoped batch terminalizers before row selection."""
+    for spec in _BATCH_TERMINALIZER_SPECS:
+        mark_stage(f"terminalizer:{spec.stats_key}")
+        coroutine = _resolve_terminalizer(spec)
+        kwargs: dict[str, Any] = {kwarg: getattr(tuning, attr) for kwarg, attr in spec.tuning_kwargs.items()}
+        if spec.passes_summary:
+            kwargs["summary"] = summary
+        terminalized = await coroutine(session, org_id, **kwargs, max_rows=terminalize_max)
+        summary[spec.stats_key] += len(terminalized)
+        if spec.alias_key:
+            summary[spec.alias_key] = summary[spec.stats_key]
+        if len(terminalized) >= terminalize_max:
+            summary["terminalize_capped"] += 1
+        terminalized_run_ids.extend((run_id, org_id) for run_id in terminalized)
+        if spec.key == "mid_graph":
+            age_gate_run_ids.extend((run_id, org_id) for run_id in terminalized)
+
+
+async def _fetch_reconcile_org_rows(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    re_dispatch_predicate: Any,
+    tuning: ReconcileTuning,
+    row_budget: int | None,
+    mark_stage: Callable[[str], None],
+) -> Sequence[Any]:
+    """Execute the SELECT query fetching reconcilable run rows for one org."""
+    from modulo.db.models.pipeline import Pipeline
+    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+    from modulo.db.models.run import Run
+    from modulo.db.soft_delete import include_soft_deleted
+
+    row_select = select(
+        Run.id,
+        Run.pipeline_id,
+        Run.status,
+        Run.dispatched_at,
+        Run.heartbeat_at,
+        Run.node_token_usage,
+        _final_row_absent_expr().label("outputs_absent"),
+        _checkpoint_absent_expr().label("checkpoints_absent"),
+        Run.started_at,
+        Run.claim_count,
+        Run.execution_attempt_count,
+        Run.node_attempt_count,
+        Run.dispatcher,
+        Run.dispatch_phase,
+        Run.dispatch_phase_entered_at,
+        Run.guardrail_override_resume_pending,
+        Run.langgraph_thread_id,
+        Run.sandbox_dispatch_state,
+        text("runs.enqueue_failed_at AS enqueue_failed_at"),
+        Pipeline.retry_policy,
+        Pipeline.id.label("pipeline_row_id"),
+        PipelineSnapshot.graph_json.label("snapshot_graph_json"),
+        Pipeline.graph_nodes_json.label("pipeline_graph_json"),
+        Pipeline.node_timeout_seconds.label("pipeline_node_timeout_seconds"),
+    )
+    row_select = row_select.join(Pipeline, Pipeline.id == Run.pipeline_id, isouter=True)
+    row_select = include_soft_deleted(row_select)
+    row_select = row_select.join(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id, isouter=True)
+    row_select = row_select.where(
+        Run.organisation_id == org_id,
+        Run.status.in_(("pending", "running", "awaiting_human", "claimed", "hitl_parked")),
+        re_dispatch_predicate,
+        _reconcile_capacity_marker_exclusion(tuning.capacity_redispatch_seconds),
+    )
+    if row_budget is not None:
+        row_select = row_select.limit(row_budget + 1)
+    mark_stage("row_select")
+    return (await session.execute(row_select)).all()
+
+
+async def _execute_reconcile_org_row_loop(
+    session: AsyncSession,
+    q: RedisQueue,
+    redis_client: AsyncRedis,
+    org_id: uuid.UUID,
+    rows: Sequence[Any],
+    tuning: ReconcileTuning,
+    enqueue_failed_redispatched: int,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    limits: _ReconcileOrgLimits,
+    mark_stage: Callable[[str], None],
+) -> int:
+    """Iterate through selected rows and reconcile each one."""
+    row_loop_started = time.monotonic()
+    rows_processed_this_pass = 0
+    slowest_row_seconds = 0.0
+    deferred_for_time = 0
+    row_budget = limits.row_budget
+    org_deadline_monotonic = limits.org_deadline_monotonic
+    row_defer_margin_seconds = limits.row_defer_margin_seconds
+    early_detect_minutes = limits.early_detect_minutes
+    org_slice_seconds = limits.org_slice_seconds
+
+    for row_index, row in enumerate(rows):
+        if row_budget is not None and row_index >= row_budget:
+            break
+        if org_deadline_monotonic is not None and time.monotonic() >= org_deadline_monotonic - row_defer_margin_seconds:
+            deferred_for_time = len(rows) - row_index
+            summary["row_loop_time_deferred"] = summary.get("row_loop_time_deferred", 0) + deferred_for_time
+            break
+        mark_stage(f"row_loop:{row_index}/{len(rows)}")
+        summary["scanned"] += 1
+        rows_processed_this_pass += 1
+        row_started = time.monotonic()
+        row_nodeless_window = pipeline_nodeless_window_minutes(
+            tuning.nodeless_window,
+            max_node_timeout_seconds=_row_pipeline_max_node_timeout_seconds(row),
+        )
+        row_early_detect_minutes = _row_early_detect_minutes(
+            early_detect_minutes,
+            floor_minutes=tuning.nodeless_window,
+            row_window_minutes=row_nodeless_window,
+        )
+        enqueue_failed_redispatched = await _reconcile_one_row(
+            session,
+            q,
+            redis_client,
+            org_id,
+            row,
+            row_nodeless_window,
+            enqueue_failed_redispatched,
+            summary,
+            terminalized_run_ids,
+            early_detect_minutes=row_early_detect_minutes,
+            floor_nodeless_window=tuning.nodeless_window,
+            stale_window=tuning.stale_window,
+        )
+        slowest_row_seconds = max(slowest_row_seconds, time.monotonic() - row_started)
+
+    summary["row_loop_slowest_row_ms"] = max(
+        float(summary.get("row_loop_slowest_row_ms", 0) or 0.0),
+        round(slowest_row_seconds * 1000, 1),
+    )
+    if deferred_for_time:
+        _log.warning(
+            "dispatcher_reconcile.row_loop_time_deferred org=%s deferred_rows=%d "
+            "rows_processed=%d elapsed_seconds=%.1f slowest_row_seconds=%.2f "
+            "org_slice_seconds=%s row_defer_margin_seconds=%.2f "
+            "(row loop stopped STARTING rows before the per-org slice could cut the "
+            "whole transaction; the processed prefix commits and the remainder drains "
+            "on the next 60s tick)",
+            org_id,
+            deferred_for_time,
+            rows_processed_this_pass,
+            time.monotonic() - row_loop_started,
+            slowest_row_seconds,
+            f"{org_slice_seconds:.2f}" if org_slice_seconds is not None else "n/a",
+            row_defer_margin_seconds,
+        )
+    return enqueue_failed_redispatched
+
+
 async def _reconcile_org(
     *,
     factory: async_sessionmaker[AsyncSession],
@@ -9671,9 +9852,7 @@ async def _reconcile_org(
     age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
     limits: _ReconcileOrgLimits = _ReconcileOrgLimits(),
     stage: dict[str, str] | None = None,
-    org_deadline_monotonic: float | None = None,
-    row_defer_margin_seconds: float = _RECONCILE_ROW_DEFER_MARGIN_SECONDS,
-    org_slice_seconds: float | None = None,
+    **kwargs: Any,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop).
 
@@ -9792,265 +9971,65 @@ async def _reconcile_org(
     at the row select and per row — so a cut at ANY of those points names the
     exact blocking site instead of only the org.
     """
-    from modulo.db.models.pipeline import Pipeline
-    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-    from modulo.db.models.run import Run
+    if kwargs:
+        limits = _ReconcileOrgLimits(
+            terminalize_max=kwargs.pop("terminalize_max", limits.terminalize_max),
+            early_detect_minutes=kwargs.pop("early_detect_minutes", limits.early_detect_minutes),
+            row_budget=kwargs.pop("row_budget", limits.row_budget),
+            org_deadline_monotonic=kwargs.pop("org_deadline_monotonic", limits.org_deadline_monotonic),
+            row_defer_margin_seconds=kwargs.pop("row_defer_margin_seconds", limits.row_defer_margin_seconds),
+            org_slice_seconds=kwargs.pop("org_slice_seconds", limits.org_slice_seconds),
+        )
+        if kwargs:
+            raise TypeError(f"Unexpected keyword argument(s) for _reconcile_org: {list(kwargs.keys())}")
 
     def _mark(detail: str) -> None:
-        """Refine the shared ``stage`` hint with this pass's current site (FAR-1621).
-
-        The org-level op (``reconcile_org:<org-id>``) is set by the reconcile
-        body before the call; each refinement below keeps that prefix, so the
-        org id is always present in the label even at the finest granularity.
-        No-op when the caller passed no stage hint (direct callers / tests).
-        """
+        """Refine the shared ``stage`` hint with this pass's current site (FAR-1621)."""
         if stage is not None:
             stage["op"] = f"reconcile_org:{org_id}/{detail}"
 
-    # Mark BEFORE the session is acquired so a block in the pool checkout
-    # (hypothesis 2 of the FAR-1621 investigation) is distinguishable from a
-    # block after it.
     _mark("session-acquire")
-    # FAR-1621 (qa F3, amended FAR-1644/M3): unwind anchors for THIS pass,
-    # captured before the first terminalizer runs. The read phase below can
-    # fail with a non-bounded error and return NORMALLY (its contract: log
-    # ``read failed``, roll the transaction back, skip the org)
-    # — but by then the batch terminalizers may already have bumped ``summary``
-    # and appended to ``terminalized_run_ids``. Restore both on that path so
-    # the tick's counters and its compensating-fact ids only ever describe
-    # COMMITTED work (a rolled-back org contributes neither).
     summary_before = dict(summary)
     terminalized_len_before = len(terminalized_run_ids)
     if age_gate_run_ids is None:
-        # FAR-1993: a direct caller that omits the accumulator gets a local one
-        # (only the reconcile body consumes it).
         age_gate_run_ids = []
     age_gate_len_before = len(age_gate_run_ids)
-    terminalize_max = limits.terminalize_max
-    early_detect_minutes = limits.early_detect_minutes
-    row_budget = limits.row_budget
+
     async with factory() as session, session.begin():
         _mark("session-acquired")
-        # FAR-1601: bound THIS org transaction's row-lock waits FIRST — the
-        # transaction's opening statement, before any lock. ``set_config``
-        # takes no lock itself, so it cannot disturb lock ordering. Every hot
-        # ``runs`` write below shares this ONE transaction, so one bound covers
-        # them all: the five batch terminalizers, the enqueue-failed TTL
-        # backstop, the previous-attempt marker clear and the capacity-defer
-        # stamp. An unbounded wait here is the FAR-1524 class: silent past the
-        # Fly HAProxy 30-minute session window, which got prod connections
-        # culled mid-operation.
         from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
         await set_mutation_row_lock_timeout(session)
         _mark("lock-bound-set")
-        # FAR-1621: the companion STATEMENT bound, second statement of the same
-        # transaction (see _set_org_statement_timeout and the docstring above).
         await _set_org_statement_timeout(session)
         _mark("statement-bound-set")
         await _set_rls_org(session, org_id)
         _mark("rls-set")
         try:
-            # DB-only org-scoped batch terminalizers (B4 age-bound mid-graph
-            # wedge, B5 claim-cap, FAR-648 expired-HITL-gate, FAR-721
-            # zero-claim awaitng_human orphan), run BEFORE the row select so
-            # terminalised rows are excluded from re-dispatch.  FAR-746 batch
-            # cap: terminalize_max bounds each UPDATE so a big backlog drains
-            # gradually across 60s ticks.  Driven by the registry (FAR-720): a
-            # new batch terminalizer registers once below — the FAR-721 sweep
-            # is a registry entry with no tuning kwargs, so it needs no edit
-            # here.
-            for spec in _BATCH_TERMINALIZER_SPECS:
-                _mark(f"terminalizer:{spec.stats_key}")
-                coroutine = _resolve_terminalizer(spec)
-                kwargs: dict[str, Any] = {kwarg: getattr(tuning, attr) for kwarg, attr in spec.tuning_kwargs.items()}
-                if spec.passes_summary:
-                    # FAR-1329: the nodeless router delegates to
-                    # ``_fail_nodeless_run``, which bumps counters on the live
-                    # tick summary (same contract as the row loop).
-                    kwargs["summary"] = summary
-                terminalized = await coroutine(session, org_id, **kwargs, max_rows=terminalize_max)
-                summary[spec.stats_key] += len(terminalized)
-                if spec.alias_key:
-                    summary[spec.alias_key] = summary[spec.stats_key]
-                if len(terminalized) >= terminalize_max:
-                    summary["terminalize_capped"] += 1
-                terminalized_run_ids.extend((run_id, org_id) for run_id in terminalized)
-                if spec.key == "mid_graph":
-                    # FAR-1993: only the mid-graph age gate's runs get a DERIVED
-                    # sandbox cost, attributed post-commit from their heartbeat
-                    # liveness window. Collected here (still inside the org
-                    # transaction) and consumed by ``_terminalize_run_facts``
-                    # AFTER the commit; unwound with the org's other ids if the
-                    # transaction rolls back.
-                    age_gate_run_ids.extend((run_id, org_id) for run_id in terminalized)
-            row_select = select(
-                Run.id,
-                Run.pipeline_id,
-                Run.status,
-                Run.dispatched_at,
-                Run.heartbeat_at,
-                Run.node_token_usage,
-                # FAR-583 B1: the legacy outputs_json column is gone
-                # from the scan — the row-level nodeless recheck
-                # discriminates on whether the run still has NO
-                # ``__final__`` row in the per-node store (the
-                # finalisation-represented marker). Computed as a
-                # correlated NOT EXISTS (see _nodeless_zombie_predicate;
-                # one shared expression — qa iteration 1 rider).
-                _final_row_absent_expr().label("outputs_absent"),
-                # FAR-1088 F4: the zero-node checkpoint leg as a row
-                # flag — the SAME shared expression the SQL predicate
-                # uses, so the row-level recheck
-                # (_is_nodeless_zombie_row) enforces the identical
-                # premise for rows matched via OTHER branches (e.g.
-                # stale heartbeat).
-                _checkpoint_absent_expr().label("checkpoints_absent"),
-                Run.started_at,
-                Run.claim_count,
-                # FAR-2076: the ONE executions-consumed measure the
-                # retry-budget gate compares against the policy ceiling
-                # (``retry_budget.retry_executions_consumed``). Deliberately
-                # NOT derived from ``claim_count`` (it grows on
-                # capacity-demoted and resume claims) or ``node_attempt_count``
-                # (a pre-node death records nothing).
-                Run.execution_attempt_count,
-                # Selected for the terminal error_detail / triage context only
-                # — never as a budget measure.
-                Run.node_attempt_count,
-                Run.dispatcher,
-                # FAR-1649: consumed by the row-level nodeless recheck
-                # (_is_nodeless_zombie_row) — a durably-recorded first-node
-                # start proves a node executed, so the row is never treated
-                # as a zero-node zombie (no safe re-dispatch, no
-                # "dispatched no node" mislabel).
-                Run.dispatch_phase,
-                # FAR-1999: the durable first-node-start timestamp — the anchor
-                # of the node-deadline reaper's deadline for a node-started,
-                # zero-progress run.
-                Run.dispatch_phase_entered_at,
-                # FAR-1728: the override-resume class discriminator — the
-                # flip's single-writer dedicated marker column
-                # (_is_override_resume_row) — plus the row's
-                # resumable-checkpoint probe key
-                # (_override_resume_checkpoint_present): the per-row half of
-                # the guardrail-override self-heal leg. (``is_replay`` is NOT
-                # selected: webhook/manual replay also set it, so it cannot
-                # identify the flip; ``error_detail`` is NOT selected either —
-                # pre-0307 it carried the sentinel string, but an observation
-                # column must not hold a control-flow marker.)
-                Run.guardrail_override_resume_pending,
-                Run.langgraph_thread_id,
-                # FAR-1088 W-B: consumed by the row-level nodeless
-                # recheck (_is_nodeless_zombie_row) — a live dispatch
-                # marker shields the row from the nodeless repair
-                # until the in-flight safety floor passes.
-                Run.sandbox_dispatch_state,
-                text("runs.enqueue_failed_at AS enqueue_failed_at"),
-                Pipeline.retry_policy,
-                # FAR-2076: distinguishes "the pipeline has NO retry policy"
-                # (this column NULL, the row present) from "the pipeline row
-                # could not be resolved at all" (this column NULL too, but
-                # because the LEFT JOIN matched nothing) — the latter logs
-                # loudly instead of silently skipping the budget gate.
-                Pipeline.id.label("pipeline_row_id"),
-                # FAR-1740: the per-pipeline max node timeout drives the
-                # claimed-but-nodeless window. The FROZEN snapshot graph is the
-                # graph the run actually executes; the live pipeline node list
-                # and the pipeline-level default are fallbacks. All three are
-                # NULL-safe (a row source without them keeps the global floor).
-                PipelineSnapshot.graph_json.label("snapshot_graph_json"),
-                Pipeline.graph_nodes_json.label("pipeline_graph_json"),
-                Pipeline.node_timeout_seconds.label("pipeline_node_timeout_seconds"),
+            await _execute_reconcile_batch_terminalizers(
+                session,
+                org_id,
+                tuning,
+                limits.terminalize_max,
+                summary,
+                terminalized_run_ids,
+                age_gate_run_ids,
+                _mark,
             )
-            row_select = row_select.join(Pipeline, Pipeline.id == Run.pipeline_id, isouter=True)
-            # FAR-2076: opt OUT of the global soft-delete filter. Without this a
-            # soft-deleted pipeline yields ``retry_policy = NULL`` from the LEFT
-            # JOIN and the retry-budget gate silently skipped — restoring the
-            # original defect for exactly the FAR-1025 in-flight population this
-            # backstop exists to recover (``_saq_retries_for_run`` already opts
-            # out for the same reason). Run / PipelineSnapshot are not
-            # soft-deleted models, so this only widens the Pipeline leg.
-            from modulo.db.soft_delete import include_soft_deleted
-
-            row_select = include_soft_deleted(row_select)
-            # FAR-1740: the run's frozen snapshot graph — joined (not a
-            # per-row query) so deriving the window is free per row. LEFT join:
-            # a run with no snapshot (or a pruned one) still reconciles.
-            row_select = row_select.join(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id, isouter=True)
-            row_select = row_select.where(
-                Run.organisation_id == org_id,
-                # The F6a statuses must be IN this scan tuple too (qa
-                # F1): the gated-recovery branch below can only ever
-                # match rows this outer WHERE let through.
-                Run.status.in_(("pending", "running", "awaiting_human", "claimed", "hitl_parked")),
+            rows = await _fetch_reconcile_org_rows(
+                session,
+                org_id,
                 re_dispatch_predicate,
-                _reconcile_capacity_marker_exclusion(tuning.capacity_redispatch_seconds),
+                tuning,
+                limits.row_budget,
+                _mark,
             )
-            if row_budget is not None:
-                # FAR-1425: bound the FETCH itself. The two correlated NOT
-                # EXISTS legs above are SELECT-list expressions, so Postgres
-                # evaluates them once per fetched row — an unbounded fetch is
-                # unbounded work inside this single statement, on top of the
-                # per-row loop below.
-                #
-                # Fetch ONE row beyond the budget so an exactly-full result
-                # set can be distinguished from a genuinely capped one (review
-                # follow-up): ``row_budget + 1`` returned rows prove overflow
-                # exists; exactly ``row_budget`` rows prove the backlog was
-                # drained this tick, so nothing is deferred.
-                row_select = row_select.limit(row_budget + 1)
-            _mark("row_select")
-            rows = (await session.execute(row_select)).all()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             if is_row_lock_timeout(exc) or is_statement_timeout(exc):
-                # FAR-1601: the bounded wait expired while a terminalizer (or
-                # the row select's locking read) held a contended ``runs`` row.
-                # Propagate OUT of the org transaction (which rolls back at the
-                # ``async with``) to the reconcile body's org-level 55P03 skip —
-                # WARNING + unwind + next-tick re-process — instead of
-                # mislabelling expected sweep contention as a read failure.
-                #
-                # FAR-1621: a statement bound expiry (SQLSTATE 57014) is routed
-                # the SAME way — it too is an expected, bounded per-org failure
-                # with a dedicated body-level skip, and mislabelling it
-                # ``read failed`` would swallow the stage attribution the bound
-                # exists to produce.
                 raise
             _log.exception("dispatcher_reconcile: read failed (org %s)", org_id)
-            # FAR-1644 (M3): DECIDE the transaction outcome before touching the
-            # counters. This is a NORMAL return from inside
-            # ``async with session.begin()``, so ``SessionTransaction.__exit__``
-            # would take its COMMIT branch — and on a client-side/Python failure
-            # over a still-healthy connection that commit SUCCEEDS. The FAR-1621
-            # qa F3 comment this replaced claimed "Postgres rolls this
-            # transaction back at the ``async with`` exit"; it does not, unless
-            # something made it abort. Unwinding first therefore committed
-            # terminalizer writes that the summary had just disowned: their
-            # counters were zeroed and their compensating-fact ids dropped, so
-            # the tick reported less work than it had actually persisted.
-            #
-            # Roll back EXPLICITLY and only then unwind, so server-side state
-            # and the in-memory accounting can never disagree in either
-            # direction. ``session.rollback()`` inside a ``session.begin()``
-            # block is safe: on exit the transaction is no longer active, and
-            # SQLAlchemy's ``TransactionalContext.__exit__`` only commits an
-            # ACTIVE transaction, so it skips the commit and just closes
-            # (verified against SQLAlchemy 2.1.3, the pin this repo ships).
-            # The rollback is deliberately NOT wrapped in its own try/except:
-            # if it cannot complete the connection is already broken and the
-            # outcome genuinely is unknown — swallowing here would reintroduce
-            # exactly the disagree-with-the-server bug this fixes. Failing the
-            # tick with a truthful failure heartbeat is the honest outcome
-            # (the "swallow + keep going" contract is unchanged for every read
-            # failure whose rollback succeeds, which is all of them while the
-            # connection is alive). The ``nosemgrep`` follows the house
-            # precedent (run_outputs_dualwrite, library_service.community):
-            # the rule guards against destroying a SHARED session's writes,
-            # while this session was checked out for THIS org's pass alone and
-            # rolling all of it back is the intended semantics.
             await session.rollback()  # nosemgrep: session-rollback-abuse
             _unwind_org_counts(
                 summary,
@@ -10062,109 +10041,20 @@ async def _reconcile_org(
             )
             return enqueue_failed_redispatched
 
-        row_loop_started = time.monotonic()
-        rows_processed_this_pass = 0
-        slowest_row_seconds = 0.0
-        deferred_for_time = 0
-        for row_index, row in enumerate(rows):
-            # FAR-1425: defence in depth — the LIMIT already caps the fetch,
-            # but the loop must never be able to exceed the budget the
-            # inner-deadline message advertises (``max_rows=...``).
-            if row_budget is not None and row_index >= row_budget:
-                break
-            # FAR-1643: stop STARTING rows with margin to spare, so the work
-            # already done commits instead of the caller's slice rolling the
-            # whole org transaction back (the prod row_loop:13/15 cut). The
-            # unprocessed rows are counted in a DISTINCT counter — never
-            # silently dropped, and never folded into ``rows_deferred`` (the
-            # FAR-1425 cap marker) so the readiness detail can tell a
-            # time-deferral from a row-budget cap. Checked AFTER the row budget
-            # so the FAR-1425 path above keeps its exact semantics, and BEFORE
-            # the stage mark so a deferral never looks like a row in flight.
-            if (
-                org_deadline_monotonic is not None
-                and time.monotonic() >= org_deadline_monotonic - row_defer_margin_seconds
-            ):
-                deferred_for_time = len(rows) - row_index
-                summary["row_loop_time_deferred"] = summary.get("row_loop_time_deferred", 0) + deferred_for_time
-                break
-            _mark(f"row_loop:{row_index}/{len(rows)}")
-            summary["scanned"] += 1
-            rows_processed_this_pass += 1
-            row_started = time.monotonic()
-            # FAR-1740: derive the claimed-but-nodeless window PER-PIPELINE from
-            # this row's longest node timeout (frozen snapshot graph preferred,
-            # then the live node list, then the pipeline default). A row whose
-            # pipeline graph is unavailable keeps the global floor, so the SQL
-            # scan's global window stays a valid SUPERSET and the row-level
-            # recheck enforces the (never shorter) per-pipeline window. The
-            # FAR-873 early-detect is disabled for a pipeline whose window had
-            # to be widened above the floor — a node may still be legitimately
-            # running inside the early window.
-            row_nodeless_window = pipeline_nodeless_window_minutes(
-                tuning.nodeless_window,
-                max_node_timeout_seconds=_row_pipeline_max_node_timeout_seconds(row),
-            )
-            row_early_detect_minutes = _row_early_detect_minutes(
-                early_detect_minutes,
-                floor_minutes=tuning.nodeless_window,
-                row_window_minutes=row_nodeless_window,
-            )
-            enqueue_failed_redispatched = await _reconcile_one_row(
-                session,
-                q,
-                redis_client,
-                org_id,
-                row,
-                row_nodeless_window,
-                enqueue_failed_redispatched,
-                summary,
-                terminalized_run_ids,
-                early_detect_minutes=row_early_detect_minutes,
-                floor_nodeless_window=tuning.nodeless_window,
-                stale_window=tuning.stale_window,
-            )
-            # FAR-1643 instrumentation: the per-row cost, so the NEXT deferral
-            # can tell a single pathological row from a uniformly slow loop
-            # instead of assuming a fixed per-row figure. Measured around the
-            # whole per-row body (window derivation + repair) because that is
-            # what actually consumes the slice.
-            slowest_row_seconds = max(slowest_row_seconds, time.monotonic() - row_started)
-        # FAR-1643: the tick-level slowest-row gauge (max across orgs — the
-        # summary is shared by every org pass), surfaced in the readiness
-        # detail as ``row_loop_slowest_row_ms``.
-        summary["row_loop_slowest_row_ms"] = max(
-            float(summary.get("row_loop_slowest_row_ms", 0) or 0.0),
-            round(slowest_row_seconds * 1000, 1),
+        enqueue_failed_redispatched = await _execute_reconcile_org_row_loop(
+            session,
+            q,
+            redis_client,
+            org_id,
+            rows,
+            tuning,
+            enqueue_failed_redispatched,
+            summary,
+            terminalized_run_ids,
+            limits,
+            _mark,
         )
-        if deferred_for_time:
-            # WARNING, not INFO: a sustained deferral is the durable signal an
-            # operator needs (the tick deliberately stays ``ok`` — a partial
-            # pass that drains next tick is not a failure). The distinct
-            # ``row_loop_time_deferred`` counter plus this line IS the
-            # visibility; there is no rollback and no ``status=timeout``.
-            _log.warning(
-                "dispatcher_reconcile.row_loop_time_deferred org=%s deferred_rows=%d "
-                "rows_processed=%d elapsed_seconds=%.1f slowest_row_seconds=%.2f "
-                "org_slice_seconds=%s row_defer_margin_seconds=%.2f "
-                "(row loop stopped STARTING rows before the per-org slice could cut the "
-                "whole transaction; the processed prefix commits and the remainder drains "
-                "on the next 60s tick)",
-                org_id,
-                deferred_for_time,
-                rows_processed_this_pass,
-                time.monotonic() - row_loop_started,
-                slowest_row_seconds,
-                f"{org_slice_seconds:.2f}" if org_slice_seconds is not None else "n/a",
-                row_defer_margin_seconds,
-            )
-        # FAR-1425: the fetch above returned one row beyond the budget when
-        # (and only when) matching rows remain. Count the org as deferred so
-        # the cap is visible instead of silently reported as a clean tick; the
-        # remainder drains next tick. A fetch of exactly ``row_budget`` rows
-        # means the backlog was drained this tick — deferring it every tick
-        # would misreport a clean org as permanently capped.
-        if row_budget is not None and len(rows) > row_budget:
+        if limits.row_budget is not None and len(rows) > limits.row_budget:
             summary["rows_deferred"] = summary.get("rows_deferred", 0) + 1
     return enqueue_failed_redispatched
 

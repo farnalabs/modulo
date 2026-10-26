@@ -97,11 +97,11 @@ async def _bound_statement_timeout(session: AsyncSession) -> None:
     )
 
 
-@router.get("/evidence-index", response_model=EvidenceIndex)
+@router.get("/evidence-index")
 @handle_db_errors(_LOG_PREFIX)
 async def get_evidence_index_endpoint(
-    session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission(_CODE_EVIDENCE_INDEX_READ),
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, require_permission(_CODE_EVIDENCE_INDEX_READ)],
     period_from: Annotated[
         datetime | None,
         Query(

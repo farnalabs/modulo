@@ -1,17 +1,21 @@
-name: "Release: Legacy Entry Point (Retired)"
+name: "Release: Legacy Entry Point (Deprecated)"
 
-# RETIRED: Release: Unified Pipeline is the sole executable release path.
+# Deprecated compatibility wrapper for operators who still have the old workflow
+# bookmarked. This workflow deliberately has no release-mutating jobs: it cannot
+# create tags, move release-freeze, create GitHub Releases, publish packages, or
+# dispatch release work. Use release-unified.yml instead.
 #
-# This workflow remains only so an old bookmark or automation call fails loudly
-# with migration instructions. It deliberately has no checkout, write
-# permissions, tags, releases, freeze changes, dispatches, publishes, changelog
-# writes, or environments. Do not add release logic here.
+# Migration:
+#   gh workflow run "Release: Unified Pipeline" -f mode=dry-run -f version=X.Y.Z
+#   gh workflow run "Release: Unified Pipeline" -f mode=cut -f version=X.Y.Z
+#   gh workflow run "Release: Unified Pipeline" -f mode=recut -f version=X.Y.Z
+#   gh workflow run "Release: Unified Pipeline" -f mode=promote -f version=X.Y.Z
 
 on:
   workflow_dispatch:
     inputs:
       action:
-        description: "Retired input; use mode on Release: Unified Pipeline"
+        description: "Deprecated. Use release-unified.yml with mode=dry-run|cut|recut|promote."
         type: choice
         required: true
         options:
@@ -20,27 +24,33 @@ on:
           - release
           - dry-run
       version:
-        description: "Retired input; pass the version to Release: Unified Pipeline"
+        description: "Version to migrate (X.Y.Z); this wrapper does not use it to mutate release state."
         type: string
         required: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-legacy-wrapper
+  cancel-in-progress: false
+
 jobs:
-  retired:
-    name: Reject retired release entry point
+  deprecated:
+    name: "Deprecated - use Release: Unified Pipeline"
     runs-on: ubicloud-standard-2
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
-      - name: Fail closed with migration instructions
+      - name: Refuse legacy release path
         shell: bash
+        env:
+          ACTION: ${{ inputs.action }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          echo "::error::This release entry point is retired and cannot perform release actions."
-          echo "Use 'Release: Unified Pipeline' (.github/workflows/release-unified.yml) instead."
-          echo "Modes are: cut, recut, promote, and dry-run."
-          echo "Example: gh workflow run \"Release: Unified Pipeline\" -f mode=dry-run -f version=0.4.0"
+          echo "::error::The legacy release workflow is disabled and performed no release action."
+          echo "::error::Run 'Release: Unified Pipeline' with mode=${ACTION/release/promote} and version=${VERSION}."
+          echo "No tags, releases, freeze markers, package publishes, or release dispatches were created."
           exit 1

@@ -22,6 +22,7 @@ from typing import cast
 
 import pytest
 from sqlalchemy import Table
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.api.routes.admin import _eval_by_type, _eval_summary
@@ -255,28 +256,28 @@ async def test_variant_batch_eval_stats_exclude_error_rows(session: AsyncSession
     assert stats[run_id] == (2, 1)
 
 
-async def test_a_legacy_null_outcome_row_still_counts(session: AsyncSession):
-    """During the FAR-2040 expand rollout ``outcome`` is NULL on old rows.
+async def test_the_stage_two_contract_rejects_a_null_outcome(session: AsyncSession):
+    """FAR-2058 stage 2 closes the FAR-2040 expand window at the DATABASE layer.
 
-    ``outcome != 'error'`` evaluates to NULL for them and would silently drop
-    every legacy verdict from every pass rate; ``IS DISTINCT FROM`` keeps them.
-    A Core insert bypasses the ORM before_insert guard so the legacy shape can
-    be reproduced.
+    During the expand rollout ``outcome`` was nullable on old rows, so the
+    consumer clause used ``IS DISTINCT FROM`` to keep them counted. Migration
+    ``0335`` backfills those rows from ``passed`` and sets the column NOT NULL,
+    so the legacy shape can no longer be persisted at all — the invariant this
+    test now pins. A Core insert bypasses the ORM ``before_insert`` guard,
+    proving the database itself is the enforcer rather than the application.
     """
     run_id = await _seed_run(session)
     normal_id = await _seed_eval_def(session, eval_type="regex")
-    await session.execute(
-        EvalResult.__table__.insert().values(
-            organisation_id=_ORG,
-            run_id=run_id,
-            node_id=None,
-            eval_id=normal_id,
-            outcome=None,
-            passed=True,
-            observed=False,
+    with pytest.raises(IntegrityError, match=r"eval_results\.outcome"):
+        await session.execute(
+            EvalResult.__table__.insert().values(
+                organisation_id=_ORG,
+                run_id=run_id,
+                node_id=None,
+                eval_id=normal_id,
+                outcome=None,
+                passed=True,
+                observed=False,
+            )
         )
-    )
-    await session.flush()
-
-    evals = await get_run_evals(session, run_id)
-    assert [row.outcome for row in evals] == [None]
+    await session.rollback()

@@ -28,10 +28,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 PASS=0
 FAIL=0
+NO_TRANSITION_LOG="No transition"
+SUBJECT_FIELD='"subject"'
 
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
-  if [ "$expected" = "$actual" ]; then
+  if [[ "$expected" == "$actual" ]]; then
     echo "  PASS: $label (expected=$expected)"
     PASS=$((PASS + 1))
   else
@@ -155,8 +157,8 @@ echo ""
 
 echo "Case 1: healthy -> healthy (no transition, no email)"
 OUT="$(run_notify true healthy "$WORK/healthy.json" 2>&1)"
-assert_contains "no transition logged" "No transition" "$OUT"
-assert_not_contains "no email rendered" '"subject"' "$OUT"
+assert_contains "no transition logged" "${NO_TRANSITION_LOG}" "$OUT"
+assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
 echo ""
 
 echo "Case 2: healthy -> unhealthy (alert exactly once)"
@@ -168,8 +170,8 @@ echo ""
 
 echo "Case 3: unhealthy -> unhealthy (no duplicate email)"
 OUT="$(run_notify false unhealthy "$WORK/unhealthy.json" 2>&1)"
-assert_contains "no transition logged" "No transition" "$OUT"
-assert_not_contains "no duplicate email" '"subject"' "$OUT"
+assert_contains "no transition logged" "${NO_TRANSITION_LOG}" "$OUT"
+assert_not_contains "no duplicate email" "${SUBJECT_FIELD}" "$OUT"
 echo ""
 
 echo "Case 4: unhealthy -> healthy (recovery closes the alert)"
@@ -186,7 +188,7 @@ echo ""
 echo "Case 6: UNKNOWN current (no transition inferred, loud warning, no email)"
 OUT="$(run_notify "" unhealthy "$WORK/unhealthy.json" 2>&1)"
 assert_contains "warning emitted" "::warning::" "$OUT"
-assert_not_contains "no email rendered" '"subject"' "$OUT"
+assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
 echo ""
 
 echo "Case 7: watchdog's own condition (shared renderer, caller-measured detail)"
@@ -215,7 +217,7 @@ assert_contains "warning names the missing secrets" "NO email was sent" "$OUT"
 echo ""
 
 echo "=== passed: $PASS, failed: $FAIL ==="
-if [ "$FAIL" -ne 0 ]; then
+if [[ "$FAIL" -ne 0 ]]; then
   exit 1
 fi
 exit 0

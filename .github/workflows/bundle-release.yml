@@ -87,8 +87,12 @@ jobs:
     name: Bundle linux-${{ matrix.arch }}
     needs: version-parity
     runs-on: ubuntu-latest
+    # The caller supplies the workflow token, but this reusable job only checks
+    # out the requested ref and uploads workflow artefacts. It never creates a
+    # tag, pushes a ref, or calls a repository-write API, so read is sufficient
+    # and keeps the reusable contract valid for the unified dry-run caller.
     permissions:
-      contents: write
+      contents: read
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -154,8 +158,10 @@ jobs:
           for spec in "postgresql-16.deb:${PG_DEB_VERSION}" "postgresql-client-16.deb:${PG_DEB_VERSION}" "redis-server.deb:${REDIS_DEB_VERSION}" "redis-tools.deb:${REDIS_DEB_VERSION}"; do
             deb="${spec%%:*}"
             want="${spec#*:}"
-            got="$(dpkg-deb -f "downloads/${deb}" Version)"
-            if [ "$got" != "$want" ]; then
+             got="$(dpkg-deb -f "downloads/${deb}" Version)"
+             got="${got#*:}"
+             if [ "$got" != "$want" ]; then
+
               echo "::error::${deb} Version field is '${got}' but the pin is '${want}' -- refusing to ship a mismatched package"
               exit 1
             fi

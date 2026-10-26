@@ -6,12 +6,14 @@ How we cut, validate and promote a release of Modulo - and how to rehearse the w
 
 ## The single entry point
 
-Every release action runs through `.github/workflows/release-unified.yml` ("Release: Unified Pipeline"). This is the only executable release entry point. The legacy `.github/workflows/release.yml` is a read-only, fail-closed wrapper that exists only to direct old callers here; it performs no release action. It is `workflow_dispatch` only - it never runs on a push - and takes a version plus a mode input:
+Every release action runs through `.github/workflows/release-unified.yml` ("Release: Unified Pipeline"). This is the only executable release entry point. The legacy `.github/workflows/release.yml` is a read-only, fail-closed migration wrapper that exists only to direct old callers here; it has no write permissions or release-mutating steps, so it cannot create a tag, release, freeze marker, or package, and operators using an old bookmark must re-run the command against the unified workflow. It is `workflow_dispatch` only - it never runs on a push - and takes a version plus a mode input:
 
 | Input | Meaning |
 |-------|---------|
 | `mode` | `cut`, `recut`, `promote`, or `dry-run` |
 | `version` | The plain numeric version being released, e.g. `0.4.0` |
+
+**The unified pipeline owns every publication.** `release-unified.yml` pushes the four container images (and their versioned tags) to GHCR, pushes the Helm chart to the OCI registry, builds and signs the release bundle through `bundle-release.yml`, creates the GitHub Release from that bundle, pushes the `bundle-v*` tag, publishes `farnalabs-modulo` to PyPI on `promote`, and dispatches Deploy plus `rc-validate`.
 
 The workflow defaults to workflow-level `permissions: contents: read`, with write scopes granted only on the job that needs them: the `release` job carries `contents: write` (push tags and the CHANGELOG commit, create the GitHub Release) and `actions: write` (`gh workflow run rc-validate.yml`). The `dry-run` and build jobs are read-only. A `release-unified-${{ github.ref }}` concurrency group with `cancel-in-progress: false` ensures two release actions can never interleave.
 
@@ -21,7 +23,7 @@ The workflow defaults to workflow-level `permissions: contents: read`, with writ
 |------|--------------|------------|
 | `cut` | Establishes a temporary publication hold, bumps the version on `main`, tags `vX.Y.Z-rcN`, establishes the authoritative `release-freeze`, publishes four RC-qualified container images (including `runner-opencode`), builds/signs the release bundle, pushes the bundle tag, creates the GitHub Release, and dispatches forced deploy plus `rc-validate.yml` | Yes - RC tag, freeze, four RC images, signed bundle/artifacts, GitHub Release, bundle tag, forced deploy + validation |
 | `recut` | After a fix has been manually merged to `main`: tags the *next* RC, re-freezes, republishes the four RC-qualified images and signed release artefacts, and dispatches the forced soak and validation again | Yes - next RC tag, freeze, four RC images, signed bundle/artifacts, GitHub Release, bundle tag, forced deploy + validation |
-| `promote` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, retags all four images as `VERSION_NUM` and `latest`, pushes the stable Helm chart, updates `CHANGELOG.md`, creates or updates the GitHub Release, and lifts the freeze | Yes - stable `VERSION_NUM`/`latest` images and Helm chart only here, plus GA tag and Release |
+| `promote` | Promotes the validated RC to GA: creates and pushes the `vX.Y.Z` tag, retags all four images as `VERSION_NUM` and `latest`, pushes the stable Helm chart, updates `CHANGELOG.md`, creates or updates the GitHub Release, lifts the freeze, and publishes `farnalabs-modulo` to PyPI | Yes - stable `VERSION_NUM`/`latest` images and Helm chart only here, plus GA tag, Release and PyPI package |
 | `dry-run` | Builds everything and resolves what a `cut` would have done, then stops | **No - no publication, tags, commits, registry pushes, Release, attestation, or deploy** |
 
 ### The freeze
@@ -73,7 +75,7 @@ It does **not** publish anything. It does not create a tag of any kind - not the
 
 A tag push is not a private act: a separate tag-triggered publication path could publish images if one were configured. The current `publish-images.yml` trigger is limited to `main` pushes and manual dispatch, while Release: Unified Pipeline publishes release images explicitly. So the dry-run path takes no tag action whatsoever rather than "a harmless local tag".
 
-The rule that keeps this true as the workflow grows: **any job added to `release-unified.yml` that publishes something must be explicitly gated so it cannot run under `dry-run`.** Publish-shaped work is expected to carry `if: inputs.mode != 'dry-run'` (matching the existing publish jobs). This is documented in the workflow header so the next author cannot miss it.
+The rule that keeps this true as the workflow grows: **publish-shaped work belongs in `release-unified.yml`, and every job that publishes must be explicitly gated so it cannot run under `dry-run`.** Publish-shaped jobs carry `if: inputs.mode != 'dry-run'` (or a narrower mode gate). This is documented in the workflow header so the next author cannot miss it. The legacy `release.yml` wrapper must remain fail-closed and read-only: do not add tags, releases, freeze changes, registry publishes, package publishes, changelog commits, or release dispatches to it.
 
 ## Container images and platform scope
 
@@ -85,6 +87,8 @@ The `dry-run` build job builds the four images the release and deployments consu
 | backend | `backend` | `backend/Dockerfile` |
 | frontend | `frontend` | `frontend/Dockerfile.prod` |
 | runner-opencode | `.` | `deploy/docker/runner-opencode.Dockerfile` |
+
+Each is tagged with both the RC tag and the plain `X.Y.Z`, and each runs its own smoke check after the push (`import modulo` for the all-in-one and backend, `nginx -t` for the all-in-one and frontend, `opencode --version` for the runner). A failing smoke check fails the job - never `|| true`. The `dry-run` rehearsal builds the same four images with no push.
 
 Server images are `linux/amd64` **only**. Nothing we ship is `arm64`: `publish-images.yml` declares no `platforms:` (so it builds amd64), and `docs/system-requirements.md` lists `linux-amd64 (x86_64)` as supported while `linux-arm64` is Planned (P2) - as are macOS (P2) and Windows (P3). `bundle-release.yml` carries the same deferral ("linux-amd64 only for now; the matrix structure below is where linux-arm64 slots in; `scripts/bundle-versions.env` already carries the arm64 pins"). The Windows/macOS installer scope-out is tracked separately (FAR-1873).
 
@@ -105,18 +109,21 @@ git push origin --delete release-publication-hold                     # release 
 
 The dry-run's no-publication guarantee stays structural: it performs no tag action, registry push, Release creation, commit, attestation, or deploy. A human or another credential pushing a tag is a separate event and is outside the dry-run path.
 
+## Legacy workflow migration
+
+`release.yml` is retained only so an old bookmarked workflow name produces a loud, actionable failure. It is deliberately read-only and contains no release-mutating job. A failed wrapper run is safe: it creates no tag, moves no freeze marker, creates no GitHub Release, publishes no package, commits no changelog, and dispatches no release workflow. Re-run the intended operation through `Release: Unified Pipeline` using the commands above.
+
 ## Not implemented yet
 
-`release-unified.yml` covers the RC/GA lifecycle, RC publication, GA publication and the rehearsal. Only the explicitly listed future publication surfaces remain out of scope; they are not executable release steps and must not be described as active stubs.
+`release-unified.yml` owns the RC/GA lifecycle, RC publication, GA publication, the rehearsal, the deterministic RC soak dispatch (FAR-1870), and PyPI publication. The legacy `release.yml` is not a second release implementation: its release jobs were removed outright in favour of a single fail-closed refusal, and it must stay that way. Only the explicitly listed future publication surfaces remain out of scope; they are not executable release steps and must not be described as active stubs.
 
 | Future surface | Ticket | Scope |
 |----------------|--------|-------|
-| `publish-pypi` | FAR-1871 | Publishing the Python package |
 | `pin-release-docs` | FAR-1872 | Pinning the released version in the docs |
 
-SBOM production and file-artefact attestation are **no longer stubs** (FAR-1868). `produce-sbom` runs for every action, dry-run included, and uploads a validated CycloneDX SBOM as the `sbom-cyclonedx` artefact. `attest-artefacts` runs for every action except `dry-run` and creates SLSA build provenance with `actions/attest-build-provenance`; it is the producer for the fail-closed `gh attestation verify` gate in `native-release-smoke.yml`. Container-image attestation remains future work: attesting an image needs a registry digest, so nothing fabricates a subject for an artefact that was not produced.
+SBOM production and file-artefact attestation are **no longer stubs** (FAR-1868). `produce-sbom` runs for every action, dry-run included, and uploads a validated CycloneDX SBOM as the `sbom-cyclonedx` artefact. `attest-artefacts` runs for every action except `dry-run` and creates SLSA build provenance with `actions/attest-build-provenance`; it is the producer for the fail-closed `gh attestation verify` gate in `native-release-smoke.yml`. Today the SBOM is the only attested subject: container-image and release-bundle attestation remain FAR-1869 work, because attesting an image needs a registry digest - nothing fabricates a subject for an artefact that was not produced.
 
-Until those land, a GA release still gets its tag, its GitHub Release, its CHANGELOG section, stable container/chart publication and the release bundle. It also produces an SBOM for the run, plus an attestation for it on non-`dry-run` actions.
+Until `pin-release-docs` lands, a GA release still gets its tag, its GitHub Release, its CHANGELOG section, stable container/chart publication and the release bundle. It also produces an SBOM for the run, plus an attestation for it on non-`dry-run` actions.
 
 ## Attestation scope: `gh attestation verify`, not cosign
 
@@ -134,9 +141,11 @@ gh workflow run "Release: Unified Pipeline" -f mode=cut -f version=0.4.0
 # After a fix has been merged to main, cut the next RC and re-run the soak.
 gh workflow run "Release: Unified Pipeline" -f mode=recut -f version=0.4.0
 
-# Once the RC has validated, promote to GA.
+# Once the RC has validated, promote to GA (tag, Release, CHANGELOG, PyPI).
 gh workflow run "Release: Unified Pipeline" -f mode=promote -f version=0.4.0
 ```
+
+The deprecated `Release: Legacy Entry Point (Deprecated)` workflow still accepts the same arguments under its `action` input, but every run now fails closed with an instruction to re-run here; it performs no release action.
 
 ## Version numbering
 

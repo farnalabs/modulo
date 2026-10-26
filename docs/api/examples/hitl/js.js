@@ -11,7 +11,10 @@
  *   node hitl/js.js
  */
 
-const BASE_URL = (process.env.MODULO_URL || "http://localhost:8000").replace(/\/+$/, "");
+let BASE_URL = process.env.MODULO_URL || "http://localhost:8000";
+while (BASE_URL.endsWith("/")) {
+  BASE_URL = BASE_URL.slice(0, -1);
+}
 const EMAIL = process.env.MODULO_EMAIL;
 const PASSWORD = process.env.MODULO_PASSWORD;
 
@@ -38,7 +41,11 @@ function auth(token) {
 }
 
 function logSafe(value, max = 200) {
-  return String(value ?? "").replace(/[\r\n]+/g, " ").slice(0, max);
+  return String(value ?? "")
+    .replaceAll("\r\n", " ")
+    .replaceAll("\r", " ")
+    .replaceAll("\n", " ")
+    .slice(0, max);
 }
 
 async function main() {

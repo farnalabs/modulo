@@ -14,6 +14,8 @@ import logging
 
 import httpx
 
+from modulo.core.ssrf import pinned_async_client
+
 _log = logging.getLogger(__name__)
 
 # Retry configuration — mirrors Notifier RETRY_DELAYS.
@@ -61,9 +63,12 @@ class VendorClient:
         self._instance_secret = instance_secret
         self._http_client: httpx.AsyncClient | None = None
 
-    def _get_client(self) -> httpx.AsyncClient:
+    async def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=25.0, write=25.0, pool=30.0))
+            self._http_client = await pinned_async_client(
+                self._endpoint_url,
+                timeout=httpx.Timeout(connect=10.0, read=25.0, write=25.0, pool=30.0),
+            )
         return self._http_client
 
     def _standard_delay(self, attempt: int) -> float:
@@ -84,6 +89,8 @@ class VendorClient:
         """Human-readable message for a transport-level failure."""
         if isinstance(exc, TimeoutError):
             return f"Timeout after {REQUEST_TIMEOUT}s"
+        if isinstance(exc, ValueError):
+            return f"Blocked outbound URL: {exc}"
         return f"RequestError: {exc}"
 
     def _log_attempt_failure(self, attempt: int, last_error: str) -> None:
@@ -165,7 +172,11 @@ class VendorClient:
         signature = sign_outbound_batch(self._instance_secret, payload, timestamp, sequence)
         url = f"{self._endpoint_url}/api/v1/batch"
 
-        client = self._get_client()
+        try:
+            client = await self._get_client()
+        except ValueError as exc:
+            return False, None, self._describe_error(exc)
+
         last_error: str | None = None
         response_code: int | None = None
 

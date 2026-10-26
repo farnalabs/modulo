@@ -88,18 +88,19 @@ and does not cover:
   SDK is told to reuse OUR pinned client rather than building its own.
 * **Core support modules that build their own client.** ``core/notifier``,
   ``core/error_tracking/**`` (forwarders + ``alert_dispatcher``),
-  ``core/product_analytics/vendor_client``, ``core/watchdog/worker_liveness``,
-  ``core/library_sync/client`` and ``core/reports/scheduler`` construct raw
-  clients toward operator-config / per-org / multi-host endpoints. Several are
-  genuinely multi-host (the notifier fans out to per-org notification
+  ``core/watchdog/worker_liveness`` and ``core/reports/scheduler`` construct
+  raw clients toward operator-config / per-org / multi-host endpoints. Several
+  are genuinely multi-host (the notifier fans out to per-org notification
   endpoints), so a single pinned client cannot cover them — they need either a
-  per-host pin or per-request validation. ``core/library_sync`` already
-  validate-then-connects (an accepted residual, see the note on
-  :func:`validate_outbound_url`); the others are pending a per-call-site pin and
-  are excluded from the semgrep gate so it does not go red while they remain
-  un-migrated. ``cli/apply`` (FAR-681) joins the residual list for the same
-  reason the sync world needs a pinless path: the click executor is sync and no
-  sync pinned factory exists, and the target is the single operator-configured
+  per-host pin or per-request validation. They are pending a per-call-site pin
+  and are excluded from the semgrep gate so it does not go red while they
+  remain un-migrated. ``core/library_sync/client`` and
+  ``core/product_analytics/vendor_client`` are NOT residual: both build their
+  client through :func:`pinned_async_client` and are covered by the gate, so a
+  raw construction there is caught like anywhere else. ``cli/apply`` (FAR-681)
+  joins the residual list for the same reason the sync world needs a pinless
+  path: the click executor is sync and no sync pinned factory exists, and the
+  target is the single operator-configured
   ``MODULO_URL`` the operator's credentials already address, so it is excluded
   as documented residual (no validate-then-connect attached - test harnesses
   use unresolvable fixture URLs). A NEW raw

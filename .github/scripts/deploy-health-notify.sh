@@ -64,21 +64,22 @@ DEPLOY_URL="${DEPLOY_URL:-}"
 
 emit_output() {
   # GITHUB_OUTPUT is absent when the script runs locally.
-  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     printf '%s\n' "$1=$2" >> "$GITHUB_OUTPUT"
   fi
+  return 0
 }
 
 # A missing evaluator must never degrade to "no transition": the transition
 # decision would silently report none and the email edge would switch itself
 # off without a signal.
-if [ ! -f "$EVALUATOR" ]; then
-  echo "::error::The shared deploy-health evaluator is missing ($EVALUATOR) - the deploy-health email edge cannot run."
+if [[ ! -f "$EVALUATOR" ]]; then
+  echo "::error::The shared deploy-health evaluator is missing ($EVALUATOR) - the deploy-health email edge cannot run." >&2
   exit 1
 fi
 
 # ---- 0. An evaluation that produced nothing cannot infer a transition. ----
-if [ -z "$CURRENT_HEALTHY" ]; then
+if [[ -z "$CURRENT_HEALTHY" ]]; then
   echo "::warning::Deploy health could not be evaluated this cycle (UNKNOWN) - no transition can be inferred, so no email is sent. The run still warns; an UNKNOWN previous verdict never suppresses the next alert."
   emit_output action none
   exit 0
@@ -86,12 +87,12 @@ fi
 
 # ---- 1. Previous verdict: this workflow's most recent completed run. ----
 PREV_VERDICT="${PREVIOUS_VERDICT:-}"
-if [ -z "$PREV_VERDICT" ]; then
+if [[ -z "$PREV_VERDICT" ]]; then
   PREV_VERDICT="unknown"
-  if [ -n "${REPOSITORY:-}" ] && [ -n "$WORKFLOW_NAME" ] && command -v gh >/dev/null 2>&1; then
+  if [[ -n "${REPOSITORY:-}" ]] && [[ -n "$WORKFLOW_NAME" ]] && command -v gh >/dev/null 2>&1; then
     PREV_RUNS="$(gh run list --repo "$REPOSITORY" --workflow "$WORKFLOW_NAME" --limit 10 \
       --json databaseId,status,conclusion,createdAt 2>/dev/null)" || PREV_RUNS=""
-    if [ -n "$PREV_RUNS" ]; then
+    if [[ -n "$PREV_RUNS" ]]; then
       PREV_ID="$(PAYLOAD="$PREV_RUNS" CURRENT="${GITHUB_RUN_ID:-}" python3 - <<'PY'
 import json
 import os
@@ -109,7 +110,7 @@ completed = [
 print(completed[0]["databaseId"] if completed else "")
 PY
 )" || PREV_ID=""
-      if [ -n "$PREV_ID" ]; then
+      if [[ -n "$PREV_ID" ]]; then
         PREV_JOBS_FILE="$(mktemp)"
         if gh api "repos/$REPOSITORY/actions/runs/$PREV_ID/jobs" > "$PREV_JOBS_FILE" 2>/dev/null; then
           PREV_VERDICT="$(python3 "$EVALUATOR" previous-verdict --jobs-json "$PREV_JOBS_FILE")" || PREV_VERDICT="unknown"
@@ -128,14 +129,14 @@ echo "previous verdict: $PREV_VERDICT (current healthy=$CURRENT_HEALTHY)"
 # ---- 2. Transition decision (shared with the staleness check). ----
 ACTION="$(python3 "$EVALUATOR" action --healthy "$CURRENT_HEALTHY" --previous "$PREV_VERDICT")" || ACTION="none"
 emit_output action "$ACTION"
-if [ "$ACTION" = "none" ]; then
+if [[ "$ACTION" = "none" ]]; then
   echo "No transition (current healthy=$CURRENT_HEALTHY, previous=$PREV_VERDICT) - nothing to send."
   exit 0
 fi
 
 # ---- 3. Render the email with the shared renderer BEFORE checking SMTP. ----
-if [ -z "$VERDICT_JSON" ] || [ ! -f "$VERDICT_JSON" ]; then
-  echo "::error::Deploy-health transition ($ACTION) but the verdict JSON is missing ($VERDICT_JSON) - cannot render the email."
+if [[ -z "$VERDICT_JSON" ]] || [[ ! -f "$VERDICT_JSON" ]]; then
+  echo "::error::Deploy-health transition ($ACTION) but the verdict JSON is missing ($VERDICT_JSON) - cannot render the email." >&2
   exit 1
 fi
 PAYLOAD="$(python3 "$EVALUATOR" email \
@@ -143,19 +144,19 @@ PAYLOAD="$(python3 "$EVALUATOR" email \
   --action "$ACTION" \
   --run-url "$RUN_URL" \
   --deploy-url "$DEPLOY_URL")" || {
-  echo "::error::Could not render the deploy-health email payload."
+  echo "::error::Could not render the deploy-health email payload." >&2
   exit 1
 }
 SUBJECT="$(printf '%s' "$PAYLOAD" | jq -r .subject)"
 BODY="$(printf '%s' "$PAYLOAD" | jq -r .body)"
 
-if [ "${DRY_RUN:-}" = "1" ]; then
+if [[ "${DRY_RUN:-}" = "1" ]]; then
   # Local proof / CI test seam: show exactly what would be sent, send nothing.
   printf '%s' "$PAYLOAD" | jq -c '{action: "'"$ACTION"'", subject: .subject, body: .body}'
   exit 0
 fi
 
-if [ -z "${ZOHO_SMTP_USER:-}" ] || [ -z "${ZOHO_SMTP_PASS:-}" ] || [ -z "${ISSUE_NOTIFY_EMAIL:-}" ]; then
+if [[ -z "${ZOHO_SMTP_USER:-}" ]] || [[ -z "${ZOHO_SMTP_PASS:-}" ]] || [[ -z "${ISSUE_NOTIFY_EMAIL:-}" ]]; then
   # Best-effort channel: unconfigured is reported, never silently green. The
   # red run + Linear ticket legs still fire.
   echo "::warning::Deploy-health transition ($ACTION) but ZOHO_SMTP_USER / ZOHO_SMTP_PASS / ISSUE_NOTIFY_EMAIL are not configured - NO email was sent. Configure the same secrets issue-notify.yml uses."

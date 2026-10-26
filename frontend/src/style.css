@@ -12,9 +12,8 @@
     outline-offset: 2px;
   }
 
-  *,
-  *::before,
-  *::after {
+  :where(:root, :root *),
+  :where(:root::before, :root *::before, :root::after, :root *::after) {
     border-color: hsl(var(--border));
   }
 }
@@ -449,7 +448,7 @@
   /* !important is required here: component-scoped <style> blocks declare their
      own animations/transitions at higher specificity, so without it the reset
      would lose and reduce-motion users would still get the motion. */
-  *, *::before, *::after {
+  :where(:root, :root *, :root::before, :root *::before, :root::after, :root *::after) {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
@@ -717,7 +716,7 @@ select option {
 }
 
 /* Firefox support */
-* {
+:where(html, html *) {
   scrollbar-width: thin;
   scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
 }

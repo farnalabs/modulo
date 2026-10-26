@@ -23,9 +23,7 @@ depends_on = None
 
 def upgrade() -> None:
     """Retain this revision as a no-op chain link for existing databases."""
-    return
 
 
 def downgrade() -> None:
     """Retain this revision as a no-op chain link for existing databases."""
-    return

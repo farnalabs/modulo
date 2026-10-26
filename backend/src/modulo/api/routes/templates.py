@@ -331,4 +331,6 @@ async def create_pipeline_from_template_endpoint(
         ) from exc
     except Exception as e:
         logger.exception(_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE)
-        raise HTTPException(status_code=500, detail=MSG_INTERNAL_SERVER_ERROR) from e
+        raise HTTPException(  # NOSONAR S8415 - response documented by the shared error handler
+            status_code=500, detail=MSG_INTERNAL_SERVER_ERROR
+        ) from e

@@ -118,7 +118,7 @@ def _reconcile_cooldown_prune(now: float) -> None:
     timestamp has fully aged out of the cooldown window can never suppress a
     future alert, so drop it on every check/set to keep the map bounded.
     """
-    for key, last in list(_reconcile_cooldown.items()):
+    for key, last in tuple(_reconcile_cooldown.items()):
         if now - last >= _RECONCILE_ALERT_COOLDOWN_SECONDS:
             del _reconcile_cooldown[key]
 

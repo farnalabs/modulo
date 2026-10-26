@@ -75,7 +75,7 @@ async def _invoke_backend_with_timeout(
         return await backend.invoke(messages)
 
 
-async def _handle_backend_timeout(
+def _handle_backend_timeout(
     context: str,
     *,
     timeout_seconds: float,
@@ -103,7 +103,7 @@ async def _handle_backend_error(
     await asyncio.sleep(2**attempt)
 
 
-async def _process_backend_response(
+def _process_backend_response(
     response: BaseMessage,
     context: str,
     error_cls: type[Exception],
@@ -127,7 +127,7 @@ async def invoke_and_parse(
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            await _handle_backend_timeout(
+            _handle_backend_timeout(
                 context,
                 timeout_seconds=timeout,
                 attempt=attempt,
@@ -137,6 +137,6 @@ async def invoke_and_parse(
         except Exception as exc:
             await _handle_backend_error(context, attempt, _MAX_RETRIES, error_cls, exc)
         else:
-            return await _process_backend_response(response, context, error_cls)
+            return _process_backend_response(response, context, error_cls)
 
     raise error_cls("LLM call failed after all retries (unreachable — safety net)")
