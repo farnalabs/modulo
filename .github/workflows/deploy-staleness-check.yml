@@ -141,45 +141,45 @@ jobs:
 
           # Fetch job conclusions for failed runs to classify failure stages
           if [ -f "$WORK/runs.json" ]; then
-            python3 - "$WORK/runs.json" "$WORK/jobs.json" "$REPOSITORY" "$GH_TOKEN" <<'PYEOF'
-            import json
-            import sys
-            import subprocess
+          python3 - "$WORK/runs.json" "$WORK/jobs.json" "$REPOSITORY" "$GH_TOKEN" <<'PYEOF'
+          import json
+          import sys
+          import subprocess
 
-            runs_path = sys.argv[1]
-            jobs_path = sys.argv[2]
-            repository = sys.argv[3]
-            gh_token = sys.argv[4]
+          runs_path = sys.argv[1]
+          jobs_path = sys.argv[2]
+          repository = sys.argv[3]
+          gh_token = sys.argv[4]
 
-            with open(runs_path, encoding="utf-8") as f:
-                runs = json.load(f)
+          with open(runs_path, encoding="utf-8") as f:
+              runs = json.load(f)
 
-            jobs_data = {}
-            for run in runs:
-                if str(run.get("status") or "").lower() == "completed" and str(run.get("conclusion") or "").lower() == "failure":
-                    run_id = run.get("databaseId")
-                    if not run_id:
-                        continue
-                    run_sha = (run.get("headSha") or "")[:7]
-                    # Fetch job conclusions for this run
-                    try:
-                        result = subprocess.run(
-                            ["gh", "api", f"repos/{repository}/actions/runs/{run_id}/jobs",
-                             "--jq", "[.jobs[] | {name: .name, conclusion: .conclusion}]"],
-                            capture_output=True, text=True, timeout=30, env={**__import__("os").environ, "GH_TOKEN": gh_token}
-                        )
-                        if result.returncode == 0 and result.stdout.strip():
-                            jobs = json.loads(result.stdout)
-                            job_conclusions = {job["name"]: job["conclusion"] for job in jobs if job.get("name") and job.get("conclusion")}
-                            if job_conclusions:
-                                jobs_data[run_sha] = job_conclusions
-                    except Exception:
-                        pass  # Best effort; if we can't get jobs, we'll skip classification for this run
+          jobs_data = {}
+          for run in runs:
+              if str(run.get("status") or "").lower() == "completed" and str(run.get("conclusion") or "").lower() == "failure":
+                  run_id = run.get("databaseId")
+                  if not run_id:
+                      continue
+                  run_sha = (run.get("headSha") or "")[:7]
+                  # Fetch job conclusions for this run
+                  try:
+                      result = subprocess.run(
+                          ["gh", "api", f"repos/{repository}/actions/runs/{run_id}/jobs",
+                           "--jq", "[.jobs[] | {name: .name, conclusion: .conclusion}]"],
+                          capture_output=True, text=True, timeout=30, env={**__import__("os").environ, "GH_TOKEN": gh_token}
+                      )
+                      if result.returncode == 0 and result.stdout.strip():
+                          jobs = json.loads(result.stdout)
+                          job_conclusions = {job["name"]: job["conclusion"] for job in jobs if job.get("name") and job.get("conclusion")}
+                          if job_conclusions:
+                              jobs_data[run_sha] = job_conclusions
+                  except Exception:
+                      pass  # Best effort; if we can't get jobs, we'll skip classification for this run
 
-            with open(jobs_path, "w", encoding="utf-8") as f:
-                json.dump(jobs_data, f)
-            print(f"Fetched job conclusions for {len(jobs_data)} failed run(s).")
-            PYEOF
+          with open(jobs_path, "w", encoding="utf-8") as f:
+              json.dump(jobs_data, f)
+          print(f"Fetched job conclusions for {len(jobs_data)} failed run(s).")
+          PYEOF
           else
             echo "{}" > "$WORK/jobs.json"
           fi
