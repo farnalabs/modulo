@@ -1386,6 +1386,12 @@ elements:
       - testid: cost-team-table
         type: element
         dynamic_testid: false
+      - testid: cost-team-unattributed
+        type: element
+        dynamic_testid: false
+      - testid: cost-team-unattributed-unavailable
+        type: element
+        dynamic_testid: false
       - testid: cost-anomalies-error
         type: element
         dynamic_testid: false
@@ -6792,6 +6798,7 @@ features:
         behaviours:
             # Cost report + run-cost aggregation (GET /api/v1/admin/costs)
             - "[x] The cost report aggregates org spend for the selected period (day/week/month/year) and groups by team or org; each item carries total_spend_usd, total_runs, a summed per-component breakdown (cost components resolved per environment) and per-org annotations, and the response surfaces org_total / org_run_count / legacy_total / has_more plus org_unassigned_components"
+            - "[x] The /admin/costs Per-Team Cost Breakdown card reads group_by=team&period=month, renders the team-attributed ledger rows with refused/clamped annotations and a derived average per run, and discloses the response's org_unassigned_components (component spend from runs with no team) — showing an explicit unavailable state when that bucket is absent or corrupt — so the bucket is never silently omitted from the breakdown (frontend/src/views/AdminCostBreakdownView.vue, frontend/src/__tests__/AdminCostBreakdownView.spec.ts)"
             - "[x] An invalid group_by or period query param is rejected with 422 (pattern-constrained, no silent fallback)"
             - "[x] The cost endpoints are admin-only: operators/viewers are refused 403 and an unauthenticated caller 401 (require_permission cost.manage)"
 
