@@ -92,8 +92,12 @@ def _mock_org(settings_json: dict[str, object] | None = None) -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _reset_license_state() -> Generator[None, None, None]:
+def _reset_license_state(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     clear_license()
+    # FAR-2153: the process also tracks the persisted system-licence state.
+    # Reset it so a test's install cannot leak into the next test's refresh.
+    monkeypatch.setattr("modulo.core.license._persisted_state", None)
+    monkeypatch.setattr("modulo.core.license._persisted_state_checked_at", 0.0)
     set_public_key(_TEST_PUB)
     yield
     clear_license()
@@ -1231,6 +1235,79 @@ class TestRemoveSystemLicense:
             assert "audit_viewer" in after.text
         finally:
             app.dependency_overrides.clear()
+
+
+# ── FAR-2153 instance-scope persistence ──────────────────────────────────
+
+
+class TestSystemLicencePersistence:
+    """The system-scope licence must be durable and cross-process.
+
+    The routes call the persistence helpers in ``core.license``; these tests pin
+    the WIRING (the DB behaviour is covered against a real SQLite database in
+    ``tests/unit/core/test_license_persistence.py``).
+    """
+
+    URL = "/api/v1/admin/license"
+
+    def test_upload_persists_the_installed_key(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        persist = AsyncMock()
+        monkeypatch.setattr(admin_license, "persist_installed_system_license", persist)
+        key = _sign_license_payload(_make_valid_payload())
+
+        resp = client.post(self.URL, json={"license_key": key})
+
+        assert resp.status_code == 200
+        persist.assert_awaited_once()
+        assert persist.await_args is not None
+        assert persist.await_args.args[1] == key
+        assert persist.await_args.kwargs["parked"] is False
+        assert get_license() is not None
+
+    def test_upload_reports_a_parked_successor_to_the_persister(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        persist = AsyncMock()
+        monkeypatch.setattr(admin_license, "persist_installed_system_license", persist)
+        payload = _make_valid_payload(
+            starts_at=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        )
+        key = _sign_license_payload(payload)
+
+        resp = client.post(self.URL, json={"license_key": key})
+
+        assert resp.status_code == 200
+        assert resp.json()["parked"] is True
+        persist.assert_awaited_once()
+        assert persist.await_args is not None
+        assert persist.await_args.kwargs["parked"] is True
+
+    def test_remove_deletes_the_persisted_key(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        key = _sign_license_payload(_make_valid_payload())
+        assert client.post(self.URL, json={"license_key": key}).status_code == 200
+
+        clear = AsyncMock(return_value=True)
+        monkeypatch.setattr(admin_license, "clear_persisted_system_license", clear)
+
+        resp = client.delete(self.URL)
+
+        assert resp.status_code == 200
+        clear.assert_awaited_once()
+        assert get_license() is None
+
+    def test_status_refreshes_the_persisted_licence_before_resolving(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        refresh = AsyncMock(return_value=False)
+        monkeypatch.setattr(admin_license, "refresh_persisted_system_license", refresh)
+
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=_mock_org({}))):
+            resp = client.get(self.URL)
+
+        assert resp.status_code == 200
+        refresh.assert_awaited_once()
+        assert refresh.await_args is not None
+        assert refresh.await_args.kwargs.get("force") is not True
 
 
 # ── FAR-2146 chosen licence start / parked successor ─────────────────────

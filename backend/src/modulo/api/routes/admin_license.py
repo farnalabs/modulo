@@ -37,9 +37,12 @@ from modulo.core.license import (
     LicenseError,
     LicenseValidation,
     clear_license,
+    clear_persisted_system_license,
     get_parked_successor,
     is_parked,
     parse_and_verify,
+    persist_installed_system_license,
+    refresh_persisted_system_license,
     store_license,
 )
 from modulo.core.license_signing import TEAM_FEATURES, generate_team_license
@@ -534,6 +537,14 @@ async def get_license_status(
             return cached
 
     try:
+        # FAR-2153: the instance licence is durable, so the admin surface must
+        # be able to re-read it rather than trusting only this process's memory
+        # (after a deploy, or an install handled by a sibling machine). Bounded
+        # by the same short TTL as plan resolution: the first read in a fresh
+        # process always happens, and a change made elsewhere is picked up
+        # within the window (the install/removal also busts the Redis status
+        # cache, so the common same-process path is immediate).
+        await refresh_persisted_system_license(session)
         org = None
         if org_id is not None:
             async with session.begin():
@@ -577,6 +588,7 @@ async def get_license_status(
 async def upload_license(
     req: LicenseUploadRequest,
     settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     _: Annotated[TenantPrincipal, require_system_permission(PERM_SYSTEM_CONFIG_MANAGE)],
 ) -> LicenseUploadResponse | JSONResponse:
     try:
@@ -597,14 +609,21 @@ async def upload_license(
             content=_license_failure_body(validation),
         )
 
-    store_license(req.license_key, validation.license_data)
+    data = validation.license_data
+
+    # FAR-2153: persist BEFORE installing into memory. A process restart (every
+    # rolling deploy) discards memory, and the SAQ worker is a separate process,
+    # so an in-memory-only install silently drops a paying customer to Community
+    # on the next deploy and is invisible to the worker. Writing first means a
+    # failed write surfaces as an error and leaves this process on its old
+    # licence, rather than reporting success for an install that will vanish.
+    await persist_installed_system_license(session, req.license_key, parked=is_parked(data))
+    store_license(req.license_key, data)
     # A system-licence change can flip the effective resolution of EVERY org
     # that falls back to the system licence, so bust every cached entry. The
     # upload above already committed to in-memory state; a cache failure must
     # not turn it into a 500 (best-effort inside the helper, FAR-1719).
     await invalidate_license_status_cache(settings)
-
-    data = validation.license_data
 
     return LicenseUploadResponse(
         status="ok",
@@ -624,21 +643,28 @@ async def upload_license(
 )
 async def remove_license(
     settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     _: Annotated[TenantPrincipal, require_system_permission(PERM_SYSTEM_CONFIG_MANAGE)],
 ) -> LicenseStatusResponse:
-    """Remove the instance-wide (system-scope) licence (FAR-2110).
+    """Remove the instance-wide (system-scope) licence (FAR-2110 / FAR-2153).
 
     The counterpart of :func:`upload_license`: ``POST`` stores a verified key
-    in the process-wide in-memory licence store, and this route clears it, so
-    an operator who installed a key by mistake (or wants to return the
-    deployment to Community) no longer has to restart the process.
+    in the process-wide in-memory licence store AND the instance-scope
+    ``system_config`` row, and this route removes both, so an operator who
+    installed a key by mistake (or wants to return the deployment to Community)
+    no longer has to restart the process.
 
-    Two mutations are required for the change to be visible immediately:
+    Three mutations are required for the change to be complete and visible:
 
-    1. ``clear_license()`` empties the in-memory store — the rung
+    1. ``clear_persisted_system_license()`` deletes the durable row. This is
+       done FIRST: if the DB write fails the request fails rather than
+       reporting a removal that a restart would undo. It is also what makes the
+       removal reach the SAQ worker, which re-reads the row on its own cadence.
+    2. ``clear_license()`` empties the in-memory store — the rung
        ``core.feature_flags.resolve_effective_license`` reads on every plan
-       resolution, so every subsequent resolution falls through to Community.
-    2. ``invalidate_license_status_cache`` deletes every cached
+       resolution, so every subsequent resolution falls through to the env key
+       (the deployment floor) and then Community.
+    3. ``invalidate_license_status_cache`` deletes every cached
        ``license:{org_id}`` status entry. The admin status cache holds the
        RESOLVED effective licence for each org (60s TTL), and any org without
        its own key was caching the system licence, so a removal without the
@@ -659,6 +685,9 @@ async def remove_license(
     the audit wrapper never becomes a stricter access gate ahead of it (an
     absent tenant is attributed to the instance partition).
     """
+    # Persist the removal FIRST (FAR-2153): a durable row that survives the
+    # response would resurrect the licence on the next restart / worker refresh.
+    await clear_persisted_system_license(session)
     clear_license()
     # A system-licence change can flip the effective resolution of EVERY org
     # that falls back to the system licence, so bust every cached entry. The
