@@ -26,11 +26,32 @@ vi.mock('../stores/planStore', () => ({ usePlanStore }))
 
 import router, {
   enforceRoleTierVisibility,
+  hydrateManifestMeta,
 } from '../router'
 import { clearAccessToken, setAccessToken } from '../lib/api/auth'
 
 it('registers the risk assessment route in the real router', () => {
   expect(router.getRoutes().some((route) => route.name === 'risk-assessment' && route.path === '/risk-assessment')).toBe(true)
+})
+
+it('keeps organisation email settings reachable for a team org admin', async () => {
+  decodeJwtPayload.mockReturnValue({ org_role: 'admin' })
+  const resolved = router.resolve('/settings/email')
+  const route = {
+    name: resolved.name,
+    matched: resolved.matched,
+    path: resolved.path,
+    meta: {} as Record<string, unknown>,
+  }
+
+  hydrateManifestMeta(route as never)
+
+  expect(route.name).toBe('settings-email')
+  expect(route.path).toBe('/settings/email')
+  expect(route.meta.requiresSystemAdmin).toBeUndefined()
+  expect(route.meta.requiredRoles).toEqual(['admin'])
+  expect(route.meta.requiredTier).toBe('team')
+  await expect(enforceRoleTierVisibility(route as never, adminToken())).resolves.toBe(true)
 })
 
 function makeRoute(name: string | undefined, meta: Record<string, unknown> = {}): any {
