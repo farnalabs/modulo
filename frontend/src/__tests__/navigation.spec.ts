@@ -12,6 +12,8 @@ const mockManifest = vi.hoisted(() => ({
     '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'core', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/notifications': { name: 'notifications', breadcrumb: 'Notifications', sidebar_group: 'monitor', sidebar_order: 0, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/risk-assessment': { name: 'risk-assessment', breadcrumb: 'Risk Assessment', sidebar_group: 'monitor', sidebar_order: 9, type: 'page', required_tier: null, required_roles: null, required_permissions: null, product_map: ['feat-risk-assessment'] },
+    // A route with no breadcrumb: the nav label must fall back to the route name.
+    '/no-breadcrumb': { name: 'no-breadcrumb', sidebar_group: 'monitor', sidebar_order: 98, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/missing-group': { name: 'missing-group', breadcrumb: 'Missing Group', sidebar_group: 'missing', sidebar_order: 99, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/pipelines': { name: 'pipeline-list', breadcrumb: 'Pipelines', sidebar_group: 'core', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/library': { name: 'library', breadcrumb: 'Library', sidebar_group: 'core', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
@@ -290,6 +292,13 @@ describe('navigation.ts', () => {
     const core = navGroups.find((g) => g.id === 'core')!
     const dash = core.items.find((item) => item.to === '/')!
     expect(dash.labelKey).toBe('components.SidebarNav.item_dashboard')
+  })
+
+  it('falls back to the route name when the manifest has no breadcrumb', () => {
+    const monitor = navGroups.find((g) => g.id === 'monitor')!
+    const item = monitor.items.find((i) => i.to === '/no-breadcrumb')
+    expect(item, 'the no-breadcrumb mock route must produce a nav item').toBeDefined()
+    expect(item!.label).toBe('no-breadcrumb')
   })
 
   it('sets group labelKey from manifest labelKey', () => {
