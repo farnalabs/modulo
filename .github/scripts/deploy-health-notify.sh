@@ -25,12 +25,14 @@
 #
 # FAR-2157: a tick whose evaluation is UNKNOWN runs neither the verdict step
 # nor a healthy verdict -- it runs the workflow's UNKNOWN-tick marker step,
-# which `deploy_health.parse_previous_verdict` reads as UNKNOWN. The lookup
-# therefore walks BACKWARDS past such ticks to the last measured verdict
-# (bounded), instead of stopping at the first completed run: stopping there
-# recorded an unmeasured tick as healthy (its verdict step is skipped), which
-# silently swallowed the recovery email between an escalation and its
-# recovery. A lookup that cannot be read is skipped, never trusted.
+# which `deploy_health.parse_previous_verdict` reads as UNKNOWN. The step is
+# DEFINED on every run (GitHub returns it skipped on a measured tick), so only
+# its EXECUTED conclusion is a signal (FAR-2176). The lookup therefore walks
+# BACKWARDS past such ticks to the last measured verdict (bounded), instead of
+# stopping at the first completed run: stopping there recorded an unmeasured
+# tick as healthy (its verdict step is skipped), which silently swallowed the
+# recovery email between an escalation and its recovery. A lookup that cannot
+# be read is skipped, never trusted.
 #
 # FAR-2159: a tick that read only SOME of its required inputs is UNKNOWN too
 # (`deploy_health._overall_healthy`), so it takes THIS same path -- no email is

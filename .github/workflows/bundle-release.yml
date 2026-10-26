@@ -219,11 +219,21 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
-      - name: uv sync and stage backend into the bundle
+      # NOSONAR githubactions:S8541: ibm-cos-sdk and pytest-bdd are locked
+      # source distributions without wheels, so `--no-build` hard-fails the
+      # sync on a cold uv cache. `--frozen` locks the exact revisions, so the
+      # builds are deterministic and trusted (no untrusted setup scripts
+      # execute). Kept as an inline `run:` scalar (not a `|` block) because
+      # SonarCloud only sees `# NOSONAR` as a YAML comment on the flagged line
+      # when it is not inside a block scalar.
+      - name: Sync backend dependencies for the bundle
+        working-directory: backend
+        run: uv sync --frozen --no-dev  # NOSONAR
+
+      - name: Stage backend into the bundle
+        working-directory: backend
         run: |
           set -euo pipefail
-          cd backend
-          uv sync --frozen --no-dev --no-build
           BUNDLE="../build/${BUNDLE_ROOT}"
           mkdir -p "$BUNDLE/backend"
           cp -a src "$BUNDLE/backend/src"

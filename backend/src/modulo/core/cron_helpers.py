@@ -1389,7 +1389,7 @@ async def _log_ongoing_event(
 
 
 async def _ingest_saq_error(
-    _session: Any,
+    session: Any,
     org_id: uuid.UUID,
     *,
     function: str,
@@ -1398,11 +1398,11 @@ async def _ingest_saq_error(
 ) -> None:
     """Ingest an error event with source='saq' (plan F3d/F1 enqueue-failure alert).
 
-    Runs in its own session/transaction (the caller's transaction stays intact
-    — ``_session`` is vestigial and kept only for caller symmetry, so its type
-    is ``Any``: reconcile callers pass their ORM ``AsyncSession``, the
-    stale_run_recovery zero-progress sweep passes its raw ``AsyncConnection``
-    — neither is ever executed on) and never raises — error ingestion must not
+    Runs in its own session/transaction (the caller's transaction stays intact;
+    *session* is retained for caller symmetry, so its type is ``Any``: reconcile
+    callers pass their ORM ``AsyncSession``, the stale_run_recovery zero-progress
+    sweep passes its raw ``AsyncConnection`` — neither is ever executed on) and
+    never raises — error ingestion must not
     crash the scheduler tick.
 
     If ``org_id`` is the nil UUID (system error without tenant context), the
@@ -2756,22 +2756,23 @@ async def _resolve_ongoing_snapshot(
 
 
 async def _dispatch_ongoing_runs(
-    _q_or_none: Any,
+    q_or_none: Any,
     org_id: uuid.UUID,
     run_ids: list[uuid.UUID],
-    _redis_client: AsyncRedis | None = None,
+    redis_client: AsyncRedis | None = None,
 ) -> list[dict[str, Any]]:
     """Queue phase of the ongoing top-up — dispatch each created run to SAQ.
 
-    Called ONLY after the top-up transaction committed (``_q_or_none`` is a
-    placeholder kept for seam parity; the queue name resolves from settings).
-    ``_redis_client`` is retained for caller symmetry but unused — per-run
-    try/except collects ``{'run_id', 'outcome', 'job_id'?}`` and NEVER raises
+    Called ONLY after the top-up transaction committed (the queue and Redis
+    arguments are retained for caller/test seam compatibility; the queue name
+    resolves from settings). Per-run try/except collects ``{'run_id',
+    'outcome', 'job_id'?}`` and NEVER raises
     after commit: a SAQ retry would re-count the committed pendings
     (idempotent), and committed-but-never-dispatched pendings are recovered by
     ``dispatcher_reconcile``'s existing ``pending + dispatched_at IS NULL``
     branch.
     """
+    del q_or_none, redis_client
     from modulo.core.dispatch import dispatch_run
 
     settings = get_settings()
@@ -5846,7 +5847,6 @@ def _compute_zombie_timing(run: Any) -> tuple[float | None, float | None, float 
 
 
 def _build_zombie_error_detail(
-    run: Any,
     detail_lead: str,
     phase_text: str,
     pipeline_id: uuid.UUID | None,
@@ -6030,7 +6030,7 @@ async def _fail_nodeless_run(
     completed_at = datetime.now(UTC)
     run.status = "failed"
     run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
-    run.error_detail = _build_zombie_error_detail(run, detail_lead, phase_text, pipeline_id, trigger_id, claim_count)
+    run.error_detail = _build_zombie_error_detail(detail_lead, phase_text, pipeline_id, trigger_id, claim_count)
     run.completed_at = completed_at
 
     if node_started:
@@ -6124,9 +6124,6 @@ async def _terminalize_node_deadline_run(
     now: datetime,
     node_budget_seconds: int,
     deadline: datetime,
-    age_minutes: float | None,
-    phase_elapsed: float | None,
-    age_text: str,
     phase_text: str,
 ) -> None:
     """Terminalize a run at its node deadline."""
@@ -6282,9 +6279,6 @@ async def _fail_node_deadline_run(
         now,
         node_budget_seconds,
         deadline,
-        age_minutes,
-        phase_elapsed,
-        age_text,
         phase_text,
     )
 

@@ -723,11 +723,19 @@ def evaluate(
 
 #: The step each escalation workflow runs ONLY when the tick produced no verdict
 #: (``healthy`` is empty): it measured nothing, or it could read only some of its
-#: required inputs (FAR-2159). Its presence is the durable machine-readable
-#: "UNKNOWN" marker: without it, an unmeasured tick skips the verdict step and
-#: its run is recorded as HEALTHY by ``_verdict_from_step`` (FAR-2157). Both
-#: workflows must use this exact name - an architecture test pins it.
+#: required inputs (FAR-2159). Its EXECUTED conclusion is the durable machine-
+#: readable "UNKNOWN" marker (FAR-2176): without it, a tick that reached no
+#: verdict skips the verdict step and its run is recorded as HEALTHY by
+#: ``_verdict_from_step`` (FAR-2157). Both workflows must use this exact name -
+#: an architecture test pins it.
 UNKNOWN_VERDICT_STEP_NAME = "Record the unmeasured tick (FAR-2157)"
+
+#: A step is a signal when the jobs API reports a terminal, EXECUTED conclusion
+#: for it. The API returns EVERY step the workflow defines - including the ones
+#: a step-level ``if:`` skipped - so a step's PRESENCE says nothing about
+#: whether it ran (FAR-2176). This is the rule FAR-2160 applies to the
+#: audit-chain monitor's notice marker.
+_EXECUTED_CONCLUSIONS = frozenset({"success", "failure"})
 
 
 def _verdict_from_step(step: dict[str, Any]) -> str:
@@ -741,18 +749,32 @@ def _verdict_from_step(step: dict[str, Any]) -> str:
 
 
 def _has_unknown_marker(jobs_payload: dict[str, Any] | None) -> bool:
-    """True when the run carries the UNKNOWN-tick marker step (FAR-2157).
+    """True when this run RAN the UNKNOWN-tick marker step (FAR-2157/2176).
 
-    ``True`` is authoritative: the workflow ran that step, which it does only
+    ``True`` is authoritative: the workflow RAN that step, which it does only
     when the tick's ``healthy`` output was empty, i.e. the tick reached no
-    verdict (nothing was measured, or only some required inputs were - FAR-2159).
-    A tick that reached no verdict must never be read back as a healthy verdict
-    - the transition email would then silently swallow the recovery.
+    verdict (nothing was measured, or only some required inputs were -
+    FAR-2159). A tick that reached no verdict must never be read back as a
+    healthy verdict - the transition email would then silently swallow the
+    recovery.
+
+    The marker step is DEFINED in both workflows, but GitHub returns it in
+    ``jobs[].steps`` even when its condition skipped it - which is the normal
+    state of every MEASURED (healthy or unhealthy) tick. Mere presence therefore
+    cannot be the signal: a healthy run whose marker step is ``skipped`` was
+    read back as UNKNOWN, and because an UNKNOWN previous verdict always alerts,
+    an already-unhealthy pipeline re-alerted on every tick (FAR-2176, measured
+    against the live run 40316916204).
+
+    Only an executed conclusion is a signal. A marker that ran and FAILED still
+    means the tick reached no verdict, so it stays UNKNOWN rather than falling
+    through to the skipped verdict step (which reads as healthy - exactly the
+    silent swallow FAR-2157 exists to prevent).
     """
     for job in (jobs_payload or {}).get("jobs") or []:
         for step in job.get("steps") or []:
             if step.get("name") == UNKNOWN_VERDICT_STEP_NAME:
-                return True
+                return str(step.get("conclusion") or "").lower() in _EXECUTED_CONCLUSIONS
     return False
 
 
@@ -765,13 +787,14 @@ def parse_previous_verdict(jobs_payload: dict[str, Any] | None, step_name: str |
     name - needs no argument. The watchdog names its step differently and must
     pass it, or its previous verdict silently reads as UNKNOWN (FAR-2177).
 
-    A run that carries the UNKNOWN-tick marker reached no verdict - it measured
+    A run that RAN the UNKNOWN-tick marker reached no verdict - it measured
     nothing, or only some of its required inputs (FAR-2159) - so its actual
     state is unknown (FAR-2157). That check comes first, because such a run
-    SKIPS the verdict step and would otherwise read as healthy. Otherwise
-    ``failure`` -> the previous run evaluated unhealthy; ``skipped`` -> it
-    evaluated healthy (the step's condition was false); anything else, or no
-    such step (a run from an older workflow definition), -> UNKNOWN.
+    SKIPS the verdict step and would otherwise read as healthy. A measured tick
+    carries the marker step too, but skipped, which is not a signal (FAR-2176).
+    Otherwise ``failure`` -> the previous run evaluated unhealthy; ``skipped``
+    -> it evaluated healthy (the step's condition was false); anything else, or
+    no such step (a run from an older workflow definition), -> UNKNOWN.
     """
     if _has_unknown_marker(jobs_payload):
         return UNKNOWN
