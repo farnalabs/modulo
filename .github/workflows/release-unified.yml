@@ -114,8 +114,8 @@ jobs:
               --platform linux/amd64 \
               --push=false \
               --tag "ghcr.io/$image_name:dry-run-$VERSION" \
-              --cache-from type=gha,scope=$img \
-              --cache-to type=gha,mode=max,scope=$img
+              --cache-from type=gha,scope="$img" \
+              --cache-to type=gha,mode=max,scope="$img"
           done
 
       - name: Verify SBOM generation
@@ -470,8 +470,8 @@ jobs:
               --platform linux/amd64 \
               --push \
               --tag "ghcr.io/$image_name:$TAG" \
-              --cache-from type=gha,scope=$img \
-              --cache-to type=gha,mode=max,scope=$img
+              --cache-from type=gha,scope="$img" \
+              --cache-to type=gha,mode=max,scope="$img"
 
             # Smoke checks. Each image only runs the checks it can actually
             # satisfy, and a failure FAILS the job - never `|| true`.
