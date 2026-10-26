@@ -1125,8 +1125,8 @@ jobs:
           "$SCANNER" --version
       - name: SonarCloud scan
         if: needs.changes.outputs.sonar == 'true'
-        # Two known environment-only, intermittent scanner failures are retried;
-        # any other error is genuine and fails the check immediately.
+        # Three known environment-only, intermittent failures are retried; any
+        # other error is genuine and fails the check immediately.
         #
         #   1. Transient race in SonarCloud's Python sensor: PackageRootResolver's
         #      unconditional Files.walk(baseDir) in FileProvider descends into
@@ -1145,8 +1145,23 @@ jobs:
         #      38021176294): the SAME commit 2b06bc01c scanned green 28 min
         #      earlier (run 38019518160) and the scanner ships no code change, so
         #      it is environment-only, never a code or quality-gate failure.
+        #   3. SonarCloud's compute engine (CE) rejecting an uploaded report
+        #      server-side: the scanner prints `CE Task finished abnormally with
+        #      status: FAILED` and exits 3. Observed on main 2026-10-26 (runs
+        #      40292373035 for 5a0f0cb5d and 40292390281 for 3217ae8e3, both
+        #      red) while IDENTICAL analyses of the same project finished green
+        #      minutes apart: run 40292507790 analysed the SAME revision
+        #      3217ae8e3 at 09:07:52 and run 40292352735 analysed its parent
+        #      621e163 at 09:02:40. The failing scans produced the same report
+        #      (same warnings, same coverage, same file set, ~41 MB), so the
+        #      rejection is server-side and transient -- never a code or
+        #      quality-gate failure. Because the CE message itself is generic,
+        #      the server's own `errorMessage` is fetched from `/api/ce/task`
+        #      and logged before any retry, so a DETERMINISTIC CE failure
+        #      (quota, licence, malformed report) stays visible and still fails
+        #      the check after that single retry.
         #
-        # Both are matched by an exact log signature, never a quality-gate
+        # All three are matched by an exact log signature, never a quality-gate
         # failure or any other error, so a genuine red check is never masked.
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -1158,6 +1173,10 @@ jobs:
           # every exit path (success, non-transient failure, exhaustion).
           LOG="$(mktemp)"
           trap 'rm -f "$LOG"' EXIT
+          # A CE-task rejection gets exactly one retry (the class is server-side
+          # and intermittent); counted separately from the loop index so a
+          # retry of one class never silently buys another class extra attempts.
+          CE_FAILURES=0
           for attempt in 1 2 3; do
             : > "$LOG"
             set +e
@@ -1177,7 +1196,25 @@ jobs:
               fi
               continue
             fi
-            echo "::error::SonarCloud scan failed with a non-transient error (neither the .git/.probe-* race nor the security-engine duplicate-class LinkageError); not retrying."
+            if grep -qF "CE Task finished abnormally with status: FAILED" "$LOG"; then
+              CE_FAILURES=$((CE_FAILURES + 1))
+              # The scanner only prints the CE task URL. Fetch the server's own
+              # reason so an opaque "CE Task FAILED" never reaches the log bare.
+              TASK_ID="$(grep -oE 'api/ce/task\?id=[A-Za-z0-9_-]+' "$LOG" | tail -n 1 | sed 's/.*id=//')"
+              CE_REASON=""
+              if [ -n "$TASK_ID" ]; then
+                CE_REASON="$(curl -sS --max-time 30 -H "Authorization: Bearer ${SONAR_TOKEN}" "${SONAR_HOST_URL}/api/ce/task?id=${TASK_ID}" 2>/dev/null | jq -r '.task.errorMessage // .errors[0].msg // empty' 2>/dev/null || true)"
+                echo "::notice::SonarCloud CE task ${TASK_ID} failed server-side: ${CE_REASON:-<no errorMessage returned>}"
+              fi
+              if [ "$CE_FAILURES" -lt 2 ] && [ "$attempt" -lt 3 ]; then
+                echo "::warning::SonarCloud CE task rejected the report server-side (CE attempt ${CE_FAILURES}/2); retrying once -- identical analyses of this project have completed green minutes apart."
+                sleep 20
+                continue
+              fi
+              echo "::error::SonarCloud CE task rejected the report server-side on ${CE_FAILURES}/2 attempt(s); not retrying further. Server reason: ${CE_REASON:-<no errorMessage returned>}"
+              exit "$RC"
+            fi
+            echo "::error::SonarCloud scan failed with a non-transient error (neither the .git/.probe-* race, the security-engine duplicate-class LinkageError, nor a server-side CE task rejection); not retrying."
             exit "$RC"
           done
           echo "::error::SonarCloud scan still hit a known transient scanner failure after 3 attempts; failing the required check (upstream SONARPY-2120 / security-engine plugin-classloader race)."
