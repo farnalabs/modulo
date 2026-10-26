@@ -93,6 +93,7 @@
 
       <section class="space-y-3" aria-labelledby="evidence-index-coverage-heading" data-testid="compliance-evidence-index-coverage">
         <h2 id="evidence-index-coverage-heading" class="text-lg font-semibold">{{ $t('views.ComplianceEvidenceIndex.coverage_heading') }}</h2>
+        <!-- NOSONAR: A focusable named scroll region is required for keyboard users to reach and scroll this table. -->
         <div
           class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           role="region"
@@ -126,6 +127,7 @@
             {{ $t('views.ComplianceEvidenceIndex.artifact_count', { count: indexData.artifacts.length }) }}
           </p>
         </div>
+        <!-- NOSONAR: A focusable named scroll region is required for keyboard users to reach and scroll this table. -->
         <div
           class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           role="region"
@@ -179,11 +181,11 @@
                         <button
                           type="button"
                           :aria-label="identifierCopyLabel(identifier)"
-                          aria-live="polite"
                           class="ml-1 underline hover:text-foreground"
                           data-testid="compliance-evidence-index-copy-identifier"
                           @click="copyIdentifier(identifier.raw)"
                         >{{ copiedIdentifier === identifier.raw ? $t('views.ComplianceEvidenceIndex.identifier_copied') : $t('views.ComplianceEvidenceIndex.identifier_copy') }}</button>
+                        <output v-if="copiedIdentifier === identifier.raw" aria-live="polite" class="sr-only">{{ $t('views.ComplianceEvidenceIndex.identifier_copied') }}</output>
                         <details class="mt-1" data-testid="compliance-evidence-index-identifier-details">
                           <summary class="cursor-pointer">{{ $t('views.ComplianceEvidenceIndex.identifier_details') }}</summary>
                           <code class="mt-1 block select-all break-all font-mono">{{ identifier.raw }}</code>
