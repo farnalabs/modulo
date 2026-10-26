@@ -120,12 +120,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command != "enrich":  # pragma: no cover - argparse enforces the one command
         parser.error(f"unknown command {args.command!r}")
 
-    runs = json.loads(Path(args.runs_json).read_text(encoding="utf-8"))
+    # ``args.runs_json`` is a CLI argument supplied by the calling workflow
+    # (deploy-watchdog.yml and deploy-staleness-check.yml pass a ``mktemp``
+    # path); it is never user- or model-supplied, so this S8707 taint flow is a
+    # false positive.
+    runs = json.loads(Path(args.runs_json).read_text(encoding="utf-8"))  # NOSONAR pythonsecurity:S8707
     if not isinstance(runs, list):
         print(f"deploy_run_attempts: {args.runs_json} is not a JSON list", file=sys.stderr)
         return 2
     result = enrich(runs, repo=args.repo, limit=args.limit)
-    Path(args.out).write_text(json.dumps(result), encoding="utf-8")
+    # ``args.out`` is likewise a ``mktemp`` path supplied by the calling
+    # workflow, never user- or model-supplied, so the S2083/S8707 taint flow is
+    # a false positive.
+    Path(args.out).write_text(json.dumps(result), encoding="utf-8")  # NOSONAR pythonsecurity:S2083 pythonsecurity:S8707
     return 0
 
 
