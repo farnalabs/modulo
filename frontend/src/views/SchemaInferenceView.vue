@@ -1,11 +1,14 @@
 <template>
   <div class="page-wide">
-    <PageTabs :tabs="[
-      { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
-      { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
-      { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
-    ]" />
-    <PageHeader :title="$t('views.SchemaInferenceView.schema_inference')" :subtitle="$t('views.SchemaInferenceView.infer_a_schema_from_a_connected_data_source')" />
+    <PageHeader
+      :title="$t('views.SchemaInferenceView.schema_inference')"
+      :subtitle="$t('views.SchemaInferenceView.infer_a_schema_from_a_connected_data_source')"
+      :tabs="[
+        { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+        { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+        { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
+      ]"
+    />
 
     <div
       v-if="loadingConnectors"
@@ -178,7 +181,6 @@ import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
-import PageTabs from "../components/PageTabs.vue"
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 

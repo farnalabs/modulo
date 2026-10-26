@@ -85,19 +85,30 @@ describe('shared formatting used by the risk assessment surface', () => {
     expect(toProblemDetail('plain').detail).toBe('plain')
   })
 
-  it('renders PageHeader optional back link and right slot', () => {
+  it('renders PageHeader optional back link, right slot, below-title content, and tabs', () => {
     const wrapper = mountWithI18n(PageHeader, {
-      props: { title: 'Risk', subtitle: 'Assessment', backLink: '/runs' },
-      slots: { right: '<button>Action</button>' },
+      props: {
+        title: 'Risk',
+        subtitle: 'Assessment',
+        backLink: '/runs',
+        tabs: [{ label: 'Runs', to: '/runs' }],
+      },
+      slots: {
+        right: '<button>Action</button>',
+        default: '<p data-testid="header-context">Context</p>',
+      },
       global: {
         plugins: [i18n],
         mocks: { $router: { push: vi.fn() } },
+        stubs: { PageTabs: { template: '<nav data-testid="header-tabs"><slot /></nav>' } },
       },
     })
 
     expect(wrapper.find('h1').text()).toBe('Risk')
-    expect(wrapper.find('p').text()).toBe('Assessment')
+    expect(wrapper.find('p').text()).toContain('Assessment')
+    expect(wrapper.find('[data-testid="header-context"]').text()).toBe('Context')
     expect(wrapper.findAll('button').at(-1)?.text()).toBe('Action')
+    expect(wrapper.find('[data-testid="header-tabs"]').exists()).toBe(true)
   })
 
   it('renders ErrorAlert problem, retry and both dismiss variants', async () => {

@@ -90,6 +90,8 @@ describe('AdminCostBreakdownView', () => {
 
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Cost Breakdown')
+    expect(wrapper.find('header.page-header + .page-tabs-wrapper').exists()).toBe(true)
+    expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
   })
 
   it('dismisses an anomaly via POST', async () => {

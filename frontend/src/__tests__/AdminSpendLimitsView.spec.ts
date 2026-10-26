@@ -101,6 +101,8 @@ describe('AdminSpendLimitsView', () => {
 
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Spend Limits')
+    expect(wrapper.find('header.page-header + .page-tabs-wrapper').exists()).toBe(true)
+    expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
   })
 
   it('confirms org-limit and ceiling saves and styles a positive remaining budget', async () => {

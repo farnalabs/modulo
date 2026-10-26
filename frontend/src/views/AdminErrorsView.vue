@@ -1,10 +1,13 @@
 <template>
   <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
-  <div class="page-wide">
-    <PageTabs :tabs="[
-      { label: $t('views.AdminErrorsView.dashboard'), to: '/admin/errors' },
-    ]" />
-    <PageHeader :title="$t('views.AdminErrorsView.error_dashboard')" :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')" />
+  <div class="page-wide pt-4">
+    <PageHeader
+      :title="$t('views.AdminErrorsView.error_dashboard')"
+      :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')"
+      :tabs="[
+        { label: $t('views.AdminErrorsView.dashboard'), to: '/admin/errors' },
+      ]"
+    />
 
     <!-- Instance scope (FAR-1547): system admins can switch the dashboard to
          the SYSTEM_ORG_ID sentinel partition (instance-level / unattributed
@@ -213,7 +216,6 @@ import {
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { useDataFetch } from '../composables/useDataFetch'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
 import {
   errorGroupRowId,

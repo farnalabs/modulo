@@ -64,6 +64,8 @@ describe('SchemaInferenceView', () => {
     const wrapper = await mountView()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Schema Inference')
+    expect(wrapper.find('header.page-header + .page-tabs-wrapper').exists()).toBe(true)
+    expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(3)
   })
 
   it('loads connectors on mount and populates the dropdown list', async () => {
