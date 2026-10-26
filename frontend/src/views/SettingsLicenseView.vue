@@ -351,11 +351,11 @@ const licenceKeyPreview = computed<LicenceKeyPreview | null>(() => {
   const raw = applyScope.value === 'system' ? newSystemLicenseKey.value : newLicenseKey.value
   const payload = decodeLicenceKeyPayload(raw)
   if (!payload) return null
-  return {
-    tier: typeof payload.tier === 'string' ? payload.tier : null,
-    expiresAt: typeof payload.expires_at === 'string' ? payload.expires_at : null,
-    startsAt: typeof payload.starts_at === 'string' ? payload.starts_at : null,
-  }
+  const preview: LicenceKeyPreview = { tier: null, expiresAt: null, startsAt: null }
+  if (typeof payload.tier === 'string') preview.tier = payload.tier
+  if (typeof payload.expires_at === 'string') preview.expiresAt = payload.expires_at
+  if (typeof payload.starts_at === 'string') preview.startsAt = payload.starts_at
+  return preview
 })
 
 function openApplyDialog() {

@@ -396,6 +396,50 @@ describe('SettingsLicenseView', () => {
     expect(api.POST).not.toHaveBeenCalled()
   })
 
+  it('omits preview claims whose value is not a string (FAR-2154)', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+
+    // A well-formed payload whose claims are the wrong type must render an
+    // empty review list rather than leaking a raw value into the dialog.
+    const payload = btoa(JSON.stringify({ tier: 42, expires_at: null, starts_at: ['2026-12-01'] }))
+    const key = `${payload}.${btoa('signature')}`
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    await wrapper.find('[data-testid="license-key-input-system"]').setValue(key)
+    await wrapper.find('[data-testid="license-apply-btn-system"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    const preview = wrapper.find('[data-testid="licence-key-preview"]')
+    expect(preview.exists()).toBe(true)
+    expect(preview.text()).toContain('not yet verified')
+    expect(preview.text()).not.toContain('42')
+    expect(preview.text()).not.toContain('2026-12-01')
+  })
+
+  it('treats a key with no payload segment as unreadable (FAR-2154)', async () => {
+    const { api } = await import('../lib/api/client')
+    mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
+
+    const wrapper = mount(SettingsLicenseView, {
+      global: { plugins: [createPinia()], stubs: { ...dialogStubObj, FormDialog: formDialogStub } },
+    })
+    await nextTick(); await nextTick(); await nextTick()
+
+    // `<signature>` with an empty payload segment: non-empty enough to open
+    // the dialog, but nothing to decode.
+    await wrapper.find('[data-testid="license-key-input-system"]').setValue('.signature')
+    await wrapper.find('[data-testid="license-apply-btn-system"]').trigger('click')
+    await nextTick(); await flushPromises(); await nextTick()
+
+    expect(wrapper.find('[data-testid="licence-key-preview"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain("This key's details cannot be read here")
+  })
+
   it('still installs a key whose payload cannot be decoded, and surfaces the server detail', async () => {
     const { api } = await import('../lib/api/client')
     mockApiResponses(api.GET, mockLicenseTeam, mockFlagsTeam, SYSTEM_PERMISSIONS)
