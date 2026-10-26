@@ -309,6 +309,9 @@ async def create_pipeline(
     account_id: uuid.UUID,
     **options: Unpack[CreatePipelineOptions],
 ) -> Pipeline:
+    unexpected = set(options) - set(CreatePipelineOptions.__annotations__)
+    if unexpected:
+        raise ValueError(f"Unexpected keyword arguments for create_pipeline: {sorted(unexpected)}")
     description = options.get("description")
     visibility = options.get("visibility", "org")
     owner_team_id = options.get("owner_team_id")
