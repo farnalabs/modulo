@@ -152,6 +152,24 @@ class TestOperatorWins:
         assert state.enabled is False
         assert state.source == SWITCH_SOURCE_OPERATOR
 
+    @pytest.mark.parametrize("raw", ["", "   "])
+    @pytest.mark.asyncio
+    async def test_blank_env_var_is_off_not_a_licence_fallthrough(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """A set-but-empty env var is an explicit OFF, never "unset".
+
+        Regression: blank-then-strip dropped the env source entirely, so a
+        licence that requires analytics turned the switch ON (fail-open on a
+        telemetry control).
+        """
+        monkeypatch.setenv(ENV_INSTANCE_SWITCH, raw)
+        state = await _resolve(stored=None, licence=_licence(claim=True))
+        assert state.enabled is False
+        assert state.source == SWITCH_SOURCE_ENV
+        assert state.operator_value is False
+        assert state.licence_requires_analytics is True
+
 
 class TestPartnerLicenseClaimReader:
     def test_reads_the_signed_raw_payload(self) -> None:

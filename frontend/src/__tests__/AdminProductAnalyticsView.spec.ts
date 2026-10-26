@@ -543,6 +543,42 @@ describe('AdminProductAnalyticsView', () => {
     })
   })
 
+  it('offers no reset for an environment-sourced switch (the env var owns it)', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        last_successful_dump_at: null,
+        dump_count_total: 0,
+        consent_level: 'off',
+        instance_enabled: true,
+        instance_switch_source: 'environment',
+        licence_requires_analytics: false,
+        warning: null,
+      },
+      error: undefined,
+    })
+
+    const wrapper = mount(AdminProductAnalyticsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          SectionCard: { template: '<div><slot /></div>', props: ['title'] },
+          PageHeader: { template: '<div />', props: ['title', 'subtitle'] },
+        },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="instance-switch-source"]').text()).toContain(
+      'MODULO_PRODUCT_ANALYTICS_ENABLED',
+    )
+    // An env-sourced switch has no stored system_config row, so a reset would
+    // be a silent backend no-op while the copy claims an effect. Never render it.
+    expect(wrapper.find('[data-testid="instance-switch-reset"]').exists()).toBe(false)
+    expect((wrapper.find('[data-testid="instance-switch-toggle"]').element as HTMLInputElement).checked).toBe(true)
+  })
+
   it('shows the save error and does not refetch when the switch write fails', async () => {
     mockGet.mockResolvedValue({
       data: {
@@ -572,10 +608,16 @@ describe('AdminProductAnalyticsView', () => {
     await nextTick()
 
     mockGet.mockClear()
-    await wrapper.find('[data-testid="instance-switch-toggle"]').trigger('change')
+    const toggle = wrapper.find('[data-testid="instance-switch-toggle"]')
+    // A real click flips the DOM before the request fires. The failed save must
+    // re-assert the committed value, or the control keeps showing the user's
+    // rejected flip.
+    ;(toggle.element as HTMLInputElement).checked = true
+    await toggle.trigger('change')
     await flushPromises()
 
     expect(wrapper.find('[data-testid="instance-switch-error"]').exists()).toBe(true)
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
     expect(mockGet).not.toHaveBeenCalled()
   })
 

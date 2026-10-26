@@ -260,7 +260,10 @@ async def resolve_instance_analytics_switch(session: AsyncSession) -> AnalyticsS
         )
 
     env_raw = os.environ.get(ENV_INSTANCE_SWITCH)
-    if env_raw is not None and env_raw.strip() != "":
+    if env_raw is not None:
+        # A SET-but-blank variable is an explicit operator value, not "unset":
+        # an exported-but-empty variable must read OFF (fail-closed) rather than
+        # silently falling through to a licence that would turn analytics ON.
         env_value = coerce_switch_value(env_raw)
         return AnalyticsSwitchState(
             enabled=env_value,

@@ -459,6 +459,41 @@ class TestInstanceSwitchWrite:
         assert audit.await_args.kwargs["payload_json"]["action"] == "cleared"
         _restore_overrides()
 
+    def test_clearing_with_nothing_stored_is_audited_as_already_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A PUT null that deletes no row is a real no-op, and says so.
+
+        The action must distinguish "cleared a stored override" from "there was
+        nothing to clear" - the latter is what a licence/default/env-resolved
+        switch reports, and it must never be recorded as a change.
+        """
+        client = _client(session=_write_session())
+        stored: dict[str, object] = {}
+
+        async def _fake_delete(_session: object, key: str) -> bool:
+            return stored.pop(key, None) is not None
+
+        sources = _patch_sources(monkeypatch=monkeypatch)
+        with (
+            sources[0],
+            patch(
+                "modulo.core.product_analytics.consent.get_config",
+                new=AsyncMock(side_effect=_consent_get_config(stored)),
+            ),
+            patch.object(pat_module, "delete_config", new=AsyncMock(side_effect=_fake_delete)),
+            patch.object(pat_module, "append_system_audit_event", new=AsyncMock()) as audit,
+        ):
+            resp = client.put(_SWITCH_URL, json={"enabled": None})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["instance_switch_source"] == SWITCH_SOURCE_DEFAULT
+        payload = audit.await_args.kwargs["payload_json"]
+        assert payload["action"] == "already_default"
+        assert payload["operator_value"] is None
+        assert payload["effective_enabled"] is False
+        assert payload["source"] == SWITCH_SOURCE_DEFAULT
+        _restore_overrides()
+
     def test_non_system_admin_gets_403(self) -> None:
         client = _client(_NON_SYSTEM_ADMIN, session=_write_session())
         resp = client.put(_SWITCH_URL, json={"enabled": True})

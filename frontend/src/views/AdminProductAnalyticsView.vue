@@ -76,6 +76,7 @@
             <div class="flex flex-wrap items-center gap-3">
               <label class="inline-flex items-center gap-2 text-sm">
                 <input
+                  ref="toggleEl"
                   type="checkbox"
                   data-testid="instance-switch-toggle"
                   :checked="instanceEnabled"
@@ -137,6 +138,7 @@ const store = useProductAnalyticsStore()
 const { t } = useI18n()
 const saving = ref(false)
 const saveError = ref<string | null>(null)
+const toggleEl = ref<HTMLInputElement | null>(null)
 
 const view = computed<TransparencyView | null>(
   () => (store.transparency as unknown as TransparencyView | null) ?? null,
@@ -155,16 +157,26 @@ const egressAllowed = computed(() => view.value?.egress_allowed === true)
 const instanceEnabled = computed(() => view.value?.instance_enabled === true)
 const licenceRequiresAnalytics = computed(() => view.value?.licence_requires_analytics === true)
 
-// An explicit operator value (stored or env) can be cleared, restoring the
-// licence-derived default. A licence/default value needs no "reset".
+// Only an operator-set value is a stored system_config row that "Use licence
+// default" can actually delete. An environment-sourced switch has no stored row
+// (the deployment's env var owns it), so offering the reset would be a silent
+// no-op; a licence/default value needs no reset either.
 const hasExplicitOperatorValue = computed(
-  () => view.value?.instance_switch_source === 'operator' || view.value?.instance_switch_source === 'environment',
+  () => view.value?.instance_switch_source === 'operator',
 )
 
 const switchSourceCopy = computed(() => {
   const source = view.value?.instance_switch_source ?? 'default'
   return t(`views.AdminProductAnalyticsView.switch_source_${source}`)
 })
+
+// `:checked` only patches the DOM when the bound value CHANGES. A user-flipped
+// checkbox therefore stays flipped when the write fails (or the server's
+// effective value is unchanged), so re-assert the committed state after every
+// attempt settles.
+function syncToggleDom(): void {
+  if (toggleEl.value) toggleEl.value.checked = instanceEnabled.value
+}
 
 async function saveSwitch(enabled: boolean | null): Promise<void> {
   saving.value = true
@@ -184,6 +196,7 @@ async function saveSwitch(enabled: boolean | null): Promise<void> {
     saveError.value = formatApiError(e)
   } finally {
     saving.value = false
+    syncToggleDom()
   }
 }
 

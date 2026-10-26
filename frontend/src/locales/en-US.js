@@ -632,7 +632,7 @@ export default {
       "instance_switch_label": "Enable product analytics for this instance",
       "use_licence_default": "Use licence default",
       "switch_source_operator": "This switch was set explicitly on this instance. Your choice always wins, including turning it off when your licence requires analytics.",
-      "switch_source_environment": "This switch is set by the MODULO_PRODUCT_ANALYTICS_ENABLED environment variable. Clearing it here restores the licence default.",
+      "switch_source_environment": "This switch is set by the MODULO_PRODUCT_ANALYTICS_ENABLED environment variable. Change that variable on the deployment to override it - it cannot be cleared from here.",
       "switch_source_licence": "On because your licence requires it — you can turn it off.",
       "switch_source_default": "Off by default. Turn it on to share aggregate usage metrics."
     },
