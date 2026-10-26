@@ -18,12 +18,16 @@ from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 for parent in Path(__file__).resolve().parents:
     _script_path = parent / ".github" / "scripts" / "deploy_health.py"
     if _script_path.exists():
         break
 else:
     raise RuntimeError("Could not find .github/scripts/deploy_health.py")
+
+_REPO_ROOT = parent
 
 _loader = SourceFileLoader("deploy_health", str(_script_path))
 health = module_from_spec(spec_from_loader("deploy_health", _loader))
@@ -52,10 +56,11 @@ def _run(
     status: str = "completed",
     sha: str = "aaaaaaa",
     title: str = "",
+    run_id: int = 1,
     deploy_job: str | None = None,
 ) -> dict[str, Any]:
     run: dict[str, Any] = {
-        "databaseId": 1,
+        "databaseId": run_id,
         "status": status,
         "conclusion": conclusion,
         "headSha": sha,
@@ -74,6 +79,7 @@ def _verdict(
     runs: list[dict[str, Any]] | None = None,
     grace_hours: int = 6,
     failure_threshold: int = 2,
+    deploy_jobs: dict[str, dict[str, str]] | None = None,
 ) -> Any:
     return health.evaluate(
         main=_main() if main is None else main,
@@ -82,6 +88,7 @@ def _verdict(
         now=_NOW,
         grace_hours=grace_hours,
         failure_threshold=failure_threshold,
+        deploy_jobs=deploy_jobs,
     )
 
 
@@ -186,6 +193,201 @@ def test_failure_at_the_end_of_the_window_still_counts() -> None:
     verdict = _verdict(runs=runs)
     assert verdict.consecutive_failures == health.DEPLOY_RUNS_WINDOW
     assert verdict.healthy is False
+
+
+_JOB_DISPLAY_NAMES: dict[str, str] = {
+    "deploy-throttle": "Deploy throttle (batch deploys)",
+    "backend-lint": "Pre-deploy: Backend lint",
+    "backend-unit": "Pre-deploy: Backend unit tests",
+    "frontend-checks": "Pre-deploy: Frontend checks",
+    "integration-tests": "Pre-deploy: Integration tests",
+    "security-audit": "Pre-deploy: Security audit",
+    "pre-deploy-gate": "Pre-deploy gate",
+    "deploy-staging": "Deploy to staging",
+    "staging-e2e": "Staging E2E (smoke + WCAG + regression)",
+    "deploy-production": "Deploy to app.modulo.run",
+    "prod-smoke": "Prod smoke tests",
+}
+
+_JOB_STAGES: dict[str, str] = {
+    "deploy-throttle": "deploy_throttle",
+    "backend-lint": "pre_deploy_lint",
+    "backend-unit": "pre_deploy_lint",
+    "frontend-checks": "pre_deploy_lint",
+    "integration-tests": "integration_test",
+    "security-audit": "pre_deploy_lint",
+    "pre-deploy-gate": "pre_deploy_gate",
+    "deploy-staging": "migration",
+    "staging-e2e": "staging_e2e",
+    "deploy-production": "migration",
+    "prod-smoke": "prod_smoke",
+}
+
+
+def _job_map(**conclusions: str) -> dict[str, str]:
+    """Build a run's job map in the wire shape: display name -> conclusion."""
+    return {_JOB_DISPLAY_NAMES[job_id.replace("_", "-")]: conclusion for job_id, conclusion in conclusions.items()}
+
+
+# ---------------------------------------------------------------------------
+# Failure-stage classification (FAR-2156)
+# ---------------------------------------------------------------------------
+
+
+def test_job_to_stage_matches_deploy_yml_display_names() -> None:
+    """The classifier is keyed on the display names deploy.yml really emits.
+
+    GitHub's jobs API exposes each job's ``name:`` (the display name), never the
+    YAML job ID, and the staleness workflow keys its job map on that field.
+    Pinning the map to deploy.yml here means renaming a job fails CI instead of
+    silently turning every real failure into ``unknown`` again.
+    """
+    workflow = yaml.safe_load((_REPO_ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8"))
+    deploy_jobs = workflow["jobs"]
+    for job_id, display_name in _JOB_DISPLAY_NAMES.items():
+        assert deploy_jobs[job_id]["name"] == display_name
+        assert health.JOB_TO_STAGE[display_name] == _JOB_STAGES[job_id]
+    assert set(health.JOB_TO_STAGE) == set(_JOB_DISPLAY_NAMES.values())
+    assert tuple(_JOB_DISPLAY_NAMES.values()) == health.DEPLOYMENT_ORDER
+
+
+def test_first_failed_job_in_deployment_order_wins() -> None:
+    """An earlier failure is the blocker even when a later stage also failed."""
+    stage = health._classify_failure_stage(
+        _job_map(deploy_staging="success", integration_tests="failure", staging_e2e="failure")
+    )
+    assert stage == "integration_test"
+
+
+def test_prod_smoke_only_failure_is_classified() -> None:
+    """The one stage where prod is deployed but broken must not be dropped."""
+    stage = health._classify_failure_stage(_job_map(deploy_production="success", prod_smoke="failure"))
+    assert stage == "prod_smoke"
+
+
+def test_pre_deploy_gate_failure_is_classified() -> None:
+    assert health._classify_failure_stage(_job_map(pre_deploy_gate="failure")) == "pre_deploy_gate"
+
+
+def test_unknown_failed_job_is_dropped() -> None:
+    assert health._classify_failure_stage({"some-unmapped-job": "failure"}) == "unknown"
+
+
+def test_fallback_skips_unmapped_to_a_later_mappable_job(monkeypatch: Any) -> None:
+    """An unmapped failure must not mask a mappable one outside the order."""
+    monkeypatch.setitem(health.JOB_TO_STAGE, "future-job", "integration_test")
+    stage = health._classify_failure_stage({"unmapped-job": "failure", "future-job": "failure"})
+    assert stage == "integration_test"
+
+
+def test_deploy_jobs_are_plumbed_into_evaluate() -> None:
+    runs = [_run("failure", sha="abc1234", run_id=11), _run("failure", sha="def5678", run_id=12)]
+    deploy_jobs = {
+        "11": _job_map(backend_lint="failure"),
+        "12": _job_map(staging_e2e="failure"),
+    }
+    verdict = _verdict(runs=runs, deploy_jobs=deploy_jobs)
+    assert verdict.failure_stages == [
+        {"sha": "abc1234", "stage": "pre_deploy_lint"},
+        {"sha": "def5678", "stage": "staging_e2e"},
+    ]
+
+
+def test_failure_stages_are_empty_without_jobs_data() -> None:
+    verdict = _verdict(runs=[_run("failure"), _run("failure")])
+    assert not verdict.failure_stages
+    assert "failure stages" not in verdict.reason
+
+
+def test_reruns_of_the_same_sha_each_count() -> None:
+    """Two reruns of one commit are two failures, not one collapsed entry."""
+    runs = [
+        _run("failure", sha="same123", run_id=21),
+        _run("failure", sha="same123", run_id=22),
+    ]
+    deploy_jobs = {"21": _job_map(backend_lint="failure"), "22": _job_map(backend_lint="failure")}
+    verdict = _verdict(runs=runs, deploy_jobs=deploy_jobs)
+    assert len(verdict.failure_stages) == 2
+    assert "failure stages: 2 pre_deploy_lint" in verdict.reason
+
+
+def test_throttled_noop_does_not_desync_stage_selection() -> None:
+    """A neutral throttled run must be skipped, not consumed as a streak slot."""
+    runs = [
+        _run("success", sha="noop111", run_id=61, deploy_job="skipped"),
+        _run("failure", sha="fail222", run_id=62),
+        _run("failure", sha="fail333", run_id=63),
+    ]
+    deploy_jobs = {"62": _job_map(backend_lint="failure"), "63": _job_map(staging_e2e="failure")}
+    verdict = _verdict(runs=runs, deploy_jobs=deploy_jobs)
+    assert verdict.consecutive_failures == 2
+    assert verdict.failure_stages == [
+        {"sha": "fail222", "stage": "pre_deploy_lint"},
+        {"sha": "fail333", "stage": "staging_e2e"},
+    ]
+
+
+def test_failure_stages_render_in_reason_counts() -> None:
+    runs = [
+        _run("failure", sha="aaa1111", run_id=31),
+        _run("failure", sha="bbb2222", run_id=32),
+        _run("failure", sha="ccc3333", run_id=33),
+    ]
+    deploy_jobs = {
+        "31": _job_map(backend_lint="failure"),
+        "32": _job_map(backend_lint="failure"),
+        "33": _job_map(prod_smoke="failure"),
+    }
+    verdict = _verdict(runs=runs, deploy_jobs=deploy_jobs)
+    assert "failure stages: 2 pre_deploy_lint, 1 prod_smoke" in verdict.reason
+    assert verdict.as_dict()["failure_stages"] == verdict.failure_stages
+    assert json.loads(verdict.as_outputs["failure_stages"]) == verdict.failure_stages
+
+
+def test_unknown_stage_run_is_skipped() -> None:
+    runs = [_run("failure", sha="abc1234", run_id=41)]
+    deploy_jobs = {"41": {"some-unmapped-job": "failure"}}
+    assert not _verdict(runs=runs, deploy_jobs=deploy_jobs).failure_stages
+
+
+def test_cli_evaluate_reads_jobs_json(tmp_path: Path) -> None:
+    main_path = tmp_path / "main.json"
+    prod_path = tmp_path / "prod.json"
+    runs_path = tmp_path / "runs.json"
+    jobs_path = tmp_path / "jobs.json"
+    verdict_path = tmp_path / "verdict.json"
+
+    main_path.write_text(json.dumps(_main()), encoding="utf-8")
+    prod_path.write_text(json.dumps(_prod(sha="7b1c064000", age_hours=46)), encoding="utf-8")
+    runs_path.write_text(
+        json.dumps([_run("failure", sha="abc1234", run_id=51), _run("failure", sha="def5678", run_id=52)]),
+        encoding="utf-8",
+    )
+    jobs_path.write_text(json.dumps({"51": _job_map(deploy_staging="failure")}), encoding="utf-8")
+
+    assert (
+        health.main(
+            [
+                "evaluate",
+                "--main-json",
+                str(main_path),
+                "--prod-json",
+                str(prod_path),
+                "--runs-json",
+                str(runs_path),
+                "--jobs-json",
+                str(jobs_path),
+                "--now",
+                "2026-10-25T12:00:00Z",
+                "--verdict-out",
+                str(verdict_path),
+            ]
+        )
+        == 0
+    )
+
+    written = json.loads(verdict_path.read_text(encoding="utf-8"))
+    assert written["failure_stages"] == [{"sha": "abc1234", "stage": "migration"}]
 
 
 # ---------------------------------------------------------------------------
