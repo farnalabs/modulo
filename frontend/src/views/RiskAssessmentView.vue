@@ -116,7 +116,7 @@ function filtersFromRoute(): RiskAssessmentFilters {
   if (typeof keyPrefix === 'string') filters.keyPrefix = keyPrefix
   if (typeof pipelineId === 'string') filters.pipelineId = pipelineId
   if (typeof days === 'string') {
-    const parsed = parseInt(days, 10)
+    const parsed = Number.parseInt(days, 10)
     if (!Number.isNaN(parsed)) filters.days = parsed
   }
   if (typeof action === 'string') filters.action = action

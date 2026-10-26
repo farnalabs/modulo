@@ -134,7 +134,7 @@
                     @dragover.prevent
                   >
                     <td class="px-4 py-3 font-medium">{{ schema.name }}</td>
-                    <td class="px-4 py-3 text-muted-foreground">{{ schema.description || '—' }}</td>
+                    <td class="px-4 py-3 text-muted-foreground">{{ schema.description ?? '—' }}</td>
                     <td class="px-4 py-3">
                       <span
                         v-if="schema.deprecated"
@@ -328,7 +328,7 @@ const folderNameMap = computed(() => {
 
 const selectedFolderName = computed(() => {
   if (!selectedFolderId.value) return ''
-  return folderNameMap.value.get(selectedFolderId.value) || ''
+  return folderNameMap.value.get(selectedFolderId.value) ?? ''
 })
 
 const mobileFolderSelectValue = computed<string>({
@@ -369,7 +369,9 @@ function onFoldersChanged() {
 
 function onSchemaDragStart(schema: SchemaItem, event: DragEvent) {
   event.dataTransfer?.setData('text/plain', schema.id)
-  event.dataTransfer!.effectAllowed = 'move'
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+  }
 }
 
 const moving = ref(false)

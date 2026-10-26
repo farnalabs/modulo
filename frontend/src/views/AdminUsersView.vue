@@ -527,7 +527,7 @@ const actionLoading = ref<Record<string, boolean>>({})
 let flashTimeout: ReturnType<typeof setTimeout> | null = null
 
 function initialOf(name: string): string {
-  return name ? name.charAt(0).toUpperCase() : '?'
+  return name.charAt(0).toUpperCase() || '?'
 }
 
 function showFlash(type: 'success' | 'error', text: string) {
