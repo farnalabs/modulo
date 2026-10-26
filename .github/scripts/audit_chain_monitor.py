@@ -394,7 +394,6 @@ def evaluate(
         escalate=escalate,
         reason=_reason(
             current_blind=current_blind,
-            previous_blind=previous_blind,
             consecutive=consecutive,
             threshold=due_threshold,
             already_escalated=already_escalated_value,
@@ -416,7 +415,6 @@ def _previous_label(previous_blind: bool | None) -> str:
 def _reason(
     *,
     current_blind: bool | None,
-    previous_blind: bool | None,
     consecutive: int | None,
     threshold: int,
     already_escalated: bool | None,
