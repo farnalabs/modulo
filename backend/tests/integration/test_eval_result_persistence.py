@@ -179,6 +179,7 @@ class TestC10EvalResultColumnRoundTrip:
         eval_result_id = uuid.uuid4()
         expected_version = 3
         expected_passed = False
+        expected_outcome = "fail"
         expected_score = 0.42
         expected_detail = "chunk-2-persistence-test"
 
@@ -187,8 +188,8 @@ class TestC10EvalResultColumnRoundTrip:
                 text(
                     "INSERT INTO eval_results "
                     "(id, organisation_id, run_id, node_id, eval_id, "
-                    "eval_definition_version, passed, score, detail) "
-                    "VALUES (:id, :oid, :rid, :nid, :eid, :edv, :p, :s, :d)"
+                    "eval_definition_version, passed, outcome, score, detail) "
+                    "VALUES (:id, :oid, :rid, :nid, :eid, :edv, :p, :o, :s, :d)"
                 ),
                 {
                     "id": str(eval_result_id),
@@ -198,6 +199,7 @@ class TestC10EvalResultColumnRoundTrip:
                     "eid": str(eval_id),
                     "edv": expected_version,
                     "p": expected_passed,
+                    "o": expected_outcome,
                     "s": expected_score,
                     "d": expected_detail,
                 },
@@ -208,7 +210,7 @@ class TestC10EvalResultColumnRoundTrip:
             result = await conn.execute(
                 text(
                     "SELECT organisation_id, run_id, node_id, eval_id, "
-                    "eval_definition_version, passed, score, detail "
+                    "eval_definition_version, passed, outcome, score, detail "
                     "FROM eval_results WHERE id = :id"
                 ),
                 {"id": str(eval_result_id)},
@@ -223,8 +225,9 @@ class TestC10EvalResultColumnRoundTrip:
         assert uuid.UUID(str(row[3])) == eval_id, "eval_id mismatch"
         assert row[4] == expected_version, "eval_definition_version mismatch"
         assert row[5] is expected_passed, "passed mismatch"
-        assert abs(float(row[6]) - expected_score) < 1e-6, "score mismatch"
-        assert row[7] == expected_detail, "detail mismatch"
+        assert row[6] == expected_outcome, "outcome mismatch"
+        assert abs(float(row[7]) - expected_score) < 1e-6, "score mismatch"
+        assert row[8] == expected_detail, "detail mismatch"
 
     @pytest.mark.asyncio
     async def test_null_optional_columns(self, db_engine: AsyncEngine) -> None:
@@ -246,8 +249,8 @@ class TestC10EvalResultColumnRoundTrip:
             await conn.execute(
                 text(
                     "INSERT INTO eval_results "
-                    "(id, organisation_id, run_id, eval_id, passed) "
-                    "VALUES (:id, :oid, :rid, :eid, true)"
+                    "(id, organisation_id, run_id, eval_id, passed, outcome) "
+                    "VALUES (:id, :oid, :rid, :eid, true, 'pass')"
                 ),
                 {
                     "id": str(eval_result_id),
@@ -290,8 +293,8 @@ class TestC11EvalResultFKEnforcement:
                 await conn.execute(
                     text(
                         "INSERT INTO eval_results "
-                        "(id, organisation_id, run_id, eval_id, passed) "
-                        "VALUES (:id, :oid, :rid, :eid, true)"
+                        "(id, organisation_id, run_id, eval_id, passed, outcome) "
+                        "VALUES (:id, :oid, :rid, :eid, true, 'pass')"
                     ),
                     {
                         "id": str(uuid.uuid4()),
