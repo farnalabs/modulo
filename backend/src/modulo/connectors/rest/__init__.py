@@ -546,7 +546,7 @@ def _stub_security_guard() -> SecurityGuard:
     inject a real ``SecurityGuard``.
     """
 
-    async def validate_url(_url: str) -> None:
+    async def validate_url(_url: str) -> None:  # NOSONAR python:S7503 — async security-guard capability seam
         return None
 
     def filter_strings(_values: Sequence[str], _resource: str) -> None:
@@ -1135,7 +1135,7 @@ class RestConnector(ConnectorBase):
                     success_count=success_count,
                     failure_count=sum(1 for o in outcomes if o["status"] == "failure"),
                 ) from exc
-            except Exception as exc:
+            except Exception as exc:  # NOSONAR python:S112 — record every fan-out failure
                 outcome["status"] = "failure"
                 outcome["error"] = self._redact(str(exc))
                 outcomes.append(outcome)
@@ -1453,7 +1453,7 @@ class RestConnector(ConnectorBase):
         """
         try:
             text = repr(item)
-        except Exception:  # NOSONAR S112 - a fan-out item's repr may raise any type; never abort outcome recording
+        except Exception:  # NOSONAR python:S112 — any repr failure must not abort outcome recording
             text = f"<{type(item).__name__}>"
         redacted = self._redact(text)
         return redacted if len(redacted) <= 80 else redacted[:77] + "..."
@@ -1909,7 +1909,7 @@ class RestConnector(ConnectorBase):
         except (TypeError, ValueError, AttributeError):
             return ""
 
-    async def _consume_body(self, resp: httpx.Response) -> str:
+    async def _consume_body(self, resp: httpx.Response) -> str:  # NOSONAR python:S7503 — async HTTP streaming seam
         """Read the body, aborting past ``max_response_size`` (never unbounded)."""
         cap = self._max_response_size
         content_length = resp.headers.get("content-length")
