@@ -825,6 +825,19 @@ never 503s readiness on its own) when either threshold is breached. A completed 
 that grades `degraded` DOES gate the aggregate – only a probe that never finished is
 advisory.
 
+### Deploy-run correlation
+
+When the migrations check reports repo-vs-DB divergence, its detail links the most recent
+run of the configured deploy workflow so an operator can jump straight to it. The lookup
+is best-effort and never gates readiness: it is skipped when no `GITHUB_TOKEN` /
+`GITHUB_REVIEWBOT_PAT` is set or when `MODULO_DEPLOY_RUN_REPO` is empty.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_DEPLOY_RUN_REPO` | No | `farnalabs/modulo` | `owner/repo` whose deploy workflow run is linked; empty disables the lookup |
+| `MODULO_DEPLOY_RUN_WORKFLOW` | No | `deploy.yml` | Workflow file name (or numeric id) whose latest run is linked |
+| `MODULO_DEPLOY_RUN_API_BASE` | No | `https://api.github.com` | GitHub API base URL; a GitHub Enterprise Server deployment sets `https://<host>/api/v3` |
+
 ---
 
 ## Migration CLI

@@ -12,17 +12,19 @@
 # staleness check uses.
 #
 # State vector: the previous verdict is the conclusion of this workflow's
-# VERDICT_STEP_NAME step in its most recent completed run -- FAILED when that
-# run evaluated unhealthy, SKIPPED when it did not. No state store is
+# VERDICT_STEP_NAME step (FAILED = unhealthy, SKIPPED = not unhealthy) in the
+# most recent completed run that MEASURED something. No state store is
 # introduced. An unreadable / missing previous verdict is UNKNOWN, which never
 # suppresses an alert.
 #
-# Known limitation (fail-loud, not fail-silent): a tick whose evaluation is
-# UNKNOWN skips the verdict step, so its run is indistinguishable from a
-# healthy one in run history. The consequence is that an unreadable tick
-# BETWEEN an escalation and its recovery can swallow the recovery email, and an
-# unreadable tick between two unhealthy ticks re-sends the alert once. Both
-# directions are deliberately loud; neither can hide an escalation.
+# FAR-2157: a tick whose evaluation is UNKNOWN runs neither the verdict step
+# nor a healthy verdict -- it runs the workflow's UNKNOWN-tick marker step,
+# which `deploy_health.parse_previous_verdict` reads as UNKNOWN. The lookup
+# therefore walks BACKWARDS past such ticks to the last measured verdict
+# (bounded), instead of stopping at the first completed run: stopping there
+# recorded an unmeasured tick as healthy (its verdict step is skipped), which
+# silently swallowed the recovery email between an escalation and its
+# recovery. A lookup that cannot be read is skipped, never trusted.
 #
 # Inputs (all via env: -- never interpolated into the shell):
 #   WORKFLOW_NAME       workflow whose run history holds the state vector
@@ -93,7 +95,8 @@ if [[ -z "$PREV_VERDICT" ]]; then
     PREV_RUNS="$(gh run list --repo "$REPOSITORY" --workflow "$WORKFLOW_NAME" --limit 10 \
       --json databaseId,status,conclusion,createdAt 2>/dev/null)" || PREV_RUNS=""
     if [[ -n "$PREV_RUNS" ]]; then
-      PREV_ID="$(PAYLOAD="$PREV_RUNS" CURRENT="${GITHUB_RUN_ID:-}" python3 - <<'PY'
+      # Newest-first ids of completed runs other than this one, one per line.
+      PREV_IDS="$(PAYLOAD="$PREV_RUNS" CURRENT="${GITHUB_RUN_ID:-}" python3 - <<'PY'
 import json
 import os
 
@@ -102,22 +105,47 @@ try:
 except Exception:
     runs = []
 current = str(os.environ.get("CURRENT", ""))
-completed = [
-    r
-    for r in runs
-    if r.get("status") == "completed" and str(r.get("databaseId")) != current
-]
-print(completed[0]["databaseId"] if completed else "")
+for run in runs:
+    if run.get("status") == "completed" and str(run.get("databaseId")) != current:
+        print(run["databaseId"])
 PY
-)" || PREV_ID=""
-      if [[ -n "$PREV_ID" ]]; then
-        PREV_JOBS_FILE="$(mktemp)"
-        if gh api "repos/$REPOSITORY/actions/runs/$PREV_ID/jobs" > "$PREV_JOBS_FILE" 2>/dev/null; then
-          PREV_VERDICT="$(python3 "$EVALUATOR" previous-verdict --jobs-json "$PREV_JOBS_FILE")" || PREV_VERDICT="unknown"
-        else
-          echo "::warning::Could not read the previous run's jobs ($PREV_ID) - treating the previous verdict as UNKNOWN, which alerts rather than suppresses."
+)" || PREV_IDS=""
+      if [[ -n "$PREV_IDS" ]]; then
+        # FAR-2157: walk back to the last MEASURED verdict. A tick that measured
+        # nothing carries the UNKNOWN-tick marker, so the evaluator returns
+        # UNKNOWN for it; such a run must neither be trusted as healthy nor
+        # stop the walk. (A run from before the marker existed cannot be told
+        # apart from a healthy one - it is read as healthy, as it always was.)
+        # Bounded: at most LOOKUP_BUDGET job reads.
+        LOOKUP_BUDGET=5
+        LOOKED_UP=0
+        while IFS= read -r PREV_ID; do
+          [[ -z "$PREV_ID" ]] && continue
+          if [[ "$LOOKED_UP" -ge "$LOOKUP_BUDGET" ]]; then
+            echo "::warning::Previous-verdict walk stopped after ${LOOKUP_BUDGET} unmeasured run(s) - treating the previous verdict as UNKNOWN, which alerts rather than suppresses."
+            break
+          fi
+          LOOKED_UP=$((LOOKED_UP + 1))
+          PREV_JOBS_FILE="$(mktemp)"
+          if gh api "repos/$REPOSITORY/actions/runs/$PREV_ID/jobs" > "$PREV_JOBS_FILE" 2>/dev/null; then
+            RUN_VERDICT="$(python3 "$EVALUATOR" previous-verdict --jobs-json "$PREV_JOBS_FILE")" || RUN_VERDICT="unknown"
+            rm -f "$PREV_JOBS_FILE"
+            if [[ "$RUN_VERDICT" != "unknown" ]]; then
+              PREV_VERDICT="$RUN_VERDICT"
+              echo "Previous verdict read from run $PREV_ID."
+              break
+            fi
+            echo "Run $PREV_ID measured nothing (UNKNOWN) - walking back to the last measured verdict."
+          else
+            rm -f "$PREV_JOBS_FILE"
+            echo "::warning::Could not read run ${PREV_ID}'s jobs - skipping it rather than trusting it."
+          fi
+        done <<< "$PREV_IDS"
+        if [[ "$PREV_VERDICT" = "unknown" ]]; then
+          echo "::warning::No measured previous verdict found in this workflow's recent runs - treating it as UNKNOWN, which alerts rather than suppresses."
         fi
-        rm -f "$PREV_JOBS_FILE"
+      else
+        echo "No completed previous run of this workflow - treating the previous verdict as UNKNOWN, which alerts rather than suppresses."
       fi
     else
       echo "::warning::Could not list this workflow's recent runs - treating the previous verdict as UNKNOWN, which alerts rather than suppresses."

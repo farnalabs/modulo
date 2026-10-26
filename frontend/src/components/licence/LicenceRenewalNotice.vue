@@ -69,17 +69,6 @@
           >
             {{ $t('components.LicenceRenewalNotice.install_action') }}
           </button>
-          <!--
-            FAR-2114: renewing early issues a new key; the days left on the
-            previous licence are only added through the claim page.
-          -->
-          <a
-            href="/licence/claim"
-            class="text-sm font-medium text-primary-text underline underline-offset-2"
-            data-testid="licence-renewal-claim-link"
-          >
-            {{ $t('components.LicenceRenewalNotice.claim_action') }}
-          </a>
         </div>
       </div>
     </div>
