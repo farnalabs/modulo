@@ -302,6 +302,39 @@ describe('AdminUsersView', () => {
     expect((input.element as HTMLInputElement).value).toMatch(/\d/)
   })
 
+  it('masks a password credential by default and reveals it on demand', async () => {
+    mockPost.mockResolvedValue({ id: 'u-new', email: 'carol@example.com', display_name: 'Carol', org_role: 'runner' })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-create-email"]').setValue('carol@example.com')
+    await wrapper.find('[data-testid="admin-users-create-display-name"]').setValue('Carol')
+    await wrapper.find('[data-testid="admin-users-create-password"]').setValue('Sup3rSecret!')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    await nextTick()
+
+    const value = wrapper.find('[data-testid="admin-users-credential-value"]')
+    expect(value.text()).toBe('•'.repeat('Sup3rSecret!'.length))
+    expect(value.text()).not.toContain('Sup3rSecret!')
+
+    await wrapper.find('[data-testid="admin-users-reveal-password"]').trigger('click')
+    expect(value.text()).toBe('Sup3rSecret!')
+  })
+
+  it('keeps the create-user form fields spaced and appends the role menu to body', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+
+    const form = wrapper.find('form')
+    expect(form.classes()).toContain('space-y-4')
+    expect(wrapper.find('[data-testid="admin-users-create-role"]').attributes('append-to')).toBe('body')
+  })
+
   it('shows the shared credential dialog with a copy button after create user succeeds', async () => {
     mockPost.mockResolvedValue({ id: 'u-new', email: 'carol@example.com', display_name: 'Carol', org_role: 'runner' })
     const wrapper = mountView()
@@ -567,15 +600,17 @@ describe('AdminUsersView', () => {
     await vi.waitFor(() => {
       const code = wrapper.find('[data-testid="admin-users-credential-value"]')
       expect(code.exists()).toBe(true)
-      expect(code.text()).toBe('$2b$12$tempsecret')
+      expect(code.text()).toBe('•'.repeat('$2b$12$tempsecret'.length))
     })
+    await wrapper.find('[data-testid="admin-users-reveal-password"]').trigger('click')
+    expect(wrapper.find('[data-testid="admin-users-credential-value"]').text()).toBe('$2b$12$tempsecret')
     const doneButton = wrapper.findAll('button').find(b => b.text() === 'Done')
     expect(doneButton).toBeDefined()
     await doneButton!.trigger('click')
     await nextTick()
     const codeAfter = wrapper.find('[data-testid="admin-users-credential-value"]')
-    // Either unmounted or rendered empty — the secret must be gone either way.
-    if (codeAfter.exists()) expect(codeAfter.text()).toBe('')
+    // Either unmounted or rendered as the non-secret mask — the secret must be gone either way.
+    if (codeAfter.exists()) expect(codeAfter.text()).toBe('•'.repeat(8))
   })
 
   it('renders pagination controls and advances the page when total exceeds the page size', async () => {

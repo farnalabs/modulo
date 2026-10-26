@@ -96,6 +96,7 @@ def _make_session(execute_results: list[MagicMock] | None = None) -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    session.begin_nested = MagicMock(return_value=begin_cm)
     session.add = MagicMock()
     session.flush = AsyncMock()
     session.refresh = AsyncMock()
@@ -457,6 +458,22 @@ def test_list_users_programming_error_501(api: tuple[TestClient, AsyncMock]) -> 
 
 
 # ── PUT /users/{user_id} ──
+
+
+def test_update_user_role_rolls_back_implicit_read_transaction(
+    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, session = api
+    membership = _membership(role="runner")
+    monkeypatch.setattr(admin, "get_membership_by_account_and_org", AsyncMock(return_value=membership))
+    monkeypatch.setattr(admin, "assert_not_last_admin", AsyncMock())
+    monkeypatch.setattr(admin, "get_account_by_id", AsyncMock(return_value=_account()))
+
+    resp = client.put(f"/api/v1/admin/users/{_TARGET_USER_ID}", json={"org_role": "viewer"})
+
+    assert resp.status_code == 200
+    session.begin_nested.assert_called_once()
+    assert membership.role == "runner"
 
 
 def test_update_user_account_missing_404(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:

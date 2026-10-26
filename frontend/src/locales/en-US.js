@@ -3707,6 +3707,8 @@ export default {
       "user_reactivated": "User {email} reactivated",
       "role_changed_to": "Role changed to {role} for {email}",
       "copy": "Copy",
+      "reveal_password": "Reveal",
+      "hide_password": "Hide",
       "copy_failed_manual": "Copy failed — select the value above and copy it manually.",
       "done": "Done",
       "invitation_ready": "Invitation Ready",

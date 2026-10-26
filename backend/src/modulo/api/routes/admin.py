@@ -1236,7 +1236,8 @@ async def admin_update_user(
         )
 
     try:
-        async with session.begin():
+        transaction = session.begin_nested() if session.in_transaction() else session.begin()
+        async with transaction:
             await set_rls_org(session, current_user.organisation_id)
 
             # SECURITY (#1188): verify the target has membership in the caller's org
