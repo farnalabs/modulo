@@ -4486,7 +4486,7 @@ async def _process_polling_fire(
     org_paused: bool,
     row: Any,
     config: dict[str, Any],
-    connector_instance_id: uuid.UUID,
+    connector_instance_id: uuid.UUID | None,
     summary: dict[str, Any],
 ) -> None:
     """Enqueue polling fire job."""
@@ -5474,8 +5474,11 @@ def _check_dispatch_phase_excludes(row: Any) -> bool:
 def _check_age_gate(row: Any, age_minutes: int) -> bool:
     """Check if row passes the age gate."""
     now = datetime.now(UTC)
-    age_seconds = (now - row.started_at).total_seconds()
-    return age_seconds > age_minutes * 60
+    started_at = getattr(row, "started_at", None)
+    if started_at is None:
+        return False
+    age_seconds = (now - started_at).total_seconds()
+    return bool(age_seconds > age_minutes * 60)
 
 
 def _check_in_flight_shield(row: Any, age_seconds: float) -> bool:
@@ -6083,7 +6086,7 @@ async def _check_node_deadline_zero_progress(run: Any, session: AsyncSession) ->
             ).where(Run.id == run.id)
         )
     ).one()
-    return flags.outputs_absent and flags.checkpoints_absent
+    return bool(flags.outputs_absent and flags.checkpoints_absent)
 
 
 def _compute_node_deadline_timing(run: Any, now: datetime) -> tuple[float | None, float | None, str, str]:

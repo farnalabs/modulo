@@ -93,7 +93,7 @@ def _tokenize(formula: str) -> list[_Token]:
     pos = 0
     length = len(formula)
     while pos < length:
-        if formula[pos] in " \t\r\n\f\v":
+        if formula[pos] in " \t\r\n\f\v" and pos + 1 < length:
             pos += 1
             continue
         match = _TOKEN_RE.match(formula, pos)
