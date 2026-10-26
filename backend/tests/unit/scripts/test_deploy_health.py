@@ -945,10 +945,108 @@ def test_markerless_skipped_verdict_step_still_reads_as_healthy() -> None:
 def test_marker_does_not_make_an_unhealthy_run_unknown() -> None:
     """An unhealthy tick fails the verdict step and never runs the marker leg.
 
-    Guards against a marker check that swallows a real failure if both appear.
+    Guards against a marker check that lets the SKIPPED marker step (which every
+    measured tick carries) swallow a real failure. FAR-2176: before the fix this
+    returned UNKNOWN, so an already-unhealthy pipeline re-alerted every tick.
     """
     payload = _jobs(
         {"name": health.VERDICT_STEP_NAME, "conclusion": "failure"},
         {"name": health.UNKNOWN_VERDICT_STEP_NAME, "conclusion": "skipped"},
     )
-    assert health.parse_previous_verdict(payload) == health.UNKNOWN
+    assert health.parse_previous_verdict(payload) == health.UNHEALTHY
+
+
+# --- FAR-2176: a step's PRESENCE is not "it ran" -----------------------------
+
+
+def _api_step(name: str, conclusion: str, number: int) -> dict[str, Any]:
+    """One step exactly as the Actions jobs API returns it (skipped included).
+
+    A skipped step is still ``status: "completed"`` with a ``conclusion`` of
+    ``"skipped"`` and populated timestamps - so ``status`` is not the
+    discriminator either; only the conclusion says whether it ran.
+    """
+    return {
+        "name": name,
+        "status": "completed",
+        "conclusion": conclusion,
+        "number": number,
+        "started_at": "2026-10-26T11:41:40Z",
+        "completed_at": "2026-10-26T11:41:40Z",
+    }
+
+
+def _measured_run(*, verdict_conclusion: str) -> dict[str, Any]:
+    """A MEASURED tick: verdict step decides, marker step present-but-skipped.
+
+    This is the real wire shape of a healthy run (40316916204: verdict step
+    ``skipped``, marker step ``skipped``) and of an unhealthy one (verdict step
+    ``failure``, marker step ``skipped``).
+    """
+    return _jobs(
+        _api_step(health.VERDICT_STEP_NAME, verdict_conclusion, 7),
+        _api_step(health.UNKNOWN_VERDICT_STEP_NAME, "skipped", 8),
+    )
+
+
+def test_skipped_marker_step_is_not_an_unknown_tick() -> None:
+    """FAR-2176, the real skipped-step shape: presence is not "it ran".
+
+    GitHub returns every DEFINED step in ``jobs[].steps``, including the ones a
+    step-level ``if:`` skipped. Both escalation workflows define the marker step
+    unconditionally, so a measured tick carries it with ``conclusion:
+    "skipped"``. Reading presence made a HEALTHY run read as UNKNOWN - and an
+    UNKNOWN previous verdict always alerts, so an already-unhealthy pipeline
+    re-alerted on every tick.
+    """
+    healthy_run = _measured_run(verdict_conclusion="skipped")
+    assert health.parse_previous_verdict(healthy_run) == health.HEALTHY
+
+    unhealthy_run = _measured_run(verdict_conclusion="failure")
+    assert health.parse_previous_verdict(unhealthy_run) == health.UNHEALTHY
+
+
+def test_executed_marker_step_still_reads_as_unknown() -> None:
+    """The genuine UNKNOWN tick keeps the FAR-2157 behaviour.
+
+    The marker step only EXECUTES on the unmeasured path, so a success (or a
+    failure of the recorder itself, which still means no verdict was reached)
+    is authoritative - UNKNOWN never becomes healthy.
+    """
+    unmeasured = _jobs(
+        _api_step(health.VERDICT_STEP_NAME, "skipped", 7),
+        _api_step(health.UNKNOWN_VERDICT_STEP_NAME, "success", 8),
+    )
+    assert health.parse_previous_verdict(unmeasured) == health.UNKNOWN
+
+    failed_recorder = _jobs(_api_step(health.UNKNOWN_VERDICT_STEP_NAME, "failure", 8))
+    assert health.parse_previous_verdict(failed_recorder) == health.UNKNOWN
+
+
+def test_measured_step_shapes_drive_exactly_one_transition() -> None:
+    """FAR-2176: the real step shapes yield ONE email per transition.
+
+    Composes the two halves the workflows use - ``parse_previous_verdict`` on
+    the previous run's steps, then ``resolve_action`` - because the alert-fatigue
+    defect lived in their interaction, not in either alone.
+    """
+    healthy_previous = health.parse_previous_verdict(_measured_run(verdict_conclusion="skipped"))
+    unhealthy_previous = health.parse_previous_verdict(_measured_run(verdict_conclusion="failure"))
+    unmeasured_previous = health.parse_previous_verdict(
+        _jobs(_api_step(health.UNKNOWN_VERDICT_STEP_NAME, "success", 8))
+    )
+
+    # unhealthy -> unhealthy: the incident is already open, so no second email.
+    assert health.resolve_action(False, unhealthy_previous) == "none"
+    # healthy -> unhealthy: entering the condition sends ONE alert.
+    assert health.resolve_action(False, healthy_previous) == "alert"
+    # unhealthy -> healthy: ONE recovery closes the incident.
+    assert health.resolve_action(True, unhealthy_previous) == "recovery"
+
+    # A genuine UNKNOWN tick is unchanged (FAR-2157): it never suppresses the
+    # alert it precedes...
+    assert unmeasured_previous == health.UNKNOWN
+    assert health.resolve_action(False, unmeasured_previous) == "alert"
+    # ...and an unmeasured CURRENT tick still sends nothing, leaving a live
+    # alert open rather than inventing a recovery.
+    assert health.resolve_action(None, health.UNHEALTHY) == "none"
