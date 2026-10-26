@@ -84,6 +84,29 @@ def is_org_consenting(settings_json: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _parse_prompted_at(prompted_at: Any) -> datetime | None:
+    """Parse prompted_at value to an aware datetime, or return None on failure."""
+    if prompted_at is None:
+        return None
+    if isinstance(prompted_at, str):
+        try:
+            parsed = datetime.fromisoformat(prompted_at)
+        except (ValueError, TypeError):
+            return None
+    else:
+        parsed = prompted_at
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _is_cooldown_expired(prompted_at: datetime | None) -> bool:
+    """Check if the dismiss cooldown has expired."""
+    if prompted_at is None:
+        return True
+    return datetime.now(UTC) - prompted_at >= DISMISS_COOLDOWN
+
+
 def is_prompt_eligible(consent: dict[str, Any]) -> bool:
     """Return True if the org is eligible for a consent prompt.
 
@@ -96,18 +119,8 @@ def is_prompt_eligible(consent: dict[str, Any]) -> bool:
         return True
     if prompted != PROMPTED_DISMISSED:
         return False
-    # Check cooldown
-    prompted_at = consent.get("prompted_at")
-    if prompted_at is None:
-        return True
-    if isinstance(prompted_at, str):
-        try:
-            prompted_at = datetime.fromisoformat(prompted_at)
-        except (ValueError, TypeError):
-            return True
-    if prompted_at.tzinfo is None:
-        prompted_at = prompted_at.replace(tzinfo=UTC)
-    return datetime.now(UTC) - prompted_at >= DISMISS_COOLDOWN
+    prompted_at = _parse_prompted_at(consent.get("prompted_at"))
+    return _is_cooldown_expired(prompted_at)
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +282,7 @@ async def is_license_enforcement_enabled(session: AsyncSession) -> bool:
         config = await get_config(session, LICENSE_ENFORCEMENT_KILL_SWITCH_KEY)
     except SQLAlchemyError:
         _log.warning("product_analytics.kill_switch_read_failed", exc_info=True)
-        return True  # read failure = fail safe = enforced
+        return True
     if config is None:
         return True  # absent = enforced
     return not kill_switch_disables_enforcement(config.value)
