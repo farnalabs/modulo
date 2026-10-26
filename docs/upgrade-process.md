@@ -222,6 +222,12 @@ sudo systemctl restart modulo
 
 **Warning:** Rolling back the application does NOT revert database migrations. If the previous code expects an older schema:
 
+#### Irreversible data-purge migrations
+
+A database restore alone is not a durable rollback for a migration that permanently deletes data. Stop the purge image and hold any release or startup path that could boot it. Restore the database from the pre-purge backup, then roll the application image back to an image built before the purge migration before starting the application again. Otherwise, startup or release migration logic can apply the purge again as soon as it sees the restored pre-purge revision.
+
+The order is mandatory: **stop or hold the purge image, restore the database, roll back the application image, then boot it**. Do not boot the purge image between the restore and the application rollback.
+
 ```bash
 # Check current Alembic version
 docker compose -f deploy/compose/docker-compose.prod.yml exec modulo uv run alembic current
