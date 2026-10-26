@@ -3211,8 +3211,11 @@ async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
 #: lowercase echo and be recorded as THE delivery URL.
 # The exact grammar is pinned against the runtime extractor and sandbox policy;
 # retain ``\d`` in the class because those copies are an intentional contract.
-_PR_URL_PATTERN = re.compile(  # NOSONAR S5869 — pinned cross-module regex contract
-    r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+", re.IGNORECASE
+_PR_URL_PATTERN = re.compile(
+    # The exact grammar is pinned by test_pr_url_regex_pins.py and must match
+    # the other copies.  # NOSONAR S5869 — intentional duplicate-safe grammar.
+    r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+",  # NOSONAR S5869
+    re.IGNORECASE,
 )
 
 #: A line carrying a JSON ``"url":`` key is a ``gh pr list --json ...,url``

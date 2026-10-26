@@ -311,25 +311,35 @@ def upgrade() -> None:
     _migrate_flag_catalog(forward=True)
 
 
+def _downgrade_postgres() -> None:
+    """Reverse PostgreSQL object renames while tables use assistant names."""
+    # Reverse order: triggers/indexes/constraints while the tables still
+    # carry their assistant_* names, then the tables themselves.
+    for table, old, new in _TRIGGERS:
+        op.execute(_rename_trigger_sql(table, new, old))
+    for old, new in _INDEXES:
+        op.execute(_rename_index_sql(new, old))
+    for table, old, new in _CONSTRAINTS:
+        op.execute(_rename_constraint_sql(table, new, old))
+    for old, new in _TABLES:
+        op.execute(_rename_table_sql(new, old))
+    for old_table, _new_table in _TABLES:
+        op.execute(_ensure_rls_sql(old_table))
+
+
+def _downgrade_other() -> None:
+    """Reverse portable table renames on non-PostgreSQL backends."""
+    inspector = sa.inspect(op.get_bind())
+    existing = set(inspector.get_table_names())
+    for old, new in _TABLES:
+        if new in existing and old not in existing:
+            op.execute(_rename_table_portable_sql(new, old))
+
+
 def downgrade() -> None:
     _migrate_config_keys(forward=False)
     _migrate_flag_catalog(forward=False)
     if op.get_bind().dialect.name == "postgresql":
-        # Reverse order: triggers/indexes/constraints while the tables still
-        # carry their assistant_* names, then the tables themselves.
-        for table, old, new in _TRIGGERS:
-            op.execute(_rename_trigger_sql(table, new, old))
-        for old, new in _INDEXES:
-            op.execute(_rename_index_sql(new, old))
-        for table, old, new in _CONSTRAINTS:
-            op.execute(_rename_constraint_sql(table, new, old))
-        for old, new in _TABLES:
-            op.execute(_rename_table_sql(new, old))
-        for old_table, _new_table in _TABLES:
-            op.execute(_ensure_rls_sql(old_table))
+        _downgrade_postgres()
     else:
-        inspector = sa.inspect(op.get_bind())
-        existing = set(inspector.get_table_names())
-        for old, new in _TABLES:
-            if new in existing and old not in existing:
-                op.execute(_rename_table_portable_sql(new, old))
+        _downgrade_other()
