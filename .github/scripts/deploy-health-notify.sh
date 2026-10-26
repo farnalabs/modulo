@@ -61,6 +61,8 @@ WORKFLOW_NAME="${WORKFLOW_NAME:-}"
 VERDICT_STEP_NAME="${VERDICT_STEP_NAME:-}"
 CURRENT_HEALTHY="${CURRENT_HEALTHY:-}"
 VERDICT_JSON="${VERDICT_JSON:-}"
+UNKNOWN_VERDICT="unknown"
+export UNKNOWN_VERDICT
 RUN_URL="${RUN_URL:-}"
 DEPLOY_URL="${DEPLOY_URL:-}"
 
@@ -90,7 +92,7 @@ fi
 # ---- 1. Previous verdict: this workflow's most recent completed run. ----
 PREV_VERDICT="${PREVIOUS_VERDICT:-}"
 if [[ -z "$PREV_VERDICT" ]]; then
-  PREV_VERDICT="unknown"
+  PREV_VERDICT="$UNKNOWN_VERDICT"
   if [[ -n "${REPOSITORY:-}" ]] && [[ -n "$WORKFLOW_NAME" ]] && command -v gh >/dev/null 2>&1; then
     PREV_RUNS="$(gh run list --repo "$REPOSITORY" --workflow "$WORKFLOW_NAME" --limit 10 \
       --json databaseId,status,conclusion,createdAt 2>/dev/null)" || PREV_RUNS=""
@@ -128,9 +130,9 @@ PY
           LOOKED_UP=$((LOOKED_UP + 1))
           PREV_JOBS_FILE="$(mktemp)"
           if gh api "repos/$REPOSITORY/actions/runs/$PREV_ID/jobs" > "$PREV_JOBS_FILE" 2>/dev/null; then
-            RUN_VERDICT="$(python3 "$EVALUATOR" previous-verdict --jobs-json "$PREV_JOBS_FILE")" || RUN_VERDICT="unknown"
+            RUN_VERDICT="$(python3 "$EVALUATOR" previous-verdict --jobs-json "$PREV_JOBS_FILE")" || RUN_VERDICT="$UNKNOWN_VERDICT"
             rm -f "$PREV_JOBS_FILE"
-            if [[ "$RUN_VERDICT" != "unknown" ]]; then
+            if [[ "$RUN_VERDICT" != "$UNKNOWN_VERDICT" ]]; then
               PREV_VERDICT="$RUN_VERDICT"
               echo "Previous verdict read from run $PREV_ID."
               break
@@ -141,7 +143,7 @@ PY
             echo "::warning::Could not read run ${PREV_ID}'s jobs - skipping it rather than trusting it."
           fi
         done <<< "$PREV_IDS"
-        if [[ "$PREV_VERDICT" = "unknown" ]]; then
+        if [[ "$PREV_VERDICT" = "$UNKNOWN_VERDICT" ]]; then
           echo "::warning::No measured previous verdict found in this workflow's recent runs - treating it as UNKNOWN, which alerts rather than suppresses."
         fi
       else
@@ -202,6 +204,8 @@ from email.utils import formatdate
 HOST = "smtppro.zoho.eu"
 PORT_STARTTLS = 587
 PORT_SSL = 465
+STARTTLS_LABEL = f"{PORT_STARTTLS}"
+SSL_LABEL = f"{PORT_SSL}"
 
 user = os.environ["ZOHO_SMTP_USER"]
 password = os.environ["ZOHO_SMTP_PASS"]
@@ -247,7 +251,10 @@ except Exception as first_error:
         send(PORT_SSL, use_ssl=True)
     except Exception as second_error:
         print(
-            scrub(f"SMTP send failed on 587 ({first_error}) and 465 ({second_error})"),
+            scrub(
+                f"SMTP send failed on {STARTTLS_LABEL} ({first_error}) "
+                f"and {SSL_LABEL} ({second_error})"
+            ),
             file=sys.stderr,
         )
         sys.exit(1)
