@@ -45,6 +45,60 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Check release freeze marker
+        id: release_gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          STATUS="$(curl -sS -o /tmp/release-freeze.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-freeze")"
+          case "$STATUS" in
+            200)
+              FREEZE_SHA="$(jq -r '.object.sha // empty' /tmp/release-freeze.json)"
+              if [ -z "$FREEZE_SHA" ]; then
+                echo "::error::release-freeze lookup returned no SHA; refusing stable publication."
+                exit 1
+              fi
+              echo "allow_latest=false" >> "$GITHUB_OUTPUT"
+              echo "Release freeze is active at ${FREEZE_SHA}; this main push may publish only its immutable SHA tag, never stable latest."
+              ;;
+            404)
+              HOLD_STATUS="$(curl -sS -o /tmp/release-publication-hold.json -w '%{http_code}' \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H 'Accept: application/vnd.github+json' \
+                "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-publication-hold")"
+              case "$HOLD_STATUS" in
+                200)
+                  HOLD_SHA="$(jq -r '.object.sha // empty' /tmp/release-publication-hold.json)"
+                  if [ -z "$HOLD_SHA" ]; then
+                    echo "::error::release-publication-hold lookup returned no SHA; refusing stable publication."
+                    exit 1
+                  fi
+                  echo "allow_latest=false" >> "$GITHUB_OUTPUT"
+                  echo "Release publication hold is active at ${HOLD_SHA}; this main push may publish only its immutable SHA tag, never stable latest."
+                  ;;
+                404)
+                  echo "allow_latest=true" >> "$GITHUB_OUTPUT"
+                  echo "No release freeze or publication hold marker; ordinary main publication may update latest."
+                  ;;
+                *)
+                  echo "::error::release-publication-hold lookup failed with HTTP ${HOLD_STATUS}; refusing stable publication rather than guessing."
+                  cat /tmp/release-publication-hold.json
+                  exit 1
+                  ;;
+              esac
+              ;;
+            *)
+              echo "::error::release-freeze lookup failed with HTTP ${STATUS}; refusing stable publication rather than guessing."
+              cat /tmp/release-freeze.json
+              exit 1
+              ;;
+          esac
+
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -63,7 +117,7 @@ jobs:
             # Tag :latest on main branch pushes so :latest always means the
             # newest main build. Versioned tags are published by
             # release-unified.yml (cut/recut), not here.
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && steps.release_gate.outputs.allow_latest == 'true' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -113,6 +167,60 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Check release freeze marker
+        id: release_gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          STATUS="$(curl -sS -o /tmp/release-freeze.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-freeze")"
+          case "$STATUS" in
+            200)
+              FREEZE_SHA="$(jq -r '.object.sha // empty' /tmp/release-freeze.json)"
+              if [ -z "$FREEZE_SHA" ]; then
+                echo "::error::release-freeze lookup returned no SHA; refusing stable publication."
+                exit 1
+              fi
+              echo "allow_latest=false" >> "$GITHUB_OUTPUT"
+              echo "Release freeze is active at ${FREEZE_SHA}; this main push may publish only its immutable SHA tag, never stable latest."
+              ;;
+            404)
+              HOLD_STATUS="$(curl -sS -o /tmp/release-publication-hold.json -w '%{http_code}' \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H 'Accept: application/vnd.github+json' \
+                "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-publication-hold")"
+              case "$HOLD_STATUS" in
+                200)
+                  HOLD_SHA="$(jq -r '.object.sha // empty' /tmp/release-publication-hold.json)"
+                  if [ -z "$HOLD_SHA" ]; then
+                    echo "::error::release-publication-hold lookup returned no SHA; refusing stable publication."
+                    exit 1
+                  fi
+                  echo "allow_latest=false" >> "$GITHUB_OUTPUT"
+                  echo "Release publication hold is active at ${HOLD_SHA}; this main push may publish only its immutable SHA tag, never stable latest."
+                  ;;
+                404)
+                  echo "allow_latest=true" >> "$GITHUB_OUTPUT"
+                  echo "No release freeze or publication hold marker; ordinary main publication may update latest."
+                  ;;
+                *)
+                  echo "::error::release-publication-hold lookup failed with HTTP ${HOLD_STATUS}; refusing stable publication rather than guessing."
+                  cat /tmp/release-publication-hold.json
+                  exit 1
+                  ;;
+              esac
+              ;;
+            *)
+              echo "::error::release-freeze lookup failed with HTTP ${STATUS}; refusing stable publication rather than guessing."
+              cat /tmp/release-freeze.json
+              exit 1
+              ;;
+          esac
+
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -127,7 +235,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}/backend
           tags: |
             type=sha,prefix=
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && steps.release_gate.outputs.allow_latest == 'true' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -169,6 +277,60 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Check release freeze marker
+        id: release_gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          STATUS="$(curl -sS -o /tmp/release-freeze.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-freeze")"
+          case "$STATUS" in
+            200)
+              FREEZE_SHA="$(jq -r '.object.sha // empty' /tmp/release-freeze.json)"
+              if [ -z "$FREEZE_SHA" ]; then
+                echo "::error::release-freeze lookup returned no SHA; refusing stable publication."
+                exit 1
+              fi
+              echo "allow_latest=false" >> "$GITHUB_OUTPUT"
+              echo "Release freeze is active at ${FREEZE_SHA}; this main push may publish only its immutable SHA tag, never stable latest."
+              ;;
+            404)
+              HOLD_STATUS="$(curl -sS -o /tmp/release-publication-hold.json -w '%{http_code}' \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H 'Accept: application/vnd.github+json' \
+                "https://api.github.com/repos/${{ github.repository }}/git/ref/tags/release-publication-hold")"
+              case "$HOLD_STATUS" in
+                200)
+                  HOLD_SHA="$(jq -r '.object.sha // empty' /tmp/release-publication-hold.json)"
+                  if [ -z "$HOLD_SHA" ]; then
+                    echo "::error::release-publication-hold lookup returned no SHA; refusing stable publication."
+                    exit 1
+                  fi
+                  echo "allow_latest=false" >> "$GITHUB_OUTPUT"
+                  echo "Release publication hold is active at ${HOLD_SHA}; this main push may publish only its immutable SHA tag, never stable latest."
+                  ;;
+                404)
+                  echo "allow_latest=true" >> "$GITHUB_OUTPUT"
+                  echo "No release freeze or publication hold marker; ordinary main publication may update latest."
+                  ;;
+                *)
+                  echo "::error::release-publication-hold lookup failed with HTTP ${HOLD_STATUS}; refusing stable publication rather than guessing."
+                  cat /tmp/release-publication-hold.json
+                  exit 1
+                  ;;
+              esac
+              ;;
+            *)
+              echo "::error::release-freeze lookup failed with HTTP ${STATUS}; refusing stable publication rather than guessing."
+              cat /tmp/release-freeze.json
+              exit 1
+              ;;
+          esac
+
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -183,7 +345,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}/frontend
           tags: |
             type=sha,prefix=
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && steps.release_gate.outputs.allow_latest == 'true' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3

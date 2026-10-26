@@ -7,12 +7,18 @@ pre-deploy wiring intact — the same reasoning as the sibling
 ``test_extract_machine_id.py`` for the machine-id parser.
 """
 
+import importlib.util
+import re
 from pathlib import Path
+from typing import Any, cast
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
+NATIVE_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml"
 
 _REHEARSAL_STEP_NAME = "Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)"
 _REAL_STEP_NAME = "Pre-deploy migrations (one-off machine)"
@@ -25,16 +31,27 @@ _LEGS = (
 )
 
 
-def _workflow() -> dict:
-    return yaml.safe_load(DEPLOY_WORKFLOW.read_text(encoding="utf-8"))
+def _workflow() -> dict[str, Any]:
+    return cast(dict[str, Any], yaml.safe_load(DEPLOY_WORKFLOW.read_text(encoding="utf-8")))
 
 
-def _step_names(steps: list[dict]) -> list[str]:
+def _step_names(steps: list[dict[str, Any]]) -> list[str]:
     return [step.get("name", "") for step in steps]
 
 
 def _upload_step_name(suffix: str) -> str:
     return f"Upload migration machine logs ({suffix})"
+
+
+def _release_validator() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "validate_release_tag", REPO_ROOT / "scripts" / "validate_release_tag.py"
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("release validator module could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_rehearsal_step_exists_before_real_migrations_per_leg() -> None:
@@ -113,6 +130,189 @@ def test_real_run_discovery_excludes_leaked_rehearsal_machine() -> None:
         )
 
 
+def test_release_identity_resolves_annotated_tags_to_commit_sha_and_fails_closed() -> None:
+    workflow_text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "TAG_OBJECT_TYPE=\"$(jq -r '.object.type // empty'" in workflow_text
+    assert "TAG_OBJECT_SHA=\"$(jq -r '.object.sha // empty'" in workflow_text
+    assert 'if [ "$TAG_OBJECT_TYPE" = "tag" ]; then' in workflow_text
+    assert "gh api \"repos/${{ github.repository }}/git/tags/${TAG_OBJECT_SHA}\" --jq '.object.sha'" in workflow_text
+    assert 'elif [ "$TAG_OBJECT_TYPE" = "commit" ]; then' in workflow_text
+    assert 'ACTUAL_SHA="$TAG_OBJECT_SHA"' in workflow_text
+    assert "resolved to unsupported Git object type" in workflow_text
+    assert "did not resolve to a full commit SHA" in workflow_text
+    assert 'if [ "$ACTUAL_SHA" != "$REQUESTED_SHA" ]; then' in workflow_text
+
+
+def test_release_identity_keeps_normal_deploy_outside_rc_validation() -> None:
+    workflow = _workflow()
+    step_names = _step_names(workflow["jobs"]["deploy-throttle"]["steps"])
+    validation_script = workflow["jobs"]["deploy-throttle"]["steps"][
+        step_names.index("Validate requested release identity")
+    ]["run"]
+
+    assert 'if [ -z "$REQUESTED_REF" ] && [ -z "$REQUESTED_SHA" ]; then' in validation_script
+    assert 'echo "Normal deploy identity: ${{ github.sha }}"' in validation_script
+    assert "release_ref must be an RC tag" in validation_script
+
+
+def test_release_identity_step_passes_gh_token_to_its_gh_api_calls() -> None:
+    """The RC identity lookup calls ``gh api``, which needs ``GH_TOKEN`` in the
+    step environment; without it every RC dispatch dies in deploy-throttle.
+    Normal deploys exit before the ``gh`` calls, so CI cannot catch it - this
+    structural assertion is the regression gate.
+    """
+    workflow = _workflow()
+    step_names = _step_names(workflow["jobs"]["deploy-throttle"]["steps"])
+    step = workflow["jobs"]["deploy-throttle"]["steps"][step_names.index("Validate requested release identity")]
+
+    assert "gh api" in step["run"]
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+
+
+def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["attest-artefacts"]
+    assert job["needs"] == ["produce-sbom", "bundle"]
+    names = _step_names(job["steps"])
+    assert "Download the SBOM artefact" in names
+    assert "Download the published bundle artefact" in names
+    bundle_download = job["steps"][names.index("Download the published bundle artefact")]
+    assert bundle_download["with"]["name"] == "bundle-artefacts-amd64"
+    assert bundle_download["with"]["path"] == "release-artefacts"
+    assert bundle_download["if"] == "inputs.mode == 'cut' || inputs.mode == 'recut'"
+    attest = job["steps"][names.index("Attest the file artefacts")]
+    assert attest["with"]["subject-path"] == "release-artefacts/*"
+
+
+def test_native_release_smoke_verifies_release_tarball_attestation_before_install() -> None:
+    workflow = yaml.safe_load(NATIVE_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release-smoke"]["steps"]
+    names = _step_names(steps)
+    verify_idx = names.index("Verify release tarball attestation before install")
+    install_idx = names.index("Install from the artifact (verified, installer enforces signature + sha256)")
+    verify = steps[verify_idx]
+    assert verify_idx < install_idx
+    assert verify["if"] == "github.event_name == 'push'"
+    assert 'gh attestation verify "${TARBALL}"' in verify["run"]
+
+
+def test_native_release_smoke_n_minus_one_reuses_fail_closed_artifact_gates() -> None:
+    workflow = yaml.safe_load(NATIVE_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["canary"]["steps"]
+    names = _step_names(steps)
+    n_minus_one = steps[names.index("N-1 upgrade leg (canary leg only)")]
+    script = n_minus_one["run"]
+
+    assert "n1-artifact" in script
+    assert "RELEASE_MANIFEST.json" in script
+    assert "RELEASE_MANIFEST.json.sig" in script
+    assert "SHA256SUMS" in script
+    assert 'sha256sum "${n1_dir}/${n1_tarball}"' in script
+    assert 'grep -F "${n1_tarball}" "${n1_dir}/SHA256SUMS"' in script
+    assert 'gh attestation verify "${n1_dir}/${n1_tarball}"' in script
+    assert 'bash scripts/install.sh --from-file "${n1_dir}/${n1_tarball}"' in script
+    assert script.index("RELEASE_MANIFEST.json") < script.index("bash scripts/install.sh")
+    assert script.index("RELEASE_MANIFEST.json.sig") < script.index("bash scripts/install.sh")
+    assert script.index("SHA256SUMS") < script.index("bash scripts/install.sh")
+    assert script.index("sha256sum") < script.index("bash scripts/install.sh")
+    assert script.index("gh attestation verify") < script.index("bash scripts/install.sh")
+
+
+def test_native_release_smoke_has_exactly_one_fail_closed_n_minus_one_leg() -> None:
+    """N-1 is a canary-only leg. A second N-1 step must not creep into another
+    job: the old release-smoke copy was unreachable (``CANARY`` is set only on
+    the canary job, ``N_MINUS_1`` only resolved there) yet still read as a live
+    check, and it installed N-1 with a plain curl and no attestation gate.
+    """
+    workflow = yaml.safe_load(NATIVE_SMOKE_WORKFLOW.read_text(encoding="utf-8"))
+    legs = [
+        (job_id, step)
+        for job_id, job in workflow["jobs"].items()
+        for step in job.get("steps", [])
+        if step.get("name") == "N-1 upgrade leg (canary leg only)"
+    ]
+
+    assert [job_id for job_id, _step in legs] == ["canary"]
+    assert 'gh attestation verify "${n1_dir}/${n1_tarball}"' in legs[0][1]["run"]
+
+
+def test_native_release_smoke_uses_central_release_validator_for_all_consumers() -> None:
+    workflow_text = NATIVE_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+    assert workflow_text.count("scripts/validate_release_tag.py validate") >= 4
+    assert "scripts/validate_release_tag.py resolve-n-minus-1" in workflow_text
+    assert "releases?per_page=100" in workflow_text
+    assert "--paginate --slurp" in workflow_text
+    assert "release-pages.json" in workflow_text
+    assert "current canary ${tag}" not in workflow_text
+
+
+def test_release_validator_accepts_only_exact_published_release() -> None:
+    validator = _release_validator()
+    published = {"tag_name": "bundle-v1.2.3", "draft": False, "prerelease": False}
+    assert validator.validate_published_release("bundle-v1.2.3", published) == "bundle-v1.2.3"
+    for tag in ("bundle-v1.2", "bundle-v1.2.3-rc1"):
+        with pytest.raises(ValueError, match="tag must match"):
+            validator.validate_published_release(tag, published)
+    for release in (
+        {"tag_name": "bundle-v1.2.3", "draft": True, "prerelease": False},
+        {"tag_name": "bundle-v1.2.3", "draft": False, "prerelease": True},
+    ):
+        with pytest.raises(ValueError, match="release is not published"):
+            validator.validate_published_release("bundle-v1.2.3", release)
+
+
+def test_release_validator_resolves_semantic_predecessor_across_pages() -> None:
+    validator = _release_validator()
+    releases = [
+        {"tag_name": "bundle-v1.10.0", "draft": False, "prerelease": False},
+        {"tag_name": "bundle-v1.2.0", "draft": False, "prerelease": False},
+        {"tag_name": "bundle-v1.9.0", "draft": False, "prerelease": False},
+    ]
+    assert validator.resolve_n_minus_1([releases[:2], releases[2:]], "bundle-v1.10.0") == "bundle-v1.9.0"
+
+
+def test_release_validator_excludes_drafts_and_prereleases() -> None:
+    releases = [
+        {"tag_name": "bundle-v1.0.0", "draft": False, "prerelease": False},
+        {"tag_name": "bundle-v1.1.0", "draft": True, "prerelease": False},
+        {"tag_name": "bundle-v1.2.0", "draft": False, "prerelease": True},
+        {"tag_name": "bundle-v1.3.0", "draft": False, "prerelease": False},
+    ]
+    assert _release_validator().resolve_n_minus_1([releases], "bundle-v1.3.0") == "bundle-v1.0.0"
+
+
+def test_release_validator_fails_closed_on_api_failure() -> None:
+    with pytest.raises(ValueError, match="release history response is not a list"):
+        _release_validator().resolve_n_minus_1(None, "bundle-v1.0.0")
+
+
+def test_release_validator_fails_closed_on_malformed_history() -> None:
+    with pytest.raises(ValueError, match=re.escape("tag must match bundle-vX.Y.Z exactly")):
+        _release_validator().resolve_n_minus_1(
+            [[{"tag_name": "bundle-v1.0", "draft": False, "prerelease": False}]],
+            "bundle-v1.0",
+        )
+
+
+def test_release_validator_handles_first_release() -> None:
+    assert (
+        _release_validator().resolve_n_minus_1(
+            [[{"tag_name": "bundle-v1.0.0", "draft": False, "prerelease": False}]],
+            "bundle-v1.0.0",
+        )
+        is None
+    )
+
+
+def test_release_validator_fails_when_current_release_is_missing() -> None:
+    with pytest.raises(ValueError, match="current release is not published"):
+        _release_validator().resolve_n_minus_1(
+            [[{"tag_name": "bundle-v1.0.0", "draft": False, "prerelease": False}]],
+            "bundle-v2.0.0",
+        )
+
+
 def test_release_sh_passes_rehearsal_env_through() -> None:
     """release.sh must not sanitise the env alembic's env.py reads.
 
@@ -123,3 +323,24 @@ def test_release_sh_passes_rehearsal_env_through() -> None:
     release_sh = (REPO_ROOT / "deploy" / "fly" / "release.sh").read_text(encoding="utf-8")
     assert "unset " not in release_sh, "release.sh must not unset env vars (would strip ALEMBIC_REHEARSAL)"
     assert "alembic upgrade heads" in release_sh
+
+
+def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:
+    """Deploy must be dispatched from ``main``, not the RC tag.
+
+    ``deploy.yml`` serialises on ``deploy-pipeline-${{ github.ref_name }}``. A
+    dispatch ``--ref ${RC_TAG}`` gives every RC its own concurrency group, so
+    two forced RC deploys can run concurrently against the same Fly apps and
+    the older RC can win. The RC commit is still deployed from ``main`` because
+    ``deploy.yml`` checks out ``release_ref``/``release_sha`` explicitly.
+    """
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    dispatch = steps[names.index("Dispatch Deploy and rc-validate")]["run"]
+
+    assert 'gh workflow run "Deploy: Staging + Prod" --ref main' in dispatch
+    assert 'gh workflow run "Deploy: Staging + Prod" --ref "${RC_TAG}"' not in dispatch
+    assert "-f force_deploy=true" in dispatch
+    assert '-f release_ref="${RC_TAG}"' in dispatch
+    assert '-f release_sha="${RC_SHA}"' in dispatch

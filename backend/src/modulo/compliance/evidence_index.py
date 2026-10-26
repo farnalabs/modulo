@@ -746,7 +746,7 @@ def _collect_release_sbom(pack: MappingPack) -> ArtifactEntry:
         provenance=PROVENANCE_CUSTOMER_SUPPLIED,
         description=ARTIFACT_TYPES[ARTIFACT_RELEASE_SBOM].description,
         location=(
-            "Release pipeline artefact sbom-cyclonedx (.github/workflows/release.yml), or "
+            "Release: Unified Pipeline artefact sbom-cyclonedx (.github/workflows/release-unified.yml), or "
             "regenerate with python backend/scripts/generate-sbom.py"
         ),
         identifiers=(),

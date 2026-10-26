@@ -278,10 +278,14 @@ Evidence: `.github/workflows/ci.yml`; `.pre-commit-config.yaml`.
 A: A documented dependency policy defines severity service levels and the
 scanning gates. `pip-audit` (backend) and `pnpm audit` (frontend) run in CI; a
 CycloneDX SBOM is generated for every release from the pinned dependency set.
+The `Release: Unified Pipeline` workflow owns publication of the release
+artefact and SBOM; stable publication occurs in its `promote` mode after RC
+validation.
 
 Evidence: `docs/security/dependency-policy.md`;
-`backend/scripts/generate-sbom.py`; `.github/workflows/release.yml`
-(`produce-sbom`); the dependency-audit steps in `.github/workflows/ci.yml`.
+`backend/scripts/generate-sbom.py`; `.github/workflows/release-unified.yml`
+(`produce-sbom`, and the `promote`-only stable publication steps); the
+dependency-audit steps in `.github/workflows/ci.yml`.
 
 **Q: How do you scan your own code?**
 
@@ -357,7 +361,7 @@ Evidence: `docs/operations/network-egress.md`;
 A: Release builds run on GitHub Actions runners. That pipeline handles the
 product source, not customer data.
 
-Evidence: `.github/workflows/release.yml`; `.github/workflows/ci.yml`.
+Evidence: `.github/workflows/release-unified.yml`; `.github/workflows/ci.yml`.
 
 ## 9. Retention and deletion
 

@@ -4,11 +4,11 @@ name: "Release: Unified Pipeline"
 # This workflow consolidates the release logic with a `mode` input.
 # Modes:
 #   cut      - Push release-freeze, bump version in SoT files, commit on main,
-#              tag vX.Y.Z-rcN, publish 4 images to GHCR, build/sign/attest bundle,
-#              push bundle-v* tag, create GitHub Release, push Helm chart to OCI,
-#              dispatch Deploy + rc-validate
-#   recut    - Re-publish from existing RC tag (no version bump)
-#   promote  - Promote RC to GA (retag, update release, lift freeze)
+#              tag vX.Y.Z-rcN, publish 4 RC images to GHCR, build/sign/attest bundle,
+#              push bundle-v* tag, create GitHub Release, dispatch Deploy + rc-validate
+#   recut    - Tag current main as the next RC and re-publish (no version bump)
+#   promote  - Promote RC to GA (retag images to stable/latest, push Helm chart to OCI,
+#              update release/changelog, lift freeze)
 #   dry-run  - Build + verify everything, emit artefacts as CI artefacts, publish NOTHING
 #
 # The bundle is built by the reusable `.github/workflows/bundle-release.yml`
@@ -216,10 +216,25 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
-      # Version bump (cut only). Runs BEFORE the RC tag is created so the
-      # tagged commit is the bumped one. Committed and pushed to main by the
-      # workflow, matching the header contract.
+      # Version bump (cut only). The publication hold is established first so
+      # publish-images cannot publish stable latest during the main push below.
+      # The later release-freeze tag remains the authoritative release boundary.
       # -----------------------------------------------------------------------
+      - name: Establish release publication hold (cut only)
+        if: inputs.mode == 'cut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
+            echo "::error::release-publication-hold already exists; refusing to start a second cut over an unresolved hold."
+            exit 1
+          fi
+          git tag -a release-publication-hold -m "Suppress stable publication while cut establishes release-freeze"
+          git push origin release-publication-hold
+          echo "Established release-publication-hold before the version-bump push."
+
       - name: Bump version in SoT files and commit to main (cut only)
         if: inputs.mode == 'cut'
         # Mapped through the step env block (S7630): GitHub expressions inside a
@@ -275,14 +290,21 @@ jobs:
           git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
           git push origin release-freeze --force
 
+          # The hold only covers the version-bump push. Once the authoritative
+          # release-freeze exists, remove the temporary suppression marker.
+          if ! git push origin --delete release-publication-hold; then
+            echo "::error::Could not remove release-publication-hold after establishing release-freeze; refusing to continue with a stale suppression marker."
+            exit 1
+          fi
+
           # rc-validate.yml is dispatched once, by the consolidated
           # "Dispatch Deploy and rc-validate" step after the artefacts publish.
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
-      # RECUT: re-publish from existing RC tag (no version bump)
+      # RECUT: tag current main as the next RC (no version bump)
       # -----------------------------------------------------------------------
-      - name: Recut from existing RC
+      - name: Recut from current main
         id: recut
         if: inputs.mode == 'recut'
         env:
@@ -293,18 +315,30 @@ jobs:
           set -euo pipefail
           BASE="v${VERSION}"
 
-          # Find the latest RC tag for this version
-          LATEST_RC=$(git tag --list "${BASE}-rc*" --sort=-v:refname | head -n1)
-          if [ -z "$LATEST_RC" ]; then
-            echo "::error::No ${BASE}-rc* tags found - nothing to recut."
-            exit 1
-          fi
+          # A recut must represent the fix currently on main, never re-use the
+          # prior RC tag. Resolve the next free number from all local tags.
+          N=1
+          while git rev-parse -q --verify "refs/tags/${BASE}-rc${N}" >/dev/null 2>&1; do
+            N=$((N+1))
+          done
+          RC_TAG="${BASE}-rc${N}"
 
-          # Force-move the freeze tag to the latest RC
-          git tag -f -a release-freeze -m "Release freeze active (for $LATEST_RC)"
+          # Refresh from the live main ref so the new RC always captures the
+          # fix that was merged before this recut dispatch started.
+          git fetch origin main
+          git checkout --detach origin/main
+          RC_SHA="$(git rev-parse HEAD)"
+
+          echo "Tagging recut RC: $RC_TAG at $RC_SHA"
+          git tag -a "$RC_TAG" -m "Release candidate $RC_TAG"
+          git push origin "$RC_TAG"
+
+          # Move the freeze to the new RC commit so main remains frozen at the
+          # exact commit sent to deploy and rc-validate.
+          git tag -f -a release-freeze -m "Release freeze active (for $RC_TAG)"
           git push origin release-freeze --force
 
-          echo "rc_tag=$LATEST_RC" >> "$GITHUB_OUTPUT"
+          echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
       # PROMOTE: promote RC to GA + lift freeze
@@ -374,9 +408,7 @@ jobs:
           echo "rc_tag=$LATEST_RC" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
-      # RECUT: publish from the RC commit, not from main's current tip. A recut
-      # after main has moved must never tag main-HEAD artefacts with an older
-      # RC tag. (Cut already sits on the bumped commit the new tag points at.)
+      # RECUT: publish from the new RC tag, which was created at current main.
       # -----------------------------------------------------------------------
       - name: Check out the RC commit for publishing (recut only)
         if: inputs.mode == 'recut'
@@ -395,7 +427,6 @@ jobs:
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
           RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
           REGISTRY_USER: ${{ github.actor }}
           IMAGE_NAMESPACE: ${{ github.repository }}
@@ -403,7 +434,6 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${RC_TAG}"
-          VERSION_NUM="${VERSION}"
 
           # Log in to GHCR
           echo "${GH_TOKEN}" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
@@ -440,7 +470,6 @@ jobs:
               --platform linux/amd64 \
               --push \
               --tag "ghcr.io/$image_name:$TAG" \
-              --tag "ghcr.io/$image_name:$VERSION_NUM" \
               --cache-from type=gha,scope=$img \
               --cache-to type=gha,mode=max,scope=$img
 
@@ -466,14 +495,105 @@ jobs:
           done
 
       # -----------------------------------------------------------------------
-      # Push Helm chart to OCI registry (cut and recut)
+      # Dispatch Deploy + rc-validate (cut and recut)
       # -----------------------------------------------------------------------
-      - name: Push Helm chart to OCI registry
+      - name: Dispatch Deploy and rc-validate
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
           RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The release freeze pauses merges only. It must not prevent the
+          # forced deploy that puts this RC into the production soak.
+          echo "Dispatching Deploy: Staging + Prod for ${RC_TAG} (force_deploy=true)."
+          RC_SHA="$(git rev-parse "${RC_TAG}^{commit}")"
+          # Dispatch from main, NOT the RC tag: deploy.yml serialises on
+          # `deploy-pipeline-${{ github.ref_name }}`, so a tag ref gives each
+          # RC its own concurrency group and two forced deploys can race the
+          # same Fly apps (the older RC can win). The RC commit is deployed via
+          # release_ref/release_sha, which deploy.yml checks out explicitly.
+          gh workflow run "Deploy: Staging + Prod" --ref main \
+            -f force_deploy=true \
+            -f release_ref="${RC_TAG}" \
+            -f release_sha="${RC_SHA}"
+
+
+          # Dispatch validation only after GitHub has accepted the deploy
+          # dispatch. rc-validate waits for /api/v1/deployment to report the RC
+          # commit, then owns the validated/${RC_TAG} marker on success.
+          echo "Dispatching rc-validate.yml for ${RC_TAG}."
+          gh workflow run rc-validate.yml --ref "${RC_TAG}" -f rc_tag="${RC_TAG}"
+
+          echo "Dispatched Deploy (force) and rc-validate for ${RC_TAG}."
+
+      # -----------------------------------------------------------------------
+      # Retag container images for GA (promote only)
+      # -----------------------------------------------------------------------
+      - name: Retag container images for GA
+        if: inputs.mode == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          RC_TAG: ${{ steps.promote.outputs.rc_tag }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE_NAMESPACE: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_NUM="${VERSION}"
+
+          if [ -z "$RC_TAG" ]; then
+            echo "::error::RC_TAG is empty; cannot retag images."
+            exit 1
+          fi
+
+          # Log in to GHCR
+          echo "${GH_TOKEN}" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+
+          for img in all-in-one backend frontend runner-opencode; do
+            case "$img" in
+              all-in-one)
+                image_name="$IMAGE_NAMESPACE"
+                ;;
+              backend)
+                image_name="$IMAGE_NAMESPACE/backend"
+                ;;
+              frontend)
+                image_name="$IMAGE_NAMESPACE/frontend"
+                ;;
+              runner-opencode)
+                image_name="$IMAGE_NAMESPACE/runner-opencode"
+                ;;
+            esac
+
+            echo "Retagging $img ($RC_TAG -> $VERSION_NUM, latest)..."
+            if docker buildx imagetools create \
+                --tag "ghcr.io/$image_name:$VERSION_NUM" \
+                --tag "ghcr.io/$image_name:latest" \
+                "ghcr.io/$image_name:$RC_TAG"; then
+              echo "Retagged $img via imagetools."
+            else
+              echo "imagetools retag failed; falling back to docker pull/tag/push..."
+              docker pull "ghcr.io/$image_name:$RC_TAG"
+              docker tag "ghcr.io/$image_name:$RC_TAG" "ghcr.io/$image_name:$VERSION_NUM"
+              docker tag "ghcr.io/$image_name:$RC_TAG" "ghcr.io/$image_name:latest"
+              docker push "ghcr.io/$image_name:$VERSION_NUM"
+              docker push "ghcr.io/$image_name:latest"
+              echo "Retagged $img via docker pull/tag/push."
+            fi
+          done
+
+      # -----------------------------------------------------------------------
+      # Push Helm chart to OCI registry (promote only)
+      # -----------------------------------------------------------------------
+      - name: Push Helm chart to OCI registry
+        if: inputs.mode == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
           REGISTRY_USER: ${{ github.actor }}
           IMAGE_NAMESPACE: ${{ github.repository }}
         shell: bash
@@ -488,20 +608,6 @@ jobs:
           helm package deploy/helm/modulo --destination /tmp/helm-pkg --version "$VERSION_NUM" --app-version "$VERSION_NUM"
           CHART_TGZ="/tmp/helm-pkg/modulo-${VERSION_NUM}.tgz"
           helm push "$CHART_TGZ" "oci://ghcr.io/${IMAGE_NAMESPACE}/charts"
-
-      # -----------------------------------------------------------------------
-      # Dispatch Deploy + rc-validate (cut and recut)
-      # -----------------------------------------------------------------------
-      - name: Dispatch Deploy and rc-validate
-        if: inputs.mode == 'cut' || inputs.mode == 'recut'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RC_TAG: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
-        shell: bash
-        run: |
-          gh workflow run "Deploy: Staging + Prod" --ref main -f force_deploy=true
-          gh workflow run rc-validate.yml --ref main -f rc_tag="${RC_TAG}"
-          echo "Dispatched Deploy (force) and rc-validate for ${RC_TAG}"
 
       # -----------------------------------------------------------------------
       # Update CHANGELOG.md and GitHub Release (promote only)
@@ -560,11 +666,19 @@ jobs:
             printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
           fi
 
-          # 5. Update GitHub Release
-          if ! gh release edit "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
-            echo "::warning::GitHub Release update failed for ${GA_TAG}"
+          # 5. Update or create GitHub Release
+          if gh release view "$GA_TAG" >/dev/null 2>&1; then
+            if ! gh release edit "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
+              echo "::warning::GitHub Release update failed for ${GA_TAG}"
+            else
+              echo "GitHub Release updated for ${GA_TAG}."
+            fi
           else
-            echo "GitHub Release updated for ${GA_TAG}."
+            if ! gh release create "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
+              echo "::warning::GitHub Release creation failed for ${GA_TAG}"
+            else
+              echo "GitHub Release created for ${GA_TAG}."
+            fi
           fi
 
           exit $rc
@@ -595,7 +709,9 @@ jobs:
   # ---------------------------------------------------------------------------
   publish-release:
     name: Create GitHub Release
-    needs: [release, bundle]
+    # Do not publish the bundle-v* tag until its tarball has a provenance
+    # attestation; native-release-smoke is fail-closed on that attestation.
+    needs: [release, bundle, attest-artefacts]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
@@ -804,8 +920,10 @@ jobs:
   # ---------------------------------------------------------------------------
   attest-artefacts:
     name: Attest released artefacts
-    needs: produce-sbom
-    if: inputs.mode != 'dry-run'
+    needs: [produce-sbom, bundle]
+    # The bundle is available for cut/recut; promote still attests the SBOM
+    # without waiting on the intentionally skipped bundle job.
+    if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.bundle.result == 'success')
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
     permissions:
@@ -819,7 +937,16 @@ jobs:
           name: sbom-cyclonedx
           path: release-artefacts
 
+      - name: Download the published bundle artefact
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bundle-artefacts-amd64
+          path: release-artefacts
+
       - name: Attest the file artefacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
+          # Includes the SBOM for every non-dry-run mode and the release bundle
+          # tarball plus its manifest/checksum files for cut/recut.
           subject-path: release-artefacts/*
