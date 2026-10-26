@@ -267,18 +267,16 @@ cat > "$WORK/bin/gh" <<'FAKEGH'
 set -euo pipefail
 if [[ "${1:-}" = "run" && "${2:-}" = "list" ]]; then
   printf '%s' "${FAKE_RUNS:-[]}"
-  exit 0
-fi
-if [[ "${1:-}" = "api" ]]; then
+elif [[ "${1:-}" = "api" ]]; then
   id="$(printf '%s' "${2:-}" | sed -E 's#.*/runs/([0-9]+)/jobs#\1#')"
   case "$id" in
     201) cat "${FAKE_JOBS_DIR}/jobs-201.json" ;;
     202) cat "${FAKE_JOBS_DIR}/jobs-202.json" ;;
     *) echo '{"jobs":[]}' ;;
   esac
-  exit 0
+else
+  false
 fi
-exit 1
 FAKEGH
 chmod +x "$WORK/bin/gh"
 
