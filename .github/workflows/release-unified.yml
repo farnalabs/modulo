@@ -195,6 +195,10 @@ jobs:
     outputs:
       rc_tag: ${{ steps.cut.outputs.rc_tag || steps.recut.outputs.rc_tag }}
       ga_tag: ${{ steps.promote.outputs.ga_tag }}
+      all_in_one_digest: ${{ steps.publish_images.outputs.all_in_one_digest || steps.retag_images.outputs.all_in_one_digest }}
+      backend_digest: ${{ steps.publish_images.outputs.backend_digest || steps.retag_images.outputs.backend_digest }}
+      frontend_digest: ${{ steps.publish_images.outputs.frontend_digest || steps.retag_images.outputs.frontend_digest }}
+      runner_opencode_digest: ${{ steps.publish_images.outputs.runner_opencode_digest || steps.retag_images.outputs.runner_opencode_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -501,6 +505,7 @@ jobs:
       # Publish container images (cut and recut)
       # -----------------------------------------------------------------------
       - name: Publish container images to GHCR
+        id: publish_images
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -571,10 +576,29 @@ jobs:
             esac
           done
 
+          # Resolve the immutable manifest digest for every published image.
+          # The tag is only a lookup key; attestations target these digests.
+          for img in all-in-one backend frontend runner-opencode; do
+            case "$img" in
+              all-in-one) image_name="$IMAGE_NAMESPACE"; output_name=all_in_one_digest ;;
+              backend) image_name="$IMAGE_NAMESPACE/backend"; output_name=backend_digest ;;
+              frontend) image_name="$IMAGE_NAMESPACE/frontend"; output_name=frontend_digest ;;
+              runner-opencode) image_name="$IMAGE_NAMESPACE/runner-opencode"; output_name=runner_opencode_digest ;;
+            esac
+            digest="$(docker buildx imagetools inspect "ghcr.io/$image_name:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::missing or invalid digest for ghcr.io/$image_name:$TAG: $digest"
+              exit 1
+            fi
+            echo "${output_name}=${digest}" >> "$GITHUB_OUTPUT"
+            echo "$img=ghcr.io/$image_name@$digest"
+          done
+
       # -----------------------------------------------------------------------
       # Dispatch Deploy + rc-validate (cut and recut)
       # -----------------------------------------------------------------------
       - name: Dispatch Deploy and rc-validate
+
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -610,6 +634,7 @@ jobs:
       # Retag container images for GA (promote only)
       # -----------------------------------------------------------------------
       - name: Retag container images for GA
+        id: retag_images
         if: inputs.mode == 'promote'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -663,10 +688,28 @@ jobs:
             fi
           done
 
+          # Resolve the GA manifest digest after both stable tags are published.
+          for img in all-in-one backend frontend runner-opencode; do
+            case "$img" in
+              all-in-one) image_name="$IMAGE_NAMESPACE"; output_name=all_in_one_digest ;;
+              backend) image_name="$IMAGE_NAMESPACE/backend"; output_name=backend_digest ;;
+              frontend) image_name="$IMAGE_NAMESPACE/frontend"; output_name=frontend_digest ;;
+              runner-opencode) image_name="$IMAGE_NAMESPACE/runner-opencode"; output_name=runner_opencode_digest ;;
+            esac
+            digest="$(docker buildx imagetools inspect "ghcr.io/$image_name:$VERSION_NUM" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::missing or invalid digest for ghcr.io/$image_name:$VERSION_NUM: $digest"
+              exit 1
+            fi
+            echo "${output_name}=${digest}" >> "$GITHUB_OUTPUT"
+            echo "$img=ghcr.io/$image_name@$digest"
+          done
+
       # -----------------------------------------------------------------------
       # Push Helm chart to OCI registry (promote only)
       # -----------------------------------------------------------------------
       - name: Push Helm chart to OCI registry
+
         if: inputs.mode == 'promote'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1032,7 +1075,7 @@ jobs:
   # ---------------------------------------------------------------------------
   attest-artefacts:
     name: Attest released artefacts
-    needs: [produce-sbom, bundle]
+    needs: [produce-sbom, bundle, release]
     # The bundle is available for cut/recut; promote still attests the SBOM
     # without waiting on the intentionally skipped bundle job.
     if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.bundle.result == 'success')
@@ -1062,3 +1105,74 @@ jobs:
           # Includes the SBOM for every non-dry-run mode and the release bundle
           # tarball plus its manifest/checksum files for cut/recut.
           subject-path: release-artefacts/*
+
+      - name: Validate image digest outputs
+        if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
+        env:
+          ALL_IN_ONE_DIGEST: ${{ needs.release.outputs.all_in_one_digest }}
+          BACKEND_DIGEST: ${{ needs.release.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ needs.release.outputs.frontend_digest }}
+          RUNNER_OPENCODE_DIGEST: ${{ needs.release.outputs.runner_opencode_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for entry in all-in-one="$ALL_IN_ONE_DIGEST" backend="$BACKEND_DIGEST" frontend="$FRONTEND_DIGEST" runner-opencode="$RUNNER_OPENCODE_DIGEST"; do
+            name="${entry%%=*}"
+            digest="${entry#*=}"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::missing or invalid digest output for $name: '$digest'"
+              exit 1
+            fi
+          done
+
+      - name: Attest all-in-one image
+        if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ needs.release.outputs.all_in_one_digest }}
+
+      - name: Attest backend image
+        if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/backend
+          subject-digest: ${{ needs.release.outputs.backend_digest }}
+
+      - name: Attest frontend image
+        if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/frontend
+          subject-digest: ${{ needs.release.outputs.frontend_digest }}
+
+      - name: Attest runner-opencode image
+        if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/runner-opencode
+          subject-digest: ${{ needs.release.outputs.runner_opencode_digest }}
+
+      - name: Verify image attestations
+        if: inputs.mode == 'cut' || inputs.mode == 'recut' || inputs.mode == 'promote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_NAMESPACE: ${{ github.repository }}
+          ALL_IN_ONE_DIGEST: ${{ needs.release.outputs.all_in_one_digest }}
+          BACKEND_DIGEST: ${{ needs.release.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ needs.release.outputs.frontend_digest }}
+          RUNNER_OPENCODE_DIGEST: ${{ needs.release.outputs.runner_opencode_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image_name in "$IMAGE_NAMESPACE" "$IMAGE_NAMESPACE/backend" "$IMAGE_NAMESPACE/frontend" "$IMAGE_NAMESPACE/runner-opencode"; do
+            case "$image_name" in
+              "$IMAGE_NAMESPACE") digest="$ALL_IN_ONE_DIGEST" ;;
+              "$IMAGE_NAMESPACE/backend") digest="$BACKEND_DIGEST" ;;
+              "$IMAGE_NAMESPACE/frontend") digest="$FRONTEND_DIGEST" ;;
+              "$IMAGE_NAMESPACE/runner-opencode") digest="$RUNNER_OPENCODE_DIGEST" ;;
+            esac
+            subject="ghcr.io/$image_name@$digest"
+            echo "Verifying attestation for $subject"
+            gh attestation verify "$subject" --repo "${{ github.repository }}"
+          done
