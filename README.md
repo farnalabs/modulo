@@ -150,11 +150,11 @@ bash modulo-install.sh
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
-TAG=v0.4.0 bash modulo-install.sh
+VERSION=bundle-v0.4.0 bash modulo-install.sh
 ```
 
-Replace `v0.4.0` with the version you intend to run. The `TAG` variable pins
-the exact release artifact (see the [release process](docs/release-process.md)
+Replace `bundle-v0.4.0` with the bundle tag you intend to run. The `VERSION`
+variable pins the exact bundle release tag (see the [release process](docs/release-process.md)
 for the version convention).
 
 The installer verifies every byte it downloads (SHA256SUMS plus a signed
