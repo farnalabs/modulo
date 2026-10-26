@@ -90,9 +90,7 @@ def _site_packages(venv_root: Path) -> Path:
     return candidates[0]
 
 
-def _popen(
-    command: list[str], cwd: Path, env: dict[str, str], *, timeout: float
-) -> subprocess.Popen[bytes]:
+def _popen(command: list[str], cwd: Path, env: dict[str, str], *, timeout: float) -> subprocess.Popen[bytes]:
     """Start a process whose caller enforces the bounded wait."""
     del timeout
     return Popen(  # noqa: S603
