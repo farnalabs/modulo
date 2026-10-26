@@ -199,7 +199,6 @@ async def is_instance_analytics_enabled(session: AsyncSession) -> bool:
         if isinstance(config.value, str):
             return config.value.lower() in ("1", "true", "yes")
         return bool(config.value)
-    # Env var fallback
     env_val = os.environ.get(ENV_INSTANCE_SWITCH, "")
     return env_val.lower() in ("1", "true", "yes")
 
@@ -284,5 +283,5 @@ async def is_license_enforcement_enabled(session: AsyncSession) -> bool:
         _log.warning("product_analytics.kill_switch_read_failed", exc_info=True)
         return True
     if config is None:
-        return True  # absent = enforced
+        return True
     return not kill_switch_disables_enforcement(config.value)
