@@ -111,16 +111,34 @@ def _popen(command: list[str], cwd: Path, env: dict[str, str]) -> subprocess.Pop
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
+    cleanup_timeout = 10
     if os.name == "nt":
-        process.terminate()
+        taskkill_path = shutil.which("taskkill")
+        assert taskkill_path is not None, "Windows taskkill executable is required for subprocess cleanup"
         try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=10)
+            taskkill = subprocess.run(  # noqa: S603
+                [taskkill_path, "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+                timeout=cleanup_timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise AssertionError(f"failed to terminate subprocess tree {process.pid}: {exc}") from exc
+        if taskkill.returncode != 0 and process.poll() is None:
+            details = taskkill.stderr.decode(errors="replace").strip()
+            raise AssertionError(
+                f"taskkill failed for subprocess tree {process.pid} with exit {taskkill.returncode}: {details}"
+            )
+        try:
+            process.wait(timeout=cleanup_timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(f"subprocess tree {process.pid} survived taskkill") from exc
         return
-    os.killpg(process.pid, signal.SIGKILL)
-    process.wait(timeout=10)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=cleanup_timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AssertionError(f"failed to terminate subprocess group {process.pid}: {exc}") from exc
 
 
 def _run_process(command: list[str], cwd: Path, deadline: float, env: dict[str, str]) -> None:
@@ -168,10 +186,19 @@ def _verify_locked_archives(locked: dict[str, dict[str, Any]], deadline: float) 
             )
             digest = hashlib.sha256()
             size = 0
+            response_socket = getattr(getattr(response, "fp", None), "raw", None)
+            response_socket = getattr(response_socket, "_sock", None)
             while True:
                 remaining = deadline - time.monotonic()
                 assert remaining > 0, "release security test exceeded its archive-download deadline"
-                chunk = response.read(min(ARCHIVE_CHUNK_SIZE, max(1, int(remaining))))
+                if response_socket is not None and not response_socket._closed:
+                    response_socket.settimeout(remaining)
+                try:
+                    chunk = response.read(ARCHIVE_CHUNK_SIZE)
+                except TimeoutError as exc:
+                    raise AssertionError("archive download exceeded its absolute deadline") from exc
+                if time.monotonic() >= deadline:
+                    raise AssertionError("archive download exceeded its absolute deadline")
                 if not chunk:
                     break
                 digest.update(chunk)
