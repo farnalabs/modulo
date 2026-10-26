@@ -223,7 +223,10 @@ jobs:
         run: |
           set -euo pipefail
           cd backend
-          uv sync --frozen --no-dev --no-build
+          # ibm-cos-sdk and pytest-bdd are locked source distributions without
+          # wheels. A frozen sync keeps the exact lockfile revisions while
+          # allowing uv to build those trusted, hash-pinned packages.
+          uv sync --frozen --no-dev  # NOSONAR
           BUNDLE="../build/${BUNDLE_ROOT}"
           mkdir -p "$BUNDLE/backend"
           cp -a src "$BUNDLE/backend/src"

@@ -118,6 +118,12 @@ jobs:
               --cache-to type=gha,mode=max,scope="$img"
           done
 
+      - name: Set up uv for SBOM verification
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
       - name: Verify SBOM generation
         run: |
           # --no-sync/--no-build + an exact pin (S8541/S8544): no dependency
