@@ -477,7 +477,12 @@ async def _search_runs(session: AsyncSession, params: _SearchParams) -> tuple[li
     return items, count
 
 
-async def _search_audit(session: AsyncSession, params: _SearchParams) -> tuple[list[tuple[int, SearchResultItem]], int]:
+async def _search_audit(
+    session: AsyncSession,
+    params: _SearchParams,
+    *,
+    include_lifecycle_maps: bool,
+) -> tuple[list[tuple[int, SearchResultItem]], int]:
     rows = (
         await session.execute(
             text("""
@@ -492,6 +497,10 @@ async def _search_audit(session: AsyncSession, params: _SearchParams) -> tuple[l
                 FROM audit_events
                 WHERE organisation_id = :org_id
                     AND (
+                        :include_lifecycle_maps
+                        OR NOT (resource_type = 'lifecycle_map' OR event_type LIKE 'lifecycle_map.%')
+                    )
+                    AND (
                         LOWER(event_type) LIKE LOWER(:like)
                         OR LOWER(resource_type) LIKE LOWER(:like)
                         OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
@@ -503,6 +512,7 @@ async def _search_audit(session: AsyncSession, params: _SearchParams) -> tuple[l
                 "org_id": params.org_id,
                 "like": params.like,
                 "prefix": params.prefix,
+                "include_lifecycle_maps": include_lifecycle_maps,
                 "lim": params.limit,
                 "off": params.offset,
             },
@@ -514,12 +524,20 @@ async def _search_audit(session: AsyncSession, params: _SearchParams) -> tuple[l
                 SELECT COUNT(*) FROM audit_events
                 WHERE organisation_id = :org_id
                     AND (
+                        :include_lifecycle_maps
+                        OR NOT (resource_type = 'lifecycle_map' OR event_type LIKE 'lifecycle_map.%')
+                    )
+                    AND (
                         LOWER(event_type) LIKE LOWER(:like)
                         OR LOWER(resource_type) LIKE LOWER(:like)
                         OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
                     )
             """),
-            {"org_id": params.org_id, "like": params.like},
+            {
+                "org_id": params.org_id,
+                "like": params.like,
+                "include_lifecycle_maps": include_lifecycle_maps,
+            },
         )
     ).scalar() or 0
 
@@ -642,7 +660,14 @@ async def global_search(
                 all_items.extend(items)
                 total_by_type["run"] = count
             if "audit" in search_types:
-                items, count = await _search_audit(session, params)
+                items, count = await _search_audit(
+                    session,
+                    params,
+                    include_lifecycle_maps=_can_access_lifecycle_map_primitives(
+                        current_user,
+                        dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                    ),
+                )
                 all_items.extend(items)
                 total_by_type["audit"] = count
             if "library" in search_types:

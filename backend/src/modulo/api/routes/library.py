@@ -206,6 +206,24 @@ def _require_lifecycle_map_internal_access(principal: TenantPrincipal) -> None:
     )
 
 
+async def _require_lifecycle_map_primitive_access(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    primitive_id: uuid.UUID,
+) -> None:
+    """Hide ratings and abuse reports for lifecycle-map primitives."""
+    primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+    if (
+        primitive is not None
+        and primitive.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE
+        and not _can_access_lifecycle_map_primitives(
+            principal,
+            dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+        )
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Primitive not found")
+
+
 def _filter_lifecycle_map_types(
     principal: TenantPrincipal,
     primitive_type: str | None,
@@ -1807,6 +1825,7 @@ async def list_ratings_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _require_lifecycle_map_primitive_access(session, principal, primitive_id)
             result = await list_ratings_for_primitive(session, primitive_id, page=page, page_size=page_size)
     except IntegrityError:
         _log.exception("library.list_ratings_endpoint")
@@ -1833,6 +1852,7 @@ async def get_rating_aggregate_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _require_lifecycle_map_primitive_access(session, principal, primitive_id)
             avg, count = await get_rating_aggregate(session, primitive_id)
     except IntegrityError:
         _log.exception("library.get_rating_aggregate_endpoint")
@@ -1864,6 +1884,7 @@ async def submit_rating_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _require_lifecycle_map_primitive_access(session, principal, primitive_id)
             rating = await submit_rating(
                 session,
                 org_id=principal.organisation_id,
@@ -1911,6 +1932,7 @@ async def submit_abuse_report_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            await _require_lifecycle_map_primitive_access(session, principal, primitive_id)
             report = await submit_abuse_report(
                 session,
                 org_id=principal.organisation_id,
@@ -2446,6 +2468,12 @@ async def list_community_contributions_endpoint(
         except SQLAlchemyError:
             _log.exception("list_community_contributions_endpoint: SQLAlchemyError")
             raise _unavailable_error() from None
+        if not _can_access_lifecycle_map_primitives(
+            principal,
+            dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+        ):
+            result.items = [p for p in result.items if p.primitive_type != _LIFECYCLE_MAP_PRIMITIVE_TYPE]
+            result.total = len(result.items)
         items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
     except HTTPException:
         raise

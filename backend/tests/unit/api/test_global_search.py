@@ -246,6 +246,18 @@ class TestGlobalSearchEndpoint:
         query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
         assert query_params[0]["include_lifecycle_maps"] is True
 
+    def test_ordinary_admin_audit_search_excludes_lifecycle_map_events(
+        self, client: TestClient, mock_db: AsyncMock
+    ) -> None:
+        mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
+        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
+            resp = client.get("/api/v1/admin/search?q=lifecycle&type=audit")
+        assert resp.status_code == 200
+        assert not resp.json()["results"]
+        query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
+        assert query_params[0]["include_lifecycle_maps"] is False
+        assert query_params[1]["include_lifecycle_maps"] is False
+
     def test_all_types_search(self, client: TestClient, mock_db: AsyncMock) -> None:
         pipe_id = uuid.uuid4()
         run_id = uuid.uuid4()

@@ -125,6 +125,15 @@ def system_admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _default_lifecycle_map_gate_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unrelated route tests on the ordinary primitive path."""
+    monkeypatch.setattr(
+        "modulo.api.routes.library.get_primitive",
+        AsyncMock(return_value=_make_listable_primitive()),
+    )
+
+
 def _make_listable_primitive(
     *,
     pid: uuid.UUID | None = None,
@@ -991,8 +1000,10 @@ def _make_rating() -> MagicMock:
 
 
 def test_list_ratings_returns_items(client: TestClient) -> None:
+    primitive = _make_listable_primitive(primitive_type="workflow")
     page = PageResult(items=[_make_rating()], total=1, page=1, page_size=20)
     with (
+        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=primitive),
         patch("modulo.api.routes.library.list_ratings_for_primitive", new_callable=AsyncMock, return_value=page),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -1002,6 +1013,25 @@ def test_list_ratings_returns_items(client: TestClient) -> None:
     body = resp.json()
     assert body["total"] == 1
     assert len(body["items"]) == 1
+
+
+def test_lifecycle_map_ratings_are_hidden_from_ordinary_callers(client: TestClient) -> None:
+    lifecycle_map = _make_listable_primitive(primitive_type="lifecycle_map")
+    with (
+        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=lifecycle_map),
+        patch(
+            "modulo.api.routes.library.get_settings",
+            return_value=Settings(
+                database_url="postgresql+asyncpg://localhost/test",
+                secret_key=_VALID_32,
+                fernet_key=_VALID_32,
+                modulo_admin_password="testpass",
+                modulo_dev_mode=False,
+            ),
+        ),
+    ):
+        resp = client.get(f"/api/v1/libraries/{uuid.uuid4()}/ratings/aggregate")
+    assert resp.status_code == 404
 
 
 def test_rating_aggregate_returns_values(client: TestClient) -> None:
@@ -1082,6 +1112,28 @@ def test_submit_rating_overlong_comment_rejected(client: TestClient) -> None:
         json={"thumbs_up": True, "comment": "x" * 2001},
     )
     assert resp.status_code == 422
+
+
+def test_lifecycle_map_abuse_reports_are_hidden_from_ordinary_callers(client: TestClient) -> None:
+    lifecycle_map = _make_listable_primitive(primitive_type="lifecycle_map")
+    with (
+        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=lifecycle_map),
+        patch(
+            "modulo.api.routes.library.get_settings",
+            return_value=Settings(
+                database_url="postgresql+asyncpg://localhost/test",
+                secret_key=_VALID_32,
+                fernet_key=_VALID_32,
+                modulo_admin_password="testpass",
+                modulo_dev_mode=False,
+            ),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/libraries/{uuid.uuid4()}/ratings/abuse",
+            json={"reason": "Inappropriate content here"},
+        )
+    assert resp.status_code == 404
 
 
 def test_submit_abuse_report_returns_201(client: TestClient) -> None:
