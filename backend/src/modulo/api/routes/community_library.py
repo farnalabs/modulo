@@ -197,18 +197,18 @@ async def install(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_MSG_COMMUNITY_LIBRARY_DISABLED,
         )
-    entry = await get_community_entry(session, entry_id)
-    if entry is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Community entry not found",
-        )
-    if entry.get("type") == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
-        _require_lifecycle_map_internal_access(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            entry = await get_community_entry(session, entry_id)
+            if entry is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Community entry not found",
+                )
+            if entry.get("type") == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
+                _require_lifecycle_map_internal_access(principal)
             primitive = await install_community_entry(
                 session,
                 principal.organisation_id,
@@ -216,6 +216,8 @@ async def install(
                 target_team_id=req.target_team_id,
                 created_by=principal.account_id,
             )
+    except HTTPException:
+        raise
     except ValueError as exc:
         message = str(exc)
         if message == "entry not found":

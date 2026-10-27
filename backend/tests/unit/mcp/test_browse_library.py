@@ -169,10 +169,15 @@ class TestSearchLibrary:
                 limit=10,
             )
 
+        from modulo.core.library_service.primitive_types import PRIMITIVE_TYPES
+
         mock_list.assert_called_once_with(
             mock_session.return_value.__aenter__.return_value,
             "00000000-0000-0000-0000-000000000001",
             primitive_type="agent",
+            # FAR-2200: a caller without the in-dev grant is restricted to the
+            # Alpha-visible primitive types; lifecycle_map never leaks through.
+            primitive_types=[ptype for ptype in PRIMITIVE_TYPES if ptype != "lifecycle_map"],
             search="test",
             page=1,
             page_size=10,

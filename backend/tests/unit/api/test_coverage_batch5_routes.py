@@ -146,12 +146,36 @@ class TestCommunityLibraryRoutes:
                 new=AsyncMock(return_value=True),
             ),
             patch(
+                "modulo.api.routes.community_library.get_community_entry",
+                new=AsyncMock(return_value={"id": "entry", "type": "agent"}),
+            ),
+            patch(
                 "modulo.api.routes.community_library.install_community_entry",
                 new=AsyncMock(side_effect=ValueError("blob fetch failed")),
             ),
         ):
             response = client.post("/api/v1/libraries/community/entry/install", json={})
         assert response.status_code == 502
+
+    def test_install_unknown_entry_returns_404(self, client: TestClient) -> None:
+        """An unresolvable community entry is a 404, not a 500."""
+        with (
+            patch(
+                "modulo.api.routes.community_library._community_objects_enabled",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "modulo.api.routes.community_library.get_community_entry",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "modulo.api.routes.community_library.install_community_entry",
+                new=AsyncMock(),
+            ) as mock_install,
+        ):
+            response = client.post("/api/v1/libraries/community/entry/install", json={})
+        assert response.status_code == 404
+        mock_install.assert_not_called()
 
 
 class TestMetricsRoutes:
