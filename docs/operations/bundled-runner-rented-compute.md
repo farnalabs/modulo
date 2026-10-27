@@ -156,9 +156,11 @@ Additional operational env for a shared or multi-deployment engine:
   the engine; the reconciler's machine-identity label then scopes each
   deployment's orphan sweep to its own workspaces (operator guide §6).
 - The registration matrix (operator guide §2): `runner_docker` registers
-  when any `MODULO_RUNNER_*` variable **or** a Docker endpoint env is set.
-  With none set it does not register, and binding a profile raises a typed
-  dispatch error naming `MODULO_DOCKER_HOST` – never a silent fallback.
+  when a Docker endpoint env (`MODULO_DOCKER_HOST` or `DOCKER_HOST`) is set.
+  An unrelated `MODULO_RUNNER_*` variable (such as `MODULO_RUNNER_MACHINE_ID`)
+  does not register it (FAR-996). With no endpoint set it does not register,
+  and binding a profile raises a typed dispatch error naming
+  `MODULO_DOCKER_HOST` – never a silent fallback.
 
 **Runner image on the engine.** The pinned runner image must exist on the
 VM's engine before dispatch can provision a workspace. Check the operator

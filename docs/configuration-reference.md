@@ -21,6 +21,7 @@ The application refuses to start if any required variable is absent or invalid.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | **Yes** | – | `postgresql+asyncpg://user:pass@host:port/db` |
+| `DATABASE_ADMIN_URL` | No | – | Privileged owner-role connection string read directly by Alembic from the process environment, the launcher-pinned config, or the `.env` file in `backend/` (not a `Settings` field). When set it wins over `DATABASE_URL` for migrations, so `uv run alembic upgrade heads` runs as the table owner rather than the RLS-bound app role. It is also the privileged connection for the role bootstrap (`python -m modulo.db.bootstrap_role` requires it) and the URL `modulo restore --db-url` points at. If neither it nor `DATABASE_URL` is set, migrations refuse to run instead of defaulting to a local database (FAR-2183). |
 | `MODULO_DB` | No | `postgres` | Database backend: `postgres`, `sqlite`, `mariadb`, or `mysql` |
 | `MODULO_SYSTEM_DATABASE_URL` | No | `""` | Dedicated connection string for cross-org system cron jobs (`modulo_system` role). When set, system crons use this instead of `DATABASE_URL`. |
 
@@ -480,6 +481,11 @@ Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `MODULO_DOCKER_HOST` | No | unset (provider does not register) | Docker daemon endpoint for the `runner_docker` runtime provider (`docker` / `local_docker` aliases), the bundled-runner reconciler and its health probe. Setting it (or `DOCKER_HOST`) registers the provider; an unrelated `MODULO_RUNNER_*` variable does NOT (FAR-996). An explicitly constructed provider falls back to the local socket when unset. |
+| `DOCKER_HOST` | No | unset | Fallback Docker endpoint consulted after `MODULO_DOCKER_HOST`; setting it also registers the `runner_docker` provider. |
+| `DOCKER_TLS_VERIFY` | No | unset | Set to `1` to use TLS for the Docker endpoint. A non-loopback `tcp://` endpoint is rejected at provider registration unless `DOCKER_TLS_VERIFY` or `DOCKER_CERT_PATH` is truthy, or the insecure escape hatch below is set (FAR-1038). |
+| `DOCKER_CERT_PATH` | No | unset | Directory holding `ca.pem` (server TLS) and optionally `cert.pem` / `key.pem` (mutual TLS). A truthy value also satisfies the remote-endpoint TLS gate. |
+| `MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT` | No | unset | Escape hatch: set to a non-empty, non-false value to allow a remote `tcp://` Docker endpoint without TLS. Logs a prominent warning at provider construction; not for a public-IP endpoint. |
 | `MODULO_E2B_API_KEY` | For E2B | – | E2B sandbox API key for runtime provider (read directly from env, not via Settings) |
 | `MODULO_KUBERNETES_ENABLED` | For Kubernetes | – | Registers the `kubernetes`/`k8s` runtime provider when set to any value except an explicit negative (`0`, `false`, `no`, `off`); unset/falsy leaves it unregistered. In-cluster auth is used when `KUBERNETES_SERVICE_HOST` is set, otherwise the standard kubeconfig chain (`KUBECONFIG` / default path). |
 | `MODULO_KUBERNETES_NAMESPACE` | No | `modulo` | Namespace the provider creates workspace pods in. |
