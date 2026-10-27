@@ -225,29 +225,145 @@ describe('LibraryView', () => {
     wrapper.unmount()
   })
 
-   it('does not render lifecycle-map primitives in the native library surface', async () => {
-     getMock.mockResolvedValue({
-       items: [
-         { id: 'lm-prim-1', organisation_id: 'org-1', source: 'modulo', primitive_type: 'lifecycle_map', name: 'SDLC Map', slug: 'sdlc-map', description: null, author: 'modulo', version: '1.0', tags: [], visibility: 'community', forked_from: null, auto_update: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
-       ],
-       total: 1,
-       page: 1,
-       page_size: 12,
-     })
-
-     await router.push('/library')
-     const wrapper = mount(LibraryView, {
-       global: { plugins: [router] },
-     })
-     await nextTick()
-     await nextTick()
-
-     expect(wrapper.text()).not.toContain('SDLC Map')
-     expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(false)
-     expect(postMock).not.toHaveBeenCalled()
+  it('does not render lifecycle-map primitives in the native library surface', async () => {
+    getMock.mockResolvedValue({
+      items: [
+        { id: 'lm-prim-1', organisation_id: 'org-1', source: 'modulo', primitive_type: 'lifecycle_map', name: 'SDLC Map', slug: 'sdlc-map', description: null, author: 'modulo', version: '1.0', tags: [], visibility: 'community', forked_from: null, auto_update: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 12,
     })
 
- })
+    await router.push('/library')
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).not.toContain('SDLC Map')
+    expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(false)
+    expect(postMock).not.toHaveBeenCalled()
+  })
+
+  it('calls toggleAutoUpdate which toggles the primitive', async () => {
+    getMock.mockResolvedValue({ items: [NATIVE_ITEM], total: 1, page: 1, page_size: 12 })
+    patchMock.mockResolvedValue({ ...NATIVE_ITEM, auto_update: false })
+
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+    await nextTick()
+
+    // Call the internal toggleAutoUpdate function directly
+    const vm = wrapper.vm as any
+    await vm.toggleAutoUpdate(NATIVE_ITEM)
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(patchMock).toHaveBeenCalledWith('/api/v1/libraries/{primitive_id}', {
+      params: { path: { primitive_id: 'native-1' } },
+      body: { auto_update: false },
+    })
+    wrapper.unmount()
+  })
+
+  it('handles toggleAutoUpdate error and restores loading state', async () => {
+    getMock.mockResolvedValue({ items: [NATIVE_ITEM], total: 1, page: 1, page_size: 12 })
+    patchMock.mockRejectedValue(new Error('network error'))
+
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+    await nextTick()
+
+    const vm = wrapper.vm as any
+    await vm.toggleAutoUpdate(NATIVE_ITEM)
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('network error')
+    wrapper.unmount()
+  })
+
+  it('handles a toggle response without data', async () => {
+    getMock.mockResolvedValue({ items: [NATIVE_ITEM], total: 1, page: 1, page_size: 12 })
+    await router.push('/library')
+    const wrapper = mount(LibraryView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+    const vm = wrapper.vm as any
+
+    patchMock.mockResolvedValueOnce(undefined)
+    await vm.toggleAutoUpdate(NATIVE_ITEM)
+    expect(patchMock).toHaveBeenCalledWith('/api/v1/libraries/{primitive_id}', {
+      params: { path: { primitive_id: 'native-1' } },
+      body: { auto_update: false },
+    })
+    // An undefined response body must not replace the primitive, and the
+    // per-row spinner must still be cleared.
+    expect(vm.primitives.find((p: { id: string }) => p.id === 'native-1').auto_update).toBe(true)
+    expect(vm.toggleLoading['native-1']).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('covers collection pagination and outside-click closing', async () => {
+    getMock.mockResolvedValue({ items: [], total: 24, page: 1, page_size: 12 })
+    await router.push('/library')
+    const wrapper = mount(LibraryView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    // The type-filter dropdown opens on click and closes on an outside mousedown.
+    await wrapper.get('[data-testid="library-type-filter-button"]').trigger('click')
+    expect(wrapper.find('[data-testid="library-type-filter-dropdown"]').exists()).toBe(true)
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await nextTick()
+    expect(wrapper.find('[data-testid="library-type-filter-dropdown"]').exists()).toBe(false)
+
+    const pagesRequested = () =>
+      getMock.mock.calls
+        .map((c: unknown[]) => (c[1] as { params?: { query?: { page?: number } } })?.params?.query?.page)
+        .filter((p): p is number => typeof p === 'number')
+
+    await wrapper.get('[data-testid="library-next-page"]').trigger('click')
+    await nextTick()
+    await nextTick()
+    expect(pagesRequested()).toContain(2)
+
+    await wrapper.get('[data-testid="library-previous-page"]').trigger('click')
+    await nextTick()
+    await nextTick()
+    expect(pagesRequested().slice(-1)).toEqual([1])
+    wrapper.unmount()
+  })
+
+  it('navigates from primitive and collection detail actions', async () => {
+    const collection = { ...NATIVE_ITEM, id: 'collection-1', primitive_type: 'library_collection' }
+    getMock.mockResolvedValue({ items: [NATIVE_ITEM, collection], total: 2, page: 1, page_size: 12 })
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+    const vm = wrapper.vm as any
+    vm.viewPrimitive(NATIVE_ITEM)
+    vm.viewCollection(collection)
+    expect(router.push).toHaveBeenCalledWith({ name: 'library-pipeline-wizard', params: { id: 'native-1' } })
+    expect(router.push).toHaveBeenCalledWith({ name: 'library-collection-detail', params: { id: 'collection-1' } })
+    wrapper.unmount()
+  })
+})
+
 
 describe('LibraryView responsive layout (FAR-640)', () => {
   async function mountLibrary() {
