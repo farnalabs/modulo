@@ -117,7 +117,7 @@ rather than an invisible drift.
    `0.75/0.5rem`, badge height `1.25rem` vs `1.5rem`, menu item padding
    `0.25/0.625rem` vs `0.5/0.75rem`, dialog title `1.125rem` vs `1.25rem`,
    icon size `0.875rem` vs `1rem`). `PRIMEVUE_V4_DENSITY_PARITY` pins those
-   **78 tokens** back to the recorded v5 value; the guard test asserts every
+   **81 tokens** back to the recorded v5 value; the guard test asserts every
    entry (a) is a real v4 token and (b) equals the value in
    `tests/visual-baseline/v5/tokens.json`.
 
