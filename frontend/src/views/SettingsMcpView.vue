@@ -4,12 +4,6 @@
     <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.SettingsMcpView.mcp_configuration')" :subtitle="$t('views.SettingsMcpView.configure_mcp_server_settings_and_api_keys')" />
 
-    <!-- The INITIAL load owns the page-level states: the spinner while it
-         runs, and the ErrorAlert with retry if it FAILS (nothing was ever
-         rendered then, so there is no last-good content to keep on screen).
-         After the first successful load, `loading` never flips again
-         (silentRefetch) and a later failure is non-fatal - see `refetchError`
-         at the top of the branch below. -->
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="initialLoadError" :message="initialLoadError" :on-retry="loadAll" />
 
@@ -361,26 +355,8 @@ const planStore = usePlanStore()
 const { orgRole } = useCurrentUser()
 const { t } = useI18n()
 
-interface ApiKeyItem {
-  id: string
-  name: string
-  role: string
-  lookup_prefix: string
-  is_active: boolean
-  // Serialized by _serialize_key (backend/src/modulo/auth/api_key.py) alongside
-  // is_active - always present on the wire, null when the key never expires.
-  expires_at: string | null
-  // FAR-1299: the revocation FACT, emitted like expires_at. null until an
-  // operator revokes the key; it is NOT derivable from is_active ALONE, which
-  // is computed and says only that the key stopped working, never why.
-  revoked_at: string | null
-  last_used_at: string | null
-  created_at: string
-  // FAR-2172: account info for the key owner (human/service)
-  account_kind: 'human' | 'service'
-  account_display_name: string
-  account_email: string | null
-}
+type ApiKeyItem = components['schemas']['ApiKeyListResponse']
+type OAuthClientItem = components['schemas']['OAuthClientItem']
 
 interface McpPageData {
   mcpUrl: string
@@ -390,8 +366,6 @@ interface McpPageData {
   apiKeysForbidden: boolean
   oauthListError: string | null
 }
-
-type OAuthClientItem = components['schemas']['OAuthClientItem']
 
 /**
  * A request that REJECTS (network failure, abort, parse error) never reaches
@@ -455,12 +429,7 @@ const {
         return { error: keysResp.error }
       }
     } else if (Array.isArray(keysResp.data)) {
-      // The generated OpenAPI type for GET /api/v1/api-keys is a bare
-      // `{ [key: string]: unknown }[]` (FastAPI serialises the rows without a
-      // response model), so the row shape is asserted at this one boundary
-      // where the data enters the page - it stays null-safe behind the
-      // Array.isArray guard above, and everything downstream is ApiKeyItem.
-      apiKeys = keysResp.data as unknown as ApiKeyItem[]
+      apiKeys = keysResp.data
     }
 
     // The OAuth client list is deliberately NON-fatal: a 403 (viewer role) or

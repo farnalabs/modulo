@@ -9685,8 +9685,11 @@ async def create_api_key(
 
 @mcp.tool(
     description=(
-        "List API keys in the organisation. Returns id/name/role/lookup_prefix/"
-        "created_at/team_id — never full key values. Mirrors GET /api/v1/api-keys."
+        "List API keys in the organisation. Requires an operator or admin caller. "
+        "Returns id/name/role/scope/lookup_prefix/last_used_at/created_at/"
+        "expires_at/revoked_at/is_active/grants plus account_kind, "
+        "account_display_name, and account_email (null for service accounts). "
+        "Never returns key_value or hashed_secret. Mirrors GET /api/v1/api-keys."
     ),
 )
 @_RETRY_DB
@@ -9697,11 +9700,15 @@ async def list_api_keys() -> dict[str, Any]:
         _check_agent_tool_scope("list_api_keys")
 
         org_id = _ctx_org_id_val()
+        if ORG_ROLE_HIERARCHY.get(_ctx_role_val() or "", -1) < ORG_ROLE_HIERARCHY["operator"]:
+            raise MCPAuthorizationError("Only admin or operator users can list API keys")
 
         async with _session(org_id) as s:
             keys = await auth_list_api_keys(s, org_id)
 
         return {"api_keys": keys, "total": len(keys)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
         _log.exception(_MSG_LIST_API_KEYS_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}

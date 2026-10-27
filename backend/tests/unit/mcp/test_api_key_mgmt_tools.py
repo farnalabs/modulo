@@ -448,6 +448,25 @@ class TestListApiKeys(AuthContext):
         assert result["error"] == "insufficient_scope"
         assert "account_email" not in result
 
+    async def test_operator_list_returns_account_metadata_without_secrets(self) -> None:
+        from modulo.api.mcp_server import list_api_keys
+
+        key = _make_key()
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+        ):
+            mock_session.return_value = make_session_context(_make_list_session([key]))
+            result = await list_api_keys()
+
+        assert result["total"] == 1
+        entry = result["api_keys"][0]
+        assert entry["account_kind"] == "human"
+        assert entry["account_display_name"] == "Duncan Tait"
+        assert entry["account_email"] == "duncan@example.com"
+        assert "key_value" not in entry
+        assert "hashed_secret" not in entry
+
     async def test_list_never_returns_full_key_values(self) -> None:
         from modulo.api.mcp_server import list_api_keys
 

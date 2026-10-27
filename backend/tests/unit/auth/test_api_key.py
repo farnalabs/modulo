@@ -377,6 +377,27 @@ async def test_list_api_keys_serializes_keys() -> None:
     key, kind, display_name, email = key_tuple
     expected = _serialize_key_with_account(key, kind, display_name, email)
     assert keys == [expected]
+    assert keys[0]["account_kind"] == "human"
+    assert keys[0]["account_display_name"] == "Test User"
+    assert keys[0]["account_email"] == "test@example.com"
+    assert "key_value" not in keys[0]
+    assert "hashed_secret" not in keys[0]
+
+
+def test_serialize_key_with_account_hides_service_email() -> None:
+    key, _kind, _display_name, _email = _make_serializable_key_with_account(
+        kind="service",
+        display_name="CI Service",
+        email="service@example.com",
+    )
+
+    serialized = _serialize_key_with_account(key, "service", "CI Service", "service@example.com")
+
+    assert serialized["account_kind"] == "service"
+    assert serialized["account_display_name"] == "CI Service"
+    assert serialized["account_email"] is None
+    assert "key_value" not in serialized
+    assert "hashed_secret" not in serialized
 
 
 @pytest.mark.asyncio

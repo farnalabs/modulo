@@ -251,27 +251,53 @@ describe('SettingsMcpView', () => {
      expect(wrapper.text()).toContain('Service')
    })
 
-   it('filters API keys by all, human, and service account', async () => {
-     const wrapper = mountView()
-     await nextTick()
-     await nextTick()
-     await nextTick()
-     const select = wrapper.find('[data-testid="settings-mcp-account-filter"]')
-     expect(select.exists()).toBe(true)
-     const vm = wrapper.vm as any
-     vm.accountFilter = 'human'
-     await nextTick()
-     expect(wrapper.text()).toContain('Claude Key')
-     expect(wrapper.text()).not.toContain('Cursor Key')
-     vm.accountFilter = 'service'
-     await nextTick()
-     expect(wrapper.text()).toContain('Cursor Key')
-     expect(wrapper.text()).not.toContain('Claude Key')
-     vm.accountFilter = 'all'
-     await nextTick()
-     expect(wrapper.text()).toContain('Claude Key')
-     expect(wrapper.text()).toContain('Cursor Key')
-   })
+    it('filters API keys by all, human, and service account', async () => {
+      const wrapper = mountView()
+      await nextTick()
+      await nextTick()
+      await nextTick()
+      const select = wrapper.find('[data-testid="settings-mcp-account-filter"]')
+      expect(select.exists()).toBe(true)
+      const vm = wrapper.vm as any
+      vm.accountFilter = 'human'
+      await nextTick()
+      expect(wrapper.text()).toContain('Claude Key')
+      expect(wrapper.text()).not.toContain('Cursor Key')
+      vm.accountFilter = 'service'
+      await nextTick()
+      expect(wrapper.text()).toContain('Cursor Key')
+      expect(wrapper.text()).not.toContain('Claude Key')
+      vm.accountFilter = 'all'
+      await nextTick()
+      expect(wrapper.text()).toContain('Claude Key')
+      expect(wrapper.text()).toContain('Cursor Key')
+    })
+
+    it('shows an empty state when the selected account type has no keys', async () => {
+      const wrapper = mountView()
+      await nextTick()
+      await nextTick()
+      await nextTick()
+      const vm = wrapper.vm as any
+      vm.accountFilter = 'service'
+      await nextTick()
+      expect(wrapper.text()).toContain('Cursor Key')
+
+      vm.accountFilter = 'human'
+      await nextTick()
+      expect(wrapper.text()).toContain('Claude Key')
+
+      const humanOnlyWrapper = mountView(mockMcpConfig, [mockApiKeys[0]], mockNoOAuthClients)
+      await nextTick()
+      await nextTick()
+      await nextTick()
+      const humanOnlyVm = humanOnlyWrapper.vm as any
+      humanOnlyVm.accountFilter = 'service'
+      await nextTick()
+      expect(humanOnlyWrapper.text()).toContain('No API keys match the selected filter.')
+      expect(humanOnlyWrapper.text()).not.toContain('Claude Key')
+    })
+
 
    it('shows the org-wide key scope note (FAR-620)', async () => {
     const wrapper = mountView()
