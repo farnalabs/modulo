@@ -2985,6 +2985,7 @@ export default {
       "scopes_retry": "Retry",
       "no_oauth_clients_registered_yet": "No OAuth clients registered yet.",
       "oauth_list_unexpected_response": "Could not read the OAuth client list. Try again.",
+      "api_keys_unexpected_response": "Could not read the API key list. Try again.",
       "oauth_clients_restricted": "You need an admin or operator role to view and manage OAuth clients.",
       "api_keys_restricted": "You need an admin or operator role to view and manage API keys.",
       "copy_failed_manual": "Copy failed - select the value and copy manually.",

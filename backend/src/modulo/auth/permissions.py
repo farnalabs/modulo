@@ -117,6 +117,7 @@ PERMISSIONS: dict[str, str] = {
     # api keys
     "api_key.create": "runner",
     "api_key.update": "runner",
+    # Listing keys discloses owning-account attribution and is operator-only.
     "api_key.list": "operator",
     "api_key.revoke": "runner",
     # metrics

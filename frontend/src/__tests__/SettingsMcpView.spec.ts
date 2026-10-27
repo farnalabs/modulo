@@ -225,6 +225,15 @@ describe('SettingsMcpView', () => {
     expect(wrapper.text()).toContain('http://localhost:8000')
   })
 
+  it('shows an explicit error when API key list succeeds with a non-array body', async () => {
+    const wrapper = mountView(mockMcpConfig, { unexpected: true } as unknown as MockApiKey[], mockNoOAuthClients)
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    expect(wrapper.text()).toContain('Could not read the API key list. Try again.')
+    expect(wrapper.text()).not.toContain('No API keys created yet.')
+  })
+
   it('shows API keys in the table', async () => {
     const wrapper = mountView()
     await nextTick()
@@ -2044,7 +2053,7 @@ describe('SettingsMcpView', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
-  it('a non-array api-keys body degrades to the empty state, not a page error', async () => {
+  it('a non-array api-keys body renders an explicit error, not the empty state', async () => {
     getMock.mockImplementation((path: string) => {
       if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mockMcpConfig, error: undefined })
       if (path === '/api/v1/api-keys') return Promise.resolve({ data: { unexpected: true }, error: undefined })
@@ -2055,7 +2064,8 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await nextTick()
     await nextTick()
-    expect(wrapper.text()).toContain('No API keys created yet')
+    expect(wrapper.text()).toContain('Could not read the API key list. Try again.')
+    expect(wrapper.text()).not.toContain('No API keys created yet')
   })
 
   it('refetchError is null before the first successful load', async () => {

@@ -430,6 +430,8 @@ const {
       }
     } else if (Array.isArray(keysResp.data)) {
       apiKeys = keysResp.data
+    } else {
+      return { error: { detail: t('views.SettingsMcpView.api_keys_unexpected_response') } }
     }
 
     // The OAuth client list is deliberately NON-fatal: a 403 (viewer role) or

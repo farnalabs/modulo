@@ -425,7 +425,7 @@ class TestListApiKeys(AuthContext):
         super().setup_method()
         from modulo.api.mcp_server import _ctx_role
 
-        _ctx_role.set("admin")
+        _ctx_role.set("operator")
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
@@ -466,6 +466,22 @@ class TestListApiKeys(AuthContext):
         assert entry["account_email"] == "duncan@example.com"
         assert "key_value" not in entry
         assert "hashed_secret" not in entry
+
+    async def test_runner_is_denied_and_operator_is_allowed(self) -> None:
+        from modulo.api.mcp_server import _ctx_role, list_api_keys
+
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+        ):
+            mock_session.return_value = make_session_context(_make_list_session([_make_key()]))
+            _ctx_role.set("runner")
+            denied = await list_api_keys()
+            _ctx_role.set("operator")
+            allowed = await list_api_keys()
+
+        assert denied["error"] == "insufficient_scope"
+        assert allowed["total"] == 1
 
     async def test_list_never_returns_full_key_values(self) -> None:
         from modulo.api.mcp_server import list_api_keys

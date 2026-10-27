@@ -139,10 +139,13 @@ applications. Built on the auth + model-backend core.
       protocol endpoints need a real public issuer
       (`SettingsMcpView.spec.ts`, `tests/unit/api/test_mcp_oauth.py`,
       `mcp/mcp_oauth.feature`)
+- [x] API-key listing is restricted to operator/admin principals on REST and MCP because it discloses account attribution (`account_kind`, `account_display_name`, and human `account_email`; service-account email is always `null`). The list response excludes the one-time raw key value, hashed secret, and all other secret material; malformed successful non-array responses are rendered as an explicit error rather than an empty state (`api_keys.py`, `auth/api_key.py`, `core/mcp/scope_validator.py`, `SettingsMcpView.vue`)
 - [x] Security hardening: keys are minted/revoked through the api-key surface,
       list-run/cost and other sensitive tools are role-gated, HITL-gated tools
       route through human review, and the suite guards structural tool
       coverage so new tools cannot ship unscoped
+
+
 - [x] MCP trigger dispatch (2026-09-22): the `trigger_pipeline` tool drives the
       real manual-run path (snapshot + `create_run` with the caller's account,
       `trigger_type manual`, then dispatch) and is scope-gated through the
