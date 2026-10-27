@@ -1025,10 +1025,10 @@ async def _set_user_keys_flag(org_id: uuid.UUID) -> bool:
 
     Stores the resolved value in the request-scoped ContextVar (no caching
     across requests — a mid-flight flag flip applies to the next request).
-    Fail-closed: any read error is treated as ON (restrictive) so a broken
-    flag resolution never broadens access. Org-key requests never consult
-    the flag at all (byte-identical org-key behaviour, no extra read); this
-    helper runs only on the user-scoped-key mint/auth paths.
+    Fail-closed: any read error is treated as OFF so a broken flag resolution
+    never broadens access. Org-key requests never consult the flag at all
+    (byte-identical org-key behaviour, no extra read); this helper runs only
+    on the user-scoped-key mint/auth paths.
     """
     try:
         enabled = bool(await get_registry().resolve_flag(_FLAG_USER_SCOPED_MCP_KEYS, org_id=org_id))
@@ -1036,7 +1036,7 @@ async def _set_user_keys_flag(org_id: uuid.UUID) -> bool:
         raise
     except Exception:
         _log.warning("feature_flag.user_scoped_mcp_keys_read_failed", exc_info=True)
-        enabled = True
+        enabled = False
     _ctx_user_keys_enabled.set(enabled)
     return enabled
 
@@ -1599,19 +1599,18 @@ async def _authenticate_api_key(
         key_grants = await resolve_key_grants(key)
         org_id = key.organisation_id
         # FAR-620: the ``user_scoped_mcp_keys`` flag is the kill switch for
-        # user-scoped keys — ENABLING it (ON = restrict) DENIES the key at
-        # auth (401), revoking rather than broadening. The flag is read ONCE
-        # per request, fail-closed (defaults to ON/restrictive on error), and
-        # ONLY for user-scoped keys: org-key authentication is byte-identical
-        # to the pre-FAR-620 behaviour (no flag read). The deny decision reads
-        # the request-scoped ContextVar (not the helper's inline return) so
-        # the var - shared with the mint path - is the single source of the
-        # flag's per-request state.
+        # user-scoped keys — disabling it DENIES the key at auth (401),
+        # revoking rather than broadening. The flag is read ONCE per request,
+        # fail-closed, and ONLY for user-scoped keys: org-key authentication
+        # is byte-identical to the pre-FAR-620 behaviour (no flag read). The
+        # deny decision reads the request-scoped ContextVar (not the helper's
+        # inline return) so the var - shared with the mint path - is the
+        # single source of the flag's per-request state.
         if key.scope == "user":
             await _set_user_keys_flag(org_id)
-            if _ctx_user_keys_enabled.get():
+            if not _ctx_user_keys_enabled.get():
                 _log.info(
-                    "api_key.user_scoped_key_denied_flag_on",
+                    "api_key.user_scoped_key_denied_flag_off",
                     extra={"key_id": str(key.id), "org_id": str(org_id)},
                 )
                 raise ApiKeyInvalidError

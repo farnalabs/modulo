@@ -24,9 +24,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from jwt import InvalidTokenError as JWTError
 
 import modulo.api.mcp_server as ms
+import modulo.api.routes.api_keys as api_keys_routes
 from modulo.api.mcp_server import (
     _authenticate_api_key,
     _authenticate_oauth_jwt,
@@ -160,10 +162,11 @@ class TestApiKeyAuthScopeStamping:
         assert ms._ctx_user_keys_enabled.get() is False
 
     @pytest.mark.asyncio
-    async def test_user_key_flag_off_allows(self) -> None:
-        """Flag OFF (permissive) ⇒ a stored user-scoped key is ALLOWED."""
+    async def test_user_key_flag_on_sets_key_scope_user(self) -> None:
+        """Flag ON: the REAL ``_set_user_keys_flag`` resolves via the registry
+        and stamps ``_ctx_user_keys_enabled``."""
         registry = MagicMock()
-        registry.resolve_flag = AsyncMock(return_value=False)
+        registry.resolve_flag = AsyncMock(return_value=True)
         patches = _api_key_patches(_mock_api_key(scope="user"), "operator")
         with (
             patches[0],
@@ -178,14 +181,16 @@ class TestApiKeyAuthScopeStamping:
         assert handled is True
         assert err is None
         assert ms._ctx_key_scope.get() == "user"
-        assert ms._ctx_user_keys_enabled.get() is False
+        assert ms._ctx_user_keys_enabled.get() is True
 
     @pytest.mark.asyncio
-    async def test_user_key_flag_on_denies_401(self) -> None:
-        """Flag ON (restrictive) ⇒ a stored user-scoped key is DENIED AT AUTH
-        (401) — enabling the restriction revokes, never broadens."""
+    async def test_user_key_flag_off_denies_401(self) -> None:
+        """Flag OFF ⇒ a stored user-scoped key is DENIED AT AUTH (401) —
+        disabling revokes, never broadens. Uses the REAL flag helper with a
+        False-resolving registry (the same fail-closed default an empty org
+        override produces)."""
         registry = MagicMock()
-        registry.resolve_flag = AsyncMock(return_value=True)
+        registry.resolve_flag = AsyncMock(return_value=False)
         patches = _api_key_patches(_mock_api_key(scope="user"), "operator")
         with (
             patches[0],
@@ -203,8 +208,7 @@ class TestApiKeyAuthScopeStamping:
 
     @pytest.mark.asyncio
     async def test_user_key_flag_read_failure_fails_closed_401(self) -> None:
-        """A flag resolution error is treated as ON (restrictive/fail-closed),
-        so user-scoped keys are denied (401) — never broadens access."""
+        """A flag resolution error is treated as OFF (fail-closed)."""
         patches = _api_key_patches(_mock_api_key(scope="user"), "operator")
         with (
             patches[0],
@@ -247,7 +251,7 @@ class TestUserKeyLiveRoleClamp:
     @pytest.mark.asyncio
     async def test_runner_user_key_live_viewer_degrades_to_viewer(self) -> None:
         registry = MagicMock()
-        registry.resolve_flag = AsyncMock(return_value=False)
+        registry.resolve_flag = AsyncMock(return_value=True)
         patches = _api_key_patches(_mock_api_key(role="runner", scope="user"), "viewer")
         with (
             patches[0],
@@ -263,7 +267,6 @@ class TestUserKeyLiveRoleClamp:
         assert err is None
         assert ms._ctx_role.get() == "viewer"
         assert ms._ctx_key_scope.get() == "user"
-        assert ms._ctx_user_keys_enabled.get() is False
 
     @pytest.mark.asyncio
     async def test_runner_user_key_clamp_matches_org_key(self) -> None:
@@ -272,10 +275,7 @@ class TestUserKeyLiveRoleClamp:
         results: list[str | None] = []
         for scope in ("org", "user"):
             registry = MagicMock()
-            # For user-scoped keys, flag must be OFF (permissive) to allow;
-            # org keys never consult the flag.
-            flag_value = scope != "user"
-            registry.resolve_flag = AsyncMock(return_value=flag_value)
+            registry.resolve_flag = AsyncMock(return_value=True)
             patches = _api_key_patches(_mock_api_key(role="runner", scope=scope), "viewer")
             with (
                 patches[0],
@@ -296,7 +296,7 @@ class TestUserKeyLiveRoleClamp:
         """Missing/deactivated membership (live None) ⇒ the key dies with 401
         for a user-scoped key, exactly as for an org key."""
         registry = MagicMock()
-        registry.resolve_flag = AsyncMock(return_value=False)
+        registry.resolve_flag = AsyncMock(return_value=True)
         patches = _api_key_patches(_mock_api_key(role="runner", scope="user"), None)
         with (
             patches[0],
@@ -535,21 +535,89 @@ class TestSetUserKeysFlag:
         assert ms._ctx_user_keys_enabled.get() is True
 
     @pytest.mark.asyncio
-    async def test_read_failure_fails_closed_restrictive(self) -> None:
-        """Fail-closed: a flag resolution error defaults to True (restrictive),
-        so user-scoped keys are denied — never broadens access."""
+    async def test_read_failure_fails_closed(self) -> None:
         registry = MagicMock()
         registry.resolve_flag = AsyncMock(side_effect=RuntimeError("db down"))
         with patch.object(ms, "get_registry", return_value=registry):
-            assert await _set_user_keys_flag(_ORG_ID) is True
-        assert ms._ctx_user_keys_enabled.get() is True
+            assert await _set_user_keys_flag(_ORG_ID) is False
+        assert ms._ctx_user_keys_enabled.get() is False
 
     @pytest.mark.asyncio
-    async def test_resolve_flag_exception_path_returns_true(self) -> None:
-        """A registry construction failure also fails closed (restrictive)."""
+    async def test_resolve_flag_exception_path_returns_false(self) -> None:
+        """A registry construction failure is also fail-closed."""
         with patch.object(ms, "get_registry", side_effect=RuntimeError("no registry")):
-            assert await _set_user_keys_flag(_ORG_ID) is True
-        assert ms._ctx_user_keys_enabled.get() is True
+            assert await _set_user_keys_flag(_ORG_ID) is False
+        assert ms._ctx_user_keys_enabled.get() is False
+
+
+class TestFlagPolarityContractAcrossPaths:
+    """FAR-620: the SAME ``user_scoped_mcp_keys`` flag gates BOTH the mint path
+    (``api/routes/api_keys.py``) and the MCP auth path (this module). Both must
+    therefore agree on its polarity: ON permits, OFF (and an unreadable flag)
+    denies. A split — one path treating OFF as permissive while the other
+    treats it as a kill switch — lets a flag state mint keys that can never
+    authenticate, or authenticate keys that a kill switch was meant to revoke.
+    Pinning the agreement here makes such a polarity split fail CI.
+    """
+
+    @staticmethod
+    def _registry(resolved: bool | Exception) -> MagicMock:
+        registry = MagicMock()
+        if isinstance(resolved, Exception):
+            registry.resolve_flag = AsyncMock(side_effect=resolved)
+        else:
+            registry.resolve_flag = AsyncMock(return_value=resolved)
+        return registry
+
+    @classmethod
+    async def _mint_allowed(cls, resolved: bool | Exception) -> bool:
+        principal = MagicMock()
+        principal.organisation_id = _ORG_ID
+        principal.account_id = _USER_ID
+        req = api_keys_routes.ApiKeyCreate(name="user:parity", role="operator", scope="user")
+        denied_status: int | None = None
+        with patch.object(api_keys_routes, "get_registry", return_value=cls._registry(resolved)):
+            try:
+                await api_keys_routes._validate_create_request(req, principal)
+            except HTTPException as exc:
+                denied_status = exc.status_code
+        if denied_status is not None:
+            assert denied_status == 422
+            return False
+        return True
+
+    @classmethod
+    async def _auth_allowed(cls, resolved: bool | Exception) -> bool:
+        patches = _api_key_patches(_mock_api_key(scope="user"), "operator")
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patch.object(ms, "get_registry", return_value=cls._registry(resolved)),
+        ):
+            handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
+        assert (handled is True) == (err is None)
+        return handled
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("resolved", "expected"),
+        [
+            (True, True),
+            (False, False),
+            (RuntimeError("flag read exploded"), False),
+        ],
+        ids=["flag-on-permits", "flag-off-denies", "read-error-denies"],
+    )
+    async def test_mint_and_auth_agree_on_one_polarity(self, resolved: bool | Exception, expected: bool) -> None:
+        mint_allowed = await self._mint_allowed(resolved)
+        auth_allowed = await self._auth_allowed(resolved)
+        assert mint_allowed is expected
+        assert auth_allowed is expected
+        assert mint_allowed is auth_allowed
 
 
 def test_mcp_authorization_error_import_stable() -> None:
