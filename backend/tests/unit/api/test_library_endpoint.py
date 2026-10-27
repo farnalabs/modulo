@@ -292,6 +292,15 @@ def test_list_libraries_backwards_compatible_single_primitive_type(client: TestC
     assert call_kwargs["primitive_types"] is None
 
 
+def test_list_libraries_singular_lifecycle_map_filter_is_hidden_for_ordinary_user(viewer_client: TestClient) -> None:
+    mock_list = _stub_list_call(client=viewer_client, primitive_type="lifecycle_map")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] == "__hidden_lifecycle_map__"
+    assert call_kwargs["primitive_types"] is None
+
+
 def test_list_libraries_default_excludes_in_dev(client: TestClient) -> None:
     """The list endpoint defaults to the service in_dev exclusion (excluded_tiers=None)."""
     result = PageResult(items=[_make_listable_primitive()], total=1, page=1, page_size=20)

@@ -790,7 +790,7 @@ async def list_library_primitives_endpoint(
     requested_types = _split_primitive_types(primitive_types)
     if primitive_types and requested_types is None:
         requested_types = []
-    if primitive_type is not None and requested_types is None:
+    if primitive_type is not None and requested_types is None and primitive_type != _LIFECYCLE_MAP_PRIMITIVE_TYPE:
         filtered_primitive_type: str | None = primitive_type
         filtered_primitive_types: str | None = None
     else:
