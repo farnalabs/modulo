@@ -3029,7 +3029,15 @@ export default {
       "key_will_be_masked_in": "This key will be masked in {seconds}s",
       "revoke_api_key": "Revoke API Key",
       "revoke_key_confirmation_part1": "Are you sure you want to revoke the key",
-      "revoke_key_confirmation_part2": "Any clients using this key will lose access immediately."
+      "revoke_key_confirmation_part2": "Any clients using this key will lose access immediately.",
+      "filter_by_account": "Filter by Account",
+      "all_accounts": "All Accounts",
+      "human_accounts": "Human Accounts",
+      "service_accounts": "Service Accounts",
+      "account": "Account",
+      "human": "Human",
+      "service": "Service",
+      "no_api_keys_match_filter": "No API keys match the selected filter."
     },
     "UserAssistantSkillsView": {
       "my_assistant_skills": "My Assistant Skills",

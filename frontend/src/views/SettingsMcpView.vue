@@ -93,8 +93,25 @@
           <p class="mb-3 text-xs text-muted-foreground" data-testid="settings-mcp-machine-credential-note">
             {{ $t('views.SettingsMcpView.api_keys_machine_credential_note') }}
           </p>
-          <div v-if="apiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
-            {{ $t('views.SettingsMcpView.no_api_keys_created_yet') }}
+          <div class="mb-3 flex items-center gap-2">
+            <label for="settings-mcp-account-filter" class="text-sm font-medium">{{ $t('views.SettingsMcpView.filter_by_account') }}</label>
+            <Select
+              id="settings-mcp-account-filter"
+              v-model="accountFilter"
+              :placeholder="$t('views.SettingsMcpView.all_accounts')"
+              class="w-48"
+              :options="accountFilterOptions"
+              option-label="label"
+              option-value="value"
+              data-testid="settings-mcp-account-filter"
+            >
+              <template #option="{ option }">
+                <span :data-value="option.value">{{ option.label }}</span>
+              </template>
+            </Select>
+          </div>
+          <div v-if="filteredApiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
+            {{ $t('views.SettingsMcpView.no_api_keys_match_filter') }}
           </div>
 
           <div v-else class="overflow-x-auto">
@@ -104,16 +121,27 @@
                 <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.name') }}</th>
                 <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.key_prefix') }}</th>
                 <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.role') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.account') }}</th>
                 <th class="pb-2 font-medium capitalize">{{ $t('views.SettingsMcpView.status') }}</th>
                 <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.last_used') }}</th>
                 <th class="pb-2 font-medium" />
               </tr>
             </thead>
             <tbody class="divide-y divide-border">
-              <tr v-for="key in apiKeys" :key="key.id" class="transition-colors hover:bg-muted/20">
+              <tr v-for="key in filteredApiKeys" :key="key.id" class="transition-colors hover:bg-muted/20">
                 <td class="py-2.5 font-medium">{{ key.name }}</td>
                 <td class="py-2.5 font-mono text-muted-foreground">{{ key.lookup_prefix }}</td>
                 <td class="py-2.5 capitalize">{{ key.role }}</td>
+                <td class="py-2.5">
+                  <div class="flex items-center gap-2">
+                    <Badge
+                      :severity="key.account_kind === 'human' ? 'success' : 'info'"
+                      class="text-xs"
+                    >{{ key.account_kind === 'human' ? $t('views.SettingsMcpView.human') : $t('views.SettingsMcpView.service') }}</Badge>
+                    <span class="font-medium">{{ key.account_display_name }}</span>
+                    <span v-if="key.account_email" class="text-xs text-muted-foreground">({{ key.account_email }})</span>
+                  </div>
+                </td>
                 <td class="py-2.5" data-testid="settings-mcp-key-status">
                   <Badge :severity="apiKeyStatusMeta(key).severity">{{ apiKeyStatusMeta(key).label }}</Badge>
                 </td>
@@ -345,6 +373,10 @@ interface ApiKeyItem {
   revoked_at: string | null
   last_used_at: string | null
   created_at: string
+  // FAR-2172: account info for the key owner (human/service)
+  account_kind: 'human' | 'service'
+  account_display_name: string
+  account_email: string | null
 }
 
 interface McpPageData {
@@ -478,6 +510,18 @@ const mcpUrl = computed(() => mcpData.value?.mcpUrl ?? '')
 const apiKeys = computed(() => mcpData.value?.apiKeys ?? [])
 const oauthClients = computed(() => mcpData.value?.oauthClients ?? [])
 const oauthListError = computed(() => mcpData.value?.oauthListError ?? null)
+
+const accountFilter = ref<'all' | 'human' | 'service'>('all')
+const accountFilterOptions = computed(() => [
+  { value: 'all', label: t('views.SettingsMcpView.all_accounts') },
+  { value: 'human', label: t('views.SettingsMcpView.human_accounts') },
+  { value: 'service', label: t('views.SettingsMcpView.service_accounts') },
+])
+
+const filteredApiKeys = computed(() => {
+  if (accountFilter.value === 'all') return apiKeys.value
+  return apiKeys.value.filter((k) => k.account_kind === accountFilter.value)
+})
 
 /**
  * The page's ONE concept of "MODULO_PUBLIC_URL is configured" (FAR-1282).
