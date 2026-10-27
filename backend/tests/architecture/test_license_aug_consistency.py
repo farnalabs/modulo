@@ -15,10 +15,12 @@ enforced here.
 
 The comparison is of SUBSTANCE, not wording. Each concept below (the permitted
 acts, the carve-out, the fact that the carve-out reaches derivatives, and the
-fact that it is limited to offering the service to third parties) is expressed by
-any of several phrasings, so an artefact may reword freely. What it may not do is
-disagree: drop a permitted act the licence grants, or claim a permission the
-licence does not give.
+fact that it is limited to offering the service to third parties, and the
+qualifier that bounds it to a service providing substantially the same
+functionality) is expressed by any of several phrasings, so an artefact may
+reword freely. What it may not do is disagree: drop a permitted act the licence
+grants, widen the restriction beyond what the licence imposes, or claim a
+permission the licence does not give.
 
 Deliberately NOT covered: byte-identical formatting. The AUG is wrapped to the
 parameter block's column width in ``LICENSE`` and reflowed in prose, so a literal
@@ -51,6 +53,14 @@ _HOSTED_PHRASES = (
     r"\bpaid hosted\b",
     r"\bhosted or managed service\b",
     r"\bas a hosted service\b",
+)
+# The AUG restricts only a service providing SUBSTANTIALLY THE SAME functionality
+# as Modulo. Dropping the qualifier widens the restriction to any paid hosted
+# offering, which the licence does not say - the widening happened in README.md.
+_SAME_FUNCTIONALITY_QUALIFIER = (
+    r"\bsubstantially\s+(?:the\s+)?same\s+(?:functionality|features?|service)\b",
+    r"\bsubstantially\s+similar\s+(?:functionality|features?|service)\b",
+    r"\bfunctionally\s+(?:equivalent|the\s+same)\b",
 )
 # The carve-out is limited to offering such a service TO THIRD PARTIES. Dropping
 # that limit overstates the restriction: read literally it would also bar
@@ -100,6 +110,15 @@ def _carve_out_reaches_derivatives(text: str) -> bool:
     )
 
 
+def _qualifies_the_hosted_restriction(text: str) -> bool:
+    """The carve-out reaches only a service substantially matching Modulo.
+
+    The qualifier is checked in the same window as the hosted-service phrase, so
+    an unrelated "same functionality" elsewhere in a long doc cannot satisfy it.
+    """
+    return any(_matches_any(window, _SAME_FUNCTIONALITY_QUALIFIER) for window in _windows_around(text, _HOSTED_PHRASES))
+
+
 def _carve_out_names_third_parties(text: str) -> bool:
     return any(
         re.search(_THIRD_PARTY_RECIPIENT, window, re.IGNORECASE) for window in _windows_around(text, _HOSTED_PHRASES)
@@ -111,6 +130,7 @@ _CONCEPT_CHECKS: dict[str, Callable[[str], bool]] = {
     "derivative_works": lambda text: _matches_any(text, _DERIVATIVE_WORKS),
     "hosted_service_carve_out": _expresses_hosted_carve_out,
     "derivative_in_carve_out": _carve_out_reaches_derivatives,
+    "same_functionality_qualifier": _qualifies_the_hosted_restriction,
     "third_party_recipient": _carve_out_names_third_parties,
 }
 
@@ -130,9 +150,16 @@ _AUG_ARTEFACTS: dict[str, frozenset[str]] = {
     "backend/LICENSE": _ALL_CONCEPTS,
     "docs/continuity-and-escrow.md": _ALL_CONCEPTS,
     # The answer bank states the RESTRICTION only, so it is held to the
-    # carve-out concepts rather than the full grant.
+    # carve-out concepts rather than the full grant. It does state the
+    # "substantially the same functionality" qualifier, so it is held to that
+    # too: dropping the qualifier from the answer bank fails this test.
     "docs/security/security-questionnaire-answer-bank.md": frozenset(
-        {"hosted_service_carve_out", "derivative_in_carve_out", "third_party_recipient"}
+        {
+            "hosted_service_carve_out",
+            "derivative_in_carve_out",
+            "same_functionality_qualifier",
+            "third_party_recipient",
+        }
     ),
 }
 
