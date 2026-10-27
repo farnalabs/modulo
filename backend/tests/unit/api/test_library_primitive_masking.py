@@ -442,7 +442,17 @@ def test_read_surface_admin_publish_response_masks_composite(client: TestClient)
 def test_read_surface_community_install_response_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
     prim.source = "registry"
+    entry_id = uuid.uuid4()
+    # The install route resolves the community entry before installing (FAR-2200
+    # lifecycle-map gate); a non-lifecycle-map entry keeps the composite-masking
+    # assertion on the end-to-end install path.
+    entry = {"id": str(entry_id), "type": "composite"}
     with (
+        patch(
+            "modulo.api.routes.community_library.get_community_entry",
+            new_callable=AsyncMock,
+            return_value=entry,
+        ),
         patch(
             "modulo.api.routes.community_library.install_community_entry",
             new_callable=AsyncMock,
@@ -452,7 +462,7 @@ def test_read_surface_community_install_response_masks_composite(client: TestCli
         patch("modulo.api.routes.community_library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
-            f"/api/v1/libraries/community/{uuid.uuid4()}/install",
+            f"/api/v1/libraries/community/{entry_id}/install",
             json={},
         )
 
