@@ -13,9 +13,11 @@ module import — BEFORE it imports ``modulo.cli.backup`` (psycopg, settings,
 apply) — so the backup/restore path is covered on the real entry point too
 (locked by the import-hygiene subprocess test).
 
-Platform: the bundled runtime is LINUX-FIRST. macOS is refused loudly at
-boot — the child-death shim depends on /proc STARTTIME, which only Linux
-provides (TODO(P2) macOS variant); Windows carries the TODO(P3) seam.
+Platform: the bundled runtime runs on Linux and macOS. The child-death shim
+needs a process start-time identity, which the supervisor's platform seam
+provides from /proc STARTTIME on Linux and from libproc's
+``proc_pidinfo(PROC_PIDTBSDINFO)`` on macOS. Windows carries the TODO(P3)
+seam and is refused loudly.
 
 Boot order (ADR 031 Decision 2):
 
@@ -189,13 +191,6 @@ def run_start(
     """
     # FIRST ACTION — before any other modulo import (ADR 031 Decision 2).
     env_safety.scrub_os_environment()
-    if sys.platform == "darwin":
-        raise BootError(
-            "The native launcher requires Linux: the child-death watchdog depends on "
-            "/proc STARTTIME, which macOS does not provide (a bundled service would be "
-            "killed moments after every spawn). macOS support is planned (P2) — use the "
-            "Docker Compose path meanwhile."
-        )
     effective_data_dir = data_dir if data_dir is not None else default_data_dir()
     if detach:
         return _start_detached(effective_data_dir, bin_dir, clear_degraded=clear_degraded)

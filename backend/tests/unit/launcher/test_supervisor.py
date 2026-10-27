@@ -858,11 +858,10 @@ def test_reconcile_sweeps_stale_redis_conf_files(tmp_path: Path) -> None:
     assert not stale.exists()
 
 
-def test_is_postgres_process_refuses_on_non_linux(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Off Linux the identity is UNKNOWABLE (None), never 'not postgres'."""
-    if sys.platform == "linux":
-        pytest.skip("non-Linux refusal contract")
-    monkeypatch.setattr(sys, "platform", "darwin")
+def test_is_postgres_process_refuses_without_a_platform_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no identity backend the answer is UNKNOWABLE (None), never
+    'not postgres' (that would let reconciliation delete a live pidfile)."""
+    monkeypatch.setattr(sys, "platform", "win32")
     assert _is_postgres_process(os.getpid()) is None
 
 
@@ -999,14 +998,23 @@ def test_child_shim_argv_falls_back_without_proc(monkeypatch: pytest.MonkeyPatch
     assert argv == ["redis-server", "--port", "1"]
 
 
-def test_child_shim_argv_unwrapped_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No /proc STARTTIME on macOS → an unwrapped argv (a wrapped shim would
-    kill its child on the first watchdog tick)."""
-    if sys.platform == "linux":
-        pytest.skip("the shim wraps on Linux by design")
+def test_child_shim_argv_wraps_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """darwin carries a start-time identity (libproc), so the shim wraps.
+
+    The real libproc calls are macOS-only; the seam is driven here with an
+    injected backend so the dispatch is covered on every platform.
+    """
+
+    class _DarwinStub:
+        def shim_starttime(self, _pid: int) -> int | None:
+            return 987654
+
     monkeypatch.setattr(sys, "platform", "darwin")
-    argv = child_shim_argv(["redis-server", "--port", "1"])
-    assert argv == ["redis-server", "--port", "1"]
+    monkeypatch.setitem(supervisor_module._PROCESS_BACKENDS, "darwin", _DarwinStub())
+    argv = child_shim_argv(["redis-server", "--port", "1"], parent_pid=4242)
+    assert argv[:3] == [sys.executable, "-m", "modulo.launcher.supervisor"]
+    assert argv[argv.index("--parent-pid") + 1] == "4242"
+    assert argv[argv.index("--parent-starttime") + 1] == "987654"
 
 
 @requires_posix

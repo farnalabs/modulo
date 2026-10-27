@@ -10,8 +10,8 @@ Contracts locked by tests (``tests/unit/launcher/test_supervisor.py``):
   ``flock`` on the ``<datadir>.lock`` sibling file for its WHOLE lifetime.
   The kernel releases it on process death, so a SIGKILLed launcher can never
   wedge the data dir. A concurrent start refuses and names the holder's
-  PID + mode; the holder's /proc STARTTIME is recorded at acquire so
-  ``request_stop`` can verify the identity before signalling (a recycled
+  PID + mode; the holder's platform start-time identity is recorded at
+  acquire so ``request_stop`` can verify it before signalling (a recycled
   PID is never SIGTERMed) and a clean release truncates the holder record.
   POSIX-only: Windows carries the TODO(P3) Job-Object seam and refuses
   loudly.
@@ -27,17 +27,18 @@ Contracts locked by tests (``tests/unit/launcher/test_supervisor.py``):
   spawn; deferred children (SAQ behind migration-head readiness) cannot
   crash before their start condition is met because they are not spawned
   until it is.
-* **Child shim owns death**: every supervised child ON LINUX runs under a
-  shim process (``python -m modulo.launcher.supervisor child-shim``) that
-  polls the launcher's ``/proc/<ppid>/stat`` STARTTIME (field 22) at most
-  every 2 seconds — PID-reuse safe — and kills the child when the parent is
-  gone. On Linux the child additionally carries PDEATHSIG (pre-exec) as a
-  belt-and-braces optimisation. Off Linux the shim has no readable
-  STARTTIME, so the argv passes through UNWRAPPED (``read_proc_starttime``
-  returns None everywhere but Linux; a wrapped shim would kill its child on
-  the first watchdog tick) and the entry refuses non-Linux platforms loudly
-  until the platform-native death-binding lands (TODO(P2) macOS,
-  TODO(P3) Windows Job Objects).
+* **Child shim owns death**: every supervised child ON LINUX OR macOS runs
+  under a shim process (``python -m modulo.launcher.supervisor child-shim``)
+  that polls the launcher's start-time identity at most every 2 seconds —
+  PID-reuse safe — and kills the child when the parent is gone. The identity
+  comes from ``/proc/<ppid>/stat`` STARTTIME (field 22) on Linux and from
+  libproc's ``proc_pidinfo(PROC_PIDTBSDINFO)`` start time on macOS (one
+  platform seam, :func:`_process_backend`). On Linux the child additionally
+  carries PDEATHSIG (pre-exec) as a belt-and-braces optimisation. A platform
+  (or a backend that cannot read the launcher's identity) passes the argv
+  through UNWRAPPED, because a wrapped shim would kill its child on the
+  first watchdog tick; on Linux that sentinel is preserved exactly
+  (TODO(P3) Windows Job Objects).
 * **Probe tri-state + startup deadline**: a probe answers healthy,
   unhealthy, or PROBE-UNAVAILABLE (the probe TOOL itself is broken — e.g.
   the binary is missing). PROBE-UNAVAILABLE never terminates a child: the
@@ -90,7 +91,10 @@ override seam until Settings grows launcher knob fields.
 
 import argparse
 import contextlib
+import ctypes
+import ctypes.util
 import enum
+import functools
 import json
 import logging
 import math
@@ -141,8 +145,8 @@ _PRIORITY_SAQ = policy.TEARDOWN_PRIORITY_SAQ
 _PRIORITY_POSTGRES = policy.TEARDOWN_PRIORITY_POSTGRES
 _PRIORITY_REDIS = policy.TEARDOWN_PRIORITY_REDIS
 
-# /proc helpers — exposed for the orphan-reconciliation tests (they import
-# the private names directly).
+# Platform process-identity seam — exposed for the orphan-reconciliation
+# tests (they import the private names directly).
 # Read-only access helpers for doctor/status (FAR-676): the supervisor
 # persists a degraded reason (and a crash-incident marker) next to the
 # child-PID manifest when it degrades, and exposes pure readers so
@@ -422,9 +426,10 @@ def knobs_from_env(env: dict[str, str] | None = None) -> SupervisorKnobs:
 class LockHolder:
     """The launcher identity recorded inside the lock file after acquiring.
 
-    ``starttime`` is the holder's /proc STARTTIME (None off Linux): it
-    lets ``request_stop`` verify the identity before signalling so a
-    RECYCLED PID is never SIGTERMed.
+    ``starttime`` is the holder's platform start-time identity token
+    (``/proc`` STARTTIME on Linux, libproc's start time on macOS; None on a
+    backend-less platform): it lets ``request_stop`` verify the identity
+    before signalling so a RECYCLED PID is never SIGTERMed.
     """
 
     pid: int
@@ -459,7 +464,7 @@ class DataDirLock:
     it, so a data-dir reset cannot hide a live lock). Acquisition is
     ``flock(LOCK_EX | LOCK_NB)``; the kernel releases it when the holding
     process dies, which is exactly the semantics ADR 031 Decision 5 wants.
-    The holder's PID + mode + /proc STARTTIME are written into the file
+    The holder's PID + mode + start-time identity token are written into the file
     after acquiring so a refused concurrent start can name the culprit and
     ``modulo stop`` can verify the identity before signalling. A clean
     release truncates the holder record — a stale identity must never
@@ -603,8 +608,8 @@ def _holder_identity_matches(holder: LockHolder) -> bool | None:
     Mirrors ``_postmaster_is_stale``: a missing current STARTTIME (process
     gone) or a mismatched one (PID reused by another process) proves the
     recorded holder is gone. ``None`` = unverifiable (recorded before the
-    STARTTIME field existed, or off Linux) — the caller falls back to the
-    recorded PID alone.
+    STARTTIME field existed, or the platform has no identity backend) — the
+    caller falls back to the recorded PID alone.
     """
     if holder.starttime is None:
         return None
@@ -678,8 +683,9 @@ def _await_lock_release(lock_path: Path, pid: int, timeout: float) -> int:
 def request_stop(data_dir: Path, *, timeout: float = 10.0) -> int:
     """Ask the launcher holding *data_dir* to stop (the ``modulo stop`` path).
 
-    The recorded holder's /proc STARTTIME is verified BEFORE signalling —
-    a recycled PID is never SIGTERMed. Completion is detected by probing
+    The recorded holder's start-time identity token is verified BEFORE
+    signalling — a recycled PID is never SIGTERMed. Completion is detected
+    by probing
     the flock (not the holder JSON). POSIX-only; returns 0 when the
     launcher stopped (or no live holder exists), 1 when it could not be
     confirmed stopped.
@@ -706,46 +712,307 @@ def _raise_still_locked(pid: int, timeout: float) -> int:
 
 
 # ---------------------------------------------------------------------------
-# /proc helpers (POSIX shim + reconciliation)
+# Platform seam — process identity (Linux /proc, macOS libproc)
 # ---------------------------------------------------------------------------
+#
+# Every platform-specific process query goes through ONE narrow backend,
+# selected in exactly ONE place (:func:`_process_backend`). Linux reads
+# /proc; macOS reads the same facts through libproc (``proc_pidinfo``,
+# ``proc_pidpath``, ``proc_listchildpids``). A platform with no backend
+# (Windows, TODO(P3)) keeps each caller's "unknown" contract — ``None`` for
+# an identity, ``[]`` for children — never a guess.
+#
+# The start-time token both backends return is OPAQUE and only ever compared
+# for EQUALITY on the machine that produced it: Linux uses /proc/<pid>/stat
+# field 22 (clock ticks since boot), macOS uses the process start time from
+# ``struct proc_bsdinfo`` encoded as ``tvsec * 1_000_000 + tvusec``. Either
+# token changes when the kernel recycles the PID for a new process — the exact
+# semantic the child shim and the data-dir lock's holder identity depend on.
+
+MAXCOMLEN = 16
+_PROC_PIDTBSDINFO = 3
+_PROC_PIDPATHINFO_MAXSIZE = 4096
+_PROC_CHILDREN_CAPACITY = 256
+
+
+class _ProcBsdInfo(ctypes.Structure):
+    """``struct proc_bsdinfo`` (``bsd/sys/proc_info.h``).
+
+    Only the start-time tail (``pbi_start_tvsec`` / ``pbi_start_tvusec``) is
+    consumed, but the whole layout must be declared because ``proc_pidinfo``
+    writes from the start of the struct. ``PROC_PIDTBSDINFO`` fills exactly
+    ``sizeof(struct proc_bsdinfo)`` bytes on success, which the reader
+    verifies before trusting any field.
+    """
+
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * MAXCOMLEN),
+        ("pbi_name", ctypes.c_char * (2 * MAXCOMLEN)),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
+
+
+_PROC_BSDINFO_SIZE = ctypes.sizeof(_ProcBsdInfo)
+
+
+class _ProcessBackend(Protocol):
+    """One platform's process-identity queries (selected once, above)."""
+
+    def starttime(self, pid: int) -> int | None:
+        """Opaque start-time identity token, or None when unknown/gone."""
+        ...
+
+    def shim_starttime(self, pid: int) -> int | None:
+        """Token to bake into a wrapped child shim, or None to not wrap it.
+
+        Platforms differ on the unreadable case: Linux preserves its
+        historical ``-1`` sentinel (the shim then refuses to supervise),
+        while a platform whose shim cannot tolerate a self-kill returns None
+        so the argv passes through unwrapped instead of crash-looping.
+        """
+        ...
+
+    def start_epoch(self, pid: int) -> float | None:
+        """Approximate the epoch time *pid* started, or None when unknown."""
+        ...
+
+    def children(self, pid: int) -> list[int]:
+        """Direct child PIDs of *pid* (empty when the platform cannot tell)."""
+        ...
+
+    def is_postgres(self, pid: int) -> bool | None:
+        """True/False when the executable identity is readable; None if not."""
+        ...
+
+
+class _LinuxProcessBackend:
+    """Process identity via ``/proc`` (Linux)."""
+
+    def starttime(self, pid: int) -> int | None:
+        """Return STARTTIME (clock ticks since boot, stat field 22).
+
+        ``/proc/<pid>/stat`` embeds the comm field which may contain spaces
+        and parentheses, so everything up to the LAST ``)`` is skipped before
+        counting fields. Returns None when the process does not exist.
+        """
+        try:
+            raw = Path(f"/proc/{pid}/stat").read_text(
+                encoding="ascii"
+            )  # NOSONAR — pid is int, not user-controlled string
+        except (OSError, ValueError):
+            return None
+        tail = raw.rpartition(")")[2].split()
+        # tail[0] is stat field 3 (state); starttime is field 22 → index 19.
+        if len(tail) < 20:
+            return None
+        try:
+            return int(tail[19])
+        except ValueError:
+            return None
+
+    def shim_starttime(self, pid: int) -> int | None:
+        # Historical Linux behaviour, unchanged: an unreadable STARTTIME
+        # becomes the -1 sentinel, which never matches a live process.
+        starttime = self.starttime(pid)
+        return -1 if starttime is None else starttime
+
+    def start_epoch(self, pid: int) -> float | None:
+        ticks = self.starttime(pid)
+        if ticks is None:
+            return None
+        try:
+            uptime = float(Path("/proc/uptime").read_text(encoding="ascii").split()[0])
+            hz = os.sysconf("SC_CLK_TCK")
+        except (OSError, ValueError):
+            return None
+        if hz <= 0:
+            return None
+        return time.time() - uptime + ticks / hz
+
+    def children(self, pid: int) -> list[int]:
+        try:
+            raw = Path(f"/proc/{pid}/task/{pid}/children").read_text(encoding="ascii")
+        except (OSError, ValueError):
+            return []
+        try:
+            return [int(token) for token in raw.split()]
+        except ValueError:
+            return []
+
+    def is_postgres(self, pid: int) -> bool | None:
+        try:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\x00")
+        except PermissionError:
+            return None
+        except OSError:
+            return False
+        return any(part.endswith(b"postgres") for part in cmdline if part)
+
+
+@functools.lru_cache(maxsize=1)
+def _load_libproc() -> Any | None:
+    """Load ``libproc`` once; None when it (or a needed symbol) is unavailable.
+
+    ``ctypes.util.find_library`` is tried first (it resolves the dyld shared
+    cache path), then the bare dylib name. A library that loads but lacks the
+    three symbols is treated as unavailable — every caller then answers
+    "unknown" rather than raising.
+    """
+    candidates = [candidate for candidate in (ctypes.util.find_library("proc"), "libproc.dylib") if candidate]
+    for candidate in candidates:
+        try:
+            lib: Any = ctypes.CDLL(candidate, use_errno=True)
+            lib.proc_pidinfo.argtypes = [
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint64,
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            lib.proc_pidinfo.restype = ctypes.c_int
+            lib.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+            lib.proc_pidpath.restype = ctypes.c_int
+            lib.proc_listchildpids.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+            lib.proc_listchildpids.restype = ctypes.c_int
+            return lib
+        except (OSError, AttributeError):
+            continue
+    return None
+
+
+class _DarwinProcessBackend:
+    """Process identity via libproc (macOS) — the /proc equivalent.
+
+    ``proc_pidinfo(PROC_PIDTBSDINFO)`` carries ``pbi_start_tvsec`` /
+    ``pbi_start_tvusec``: the same "when did this process start" fact as
+    /proc's stat field 22, and what makes PID-reuse detection possible
+    without /proc. ``proc_pidpath`` names the executable (the
+    ``_is_postgres_process`` equivalent) and ``proc_listchildpids`` lists
+    direct children.
+    """
+
+    def starttime(self, pid: int) -> int | None:
+        info = self._bsdinfo(pid)
+        if info is None:
+            return None
+        # Microseconds fit well inside the decimal multiplier, so the token is
+        # injective over (seconds, microseconds) and stable for one process.
+        return int(info.pbi_start_tvsec) * 1_000_000 + int(info.pbi_start_tvusec)
+
+    def shim_starttime(self, pid: int) -> int | None:
+        # No -1 sentinel on darwin: a shim that cannot verify its parent
+        # would kill the service it just spawned on the first watchdog tick,
+        # so an unreadable identity means "do not wrap".
+        return self.starttime(pid)
+
+    def start_epoch(self, pid: int) -> float | None:
+        info = self._bsdinfo(pid)
+        if info is None:
+            return None
+        return float(info.pbi_start_tvsec) + int(info.pbi_start_tvusec) / 1_000_000
+
+    def children(self, pid: int) -> list[int]:
+        lib = _load_libproc()
+        if lib is None:
+            return []
+        buffer = (ctypes.c_int * _PROC_CHILDREN_CAPACITY)()
+        try:
+            count = int(lib.proc_listchildpids(pid, buffer, ctypes.sizeof(buffer)))
+        except OSError:
+            return []
+        if count <= 0:
+            return []
+        return [int(buffer[index]) for index in range(min(count, _PROC_CHILDREN_CAPACITY)) if int(buffer[index]) > 0]
+
+    def is_postgres(self, pid: int) -> bool | None:
+        lib = _load_libproc()
+        if lib is None:
+            return None
+        buffer = ctypes.create_string_buffer(_PROC_PIDPATHINFO_MAXSIZE)
+        try:
+            length = int(lib.proc_pidpath(pid, buffer, _PROC_PIDPATHINFO_MAXSIZE))
+        except OSError:
+            return None
+        if length <= 0:
+            # The executable path is unknowable (permission denied, or the
+            # process raced away). Never answer False here: reconciliation
+            # would then delete a live foreign postmaster's pidfile.
+            return None
+        path = buffer.value
+        return path.rsplit(b"/", 1)[-1] == b"postgres"
+
+    @staticmethod
+    def _bsdinfo(pid: int) -> _ProcBsdInfo | None:
+        lib = _load_libproc()
+        if lib is None:
+            return None
+        info = _ProcBsdInfo()
+        try:
+            written = int(lib.proc_pidinfo(pid, _PROC_PIDTBSDINFO, 0, ctypes.pointer(info), _PROC_BSDINFO_SIZE))
+        except OSError:
+            return None
+        # ``proc_pidinfo`` returns the bytes written, or 0 on failure. A short
+        # write means the struct layout did not match the kernel's — the
+        # identity is then genuinely unknown, never half-trusted.
+        if written != _PROC_BSDINFO_SIZE:
+            return None
+        return info
+
+
+_PROCESS_BACKENDS: dict[str, _ProcessBackend] = {
+    "linux": _LinuxProcessBackend(),
+    "darwin": _DarwinProcessBackend(),
+}
+
+
+def _process_backend() -> _ProcessBackend | None:
+    """The ONE place ``sys.platform`` selects a process-identity backend.
+
+    ``None`` means no backend exists for this platform (Windows, TODO(P3));
+    callers then keep their "unknown" contract.
+    """
+    return _PROCESS_BACKENDS.get(sys.platform)
 
 
 def read_proc_starttime(pid: int) -> int | None:
-    """Return the process STARTTIME (clock ticks since boot, stat field 22).
+    """Return an opaque start-time identity token for *pid* (None = unknown).
 
-    ``/proc/<pid>/stat`` embeds the comm field which may contain spaces and
-    parentheses, so everything up to the LAST ``)`` is skipped before
-    counting fields. Returns None when the process does not exist.
+    Linux reads ``/proc/<pid>/stat`` field 22 (clock ticks since boot); macOS
+    reads ``pbi_start_tvsec``/``pbi_start_tvusec`` from
+    ``proc_pidinfo(PROC_PIDTBSDINFO)``. Both are stable for one process and
+    change when the PID is recycled, so equality is the "same process" test.
     """
-    if sys.platform == "win32":
-        # Deferred P3: Windows exposes no /proc; the P3 shim uses Job Objects.
+    backend = _process_backend()
+    if backend is None:
         return None
-    try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")  # NOSONAR — pid is int, not user-controlled string
-    except (OSError, ValueError):
-        return None
-    tail = raw.rpartition(")")[2].split()
-    # tail[0] is stat field 3 (state); starttime is field 22 → index 19.
-    if len(tail) < 20:
-        return None
-    try:
-        return int(tail[19])
-    except ValueError:
-        return None
+    return backend.starttime(pid)
 
 
 def _children_of(pid: int) -> list[int]:
-    """Direct child PIDs of *pid* (Linux /proc contract; empty elsewhere)."""
-    if sys.platform != "linux":
+    """Direct child PIDs of *pid* (empty when the platform cannot tell)."""
+    backend = _process_backend()
+    if backend is None:
         return []
-    try:
-        raw = Path(f"/proc/{pid}/task/{pid}/children").read_text(encoding="ascii")
-    except (OSError, ValueError):
-        return []
-    try:
-        return [int(token) for token in raw.split()]
-    except ValueError:
-        return []
+    return backend.children(pid)
 
 
 # ---------------------------------------------------------------------------
@@ -758,18 +1025,22 @@ def child_shim_argv(argv: list[str], *, parent_pid: int | None = None) -> list[s
 
     The shim process is the direct parent of the real service process; it
     watches the launcher (its own parent) and kills the service when the
-    launcher dies — PID-reuse safe via the STARTTIME comparison. The shim
-    is only viable where ``/proc/<pid>/stat`` is readable, i.e. LINUX: on
-    every other platform ``read_proc_starttime`` returns None and a wrapped
-    shim would kill its freshly spawned service on the first watchdog tick
-    (guaranteed crash loop), so the argv passes through UNWRAPPED and the
-    entry refuses those platforms loudly at boot. TODO(P2): macOS variant;
-    TODO(P3): Windows Job Objects.
+    launcher dies — PID-reuse safe via the start-time identity comparison.
+    The shim is viable wherever a process-identity backend exists: Linux
+    (/proc STARTTIME) and macOS (libproc ``proc_pidinfo``). Every other
+    platform — and a backend that cannot read this process's identity — has
+    no way to tell a live launcher from a recycled PID, so the argv passes
+    through UNWRAPPED rather than wrapping a shim that would kill the service
+    it just spawned. TODO(P3): Windows Job Objects own death there instead.
     """
-    if sys.platform != "linux":
+    backend = _process_backend()
+    if backend is None:
         return list(argv)
     parent = os.getpid() if parent_pid is None else parent_pid
-    starttime = read_proc_starttime(parent)
+    starttime = backend.shim_starttime(parent)
+    if starttime is None:
+        _log.warning("supervisor.shim_identity_unreadable pid=%s — spawn unwrapped", parent)
+        return list(argv)
     return [
         sys.executable,
         "-m",
@@ -778,7 +1049,7 @@ def child_shim_argv(argv: list[str], *, parent_pid: int | None = None) -> list[s
         "--parent-pid",
         str(parent),
         "--parent-starttime",
-        str(starttime if starttime is not None else -1),
+        str(starttime),
         "--",
         *argv,
     ]
@@ -1563,20 +1834,11 @@ def _pause_at(gate: str) -> None:
 
 
 def _pid_starttime_epoch(pid: int) -> float | None:
-    """Approximate the epoch time a /proc process started (Linux only)."""
-    if sys.platform != "linux":
+    """Approximate the epoch time *pid* started (None when unknown)."""
+    backend = _process_backend()
+    if backend is None:
         return None
-    ticks = read_proc_starttime(pid)
-    if ticks is None:
-        return None
-    try:
-        uptime = float(Path("/proc/uptime").read_text(encoding="ascii").split()[0])
-        hz = os.sysconf("SC_CLK_TCK")
-    except (OSError, ValueError):
-        return None
-    if hz <= 0:
-        return None
-    return time.time() - uptime + ticks / hz
+    return backend.start_epoch(pid)
 
 
 def reconcile_orphans(pgdata: Path, *, tolerance_seconds: float = 5.0) -> str | None:
@@ -1644,21 +1906,18 @@ def _postmaster_is_stale(pidfile: Path, *, tolerance_seconds: float) -> bool | N
 
 
 def _is_postgres_process(pid: int) -> bool | None:
-    """True/False when /proc/<pid>/cmdline is readable; None when unknowable.
+    """True/False when the executable identity is readable; None when unknowable.
 
-    Off Linux the identity is UNKNOWABLE (no /proc) — returning False here
-    would let reconciliation delete a live foreign postgres's pidfile, so
-    the only safe answer is None (refuse).
+    Linux reads ``/proc/<pid>/cmdline``; macOS resolves the executable path
+    with libproc's ``proc_pidpath``. When the identity is UNKNOWABLE
+    (permission denied, no backend, a raced-away process) the only safe
+    answer is None: returning False would let reconciliation delete a live
+    foreign postgres's pidfile.
     """
-    if sys.platform != "linux":
+    backend = _process_backend()
+    if backend is None:
         return None
-    try:
-        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\x00")
-    except PermissionError:
-        return None
-    except OSError:
-        return False
-    return any(part.endswith(b"postgres") for part in cmdline if part)
+    return backend.is_postgres(pid)
 
 
 # ---------------------------------------------------------------------------

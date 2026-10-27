@@ -822,12 +822,12 @@ def test_collect_status_without_state_file(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _pid_starttime_epoch (Linux-only paths)
+# _pid_starttime_epoch (no backend → unknown)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(sys.platform == "linux", reason="non-Linux path")
-def test_pid_starttime_epoch_non_linux() -> None:
+def test_pid_starttime_epoch_without_a_platform_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
     assert supervisor_module._pid_starttime_epoch(os.getpid()) is None
 
 

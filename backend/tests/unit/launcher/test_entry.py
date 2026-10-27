@@ -729,11 +729,24 @@ def test_verify_bundled_binaries_passes_when_all_present(tmp_path: Path) -> None
     assert entry_module._verify_bundled_binaries(tmp_path) is None
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="macOS refusal seam")
-def test_macos_is_refused_loudly_at_boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX boot dispatch")
+def test_macos_is_not_refused_at_boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """darwin now boots: run_start dispatches instead of raising the old refusal.
+
+    The supervisor's platform seam supplies the child-death identity from
+    libproc, so the boot path must reach the foreground runner. The runner is
+    stubbed here — this test owns the refusal seam, not the boot.
+    """
+    dispatched: list[Path] = []
+
+    def _stub_foreground(data_dir: Path, **_kwargs: object) -> int:
+        dispatched.append(data_dir)
+        return 0
+
     monkeypatch.setattr(sys, "platform", "darwin")
-    with pytest.raises(BootError, match="macOS"):
-        run_start(tmp_path / "data")
+    monkeypatch.setattr(entry_module, "_run_foreground", _stub_foreground)
+    assert run_start(tmp_path / "data") == 0
+    assert dispatched == [tmp_path / "data"]
 
 
 def test_bundled_children_get_allowlisted_environments() -> None:
