@@ -72,7 +72,7 @@ The local Docker Compose file includes an optional observability stack behind th
 
 ### Start
 
-The local compose file — like the root `docker-compose.yml` — refuses to start
+The local compose file – like the root `docker-compose.yml` – refuses to start
 without a valid `FERNET_KEY` (compose prints
 `required variable FERNET_KEY is missing a value` and the generation command).
 Generate the key once and put it in `.env` at the repo root:
