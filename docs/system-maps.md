@@ -95,6 +95,10 @@ System Maps adheres to four strict database design rules:
 3. **Draft isolation:** A draft revision can be edited, validated, and previewed without affecting active system overview dashboards or live pipeline run attributions.
 4. **Relational graph projections:** Map nodes and relationships are projected into queryable relational rows during publish. This enables SQL joins, foreign key integrity checks, and fast attribution lookups without parsing JSON blobs on every read.
 
+**Tenant integrity is a database rule, not only an application check.** Every row in this projection carries `organisation_id`. Before applying the DDL below, the existing `organisations`, `teams`, `accounts`, and `pipelines` tables must expose unique keys on `(id, organisation_id)` (or equivalent organisation-scoped keys). Every reference that can cross an organisation boundary uses a composite foreign key containing the child row's `organisation_id`: a revision references its map, a node or relationship references its revision, team and account bindings reference the same organisation, and pipeline bindings reference `(pipeline_id, organisation_id)`. The database therefore rejects a row whose UUID belongs to another organisation, even when the UUID itself is valid.
+
+Node keys remain stable within a revision for import/export and human-readable diffs. The relationship and loop-config tables still enforce those key references in SQL using composite foreign keys to `(revision_id, node_key, organisation_id)`. `external_ref` and values inside `config_json` are intentionally application-level data: they do not identify Modulo rows and cannot provide a relational tenant boundary. A future binding to another Modulo entity must add an organisation-scoped foreign key rather than relying on a validator.
+
 ### 3.2 Relational Entities
 
 ```
@@ -102,8 +106,9 @@ System Maps adheres to four strict database design rules:
 |    system_maps      |-------------------->|    system_map_revisions     |
 +---------------------+                     +-----------------------------+
 | id (UUID, PK)       |                     | id (UUID, PK)               |
-| organisation_id     |                     | map_id (UUID, FK)           |
-| name (VARCHAR)      |                     | revision_number (INT)       |
+| organisation_id     |                     | organisation_id             |
+| name (VARCHAR)      |                     | map_id (UUID, FK)           |
+|                     |                     | revision_number (INT)       |
 | published_rev_id    |--+                  | status (draft/published)    |
 | owner_team_id (FK)  |  |                  | nodes_json (JSONB)          |
 | visibility (ENUM)   |  |                  | edges_json (JSONB)          |
@@ -149,21 +154,36 @@ System Maps adheres to four strict database design rules:
 ### 3.3 Database Table Definitions
 
 ```sql
+-- The referenced legacy tables must expose these organisation-scoped keys before
+-- these tables are created. They may be ordinary UNIQUE constraints or equivalent
+-- existing keys, but the column order must match the foreign keys below.
+--   organisations(id)
+--   teams(id, organisation_id)
+--   accounts(id, organisation_id)
+--   pipelines(id, organisation_id)
+
 -- Core System Map table
 CREATE TABLE system_maps (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    organisation_id UUID NOT NULL,
+    organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
     name VARCHAR(255) NOT NULL,
     description TEXT,
     visibility VARCHAR(10) NOT NULL DEFAULT 'org',
-    owner_team_id UUID REFERENCES teams(id) ON DELETE RESTRICT,
+    owner_team_id UUID,
     published_revision_id UUID,
     is_default BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMPTZ,
-    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
-    updated_by UUID REFERENCES accounts(id) ON DELETE SET NULL,
+    account_id UUID NOT NULL,
+    updated_by UUID,
+    CONSTRAINT uq_system_maps_id_org UNIQUE (id, organisation_id),
+    CONSTRAINT fk_system_maps_owner_team_org FOREIGN KEY (owner_team_id, organisation_id)
+        REFERENCES teams(id, organisation_id) ON DELETE RESTRICT,
+    CONSTRAINT fk_system_maps_account_org FOREIGN KEY (account_id, organisation_id)
+        REFERENCES accounts(id, organisation_id) ON DELETE RESTRICT,
+    CONSTRAINT fk_system_maps_updated_by_org FOREIGN KEY (updated_by, organisation_id)
+        REFERENCES accounts(id, organisation_id) ON DELETE RESTRICT,
     CONSTRAINT ck_system_maps_visibility CHECK (visibility IN ('org', 'team')),
     CONSTRAINT ck_system_maps_team_owner CHECK (visibility = 'org' OR owner_team_id IS NOT NULL)
 );
@@ -177,8 +197,8 @@ WHERE is_default = TRUE AND deleted_at IS NULL;
 -- Immutable Revision table
 CREATE TABLE system_map_revisions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    organisation_id UUID NOT NULL,
-    map_id UUID NOT NULL REFERENCES system_maps(id) ON DELETE CASCADE,
+    organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    map_id UUID NOT NULL,
     revision_number INT NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'draft',
     nodes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -187,29 +207,41 @@ CREATE TABLE system_map_revisions (
     change_summary TEXT,
     published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    account_id UUID NOT NULL,
+    CONSTRAINT uq_system_map_revisions_id_org UNIQUE (id, organisation_id),
+    CONSTRAINT fk_system_map_revisions_map_org FOREIGN KEY (map_id, organisation_id)
+        REFERENCES system_maps(id, organisation_id) ON DELETE CASCADE,
+    CONSTRAINT fk_system_map_revisions_account_org FOREIGN KEY (account_id, organisation_id)
+        REFERENCES accounts(id, organisation_id) ON DELETE RESTRICT,
     CONSTRAINT ck_system_map_revisions_status CHECK (status IN ('draft', 'published', 'archived')),
     CONSTRAINT ck_system_map_revisions_number CHECK (revision_number > 0),
     CONSTRAINT uq_system_map_revisions_map_num UNIQUE (map_id, revision_number)
 );
 
-ALTER TABLE system_maps ADD CONSTRAINT fk_system_maps_published_rev
-FOREIGN KEY (published_revision_id) REFERENCES system_map_revisions(id) ON DELETE SET NULL;
+ALTER TABLE system_maps ADD CONSTRAINT fk_system_maps_published_rev_org
+FOREIGN KEY (published_revision_id, organisation_id)
+REFERENCES system_map_revisions(id, organisation_id) ON DELETE SET NULL;
 
 -- Relational projection of nodes for fast joins and indexing
 CREATE TABLE system_map_nodes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    organisation_id UUID NOT NULL,
-    revision_id UUID NOT NULL REFERENCES system_map_revisions(id) ON DELETE CASCADE,
+    organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    revision_id UUID NOT NULL,
     node_key VARCHAR(128) NOT NULL,
     node_type VARCHAR(32) NOT NULL,
     name VARCHAR(255) NOT NULL,
     description TEXT,
-    pipeline_id UUID REFERENCES pipelines(id) ON DELETE SET NULL,
+    pipeline_id UUID,
     external_ref VARCHAR(255),
     capacity_limit INT,
     config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_system_map_nodes_id_org UNIQUE (id, organisation_id),
+    CONSTRAINT uq_system_map_nodes_rev_key_org UNIQUE (revision_id, node_key, organisation_id),
+    CONSTRAINT fk_system_map_nodes_revision_org FOREIGN KEY (revision_id, organisation_id)
+        REFERENCES system_map_revisions(id, organisation_id) ON DELETE CASCADE,
+    CONSTRAINT fk_system_map_nodes_pipeline_org FOREIGN KEY (pipeline_id, organisation_id)
+        REFERENCES pipelines(id, organisation_id) ON DELETE SET NULL,
     CONSTRAINT ck_system_map_nodes_type CHECK (
         node_type IN (
             'pipeline',
@@ -220,24 +252,31 @@ CREATE TABLE system_map_nodes (
             'improvement_loop',
             'system_boundary'
         )
-    ),
-    CONSTRAINT uq_system_map_nodes_rev_key UNIQUE (revision_id, node_key)
+    )
 );
 
-CREATE INDEX ix_system_map_nodes_pipeline ON system_map_nodes(pipeline_id)
+CREATE INDEX ix_system_map_nodes_pipeline ON system_map_nodes(organisation_id, pipeline_id)
 WHERE pipeline_id IS NOT NULL;
 
 -- Relational projection of edges
 CREATE TABLE system_map_relationships (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    organisation_id UUID NOT NULL,
-    revision_id UUID NOT NULL REFERENCES system_map_revisions(id) ON DELETE CASCADE,
+    organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    revision_id UUID NOT NULL,
     relationship_key VARCHAR(128) NOT NULL,
     source_node_key VARCHAR(128) NOT NULL,
     target_node_key VARCHAR(128) NOT NULL,
     relationship_type VARCHAR(32) NOT NULL,
     config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_system_map_relationships_id_org UNIQUE (id, organisation_id),
+    CONSTRAINT uq_system_map_rel_rev_key_org UNIQUE (revision_id, relationship_key, organisation_id),
+    CONSTRAINT fk_system_map_rel_revision_org FOREIGN KEY (revision_id, organisation_id)
+        REFERENCES system_map_revisions(id, organisation_id) ON DELETE CASCADE,
+    CONSTRAINT fk_system_map_rel_source_org FOREIGN KEY (revision_id, source_node_key, organisation_id)
+        REFERENCES system_map_nodes(revision_id, node_key, organisation_id) ON DELETE CASCADE,
+    CONSTRAINT fk_system_map_rel_target_org FOREIGN KEY (revision_id, target_node_key, organisation_id)
+        REFERENCES system_map_nodes(revision_id, node_key, organisation_id) ON DELETE CASCADE,
     CONSTRAINT ck_system_map_rel_type CHECK (
         relationship_type IN (
             'flow',
@@ -249,32 +288,51 @@ CREATE TABLE system_map_relationships (
             'capacity_limited_by',
             'contains'
         )
-    ),
-    CONSTRAINT uq_system_map_rel_rev_key UNIQUE (revision_id, relationship_key)
+    )
 );
 
-CREATE INDEX ix_system_map_rel_source ON system_map_relationships(revision_id, source_node_key);
-CREATE INDEX ix_system_map_rel_target ON system_map_relationships(revision_id, target_node_key);
+CREATE INDEX ix_system_map_rel_source ON system_map_relationships(organisation_id, revision_id, source_node_key);
+CREATE INDEX ix_system_map_rel_target ON system_map_relationships(organisation_id, revision_id, target_node_key);
 
 -- First-class configuration table for improvement loops
 CREATE TABLE system_map_loop_configs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    organisation_id UUID NOT NULL,
-    revision_id UUID NOT NULL REFERENCES system_map_revisions(id) ON DELETE CASCADE,
+    organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    revision_id UUID NOT NULL,
     node_key VARCHAR(128) NOT NULL,
     target_signal VARCHAR(255) NOT NULL,
     observation_window_seconds INT NOT NULL,
-    action_pipeline_id UUID NOT NULL REFERENCES pipelines(id) ON DELETE RESTRICT,
+    action_pipeline_id UUID NOT NULL,
     budget_limit_usd NUMERIC(10, 4) NOT NULL,
     cooldown_seconds INT NOT NULL,
     outcome_metric VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_system_map_loop_configs_id_org UNIQUE (id, organisation_id),
+    CONSTRAINT fk_system_map_loop_revision_org FOREIGN KEY (revision_id, organisation_id)
+        REFERENCES system_map_revisions(id, organisation_id) ON DELETE CASCADE,
+    CONSTRAINT fk_system_map_loop_node_org FOREIGN KEY (revision_id, node_key, organisation_id)
+        REFERENCES system_map_nodes(revision_id, node_key, organisation_id) ON DELETE CASCADE,
+    CONSTRAINT fk_system_map_loop_pipeline_org FOREIGN KEY (action_pipeline_id, organisation_id)
+        REFERENCES pipelines(id, organisation_id) ON DELETE RESTRICT,
     CONSTRAINT ck_system_map_loop_obs_window CHECK (observation_window_seconds >= 60),
     CONSTRAINT ck_system_map_loop_budget CHECK (budget_limit_usd > 0),
     CONSTRAINT ck_system_map_loop_cooldown CHECK (cooldown_seconds >= 0),
-    CONSTRAINT uq_system_map_loop_rev_node UNIQUE (revision_id, node_key)
+    CONSTRAINT uq_system_map_loop_rev_node_org UNIQUE (revision_id, node_key, organisation_id)
 );
 ```
+
+### 3.4 Constraint and Binding Contract
+
+The DDL is intentionally explicit about the organisation boundary:
+
+- `system_maps`, revisions, nodes, relationships, and loop configurations each store a non-null `organisation_id` and reference `organisations(id)`.
+- The composite `(id, organisation_id)` and `(revision_id, node_key, organisation_id)` keys are not redundant metadata. They are the targets that make every child reference tenant-safe.
+- A revision can reference only a map in the same organisation. A published-revision pointer can only point to a revision in the same organisation.
+- Nodes can reference only a pipeline in the node's organisation. Loop configurations apply the same check to their action pipeline. These are direct composite foreign keys, not validator-only checks or names resolved at runtime.
+- Relationship endpoints and loop-config nodes use stable `node_key` values within a revision. Their composite foreign keys reject a missing endpoint, a node from another revision, or a node from another organisation. The graph validator still enforces semantic rules such as allowed relationship types and flow acyclicity.
+- Team and account bindings use the same composite pattern. `visibility = 'team'` requires a same-organisation `owner_team_id`; map audit actors must also belong to the map's organisation.
+
+If an existing shared table cannot provide the required `(id, organisation_id)` key, the migration must add that unique key before creating the System Maps foreign key. It must not replace the composite constraint with an application-only lookup. References stored only inside JSON, such as `external_ref` or a connector-specific configuration value, remain application-level because they do not identify a Modulo row.
 
 ---
 
