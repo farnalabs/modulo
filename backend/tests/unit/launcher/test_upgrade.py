@@ -1780,6 +1780,40 @@ def test_extract_rejects_symlink_listed_artifact(tmp_path):
         upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
 
 
+def _checksum_archive(tmp_path: Path, listed_name: str, *, symlink_parent: bool = False) -> Path:
+    import tarfile
+
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    real = bundle / "real"
+    real.mkdir()
+    payload = real / "payload.txt"
+    payload.write_text("payload", encoding="utf-8")
+    if symlink_parent:
+        (bundle / "linked").symlink_to("real", target_is_directory=True)
+    digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(f"{digest}  {listed_name}\n", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz", dereference=False) as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+    return archive
+
+
+def test_extract_rejects_symlinked_checksum_parent(tmp_path: Path) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX symlinks")
+    archive = _checksum_archive(tmp_path, "linked/payload.txt", symlink_parent=True)
+    with pytest.raises(UpgradeError, match="unsafe artifact path"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
+@pytest.mark.parametrize("listed_name", ["./real/payload.txt", "real/../real/payload.txt"])
+def test_extract_rejects_explicit_dot_checksum_components(tmp_path: Path, listed_name: str) -> None:
+    archive = _checksum_archive(tmp_path, listed_name)
+    with pytest.raises(UpgradeError, match="unsafe artifact path"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
 def test_resolve_upgrade_assets_rejects_malformed_from_file_name(tmp_path):
     tarball = tmp_path / "modulo-1.2.0-linux-amd64-extra.tar.gz"
     tarball.write_bytes(b"archive")
