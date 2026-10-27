@@ -381,6 +381,10 @@ For system requirements (minimum resources, supported databases), see [`docs/sys
 
 For upgrade procedures on existing deployments, see [`docs/upgrade-process.md`](./upgrade-process.md).
 
+For what a customer or successor keeps if Farnalabs stops operating, and how to
+build the image from source, see
+[`docs/continuity-and-escrow.md`](./continuity-and-escrow.md).
+
 For the production launch checklist, see [`docs/public-launch-checklist.md`](./public-launch-checklist.md).
 
 ---
@@ -460,6 +464,11 @@ Runs and triggers require Redis plus the SAQ workers – see [`docs/quickstart.m
 - The SQLite DB file is portable – copy it to another machine and restart `uvicorn` from the new location to pick it up
 
 ### Docker Compose (single-server, multi-user)
+
+The compose file pulls the all-in-one image from GHCR. To build that image
+yourself from source (for example as a continuity plan, or to supply your own
+PrimeUI licence key), see
+[Continuity and Escrow](continuity-and-escrow.md).
 
 **1. Create the environment file.** The stack will not start without it: compose
 refuses to run (naming the variable) until `MODULO_DB_PASSWORD`, `SECRET_KEY`,
