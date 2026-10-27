@@ -3,8 +3,8 @@
 Modulo is self-hosted and published as source under the Business Source License
 1.1 (BUSL). This page describes what a customer, or a successor taking over a
 deployment, can rely on if Farnalabs stops operating. It covers the from-source
-build that makes the source usable on its own, and the two licence caveats that
-need planning before that day: PrimeUI and the Team trust anchor.
+build that makes the source usable on its own, and the one licence caveat that
+needs planning before that day: the Team trust anchor.
 
 The short version: you keep the **Community** tier forever because it needs no
 licence key, you can build, modify and patch the source yourself, and each
@@ -36,7 +36,6 @@ Verified properties:
 | A released version after its Change Date | Apache-2.0, per `LICENSE`. |
 | Team tier (SSO, team RBAC, audit viewer) | Not automatic. It needs a licence key signed by an anchor you trust. Recoverable by issuing your own key: see [The Team licence trust anchor](#the-team-licence-trust-anchor). |
 | Farnalabs' future patches and releases | Not kept. You maintain your fork from the Change Date onward, or from the last release you mirrored. |
-| A PrimeUI licence key for the frontend | Not yours. Obtain your own: see [The PrimeUI licence](#the-primeui-licence). |
 
 ## Build the image from source
 
@@ -82,91 +81,22 @@ Notes:
 - A build of an unmodified checkout is the baseline. If you patch the source,
   the same command builds your fork.
 
-## The PrimeUI licence
+## The frontend is MIT-licensed
 
-The frontend uses PrimeVue 5 (`primevue` 5.0.4, with `@primeuix/styled` 1.2.0
-and `@primeuix/themes` 3.1.0). PrimeVue 5 is part of PrimeUI, which PrimeTek
-licenses commercially. PrimeVue 4 was MIT; version 5 is not.
+Starting with this release the frontend depends on **PrimeVue 4.5.5**, which is
+MIT-licensed. There is no licence key, no offline verification, and no
+"Invalid PrimeUI License" banner in a build from this commit onward, and the
+all-in-one build needs no credential of any kind for the frontend. This matters
+for escrow for the reason the rest of this page describes: MIT imposes no
+downstream-modification clause, so a self-hoster who receives the source and
+modifies it does not inherit a licensing obligation from a frontend dependency.
 
-The bundled licence text states:
-
-> A valid license key is required to use this software. License verification is
-> performed offline, with no telemetry and no remote connection. A missing,
-> invalid, or expired key may cause the software to display a license notice.
-
-### What the key does, and what happens without it
-
-`frontend/src/main.ts` passes `VITE_PRIMEUI_LICENSE` to
-`app.use(PrimeVue, { license: ... })`. PrimeVue hands it to
-`@primeui/license-manager`, which verifies the Ed25519 signature offline against
-a public key built into the package.
-
-Without a key, or with an invalid one:
-
-- the build **succeeds** and the application runs normally;
-- PrimeVue logs a console warning (`[PrimeUI] No license key configured for
-  PrimeUI.`) and renders a fixed bottom-right banner reading **"Invalid PrimeUI
-  License"** (`@primevue/core` `license/licenseBanner/index.mjs`);
-- the banner is a `pointer-events: none` element with `role="alert"`. It does
-  not gate a component, a route or an API call.
-
-So the missing key is cosmetic on screen, but it is not a compliant long-term
-state: PrimeTek's terms require a valid key, and the package's terms also forbid
-removing the licence mechanism.
-
-### Which builds currently carry a key
-
-Only the Fly deployment passes the key, as a build argument through
-`backend/Dockerfile.fly`, from the `VITE_PRIMEUI_LICENSE` GitHub secret
-(`.github/workflows/deploy.yml`). The **all-in-one image published to GHCR is
-built without it**: `.github/workflows/publish-images.yml` and
-`.github/workflows/release-unified.yml` build
-`deploy/docker/Dockerfile.all-in-one` with no build arguments, and that
-Dockerfile declares no `VITE_PRIMEUI_LICENSE` argument. A self-hosted compose
-deployment, whether it pulls the published image or builds it from source, shows
-the banner unless the operator supplies a key.
-
-### What a self-hoster must do
-
-Obtain a PrimeUI licence key from PrimeTek, then build with it. Choose the
-licence you qualify for:
-
-- **Community (free)** if your organisation meets PrimeTek's published
-  thresholds: fewer than 5 developers in total, fewer than 10 employees, less
-  than $1,000,000 USD annual gross revenue, and less than $3,000,000 USD of
-  outside funding. The free licence covers up to 4 developer seats and requires
-  annual renewal.
-- **Commercial (paid)** otherwise. Licensed per developer, perpetual, with one
-  year of updates.
-
-Apply and read the binding terms at:
-
-- Community: <https://primeui.dev/licenses/community>
-- Commercial: <https://primeui.dev/licenses/commercial>
-
-The all-in-one Dockerfile does not currently accept `--build-arg
-VITE_PRIMEUI_LICENSE`. The verified way to supply a key to that build is the
-frontend directory's `.env` file, which `frontend/vite.config.ts` lifts into
-`process.env` (FAR-1858), and which the build context copies into the frontend
-builder:
-
-```bash
-printf 'VITE_PRIMEUI_LICENSE=%s\n' "$YOUR_PRIMEUI_KEY" > frontend/.env
-docker build -f deploy/docker/Dockerfile.all-in-one \
-  -t ghcr.io/farnalabs/modulo:local .
-rm frontend/.env
-```
-
-The `.env` file is gitignored, and the root `.dockerignore` does not exclude it,
-so it reaches the builder as `/app/.env` and Vite inlines the value into the
-client bundle. Never commit the key: a `VITE_*` value is compiled into the
-browser bundle and is readable by every user of the instance.
-
-The key embedded in a Farnalabs-built image is Farnalabs' credential, not your
-organisation's licence. If you need your deployment to run under your own
-PrimeUI licence, build from source with your key as above. If you intend to rely
-on the key inside a published image, confirm with PrimeTek that your use is
-covered.
+Older releases (before the PrimeVue 4 downgrade) shipped PrimeVue 5
+(`primevue` 5.0.4, part of PrimeTek's commercially licensed PrimeUI family) and
+*do* require a PrimeUI licence key. If you are keeping an older tag, read that
+tag's own `docs/continuity-and-escrow.md`: it documents the key, the banner and
+how to supply the key to a from-source build. The instructions do not apply to
+this release, and this release's build takes no such key.
 
 ## The Team licence trust anchor
 
@@ -278,8 +208,9 @@ tier remains governed by your licence from Farnalabs and the BUSL terms.
 3. Keep your Team anchor and its private key, or record that you will generate a
    replacement keypair. Without the private key you cannot renew a self-issued
    licence; without the anchor a Farnalabs-issued one will not verify.
-4. Keep your PrimeUI licence key and the terms you accepted, and supply it on
-   every rebuild.
+4. If the release you mirror predates the PrimeVue 4 downgrade, keep its PrimeUI
+   licence key and the terms you accepted, and supply it on every rebuild.
+   Releases from the downgrade onward need no frontend licence key.
 5. Record the Change Date of the version you run, so you know when that version
    becomes Apache-2.0.
 6. Keep a tested restore of the database and object storage. Continuity of the

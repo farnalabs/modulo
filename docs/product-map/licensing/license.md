@@ -90,8 +90,8 @@ The anchor is operator-chosen, so a deployment can trust a keypair its operator
 generated rather than one Farnalabs issued. That is what makes the Team tier
 recoverable without Farnalabs: generate a keypair, configure its public half as
 `MODULO_LICENSE_PUBLIC_KEY`, and sign licences with the private half. The
-procedure and the continuity position (what a successor keeps, and the PrimeUI
-and trust-anchor caveats) are documented in
+procedure and the continuity position (what a successor keeps, and the
+trust-anchor caveat) are documented in
 [Continuity and Escrow](../../continuity-and-escrow.md).
 
 ## Behaviours
