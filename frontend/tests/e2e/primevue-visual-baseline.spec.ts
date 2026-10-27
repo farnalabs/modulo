@@ -224,8 +224,9 @@ function collectPrimeTokens(): Record<string, string> {
   for (const sheet of Array.from(document.styleSheets)) {
     try {
       walk(sheet.cssRules)
-    } catch {
+    } catch (err) {
       // A cross-origin sheet would throw; none exist in this app.
+      console.warn('[primevue-baseline] skipped an unreadable stylesheet', err)
     }
   }
 
@@ -374,13 +375,13 @@ async function settle(page: import('@playwright/test').Page): Promise<void> {
   )
 }
 
-test.describe('PrimeVue visual baseline capture', () => {
+test.describe('PrimeVue visual baseline capture', { tag: '@local-mock' }, () => {
   test.beforeAll(() => {
     mkdirSync(OUT_DIR, { recursive: true })
   })
 
   for (const route of ROUTES) {
-    test(`capture ${route.slug}`, async ({ page, env }) => {
+    test(`capture ${route.slug}`, { tag: '@local-mock' }, async ({ page, env }) => {
       test.skip(env.name !== 'local', 'visual baseline capture is local-only (deterministic mock API)')
 
       await page.setViewportSize(DESKTOP)
@@ -416,7 +417,7 @@ test.describe('PrimeVue visual baseline capture', () => {
   }
 
   for (const capture of INTERACTIONS) {
-    test(`capture ${capture.slug}`, async ({ page, env }) => {
+    test(`capture ${capture.slug}`, { tag: '@local-mock' }, async ({ page, env }) => {
       test.skip(env.name !== 'local', 'visual baseline capture is local-only (deterministic mock API)')
 
       await page.setViewportSize(DESKTOP)
@@ -460,7 +461,7 @@ test.describe('PrimeVue visual baseline capture', () => {
     const route = ROUTES.find((r) => r.slug === slug)
     if (!route) throw new Error(`unknown mobile route ${slug}`)
 
-    test(`capture mobile-${route.slug}`, async ({ page, env }) => {
+    test(`capture mobile-${route.slug}`, { tag: '@local-mock' }, async ({ page, env }) => {
       test.skip(env.name !== 'local', 'visual baseline capture is local-only (deterministic mock API)')
 
       await page.setViewportSize(MOBILE)
