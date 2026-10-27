@@ -34,11 +34,12 @@ node tests/visual-baseline/compare.mjs \
 
 ## Headline
 
-- **12 of 23 captures are pixel-identical (0 differing pixels).**
-- The remaining 11 differ by **35–86 pixels each (≤ 0.021 % of the image)**, and
-  every one of those pixels is PrimeVue's own **bundled icon artwork**
-  (see the justified-differences section). No layout, spacing, typography or
-  colour difference remains.
+- **15 of 23 captures are pixel-identical (0 differing pixels).**
+- The remaining 8 differ by **35–86 pixels each (≤ 0.021 % of the image)** — 503
+  differing pixels across all 23 captures in total — and every one of those
+  pixels is PrimeVue's own **bundled icon artwork** (see the
+  justified-differences section). No layout, spacing, typography or colour
+  difference remains.
 - 17 of 22 component DOM signatures are identical apart from one added attribute
   (v5's `data-pc-id`); the five structural differences are listed below and are
   either accessibility-only or a changed icon asset.
@@ -50,29 +51,29 @@ threshold.
 
 | Capture | Differing pixels | Share | bbox | Judgement |
 | --- | --- | --- | --- | --- |
-| `desktop-admin-connectors` | 0 | 0 % | — | eliminated |
-| `desktop-admin-model-backends` | 0 | 0 % | — | eliminated |
-| `desktop-admin-run-retention` | 0 | 0 % | — | eliminated |
-| `desktop-admin-users` | 0 | 0 % | — | eliminated |
-| `desktop-admin-users-dialog` | 86 | 0.008 % | 820,213 13×320 | justified: Dialog close (×) + Select chevron glyphs |
-| `desktop-dashboard` | 0 | 0 % | — | eliminated |
-| `desktop-dashboard-tooltip` | 0 | 0 % | — | eliminated |
-| `desktop-parameter-schemas-tabs` | 0 | 0 % | — | eliminated |
-| `desktop-pipeline-editor` | 35 | 0.003 % | 416,228 12×8 | justified: Select chevron glyph |
-| `desktop-pipelines` | 0 | 0 % | — | eliminated |
-| `desktop-pipelines-folder-dialog` | 86 | 0.008 % | 820,292 13×163 | justified: Dialog close (×) + Select chevron glyphs |
-| `desktop-pipelines-row-menu` | 0 | 0 % | — | eliminated |
-| `desktop-run-detail` | 0 | 0 % | — | eliminated |
-| `desktop-runs` | 70 | 0.007 % | 1061,173 182×8 | justified: two Select chevron glyphs |
-| `desktop-runs-select-open` | 70 | 0.007 % | 1061,173 182×8 | justified: two Select chevron glyphs |
-| `desktop-schemas` | 0 | 0 % | — | eliminated |
-| `desktop-settings-license` | 0 | 0 % | — | eliminated |
-| `desktop-settings-license-dialog` | 51 | 0.005 % | 821,339 12×12 | justified: Dialog close (×) glyph |
-| `desktop-settings-mcp` | 35 | 0.002 % | 571,948 12×8 | justified: Select chevron glyph |
-| `desktop-settings-triggers` | 0 | 0 % | — | eliminated |
-| `mobile-dashboard` | 0 | 0 % | — | eliminated |
-| `mobile-pipelines` | 0 | 0 % | — | eliminated |
-| `mobile-runs` | 70 | 0.021 % | 259,366 12×51 | justified: two Select chevron glyphs |
+| `desktop-dashboard` | 0 | 0% | — | eliminated |
+| `desktop-pipelines` | 0 | 0% | — | eliminated |
+| `desktop-pipeline-editor` | 35 | 0.003% | 416,228 12×8 | justified: Select chevron glyph |
+| `desktop-runs` | 70 | 0.007% | 1061,173 182×8 | justified: two Select chevron glyphs |
+| `desktop-run-detail` | 0 | 0% | — | eliminated |
+| `desktop-settings-license` | 0 | 0% | — | eliminated |
+| `desktop-settings-triggers` | 0 | 0% | — | eliminated |
+| `desktop-settings-mcp` | 35 | 0.002% | 571,948 12×8 | justified: Select chevron glyph |
+| `desktop-schemas` | 0 | 0% | — | eliminated |
+| `desktop-admin-users` | 0 | 0% | — | eliminated |
+| `desktop-admin-connectors` | 0 | 0% | — | eliminated |
+| `desktop-admin-model-backends` | 0 | 0% | — | eliminated |
+| `desktop-admin-run-retention` | 0 | 0% | — | eliminated |
+| `desktop-admin-users-dialog` | 86 | 0.008% | 820,213 13×320 | justified: Dialog close (×) + Select chevron glyphs |
+| `desktop-pipelines-folder-dialog` | 86 | 0.008% | 820,292 13×163 | justified: Dialog close (×) + Select chevron glyphs |
+| `desktop-pipelines-row-menu` | 0 | 0% | — | eliminated |
+| `desktop-runs-select-open` | 70 | 0.007% | 1061,173 182×8 | justified: two Select chevron glyphs |
+| `desktop-settings-license-dialog` | 51 | 0.005% | 821,339 12×12 | justified: Dialog close (×) glyph |
+| `desktop-parameter-schemas-tabs` | 0 | 0% | — | eliminated |
+| `desktop-dashboard-tooltip` | 0 | 0% | — | eliminated |
+| `mobile-dashboard` | 0 | 0% | — | eliminated |
+| `mobile-pipelines` | 0 | 0% | — | eliminated |
+| `mobile-runs` | 70 | 0.021% | 259,366 12×51 | justified: two Select chevron glyphs |
 
 Nothing is left at the *blocking* level.
 
@@ -184,8 +185,8 @@ targeted rule.** `installPrimeVueV4BaseFontStyles()` sets:
   antialiasing — 2 228 differing pixels on glyph edges with identical geometry).
 
 This was validated by re-measurement, not by inspection: the first capture after
-the downgrade was up to 6.1 % different per page; the final capture is 0 % on 12
-of 23 pages and icon-only on the rest.
+the downgrade was up to 6.1 % different per page; the final capture is 0 % on 15
+of 23 pages and icon-only on the remaining 8.
 
 ## Contradictions with the brief
 
