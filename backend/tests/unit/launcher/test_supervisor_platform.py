@@ -457,7 +457,7 @@ def test_linux_children_is_empty_when_a_token_is_not_an_int(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_linux_proc(monkeypatch, text="11 not-a-pid 33")
-    assert _LinuxProcessBackend().children(1234) == []
+    assert not _LinuxProcessBackend().children(1234)
 
 
 def test_linux_is_postgres_is_unknowable_on_permission_error(
@@ -574,7 +574,7 @@ def test_darwin_children_is_empty_when_listchildpids_raises(
 ) -> None:
     fake = fake_libproc()
     monkeypatch.setattr(fake, "proc_listchildpids", _raise_oserror)
-    assert _DarwinProcessBackend().children(1234) == []
+    assert not _DarwinProcessBackend().children(1234)
 
 
 def test_darwin_is_postgres_is_unknowable_when_pidpath_raises(
