@@ -11,9 +11,11 @@ record.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -1573,6 +1575,80 @@ def test_installer_uses_portable_commands_and_fails_closed_for_darwin():
     assert "base64 -d" in source
     assert 'cp -- "${FROM_FILE}"' not in source
     assert "macOS native artifact is not yet published" in source
+
+
+def _installer_probe(
+    tmp_path: Path, archive_name: str, root_name: str, *, bypass_manifest: bool = False
+) -> subprocess.CompletedProcess[str]:
+    install_script = Path(__file__).resolve().parents[4] / "scripts" / "install.sh"
+    if bypass_manifest:
+        install_script = tmp_path / "install.sh"
+        source = Path(__file__).resolve().parents[4] / "scripts" / "install.sh"
+        install_script.write_text(
+            source.read_text(encoding="utf-8").replace(
+                'verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}" '
+                '"bundle-v${VERSION_NUM}"',
+                ": # test bypass: exercise archive extraction gate",
+            ),
+            encoding="utf-8",
+        )
+        install_script.chmod(0o755)
+    archive = tmp_path / archive_name
+    source_root = tmp_path / root_name
+    source_root.mkdir()
+    (source_root / "SHA256SUMS").write_text("", encoding="utf-8")
+    tar_bin = shutil.which("tar")
+    bash_bin = shutil.which("bash")
+    assert tar_bin is not None
+    assert bash_bin is not None
+    subprocess.run(  # noqa: S603 - resolved system tar and test-owned paths
+        [tar_bin, "-czf", str(archive), "-C", str(tmp_path), root_name], check=True, timeout=30
+    )
+    env = {**os.environ, "HOME": str(tmp_path / "home"), "MODULO_INSTALL_ROOT": str(tmp_path / "install")}
+    if bypass_manifest:
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (tmp_path / "RELEASE_MANIFEST.json").write_text(
+            json.dumps({"release": "bundle-v1.2.3", "artifacts": [{"name": archive.name, "sha256": digest}]}),
+            encoding="utf-8",
+        )
+        (tmp_path / "RELEASE_MANIFEST.json.sig").write_text(
+            '{"key_id":"modulo-2026-a","signature":"' + "0" * 128 + '"}', encoding="utf-8"
+        )
+        stub_bin = tmp_path / "bin"
+        stub_bin.mkdir()
+        openssl_stub = stub_bin / "openssl"
+        openssl_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        openssl_stub.chmod(0o755)
+        env.update({"PATH": f"{stub_bin}:{os.environ['PATH']}", "TRUST_KEY_CURRENT_B64": "AA=="})
+    return subprocess.run(  # noqa: S603 - resolved bash and test-owned paths
+        [bash_bin, str(install_script), "--from-file", str(archive)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+        check=False,
+    )
+
+
+def test_installer_rejects_linux_host_with_darwin_archive(tmp_path: Path) -> None:
+    result = _installer_probe(tmp_path, "modulo-1.2.3-darwin-amd64.tar.gz", "modulo-1.2.3-darwin-amd64")
+    assert result.returncode != 0
+    assert "archive OS 'darwin' does not match detected host OS 'linux'" in result.stderr
+
+
+def test_installer_accepts_linux_archive_shape_before_manifest_gate(tmp_path: Path) -> None:
+    result = _installer_probe(tmp_path, "modulo-1.2.3-linux-amd64.tar.gz", "modulo-1.2.3-linux-amd64")
+    assert result.returncode != 0
+    assert "SIGNED release manifest must sit beside the tarball" in result.stderr
+    assert "archive OS 'linux' does not match" not in result.stderr
+    assert "archive top-level directory" not in result.stderr
+
+
+def test_installer_rejects_mismatched_archive_root_before_install_mutation(tmp_path: Path) -> None:
+    result = _installer_probe(tmp_path, "modulo-1.2.3-linux-amd64.tar.gz", "unexpected-root", bypass_manifest=True)
+    assert result.returncode != 0
+    assert "archive top-level directory 'unexpected-root' does not match archive identity" in result.stderr
+    assert not (tmp_path / "install").exists()
 
 
 def test_host_os(monkeypatch):
