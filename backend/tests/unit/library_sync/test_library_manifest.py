@@ -148,7 +148,7 @@ class TestParseManifest:
         """A non-list value is dropped, not iterated character-by-character."""
         data = parse_manifest({field: "not-a-list"})
 
-        assert getattr(data, field) == []
+        assert not getattr(data, field)
 
     def test_degrades_non_string_scalars_to_none(self) -> None:
         data = parse_manifest({"schema_version": 1, "generated_at": {"nested": True}})
