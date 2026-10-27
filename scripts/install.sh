@@ -166,7 +166,13 @@ verify_sums_in_dir() {
 
 # --- upgrade machinery (FAR-672) --------------------------------------------
 
-DATA_DIR="${MODULO_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/modulo/data}"
+if [[ -n "${MODULO_DATA_DIR:-}" ]]; then
+  DATA_DIR="${MODULO_DATA_DIR}"
+elif [[ "$(uname -s)" = "Darwin" && -z "${XDG_DATA_HOME:-}" ]]; then
+  DATA_DIR="${HOME}/Library/Application Support/Modulo/data"
+else
+  DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/modulo/data"
+fi
 LOCK_FILE="${DATA_DIR}.lock"
 
 # lock_holder_pid — the holder PID recorded in the data-dir lock file, or 0.
@@ -253,7 +259,11 @@ resolve_latest_tag() {
 }
 
 preflight() {
-  [[ "$(uname -s)" = "Linux" ]] || die "this installer supports Linux only (P1a). macOS and Windows installers come later — see ADR 031."
+  case "$(uname -s)" in
+    Linux) OS="linux" ;;
+    Darwin) OS="darwin" ;;
+    *) die "this installer supports Linux and macOS. Windows installers come later — see ADR 031." ;;
+  esac
   command -v curl >/dev/null 2>&1 || die "curl is required (install it, e.g. 'apt install curl')"
   command -v tar >/dev/null 2>&1 || die "tar is required (install it, e.g. 'apt install tar')"
   command -v python3 >/dev/null 2>&1 || die "python3 is required: install.sh extracts the sha256 + release fields from the SIGNED release manifest with it (FAR-675). Install it, e.g. 'apt install python3'."
@@ -308,8 +318,12 @@ if [[ -n "${FROM_FILE}" ]]; then
       VERSION_NUM="${tarball_name#modulo-}"
       VERSION_NUM="${VERSION_NUM%%-linux-*}"
       ;;
+    modulo-*-darwin-*.tar.gz)
+      VERSION_NUM="${tarball_name#modulo-}"
+      VERSION_NUM="${VERSION_NUM%%-darwin-*}"
+      ;;
     *)
-      die "cannot derive the bundle version from '${tarball_name}' (expected modulo-<version>-linux-<arch>.tar.gz)"
+      die "cannot derive the bundle version from '${tarball_name}' (expected modulo-<version>-${OS}-<arch>.tar.gz)"
       ;;
   esac
   RELEASE_TAG="(offline: ${tarball_name})"
@@ -324,7 +338,7 @@ else
     resolve_latest_tag
   fi
   VERSION_NUM="${RELEASE_TAG#bundle-v}"
-  tarball_name="modulo-${VERSION_NUM}-linux-${ARCH}.tar.gz"
+  tarball_name="modulo-${VERSION_NUM}-${OS}-${ARCH}.tar.gz"
 fi
 
 tmp="$(mktemp -d)"
@@ -494,7 +508,7 @@ if [[ -n "${FROM_FILE}" ]]; then
   verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}" "bundle-v${VERSION_NUM}"
   cp -- "${FROM_FILE}" "${tmp}/${tarball_name}"
 else
-  info "Installing Modulo bundle ${RELEASE_TAG} (linux-${ARCH})"
+  info "Installing Modulo bundle ${RELEASE_TAG} (${OS}-${ARCH})"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/${tarball_name}" "${tmp}/${tarball_name}"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/RELEASE_MANIFEST.json" "${tmp}/RELEASE_MANIFEST.json"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/RELEASE_MANIFEST.json.sig" "${tmp}/RELEASE_MANIFEST.json.sig"
@@ -581,7 +595,11 @@ info "installed bundle to ${target}"
 # Atomic-ish symlink swap: build a temp symlink, then rename it over `current`
 # (GNU mv -T). The upgrade machinery (FAR-672) reuses this primitive.
 ln -sfn "versions/${VERSION_NUM}" "${INSTALL_ROOT}/.current.new.$$"
-mv -Tf "${INSTALL_ROOT}/.current.new.$$" "${INSTALL_ROOT}/current"
+if [[ "${OS}" = "darwin" ]]; then
+  mv -f "${INSTALL_ROOT}/.current.new.$$" "${INSTALL_ROOT}/current"
+else
+  mv -Tf "${INSTALL_ROOT}/.current.new.$$" "${INSTALL_ROOT}/current"
+fi
 info "current -> $(readlink "${INSTALL_ROOT}/current")"
 
 # --- neutralise a previous /usr/local/bin/modulo ----------------------------

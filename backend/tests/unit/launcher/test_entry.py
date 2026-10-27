@@ -1412,6 +1412,16 @@ def test_default_data_dir_home(monkeypatch: pytest.MonkeyPatch) -> None:
     assert entry_module.default_data_dir() == expected
 
 
+def test_default_data_dir_darwin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    expected_default = Path.home() / "Library" / "Application Support" / "Modulo" / "data"
+    assert entry_module.default_data_dir() == expected_default
+
+    monkeypatch.setenv("XDG_DATA_HOME", "/custom/xdg")
+    assert entry_module.default_data_dir() == Path("/custom/xdg/modulo/data")
+
+
 # ---------------------------------------------------------------------------
 # _load_or_init_state: fresh state (no existing state.json)
 # ---------------------------------------------------------------------------

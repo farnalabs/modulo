@@ -18,11 +18,16 @@ import pytest
 
 from modulo.launcher import policy as policy_module
 from modulo.launcher.service import (
+    LAUNCHD_LABEL,
+    LAUNCHD_PLIST_FILENAME,
     ServiceError,
     assert_linux,
     assert_not_elevated,
     assert_systemd_available,
+    default_launchd_plist_path,
+    default_unit_path,
     install,
+    render_launchd_plist,
     render_unit,
     resolve_executable,
     resolve_username,
@@ -102,15 +107,38 @@ def test_unit_restart_sec_comes_from_the_shared_policy(tmp_path: Path) -> None:
     assert f"RestartSec={int(policy_module.SERVICE_RESTART_SECONDS)}s" in unit
 
 
+def test_render_launchd_plist_pure_string_and_keys(tmp_path: Path) -> None:
+    import plistlib
+
+    executable = tmp_path / "bin" / "modulo"
+    plist_str = render_launchd_plist(executable)
+    assert isinstance(plist_str, str)
+    assert '<?xml version="1.0" encoding="UTF-8"?>' in plist_str
+    assert f"<string>{LAUNCHD_LABEL}</string>" in plist_str
+    assert f"<string>{executable}</string>" in plist_str
+    assert "<string>start</string>" in plist_str
+    assert "<key>RunAtLoad</key>" in plist_str
+    assert "<key>KeepAlive</key>" in plist_str
+    assert "<key>SuccessfulExit</key>" in plist_str
+    assert "<key>ProcessType</key>" in plist_str
+
+    parsed = plistlib.loads(plist_str.encode("utf-8"))
+    assert parsed["Label"] == LAUNCHD_LABEL
+    assert parsed["ProgramArguments"] == [str(executable), "start"]
+    assert parsed["RunAtLoad"] is True
+    assert parsed["KeepAlive"] == {"SuccessfulExit": False}
+    assert parsed["ProcessType"] == "Interactive"
+
+
 # ---------------------------------------------------------------------------
 # Platform + manager guards
 # ---------------------------------------------------------------------------
 
 
 def test_macos_is_refused_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS was formerly refused loudly, but is now accepted under FAR-678."""
     monkeypatch.setattr(sys, "platform", "darwin")
-    with pytest.raises(ServiceError, match="FAR-678"):
-        assert_linux()
+    assert_linux()
 
 
 def test_windows_is_refused_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -328,3 +356,114 @@ def test_install_against_a_fake_systemd_bin_dir(monkeypatch: pytest.MonkeyPatch,
     assert "--user enable --now modulo.service" in calls
     assert any(call == "loginctl enable-linger " + resolve_username() for call in calls)
     assert unit_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# macOS launchd (Darwin) round-trips
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def darwin_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Runner-seam tests exercising macOS launchd logic."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+
+def test_darwin_install_round_trip(darwin_only: None, tmp_path: Path) -> None:
+    executable = _executable(tmp_path)
+    unit_path = tmp_path / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+    runner = FakeRunner()
+
+    result = install(
+        runner=runner,
+        unit_path=unit_path,
+        executable=executable,
+    )
+    assert result.unit_path == unit_path
+    assert result.enabled is True
+    assert result.started is True
+    assert result.linger_enabled is True
+    assert not result.warnings
+    assert unit_path.exists()
+    content = unit_path.read_text(encoding="utf-8")
+    assert f"<string>{executable}</string>" in content
+    assert ["launchctl", "unload", str(unit_path)] in [list(argv) for argv in runner.calls]
+    assert ["launchctl", "load", "-w", str(unit_path)] in [list(argv) for argv in runner.calls]
+
+
+def test_darwin_install_load_failure(darwin_only: None, tmp_path: Path) -> None:
+    executable = _executable(tmp_path)
+    unit_path = tmp_path / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+    runner = FakeRunner({("launchctl", "load"): (1, "load failed")})
+
+    result = install(
+        runner=runner,
+        unit_path=unit_path,
+        executable=executable,
+    )
+    assert result.enabled is False
+    assert result.started is False
+    assert any("launchctl load -w" in warning for warning in result.warnings)
+
+
+def test_darwin_uninstall_round_trip(darwin_only: None, tmp_path: Path) -> None:
+    unit_path = tmp_path / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+    unit_path.parent.mkdir(parents=True)
+    unit_path.write_text("<plist></plist>", encoding="utf-8")
+    runner = FakeRunner()
+
+    result = uninstall(
+        runner=runner,
+        unit_path=unit_path,
+    )
+    assert result.stopped is True
+    assert result.disabled is True
+    assert result.unit_removed is True
+    assert result.linger_disabled is True
+    assert not unit_path.exists()
+    assert runner.calls[0] == ["launchctl", "unload", "-w", str(unit_path)]
+
+
+def test_darwin_uninstall_tolerates_missing_unit(darwin_only: None, tmp_path: Path) -> None:
+    unit_path = tmp_path / "missing" / LAUNCHD_PLIST_FILENAME
+    runner = FakeRunner({("launchctl", "unload"): (1, "not loaded")})
+
+    result = uninstall(
+        runner=runner,
+        unit_path=unit_path,
+    )
+    assert result.stopped is False
+    assert result.disabled is False
+    assert result.unit_removed is True
+    assert any("launchctl unload -w" in warning for warning in result.warnings)
+
+
+def test_darwin_status(darwin_only: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.launcher.supervisor as supervisor_module
+
+    fake_plist = tmp_path / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+    fake_plist.parent.mkdir(parents=True)
+    fake_plist.write_text("<plist></plist>", encoding="utf-8")
+    monkeypatch.setattr(
+        "modulo.launcher.service.default_unit_path",
+        lambda: fake_plist,
+    )
+
+    def fake_collect(data_dir: Path) -> dict[str, object]:
+        return {"data_dir": str(data_dir), "initialized": True}
+
+    monkeypatch.setattr(supervisor_module, "collect_status", fake_collect)
+    runner = FakeRunner({("launchctl", "list"): (0, f"123 0 {LAUNCHD_LABEL}")})
+    payload = status(runner=runner, data_dir=tmp_path / "data")
+
+    assert payload["unit"] == LAUNCHD_PLIST_FILENAME
+    assert payload["unit_path"] == str(fake_plist)
+    assert payload["active"] == "active"
+    assert payload["enabled"] == "enabled"
+    assert payload["linger"] == "not_applicable (macOS LaunchAgent starts on login)"
+    assert payload["launcher"] == {"data_dir": str(tmp_path / "data"), "initialized": True}
+
+
+def test_darwin_default_unit_path(darwin_only: None) -> None:
+    assert default_unit_path() == default_launchd_plist_path()
+    assert default_launchd_plist_path() == Path.home() / "Library" / "LaunchAgents" / LAUNCHD_PLIST_FILENAME

@@ -810,8 +810,13 @@ def prune_versions(
     return pruned
 
 
+def _host_os() -> str:
+    """The bundle asset's OS token (linux or darwin)."""
+    return "darwin" if sys.platform == "darwin" else "linux"
+
+
 def _host_arch() -> str:
-    """The bundle asset's arch token (modulo-<v>-linux-<arch>.tar.gz)."""
+    """The bundle asset's arch token (modulo-<v>-<os>-<arch>.tar.gz)."""
     import platform
 
     return {
@@ -856,7 +861,7 @@ def fetch_release_assets(
     target_version = _validate_version_segment(target_version)
     release_tag = f"bundle-v{target_version}"
     download_dir.mkdir(parents=True, exist_ok=True)
-    tarball_name = f"modulo-{target_version}-linux-{_host_arch()}.tar.gz"
+    tarball_name = f"modulo-{target_version}-{_host_os()}-{_host_arch()}.tar.gz"
     base = f"{_RELEASES_DOWNLOAD_BASE}/{release_tag}"
     tarball = download_dir / tarball_name
     if not tarball.resolve().is_relative_to(download_dir.resolve()):
@@ -1326,8 +1331,6 @@ def assert_upgrade_platform() -> None:
             "the full modulo upgrade flow is not implemented on Windows yet (TODO(P3)): "
             "the versioned-dir/current-symlink swap is a POSIX symlink primitive today"
         )
-    if sys.platform == "darwin":
-        raise UpgradeError("the full modulo upgrade flow is the TODO(P2) macOS launchd seam (FAR-678)")
 
 
 def _resolve_upgrade_assets(
@@ -1353,7 +1356,11 @@ def _resolve_upgrade_assets(
     if not tarball.is_file():
         raise UpgradeError(f"--from-file: no such file: {from_file}")
     version = _strip_bundle_prefix(
-        tarball.name.removeprefix("modulo-").removesuffix("-linux-amd64.tar.gz").removesuffix("-linux-arm64.tar.gz")
+        tarball.name.removeprefix("modulo-")
+        .removesuffix("-linux-amd64.tar.gz")
+        .removesuffix("-linux-arm64.tar.gz")
+        .removesuffix("-darwin-amd64.tar.gz")
+        .removesuffix("-darwin-arm64.tar.gz")
     )
     manifest_file = tarball.parent / _RELEASE_MANIFEST_NAME
     signature_file = tarball.parent / f"{_RELEASE_MANIFEST_NAME}.sig"

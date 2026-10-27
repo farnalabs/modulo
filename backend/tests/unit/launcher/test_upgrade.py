@@ -1525,11 +1525,42 @@ class TestResolveCurrentTarget:
 
 
 class TestAssertUpgradePlatform:
-    def test_windows_raises(self):
-        if sys.platform != "win32":
-            pytest.skip("Windows test only")
+    def test_windows_raises(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
         with pytest.raises(UpgradeError, match="Windows"):
             upgrade_module.assert_upgrade_platform()
+
+    def test_darwin_does_not_raise(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "darwin")
+        upgrade_module.assert_upgrade_platform()
+
+    def test_linux_does_not_raise(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        upgrade_module.assert_upgrade_platform()
+
+
+def test_host_os(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert upgrade_module._host_os() == "darwin"
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert upgrade_module._host_os() == "linux"
+
+
+def test_resolve_upgrade_assets_darwin_tarball(tmp_path):
+    tarball = tmp_path / "modulo-1.2.3-darwin-arm64.tar.gz"
+    tarball.write_text("dummy", encoding="utf-8")
+    manifest = tmp_path / "RELEASE_MANIFEST.json"
+    manifest.write_text("{}", encoding="utf-8")
+    sig = tmp_path / "RELEASE_MANIFEST.json.sig"
+    sig.write_text("dummy", encoding="utf-8")
+
+    _tb, ver, _mf, _sf = upgrade_module._resolve_upgrade_assets(
+        from_file=tarball,
+        target_version=None,
+        staging_dir=tmp_path / "staging",
+        fetch=None,
+    )
+    assert ver == "1.2.3"
 
 
 class TestAlembicHeads:

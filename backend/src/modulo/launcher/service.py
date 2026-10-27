@@ -61,6 +61,8 @@ from modulo.launcher import policy
 # The published console-script name (also the unit's ExecStart program).
 CONSOLE_SCRIPT_NAME = "modulo"
 UNIT_FILENAME = "modulo.service"
+LAUNCHD_LABEL = "run.modulo.launcher"
+LAUNCHD_PLIST_FILENAME = f"{LAUNCHD_LABEL}.plist"
 # PID-1 systemd marker; on hosts without it, `systemctl --user` is probed.
 SYSTEMD_MARKER_PATH = Path("/run/systemd/system")
 
@@ -68,6 +70,8 @@ CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
 __all__ = [
     "CONSOLE_SCRIPT_NAME",
+    "LAUNCHD_LABEL",
+    "LAUNCHD_PLIST_FILENAME",
     "UNIT_FILENAME",
     "ServiceError",
     "ServiceInstallResult",
@@ -75,8 +79,10 @@ __all__ = [
     "assert_linux",
     "assert_not_elevated",
     "assert_systemd_available",
+    "default_launchd_plist_path",
     "default_unit_path",
     "install",
+    "render_launchd_plist",
     "render_unit",
     "resolve_executable",
     "resolve_username",
@@ -123,18 +129,16 @@ def _default_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def assert_linux() -> None:
-    """Refuse non-Linux platforms loudly (macOS = FAR-678, Windows = TODO(P3))."""
-    if sys.platform == "darwin":
-        raise ServiceError(
-            "The service install manages a systemd user unit, which macOS does not run; "
-            "the macOS (launchd) service is a separate work item (FAR-678). Use "
-            "`modulo start` directly meanwhile."
-        )
+    """Refuse unsupported service platforms loudly (Windows = TODO(P3))."""
     if sys.platform == "win32":
         # Deferred P3: Windows service seam (sc.exe / Task Scheduler).
         raise ServiceError(
             "The service install is not implemented on Windows yet (TODO(P3)); the native "
             "launcher is Linux-first (ADR 031). Use `modulo start` directly meanwhile."
+        )
+    if sys.platform not in ("linux", "darwin"):
+        raise ServiceError(
+            f"The service install is not implemented on {sys.platform} yet; use `modulo start` directly meanwhile."
         )
 
 
@@ -203,9 +207,54 @@ def resolve_username() -> str:
     return str(getpass.getuser())
 
 
+def default_launchd_plist_path() -> Path:
+    """The launchd user LaunchAgent location for the installing user."""
+    return Path.home() / "Library" / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+
+
 def default_unit_path() -> Path:
-    """The systemd user-unit location for the installing user."""
+    """The systemd user-unit or launchd LaunchAgent location for the installing user."""
+    if sys.platform == "darwin":
+        return default_launchd_plist_path()
     return Path.home() / ".config" / "systemd" / "user" / UNIT_FILENAME
+
+
+def render_launchd_plist(executable: Path) -> str:
+    """Render the LaunchAgent plist for macOS launchd (pure string).
+
+    Carries the launchd service contract:
+    - Label: run.modulo.launcher
+    - ProgramArguments: [executable, "start"]
+    - RunAtLoad: true (starts on user login, ADR 031 Decision 9)
+    - KeepAlive: restarts on crash/failure, but stops on SuccessfulExit (false)
+      so supervisor's degraded exit 75 halts restart
+    - ProcessType: Interactive
+    """
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+        '<plist version="1.0">',
+        "<dict>",
+        f"\t<key>Label</key>\n\t<string>{LAUNCHD_LABEL}</string>",
+        "\t<key>ProgramArguments</key>",
+        "\t<array>",
+        f"\t\t<string>{executable}</string>",
+        "\t\t<string>start</string>",
+        "\t</array>",
+        "\t<key>RunAtLoad</key>",
+        "\t<true/>",
+        "\t<key>KeepAlive</key>",
+        "\t<dict>",
+        "\t\t<key>SuccessfulExit</key>",
+        "\t\t<false/>",
+        "\t</dict>",
+        "\t<key>ProcessType</key>",
+        "\t<string>Interactive</string>",
+        "</dict>",
+        "</plist>",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def render_unit(executable: Path) -> str:
@@ -261,14 +310,38 @@ def install(
     executable: Path | None = None,
     linger_argv_builder: Callable[[str], list[str]] | None = None,
 ) -> ServiceInstallResult:
-    """Install, enable + start the user unit; enable linger (best-effort)."""
+    """Install, enable + start the user service (systemd or launchd); enable linger (best-effort)."""
     runner = runner if runner is not None else _default_runner
     assert_linux()
     assert_not_elevated()
-    assert_systemd_available(runner)
     resolved_executable = executable if executable is not None else resolve_executable()
     if not resolved_executable.is_absolute():
         raise ServiceError(f"the resolved modulo executable must be absolute for ExecStart: {resolved_executable}")
+
+    if sys.platform == "darwin":
+        target = unit_path if unit_path is not None else default_launchd_plist_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(render_launchd_plist(resolved_executable), encoding="utf-8")
+        with contextlib.suppress(OSError):
+            target.chmod(0o644)
+
+        warnings: list[str] = []
+        runner(["launchctl", "unload", str(target)])
+        load_result = runner(["launchctl", "load", "-w", str(target)])
+        enabled = load_result.returncode == 0
+        if not enabled:
+            detail = (load_result.stderr or load_result.stdout or "").strip()
+            warnings.append(f"`launchctl load -w` failed: {detail or load_result.returncode}")
+        return ServiceInstallResult(
+            unit_path=target,
+            executable=resolved_executable,
+            enabled=enabled,
+            started=enabled,
+            linger_enabled=True,
+            warnings=warnings,
+        )
+
+    assert_systemd_available(runner)
     target = unit_path if unit_path is not None else default_unit_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render_unit(resolved_executable), encoding="utf-8")
@@ -336,12 +409,34 @@ def uninstall(
     unit_path: Path | None = None,
     linger_argv_builder: Callable[[str], list[str]] | None = None,
 ) -> ServiceUninstallResult:
-    """Stop, disable, remove the unit, disable linger (best-effort, warned)."""
+    """Stop, disable, remove the unit/LaunchAgent, disable linger (best-effort, warned)."""
     runner = runner if runner is not None else _default_runner
     assert_linux()
     target = unit_path if unit_path is not None else default_unit_path()
-    username = resolve_username()
     warnings: list[str] = []
+
+    if sys.platform == "darwin":
+        unload_result = runner(["launchctl", "unload", "-w", str(target)])
+        stopped = unload_result.returncode == 0
+        disabled = stopped
+        if unload_result.returncode != 0:
+            detail = (unload_result.stderr or unload_result.stdout or "").strip()
+            warnings.append(f"`launchctl unload -w` failed (service may not be loaded): {detail}")
+        removed = False
+        try:
+            target.unlink(missing_ok=True)
+            removed = True
+        except OSError as exc:
+            warnings.append(f"could not remove {target}: {exc}")
+        return ServiceUninstallResult(
+            unit_removed=removed,
+            stopped=stopped,
+            disabled=disabled,
+            linger_disabled=True,
+            warnings=warnings,
+        )
+
+    username = resolve_username()
 
     stop_result = _systemctl(runner, ["stop", UNIT_FILENAME])
     disable_result = _systemctl(runner, ["disable", UNIT_FILENAME])
@@ -399,6 +494,30 @@ def status(
     from modulo.launcher.supervisor import collect_status
 
     target = default_unit_path()
+    resolved_data_dir: Path | None
+    try:
+        resolved_data_dir = data_dir if data_dir is not None else default_data_dir()
+    except RuntimeError:
+        resolved_data_dir = None
+
+    if sys.platform == "darwin":
+        list_result = runner(["launchctl", "list", LAUNCHD_LABEL])
+        active = "active" if list_result.returncode == 0 else "inactive"
+        enabled = "enabled" if list_result.returncode == 0 or target.is_file() else "disabled"
+        linger = "not_applicable (macOS LaunchAgent starts on login)"
+        return {
+            "unit": LAUNCHD_PLIST_FILENAME,
+            "unit_path": str(target),
+            "enabled": enabled,
+            "active": active,
+            "linger": linger,
+            "launcher": (
+                collect_status(resolved_data_dir)
+                if resolved_data_dir is not None
+                else {"error": "no usable default data dir on this platform"}
+            ),
+        }
+
     payload: dict[str, Any] = {"unit": UNIT_FILENAME, "unit_path": str(target)}
     enabled_result = _systemctl(runner, ["is-enabled", UNIT_FILENAME])
     payload["enabled"] = (enabled_result.stdout or "").strip() or f"exit {enabled_result.returncode}"
@@ -408,11 +527,6 @@ def status(
     linger_result = runner(["loginctl", "show-user", username, "--property=Linger"])
     linger_output = (linger_result.stdout or "").strip()
     payload["linger"] = "enabled" if "Linger=yes" in linger_output else "disabled/unknown"
-    resolved_data_dir: Path | None
-    try:
-        resolved_data_dir = data_dir if data_dir is not None else default_data_dir()
-    except RuntimeError:
-        resolved_data_dir = None
     payload["launcher"] = (
         collect_status(resolved_data_dir)
         if resolved_data_dir is not None
