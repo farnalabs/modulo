@@ -6,8 +6,7 @@ import { nextTick as vueNextTick } from 'vue'
 // Restore the REAL vue-router: the shared vitest setup (src/__tests__/setup.ts)
 // mocks 'vue-router' with a stub router whose currentRoute is pinned to a
 // no-match route. This spec asserts on the loaded collection and error state,
-// which depend on the real useRoute()/navigation (same override pattern as
-// routerFeatureFlagGuard.spec.ts / demo-handoff.spec.ts).
+// which depend on the real useRoute()/navigation.
 vi.mock('vue-router', async () => {
   const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
   return actual
@@ -88,13 +87,11 @@ describe('CollectionDetailView (FAR-760)', () => {
     await router.isReady()
     const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
 
-    // While loading, shows the loading state.
     await nextTick()
     await nextTick()
 
     expect(wrapper.text()).toContain('My Collection')
     expect(wrapper.text()).toContain('my-schema@1.0')
-    // Draft status exposes the publish action.
     expect(wrapper.find('[data-testid="collection-publish"]').exists()).toBe(true)
   })
 
@@ -124,7 +121,6 @@ describe('CollectionDetailView (FAR-760)', () => {
     const [path] = postMock.mock.calls[0] as [string, ...unknown[]]
     expect(path).toContain('/publish')
 
-    // Status flips to published: the publish action is only shown for drafts.
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="collection-publish"]').exists()).toBe(false)
     })
@@ -145,6 +141,23 @@ describe('CollectionDetailView (FAR-760)', () => {
 
     expect(wrapper.find('[data-testid="collection-publish"]').exists()).toBe(true)
     expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+  })
+
+  it('handles publish catch path (exception from POST)', async () => {
+    postMock.mockRejectedValue(new Error('network error'))
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-publish"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('network error')
   })
 })
 
@@ -184,7 +197,6 @@ describe('CollectionDetailView install action (FAR-826)', () => {
     await nextTick()
     await nextTick()
 
-    // After install succeeds, the refetched installs list renders the record.
     getMock.mockImplementation(async (path: string) => {
       if (String(path).includes('/installs')) return { items: [makeInstall()] }
       return makeCollection({ status: 'published' })
@@ -200,7 +212,6 @@ describe('CollectionDetailView install action (FAR-826)', () => {
     expect(installPath).toBe('/api/v1/libraries/collections/{primitive_id}/install')
     expect(installOpts.params.path.primitive_id).toBe('col-1')
 
-    // Installs list was refetched and renders the new install.
     const installsGetCalls = getMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/installs'))
     expect(installsGetCalls.length).toBeGreaterThanOrEqual(2)
     expect(wrapper.text()).toContain('v1.0')
@@ -228,8 +239,6 @@ describe('CollectionDetailView install action (FAR-826)', () => {
 
     const region = wrapper.find('[data-testid="collection-install-warnings"]')
     expect(region.exists()).toBe(true)
-    // The styled block now renders inside the always-mounted polite live
-    // region, so its politeness is inherited from the container.
     expect(region.attributes('aria-live')).toBeUndefined()
     expect(region.attributes('role')).toBeUndefined()
     expect(
@@ -262,7 +271,7 @@ describe('CollectionDetailView install action (FAR-826)', () => {
 
   it('keeps the standing install warnings when a later install attempt fails', async () => {
     const warning =
-      "1 credential(s) were not exported with this bundle; re-provision them on this instance: node.env.API_KEY."
+      "1 credential(s) were not exported with this bundle; re-provision them on this instance: node.env_API_KEY."
     mockPublishedCollection([
       { ...makeInstall(), resolved_manifest: { warnings: [warning] } },
     ])
@@ -398,23 +407,30 @@ describe('CollectionDetailView install action (FAR-826)', () => {
     await nextTick()
 
     expect(wrapper.find('[data-testid="collection-install-error"][role="alert"]').exists()).toBe(true)
-
-    // FAR-1669: install is a non-idempotent POST, so the shared ErrorAlert
-    // renders with retryable=false — no Retry button; the Install button is
-    // the retry path.
     expect(vi.mocked(api.POST)).toHaveBeenCalledTimes(1)
     expect(wrapper.findAll('button').find((b) => b.text() === 'Retry')).toBeUndefined()
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
+
+  it('handles install catch path (exception from POST)', async () => {
+    mockPublishedCollection([])
+    vi.mocked(api.POST).mockRejectedValueOnce(new Error('network error'))
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="collection-install-error"][role="alert"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('network error')
+  })
 })
 
-
-// WCAG 4.1.3 (Status Messages): a status message must be announced without
-// moving focus. An aria-live region that enters the DOM in the same mutation
-// as its own content is not reliably announced, so the announcing container
-// has to pre-exist and stay empty while the install is still in flight — only
-// then can the re-provision warning reach a screen-reader user who never looks
-// at the top of the page.
 describe('CollectionDetailView install warning announcement (FAR-1231)', () => {
   const LIVE_REGION = '[data-testid="collection-install-warnings-live"]'
   const WARNING_REGION = '[data-testid="collection-install-warnings"]'
@@ -435,7 +451,6 @@ describe('CollectionDetailView install warning announcement (FAR-1231)', () => {
     const live = wrapper.find(LIVE_REGION)
     expect(live.exists()).toBe(true)
     expect(live.attributes('aria-live')).toBe('polite')
-    // Nothing rendered yet, and nothing in the accessibility tree removed.
     expect(live.element.children.length).toBe(0)
     expect(live.text()).toBe('')
     expect(live.attributes('hidden')).toBeUndefined()
@@ -451,15 +466,6 @@ describe('CollectionDetailView install warning announcement (FAR-1231)', () => {
     await nextTick()
     await nextTick()
 
-    // The empty container must be out of flow WITHOUT leaving the a11y tree.
-    // `empty:hidden` compiles to `display: none`, and no screen reader
-    // announces a live region that was display:none when it populated — which
-    // would reinstate the exact bug this change exists to fix. `empty:sr-only`
-    // is position:absolute (no phantom space-y-4 gap) but still exposed.
-    //
-    // Asserted on the class rather than computed style: vite.config.ts
-    // deliberately injects only the two JsonViewer stylesheets into jsdom
-    // (test.css.include), so Tailwind output is not available here.
     const live = wrapper.find(LIVE_REGION)
     expect(live.classes()).toContain('empty:sr-only')
     expect(live.classes()).not.toContain('empty:hidden')
@@ -488,13 +494,9 @@ describe('CollectionDetailView install warning announcement (FAR-1231)', () => {
     await flushPromises()
     await nextTick()
 
-    // Same DOM node throughout: content was inserted into a live region that
-    // was already on the page, which is what gets announced.
     expect(wrapper.find(LIVE_REGION).element).toBe(live.element)
     expect(wrapper.find(WARNING_REGION).exists()).toBe(true)
     expect(wrapper.find(LIVE_REGION).text()).toContain(warning)
-    // The element is no longer `:empty`, so the sr-only rule stops matching
-    // and the warning box lays out normally.
   })
 
   it('leaves the live region empty when the installed bundle stripped nothing', async () => {
@@ -518,8 +520,6 @@ describe('CollectionDetailView install warning announcement (FAR-1231)', () => {
   it('does not report an install failure when only the follow-up refetch fails', async () => {
     const warning =
       '1 credential(s) were not exported with this bundle; re-provision them on this instance: node.env.API_KEY.'
-    // The mount-time installs GET succeeds; the refetch after the install POST
-    // rejects the way api.GET does on a transport failure.
     let installListCalls = 0
     getMock.mockImplementation(async (path: string) => {
       if (String(path).includes('/installs')) {
@@ -541,8 +541,6 @@ describe('CollectionDetailView install warning announcement (FAR-1231)', () => {
     await flushPromises()
     await nextTick()
 
-    // The install itself succeeded, so a red "install failed" would contradict
-    // the re-provision warning sitting right above it.
     expect(wrapper.find('[data-testid="collection-install-error"]').exists()).toBe(false)
     expect(wrapper.find(WARNING_REGION).text()).toContain(warning)
   })
@@ -655,6 +653,24 @@ describe('CollectionDetailView update-available flow (FAR-759)', () => {
     expect(wrapper.find('[data-testid="collection-upgrade-error"]').exists()).toBe(true)
   })
 
+  it('handles upgrade catch path (exception from POST)', async () => {
+    mockPublishedCollectionWithUpdate(true)
+    vi.mocked(api.POST).mockRejectedValueOnce(new Error('network error'))
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-upgrade"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="collection-upgrade-error"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('network error')
+  })
+
   it('renders a placeholder version when the update has no available version', async () => {
     getMock.mockImplementation(async (path: string) => {
       if (String(path).includes('/installs')) {
@@ -679,5 +695,150 @@ describe('CollectionDetailView update-available flow (FAR-759)', () => {
     const badge = wrapper.find('[data-testid="collection-update-available"]')
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toContain('?')
+  })
+})
+
+describe('CollectionDetailView grantAgents flow', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getMock.mockResolvedValue(makeCollection({ status: 'published' }))
+    postMock.mockResolvedValue({ status: 'published' })
+  })
+
+  it('shows Grant Access button for community-sourced install without agents granted', async () => {
+    mockPublishedCollection([
+      { ...makeInstall(), community_sourced: true, agents_granted: false, install_id: 'install-1' },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const grantBtn = wrapper.find('[data-testid="collection-grant-agents"]')
+    expect(grantBtn.exists()).toBe(true)
+    expect(grantBtn.text()).toContain('Grant Access')
+  })
+
+  it('calls grantAgents endpoint and updates the install', async () => {
+    mockPublishedCollection([
+      { ...makeInstall(), community_sourced: true, agents_granted: false, install_id: 'install-1' },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const updatedInstall = { ...makeInstall(), community_sourced: true, agents_granted: true, install_id: 'install-1' }
+    postMock.mockResolvedValueOnce(updatedInstall)
+
+    await wrapper.find('[data-testid="collection-grant-agents"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(postMock).toHaveBeenCalledWith(
+      '/api/v1/libraries/collections/{primitive_id}/installs/{install_id}/grant',
+      expect.objectContaining({
+        params: {
+          path: { primitive_id: 'col-1', install_id: 'install-1' },
+        },
+      }),
+    )
+    expect(wrapper.text()).toContain('Granted')
+  })
+
+  it('handles grantAgents error', async () => {
+    mockPublishedCollection([
+      { ...makeInstall(), community_sourced: true, agents_granted: false, install_id: 'install-1' },
+    ])
+    postMock.mockRejectedValueOnce(new Error('grant failed'))
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-grant-agents"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('grant failed')
+  })
+})
+
+describe('CollectionDetailView connector checklist', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    postMock.mockResolvedValue({ status: 'published' })
+  })
+
+  it('renders connector checklist with status badges', async () => {
+    mockPublishedCollection([
+      {
+        ...makeInstall(),
+        connector_checklist: [
+          { connector_type_id: 'github', status: 'configured+bound' },
+          { connector_type_id: 'slack', status: 'configured' },
+          { connector_type_id: 'jira', status: 'missing' },
+        ],
+      },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('github')
+    expect(wrapper.text()).toContain('slack')
+    expect(wrapper.text()).toContain('jira')
+    expect(wrapper.text()).toContain('configured+bound')
+    expect(wrapper.text()).toContain('configured')
+    expect(wrapper.text()).toContain('missing')
+  })
+
+  it('shows Create Connector link for unconfigured connectors', async () => {
+    mockPublishedCollection([
+      {
+        ...makeInstall(),
+        connector_checklist: [
+          { connector_type_id: 'github', status: 'missing' },
+        ],
+      },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const createLink = wrapper.find('[data-testid="collection-create-connector"]')
+    expect(createLink.exists()).toBe(true)
+  })
+
+  it('renders runnable status', async () => {
+    mockPublishedCollection([{ ...makeInstall(), runnable: true }])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Ready to run')
+  })
+
+  it('renders not runnable status', async () => {
+    mockPublishedCollection([{ ...makeInstall(), runnable: false }])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Not yet runnable')
   })
 })

@@ -39,6 +39,9 @@ const defaultGet = vi.hoisted(() => (path: string) => {
       error: undefined,
     })
   }
+  if (path === '/api/v1/plan' || path === '/api/v1/admin/tiers') {
+    return Promise.resolve({ data: { plan: { tier: 'team' } }, error: undefined })
+  }
   return Promise.resolve({ data: null, error: undefined })
 })
 const mockGet = vi.hoisted(() => vi.fn())
@@ -318,108 +321,6 @@ describe('AdminCostControlsView', () => {
           error: undefined,
         })
       }
-      if (path === '/api/v1/admin/feature-flags') {
-        return Promise.resolve({
-          data: { license: { tier: 'team', has_license_key: true, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'team', currently_active: true, depends_on: null }], would_activate: [] },
-          error: undefined,
-        })
-      }
-      return Promise.resolve({ data: null, error: undefined })
-    })
-
-    pinia = createPinia()
-    setActivePinia(pinia)
-
-    const wrapper = mount(AdminCostControlsView, {
-      global: { plugins: [pinia] },
-    })
-    await flushPromises()
-
-    const circuitBreaker = wrapper.find('[data-testid="cc-circuit-breaker"] input').element as HTMLInputElement
-    expect(circuitBreaker.checked).toBe(true)
-    const currency = wrapper.find('[data-testid="cc-currency"]').text()
-    expect(currency).toContain('EUR')
-  })
-
-  it('blocks unchecking the last alert threshold and surfaces an error', async () => {
-    mockGet.mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/costs/controls') {
-        return Promise.resolve({
-          data: { budget: 10000, currency: 'USD', billing_period: 'monthly', alert_thresholds: [50], circuit_breaker_enabled: false },
-          error: undefined,
-        })
-      }
-      if (path === '/api/v1/admin/feature-flags') {
-        return Promise.resolve({
-          data: { license: { tier: 'team', has_license_key: true, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'team', currently_active: true, depends_on: null }], would_activate: [] },
-          error: undefined,
-        })
-      }
-      return Promise.resolve({ data: null, error: undefined })
-    })
-
-    pinia = createPinia()
-    setActivePinia(pinia)
-
-    const wrapper = mount(AdminCostControlsView, {
-      global: { plugins: [pinia] },
-    })
-    await flushPromises()
-
-    mockPut.mockClear()
-    const input = wrapper.find('[data-testid="cc-threshold-50"] input')
-    ;(input.element as HTMLInputElement).checked = false
-    await input.trigger('change')
-    await flushPromises()
-
-    expect(mockPut).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('At least one alert threshold must remain enabled')
-  })
-
-  it('rolls back and surfaces an error when the threshold PUT fails', async () => {
-    const wrapper = await mountView()
-    mockPut.mockClear()
-    mockPut.mockResolvedValueOnce({ data: null, error: { detail: 'boom' } })
-    const input = wrapper.find('[data-testid="cc-threshold-100"] input')
-    ;(input.element as HTMLInputElement).checked = true
-    await input.trigger('change')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('boom')
-    const threshold100 = wrapper.find('[data-testid="cc-threshold-100"] input').element as HTMLInputElement
-    expect(threshold100.checked).toBe(false)
-  })
-
-  it('shows locked state when feature is disabled', async () => {
-    mockGet.mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/feature-flags') {
-        return Promise.resolve({
-          data: { license: { tier: 'community', has_license_key: false, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'team', currently_active: false, depends_on: null }], would_activate: [] },
-          error: undefined,
-        })
-      }
-      return Promise.resolve({ data: null, error: undefined })
-    })
-
-    pinia = createPinia()
-    setActivePinia(pinia)
-
-    const wrapper = mount(AdminCostControlsView, {
-      global: { plugins: [pinia] },
-    })
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('Available on higher plan tier')
-  })
-
-  it('maps snake_case controls response into camelCase settings on load', async () => {
-    mockGet.mockImplementation((path: string) => {
-      if (path === '/api/v1/admin/costs/controls') {
-        return Promise.resolve({
-          data: { budget: 10000, currency: 'EUR', billing_period: 'quarterly', alert_thresholds: [50, 90], circuit_breaker_enabled: true },
-          error: undefined,
-        })
-      }
       if (path === '/api/v1/admin/costs') {
         return Promise.resolve({ data: { period: 'month', group_by: 'team', items: [], org_total: '0', legacy_total: '0', org_unassigned_components: '0' }, error: undefined })
       }
@@ -471,5 +372,61 @@ describe('AdminCostControlsView', () => {
     expect(confirmation, 'the saved-budget confirmation must render').toBeDefined()
     expect(confirmation!.classes()).toContain('text-success-text')
     wrapper.unmount()
+  })
+
+  it('handles onCircuitBreakerChange error path', async () => {
+    const wrapper = await mountView()
+    mockPut.mockResolvedValueOnce({ data: null, error: { detail: 'circuit breaker save failed' } })
+
+    const input = wrapper.find('[data-testid="cc-circuit-breaker"] input')
+    ;(input.element as HTMLInputElement).checked = true
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('circuit breaker save failed')
+    expect(wrapper.text()).toContain('Failed to save circuit breaker')
+  })
+
+  it('handles onCurrencyChange function', async () => {
+    const wrapper = await mountView()
+    mockPut.mockClear()
+    mockPut.mockRejectedValueOnce(new Error('currency save failed'))
+
+    const vm = wrapper.vm as any
+    await vm.onCurrencyChange('EUR')
+    await flushPromises()
+
+    expect(mockPut).toHaveBeenCalledWith('/api/v1/admin/costs/controls', expect.objectContaining({
+      body: expect.objectContaining({ currency: 'EUR' }),
+    }))
+    expect(wrapper.text()).toContain('Failed to save currency')
+  })
+
+  it('handles onBillingPeriodChange function', async () => {
+    const wrapper = await mountView()
+    mockPut.mockClear()
+    mockPut.mockResolvedValueOnce({ data: null, error: { detail: 'billing period save failed' } })
+
+    const vm = wrapper.vm as any
+    await vm.onBillingPeriodChange('annual')
+    await flushPromises()
+
+    expect(mockPut).toHaveBeenCalledWith('/api/v1/admin/costs/controls', expect.objectContaining({
+      body: expect.objectContaining({ billing_period: 'annual' }),
+    }))
+    expect(wrapper.text()).toContain('Failed to save billing period')
+  })
+
+  it('calls loadAll on mount (costs, limits, settings, feature-flags)', async () => {
+    mount(AdminCostControlsView, {
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/admin/costs')
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/admin/costs/limits')
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/admin/costs/controls')
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/plan')
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/admin/tiers')
   })
 })

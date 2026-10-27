@@ -10,12 +10,13 @@ async function nextTick() {
 
 const getMock = vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 12 })
 const postMock = vi.fn()
+const patchMock = vi.fn()
 
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn(async (...args: unknown[]) => ({ data: await getMock(...args), error: undefined })),
     POST: vi.fn(async (...args: unknown[]) => ({ data: await postMock(...args), error: undefined })),
-    PATCH: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+    PATCH: vi.fn(async (...args: unknown[]) => ({ data: await patchMock(...args), error: undefined })),
   },
 }))
 
@@ -208,7 +209,6 @@ describe('LibraryView', () => {
     await searchInput.setValue('foo')
     await vueNextTick()
 
-    // Debounce window has not elapsed yet — no request carries the search term.
     lastCall = getMock.mock.calls.at(-1)!
     opts = lastCall[1] as { params: { query: Record<string, unknown> } }
     expect(opts.params.query.search).toBeUndefined()
@@ -254,12 +254,57 @@ describe('LibraryView', () => {
       expect(router.push).toHaveBeenCalledWith({ name: 'lifecycle-map-detail', params: { id: 'map-created-1' } })
     })
   })
+
+  it('calls toggleAutoUpdate which toggles the primitive', async () => {
+    getMock.mockResolvedValue({ items: [NATIVE_ITEM], total: 1, page: 1, page_size: 12 })
+    patchMock.mockResolvedValue({ ...NATIVE_ITEM, auto_update: false })
+
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+    await nextTick()
+
+    // Call the internal toggleAutoUpdate function directly
+    const vm = wrapper.vm as any
+    await vm.toggleAutoUpdate(NATIVE_ITEM)
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(patchMock).toHaveBeenCalledWith('/api/v1/libraries/{primitive_id}', {
+      params: { path: { primitive_id: 'native-1' } },
+      body: { auto_update: false },
+    })
+    wrapper.unmount()
+  })
+
+  it('handles toggleAutoUpdate error and restores loading state', async () => {
+    getMock.mockResolvedValue({ items: [NATIVE_ITEM], total: 1, page: 1, page_size: 12 })
+    patchMock.mockRejectedValue(new Error('network error'))
+
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+    await nextTick()
+
+    const vm = wrapper.vm as any
+    await vm.toggleAutoUpdate(NATIVE_ITEM)
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('network error')
+    wrapper.unmount()
+  })
 })
 
 describe('LibraryView responsive layout (FAR-640)', () => {
-  // PageHeader is mounted for real: the responsive stacking contract itself
-  // lives in PageHeader (FAR-627) and is covered by PageHeader.spec.ts — these
-  // tests only assert this view composes its controls through that structure.
   async function mountLibrary() {
     router.push('/library')
     await router.isReady()
@@ -280,8 +325,6 @@ describe('LibraryView responsive layout (FAR-640)', () => {
     expect(searchInput.exists()).toBe(true)
     expect(typeBtn.exists()).toBe(true)
 
-    // LibraryView's outer band and PageHeader both render <header>; closest()
-    // resolves to PageHeader's own header, which must own all the controls.
     const headerEl = createBtn.element.closest('header')
     expect(headerEl).not.toBeNull()
     expect(headerEl?.contains(searchInput.element)).toBe(true)

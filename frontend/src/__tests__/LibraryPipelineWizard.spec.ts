@@ -43,6 +43,29 @@ const PRIMITIVE = {
   content_json: { agents: [] },
 }
 
+const PRIMITIVE_WITH_SUB_GRAPH = {
+  id: 'test-id-sub',
+  primitive_type: 'pipeline_template',
+  name: 'Composite Template',
+  description: 'A composite template with sub-pipeline',
+  author: 'Test Author',
+  version: '1.0.0',
+  tags: [],
+  visibility: 'org',
+  content_json: {
+    agents: [],
+    sub_pipeline_graph_json: {
+      nodes: [
+        { id: 'node-1', type: 'agent', position: { x: 100, y: 100 }, data: { label: 'Agent 1' } },
+        { id: 'node-2', type: 'agent', position: { x: 300, y: 100 }, data: { label: 'Agent 2' } },
+      ],
+      edges: [
+        { id: 'edge-1', source: 'node-1', target: 'node-2', type: 'smoothstep' },
+      ],
+    },
+  },
+}
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -73,9 +96,6 @@ describe('LibraryPipelineWizard', () => {
   })
 
   it('renders the shared ErrorAlert with a working Retry when pipeline creation fails (FAR-1655)', async () => {
-    // A thrown transport/network failure still surfaces createError via the
-    // catch path; the openapi-fetch { data, error } resolve path is covered
-    // by the next test.
     let postCalls = 0
     vi.mocked(api.POST).mockImplementation(async () => {
       postCalls += 1
@@ -96,7 +116,6 @@ describe('LibraryPipelineWizard', () => {
     await wrapper.find('[data-testid="library-wizard-create"]').trigger('click')
     await flushPromises()
 
-    // The bespoke createError <div> is gone; the shared ErrorAlert renders it.
     const alert = wrapper.find('[data-testid="error-alert-retry"]')
     expect(alert.exists()).toBe(true)
     expect(wrapper.text()).toContain('create exploded')
@@ -110,9 +129,6 @@ describe('LibraryPipelineWizard', () => {
   })
 
   it('surfaces an openapi-fetch { data: undefined, error } failure as the ErrorAlert with working Retry (FAR-1655)', async () => {
-    // openapi-fetch resolves (never throws) on 4xx/5xx with { data, error }.
-    // createPipeline must surface that error — the view previously only set
-    // createError in the thrown-error catch, so HTTP failures silently no-oped.
     let postCalls = 0
     vi.mocked(api.POST).mockImplementation(async () => {
       postCalls += 1
@@ -135,14 +151,11 @@ describe('LibraryPipelineWizard', () => {
     await wrapper.find('[data-testid="library-wizard-create"]').trigger('click')
     await flushPromises()
 
-    // The resolved-error path renders the ErrorAlert with a retry button...
     const retry = wrapper.find('[data-testid="error-alert-retry"]')
     expect(retry.exists()).toBe(true)
     expect(wrapper.text()).toContain('create backend down')
-    // ...and result.value is NOT set on failure (no success banner/link).
     expect(wrapper.find('[data-testid="library-wizard-view-pipeline"]').exists()).toBe(false)
 
-    // Retry re-invokes createPipeline; the second call succeeds.
     await retry.trigger('click')
     await flushPromises()
 
@@ -150,5 +163,90 @@ describe('LibraryPipelineWizard', () => {
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('Test Pipeline')
     expect(wrapper.find('[data-testid="library-wizard-view-pipeline"]').exists()).toBe(true)
+  })
+
+
+  it('handles primitive load error and retry', async () => {
+    vi.mocked(api.GET).mockResolvedValueOnce({ data: undefined, error: { detail: 'load failed' } } as never)
+    router.push('/library/test-id/create-pipeline')
+    await router.isReady()
+    const wrapper = mount(LibraryPipelineWizard, { global: { plugins: [router], stubs: { OwnershipPicker: true } } })
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('load failed')
+  })
+
+  it('handles direct create API error and catch fallback', async () => {
+    router.push('/library/test-id/create-pipeline')
+    await router.isReady()
+    const wrapper = mount(LibraryPipelineWizard, { global: { plugins: [router], stubs: { OwnershipPicker: true, VueFlow: true, Background: true } } })
+    await flushPromises()
+
+    vi.mocked(api.POST).mockResolvedValueOnce({ data: undefined, error: { detail: 'create error' } } as never)
+    await wrapper.find('[data-testid="library-wizard-create"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('create error')
+
+    vi.mocked(api.POST).mockRejectedValueOnce(new Error('transport error'))
+    await wrapper.find('[data-testid="library-wizard-create"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('transport error')
+  })
+
+  it('renders sub-pipeline visualization for composites with sub_pipeline_graph_json', async () => {
+    vi.mocked(api.GET).mockResolvedValue({ data: PRIMITIVE_WITH_SUB_GRAPH, error: undefined })
+
+    router.push('/library/test-id-sub/create-pipeline')
+    await router.isReady()
+    const wrapper = mount(LibraryPipelineWizard, {
+      global: {
+        plugins: [router],
+        stubs: { OwnershipPicker: true, VueFlow: true, Background: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    // The sub-pipeline visualization section should be visible
+    expect(wrapper.text()).toContain('Pipeline Visualisation')
+    expect(wrapper.text()).toContain('sub-pipeline internal')
+  })
+
+  it('renders primitive tags', async () => {
+    const primitiveWithTags = {
+      ...PRIMITIVE,
+      tags: ['tag1', 'tag2'],
+    }
+    vi.mocked(api.GET).mockResolvedValue({ data: primitiveWithTags, error: undefined })
+
+    router.push('/library/test-id/create-pipeline')
+    await router.isReady()
+    const wrapper = mount(LibraryPipelineWizard, {
+      global: {
+        plugins: [router],
+        stubs: { OwnershipPicker: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('tag1')
+    expect(wrapper.text()).toContain('tag2')
+  })
+
+  it('renders primitive author and version', async () => {
+    router.push('/library/test-id/create-pipeline')
+    await router.isReady()
+    const wrapper = mount(LibraryPipelineWizard, {
+      global: {
+        plugins: [router],
+        stubs: { OwnershipPicker: true },
+      },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Test Author')
+    expect(wrapper.text()).toContain('1.0.0')
   })
 })
