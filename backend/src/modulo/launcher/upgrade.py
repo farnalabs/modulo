@@ -35,6 +35,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess  # nosec B404 — the only exec is a fully argv-pinned pg_dump invocation below (never shell=True)
 import sys
 import tarfile
@@ -44,7 +45,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from modulo.launcher import manifest as manifest_module
@@ -886,6 +887,42 @@ def fetch_release_assets(
     return UpgradeDownloads(version=target_version, tarball=tarball, manifest=manifest_file, signature=signature_file)
 
 
+def _checksum_artifact(bundle_dir: Path, name: str) -> Path:
+    """Validate a SHA256SUMS name without following untrusted path components."""
+    path = Path(name)
+    raw_components = name.split("/")
+    if (
+        path.is_absolute()
+        or PureWindowsPath(name).is_absolute()
+        or "\\" in name
+        or any(component in {"", ".", ".."} for component in raw_components)
+    ):
+        raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}")
+
+    current = bundle_dir
+    for component in path.parts[:-1]:
+        current = current / component
+        try:
+            component_stat = current.lstat()
+        except OSError as exc:
+            raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}") from exc
+        if stat.S_ISLNK(component_stat.st_mode) or not stat.S_ISDIR(component_stat.st_mode):
+            raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}")
+
+    artifact = current / path.parts[-1]
+    try:
+        artifact_stat = artifact.lstat()
+    except OSError as exc:
+        raise UpgradeError(f"bundle integrity check FAILED: {name} (listed in SHA256SUMS) is missing") from exc
+    if stat.S_ISLNK(artifact_stat.st_mode) or not stat.S_ISREG(artifact_stat.st_mode):
+        raise UpgradeError(f"bundle integrity check FAILED: {name} (listed in SHA256SUMS) is not a regular file")
+    try:
+        artifact.resolve(strict=True).relative_to(bundle_dir.resolve(strict=True))
+    except (OSError, ValueError) as exc:
+        raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}") from exc
+    return artifact
+
+
 def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
     """Extract into *staging_dir*; assert ONE top-level dir; verify each
     file against the bundle's own SHA256SUMS (the second integrity layer)."""
@@ -917,15 +954,7 @@ def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
         expected, _separator, name = line.partition("  ")
         if len(expected) != 64 or not name:
             raise UpgradeError(f"malformed SHA256SUMS line in {tarball.name}: {line!r}")
-        artifact = bundle_dir / name
-        try:
-            artifact.resolve(strict=False).relative_to(bundle_dir.resolve())
-        except ValueError as exc:
-            raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}") from exc
-        if artifact.is_symlink():
-            raise UpgradeError(f"bundle integrity check FAILED: {name} (listed in SHA256SUMS) is not a regular file")
-        if not artifact.is_file():
-            raise UpgradeError(f"bundle integrity check FAILED: {name} (listed in SHA256SUMS) is missing")
+        artifact = _checksum_artifact(bundle_dir, name)
         actual = _sha256_file(artifact)
         if actual != expected:
             raise UpgradeError(
