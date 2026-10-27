@@ -110,11 +110,14 @@
               </template>
             </Select>
           </div>
-          <div v-if="filteredApiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
-            {{ $t('views.SettingsMcpView.no_api_keys_match_filter') }}
-          </div>
+           <div v-if="apiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
+             {{ $t('views.SettingsMcpView.no_api_keys_created_yet') }}
+           </div>
+           <div v-else-if="filteredApiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
+             {{ $t('views.SettingsMcpView.no_api_keys_match_filter') }}
+           </div>
 
-          <div v-else class="overflow-x-auto">
+           <div v-else class="overflow-x-auto">
             <table class="w-full text-sm">
             <thead>
               <tr class="border-b text-left text-muted-foreground">

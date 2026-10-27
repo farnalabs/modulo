@@ -117,6 +117,7 @@ PERMISSIONS: dict[str, str] = {
     # api keys
     "api_key.create": "runner",
     "api_key.update": "runner",
+    "api_key.list": "operator",
     "api_key.revoke": "runner",
     # metrics
     "metrics.ingest": "viewer",

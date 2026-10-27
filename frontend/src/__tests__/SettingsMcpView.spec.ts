@@ -24,17 +24,20 @@ type MockApiKey = {
   revoked_at: string | null
   last_used_at: string | null
   created_at: string
+  account_kind: 'human' | 'service'
+  account_display_name: string
+  account_email: string | null
 }
 
 const mockApiKeys: MockApiKey[] = [
-  { id: 'key-1', lookup_prefix: 'mod_mk_abc', name: 'Claude Key', role: 'operator', is_active: true, expires_at: null, revoked_at: null, last_used_at: '2026-06-28T12:00:00Z', created_at: '2026-06-01T00:00:00Z' },
+  { id: 'key-1', lookup_prefix: 'mod_mk_abc', name: 'Claude Key', role: 'operator', is_active: true, expires_at: null, revoked_at: null, last_used_at: '2026-06-28T12:00:00Z', created_at: '2026-06-01T00:00:00Z', account_kind: 'human', account_display_name: 'Duncan Tait', account_email: 'duncan@example.com' },
   // An operator revoked this key: `revoked_at` is the observed fact.
-  { id: 'key-2', lookup_prefix: 'mod_mk_def', name: 'Cursor Key', role: 'runner', is_active: false, expires_at: null, revoked_at: '2026-06-20T09:00:00Z', last_used_at: null, created_at: '2026-06-15T00:00:00Z' },
+  { id: 'key-2', lookup_prefix: 'mod_mk_def', name: 'Cursor Key', role: 'runner', is_active: false, expires_at: null, revoked_at: '2026-06-20T09:00:00Z', last_used_at: null, created_at: '2026-06-15T00:00:00Z', account_kind: 'service', account_display_name: 'CI Service', account_email: null },
 ]
 
 const mockMcpConfigEmpty = { mcp_url: '', config_snippet: '' }
 const mockApiKeysNoActive: MockApiKey[] = [
-  { id: 'key-3', lookup_prefix: 'mod_mk_ghi', name: 'Revoked Key', role: 'operator', is_active: false, expires_at: null, revoked_at: '2026-06-18T09:00:00Z', last_used_at: null, created_at: '2026-06-10T00:00:00Z' },
+  { id: 'key-3', lookup_prefix: 'mod_mk_ghi', name: 'Revoked Key', role: 'operator', is_active: false, expires_at: null, revoked_at: '2026-06-18T09:00:00Z', last_used_at: null, created_at: '2026-06-10T00:00:00Z', account_kind: 'human', account_display_name: 'Duncan Tait', account_email: 'duncan@example.com' },
 ]
 // GET /api/v1/mcp/oauth/clients returns a BARE array (not an envelope) - the
 // fixtures below mirror the real wire shape so the default mount exercises the
@@ -236,7 +239,41 @@ describe('SettingsMcpView', () => {
     expect(wrapper.text()).toContain('Revoked')
   })
 
-  it('shows the org-wide key scope note (FAR-620)', async () => {
+   it('renders account persona and email, with service accounts lacking email', async () => {
+     const wrapper = mountView()
+     await nextTick()
+     await nextTick()
+     await nextTick()
+     expect(wrapper.text()).toContain('Duncan Tait')
+     expect(wrapper.text()).toContain('duncan@example.com')
+     expect(wrapper.text()).toContain('CI Service')
+     expect(wrapper.text()).toContain('Human')
+     expect(wrapper.text()).toContain('Service')
+   })
+
+   it('filters API keys by all, human, and service account', async () => {
+     const wrapper = mountView()
+     await nextTick()
+     await nextTick()
+     await nextTick()
+     const select = wrapper.find('[data-testid="settings-mcp-account-filter"]')
+     expect(select.exists()).toBe(true)
+     const vm = wrapper.vm as any
+     vm.accountFilter = 'human'
+     await nextTick()
+     expect(wrapper.text()).toContain('Claude Key')
+     expect(wrapper.text()).not.toContain('Cursor Key')
+     vm.accountFilter = 'service'
+     await nextTick()
+     expect(wrapper.text()).toContain('Cursor Key')
+     expect(wrapper.text()).not.toContain('Claude Key')
+     vm.accountFilter = 'all'
+     await nextTick()
+     expect(wrapper.text()).toContain('Claude Key')
+     expect(wrapper.text()).toContain('Cursor Key')
+   })
+
+   it('shows the org-wide key scope note (FAR-620)', async () => {
     const wrapper = mountView()
     await nextTick()
     await nextTick()
@@ -265,8 +302,11 @@ describe('SettingsMcpView', () => {
       expires_at: '2099-01-01T00:00:00Z',
       revoked_at: null,
       last_used_at: null,
-      created_at: '2026-06-01T00:00:00Z',
-    },
+       created_at: '2026-06-01T00:00:00Z',
+       account_kind: 'human',
+       account_display_name: 'Duncan Tait',
+       account_email: 'duncan@example.com',
+     },
     // Inactive purely because its expiry elapsed - never revoked by anyone.
     {
       id: 'key-expired',
@@ -277,8 +317,11 @@ describe('SettingsMcpView', () => {
       expires_at: '2020-01-01T00:00:00Z',
       revoked_at: null,
       last_used_at: null,
-      created_at: '2026-06-02T00:00:00Z',
-    },
+       created_at: '2026-06-02T00:00:00Z',
+       account_kind: 'service',
+       account_display_name: 'CI Service',
+       account_email: null,
+     },
     // `revoked_at` is set, so revocation is the observed cause - the expiry is
     // still in the future and plays no part in the label. The list route drops
     // revoked rows today (it never passes `include_revoked`), so this is the
@@ -292,8 +335,11 @@ describe('SettingsMcpView', () => {
       expires_at: '2099-06-01T00:00:00Z',
       revoked_at: '2026-06-05T12:00:00Z',
       last_used_at: null,
-      created_at: '2026-06-03T00:00:00Z',
-    },
+       created_at: '2026-06-03T00:00:00Z',
+       account_kind: 'human',
+       account_display_name: 'Duncan Tait',
+       account_email: 'duncan@example.com',
+     },
   ]
 
   function statusBadges(wrapper: ReturnType<typeof mountView>): string[] {

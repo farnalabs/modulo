@@ -623,9 +623,9 @@ def _serialize_key_with_account(
     base = _serialize_key(k)
     base["account_kind"] = kind
     base["account_display_name"] = display_name
-    # Email is only present for human accounts (service accounts have NULL email by CHECK constraint)
-    if kind == "human" and email:
-        base["account_email"] = email
+    # The typed list response always includes this field. Service accounts
+    # deliberately expose an explicit null rather than omitting it.
+    base["account_email"] = email if kind == "human" else None
     return base
 
 
