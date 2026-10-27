@@ -424,7 +424,9 @@ Contract:
 - A future relational projection may also store the same values on `Run`, but `PipelineSnapshot` is the source of truth for the frozen attribution contract. The implementation must not read a live `system_map_nodes` row to reconstruct historical attribution.
 
 ### 5.2 Attribution Storage in `run_daily_facts` (Beta implementation contract)
-Analytics and System Overview queries must survive raw run retention without joining the `runs` table. This is also **Beta implementation work**. The proposed `run_daily_facts` projection is:
+Analytics and System Overview queries must survive raw run retention without joining the `runs` table. This is also **Beta implementation work**. The durable historical identity retained in `run_daily_facts` is the three-value tuple `system_map_id`, `system_map_revision_id`, and `system_map_node_key`. The projected `system_map_node_id` remains part of the run or snapshot source of truth when needed, but is not copied into the facts table or required for fact completeness. A `node_key` is revision-local by design: it remains meaningful after the physical node row, topology projection, or archived revision is no longer available, while the map and revision IDs identify the exact historical namespace in which that key was used.
+
+The proposed `run_daily_facts` projection is:
 
 ```sql
 -- Proposed Beta columns. These are not present in the current schema.
@@ -446,7 +448,7 @@ CREATE INDEX ix_run_daily_facts_system_map_node
 ON run_daily_facts(organisation_id, system_map_id, system_map_node_key, run_date);
 ```
 
-At terminalization, the fact writer copies the four-value attribution block directly from the run's immutable `PipelineSnapshot` into the fact row. It does not join the current System Map, look up a replacement node, or infer attribution from a work item. The nullable tuple is either complete or entirely null. The fact row is therefore a denormalized historical record that remains queryable after raw runs or map revisions are purged.
+At terminalization, the fact writer copies the three retained identity values directly from the run's immutable `PipelineSnapshot` into the fact row. It does not join the current System Map, look up a replacement node, or infer attribution from a work item. The nullable tuple is either complete or entirely null. The fact row is therefore a denormalized historical record that remains queryable after raw runs or map revisions are purged.
 
 ### 5.3 Provenance Taxonomy
 Every metric or evidence item displayed on a System Map node carries exactly one provenance value:
@@ -644,73 +646,67 @@ An organization can roll back to a prior published revision at any time. Rolling
 4. Leaves historical fact records and past run snapshots untouched.
 
 ### 8.5 Declarative GitOps Authoring (`modulo apply`)
-System Maps supports declarative specification via `modulo apply`. A file named `system-map.yaml` can be committed to version control and applied via CI. This example uses the canonical YAML field names: `owner_team_ref`, `pipeline_ref`, and `action_pipeline_ref` are authoring references; the relational projection stores the resolved `owner_team_id`, `pipeline_id`, and `action_pipeline_id`.
+System Maps is planned as a Beta extension to the declarative `modulo apply` engine. The current engine accepts the `api_version: modulo.dev/v1` envelope with an `entities:` mapping. The `system_maps` entity kind shown below is therefore a valid current declarative shape, but it is not yet a supported apply target: Beta work must add the engine and schema support before `modulo apply` can create or update System Maps. Do not treat this example as evidence that the current engine already accepts `system_maps`.
 
 ```yaml
-version: modulo/v1alpha1
-kind: SystemMap
-metadata:
-  name: "Core SDLC Delivery"
-  visibility: org
-spec:
-  nodes:
-    - key: spec_triage
-      name: "Specification Triage"
-      type: manual_capability
-      config_json:
-        owner_role: "Product Architect"
-        service_level:
-          sla_hours: 24
-        owner_team_ref: "Product Architecture"
-
-    - key: governed_implementation
-      name: "Governed Implementation"
-      type: pipeline
-      config_json:
-        pipeline_ref: "Governed Implementation"
-        execution:
-          max_concurrent_runs: 8
-          timeout_seconds: 1800
-
-    - key: gate_lint_test
-      name: "Lint & Architecture Gate"
-      type: control
-      config_json:
-        control_type: gate
-        fail_action: block
-        pass_threshold: 1.0
-
-    - key: loop_security
-      name: "Improve Security Loop"
-      type: improvement_loop
-      config_json:
-        target_signal: "security_vulnerability_count"
-        observation_window_seconds: 14400
-        budget_limit_usd: 150.00
-        cooldown_seconds: 7200
-        outcome_metric: "delta_vulnerabilities"
-        action_pipeline_ref: "Improve Security"
-
-  relationships:
-    - key: flow_spec_to_implementation
-      type: flow
-      source: spec_triage
-      target: governed_implementation
-
-    - key: flow_implementation_to_gate
-      type: flow
-      source: governed_implementation
-      target: gate_lint_test
-
-    - key: ctrl_security_to_implementation
-      type: controls
-      source: loop_security
-      target: governed_implementation
+api_version: modulo.dev/v1
+entities:
+  system_maps:
+    - name: "Core SDLC Delivery"
+      description: "The governed delivery system."
+      visibility: org
+      owner_team_ref: "Product Architecture"
+      nodes:
+        - key: spec_triage
+          name: "Specification Triage"
+          type: manual_capability
+          config_json:
+            owner_role: "Product Architect"
+            service_level:
+              sla_hours: 24
+        - key: governed_implementation
+          name: "Governed Implementation"
+          type: pipeline
+          pipeline_ref: "Governed Implementation"
+          config_json:
+            execution:
+              max_concurrent_runs: 8
+              timeout_seconds: 1800
+        - key: gate_lint_test
+          name: "Lint & Architecture Gate"
+          type: control
+          config_json:
+            control_type: gate
+            fail_action: block
+            pass_threshold: 1.0
+        - key: loop_security
+          name: "Improve Security Loop"
+          type: improvement_loop
+          action_pipeline_ref: "Improve Security"
+          config_json:
+            target_signal: "security_vulnerability_count"
+            observation_window_seconds: 14400
+            budget_limit_usd: 150.00
+            cooldown_seconds: 7200
+            outcome_metric: "delta_vulnerabilities"
+      relationships:
+        - key: flow_spec_to_implementation
+          type: flow
+          source: spec_triage
+          target: governed_implementation
+        - key: flow_implementation_to_gate
+          type: flow
+          source: governed_implementation
+          target: gate_lint_test
+        - key: ctrl_security_to_implementation
+          type: controls
+          source: loop_security
+          target: governed_implementation
 ```
 
 #### Declarative reference resolution
 
-`modulo apply` resolves authoring references before it writes or publishes relational projections. The mapping is explicit:
+When Beta adds `system_maps` support, `modulo apply` will resolve its authoring references before it writes or publishes relational projections. The intended mapping is:
 
 | YAML field | Relational field | Accepted reference | Resolution rule |
 |---|---|---|---|
