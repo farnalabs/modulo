@@ -8,6 +8,7 @@ code:
   - backend/src/modulo/api/routes/error_forwarder_config.py
   - backend/src/modulo/api/routes/admin_monitor_config.py
   - backend/src/modulo/api/routes/error_notification_rules.py
+  - backend/src/modulo/api/middleware/rate_limiter.py
   - backend/src/modulo/api/models/problem.py
   - backend/src/modulo/core/error_tracking/
   - backend/src/modulo/otel_bridge/
@@ -62,20 +63,47 @@ _All three settings pages are hidden from the MVP nav via `visibility:
 private_preview` (the router redirects them to the dashboard unless dev mode is
 on). `/settings/observability` ships with its behaviour detail below; Error
 Forwarders (`/settings/error-forwarders`) and Browser Monitoring config
-(`/settings/monitoring`) are deferred entirely - their behaviour detail is removed
-for the MVP cut, so restore it from git history when re-enabling. See FAR-547
-(error forwarders) and FAR-543 (browser monitoring)._
+(`/settings/monitoring`) are deferred from the MVP cut - their routes, views and
+API surfaces ship but stay hidden behind `private_preview`, and their behaviour
+detail is removed from this tracker, so restore it from git history when
+re-enabling. See FAR-547 (error forwarders) and FAR-543 (browser monitoring)._
 
 ## Behaviours
 
-- [x] Error ingestion: backend errors are captured, events are ingestable via the
-      public API (per-org session-key + HMAC), duplicates are deduplicated into
-      groups by fingerprint, invalid events are rejected, batch ingestion accepts
-      multiple events, and breadcrumbs persist inside `context_json`
-      (`error_ingestion.feature`, `core/error_tracking.ErrorIngestionService`)
+- [x] Error ingestion: two ingest surfaces with different trust boundaries. The
+      authenticated `POST /api/v1/errors/ingest` requires a per-session HMAC key
+      (`POST /api/v1/errors/session-key`, 1-hour TTL) with the HMAC-SHA256 of
+      the raw body sent as `X-Modulo-Error-Token`; a missing or invalid signature
+      is a 401 and the middleware caps callers at 10 requests/minute. The
+      unauthenticated `POST /api/v1/errors/ingest/public` deliberately takes NO
+      HMAC: it accepts only `source == "frontend"` and non-critical levels,
+      rejects a body over 10,000 bytes (413), admits one request per 60 seconds
+      per IP, caps a client at 100 events/day (429), and writes into the
+      `SYSTEM_ORG_ID` sentinel partition (never a tenant org). Both paths
+      deduplicate into groups by fingerprint, accept batches, persist
+      breadcrumbs inside `context_json`, reject malformed payloads with 422, and
+      map DB outages to 503/501 (`error_ingestion.feature`, `routes/errors.py`,
+      `api/middleware/rate_limiter.py`,
+      `core/error_tracking.ErrorIngestionService`,
+      `unit/error_tracking/test_error_ingestion.py`)
 - [x] Error dashboard: list groups, filter by status, view group detail, resolve a
       group, and 404 on a missing group (`error_dashboard.feature`,
       `routes/errors.py` + `db/crud/error_tracking.py`)
+- [x] Scheduler-starvation detection (FAR-604):
+      `GET /api/v1/errors/scheduler-starvation` surfaces pipelines whose
+      unstarted pending runs (`status='pending'`, `started_at IS NULL`) carry a
+      capacity-marker `error_code` and whose age anchor is older than the
+      10-minute threshold - pre-terminal runs that never produce an error event,
+      so a pipeline wedged at its concurrency cap is otherwise invisible on the
+      dashboard. The age anchor is the run's earliest trigger-event receipt
+      (`MIN(trigger_events.received_at)`), falling back to `created_at`, so a
+      coalescing re-delivery cannot reset a days-long wedge to "minutes old".
+      The aggregate is one row per starved pipeline (pending count + oldest age,
+      tenant-RLS-pinned), and the dashboard banner polls it every 60 seconds,
+      is suppressed in instance scope, and fails open (no banner) when the
+      fetch fails (`routes/errors.py`, `db/crud/error_tracking.py`,
+      `unit/error_tracking/test_error_dashboard.py`, `AdminErrorsView.vue`,
+      `__tests__/AdminErrorsView.spec.ts`)
 - [x] Two-partition read boundary (FAR-1547): error rows live in two partitions
       that never leak into each other. Every tenant read route is pinned to
       `principal.organisation_id`, so instance-level / unattributed rows (the
@@ -107,8 +135,12 @@ for the MVP cut, so restore it from git history when re-enabling. See FAR-547
 - [x] OTLP observability export: `GET/PUT /api/v1/settings/observability`
       reads/updates the OTel endpoint + export interval (and the LangSmith key),
       serves stale cache on DB outage (degraded response, never hangs), masks
-      sensitive headers, and a test endpoint validates an OTLP endpoint reachability
-      (`metrics.feature`, `unit/api/test_observability_routes.py`)
+      sensitive headers, and a test endpoint validates an OTLP endpoint
+      reachability. `GET /api/v1/settings/observability/preview` returns a
+      sample span plus the effective config (headers masked) for the current
+      settings, falling back to the last cache or defaults on a DB timeout /
+      outage rather than failing (`metrics.feature`,
+      `unit/api/test_observability_routes.py`)
 - _Browser monitoring config behaviour detail removed for the MVP cut (see the pointer above)._
 - [x] Frontend views behind the shipped routes render the settings and the admin
       error dashboard/detail surfaces (`SettingsObservabilityView.vue`,
@@ -151,6 +183,21 @@ for the MVP cut, so restore it from git history when re-enabling. See FAR-547
   unit/BDD-verified at the API layer only.
 
 ## QA History
+- 2026-10-27: **improve-codebase walk** - closed two untracked shipped
+  sub-surfaces and one drifted ingestion claim, each re-verified against the
+  code. The ingestion bullet said the public API uses a per-org session-key +
+  HMAC, but `/api/v1/errors/ingest/public` explicitly requires NO HMAC and is
+  limited per IP (1 request/60s, 100 events/day, 10KB body, frontend/non-critical
+  only, sentinel-org partition) - the HMAC contract belongs to the authenticated
+  `/api/v1/errors/ingest`; both paths are now documented distinctly. Added the
+  scheduler-starvation surface (`GET /api/v1/errors/scheduler-starvation`,
+  FAR-604), which ships with its own unit suite and dashboard banner but was
+  absent from both this tracker and the manifest registry. Added the OTLP export
+  preview endpoint to the observability bullet. Also corrected "deferred
+  entirely" for the forwarders / browser-monitoring pages: their routes, views
+  and API surfaces ship, hidden only by `visibility: private_preview`. Mirrored
+  the starvation and preview behaviours into the manifest `feat-observability`
+  registry. Product-map architecture suite re-run green.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1545 sub-surface (route-specific RFC 9457 problem types, merged in PR
   #1375): the specific `urn:problem:modulo:<code>` problem types shipped while
