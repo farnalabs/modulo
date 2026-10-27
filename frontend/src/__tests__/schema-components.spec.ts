@@ -102,6 +102,30 @@ describe('SchemaFieldEditor', () => {
     expect((emitted![0] as unknown[])[0]).toMatchObject({ _key: 1, name: 'full_name' })
   })
 
+  it('updates every editable field and honors disabled movement controls', async () => {
+    const wrapper = mount(SchemaFieldEditor, {
+      props: { field: baseField, index: 0, isFirst: true, isLast: true },
+      global: { stubs: { Select: { template: '<button data-testid="field-type-select" @click="$emit(\'update:modelValue\', \'number\')">select</button>' } } },
+    })
+    const name = wrapper.find('[data-testid="schema-editor-field-name"]')
+    await name.setValue('display_name')
+    await wrapper.find('[data-testid="schema-editor-field-description"]').setValue('Display label')
+    await wrapper.find('[data-testid="schema-editor-field-default"]').setValue('Guest')
+    const required = wrapper.find('[data-testid="schema-editor-field-required"]')
+    ;(required.element as HTMLInputElement).checked = false
+    await required.trigger('change')
+    const typeSelect = wrapper.findAll('button').find((button) => button.text() === 'select')
+    expect(typeSelect).toBeDefined()
+    await typeSelect!.trigger('click')
+
+    const updates = wrapper.emitted('update:field') as Array<[SchemaField]>
+    expect(updates.at(-1)?.[0]).toMatchObject({
+      name: 'display_name', description: 'Display label', defaultValue: 'Guest', required: false, type: 'number',
+    })
+    expect(wrapper.find('[data-testid="schema-editor-field-move-up"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="schema-editor-field-move-down"]').attributes('disabled')).toBeDefined()
+  })
+
   it('uses unique input ids per field instance', () => {
     const wrapper = mount(SchemaFieldEditor, {
       props: { field: baseField, index: 0, isFirst: true, isLast: false },
