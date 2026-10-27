@@ -57,6 +57,7 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
+        modulo_dev_mode=True,
     )
 
 
@@ -76,6 +77,7 @@ def _principal(*, is_system_admin: bool = False) -> AuthenticatedPrincipal:
         account_id=_USER_ID,
         org_role="admin",
         is_system_admin=is_system_admin,
+        key_grants=None,
     )
 
 
@@ -299,9 +301,26 @@ def test_create_composite_with_graph_content_json_returns_201(client: TestClient
     assert resp.json()["primitive_type"] == "composite"
 
 
+def test_update_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestClient) -> None:
+    prim = _make_listable_primitive(primitive_type="lifecycle_map")
+    with (
+        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch(
+            "modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim
+        ) as update_mock,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.patch(f"/api/v1/libraries/{prim.id}", json={"name": "Hidden"})
+    assert resp.status_code == 404
+    update_mock.assert_not_awaited()
+
+
 def test_update_primitive_returns_200(client: TestClient) -> None:
     prim = _make_listable_primitive(name="Renamed Workflow")
     with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -313,6 +332,7 @@ def test_update_primitive_returns_200(client: TestClient) -> None:
 
 def test_update_primitive_missing_returns_404(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -386,9 +406,26 @@ def test_update_content_json_missing_primitive_returns_404(client: TestClient) -
     assert resp.status_code == 404
 
 
+def test_delete_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestClient) -> None:
+    prim = _make_listable_primitive(primitive_type="lifecycle_map")
+    with (
+        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch(
+            "modulo.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=prim
+        ) as delete_mock,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.delete(f"/api/v1/libraries/{prim.id}")
+    assert resp.status_code == 404
+    delete_mock.assert_not_awaited()
+
+
 def test_delete_primitive_returns_200(client: TestClient) -> None:
     prim = _make_listable_primitive()
     with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -399,6 +436,7 @@ def test_delete_primitive_returns_200(client: TestClient) -> None:
 
 def test_delete_primitive_missing_returns_404(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.routes.library.soft_delete_library_primitive", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -433,9 +471,24 @@ def test_restore_primitive_not_deleted_returns_404(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_copy_to_adapt_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestClient) -> None:
+    prim = _make_listable_primitive(primitive_type="lifecycle_map")
+    with (
+        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=prim) as copy_mock,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post(f"/api/v1/libraries/{prim.id}/adapt", json={})
+    assert resp.status_code == 404
+    copy_mock.assert_not_awaited()
+
+
 def test_copy_to_adapt_returns_200(client: TestClient) -> None:
     prim = _make_listable_primitive()
     with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -446,6 +499,7 @@ def test_copy_to_adapt_returns_200(client: TestClient) -> None:
 
 def test_copy_to_adapt_community_read_only_returns_403(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
         patch(
             "modulo.api.routes.library.copy_to_adapt",
             new_callable=AsyncMock,
@@ -460,6 +514,7 @@ def test_copy_to_adapt_community_read_only_returns_403(client: TestClient) -> No
 
 def test_copy_to_adapt_missing_returns_404(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, side_effect=LookupError("nope")),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -1246,6 +1301,14 @@ def _request(method: str, path: str, *, json_body: Any = None, params: Any = Non
 def _assert_error_mapping(client: TestClient, patch_target: str, call: Any, cases: list[tuple[Exception, int]]) -> None:
     for exc, expected in cases:
         with ExitStack() as stack:
+            if patch_target.endswith(("update_library_primitive", "soft_delete_library_primitive", "copy_to_adapt")):
+                stack.enter_context(
+                    patch(
+                        "modulo.api.routes.library.get_library_primitive",
+                        new_callable=AsyncMock,
+                        return_value=_make_listable_primitive(),
+                    )
+                )
             stack.enter_context(patch(patch_target, new_callable=AsyncMock, side_effect=exc))
             if "set_rls_org" not in patch_target:
                 stack.enter_context(patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock))

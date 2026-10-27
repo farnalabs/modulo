@@ -68,6 +68,7 @@ from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.db.sqlstates import sqlstate_of
+from modulo.settings import Settings, get_settings
 
 _CODE_LIFECYCLE_MAPS_AUDIT_FAILED = "lifecycle_maps.audit_failed"
 _CODE_LIFECYCLE_MAP_LIST = "lifecycle_map.list"
@@ -119,9 +120,15 @@ _log = logging.getLogger(__name__)
 
 async def _require_internal_lifecycle_map_access(
     principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+    settings: Settings = Depends(get_settings),
 ) -> TenantPrincipal:
     """Keep the retained lifecycle-map API surface on the internal path only."""
-    require_in_dev_operator(principal, _INTERNAL_LIFECYCLE_MAP_PERMISSION)
+    require_in_dev_operator(
+        principal,
+        _INTERNAL_LIFECYCLE_MAP_PERMISSION,
+        require_dev_mode=True,
+        settings=settings,
+    )
     return principal
 
 

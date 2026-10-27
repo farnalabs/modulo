@@ -182,6 +182,7 @@ from modulo.core.library_service import (
     copy_to_adapt as library_copy_to_adapt,
 )
 from modulo.core.library_service import (
+    get_primitive,
     get_primitive_by_slug,
     list_primitives,
 )
@@ -557,6 +558,8 @@ def _ctx_role_val() -> str | None:
 
 def _mcp_internal_lifecycle_map_access() -> bool:
     """Return whether the MCP caller has the retained internal lifecycle-map grant."""
+    if not getattr(get_settings(), "modulo_dev_mode", True):
+        return False
     role = _ctx_role_val()
     return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
         _ctx_key_grants.get(None), "library.search.in_dev"
@@ -7282,6 +7285,9 @@ async def copy_library_primitive(
 
     async with _session(org_id) as s:
         try:
+            primitive = await get_primitive(s, org_id, pid)
+            if primitive is not None and primitive.primitive_type == "lifecycle_map":
+                _require_mcp_internal_lifecycle_map_access()
             result = await library_copy_to_adapt(s, org_id, pid, via_mcp=False)
         except LookupError:
             return {"error": "not_found", "primitive_id": primitive_id}

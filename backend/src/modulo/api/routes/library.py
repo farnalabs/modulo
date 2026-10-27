@@ -134,6 +134,7 @@ from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.settings import Settings, get_settings
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_LIBRARY_SEARCH = "library.search"
@@ -168,27 +169,51 @@ def _split_primitive_types(raw: str | None) -> list[str] | None:
     return types or None
 
 
-def _can_access_lifecycle_map_primitives(principal: TenantPrincipal) -> bool:
+def _can_access_lifecycle_map_primitives(principal: TenantPrincipal, *, dev_mode: bool = True) -> bool:
     """Return whether the caller has the retained internal lifecycle-map grant."""
+    if not dev_mode:
+        return False
     if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["operator"]:
         return False
     return grants_permit(principal.key_grants, "library.search.in_dev")
+
+
+def _reject_lifecycle_map_primitive_access(principal: TenantPrincipal, primitive: LibraryPrimitive | None) -> None:
+    """Reject direct mutation/copy of lifecycle-map primitives outside dev mode."""
+    if (
+        primitive is not None
+        and primitive.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE
+        and not _can_access_lifecycle_map_primitives(
+            principal,
+            dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Primitive not found",
+        )
 
 
 def _filter_lifecycle_map_types(
     principal: TenantPrincipal,
     primitive_type: str | None,
     primitive_types: list[str] | None,
+    *,
+    dev_mode: bool = True,
 ) -> tuple[str | None, str | None]:
     """Hide lifecycle-map primitives from ordinary library callers at the query boundary."""
-    if _can_access_lifecycle_map_primitives(principal):
+    if _can_access_lifecycle_map_primitives(principal, dev_mode=dev_mode):
         return primitive_type, ",".join(primitive_types) if primitive_types is not None else None
     if primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
         return "__hidden_lifecycle_map__", None
     if primitive_types is None:
         return None, ",".join(ptype for ptype in PRIMITIVE_TYPES if ptype != _LIFECYCLE_MAP_PRIMITIVE_TYPE)
+    if primitive_types == []:
+        return None, None
     filtered_types = [ptype for ptype in primitive_types if ptype != _LIFECYCLE_MAP_PRIMITIVE_TYPE]
-    return ("__hidden_lifecycle_map__", None) if not filtered_types else (primitive_type, ",".join(filtered_types))
+    if filtered_types:
+        return primitive_type, ",".join(filtered_types)
+    return "__hidden_lifecycle_map__", None
 
 
 def _conflict_error() -> HTTPException:
@@ -749,11 +774,20 @@ async def list_library_primitives_endpoint(
 ) -> LibraryPrimitiveListResponse:
     if include_in_dev:
         require_in_dev_operator(principal, "library.search.in_dev")
-    filtered_primitive_type, filtered_primitive_types = _filter_lifecycle_map_types(
-        principal,
-        primitive_type,
-        _split_primitive_types(primitive_types),
-    )
+    dev_mode = getattr(get_settings(), "modulo_dev_mode", True)
+    requested_types = _split_primitive_types(primitive_types)
+    if primitive_types and requested_types is None:
+        requested_types = []
+    if primitive_type is not None and requested_types is None:
+        filtered_primitive_type: str | None = primitive_type
+        filtered_primitive_types: str | None = None
+    else:
+        filtered_primitive_type, filtered_primitive_types = _filter_lifecycle_map_types(
+            principal,
+            primitive_type,
+            requested_types,
+            dev_mode=dev_mode,
+        )
     query = _PrimitiveListQuery(
         page=page,
         page_size=page_size,
@@ -995,30 +1029,29 @@ async def update_library_primitive_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            if "content_json" in updates:
-                existing = await get_library_primitive(session, primitive_id)
-                if existing is not None:
-                    try:
-                        _assert_composite_content_json(existing.primitive_type, updates["content_json"])
-                    except ValueError as exc:
-                        raise HTTPException(
-                            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                            detail=str(exc),
-                        ) from None
-                    if existing.primitive_type == "composite" and isinstance(
-                        updates["content_json"].get("nodes"), list
-                    ):
-                        # FAR-1181 + FAR-1374 parity: a PATCH round-tripping the
-                        # masked GET resolves mask echoes against the stored
-                        # composite sub-graph BEFORE the write (the echo is
-                        # restored to the stored value), and a sentinel the
-                        # resolve cannot map is refused 422 instead of being
-                        # dropped or persisted.
-                        updates["content_json"] = dict(updates["content_json"])
-                        updates["content_json"]["nodes"] = resolve_and_reject_mask_sentinels(
-                            list(updates["content_json"]["nodes"]),
-                            [n for n in (existing.content_json or {}).get("nodes", []) if isinstance(n, dict)],
-                        )
+            existing = await get_library_primitive(session, primitive_id)
+            if existing is not None:
+                _reject_lifecycle_map_primitive_access(principal, existing)
+            if "content_json" in updates and existing is not None:
+                try:
+                    _assert_composite_content_json(existing.primitive_type, updates["content_json"])
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail=str(exc),
+                    ) from None
+                if existing.primitive_type == "composite" and isinstance(updates["content_json"].get("nodes"), list):
+                    # FAR-1181 + FAR-1374 parity: a PATCH round-tripping the
+                    # masked GET resolves mask echoes against the stored
+                    # composite sub-graph BEFORE the write (the echo is
+                    # restored to the stored value), and a sentinel the
+                    # resolve cannot map is refused 422 instead of being
+                    # dropped or persisted.
+                    updates["content_json"] = dict(updates["content_json"])
+                    updates["content_json"]["nodes"] = resolve_and_reject_mask_sentinels(
+                        list(updates["content_json"]["nodes"]),
+                        [n for n in (existing.content_json or {}).get("nodes", []) if isinstance(n, dict)],
+                    )
             prim = await update_library_primitive(session, primitive_id, updates)
     except IntegrityError:
         _log.exception("library.update_library_primitive_endpoint")
@@ -1052,6 +1085,9 @@ async def delete_library_primitive_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            existing = await get_library_primitive(session, primitive_id)
+            if existing is not None:
+                _reject_lifecycle_map_primitive_access(principal, existing)
             prim = await soft_delete_library_primitive(session, primitive_id)
     except IntegrityError:
         _log.exception("library.delete_library_primitive_endpoint")
@@ -1123,6 +1159,9 @@ async def copy_to_adapt_endpoint(
         # short transaction BEFORE copy_to_adapt opens its own org txn.
         async with session.begin():
             await validate_owner_team_for_create(session, principal, req.target_team_id)
+            existing = await get_library_primitive(session, primitive_id)
+            if existing is not None:
+                _reject_lifecycle_map_primitive_access(principal, existing)
         result = await copy_to_adapt(
             session,
             principal.organisation_id,
@@ -2203,6 +2242,7 @@ async def create_lifecycle_map_from_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("library.copy"),
+    settings: Settings = Depends(get_settings),
 ) -> LifecycleMapResponse:
     """Copy-to-adapt a ``lifecycle_map`` library primitive into a real map.
 
@@ -2210,7 +2250,12 @@ async def create_lifecycle_map_from_primitive_endpoint(
     content (name collisions are suffixed with "(imported)"), so a shared map
     can be copied and adapted without touching the source.
     """
-    require_in_dev_operator(principal, "library.copy.in_dev")
+    require_in_dev_operator(
+        principal,
+        "library.search.in_dev",
+        require_dev_mode=True,
+        settings=settings,
+    )
     try:
         async with session.begin():
             await _set_rls_context(session, principal)

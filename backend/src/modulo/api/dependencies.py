@@ -185,7 +185,13 @@ def require_permission(permission: str) -> Any:
     return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant")
 
 
-def require_in_dev_operator(principal: TenantPrincipal, permission: str) -> None:
+def require_in_dev_operator(
+    principal: TenantPrincipal,
+    permission: str,
+    *,
+    require_dev_mode: bool = False,
+    settings: Settings | None = None,
+) -> None:
     """Enforce the operator gate for an In-Dev reveal on a list endpoint.
 
     Called by list handlers that accept ``?include_in_dev=true``; the override
@@ -195,11 +201,22 @@ def require_in_dev_operator(principal: TenantPrincipal, permission: str) -> None
     permissions remain viewer-level so ordinary listing is unchanged; only the
     In-Dev reveal is gated (``*.list.in_dev`` resolves to ``operator``).
 
+    ``require_dev_mode`` is used by retained internal preview surfaces whose
+    access must be disabled in an Alpha deployment, even for an operator with
+    the matching grant. It intentionally defaults to false so the existing
+    connector/model-backend/library In-Dev list gates keep their established
+    role-and-grant behaviour.
+
     Fail-closed and NEVER lifted by the org authz kill switch (ADR 047 DECISION
     3 scope pin): the In-Dev disclosure control is deliberately
     ``kill_switch_eligible=False`` so an org that disables authz enforcement
     still cannot expose pre-release items to viewers/runners.
     """
+    if require_dev_mode and not getattr(settings or get_settings(), "modulo_dev_mode", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This internal feature requires developer mode",
+        )
     required = resolve_required(permission)
     try:
         assert_org_role(principal.org_role, required, permission, kill_switch_eligible=False)
