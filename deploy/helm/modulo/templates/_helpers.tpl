@@ -68,15 +68,17 @@ Namespace name.
 
 {{/*
 Resolve a container image reference to a single string. A digest (immutable)
-takes precedence over a tag when both are set. Rendering one value prevents the
+takes precedence over a tag when both are set. An empty tag falls back to the
+chart's appVersion (the released image tag), so the chart version and the image
+version stay a single source of truth. Rendering one value prevents the
 duplicate `image:` key that breaks strict YAML parsing.
-Usage: {{ include "modulo.image" (dict "image" .Values.backend.image) }}
+Usage: {{ include "modulo.image" (dict "image" .Values.backend.image "appVersion" .Chart.AppVersion) }}
 */}}
 {{- define "modulo.image" -}}
 {{- if .image.digest -}}
 {{- printf "%s@%s" .image.repository .image.digest -}}
 {{- else -}}
-{{- printf "%s:%s" .image.repository (.image.tag | default "0.3.323") -}}
+{{- printf "%s:%s" .image.repository (.image.tag | default .appVersion) -}}
 {{- end -}}
 {{- end }}
 
