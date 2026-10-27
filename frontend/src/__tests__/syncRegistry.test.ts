@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { registerHandler, getHandlers, clearAllRegistrations } from '../stores/syncRegistry'
+import { registerHandler, getHandlers, clearAllRegistrations, registerSyncHandlers, disposeSyncHandlers } from '../stores/syncRegistry'
+import { ref } from 'vue'
 import type { EventBusEvent } from '../types/events'
 
 function makeEvent(overrides: Partial<EventBusEvent> = {}): EventBusEvent {
@@ -68,6 +69,49 @@ describe('syncRegistry', () => {
     const copy = getHandlers('run')
     copy.delete(handler)
     expect(getHandlers('run').size).toBe(1)
+  })
+
+  it('returns an empty set for an unregistered resource type', () => {
+    expect(getHandlers('missing')).toEqual(new Set())
+  })
+
+  it('registerSyncHandlers and dispose handle an empty registration set', () => {
+    const unsubHandlers: Array<() => void> = []
+    const syncingIds = ref(new Set(['run-1']))
+
+    registerSyncHandlers(unsubHandlers, syncingIds, [], vi.fn())
+    disposeSyncHandlers(unsubHandlers, syncingIds)
+
+    expect(unsubHandlers).toHaveLength(0)
+    expect(syncingIds.value.size).toBe(0)
+  })
+
+  it('registerSyncHandlers wires every resource and dispose clears state', () => {
+    const handler = vi.fn()
+    const unsubHandlers: Array<() => void> = []
+    const syncingIds = ref(new Set(['run-1']))
+
+    registerSyncHandlers(unsubHandlers, syncingIds, ['run', 'pipeline'], handler)
+    expect(unsubHandlers).toHaveLength(2)
+    expect(getHandlers('run').size).toBe(1)
+    expect(getHandlers('pipeline').size).toBe(1)
+
+    disposeSyncHandlers(unsubHandlers, syncingIds)
+
+    expect(unsubHandlers).toHaveLength(0)
+    expect(syncingIds.value.size).toBe(0)
+    expect(getHandlers('run').size).toBe(0)
+    expect(getHandlers('pipeline').size).toBe(0)
+  })
+
+  it('disposeSyncHandlers is safe when registrations were already removed', () => {
+    const unsubHandlers: Array<() => void> = [vi.fn()]
+    const syncingIds = ref(new Set(['run-1']))
+
+    disposeSyncHandlers(unsubHandlers, syncingIds)
+
+    expect(unsubHandlers).toHaveLength(0)
+    expect(syncingIds.value.size).toBe(0)
   })
 
   it('allows re-registration after unregister', () => {
