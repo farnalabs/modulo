@@ -466,8 +466,7 @@ Runs and triggers require Redis plus the SAQ workers – see [`docs/quickstart.m
 ### Docker Compose (single-server, multi-user)
 
 The compose file pulls the all-in-one image from GHCR. To build that image
-yourself from source (for example as a continuity plan, or to supply your own
-PrimeUI licence key), see
+yourself from source (for example as a continuity plan), see
 [Continuity and Escrow](continuity-and-escrow.md).
 
 **1. Create the environment file.** The stack will not start without it: compose

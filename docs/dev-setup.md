@@ -20,28 +20,12 @@ See [Deployment](deployment.md) for production deployment.
 - UV package manager, 0.11.13 to match the Docker image pin
   ([install](https://docs.astral.sh/uv/getting-started/installation/))
 
-## PrimeUI licence for local dev and e2e (FAR-1858)
+## PrimeVue licensing
 
-PrimeVue 5 verifies a licence key at runtime and shows an "Invalid PrimeUI
-License" banner when none is configured. Staging and production receive the key
-as a Docker build-arg (`VITE_PRIMEUI_LICENSE`, from the deploy workflow's
-GitHub secret). For local development there is no build step, so
-`frontend/vite.config.ts` lifts `VITE_PRIMEUI_LICENSE` from the nearest
-ancestor `.env` file (the workspace root `.env` in the standard layout) into
-the process environment when it is not already set; Vite then inlines it into
-`import.meta.env` exactly as it does for the production build. This covers
-`pnpm dev` and the Playwright e2e `webServer` with one mechanism.
-
-If you see the banner locally, add `VITE_PRIMEUI_LICENSE=<key>` to your
-workspace root `.env` (gitignored, so never commit the key; the repo is public
-and `VITE_*` values are inlined into the client bundle). A shell-exported
-`VITE_PRIMEUI_LICENSE` takes precedence over the `.env` lookup.
-
-A self-hosted build needs its own PrimeUI key: the all-in-one Dockerfile does
-not accept `--build-arg VITE_PRIMEUI_LICENSE`, and the published image is built
-without one. See
-[Continuity and Escrow](continuity-and-escrow.md#the-primeui-licence) for what
-the key does, how to obtain it, and how to supply it to a from-source build.
+PrimeVue is pinned to the MIT-licensed v4 line (`primevue@4.5.5`), so no licence
+key, banner or build-arg is involved in local development, e2e or production.
+An old PrimeVue licence entry in a workspace `.env` is inert and can be
+removed.
 
 ## E2E visual/token slice on PRs (FAR-2017)
 

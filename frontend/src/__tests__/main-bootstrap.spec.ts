@@ -138,7 +138,7 @@ describe('main bootstrap', () => {
     // The Aura preset is the largest dependency in the graph (the full Aura
     // CSS-in-JS definition set) and only feeds the theme object PrimeVue is
     // given — irrelevant to the bootstrap ordering under test.
-    vi.doMock('@primeuix/themes/aura', () => ({ default: {} }))
+    vi.doMock('@primevue/themes/aura', () => ({ default: {} }))
     vi.doMock('primevue/config', () => ({ default: { install: vi.fn() } }))
     vi.doMock('primevue/tooltip', () => ({ default: { mounted: vi.fn(), updated: vi.fn() } }))
     vi.doMock('@tanstack/vue-query', () => ({
@@ -167,7 +167,7 @@ describe('main bootstrap', () => {
     vi.doUnmock('@fontsource-variable/jetbrains-mono')
     vi.doUnmock('overlayscrollbars/styles/overlayscrollbars.css')
     vi.doUnmock('../stores/localeStore')
-    vi.doUnmock('@primeuix/themes/aura')
+    vi.doUnmock('@primevue/themes/aura')
     vi.doUnmock('primevue/config')
     vi.doUnmock('primevue/tooltip')
     vi.doUnmock('@tanstack/vue-query')

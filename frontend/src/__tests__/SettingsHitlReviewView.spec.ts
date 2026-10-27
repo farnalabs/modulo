@@ -49,10 +49,10 @@ function gatesResponse(gates: unknown[], overrides: Record<string, unknown> = {}
   }
 }
 
-function mockGetWithGates(gates: unknown[]) {
+function mockGetWithGates(gates: unknown[], overrides: Record<string, unknown> = {}) {
   return (url: string) => {
     if (url === GATES_URL) {
-      return Promise.resolve(gatesResponse(gates))
+      return Promise.resolve(gatesResponse(gates, overrides))
     }
     if (url === '/api/v1/pipelines') {
       return Promise.resolve({ data: { items: [] }, error: undefined })
@@ -110,7 +110,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders without crashing', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([]))
+    (api.GET as any).mockImplementation(mockGetWithGates([]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -135,7 +135,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders gates list', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -148,7 +148,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('expands gate detail panel on click', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -283,7 +283,7 @@ describe('SettingsHitlReviewView', () => {
     // path after a reload. The claimed gate must stay listed and the card
     // must offer the token-recovery (re-claim) path.
     const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockResolvedValue(gatesResponse([claimedGate()]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([claimedGate()]))
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/claim')) {
         return Promise.resolve({ data: { claim_token: 'tok-2', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
@@ -373,7 +373,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders the run link inside the expanded gate card', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -643,7 +643,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders the muted no-description fallback for a legacy gate (FAR-613)', async () => {
     const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockResolvedValue(gatesResponse([
+    ;(api.GET as any).mockImplementation(mockGetWithGates([
       {
         run_id: '550e8400-e29b-41d4-a716-446655440000',
         review_id: 'approval-gate-1',
@@ -800,7 +800,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('hides pagination when total fits within one page (FAR-692)', async () => {
     const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockResolvedValue(gatesResponse([pendingGateRow()], { total: 2 }))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()], { total: 2 }))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -825,7 +825,7 @@ describe('SettingsHitlReviewView', () => {
       decision: 'approved',
       decision_at: '2025-06-30T12:00:00Z',
     }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([approvedGate]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([approvedGate]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -878,7 +878,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders column headers above the gate rows (FAR-727)', async () => {
     const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockResolvedValue(gatesResponse([pendingGateRow()]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([pendingGateRow()]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -964,7 +964,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders the server-resolved gate label instead of the raw node-ID prefix (FAR-727)', async () => {
     const { api } = await import('../lib/api/client')
-    ;(api.GET as any).mockResolvedValue(gatesResponse([{ ...pendingGateRow(), label: 'Needs human approval' }]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([{ ...pendingGateRow(), label: 'Needs human approval' }]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1062,7 +1062,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders the empty state ONLY on a successful response with zero rows (FAR-768)', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([]))
+    (api.GET as any).mockImplementation(mockGetWithGates([]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1102,7 +1102,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('renders gate rows on a successful response with rows (FAR-768)', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1119,7 +1119,7 @@ describe('SettingsHitlReviewView', () => {
   it('truncates long gate descriptions in the collapsed-row snippet to 120 chars (FAR-858)', async () => {
     const { api } = await import('../lib/api/client')
     const longDesc = 'A'.repeat(200)
-    ;(api.GET as any).mockResolvedValue(gatesResponse([{ ...pendingGateRow(), description: longDesc }]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([{ ...pendingGateRow(), description: longDesc }]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1137,7 +1137,7 @@ describe('SettingsHitlReviewView', () => {
   it('truncates long condition_result values in the snippet to 120 chars (FAR-858)', async () => {
     const { api } = await import('../lib/api/client')
     const longValue = 'B'.repeat(200)
-    ;(api.GET as any).mockResolvedValue(gatesResponse([{
+    ;(api.GET as any).mockImplementation(mockGetWithGates([{
       ...pendingGateRow(),
       description: null,
       context: { condition_result: { value: longValue } },
@@ -1158,7 +1158,7 @@ describe('SettingsHitlReviewView', () => {
   it('does not truncate short descriptions in the snippet (FAR-858)', async () => {
     const { api } = await import('../lib/api/client')
     const shortDesc = 'Short description'
-    ;(api.GET as any).mockResolvedValue(gatesResponse([{ ...pendingGateRow(), description: shortDesc }]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([{ ...pendingGateRow(), description: shortDesc }]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1175,7 +1175,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('shows a checkbox per row and a select-all checkbox in the column header', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, review_id: 'deploy-gate-1' }]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE, { ...PENDING_GATE, review_id: 'deploy-gate-1' }]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1193,7 +1193,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('select-all toggles all row checkboxes', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, review_id: 'deploy-gate-1' }]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE, { ...PENDING_GATE, review_id: 'deploy-gate-1' }]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1216,7 +1216,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('individual row checkbox toggles selection and shows bulk bar', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1238,7 +1238,7 @@ describe('SettingsHitlReviewView', () => {
     const { api } = await import('../lib/api/client')
     const gate1 = PENDING_GATE
     const gate2 = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', review_id: 'deploy-gate-1' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([gate1, gate2]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([gate1, gate2]))
     let claimCount = 0
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/claim')) {
@@ -1277,7 +1277,7 @@ describe('SettingsHitlReviewView', () => {
     const { api } = await import('../lib/api/client')
     const gate1 = PENDING_GATE
     const gate2 = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', review_id: 'deploy-gate-1' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([gate1, gate2]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([gate1, gate2]))
 
     // Hold each claim request open until the test releases it, and record how
     // many are concurrently in flight. A Promise.all implementation would
@@ -1332,7 +1332,7 @@ describe('SettingsHitlReviewView', () => {
     const { api } = await import('../lib/api/client')
     const claimed = claimedGate({ claimed_by_me: true })
     const claimed2 = { ...claimed, review_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([claimed, claimed2]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([claimed, claimed2]))
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/claim')) {
         return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
@@ -1386,7 +1386,7 @@ describe('SettingsHitlReviewView', () => {
     const { api } = await import('../lib/api/client')
     const claimed = claimedGate({ claimed_by_me: true })
     const claimed2 = { ...claimed, review_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([claimed, claimed2]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([claimed, claimed2]))
 
     // Hold each reject request open until the test releases it, recording how
     // many are concurrently in flight. A Promise.all implementation would start
@@ -1447,7 +1447,7 @@ describe('SettingsHitlReviewView', () => {
     const { api } = await import('../lib/api/client')
     const claimed = claimedGate({ claimed_by_me: true })
     const claimed2 = { ...claimed, review_id: 'deploy-gate-1', run_id: '550e8400-e29b-41d4-a716-446655440002' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([claimed, claimed2]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([claimed, claimed2]))
     let rejectCount = 0
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/claim')) {
@@ -1553,7 +1553,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('clear selection resets all checkboxes and hides the bulk bar', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1576,7 +1576,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('bulk bar is hidden when no gates are selected', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1596,7 +1596,7 @@ describe('SettingsHitlReviewView', () => {
       decision: 'approved',
       decision_at: '2025-06-30T11:00:00Z',
     }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, approvedGate]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE, approvedGate]))
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/claim')) {
         return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
@@ -1626,7 +1626,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('registers testids on the bulk clear and bulk-reject cancel buttons (VIS-4)', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([claimedGate({ claimed_by_me: true })]))
+    (api.GET as any).mockImplementation(mockGetWithGates([claimedGate({ claimed_by_me: true })]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1653,7 +1653,7 @@ describe('SettingsHitlReviewView', () => {
   it('bulk claim reports an own claimed gate distinctly from another reviewer', async () => {
     const { api } = await import('../lib/api/client')
     const mine = claimedGate({ claimed_by_me: true })
-    ;(api.GET as any).mockResolvedValue(gatesResponse([mine]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([mine]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1678,7 +1678,7 @@ describe('SettingsHitlReviewView', () => {
   it('bulk reject reports an own claim without a token as expired, not another reviewer', async () => {
     const { api } = await import('../lib/api/client')
     const mine = claimedGate({ claimed_by_me: true })
-    ;(api.GET as any).mockResolvedValue(gatesResponse([mine]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([mine]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1704,7 +1704,7 @@ describe('SettingsHitlReviewView', () => {
 
   it('prunes the selection when a refetch drops a previously-selected gate', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' }, RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
@@ -1717,7 +1717,7 @@ describe('SettingsHitlReviewView', () => {
     expect(wrapper!.find('[data-testid="hitl-review-bulk-bar"]').exists()).toBe(true)
 
     // The gate is gone from the next page of results (decided / terminal run).
-    ;(api.GET as any).mockResolvedValue(gatesResponse([]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([]))
     wrapper!.findComponent(FilterBar).vm.$emit('update:filter', 'status', 'claimed')
     await flushPromises()
     await nextTick()
@@ -1740,7 +1740,7 @@ describe('SettingsHitlReviewView — goToPage guards', () => {
 
   it('goToPage with target < 1 is a no-op', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE], { total: 26 }))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE], { total: 26 }))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -1763,7 +1763,7 @@ describe('SettingsHitlReviewView — goToPage guards', () => {
 
   it('goToPage with target > totalPages is a no-op', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE], { total: 26 }))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE], { total: 26 }))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -1780,7 +1780,7 @@ describe('SettingsHitlReviewView — goToPage guards', () => {
 
   it('goToPage with target === currentPage is a no-op', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE], { total: 26 }))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE], { total: 26 }))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -1810,7 +1810,7 @@ describe('SettingsHitlReviewView — statusBadgeClass fallback', () => {
 
   it('applies the slate fallback badge for an unknown status', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -1842,7 +1842,7 @@ describe('SettingsHitlReviewView — matchesDate branches', () => {
     const { api } = await import('../lib/api/client')
     const earlyGate = { ...PENDING_GATE, created_at: '2025-01-01T10:00:00Z' }
     const lateGate = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', review_id: 'deploy-gate-1', created_at: '2025-06-30T10:00:00Z' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([earlyGate, lateGate]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([earlyGate, lateGate]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -1863,7 +1863,7 @@ describe('SettingsHitlReviewView — matchesDate branches', () => {
     const { api } = await import('../lib/api/client')
     const earlyGate = { ...PENDING_GATE, created_at: '2025-01-01T10:00:00Z' }
     const lateGate = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', review_id: 'deploy-gate-1', created_at: '2025-06-30T10:00:00Z' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([earlyGate, lateGate]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([earlyGate, lateGate]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -1882,7 +1882,7 @@ describe('SettingsHitlReviewView — matchesDate branches', () => {
   it('falls back to claimed_at when created_at is absent', async () => {
     const { api } = await import('../lib/api/client')
     const gate = { ...PENDING_GATE, created_at: undefined, claimed_at: '2025-06-30T10:00:00Z' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([gate]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([gate]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -1900,7 +1900,7 @@ describe('SettingsHitlReviewView — matchesDate branches', () => {
   it('returns false when neither created_at nor claimed_at is set', async () => {
     const { api } = await import('../lib/api/client')
     const gate = { ...PENDING_GATE, created_at: null, claimed_at: null }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([gate]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([gate]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -1918,7 +1918,7 @@ describe('SettingsHitlReviewView — matchesDate branches', () => {
   it('returns false when the timestamp is an invalid date', async () => {
     const { api } = await import('../lib/api/client')
     const gate = { ...PENDING_GATE, created_at: 'not-a-date' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([gate]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([gate]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -1936,7 +1936,7 @@ describe('SettingsHitlReviewView — matchesDate branches', () => {
   it('shows gates within both dateFrom and dateTo range', async () => {
     const { api } = await import('../lib/api/client')
     const gate = { ...PENDING_GATE, created_at: '2025-06-15T10:00:00Z' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([gate]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([gate]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -1968,7 +1968,7 @@ describe('SettingsHitlReviewView — bulk claim skip claimed-by-other', () => {
   it('bulk claim skips a gate claimed by another reviewer', async () => {
     const { api } = await import('../lib/api/client')
     const claimedByOther = { ...PENDING_GATE, claimed_by: 'other-user', claimed_by_me: false }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, claimedByOther]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE, claimedByOther]))
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/claim')) {
         return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
@@ -2012,7 +2012,7 @@ describe('SettingsHitlReviewView — bulk reject skip-pending', () => {
 
   it('bulk reject skips an unclaimed (pending) gate', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
     ;(api.POST as any).mockResolvedValue({ data: null, error: undefined })
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -2053,7 +2053,7 @@ describe('SettingsHitlReviewView — bulk reject skip-claimed-by-other', () => {
   it('bulk reject skips a gate claimed by another reviewer without a token', async () => {
     const { api } = await import('../lib/api/client')
     const claimedByOther = { ...PENDING_GATE, claimed_by: 'other-user', claimed_by_me: false }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([claimedByOther]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([claimedByOther]))
     ;(api.POST as any).mockResolvedValue({ data: null, error: undefined })
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -2093,7 +2093,7 @@ describe('SettingsHitlReviewView — dismissBulkOutcomes', () => {
 
   it('dismiss button hides the outcomes panel', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([claimedGate({ claimed_by_me: true })]))
+    (api.GET as any).mockImplementation(mockGetWithGates([claimedGate({ claimed_by_me: true })]))
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/claim')) {
         return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
@@ -2136,7 +2136,7 @@ describe('SettingsHitlReviewView — gateDescriptionSnippet branches', () => {
 
   it('shows no snippet when description is whitespace-only', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([{ ...pendingGateRow(), description: '   ', context: null }]))
+    (api.GET as any).mockImplementation(mockGetWithGates([{ ...pendingGateRow(), description: '   ', context: null }]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -2149,7 +2149,7 @@ describe('SettingsHitlReviewView — gateDescriptionSnippet branches', () => {
 
   it('extracts snippet from condition_result.value when description is absent', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([{
+    (api.GET as any).mockImplementation(mockGetWithGates([{
       ...pendingGateRow(),
       description: null,
       context: { condition_result: { value: 'Looks good to merge' } },
@@ -2168,7 +2168,7 @@ describe('SettingsHitlReviewView — gateDescriptionSnippet branches', () => {
 
   it('shows no snippet when condition_result.value is not a string', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([{
+    (api.GET as any).mockImplementation(mockGetWithGates([{
       ...pendingGateRow(),
       description: null,
       context: { condition_result: { value: 123 } },
@@ -2185,7 +2185,7 @@ describe('SettingsHitlReviewView — gateDescriptionSnippet branches', () => {
 
   it('shows no snippet when condition_result is an array', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([{
+    (api.GET as any).mockImplementation(mockGetWithGates([{
       ...pendingGateRow(),
       description: null,
       context: { condition_result: ['a', 'b'] },
@@ -2202,7 +2202,7 @@ describe('SettingsHitlReviewView — gateDescriptionSnippet branches', () => {
 
   it('shows no snippet when context is an array', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([{
+    (api.GET as any).mockImplementation(mockGetWithGates([{
       ...pendingGateRow(),
       description: null,
       context: ['not', 'an', 'object'],
@@ -2338,7 +2338,7 @@ describe('SettingsHitlReviewView — bulk reject catch path', () => {
   it('bulk reject catches a network error and reports it', async () => {
     const { api } = await import('../lib/api/client')
     const mine = claimedGate({ claimed_by_me: true })
-    ;(api.GET as any).mockResolvedValue(gatesResponse([mine]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([mine]))
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/reject')) {
         return Promise.reject(new Error('network down'))
@@ -2387,7 +2387,7 @@ describe('SettingsHitlReviewView — bulk claim catch path', () => {
 
   it('bulk claim catches a network error and reports it', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
     ;(api.POST as any).mockRejectedValue(new Error('network down'))
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -2428,7 +2428,7 @@ describe('SettingsHitlReviewView — pipeline filter and search', () => {
     const { api } = await import('../lib/api/client')
     const gate1 = { ...PENDING_GATE, pipeline_name: 'Alpha' }
     const gate2 = { ...PENDING_GATE, run_id: '550e8400-e29b-41d4-a716-446655440002', review_id: 'deploy-gate-1', pipeline_name: 'Beta' }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([gate1, gate2]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([gate1, gate2]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -2460,7 +2460,7 @@ describe('SettingsHitlReviewView — pipeline filter and search', () => {
 
   it('search matches by gate ID', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -2477,7 +2477,7 @@ describe('SettingsHitlReviewView — pipeline filter and search', () => {
 
   it('search hides non-matching gates', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE, { ...PENDING_GATE, review_id: 'deploy-gate-1', pipeline_name: 'Beta' }]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE, { ...PENDING_GATE, review_id: 'deploy-gate-1', pipeline_name: 'Beta' }]))
 
     wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
@@ -2550,7 +2550,7 @@ describe('SettingsHitlReviewView — bulk reject skip-already-decided', () => {
       decision: 'approved',
       decision_at: '2025-06-30T11:00:00Z',
     }
-    ;(api.GET as any).mockResolvedValue(gatesResponse([approved]))
+    ;(api.GET as any).mockImplementation(mockGetWithGates([approved]))
     ;(api.POST as any).mockResolvedValue({ data: null, error: undefined })
 
     wrapper = mount(SettingsHitlReviewView, {
@@ -2587,7 +2587,7 @@ describe('SettingsHitlReviewView — bulk claim empty envelope', () => {
 
   it('records no outcome and no failure when the claim returns neither data nor error', async () => {
     const { api } = await import('../lib/api/client');
-    (api.GET as any).mockResolvedValue(gatesResponse([PENDING_GATE]))
+    (api.GET as any).mockImplementation(mockGetWithGates([PENDING_GATE]))
     ;(api.POST as any).mockResolvedValue({ data: null, error: undefined })
 
     wrapper = mount(SettingsHitlReviewView, {
