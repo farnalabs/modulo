@@ -64,7 +64,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn, TypeGuard, cast, get_args
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard, cast, get_args
 
 import httpx
 import jinja2
@@ -7458,8 +7458,8 @@ async def _connector_action_failure(
     data: dict[str, Any],
     intent_active: bool,
     exc: Exception,
-) -> NoReturn:
-    """QA Fix 1: classify a RAISED connector error, then raise ConnectorNodeFailedError.
+) -> dict[str, Any]:
+    """Classify a RAISED connector error and return a failure envelope.
 
     The raised connector error is classified by the SINGLE authority
     (``_resolve_connector_write_outcome``) as AMBIGUOUS — a raise cannot tell
@@ -7468,8 +7468,8 @@ async def _connector_action_failure(
     fail_closed suppresses the re-fire ("possible silent miss"), fail_open
     re-fires (unchanged). No no-delivery evidence is persisted for a raise.
 
-    Then raises ``ConnectorNodeFailedError`` to propagate the failure to the
-    executor, which terminalizes the run with ``connector.side_effect_unknown``
+    Returns a failure envelope that survives through stream handling and
+    finalization, allowing the typed connector failure to be persisted
     (FAR-2090).
     """
     await _connector_write_outcome_for_state(
@@ -7484,9 +7484,17 @@ async def _connector_action_failure(
         intent_active=intent_active,
         exception=exc,
     )
-    from modulo.core.pipeline_engine.errors import ConnectorNodeFailedError
-
-    raise ConnectorNodeFailedError(node_id, str(exc))
+    return {
+        "artifacts": [
+            {
+                "node_id": node_id,
+                "status": "failed",
+                "error": str(exc),
+                "output": None,
+            }
+        ],
+        "connector_failure": True,
+    }
 
 
 async def _connector_success_phase(
@@ -7661,7 +7669,7 @@ async def _connector_invoke_phase(
     except DispatchWaitTimeoutError:
         raise
     except Exception as exc:
-        await _connector_action_failure(
+        failure_envelope = await _connector_action_failure(
             session_factory,
             connector,
             state,
@@ -7672,6 +7680,7 @@ async def _connector_invoke_phase(
             intent_active,
             exc,
         )
+        return False, failure_envelope
 
 
 async def _run_connector_node(
