@@ -27,7 +27,12 @@ from modulo.api.db_error_handling import (
     raise_lock_timeout_conflict_if,
     raise_session_contract_error,
 )
-from modulo.api.dependencies import get_db_session, require_system_permission, resolve_audit_principal
+from modulo.api.dependencies import (
+    get_db_session,
+    require_in_dev_operator,
+    require_system_permission,
+    resolve_audit_principal,
+)
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
@@ -191,6 +196,33 @@ async def _write_org_override(session: AsyncSession, org_id: uuid.UUID, flag_nam
         overrides = dict((org.settings_json or {}).get("feature_overrides", {}))
         overrides[flag_name] = enabled
         await update_org_settings_patch(session, org_id, {"feature_overrides": overrides})
+
+
+def _reject_retired_internal_flag_for_ordinary_caller(
+    flag_name: str,
+    current_user: AuthenticatedPrincipal,
+    *,
+    settings: Settings,
+) -> None:
+    """Hide retired internal flags except through the retained internal gate."""
+    if flag_name not in RETIRED_INTERNAL_FLAGS:
+        return
+    principal = TenantPrincipal(
+        username=current_user.username,
+        organisation_id=current_user.organisation_id,
+        account_id=current_user.account_id,
+        org_role=current_user.org_role or "",
+        is_system_admin=current_user.is_system_admin,
+        via_api_key=current_user.via_api_key,
+        client_kind=current_user.client_kind,
+        key_grants=current_user.key_grants,
+    )
+    require_in_dev_operator(
+        principal,
+        "library.search.in_dev",
+        require_dev_mode=True,
+        settings=settings,
+    )
 
 
 def _enforce_team_tier_gate(
@@ -601,9 +633,11 @@ async def toggle_feature_flag(
 @handle_db_errors("admin.feature_flags.get_org_flag_override")
 async def get_org_flag_override(
     flag_name: str,
+    settings: Settings = Depends(get_settings),
     current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
+    _reject_retired_internal_flag_for_ordinary_caller(flag_name, current_user, settings=settings)
     if current_user.organisation_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -736,6 +770,7 @@ async def clear_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
+    _reject_retired_internal_flag_for_ordinary_caller(flag_name, current_user, settings=settings)
     if current_user.organisation_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -162,6 +162,7 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # authenticated last, leaking cross-tenant data.
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import (
+    RETIRED_INTERNAL_FLAGS,
     get_registry,
     resolve_mcp_human_linked_hitl_authority,
     resolve_plan_context,
@@ -11303,7 +11304,11 @@ async def get_available_features() -> dict[str, Any]:
             plan_ctx = await resolve_plan_context(settings, s, org)
 
         current_tier = plan_ctx.tier()
-        all_flags = plan_ctx.list_enabled_features()
+        all_flags = [
+            flag
+            for flag in plan_ctx.list_enabled_features()
+            if flag.name not in RETIRED_INTERNAL_FLAGS or _mcp_internal_lifecycle_map_access()
+        ]
 
         lines = ["| Feature | Required Tier | Available |", "|---------|---------------|-----------|"]
         for flag in all_flags:
