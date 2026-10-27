@@ -1303,12 +1303,25 @@ jobs:
               echo "Launch call errored ambiguously (flyctl wait race, FAR-486): machine may still be starting - deferring to discovery + state poll"
               break
             fi
-            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+            # Two transient classes are retryable - see the same gate in the
+            # "Pre-deploy migrations (one-off machine)" step for the full
+            # rationale: (1) registry.fly.io eventual consistency (manifest
+            # 404), and (2) a Fly control-plane 5xx on the image manifest
+            # QUERY flyctl runs before it creates the machine. Both happen
+            # BEFORE creation, so a retry cannot leak a duplicate machine; the
+            # 5xx branch requires BOTH the image query and a 5xx, so a 5xx
+            # returned by any POST-creation call still fails fast.
+            if grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
               /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Image manifest not visible in registry.fly.io yet"
+            elif grep -qi 'image(ref:' /tmp/prerehearse-launch-err.txt 2>/dev/null \
+              && grep -qiE 'non-200 status code: 5[0-9][0-9]' /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Transient Fly API 5xx on the image manifest query"
+            else
               break
             fi
             if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
-              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              echo "${LAUNCH_RETRY_REASON} (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
               sleep "$LAUNCH_INTERVAL_SEC"
             fi
           done
@@ -1624,12 +1637,31 @@ jobs:
             # matches the "not found [http 404]" text that flyctl prints on
             # the same error line. Without this the retry would silently
             # degrade back to fail-fast if the wording changed.
-            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+            #
+            # Two transient classes are retryable:
+            #   1. registry.fly.io eventual consistency (manifest 404);
+            #   2. a Fly control-plane 5xx on the image manifest QUERY flyctl
+            #      runs before it creates the machine (2026-10-27 run
+            #      40566278052: "failed to run query (... image(ref:
+            #      $imageRef) ...): server returned a non-200 status code:
+            #      503" - seconds after the rehearsal launch from the SAME
+            #      image had succeeded, so the image and the pre-deploy chain
+            #      were fine and the deploy was aborted purely on a transient
+            #      Fly API error).
+            # Both happen BEFORE creation, so a retry cannot leak a duplicate
+            # machine. The 5xx branch requires BOTH the image query and a 5xx,
+            # so a 5xx returned by any POST-creation call still fails fast.
+            if grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
               /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Image manifest not visible in registry.fly.io yet"
+            elif grep -qi 'image(ref:' /tmp/premigrate-launch-err.txt 2>/dev/null \
+              && grep -qiE 'non-200 status code: 5[0-9][0-9]' /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Transient Fly API 5xx on the image manifest query"
+            else
               break
             fi
             if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
-              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              echo "${LAUNCH_RETRY_REASON} (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
               sleep "$LAUNCH_INTERVAL_SEC"
             fi
           done
@@ -2568,12 +2600,25 @@ jobs:
               echo "Launch call errored ambiguously (flyctl wait race, FAR-486): machine may still be starting - deferring to discovery + state poll"
               break
             fi
-            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+            # Two transient classes are retryable - see the same gate in the
+            # "Pre-deploy migrations (one-off machine)" step for the full
+            # rationale: (1) registry.fly.io eventual consistency (manifest
+            # 404), and (2) a Fly control-plane 5xx on the image manifest
+            # QUERY flyctl runs before it creates the machine. Both happen
+            # BEFORE creation, so a retry cannot leak a duplicate machine; the
+            # 5xx branch requires BOTH the image query and a 5xx, so a 5xx
+            # returned by any POST-creation call still fails fast.
+            if grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
               /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Image manifest not visible in registry.fly.io yet"
+            elif grep -qi 'image(ref:' /tmp/prerehearse-launch-err.txt 2>/dev/null \
+              && grep -qiE 'non-200 status code: 5[0-9][0-9]' /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Transient Fly API 5xx on the image manifest query"
+            else
               break
             fi
             if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
-              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              echo "${LAUNCH_RETRY_REASON} (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
               sleep "$LAUNCH_INTERVAL_SEC"
             fi
           done
@@ -2891,12 +2936,31 @@ jobs:
             # matches the "not found [http 404]" text that flyctl prints on
             # the same error line. Without this the retry would silently
             # degrade back to fail-fast if the wording changed.
-            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+            #
+            # Two transient classes are retryable:
+            #   1. registry.fly.io eventual consistency (manifest 404);
+            #   2. a Fly control-plane 5xx on the image manifest QUERY flyctl
+            #      runs before it creates the machine (2026-10-27 run
+            #      40566278052: "failed to run query (... image(ref:
+            #      $imageRef) ...): server returned a non-200 status code:
+            #      503" - seconds after the rehearsal launch from the SAME
+            #      image had succeeded, so the image and the pre-deploy chain
+            #      were fine and the deploy was aborted purely on a transient
+            #      Fly API error).
+            # Both happen BEFORE creation, so a retry cannot leak a duplicate
+            # machine. The 5xx branch requires BOTH the image query and a 5xx,
+            # so a 5xx returned by any POST-creation call still fails fast.
+            if grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
               /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Image manifest not visible in registry.fly.io yet"
+            elif grep -qi 'image(ref:' /tmp/premigrate-launch-err.txt 2>/dev/null \
+              && grep -qiE 'non-200 status code: 5[0-9][0-9]' /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Transient Fly API 5xx on the image manifest query"
+            else
               break
             fi
             if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
-              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              echo "${LAUNCH_RETRY_REASON} (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
               sleep "$LAUNCH_INTERVAL_SEC"
             fi
           done
