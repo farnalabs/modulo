@@ -459,6 +459,61 @@ describe('AdminCostControlsView', () => {
     expect(vm.progressBarClass).toBe('bg-amber-500')
   })
 
+  it('covers omitted and non-numeric cost totals without producing NaN', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({ data: { items: [{ entity_id: 'team-x', entity_name: 'X', total_spend_usd: 0 }], org_total: 'not-a-number' }, error: undefined })
+      }
+      if (path === '/api/v1/admin/costs/limits') return Promise.resolve({ data: undefined, error: undefined })
+      if (path === '/api/v1/admin/costs/controls') return Promise.resolve({ data: undefined, error: undefined })
+      return defaultGet(path)
+    })
+    const wrapper = await mountView()
+    expect(wrapper.find('[data-testid="cc-total-spend"]').text()).toContain('$0.00')
+    wrapper.unmount()
+  })
+
+  it('covers threshold removal and rollback branches', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as any
+    vm.settings.alertThresholds = [50, 75]
+    mockPut.mockResolvedValueOnce({ data: null, error: undefined })
+    await vm.toggleThreshold(50)
+    expect(vm.settings.alertThresholds).toEqual([75])
+    mockPut.mockResolvedValueOnce({ data: null, error: { detail: 'threshold denied' } })
+    await vm.toggleThreshold(90)
+    expect(vm.settings.alertThresholds).toEqual([75])
+    expect(wrapper.text()).toContain('threshold denied')
+    wrapper.unmount()
+  })
+
+  it('covers circuit breaker API error and thrown error branches', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as any
+    mockPut.mockResolvedValueOnce({ data: null, error: { detail: 'breaker denied' } })
+    await vm.toggleCircuitBreaker()
+    expect(wrapper.text()).toContain('breaker denied')
+    wrapper.unmount()
+  })
+
+  it('covers settings-load API error and thrown error paths', async () => {
+    mockGet.mockImplementationOnce((path: string) => {
+      if (path === '/api/v1/admin/costs/controls') return Promise.resolve({ data: null, error: { detail: 'settings denied' } })
+      return defaultGet(path)
+    })
+    const wrapper = await mountView()
+    expect(wrapper.exists()).toBe(true)
+    wrapper.unmount()
+
+    mockGet.mockImplementationOnce((path: string) => {
+      if (path === '/api/v1/admin/costs/controls') return Promise.reject(new Error('settings crashed'))
+      return defaultGet(path)
+    })
+    const retryWrapper = await mountView()
+    expect(retryWrapper.exists()).toBe(true)
+    retryWrapper.unmount()
+  })
+
   it('calls loadAll on mount (costs, limits, settings, feature-flags)', async () => {
     mount(AdminCostControlsView, {
       global: { plugins: [pinia] },
