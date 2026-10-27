@@ -141,7 +141,14 @@ All three require `plugin.list` permission (returning a `TenantPrincipal`) and t
 
 ### ConnectorHub fallback
 
-The connector factory `_build_connector()` first matches `type_id` against all built-in connector types (GitHub, GitLab, Linear, Jira, Slack, Filesystem, Shell, CI runners). If no built-in matches, it falls through to the plugin registry:
+The connector factory `_build_connector()` first matches `type_id` against the
+hub's own build arms: 45 type ids covering repository hosts, ticket trackers,
+chat, CI, observability and code-quality tools, secret managers, package
+registries, `filesystem`, `shell` and `rest`. `buildable_connector_type_ids()`
+in `core/connector_hub/` is the authoritative set; the `ConnectorType` enum is
+the authoring surface, not the buildable one (see the
+[Connector Authoring Guide](./connector-authoring.md#connectorbase-interface)).
+If no built-in matches, it falls through to the plugin registry:
 
 ```python
 # pseudocode from connector_hub/__init__.py
@@ -154,18 +161,20 @@ case _:
 
 ### ModelBackendHub fallback
 
-Identical pattern: match the built-in providers (OpenAI, Anthropic, DeepSeek, Grok, Ollama, and others), then fall through to the plugin registry:
+Same idea, but not a `case _` arm: `_build_backend()` tries its adapter
+builders in a fixed precedence order (Bedrock, Vertex AI, custom endpoint, the
+non-OpenAI-compatible adapters, the OpenAI-compatible adapters, Azure OpenAI,
+WatsonX) and only then consults the plugin registry. The plugin builder returns
+`None` when the provider is not registered, so the next (and final) step is the
+unknown-provider error:
 
 ```python
 # pseudocode from model_backend_hub/__init__.py
-case _:
-    registry = get_plugin_registry()
-    if registry.has_model_backend(provider):
-        api_key = creds.get("api_key")
-        if not api_key:
-            raise ValueError(...)
-        return registry.build_model_backend(provider, model_id, api_key, **default_params)
-    raise ValueError(f"Unknown model backend provider: {provider!r}")
+for builder in (..., _build_watsonx_backend, _build_plugin_backend):
+    backend = builder(provider, model_id, creds, params)
+    if backend is not None:
+        return backend
+raise ValueError(f"Unknown model backend provider: {provider!r}")
 ```
 
 ### Pipeline execution

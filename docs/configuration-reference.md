@@ -538,7 +538,7 @@ LOAD.
 | `MODULO_SEED_DEMO_ORGS` | No | `false` | Seed demo organisations with signed licenses on boot (gated framework) |
 | `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` | No | `""` | Endpoint URL for opt-in aggregate product analytics. Empty disables. |
 | `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` | No | `""` | Instance secret for HMAC signing product analytics. Empty disables. |
-| `MODULO_PRODUCT_ANALYTICS_ENABLED` | No | unset | Explicit instance-level product-analytics switch (`1`/`true`/`yes` = ON; `false`/`0`/`no` = OFF; a set-but-blank value reads OFF). `core/product_analytics/consent.resolve_instance_analytics_switch` resolves it in this order, first match wins: (1) the stored `system_config.product_analytics_enabled` value, written or cleared by a system admin via `PUT /api/v1/product-analytics/instance-switch` (or the switch on `/admin/product-analytics`); (2) this variable, honoured only when no stored value exists; (3) the installed licence's `product_analytics_required` claim, which sets the default ON; (4) otherwise OFF. An explicit operator value always wins — including OFF over a licence that requires analytics — because the licence claim is a partner expectation (a contractual default), never a control. `GET /api/v1/product-analytics/transparency` reports the effective switch and its source (`operator` / `environment` / `licence` / `default`), so an operator can always see why analytics is on and turn it off. Analytics never changes an organisation's plan or tier. `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` and `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` are the transport settings alongside this switch: either being empty disables delivery. |
+| `MODULO_PRODUCT_ANALYTICS_ENABLED` | No | unset | Explicit instance-level product-analytics switch (`1`/`true`/`yes` = ON; `false`/`0`/`no` = OFF; a set-but-blank value reads OFF). `core/product_analytics/consent.resolve_instance_analytics_switch` resolves it in this order, first match wins: (1) the stored `system_config.product_analytics_enabled` value, written or cleared by a system admin via `PUT /api/v1/product-analytics/instance-switch` (or the switch on `/admin/product-analytics`); (2) this variable, honoured only when no stored value exists; (3) the installed licence's `product_analytics_required` claim, which sets the default ON; (4) otherwise OFF. An explicit operator value always wins – including OFF over a licence that requires analytics – because the licence claim is a partner expectation (a contractual default), never a control. `GET /api/v1/product-analytics/transparency` reports the effective switch and its source (`operator` / `environment` / `licence` / `default`), so an operator can always see why analytics is on and turn it off. Analytics never changes an organisation's plan or tier. `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` and `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` are the transport settings alongside this switch: either being empty disables delivery. |
 | `MODULO_MONITOR_DOMAINS` | No | `""` | Space-separated CSP connect-src expressions (e.g. custom Grafana Faro collectors) |
 | `MODULO_ARTIFACTS_ENABLED` | No | `true` | Enable pipeline artifact storage |
 | `MODULO_ARTIFACTS_DIR` | No | `""` | Base directory for artifact files. Empty defaults to `<backend>/.data/artifacts` resolved by the store factory. |
@@ -580,7 +580,7 @@ holds:
 | Condition | Threshold | Notes |
 |-----------|-----------|-------|
 | Rolling success rate | **below 80%** of terminal runs, with at least **5** terminal runs in the window | The rate counts `cancelled` in the denominator (the same numerator/denominator shape `/analytics` publishes). A single failed run is exactly 80% of five and never alerts |
-| Node-deadline watchdog firings | **5 or more** firings in the 2-hour window | `runs.node_deadline_watchdog_fired_count` summed over the window's runs — repeated killing of nodes that blew their per-attempt deadline |
+| Node-deadline watchdog firings | **5 or more** firings in the 2-hour window | `runs.node_deadline_watchdog_fired_count` summed over the window's runs – repeated killing of nodes that blew their per-attempt deadline |
 
 Noise control: **one alert per pipeline per incident**. The open state is kept
 in Redis (7-day TTL backstop) so a sustained degradation notifies once; a
@@ -593,7 +593,7 @@ WARNING.
 
 Both events are subscribable on the admin notification endpoints (see
 `GET /api/v1/admin/notifications/available-events`), so a pager can be wired to
-them. Nothing here gates or refuses admission — it is signal, not enforcement.
+them. Nothing here gates or refuses admission – it is signal, not enforcement.
 
 The sweep's aggregate is served by the partial index
 `ix_runs_webhook_decay_sweep` (migration 0334): only webhook-triggered terminal

@@ -20,7 +20,7 @@ Modulo is a self-hosted Agentic Delivery Governance platform for building govern
 
 # Generate the Fernet key ONCE. Every process that reads or writes a stored
 # credential must hold the SAME key, so the value you export here is reused in
-# backend/.env in step 2. A Fernet key is url-safe base64 of exactly 32 bytes —
+# backend/.env in step 2. A Fernet key is url-safe base64 of exactly 32 bytes –
 # a fixed placeholder cannot work, so the compose file refuses to start without
 # one rather than half-starting a stack that cannot store credentials.
 # (Windows PowerShell: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
@@ -38,7 +38,7 @@ This starts:
   step 2 creates; until then they retry and log connection errors)
 
 If `FERNET_KEY` is unset, `docker compose up` fails immediately with
-`required variable FERNET_KEY is missing a value` and the generation command —
+`required variable FERNET_KEY is missing a value` and the generation command –
 that is the intended behaviour, not a bug.
 
 ## 2. Set up the backend
@@ -48,7 +48,7 @@ cd backend
 uv sync
 
 # Create .env (these values work with the local Docker containers).
-# FERNET_KEY is the value exported in step 1 — a different key here cannot
+# FERNET_KEY is the value exported in step 1 – a different key here cannot
 # decrypt the credentials the workers stored.
 cat > .env <<EOF
 DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/modulo
@@ -120,7 +120,7 @@ refuse to route traffic to an API that otherwise works.
 A Modulo stack can answer `GET /healthz` and accept a login while still being
 unable to do the two things that matter: storing a credential and checkpointing
 a run. Both failures come from a `FERNET_KEY` that is not a real Fernet key, and
-neither is visible in `docker compose ps`. Run the smoke check once — it creates
+neither is visible in `docker compose ps`. Run the smoke check once – it creates
 and deletes a throwaway model backend (a real encryption round-trip) and asserts
 the checkpointer tables exist:
 
@@ -145,11 +145,11 @@ A failure names its own fix. The two signatures it catches:
 
 | Failed step | What it means |
 |---|---|
-| `readiness checkpointer 'degraded'` | `startup.checkpointer_init_failed` — the checkpointer could not initialise, so `checkpoints` / `checkpoint_migrations` were never created |
-| `creating a model backend returned HTTP 500` | `ValueError: FernetSecretsBackend: invalid fernet_key` — the key only passed the `Settings` length check, not Fernet's shape check |
+| `readiness checkpointer 'degraded'` | `startup.checkpointer_init_failed` – the checkpointer could not initialise, so `checkpoints` / `checkpoint_migrations` were never created |
+| `creating a model backend returned HTTP 500` | `ValueError: FernetSecretsBackend: invalid fernet_key` – the key only passed the `Settings` length check, not Fernet's shape check |
 
 Both mean no credential has ever been stored successfully, so the fix is to
-generate a key for real — `openssl rand -base64 32` — write it to `.env` at the
+generate a key for real – `openssl rand -base64 32` – write it to `.env` at the
 repo root (and to the same `FERNET_KEY` in the backend's own `.env`, created in
 step 2), restart the backend, and recreate the compose services so they pick it
 up. On a stack that *has* stored credentials under some other key, reuse that

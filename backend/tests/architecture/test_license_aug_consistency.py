@@ -15,6 +15,7 @@ enforced here.
 
 The comparison is of SUBSTANCE, not wording. Each concept below (the permitted
 acts, the carve-out, the fact that the carve-out reaches derivatives, and the
+fact that it is limited to offering the service to third parties, and the
 qualifier that bounds it to a service providing substantially the same
 functionality) is expressed by any of several phrasings, so an artefact may
 reword freely. What it may not do is disagree: drop a permitted act the licence
@@ -61,6 +62,12 @@ _SAME_FUNCTIONALITY_QUALIFIER = (
     r"\bsubstantially\s+similar\s+(?:functionality|features?|service)\b",
     r"\bfunctionally\s+(?:equivalent|the\s+same)\b",
 )
+# The carve-out is limited to offering such a service TO THIRD PARTIES. Dropping
+# that limit overstates the restriction: read literally it would also bar
+# offering the service to the customer's own group. Checked inside the carve-out
+# window only, so an unrelated mention of "third parties" elsewhere in a
+# document cannot satisfy it.
+_THIRD_PARTY_RECIPIENT = r"\bthird\s+part(?:y|ies)\b"
 # Words that make a hosted-service mention a RESTRICTION rather than a
 # permission. Without one, "you may offer a paid hosted service" would read as
 # agreement with the carve-out.
@@ -75,8 +82,9 @@ _RESTRICTION_MARKERS = (
 )
 
 # How far around a hosted-service phrase to look for the restriction marker and
-# for the derivative wording. The carve-out is one sentence in every artefact,
-# so a couple of hundred characters is enough for any sane rewording.
+# for the derivative and recipient wording. The carve-out is one sentence in
+# every artefact, so a couple of hundred characters is enough for any sane
+# rewording.
 _WINDOW = 250
 
 
@@ -111,12 +119,19 @@ def _qualifies_the_hosted_restriction(text: str) -> bool:
     return any(_matches_any(window, _SAME_FUNCTIONALITY_QUALIFIER) for window in _windows_around(text, _HOSTED_PHRASES))
 
 
+def _carve_out_names_third_parties(text: str) -> bool:
+    return any(
+        re.search(_THIRD_PARTY_RECIPIENT, window, re.IGNORECASE) for window in _windows_around(text, _HOSTED_PHRASES)
+    )
+
+
 _CONCEPT_CHECKS: dict[str, Callable[[str], bool]] = {
     "production_use": lambda text: _matches_any(text, (_PRODUCTION_USE,)),
     "derivative_works": lambda text: _matches_any(text, _DERIVATIVE_WORKS),
     "hosted_service_carve_out": _expresses_hosted_carve_out,
     "derivative_in_carve_out": _carve_out_reaches_derivatives,
     "same_functionality_qualifier": _qualifies_the_hosted_restriction,
+    "third_party_recipient": _carve_out_names_third_parties,
 }
 
 _ALL_CONCEPTS = frozenset(_CONCEPT_CHECKS)
@@ -140,7 +155,7 @@ _AUG_ARTEFACTS: dict[str, frozenset[str]] = {
     # held to it here: add "same_functionality_qualifier" to this set in the
     # same change that adds the qualifier to the answer bank.
     "docs/security/security-questionnaire-answer-bank.md": frozenset(
-        {"hosted_service_carve_out", "derivative_in_carve_out"}
+        {"hosted_service_carve_out", "derivative_in_carve_out", "third_party_recipient"}
     ),
 }
 

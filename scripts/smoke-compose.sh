@@ -109,7 +109,8 @@ http() {
 
 # json_get DOTTED.PATH -> prints the value ("" when the path is absent)
 json_get() {
-  HTTP_BODY="$HTTP_BODY" python3 - "$1" <<'PY'
+  local path="$1"
+  HTTP_BODY="$HTTP_BODY" python3 - "$path" <<'PY'
 import json, os, sys
 value = json.loads(os.environ["HTTP_BODY"] or "null")
 for part in sys.argv[1].split("."):
