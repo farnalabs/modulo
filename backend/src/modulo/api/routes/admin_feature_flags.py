@@ -240,6 +240,11 @@ async def _apply_org_flag_override(
             detail=_MSG_ORG_ID_REQUIRED,
         )
     registry = await _build_registry(settings, session, current_user)
+    if flag_name in RETIRED_INTERNAL_FLAGS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown feature flag: {flag_name}",
+        )
     flag = registry.get_flag(flag_name)
     if flag is None:
         raise HTTPException(

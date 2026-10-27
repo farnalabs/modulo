@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.feature_flags import DEFAULT_OFF_FLAGS, FeatureFlagRegistry
+from modulo.core.feature_flags import DEFAULT_OFF_FLAGS, RETIRED_INTERNAL_FLAGS, FeatureFlagRegistry
 
 
 def _make_session() -> AsyncMock:
@@ -381,6 +381,20 @@ class TestInactiveCatalogFlags:
         finally:
             registry.clear_override("mobile_sidebar_rail")
         assert flag.currently_active is False
+
+
+class TestRetiredInternalFlags:
+    def test_lifecycle_map_journeys_is_retained_for_compatibility_but_not_customer_configurable(self) -> None:
+        registry = FeatureFlagRegistry()
+        assert {"lifecycle_map_journeys"} == RETIRED_INTERNAL_FLAGS
+        flag = registry.get_flag("lifecycle_map_journeys")
+        assert flag is not None
+        assert flag.currently_active is True
+        try:
+            registry.set_override("lifecycle_map_journeys", False)
+            assert flag.currently_active is False
+        finally:
+            registry.clear_override("lifecycle_map_journeys")
 
 
 class TestDefaultOffFlags:

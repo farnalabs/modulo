@@ -638,6 +638,24 @@ class TestToggleFeatureFlag:
         body = resp.json()
         assert "detail" in body
 
+    def test_toggle_retired_internal_flag_returns_404_without_writing(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags._write_org_override",
+                new_callable=AsyncMock,
+            ) as write_override,
+        ):
+            resp = client.put(
+                "/api/v1/admin/feature-flags/lifecycle_map_journeys",
+                json={"enabled": True},
+            )
+        assert resp.status_code == 404
+        write_override.assert_not_awaited()
+
     def test_toggle_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.put(
             "/api/v1/admin/feature-flags/sso",
@@ -799,6 +817,24 @@ def _org_with_overrides(**overrides: bool) -> MagicMock:
 
 class TestOrgOverrideCacheInvalidation:
     _ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+    def test_set_retired_internal_override_returns_404_without_writing(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags._write_org_override",
+                new_callable=AsyncMock,
+            ) as write_override,
+        ):
+            resp = client.put(
+                "/api/v1/admin/feature-flags/lifecycle_map_journeys/org-override",
+                json={"enabled": True},
+            )
+        assert resp.status_code == 404
+        write_override.assert_not_awaited()
 
     def test_set_org_override_invalidates_redis_cache(self, client: TestClient) -> None:
         org = _org_with_overrides()
