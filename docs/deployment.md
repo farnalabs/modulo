@@ -385,7 +385,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `DATABASE_URL` | **Yes** | – | `postgresql+asyncpg://user:pass@host:port/db` |
 | `SECRET_KEY` | **Yes** | – | 32+ byte random string for JWT signing |
 | `FERNET_KEY` | **Yes** | – | 44-char base64 Fernet key for credential encryption |
-| `MODULO_USERS` | No | – | Comma-separated `email:password` pairs for initial user seed (plaintext is bcrypt-hashed at seed time; `admin` gets the admin role) |
+| `MODULO_USERS` | No (but needed for a first login) | – | Comma-separated `email:password` pairs for initial user seed (plaintext is bcrypt-hashed at seed time; `admin` gets the admin role). Without it - and without `modulo users add` - no account exists and login returns `401`; see *Docker Compose* step 1 |
 | `MODULO_DB` | No | `postgres` | Database backend (`postgres`, `sqlite`, `mariadb`, or `mysql`) |
 | `REDIS_URL` | **Yes** | `redis://localhost:6379/0` | Redis URL for the SAQ broker, scheduling, event coordination, and rate limiting. The API refuses to boot when this is explicitly empty. |
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects |
@@ -467,6 +467,25 @@ cp .env.prod.example deploy/compose/.env
 #   SAQ_AUTH_PASSWORD=$(openssl rand -hex 24)
 ```
 
+Those five start the stack, but **none of them creates a login**: with no user
+in the database, `POST /api/v1/auth/login` answers **401** and a perfectly
+healthy deployment looks broken. Create the first account with one of:
+
+- **Seed it at boot (simplest).** Add `MODULO_USERS=admin@example.com:<password>`
+  to the compose env file you created in step 1, **before** step 2. The boot
+  seeder creates the account, and an entry named `admin` gets the admin role.
+  Plaintext is bcrypt-hashed at seed time.
+- **Create it after the stack is up.** From the `modulo` container:
+
+  ```bash
+  docker compose -f deploy/compose/docker-compose.prod.yml exec modulo \
+    modulo users add admin@example.com --admin
+  # prompts for the password; pass --password '<pw>' for a non-interactive run
+  ```
+
+Either way, do not skip this for a deployment you intend to log into - there is
+no admin account unless you create one.
+
 **2. Start the stack.**
 
 ```bash
@@ -483,6 +502,18 @@ curl -s http://localhost/healthz/ready | python -m json.tool
 
 If `saq_workers` is not `ok`, no pipeline run, cron trigger or polling trigger
 will execute - see *What the single container runs* below.
+
+**3b. Verify a login actually works.** Readiness says nothing about accounts;
+a user-less stack is ready and still answers `401`.
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -X POST http://localhost/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"<the password from step 1>"}'
+# 200 = the account exists and the credentials work
+# 401 = no such user (create one - step 1), or a wrong password
+```
 
 **What runs.** The `modulo` service runs the **all-in-one image**: one
 container whose `supervisord` starts the API (`uvicorn`), `nginx`, and **both
