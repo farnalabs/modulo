@@ -361,10 +361,15 @@ _sig_key_id() {
 }
 
 _openssl_ed25519_check() {
-  # At least OpenSSL 1.1.1: ed25519 in `pkeyutl -rawin` needs it.
+  # OpenSSL 3.0+ is required: ed25519 verification runs through
+  # `pkeyutl -rawin`, which did NOT exist in 1.1.1's pkeyutl (it arrived in
+  # 3.0). A 1.1.1/2.x `openssl version` must therefore fail this gate
+  # loudly instead of reaching an argv their pkeyutl cannot parse.
+  local openssl_version
   openssl version >/dev/null 2>&1 || die "openssl is required to verify the SIGNED release manifest (e.g. 'apt install openssl')"
-  if ! printf '%s' "$(openssl version)" | grep -qE 'OpenSSL (1\.1|2\.|3\.|4\.)'; then
-    die "openssl ed25519 verification needs OpenSSL 1.1.1+ (the 'pkeyutl -rawin' mode); got: $(openssl version 2>/dev/null || echo none)"
+  openssl_version="$(openssl version)"
+  if ! printf '%s' "${openssl_version}" | grep -qE 'OpenSSL ([3-9]|[1-9][0-9])\.'; then
+    die "openssl ed25519 verification needs OpenSSL 3.0+ (the 'pkeyutl -rawin' mode does not exist in 1.1.1); got: ${openssl_version}"
   fi
 }
 
@@ -372,7 +377,7 @@ hex_to_bin() {
   # hex_to_bin <hex> -> binary on stdout (the ed25519 signature input).
   local hex="$1" out="" pair
   while [[ ${#hex} -ge 2 ]]; do
-    pair="${hex%${hex#??}}"
+    pair="${hex%"${hex#??}"}"
     hex="${hex#??}"
     out="${out}\x${pair}"
   done
@@ -395,7 +400,7 @@ verify_shipped_manifest() {
   # key_id BOTH embedded keys are tried (rotation race) - an unknown
   # key-id never reaches openssl at all.
   #
-  # Preconditions: openssl (>=1.1.1, ed25519 -rawin), coreutils base64, and
+  # Preconditions: openssl (>=3.0, ed25519 -rawin), coreutils base64, and
   # python3 (the manifest sha256 extraction below). The trust store is
   # EMBEDDED and empty-by-default: no operator-added key can ever verify.
   local manifest_file="$1" signature_file="$2" tarball_file="$3" expected_release="$4"
@@ -405,9 +410,11 @@ verify_shipped_manifest() {
   [[ -f "${signature_file}" ]] || die "the signature file is missing: ${signature_file}"
   [[ -n "${TRUST_KEY_CURRENT_B64}" ]] || [[ -n "${TRUST_KEY_NEXT_B64}" ]] || die \
     "no production trust keys are provisioned in this installer (TRUST_KEY_CURRENT_B64/NEXT_B64 are empty) - refusing to verify anything (provisioning: backend/src/modulo/launcher/manifest.py PROVISIONING_NOTE)"
-  local key_file sig_file sig_hex sig_key_id candidate_keys key_b64 verified=0
+  local key_file sig_file openssl_log sig_hex sig_key_id candidate_keys key_b64 verified=0
+  local openssl_output=""
   key_file="$(mktemp)"
   sig_file="$(mktemp)"
+  openssl_log="$(mktemp)"
   sig_hex="$(sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F]\{128\}\)".*/\1/p' "${signature_file}" | head -n 1)"
   [[ -n "${sig_hex}" ]] || die "the signature file's 'signature' field is malformed (expected 128 hex chars)"
   sig_key_id="$(_sig_key_id "${signature_file}")" || sig_key_id=""
@@ -424,14 +431,28 @@ verify_shipped_manifest() {
     case "${slot}" in current) key_b64="${TRUST_KEY_CURRENT_B64}" ;; next) key_b64="${TRUST_KEY_NEXT_B64}" ;; *) die "internal error: unknown trust-store slot '${slot}'" ;; esac
     [[ -n "${key_b64}" ]] || continue
     b64_to_der "${key_b64}" "${key_file}"
-    if openssl pkeyutl -verify -pubin -inform DER -in "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}" >/dev/null 2>&1; then
+    # pkeyutl takes the PUBLIC KEY via -inkey + -keyform, and the SIGNED
+    # BYTES via -in; it has NO -inform option (that is a `dgst`/`pkey`
+    # option). Passing -inform makes pkeyutl exit 1 with "Unknown option"
+    # before it ever looks at the signature.
+    #
+    # openssl's stdout+stderr go to openssl_log, NOT /dev/null: a failure
+    # must be able to explain itself below (format error vs a genuine
+    # signature mismatch look identical from the exit code alone).
+    if openssl pkeyutl -verify -pubin -keyform DER -inkey "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}" > "${openssl_log}" 2>&1; then
       verified=1
       info "release-manifest signature verified (embedded ${slot} trust store, key-id '${sig_key_id:-any-store-key}')"
       break
     fi
+    openssl_output="$(cat "${openssl_log}" 2>/dev/null || true)"
   done
-  rm -f "${key_file}" "${sig_file}"
-  [[ "${verified}" -eq 1 ]] || die "release-manifest signature FAILED to verify against the embedded trust store - do not use this download; report it at https://github.com/${REPO}/issues (openssl 1.1.1+ required for the ed25519 -rawin mode)"
+  rm -f "${key_file}" "${sig_file}" "${openssl_log}"
+  if [[ "${verified}" -ne 1 ]]; then
+    # Surface openssl's own verdict: without it, the generic message sends
+    # the operator hunting for a key mismatch that may not exist.
+    printf 'openssl reported:\n%s\n' "${openssl_output:-<no openssl output captured>}" >&2
+    die "release-manifest signature FAILED to verify against the embedded trust store (key-id '${sig_key_id:-unparsable - both store keys tried}') - do not use this download; report it at https://github.com/${REPO}/issues. OpenSSL 3.0+ is required for the ed25519 'pkeyutl -rawin' mode."
+  fi
   local expected actual
   expected="$(python3 - "$manifest_file" "$tarball_name" <<'PYEOF'
 import json, sys
@@ -507,6 +528,7 @@ info "bundle internal SHA256SUMS verified"
 # newest pre-upgrade snapshot in the data dir (mtime order), for the
 # --skip-backup path: the operator must KNOW which snapshot is authoritative.
 newest_pre_upgrade_snapshot() {
+  # shellcheck disable=SC2012  # ls -1dt IS the newest-first mtime primitive; find has no portable mtime sort.
   ls -1dt "${DATA_DIR}"/pre-upgrade-dump-* 2>/dev/null | head -n 1
 }
 
@@ -608,6 +630,7 @@ for rc_file in "${HOME}/.bashrc" "${HOME}/.profile" "${HOME}/.zshrc"; do
   if grep -Fqs "${BIN_DIR}" "${rc_file}"; then
     continue
   fi
+  # shellcheck disable=SC2016  # $PATH must reach the generated rc line literally, not expand now.
   printf '\n# Added by Modulo install.sh (FAR-670)\nexport PATH="%s:$PATH"\n' "${BIN_DIR}" >> "${rc_file}"
   path_updated=1
   info "added ${BIN_DIR} to PATH in ${rc_file}"
