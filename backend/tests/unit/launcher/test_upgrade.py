@@ -1218,9 +1218,13 @@ class TestHostArch:
         with patch("platform.machine", return_value="arm64"):
             assert upgrade_module._host_arch() == "arm64"
 
-    def test_defaults_to_amd64(self):
-        with patch("platform.machine", return_value="unknown"):
-            assert upgrade_module._host_arch() == "amd64"
+    @pytest.mark.parametrize("machine", ["unknown", "riscv64", "mips64"])
+    def test_rejects_unknown_architecture(self, machine):
+        with (
+            patch("platform.machine", return_value=machine),
+            pytest.raises(UpgradeError, match=f"unsupported host architecture '{machine}'"),
+        ):
+            upgrade_module._host_arch()
 
 
 class TestTempOwnerPid:
@@ -1578,7 +1582,12 @@ def test_installer_uses_portable_commands_and_fails_closed_for_darwin():
 
 
 def _installer_probe(
-    tmp_path: Path, archive_name: str, root_name: str, *, bypass_manifest: bool = False
+    tmp_path: Path,
+    archive_name: str,
+    root_name: str,
+    *,
+    bypass_manifest: bool = False,
+    legacy_shim: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     install_script = Path(__file__).resolve().parents[4] / "scripts" / "install.sh"
     if bypass_manifest:
@@ -1605,6 +1614,8 @@ def _installer_probe(
         [tar_bin, "-czf", str(archive), "-C", str(tmp_path), root_name], check=True, timeout=30
     )
     env = {**os.environ, "HOME": str(tmp_path / "home"), "MODULO_INSTALL_ROOT": str(tmp_path / "install")}
+    if legacy_shim is not None:
+        env["MODULO_LEGACY_SHIM_PATH"] = str(legacy_shim)
     if bypass_manifest:
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (tmp_path / "RELEASE_MANIFEST.json").write_text(
@@ -1651,6 +1662,26 @@ def test_installer_rejects_mismatched_archive_root_before_install_mutation(tmp_p
     assert not (tmp_path / "install").exists()
 
 
+def test_installer_rejects_legacy_shim_before_install_root_mutation(tmp_path: Path) -> None:
+    legacy_shim = tmp_path / "legacy-modulo"
+    legacy_shim.write_text("legacy", encoding="utf-8")
+    install_root = tmp_path / "install"
+    current = install_root / "current"
+    result = _installer_probe(
+        tmp_path,
+        "modulo-1.2.3-linux-amd64.tar.gz",
+        "modulo-1.2.3-linux-amd64",
+        bypass_manifest=True,
+        legacy_shim=legacy_shim,
+    )
+    # The test seam points the installer at a test-owned legacy path, proving
+    # the refusal happens before the bundle is extracted or current is moved.
+    assert result.returncode != 0
+    assert not install_root.exists()
+    assert legacy_shim.read_text(encoding="utf-8") == "legacy"
+    assert not current.exists()
+
+
 def test_host_os(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     assert upgrade_module._host_os() == "darwin"
@@ -1658,8 +1689,78 @@ def test_host_os(monkeypatch):
     assert upgrade_module._host_os() == "linux"
 
 
+@pytest.mark.parametrize("machine", ["riscv64", "mips64"])
+def test_host_arch_rejects_unknown_architecture(machine):
+    with (
+        patch("platform.machine", return_value=machine),
+        pytest.raises(UpgradeError, match=f"unsupported host architecture '{machine}'"),
+    ):
+        upgrade_module._host_arch()
+
+
+def test_extract_rejects_extra_top_level_file(tmp_path):
+    import tarfile
+
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    (bundle / "SHA256SUMS").write_text("", encoding="utf-8")
+    extra = tmp_path / "extra.txt"
+    extra.write_text("unexpected", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name)
+        handle.add(extra, arcname=extra.name)
+    with pytest.raises(UpgradeError, match="exactly one non-symlink top-level directory"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
+def test_extract_rejects_symlink_listed_artifact(tmp_path):
+    import tarfile
+
+    if os.name != "posix":
+        pytest.skip("POSIX symlinks")
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    target = bundle / "target.txt"
+    target.write_text("target", encoding="utf-8")
+    (bundle / "artifact.txt").symlink_to("target.txt")
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(f"{digest}  artifact.txt\n", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz", dereference=False) as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+    with pytest.raises(UpgradeError, match="not a regular file"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
+def test_resolve_upgrade_assets_rejects_malformed_from_file_name(tmp_path):
+    tarball = tmp_path / "modulo-1.2.0-linux-amd64-extra.tar.gz"
+    tarball.write_bytes(b"archive")
+    with pytest.raises(UpgradeError, match="name is malformed"):
+        upgrade_module._resolve_upgrade_assets(
+            from_file=tarball,
+            target_version=None,
+            staging_dir=tmp_path / "stage",
+            fetch=None,
+        )
+
+
+def test_resolve_upgrade_assets_rejects_unsupported_from_file_arch(tmp_path, monkeypatch):
+    tarball = tmp_path / "modulo-1.2.0-linux-arm64.tar.gz"
+    tarball.write_bytes(b"archive")
+    monkeypatch.setattr(upgrade_module, "_host_arch", lambda: "amd64")
+    with pytest.raises(UpgradeError, match="archive architecture 'arm64' does not match"):
+        upgrade_module._resolve_upgrade_assets(
+            from_file=tarball,
+            target_version=None,
+            staging_dir=tmp_path / "stage",
+            fetch=None,
+        )
+
+
 def test_resolve_upgrade_assets_darwin_tarball(tmp_path, monkeypatch):
     monkeypatch.setattr(upgrade_module, "_host_os", lambda: "darwin")
+    monkeypatch.setattr(upgrade_module, "_host_arch", lambda: "arm64")
     tarball = tmp_path / "modulo-1.2.3-darwin-arm64.tar.gz"
     tarball.write_text("dummy", encoding="utf-8")
     manifest = tmp_path / "RELEASE_MANIFEST.json"

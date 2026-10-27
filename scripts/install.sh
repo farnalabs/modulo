@@ -152,24 +152,35 @@ sha256_of() {
 
 verify_sums_in_dir() {
   # verify_sums_in_dir <dir> — verify every file listed in <dir>/SHA256SUMS.
+  # Do the no-follow regular-file checks BEFORE invoking either checksum tool;
+  # sha256sum --check follows symlinks named in the manifest.
   local dir="$1"
-  if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$dir" && sha256sum --check --quiet SHA256SUMS) || {
-      die "bundle integrity check FAILED: one or more files in the bundle do not match SHA256SUMS. Do not use this download — report it at https://github.com/${REPO}/issues"
-    }
-  else
-    local sum path actual artifact
-    while read -r sum path; do
-      case "${path}" in
-        /* | ../* | */../* | */.. | . | ..)
-          die "bundle integrity check FAILED: unsafe artifact path '${path}'"
-          ;;
-      esac
-      artifact="${dir}/${path}"
-      [[ -f "${artifact}" && ! -L "${artifact}" ]] || die "bundle integrity check FAILED: unsafe or missing artifact path '${path}'"
-      actual="$(sha256_of "${artifact}")"
-      [[ "$actual" = "$sum" ]] || die "bundle integrity check FAILED for ${path}: expected ${sum}, got ${actual}"
-    done < "${dir}/SHA256SUMS"
+  local sum path actual artifact
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -z "${line}" ]] && continue
+    sum="${line%%  *}"
+    path="${line#*  }"
+    [[ "${sum}" =~ ^[[:xdigit:]]{64}$ && "${path}" != "${line}" && -n "${path}" ]] || \
+      die "bundle integrity check FAILED: malformed SHA256SUMS line '${line}'"
+    case "${path}" in
+      /* | ../* | */../* | */.. | . | ..)
+        die "bundle integrity check FAILED: unsafe artifact path '${path}'"
+        ;;
+    esac
+    artifact="${dir}/${path}"
+    [[ -f "${artifact}" && ! -L "${artifact}" ]] || die "bundle integrity check FAILED: unsafe or missing artifact path '${path}'"
+    actual="$(sha256_of "${artifact}")"
+    [[ "${actual}" = "${sum}" ]] || die "bundle integrity check FAILED for ${path}: expected ${sum}, got ${actual}"
+  done < "${dir}/SHA256SUMS"
+}
+
+validate_legacy_shim_collision() {
+  # Refuse an unmanaged legacy shim BEFORE downloads, extraction, or any install
+  # root mutation. A dangling symlink is also a collision and must not be
+  # silently replaced.
+  local legacy_shim="${MODULO_LEGACY_SHIM_PATH:-/usr/local/bin/modulo}"
+  if [[ -e "${legacy_shim}" || -L "${legacy_shim}" ]] && [[ ! -f "${MARKER_FILE}" ]] && [[ "${FORCE}" -ne 1 ]]; then
+    die "found an existing ${legacy_shim} that this installer did not create.\\nRe-run with --force to rename it aside and let the native install take over, or remove it manually."
   fi
 }
 
@@ -285,6 +296,7 @@ preflight() {
       die "unsupported architecture: $(uname -m). Supported: x86_64 (amd64), aarch64 (arm64). Browse https://github.com/${REPO}/releases for available artifacts."
       ;;
   esac
+  validate_legacy_shim_collision
 }
 
 # --- argument parsing -------------------------------------------------------
@@ -322,7 +334,7 @@ preflight
 if [[ -n "${FROM_FILE}" ]]; then
   [[ -f "${FROM_FILE}" ]] || die "--from-file: no such file: ${FROM_FILE}"
   tarball_name="$(basename "${FROM_FILE}")"
-  if [[ "${tarball_name}" =~ ^modulo-(.+)-(linux|darwin)-(amd64|arm64)\.tar\.gz$ ]]; then
+  if [[ "${tarball_name}" =~ ^modulo-([A-Za-z0-9][A-Za-z0-9._-]*)-(linux|darwin)-(amd64|arm64)\.tar\.gz$ ]]; then
     VERSION_NUM="${BASH_REMATCH[1]}"
     archive_os="${BASH_REMATCH[2]}"
     archive_arch="${BASH_REMATCH[3]}"
@@ -623,13 +635,11 @@ info "current -> $(readlink "${INSTALL_ROOT}/current")"
 
 # --- neutralise a previous /usr/local/bin/modulo ----------------------------
 #
-# The pre-ADR-031 installer put a `modulo` binary in /usr/local/bin. Only
-# touch it when a native-install marker matches (this machine is already
-# managed by install.sh, or the user passed --force); otherwise refuse loudly:
-# we will not replace a file we did not create.
+# The collision was validated in preflight before any install-root mutation.
+# This phase only performs the already-authorised rename.
 
-legacy_shim="/usr/local/bin/modulo"
-if [[ -e "${legacy_shim}" ]]; then
+legacy_shim="${MODULO_LEGACY_SHIM_PATH:-/usr/local/bin/modulo}"
+if [[ -e "${legacy_shim}" || -L "${legacy_shim}" ]]; then
   if [[ -f "${MARKER_FILE}" ]] || [[ "${FORCE}" -eq 1 ]]; then
     backup="${legacy_shim}.pre-native-$(date +%Y%m%d%H%M%S)"
     mv "${legacy_shim}" "${backup}" || die "could not rename ${legacy_shim} — re-run with sudo, or remove it manually"
