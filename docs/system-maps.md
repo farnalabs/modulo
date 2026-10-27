@@ -129,7 +129,10 @@ Node keys remain stable within a revision for import/export and human-readable d
         | node_type (ENUM)            |     | source_node_key (VARCHAR)   |
         | name (VARCHAR)              |     | target_node_key (VARCHAR)   |
         | pipeline_id (UUID, FK, opt) |     | relationship_type (ENUM)    |
-        | external_ref (VARCHAR, opt) |     | config_json (JSONB)         |
+        | connector_instance_id (UUID, FK, opt) | | config_json (JSONB)      |
+        | owner_team_id (UUID, FK, opt) |      |                              |
+        | eval_id (UUID, FK, opt)     |      |                              |
+        | external_ref (VARCHAR, opt) |     |                              |
         | capacity_limit (INT, opt)   |     +-----------------------------+
         | config_json (JSONB)         |
         +-----------------------------+
@@ -220,7 +223,12 @@ CREATE TABLE system_map_revisions (
 
 ALTER TABLE system_maps ADD CONSTRAINT fk_system_maps_published_rev_org
 FOREIGN KEY (published_revision_id, organisation_id)
-REFERENCES system_map_revisions(id, organisation_id) ON DELETE SET NULL;
+REFERENCES system_map_revisions(id, organisation_id) ON DELETE RESTRICT;
+
+-- Published revisions are immutable and cannot be deleted while selected by a
+-- map. Clear the pointer explicitly by publishing another revision or by an
+-- administrative map-retirement operation before deleting the map itself. The
+-- RESTRICT action is intentional: it never tries to NULL organisation_id.
 
 -- Relational projection of nodes for fast joins and indexing
 CREATE TABLE system_map_nodes (
@@ -232,6 +240,9 @@ CREATE TABLE system_map_nodes (
     name VARCHAR(255) NOT NULL,
     description TEXT,
     pipeline_id UUID,
+    connector_instance_id UUID,
+    owner_team_id UUID,
+    eval_id UUID,
     external_ref VARCHAR(255),
     capacity_limit INT,
     config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -241,7 +252,13 @@ CREATE TABLE system_map_nodes (
     CONSTRAINT fk_system_map_nodes_revision_org FOREIGN KEY (revision_id, organisation_id)
         REFERENCES system_map_revisions(id, organisation_id) ON DELETE CASCADE,
     CONSTRAINT fk_system_map_nodes_pipeline_org FOREIGN KEY (pipeline_id, organisation_id)
-        REFERENCES pipelines(id, organisation_id) ON DELETE SET NULL,
+        REFERENCES pipelines(id, organisation_id) ON DELETE RESTRICT,
+    CONSTRAINT fk_system_map_nodes_connector_org FOREIGN KEY (connector_instance_id, organisation_id)
+        REFERENCES connector_instances(id, organisation_id) ON DELETE RESTRICT,
+    CONSTRAINT fk_system_map_nodes_owner_team_org FOREIGN KEY (owner_team_id, organisation_id)
+        REFERENCES teams(id, organisation_id) ON DELETE RESTRICT,
+    CONSTRAINT fk_system_map_nodes_eval_org FOREIGN KEY (eval_id, organisation_id)
+        REFERENCES evals(id, organisation_id) ON DELETE RESTRICT,
     CONSTRAINT ck_system_map_nodes_type CHECK (
         node_type IN (
             'pipeline',
@@ -283,9 +300,6 @@ CREATE TABLE system_map_relationships (
             'depends_on',
             'controls',
             'feeds_back_to',
-            'owned_by',
-            'measured_by',
-            'capacity_limited_by',
             'contains'
         )
     )
@@ -323,6 +337,10 @@ CREATE TABLE system_map_loop_configs (
 
 ### 3.4 Constraint and Binding Contract
 
+The initial node binding contract is deliberately relational and small. A node may bind to at most one `pipeline_id`, `connector_instance_id`, `owner_team_id`, or `eval_id`; each populated binding has a composite foreign key with `organisation_id`. `external_ref` remains the only provider-owned identifier. Guardrail pins and HITL review configurations are not relational System Map bindings in this revision: controls describe those concepts through `control_type` and validated `config_json` only, while the implementation does not promise a foreign key to guardrail or HITL rows. Adding such a binding later requires a named projection table and a new composite foreign key, not an untracked JSON reference.
+
+The initial relationship vocabulary targets map nodes only. `owned_by`, `measured_by`, and `capacity_limited_by` are therefore removed from the first implementation: team ownership is represented by `owner_team_id`, metrics are selected by the node's metric configuration, and capacity is represented by `capacity_limit` or a queue node. This avoids relationships whose target entity has no typed row or tenant-safe key.
+
 The DDL is intentionally explicit about the organisation boundary:
 
 - `system_maps`, revisions, nodes, relationships, and loop configurations each store a non-null `organisation_id` and reference `organisations(id)`.
@@ -343,14 +361,16 @@ If an existing shared table cannot provide the required `(id, organisation_id)` 
 | Node Type | Purpose | Primary Properties | Modulo Binding |
 |---|---|---|---|
 | `pipeline` | Represents an automated, executable Modulo pipeline. | `pipeline_id`, `max_concurrent_runs`, `timeout_seconds` | Bound directly to `pipelines.id`. |
-| `external_capability` | Represents work executed outside Modulo (e.g. GitHub Actions, ArgoCD, Jenkins, security scanner). | `provider`, `external_ref`, `execution_mode` | Optional connector binding for status telemetry. |
-| `manual_capability` | Represents human engineering work (e.g. architectural spikes, design review, manual security audit). | `owner_role`, `team_id`, `sla_hours` | Associated with team responsibilities. |
-| `queue` | Represents an intermediate buffer or backlog holding items between capabilities. | `queue_type`, `capacity_limit`, `drain_rate_per_hour` | Backlog or SAQ task queue binding. |
-| `control` | Represents a deterministic evaluation gate, safety guardrail, or human approval barrier. | `control_type` (gate / guardrail / approval), `pass_threshold`, `fail_action` | Bound to an Eval definition, guardrail pin, or HITL edge. |
+| `external_capability` | Represents work executed outside Modulo (e.g. GitHub Actions, ArgoCD, Jenkins, security scanner). | `provider`, `external_ref`, `execution_mode` | Optional `connector_instance_id` binding for status telemetry. |
+| `manual_capability` | Represents human engineering work (e.g. architectural spikes, design review, manual security audit). | `owner_role`, `owner_team_id`, `sla_hours` | Bound to a same-organisation team. |
+| `queue` | Represents an intermediate buffer or backlog holding items between capabilities. | `queue_type`, `capacity_limit`, `drain_rate_per_hour` | Capacity is represented directly by `capacity_limit`; no separate slot entity is referenced. |
+| `control` | Represents a deterministic evaluation gate, safety guardrail, or human approval barrier. | `control_type` (gate / guardrail / approval), `pass_threshold`, `fail_action` | Optional `eval_id` binding; guardrail and HITL references are outside the initial relational binding contract. |
 | `improvement_loop` | Represents an autonomous sidecar pipeline monitoring system signals and deploying incremental fixes. | Loop configuration (signal, window, action, budget, cooldown, metric) | Bound to `system_map_loop_configs` and an action pipeline. |
 | `system_boundary` | Demarcates an organizational boundary, environment trust zone, or compliance perimeter. | `boundary_type` (network / team / environment), `compliance_scope` | Container grouping via `contains` relationships. |
 
 ### 4.2 Relationship Typology
+
+The first implementation exposes only relationships whose endpoints are rows in `system_map_nodes`. Ownership, measurement, and capacity limits remain node properties or bindings, so `owned_by`, `measured_by`, and `capacity_limited_by` are intentionally outside the initial relationship enum.
 
 | Relationship Type | Direction | Semantic Meaning | Validation Rule |
 |---|---|---|---|
@@ -358,10 +378,7 @@ If an existing shared table cannot provide the required `(id, organisation_id)` 
 | `depends_on` | Dependent -> Prerequisite | Operational or architectural dependency. | Source capability cannot operate without target. |
 | `controls` | Controller -> Controlled | Governs execution, gating, or admission into a capability. | Source must be `control` or `improvement_loop`. |
 | `feeds_back_to` | Source -> Target | Asynchronous diagnostic signal or metric emission. | Target is an upstream queue, signal buffer, or loop. |
-| `owned_by` | Node -> Team | Operational stewardship and responsibility. | Target must be an active organizational team. |
-| `measured_by` | Node -> Metric | Telemetry stream or daily fact dimension. | Binds an aggregate metric to a node. |
-| `capacity_limited_by`| Node -> Queue/Slot | Concurrency clamp or slot pool constraint. | Clamps throughput based on shared capacity. |
-| `contains` | Boundary -> Node | Hierarchical enclosure inside a subsystem or perimeter. | Source must be `system_boundary`. |
+| `contains` | Boundary -> Node | Hierarchical enclosure inside a subsystem or perimeter. | Source must be `system_boundary`; ownership, metrics, and capacity use the node columns and bindings described in §3.4. |
 
 ### 4.3 Loop Semantics & Acyclic Delivery Flow
 A core failure mode of naive delivery graphs is introducing arbitrary executable cycles into the pipeline flow. When a pipeline failure redirects an artifact back to an earlier pipeline without structural limits, the system risks infinite execution loops, unbounded cloud compute spend, and cascading queue collapse.
@@ -402,6 +419,19 @@ ALTER TABLE run_daily_facts
 ADD COLUMN system_map_id UUID,
 ADD COLUMN system_map_revision_id UUID,
 ADD COLUMN system_map_node_key VARCHAR(128);
+
+-- Facts outlive raw runs and archived topology rows, so this is an immutable
+-- denormalised attribution contract, not a live foreign key. The terminalizer
+-- copies the complete tuple from the run's frozen attribution block and never
+-- resolves current topology while writing facts. A mapped fact contains all
+-- three values; an unattributed fact contains none.
+ALTER TABLE run_daily_facts
+ADD CONSTRAINT ck_run_daily_facts_system_map_attribution_complete CHECK (
+    (system_map_id IS NULL AND system_map_revision_id IS NULL AND system_map_node_key IS NULL)
+    OR
+    (system_map_id IS NOT NULL AND system_map_revision_id IS NOT NULL
+     AND system_map_node_key IS NOT NULL AND length(system_map_node_key) BETWEEN 1 AND 128)
+);
 
 CREATE INDEX ix_run_daily_facts_system_map_node
 ON run_daily_facts(organisation_id, system_map_id, system_map_node_key, run_date);
