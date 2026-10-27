@@ -51,7 +51,7 @@ async def _insert_run(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
                 "langgraph_thread_id, trigger_type, input_hash, run_number) "
-                "VALUES (:id, :oid, :pid, :sid, :thread, 'manual', :hash, 1)"
+                "VALUES (:id, :oid, :pid, :sid, :thread, 'manual', :hash, :rn)"
             ),
             {
                 "id": str(run_id),
@@ -60,6 +60,7 @@ async def _insert_run(
                 "sid": str(snapshot_id),
                 "thread": str(uuid.uuid4()),
                 "hash": uuid.uuid4().hex * 2,
+                "rn": int(run_id.int % 10**9) + 1,
             },
         )
     return run_id
