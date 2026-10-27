@@ -70,14 +70,19 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-def _principal(*, is_system_admin: bool = False) -> AuthenticatedPrincipal:
+def _principal(
+    *,
+    is_system_admin: bool = False,
+    org_role: str = "admin",
+    key_grants: frozenset[str] | None = None,
+) -> AuthenticatedPrincipal:
     return AuthenticatedPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
-        org_role="admin",
+        org_role=org_role,
         is_system_admin=is_system_admin,
-        key_grants=None,
+        key_grants=key_grants,
     )
 
 
@@ -102,6 +107,13 @@ def _build_client(principal: AuthenticatedPrincipal) -> tuple[TestClient, AsyncM
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     test_client, _ = _build_client(_principal())
+    yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def operator_client() -> Generator[TestClient, None, None]:
+    test_client, _ = _build_client(_principal(org_role="operator", key_grants=frozenset()))
     yield test_client
     app.dependency_overrides.clear()
 
@@ -219,6 +231,56 @@ def _create_payload(**overrides: Any) -> dict[str, Any]:
     }
     payload.update(overrides)
     return payload
+
+
+def test_get_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestClient) -> None:
+    prim = _make_listable_primitive(primitive_type="lifecycle_map")
+    with (
+        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get(f"/api/v1/libraries/{prim.id}")
+    assert resp.status_code == 404
+
+
+def test_create_lifecycle_map_primitive_returns_403_when_dev_mode_off(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock) as create_mock,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post("/api/v1/libraries", json=_create_payload(primitive_type="lifecycle_map"))
+    assert resp.status_code == 403
+    create_mock.assert_not_awaited()
+
+
+def test_create_lifecycle_map_primitive_rejects_ordinary_operator(operator_client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock) as create_mock,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = operator_client.post("/api/v1/libraries", json=_create_payload(primitive_type="lifecycle_map"))
+    assert resp.status_code == 403
+    create_mock.assert_not_awaited()
+
+
+def test_create_lifecycle_map_primitive_allows_internal_operator(client: TestClient) -> None:
+    prim = _make_listable_primitive(primitive_type="lifecycle_map")
+    with (
+        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)),
+        patch("modulo.api.routes.library.get_primitive_by_slug", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.library.create_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post("/api/v1/libraries", json=_create_payload(primitive_type="lifecycle_map"))
+    assert resp.status_code == 201, resp.text
 
 
 def test_create_primitive_returns_201(client: TestClient) -> None:
@@ -443,6 +505,20 @@ def test_delete_primitive_missing_returns_404(client: TestClient) -> None:
     ):
         resp = client.delete(f"/api/v1/libraries/{uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+def test_restore_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: TestClient) -> None:
+    prim = _make_listable_primitive(primitive_type="lifecycle_map")
+    with (
+        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch.object(client.mock_session, "get", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock) as restore_mock,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post(f"/api/v1/libraries/{prim.id}/restore")
+    assert resp.status_code == 404
+    restore_mock.assert_not_awaited()
 
 
 def test_restore_primitive_returns_200(client: TestClient) -> None:
@@ -1152,6 +1228,21 @@ def test_create_lifecycle_map_missing_returns_404(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 # community contributions
 # ---------------------------------------------------------------------------
+
+
+def test_community_contribute_lifecycle_map_returns_403_when_dev_mode_off(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("modulo.api.routes.library.contribute_primitive", new_callable=AsyncMock) as contribute_mock,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post(
+            "/api/v1/libraries/community/contribute",
+            json=_create_payload(primitive_type="lifecycle_map", name="Map", slug="map"),
+        )
+    assert resp.status_code == 403
+    contribute_mock.assert_not_awaited()
 
 
 def test_community_contribute_returns_201(client: TestClient) -> None:

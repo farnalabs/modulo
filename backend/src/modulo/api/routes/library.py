@@ -178,20 +178,32 @@ def _can_access_lifecycle_map_primitives(principal: TenantPrincipal, *, dev_mode
     return grants_permit(principal.key_grants, "library.search.in_dev")
 
 
-def _reject_lifecycle_map_primitive_access(principal: TenantPrincipal, primitive: LibraryPrimitive | None) -> None:
+def _reject_lifecycle_map_primitive_access(
+    principal: TenantPrincipal,
+    primitive: LibraryPrimitive | None,
+    *,
+    dev_mode: bool,
+) -> None:
     """Reject direct mutation/copy of lifecycle-map primitives outside dev mode."""
     if (
         primitive is not None
         and primitive.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE
-        and not _can_access_lifecycle_map_primitives(
-            principal,
-            dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
-        )
+        and not _can_access_lifecycle_map_primitives(principal, dev_mode=dev_mode)
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Primitive not found",
         )
+
+
+def _require_lifecycle_map_internal_access(principal: TenantPrincipal) -> None:
+    """Require the existing operator/grant/developer-mode gate for lifecycle maps."""
+    require_in_dev_operator(
+        principal,
+        "library.search.in_dev",
+        require_dev_mode=True,
+        settings=get_settings(),
+    )
 
 
 def _filter_lifecycle_map_types(
@@ -909,7 +921,10 @@ async def get_library_primitive_endpoint(
             primitive = await get_primitive(session, principal.organisation_id, primitive_id)
             if primitive is not None and (
                 primitive.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE
-                and not _can_access_lifecycle_map_primitives(principal)
+                and not _can_access_lifecycle_map_primitives(
+                    principal,
+                    dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                )
             ):
                 primitive = None
     except IntegrityError:
@@ -951,6 +966,8 @@ async def create_library_primitive_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             await validate_owner_team_for_create(session, principal, req.owner_team_id)
+            if req.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
+                _require_lifecycle_map_internal_access(principal)
             existing = await get_primitive_by_slug(session, principal.organisation_id, req.primitive_type, req.slug)
             if existing is not None:
                 raise HTTPException(
@@ -1031,7 +1048,12 @@ async def update_library_primitive_endpoint(
             await _set_rls_context(session, principal)
             existing = await get_library_primitive(session, primitive_id)
             if existing is not None:
-                _reject_lifecycle_map_primitive_access(principal, existing)
+                _reject_lifecycle_map_primitive_access(
+                    principal,
+                    existing,
+                    dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                )
+
             if "content_json" in updates and existing is not None:
                 try:
                     _assert_composite_content_json(existing.primitive_type, updates["content_json"])
@@ -1087,8 +1109,14 @@ async def delete_library_primitive_endpoint(
             await _set_rls_context(session, principal)
             existing = await get_library_primitive(session, primitive_id)
             if existing is not None:
-                _reject_lifecycle_map_primitive_access(principal, existing)
+                _reject_lifecycle_map_primitive_access(
+                    principal,
+                    existing,
+                    dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                )
+
             prim = await soft_delete_library_primitive(session, primitive_id)
+
     except IntegrityError:
         _log.exception("library.delete_library_primitive_endpoint")
         raise _conflict_error() from None
@@ -1121,6 +1149,17 @@ async def restore_library_primitive_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
+            existing = await session.get(
+                LibraryPrimitive,
+                primitive_id,
+                execution_options={"include_deleted": True},
+            )
+            if existing is not None:
+                _reject_lifecycle_map_primitive_access(
+                    principal,
+                    existing,
+                    dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                )
             prim = await restore_library_primitive(session, primitive_id)
     except ProgrammingError:
         _log.exception("library.restore_library_primitive_endpoint")
@@ -1161,7 +1200,12 @@ async def copy_to_adapt_endpoint(
             await validate_owner_team_for_create(session, principal, req.target_team_id)
             existing = await get_library_primitive(session, primitive_id)
             if existing is not None:
-                _reject_lifecycle_map_primitive_access(principal, existing)
+                _reject_lifecycle_map_primitive_access(
+                    principal,
+                    existing,
+                    dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                )
+
         result = await copy_to_adapt(
             session,
             principal.organisation_id,
@@ -2332,6 +2376,8 @@ async def community_contribute_endpoint(
     """Submit a community library contribution."""
     try:
         org_id = _require_organisation_id(principal)
+        if req.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
+            _require_lifecycle_map_internal_access(principal)
         submitted_content = req.content_json
         if req.primitive_type == "composite" and isinstance(submitted_content.get("nodes"), list):
             # FAR-1374 parity with the library create/patch gates: a composite

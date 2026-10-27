@@ -336,10 +336,13 @@ def test_read_surface_patch_response_masks_composite(client: TestClient) -> None
 
 def test_read_surface_delete_response_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
-    with patch(
-        "modulo.api.routes.library.soft_delete_library_primitive",
-        new_callable=AsyncMock,
-        return_value=prim,
+    with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch(
+            "modulo.api.routes.library.soft_delete_library_primitive",
+            new_callable=AsyncMock,
+            return_value=prim,
+        ),
     ):
         resp = client.delete(f"/api/v1/libraries/{prim.id}")
 
@@ -369,6 +372,7 @@ def test_read_surface_adapt_response_masks_composite(client: TestClient) -> None
             return_value=prim,
         ),
         patch("modulo.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
