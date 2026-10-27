@@ -25,6 +25,30 @@ describe('useHitlReviewState (FAR-860 selected option)', () => {
     expect(state.selectedOption.value).toBeNull()
   })
 
+  it('persists and clears claim, notes, and subject editing state per gate', () => {
+    const state = useHitlReviewState('run-1', 'gate-1')
+    expect(state.claimToken.value).toBeNull()
+    expect(state.notes.value).toBe('')
+    expect(state.editingSubject.value).toBe(false)
+    expect(state.modifiedSubject.value).toBe('')
+
+    state.setClaimToken('claim-1')
+    state.notes.value = 'Needs a second look'
+    state.setEditingSubject(true)
+    state.setModifiedSubject('Updated subject')
+
+    const restored = useHitlReviewState('run-1', 'gate-1')
+    expect(restored.claimToken.value).toBe('claim-1')
+    expect(restored.notes.value).toBe('Needs a second look')
+    expect(restored.editingSubject.value).toBe(true)
+    expect(restored.modifiedSubject.value).toBe('Updated subject')
+
+    restored.editingSubject.value = false
+    restored.modifiedSubject.value = 'Another subject'
+    expect(state.editingSubject.value).toBe(false)
+    expect(state.modifiedSubject.value).toBe('Another subject')
+  })
+
   it('resets every gate selection on resetHitlReviewState', () => {
     const first = useHitlReviewState('run-1', 'gate-1')
     const second = useHitlReviewState('run-2', 'gate-1')
