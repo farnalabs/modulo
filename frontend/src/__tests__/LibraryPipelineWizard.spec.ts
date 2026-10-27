@@ -266,6 +266,17 @@ describe('LibraryPipelineWizard', () => {
     expect(wrapper.text()).toContain('Pipeline Visualisation')
   })
 
+  it('renders template agents with descriptions and connector refs', async () => {
+    vi.mocked(api.GET).mockResolvedValue({ data: { ...PRIMITIVE, content_json: { agents: [{ name: 'Builder', description: 'Builds artifacts', connector_type_refs: [{ connector_type: 'github' }] }] } }, error: undefined })
+    router.push('/library/test-id/create-pipeline')
+    await router.isReady()
+    const wrapper = mount(LibraryPipelineWizard, { global: { plugins: [router], stubs: { OwnershipPicker: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('Builder')
+    expect(wrapper.text()).toContain('Builds artifacts')
+    expect(wrapper.text()).toContain('github')
+  })
+
   it('renders an empty template-agent list when the payload omits agents', async () => {
     vi.mocked(api.GET).mockResolvedValue({ data: { ...PRIMITIVE, content_json: {} }, error: undefined })
     router.push('/library/test-id/create-pipeline')

@@ -444,6 +444,21 @@ describe('AdminCostControlsView', () => {
     expect(wrapper.text()).toContain('budget crashed')
   })
 
+  it('covers zero-budget and progress-bar threshold branches', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as any
+    vm.settings.budget = 0
+    vm.totalSpend = 0
+    expect(vm.remainingClass).toBe('')
+    expect(vm.progressBarClass).toBe('bg-primary')
+    vm.settings.budget = 100
+    vm.totalSpend = 110
+    expect(vm.remainingClass).toBe('text-destructive')
+    expect(vm.progressBarClass).toBe('bg-destructive')
+    vm.totalSpend = 80
+    expect(vm.progressBarClass).toBe('bg-amber-500')
+  })
+
   it('calls loadAll on mount (costs, limits, settings, feature-flags)', async () => {
     mount(AdminCostControlsView, {
       global: { plugins: [pinia] },
