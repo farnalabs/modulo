@@ -401,67 +401,67 @@ System Maps enforces strict loop semantics:
 
 ## 5. Data Contracts, Attribution & Provenance
 
-### 5.1 Snapshot Attribution Freezing
-A pipeline run must never guess its position in the organizational delivery system at runtime. When a run is initialized by the trigger engine, Modulo inspects the organization's published System Map.
+### 5.1 Snapshot Attribution Freezing (Beta implementation contract)
+A pipeline run must not guess its position in the organizational delivery system at runtime. At run initialization, the trigger engine will evaluate the organization's published System Map and resolve the matching `pipeline` node, if one exists.
 
-If the pipeline is mapped to a `pipeline` node in the published map revision:
-1. The run record permanently stores:
-   - `system_map_id`: UUID of the parent System Map.
-   - `system_map_revision_id`: UUID of the exact published revision active at trigger time.
-   - `system_map_node_id`: UUID of the mapped `system_map_nodes` row.
-    - `system_map_node_key`: VARCHAR(128) string identifier of the mapped node within the revision, allowing the terminal fact writer to copy it directly into `run_daily_facts` without joining `system_map_nodes`.
+This is **Beta implementation work**, not a claim about fields that exist in the current `Run` or `PipelineSnapshot` models. The proposed frozen attribution block is the following object, stored in the immutable `PipelineSnapshot` for the run:
 
- 2. The run's immutable pipeline snapshot captures this attribution block. If the System Map is updated or archived later, the historical run's attribution remains frozen.
+```json
+{
+  "system_map_id": "UUID or null",
+  "system_map_revision_id": "UUID or null",
+  "system_map_node_id": "UUID or null",
+  "system_map_node_key": "string or null"
+}
+```
 
+Contract:
 
-### 5.2 Attribution Storage in `run_daily_facts`
-Analytics and system overview queries must survive the raw run retention purge without joining the `runs` table.
+- Every field is nullable. An unmapped run stores `null` for all four fields.
+- A mapped run stores all four fields: the parent System Map UUID, the published revision UUID active at trigger time, the projected node UUID, and the node key (1-128 characters).
+- The trigger engine writes the block once, when it creates the run snapshot, before execution begins. It does not resolve the current map again during execution or terminalization.
+- The block is immutable for the lifetime of the run. Editing, republishing, or archiving a System Map cannot change an existing run's attribution.
+- A future relational projection may also store the same values on `Run`, but `PipelineSnapshot` is the source of truth for the frozen attribution contract. The implementation must not read a live `system_map_nodes` row to reconstruct historical attribution.
 
-The `run_daily_facts` table is extended with three attribution columns:
+### 5.2 Attribution Storage in `run_daily_facts` (Beta implementation contract)
+Analytics and System Overview queries must survive raw run retention without joining the `runs` table. This is also **Beta implementation work**. The proposed `run_daily_facts` projection is:
 
 ```sql
+-- Proposed Beta columns. These are not present in the current schema.
 ALTER TABLE run_daily_facts
-ADD COLUMN system_map_id UUID,
-ADD COLUMN system_map_revision_id UUID,
-ADD COLUMN system_map_node_key VARCHAR(128);
+ADD COLUMN system_map_id UUID NULL,
+ADD COLUMN system_map_revision_id UUID NULL,
+ADD COLUMN system_map_node_key VARCHAR(128) NULL;
 
--- Facts outlive raw runs and archived topology rows, so this is an immutable
--- denormalised attribution contract, not a live foreign key. The terminalizer
--- copies the complete tuple from the run's frozen attribution block and never
--- resolves current topology while writing facts. A mapped fact contains all
--- three values; an unattributed fact contains none.
 ALTER TABLE run_daily_facts
 ADD CONSTRAINT ck_run_daily_facts_system_map_attribution_complete CHECK (
     (system_map_id IS NULL AND system_map_revision_id IS NULL AND system_map_node_key IS NULL)
     OR
     (system_map_id IS NOT NULL AND system_map_revision_id IS NOT NULL
-     AND system_map_node_key IS NOT NULL AND length(system_map_node_key) BETWEEN 1 AND 128)
+     AND system_map_node_key IS NOT NULL
+     AND length(system_map_node_key) BETWEEN 1 AND 128)
 );
 
 CREATE INDEX ix_run_daily_facts_system_map_node
 ON run_daily_facts(organisation_id, system_map_id, system_map_node_key, run_date);
 ```
 
-When the analytics fact writer executes during run terminalization, it copies `system_map_id`, `system_map_revision_id`, and the node's string identifier (`system_map_node_key`) into the fact row. This guarantees that long-term system performance trends, node throughput, and loop remediation statistics remain queryable without keeping raw run blobs.
+At terminalization, the fact writer copies the four-value attribution block directly from the run's immutable `PipelineSnapshot` into the fact row. It does not join the current System Map, look up a replacement node, or infer attribution from a work item. The nullable tuple is either complete or entirely null. The fact row is therefore a denormalized historical record that remains queryable after raw runs or map revisions are purged.
 
 ### 5.3 Provenance Taxonomy
-Every aggregate metric displayed on a System Map node or evidence drawer carries an explicit provenance tag:
+Every metric or evidence item displayed on a System Map node carries exactly one provenance value:
 
-```
-+------------------------------------------------------------------------+
-| Provenance Tag | Source Description                                   |
-|----------------|------------------------------------------------------|
-| observed       | Directly recorded by Modulo runtime (run start/end,  |
-|                | gate decisions, wall-clock duration, token spend).    |
-| derived        | Computed deterministically from observed facts       |
-|                | (queue latency, failure rate, 7-day moving averages). |
-| reported       | Received from external connectors or webhooks        |
-|                | (GitHub PR merged, CI runner status, Jira status).   |
-| unknown        | Incomplete or unverified data source.                |
-+------------------------------------------------------------------------+
-```
+| Value | Meaning | Example UI label |
+|---|---|---|
+| `observed` | Modulo directly recorded the external event or response, or directly measured the runtime fact. | **Observed** - run completed at 14:03; connector received HTTP 200. |
+| `reported` | An agent, external system, connector payload, webhook, or operator asserted a claim that Modulo has not independently verified. | **Reported** - GitHub says the pull request merged. |
+| `derived` | Modulo calculated the value deterministically from observed facts. | **Derived** - p95 latency calculated from terminal run facts. |
+| `unknown` | The value is unavailable, contradictory, stale beyond its validity window, or otherwise cannot be classified reliably. | **Unknown** - source unavailable or conflicting. |
 
-Provenance tags prevent teams from mistaking self-reported external data for verified Modulo audit evidence.
+Receipt and content have separate provenance. Modulo may **observe** that a self-report envelope arrived, including its sender, timestamp, signature status, and raw receipt metadata. The claim inside that envelope remains **reported** unless Modulo independently records the underlying event. The UI therefore renders separate badges rather than upgrading the claim: for example, `Envelope observed` beside `Claim reported`, with `Derived` shown only for calculations based on observed facts. An unavailable or contradictory source is labelled `Unknown`, never silently treated as zero or observed.
+
+These labels prevent self-reported external data from being mistaken for Modulo's own audit evidence. The evidence drawer and aggregate cards use the same four labels, with a tooltip containing the source and calculation path.
+
 
 ### 5.4 Honest Reporting of Missing Data
 When a pipeline or execution path is not mapped to a System Map, or when an external step lacks telemetry:
@@ -625,15 +625,15 @@ When viewing revisions or editing a draft:
 - A structured text diff summarizes topology changes:
   ```yaml
   nodes:
-    added: [queue_review_backlog]
+    added:
+      - queue_review_backlog
     removed: []
     modified:
-       governed_implementation:
-
-        capacity_limit: 5 -> 10
+      governed_implementation:
+        capacity_limit: "5 -> 10"
   relationships:
     added:
-      - flow: queue_review_backlog -> pipeline_pr_reviewer
+      - "flow: queue_review_backlog -> pipeline_pr_reviewer"
   ```
 
 ### 8.4 Rollback Semantics
@@ -644,7 +644,7 @@ An organization can roll back to a prior published revision at any time. Rolling
 4. Leaves historical fact records and past run snapshots untouched.
 
 ### 8.5 Declarative GitOps Authoring (`modulo apply`)
-System Maps supports declarative specification via `modulo apply`. A file named `system-map.yaml` can be committed to version control and applied via CI:
+System Maps supports declarative specification via `modulo apply`. A file named `system-map.yaml` can be committed to version control and applied via CI. This example uses the canonical YAML field names: `owner_team_ref`, `pipeline_ref`, and `action_pipeline_ref` are authoring references; the relational projection stores the resolved `owner_team_id`, `pipeline_id`, and `action_pipeline_id`.
 
 ```yaml
 version: modulo/v1alpha1
@@ -657,51 +657,70 @@ spec:
     - key: spec_triage
       name: "Specification Triage"
       type: manual_capability
-      owner_team: "Product Architecture"
+      config_json:
+        owner_role: "Product Architect"
+        service_level:
+          sla_hours: 24
+        owner_team_ref: "Product Architecture"
 
-     - key: governed_implementation
-       name: "Governed Implementation"
-
+    - key: governed_implementation
+      name: "Governed Implementation"
       type: pipeline
-       pipeline_ref: "Governed Implementation"
-
-      capacity_limit: 8
+      config_json:
+        pipeline_ref: "Governed Implementation"
+        execution:
+          max_concurrent_runs: 8
+          timeout_seconds: 1800
 
     - key: gate_lint_test
       name: "Lint & Architecture Gate"
       type: control
-      config:
+      config_json:
         control_type: gate
         fail_action: block
+        pass_threshold: 1.0
 
     - key: loop_security
       name: "Improve Security Loop"
       type: improvement_loop
-      loop_config:
+      config_json:
         target_signal: "security_vulnerability_count"
         observation_window_seconds: 14400
-        action_pipeline_ref: "Improve Security"
         budget_limit_usd: 150.00
         cooldown_seconds: 7200
         outcome_metric: "delta_vulnerabilities"
+        action_pipeline_ref: "Improve Security"
 
   relationships:
-     - key: flow_spec_to_implementation
-       type: flow
-       source: spec_triage
-       target: governed_implementation
+    - key: flow_spec_to_implementation
+      type: flow
+      source: spec_triage
+      target: governed_implementation
 
-     - key: flow_implementation_to_gate
-       type: flow
-       source: governed_implementation
-       target: gate_lint_test
+    - key: flow_implementation_to_gate
+      type: flow
+      source: governed_implementation
+      target: gate_lint_test
 
-     - key: ctrl_security_to_implementation
-       type: controls
-       source: loop_security
-       target: governed_implementation
-
+    - key: ctrl_security_to_implementation
+      type: controls
+      source: loop_security
+      target: governed_implementation
 ```
+
+#### Declarative reference resolution
+
+`modulo apply` resolves authoring references before it writes or publishes relational projections. The mapping is explicit:
+
+| YAML field | Relational field | Accepted reference | Resolution rule |
+|---|---|---|---|
+| `owner_team_ref` | `owner_team_id` | Team UUID or exact team name | Resolve within the current organisation; the team must be active and permitted by the map's visibility. |
+| `pipeline_ref` | `pipeline_id` | Pipeline UUID or exact pipeline name | Resolve an active, non-deleted pipeline within the current organisation. |
+| `config_json.action_pipeline_ref` | `action_pipeline_id` | Pipeline UUID or exact pipeline name | Resolve an active, non-deleted action pipeline within the current organisation. |
+
+UUIDs are matched by ID. Names are matched exactly after the documented case-insensitive comparison; surrounding whitespace is not significant, but partial names, aliases, and cross-organisation names are not accepted. A name that matches zero rows fails the apply. A name that matches more than one row also fails the apply with an ambiguity error and requires the author to use the UUID form. A UUID from another organisation, a deleted resource, or a resource outside the permitted team scope fails validation. Apply is atomic: it does not publish a partially resolved graph.
+
+For an `improvement_loop`, `config_json.action_pipeline_ref` is the only YAML source for the action binding. After resolution, `action_pipeline_id` is the validated pipeline binding used when the loop dispatches work. It is not a display-only copy and must never be inferred from `pipeline_ref`, the node name, or the current pipeline catalog after publication. The published loop configuration retains the resolved binding in its immutable revision.
 
 ---
 
