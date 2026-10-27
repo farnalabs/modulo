@@ -1544,8 +1544,10 @@ async def admin_deactivate_user(
     # raw-SQL call does not refresh the in-session ORM object, and (with
     # expire_on_commit off) a plain re-SELECT would return the same stale
     # identity-map instance. is_active must reflect the caller's-org tombstone
-    # (gh-1794/FAR-533).
-    await session.refresh(membership)
+    # (gh-1794/FAR-533). With autobegin=False (production session config),
+    # explicitly begin a transaction for the refresh.
+    async with session.begin():
+        await session.refresh(membership)
     return _to_user_list_item(account, org_role, org_membership=membership)
 
 
@@ -1645,8 +1647,10 @@ async def admin_reactivate_user(
     # Refresh the membership AFTER the tombstone clear committed — the bulk
     # UPDATE does not refresh the in-session ORM object (same identity-map
     # caveat as the deactivate route). is_active must reflect the caller's-org
-    # state (gh-1794/FAR-533).
-    await session.refresh(membership)
+    # state (gh-1794/FAR-533). With autobegin=False (production session config),
+    # explicitly begin a transaction for the refresh.
+    async with session.begin():
+        await session.refresh(membership)
     return _to_user_list_item(account, org_role, org_membership=membership)
 
 
