@@ -816,15 +816,26 @@ def _host_os() -> str:
 
 
 def _host_arch() -> str:
-    """The bundle asset's arch token (modulo-<v>-<os>-<arch>.tar.gz)."""
+    """Return the supported bundle arch token for this host.
+
+    Unknown machine values must refuse rather than silently selecting amd64:
+    downloading an artifact for the wrong architecture can pass every checksum
+    gate and fail only when the native launcher is executed.
+    """
     import platform
 
-    return {
-        "x86_64": "amd64",
-        "AMD64": "amd64",
-        "aarch64": "arm64",
-        "arm64": "arm64",
-    }.get(platform.machine(), "amd64")
+    machine = platform.machine()
+    try:
+        return {
+            "x86_64": "amd64",
+            "AMD64": "amd64",
+            "aarch64": "arm64",
+            "arm64": "arm64",
+        }[machine]
+    except KeyError as exc:
+        raise UpgradeError(
+            f"unsupported host architecture '{machine}'; supported architectures are x86_64/amd64 and aarch64/arm64"
+        ) from exc
 
 
 def _urllib_fetch(url: str, target: Path) -> None:
@@ -884,10 +895,10 @@ def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
             archive.extractall(staging_dir, filter="data")
     except (tarfile.TarError, OSError) as exc:
         raise UpgradeError(f"could not extract {tarball.name}: {exc}") from exc
-    top_levels = [entry for entry in staging_dir.iterdir() if entry.is_dir()]
-    if len(top_levels) != 1:
+    top_levels = list(staging_dir.iterdir())
+    if len(top_levels) != 1 or not top_levels[0].is_dir() or top_levels[0].is_symlink():
         raise UpgradeError(
-            f"unexpected archive layout: expected exactly one top-level directory in "
+            f"unexpected archive layout: expected exactly one non-symlink top-level directory in "
             f"{tarball.name}, found {len(top_levels)}"
         )
     bundle_dir = top_levels[0]
@@ -907,6 +918,12 @@ def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
         if len(expected) != 64 or not name:
             raise UpgradeError(f"malformed SHA256SUMS line in {tarball.name}: {line!r}")
         artifact = bundle_dir / name
+        try:
+            artifact.resolve(strict=False).relative_to(bundle_dir.resolve())
+        except ValueError as exc:
+            raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}") from exc
+        if artifact.is_symlink():
+            raise UpgradeError(f"bundle integrity check FAILED: {name} (listed in SHA256SUMS) is not a regular file")
         if not artifact.is_file():
             raise UpgradeError(f"bundle integrity check FAILED: {name} (listed in SHA256SUMS) is missing")
         actual = _sha256_file(artifact)
@@ -1362,13 +1379,26 @@ def _resolve_upgrade_assets(
     tarball = Path(from_file)
     if not tarball.is_file():
         raise UpgradeError(f"--from-file: no such file: {from_file}")
-    filename = tarball.name.removeprefix("modulo-")
-    os_token = _host_os()
-    if f"-{os_token}-" not in filename:
-        raise UpgradeError(f"--from-file archive OS does not match the detected host ({os_token}): {tarball.name}")
-    version = _strip_bundle_prefix(
-        filename.removesuffix(f"-{os_token}-amd64.tar.gz").removesuffix(f"-{os_token}-arm64.tar.gz")
+    match = re.fullmatch(
+        r"modulo-(?P<version>[A-Za-z0-9][A-Za-z0-9._-]*)-(?P<os>linux|darwin)-(?P<arch>amd64|arm64)\.tar\.gz",
+        tarball.name,
     )
+    if match is None:
+        raise UpgradeError(
+            "--from-file archive name is malformed: expected exactly modulo-<version>-<os>-<arch>.tar.gz"
+        )
+    os_token = _host_os()
+    archive_os = match.group("os")
+    if archive_os != os_token:
+        raise UpgradeError(f"--from-file archive OS does not match the detected host ({os_token}): {tarball.name}")
+    host_arch = _host_arch()
+    archive_arch = match.group("arch")
+    if archive_arch != host_arch:
+        raise UpgradeError(
+            f"--from-file archive architecture '{archive_arch}' does not match the detected host architecture "
+            f"'{host_arch}': {tarball.name}"
+        )
+    version = _validate_version_segment(match.group("version"))
     manifest_file = tarball.parent / _RELEASE_MANIFEST_NAME
     signature_file = tarball.parent / f"{_RELEASE_MANIFEST_NAME}.sig"
     if not (manifest_file.is_file() and signature_file.is_file()):
