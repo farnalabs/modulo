@@ -37,6 +37,12 @@ workspace root `.env` (gitignored, so never commit the key; the repo is public
 and `VITE_*` values are inlined into the client bundle). A shell-exported
 `VITE_PRIMEUI_LICENSE` takes precedence over the `.env` lookup.
 
+A self-hosted build needs its own PrimeUI key: the all-in-one Dockerfile does
+not accept `--build-arg VITE_PRIMEUI_LICENSE`, and the published image is built
+without one. See
+[Continuity and Escrow](continuity-and-escrow.md#the-primeui-licence) for what
+the key does, how to obtain it, and how to supply it to a from-source build.
+
 ## E2E visual/token slice on PRs (FAR-2017)
 
 Most Playwright specs run only in the post-deploy staging `@regression` gate.

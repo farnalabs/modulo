@@ -202,6 +202,7 @@ the full command surface.
 - [Configuration reference](docs/configuration-reference.md)
 - [Agent configuration](docs/agent-config.md)
 - [Deployment guide](docs/deployment.md)
+- [Continuity and escrow](docs/continuity-and-escrow.md)
 - [System requirements](docs/system-requirements.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Upgrade process](docs/upgrade-process.md)
