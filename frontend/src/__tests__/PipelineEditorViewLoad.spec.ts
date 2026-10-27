@@ -120,7 +120,7 @@ describe('PipelineEditorView — page load', () => {
     vi.clearAllMocks()
   })
 
-  it('loads the editor on mount: pipeline, graph, catalog, folders and lifecycle maps all land', async () => {
+  it('loads the editor on mount: pipeline, graph, catalog and folders all land', async () => {
     seedApiSuccess()
     apiGetMock.mockImplementation((url: string) => {
       if (url.includes('/pipelines/{pipeline_id}/graph')) {
@@ -162,10 +162,7 @@ describe('PipelineEditorView — page load', () => {
     expect(vm.snapshots).toEqual([{ id: 's2', snapshot_version: 2 }])
     // loadFolders
     expect(vm.folders).toEqual([{ id: 'f-1', name: 'Prod', parent_id: null }])
-    // loadLifecycleMaps: only maps with a stage on THIS pipeline stay linked
-    expect(vm.linkedLifecycleMaps).toEqual([
-      { id: 'lm-1', name: 'Checkout Flow', stages: [{ pipeline_id: 'test-pipeline-id' }] },
-    ])
+    expect(vm.linkedLifecycleMaps).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -238,13 +235,16 @@ describe('PipelineEditorView — page load', () => {
     wrapper.unmount()
   })
 
-  it('keeps the editor usable when lifecycle maps fail to load (fail-open loader)', async () => {
+  it('does not request lifecycle maps when the editor loads', async () => {
     seedApiSuccess()
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    useApiFns.get.mockImplementation((url: string) => {
-      if (url.includes('/pipeline-folders')) return Promise.resolve([])
-      if (url.includes('/lifecycle-maps')) return Promise.reject(new Error('maps down'))
-      return Promise.resolve({ items: [] })
+    apiGetMock.mockImplementation((url: string) => {
+      if (url.includes('/pipelines/{pipeline_id}/graph')) {
+        return Promise.resolve({ data: graphPayload(), error: undefined })
+      }
+      if (url.includes('/pipelines/{pipeline_id}')) {
+        return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
     })
 
     router.push('/pipelines/test-pipeline-id/editor')
@@ -256,8 +256,8 @@ describe('PipelineEditorView — page load', () => {
     const vm = wrapper.vm as any
     expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(true)
     expect(vm.pageError).toBeNull()
-    expect(vm.linkedLifecycleMaps).toEqual([])
-    warnSpy.mockRestore()
+    expect(useApiFns.get).not.toHaveBeenCalledWith(expect.stringContaining('/lifecycle-maps'))
+    expect(vm.linkedLifecycleMaps).toBeUndefined()
     wrapper.unmount()
   })
 
