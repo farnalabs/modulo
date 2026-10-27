@@ -592,6 +592,16 @@ class TestListNotificationDeliveries(AuthContext):
 
 
 class TestLifecycleMaps(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_ordinary_mcp_caller_is_denied(self, mock_validate: AsyncMock) -> None:
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_role
+
+        _ctx_role.set("viewer")
+        _ctx_key_grants.set(None)
+        result = await list_lifecycle_maps()
+
+        assert result["error"] == "insufficient_scope"
+
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_list_returns_auth_error_on_revoked_token(self, mock_validate: AsyncMock) -> None:
         result = await list_lifecycle_maps()

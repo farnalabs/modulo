@@ -158,6 +158,19 @@ def _make_primitive(
     return p
 
 
+def test_viewer_library_list_excludes_lifecycle_maps(viewer_client: TestClient) -> None:
+    result = PageResult(items=[], total=0, page=1, page_size=20)
+    with patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as list_mock:
+        response = viewer_client.get("/api/v1/libraries")
+
+    assert response.status_code == 200, response.text
+    assert not response.json()["items"]
+    assert response.json()["total"] == 0
+    kwargs = list_mock.await_args.kwargs
+    assert kwargs["primitive_types"]
+    assert "lifecycle_map" not in kwargs["primitive_types"]
+
+
 def _make_listable_primitive(
     *,
     pid: uuid.UUID | None = None,

@@ -23,6 +23,8 @@ from modulo.api.routes.lifecycle_maps import LifecycleMapResponse
 from modulo.api.team_scope import validate_owner_team_for_create
 from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.permissions import grants_permit
+from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.audit_coverage import audited
 from modulo.core.feature_flags import get_registry
 from modulo.core.library_service import (
@@ -146,6 +148,7 @@ _CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE = "library.create_pipeline_from_template_
 _CODE_LIBRARY_LIST_ABUSE_REPORTS = "library.list_abuse_reports_endpoint"
 _CODE_LIBRARY_REVIEW_ABUSE_REPORT = "library.review_abuse_report_endpoint"
 _MSG_ORGANISATION_ID_REQUIRED = "Organisation ID required"
+_LIFECYCLE_MAP_PRIMITIVE_TYPE = "lifecycle_map"
 
 
 _MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50 MB
@@ -163,6 +166,29 @@ def _split_primitive_types(raw: str | None) -> list[str] | None:
         return None
     types = [t.strip() for t in raw.split(",") if t.strip()]
     return types or None
+
+
+def _can_access_lifecycle_map_primitives(principal: TenantPrincipal) -> bool:
+    """Return whether the caller has the retained internal lifecycle-map grant."""
+    if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["operator"]:
+        return False
+    return grants_permit(principal.key_grants, "library.search.in_dev")
+
+
+def _filter_lifecycle_map_types(
+    principal: TenantPrincipal,
+    primitive_type: str | None,
+    primitive_types: list[str] | None,
+) -> tuple[str | None, str | None]:
+    """Hide lifecycle-map primitives from ordinary library callers at the query boundary."""
+    if _can_access_lifecycle_map_primitives(principal):
+        return primitive_type, ",".join(primitive_types) if primitive_types is not None else None
+    if primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
+        return "__hidden_lifecycle_map__", None
+    if primitive_types is None:
+        return None, ",".join(ptype for ptype in PRIMITIVE_TYPES if ptype != _LIFECYCLE_MAP_PRIMITIVE_TYPE)
+    filtered_types = [ptype for ptype in primitive_types if ptype != _LIFECYCLE_MAP_PRIMITIVE_TYPE]
+    return ("__hidden_lifecycle_map__", None) if not filtered_types else (primitive_type, ",".join(filtered_types))
 
 
 def _conflict_error() -> HTTPException:
@@ -723,12 +749,17 @@ async def list_library_primitives_endpoint(
 ) -> LibraryPrimitiveListResponse:
     if include_in_dev:
         require_in_dev_operator(principal, "library.search.in_dev")
+    filtered_primitive_type, filtered_primitive_types = _filter_lifecycle_map_types(
+        principal,
+        primitive_type,
+        _split_primitive_types(primitive_types),
+    )
     query = _PrimitiveListQuery(
         page=page,
         page_size=page_size,
         cursor=cursor,
-        primitive_type=primitive_type,
-        primitive_types=primitive_types,
+        primitive_type=filtered_primitive_type,
+        primitive_types=filtered_primitive_types,
         search=search,
         source=source,
         include_in_dev=include_in_dev,
@@ -792,7 +823,11 @@ async def _fetch_primitives(
                 session,
                 principal.organisation_id,
                 primitive_type=query.primitive_type,
-                primitive_types=_split_primitive_types(query.primitive_types),
+                primitive_types=(
+                    query.primitive_types
+                    if isinstance(query.primitive_types, list)
+                    else _split_primitive_types(query.primitive_types)
+                ),
                 search=query.search,
                 page=query.page,
                 page_size=query.page_size,
@@ -838,6 +873,11 @@ async def get_library_primitive_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+            if primitive is not None and (
+                primitive.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE
+                and not _can_access_lifecycle_map_primitives(principal)
+            ):
+                primitive = None
     except IntegrityError:
         _log.exception("library.get_library_primitive_endpoint")
         raise _conflict_error() from None
