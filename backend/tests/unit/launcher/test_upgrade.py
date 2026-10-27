@@ -1588,6 +1588,8 @@ def _installer_probe(
     *,
     bypass_manifest: bool = False,
     legacy_shim: Path | None = None,
+    extra_top_level: str | None = None,
+    symlinked_checksum_parent: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     install_script = Path(__file__).resolve().parents[4] / "scripts" / "install.sh"
     if bypass_manifest:
@@ -1605,13 +1607,32 @@ def _installer_probe(
     archive = tmp_path / archive_name
     source_root = tmp_path / root_name
     source_root.mkdir()
-    (source_root / "SHA256SUMS").write_text("", encoding="utf-8")
+    if symlinked_checksum_parent:
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        real_parent = tmp_path / "real-parent"
+        real_parent.mkdir()
+        artifact = real_parent / "artifact.txt"
+        artifact.write_text("artifact", encoding="utf-8")
+        (source_root / "nested").symlink_to(real_parent, target_is_directory=True)
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        (source_root / "SHA256SUMS").write_text(f"{digest}  nested/artifact.txt\n", encoding="utf-8")
+    else:
+        (source_root / "SHA256SUMS").write_text("", encoding="utf-8")
     tar_bin = shutil.which("tar")
     bash_bin = shutil.which("bash")
     assert tar_bin is not None
     assert bash_bin is not None
+    archive_entries = [root_name]
+    if extra_top_level is not None:
+        extra = tmp_path / extra_top_level
+        if extra_top_level.startswith("."):
+            extra.write_text("unexpected", encoding="utf-8")
+        else:
+            extra.mkdir()
+        archive_entries.append(extra_top_level)
     subprocess.run(  # noqa: S603 - resolved system tar and test-owned paths
-        [tar_bin, "-czf", str(archive), "-C", str(tmp_path), root_name], check=True, timeout=30
+        [tar_bin, "-czf", str(archive), "-C", str(tmp_path), *archive_entries], check=True, timeout=30
     )
     env = {**os.environ, "HOME": str(tmp_path / "home"), "MODULO_INSTALL_ROOT": str(tmp_path / "install")}
     if legacy_shim is not None:
@@ -1659,6 +1680,32 @@ def test_installer_rejects_mismatched_archive_root_before_install_mutation(tmp_p
     result = _installer_probe(tmp_path, "modulo-1.2.3-linux-amd64.tar.gz", "unexpected-root", bypass_manifest=True)
     assert result.returncode != 0
     assert "archive top-level directory 'unexpected-root' does not match archive identity" in result.stderr
+    assert not (tmp_path / "install").exists()
+
+
+def test_installer_rejects_hidden_top_level_entry_before_install_mutation(tmp_path: Path) -> None:
+    result = _installer_probe(
+        tmp_path,
+        "modulo-1.2.3-linux-amd64.tar.gz",
+        "modulo-1.2.3-linux-amd64",
+        bypass_manifest=True,
+        extra_top_level=".hidden",
+    )
+    assert result.returncode != 0
+    assert "unexpected archive layout" in result.stderr
+    assert not (tmp_path / "install").exists()
+
+
+def test_installer_rejects_symlinked_checksum_parent_before_install_mutation(tmp_path: Path) -> None:
+    result = _installer_probe(
+        tmp_path,
+        "modulo-1.2.3-linux-amd64.tar.gz",
+        "modulo-1.2.3-linux-amd64",
+        bypass_manifest=True,
+        symlinked_checksum_parent=True,
+    )
+    assert result.returncode != 0
+    assert "unsafe or missing artifact path 'nested/artifact.txt'" in result.stderr
     assert not (tmp_path / "install").exists()
 
 
