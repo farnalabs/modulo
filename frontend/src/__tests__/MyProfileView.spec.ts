@@ -611,6 +611,37 @@ describe('MyProfileView loading placeholders and fallbacks', () => {
     expect(hitlLoading.find('[aria-busy="true"]').exists()).toBe(true)
   })
 
+  it('shows a profile skeleton until the profile request resolves', async () => {
+    usePlanStore().currentTier = 'team'
+    let resolveProfile: (value: unknown) => void = () => {}
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/auth/me') {
+        return new Promise<unknown>((resolve) => { resolveProfile = resolve })
+      }
+      if (url === '/api/v1/teams/my') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/me/hitl-email-preferences') {
+        return Promise.resolve({ data: { default: false, pipeline_overrides: {} }, error: undefined })
+      }
+      return Promise.resolve({ data: { items: [] }, error: undefined })
+    })
+
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+
+    const skeleton = wrapper.find('[data-testid="my-profile-profile-loading"]')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.find('output').text()).toBe('Loading')
+    expect(skeleton.find('[aria-busy="true"]').exists()).toBe(true)
+    // The blank profile card must not flash before the data arrives.
+    expect(wrapper.text()).not.toContain('Member since')
+
+    resolveProfile({ data: PROFILE, error: undefined })
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="my-profile-profile-loading"]').exists()).toBe(false)
+    })
+    expect(wrapper.text()).toContain('user@example.com')
+  })
+
   it('shows an actionable error and recovers when profile loading fails', async () => {
     usePlanStore().currentTier = 'team'
     let profileAttempts = 0
