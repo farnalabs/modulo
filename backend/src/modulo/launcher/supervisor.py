@@ -779,7 +779,7 @@ class _ProcessBackend(Protocol):
 
     def starttime(self, pid: int) -> int | None:
         """Opaque start-time identity token, or None when unknown/gone."""
-        ...
+        ...  # pragma: no cover - typing-only stub, no runtime behaviour
 
     def shim_starttime(self, pid: int) -> int | None:
         """Token to bake into a wrapped child shim, or None to not wrap it.
@@ -789,19 +789,19 @@ class _ProcessBackend(Protocol):
         while a platform whose shim cannot tolerate a self-kill returns None
         so the argv passes through unwrapped instead of crash-looping.
         """
-        ...
+        ...  # pragma: no cover - typing-only stub, no runtime behaviour
 
     def start_epoch(self, pid: int) -> float | None:
         """Approximate the epoch time *pid* started, or None when unknown."""
-        ...
+        ...  # pragma: no cover - typing-only stub, no runtime behaviour
 
     def children(self, pid: int) -> list[int]:
         """Direct child PIDs of *pid* (empty when the platform cannot tell)."""
-        ...
+        ...  # pragma: no cover - typing-only stub, no runtime behaviour
 
     def is_postgres(self, pid: int) -> bool | None:
         """True/False when the executable identity is readable; None if not."""
-        ...
+        ...  # pragma: no cover - typing-only stub, no runtime behaviour
 
 
 class _LinuxProcessBackend:

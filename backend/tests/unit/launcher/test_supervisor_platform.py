@@ -25,6 +25,7 @@ import logging
 import os
 import sys
 import time
+import types
 from collections.abc import Callable
 from subprocess import Popen
 from typing import Any
@@ -380,6 +381,209 @@ def test_child_shim_argv_passes_through_when_darwin_identity_is_unreadable(
         argv = child_shim_argv(["redis-server"], parent_pid=4242)
     assert argv == ["redis-server"]
     assert "supervisor.shim_identity_unreadable" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Linux backend: malformed / unreadable /proc edges
+# ---------------------------------------------------------------------------
+
+
+class _FakeProcPath:
+    """Stand-in for ``Path`` behind the Linux /proc readers."""
+
+    def __init__(
+        self,
+        *,
+        text: str | None = None,
+        data: bytes | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        self._text = text
+        self._data = data
+        self._error = error
+
+    def read_text(self, encoding: str | None = None) -> str:
+        if self._error is not None:
+            raise self._error
+        assert self._text is not None
+        return self._text
+
+    def read_bytes(self) -> bytes:
+        if self._error is not None:
+            raise self._error
+        assert self._data is not None
+        return self._data
+
+
+def _install_linux_proc(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> None:
+    monkeypatch.setattr(supervisor_module, "Path", lambda _path: _FakeProcPath(**kwargs))
+
+
+def test_linux_starttime_is_none_when_stat_has_too_few_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_linux_proc(monkeypatch, text="1234 (postgres) S 1 2 3")
+    assert _LinuxProcessBackend().starttime(1234) is None
+
+
+def test_linux_starttime_is_none_when_starttime_is_not_an_int(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokens = ["S", *(str(index) for index in range(1, 19)), "not-a-number"]
+    _install_linux_proc(monkeypatch, text=f"1234 (postgres) {' '.join(tokens)}")
+    assert _LinuxProcessBackend().starttime(1234) is None
+
+
+def test_linux_start_epoch_is_none_when_uptime_is_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _LinuxProcessBackend()
+    monkeypatch.setattr(backend, "starttime", lambda _pid: 100)
+    _install_linux_proc(monkeypatch, error=OSError("no /proc"))
+    assert backend.start_epoch(1234) is None
+
+
+def test_linux_start_epoch_is_none_when_clock_tick_rate_is_not_positive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _LinuxProcessBackend()
+    monkeypatch.setattr(backend, "starttime", lambda _pid: 100)
+    _install_linux_proc(monkeypatch, text="10.00 20.00")
+    monkeypatch.setattr(supervisor_module.os, "sysconf", lambda _name: 0)
+    assert backend.start_epoch(1234) is None
+
+
+def test_linux_children_is_empty_when_a_token_is_not_an_int(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_linux_proc(monkeypatch, text="11 not-a-pid 33")
+    assert _LinuxProcessBackend().children(1234) == []
+
+
+def test_linux_is_postgres_is_unknowable_on_permission_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_linux_proc(monkeypatch, error=PermissionError("denied"))
+    assert _LinuxProcessBackend().is_postgres(1234) is None
+
+
+# ---------------------------------------------------------------------------
+# libproc loader: bind the symbols, fall back, answer None when unavailable
+# ---------------------------------------------------------------------------
+
+
+class _FakeLibprocLibrary:
+    """A CDLL stand-in exposing the three libproc symbols."""
+
+    def __init__(self) -> None:
+        self.proc_pidinfo = types.SimpleNamespace()
+        self.proc_pidpath = types.SimpleNamespace()
+        self.proc_listchildpids = types.SimpleNamespace()
+
+
+@pytest.fixture
+def clean_libproc_cache() -> Any:
+    """The loader is lru_cached — never let a fake leak into another test."""
+    supervisor_module._load_libproc.cache_clear()
+    yield
+    supervisor_module._load_libproc.cache_clear()
+
+
+def test_load_libproc_binds_the_three_symbols(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_libproc_cache: None,
+) -> None:
+    lib = _FakeLibprocLibrary()
+    monkeypatch.setattr(ctypes.util, "find_library", lambda _name: "/usr/lib/libproc.dylib")
+    monkeypatch.setattr(ctypes, "CDLL", lambda *_args, **_kwargs: lib)
+    assert supervisor_module._load_libproc() is lib
+    assert lib.proc_pidinfo.restype is ctypes.c_int
+    assert lib.proc_pidpath.restype is ctypes.c_int
+    assert lib.proc_listchildpids.restype is ctypes.c_int
+
+
+def test_load_libproc_falls_through_to_the_bare_dylib(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_libproc_cache: None,
+) -> None:
+    lib = _FakeLibprocLibrary()
+    attempted: list[str] = []
+
+    def fake_cdll(name: str, **_kwargs: Any) -> Any:
+        attempted.append(name)
+        if name == "libproc.dylib":
+            return lib
+        raise OSError("not found")
+
+    monkeypatch.setattr(ctypes.util, "find_library", lambda _name: "candidate-a")
+    monkeypatch.setattr(ctypes, "CDLL", fake_cdll)
+    assert supervisor_module._load_libproc() is lib
+    assert attempted == ["candidate-a", "libproc.dylib"]
+
+
+def test_load_libproc_is_none_when_every_candidate_fails_to_load(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_libproc_cache: None,
+) -> None:
+    monkeypatch.setattr(ctypes.util, "find_library", lambda _name: None)
+
+    def fake_cdll(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("not found")
+
+    monkeypatch.setattr(ctypes, "CDLL", fake_cdll)
+    assert supervisor_module._load_libproc() is None
+
+
+def test_load_libproc_is_none_when_a_symbol_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_libproc_cache: None,
+) -> None:
+    monkeypatch.setattr(ctypes.util, "find_library", lambda _name: None)
+    monkeypatch.setattr(ctypes, "CDLL", lambda *_args, **_kwargs: object())
+    assert supervisor_module._load_libproc() is None
+
+
+# ---------------------------------------------------------------------------
+# Darwin backend: real-call failures (0-byte answers and raised OSErrors)
+# ---------------------------------------------------------------------------
+
+
+def _raise_oserror(*_args: Any, **_kwargs: Any) -> Any:
+    raise OSError("libproc call failed")
+
+
+def test_darwin_start_epoch_is_none_when_pidinfo_fails(
+    fake_libproc: Callable[..., FakeLibproc],
+) -> None:
+    fake_libproc(start=None)
+    assert _DarwinProcessBackend().start_epoch(os.getpid()) is None
+
+
+def test_darwin_starttime_is_none_when_pidinfo_raises(
+    fake_libproc: Callable[..., FakeLibproc],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = fake_libproc()
+    monkeypatch.setattr(fake, "proc_pidinfo", _raise_oserror)
+    assert _DarwinProcessBackend().starttime(1234) is None
+
+
+def test_darwin_children_is_empty_when_listchildpids_raises(
+    fake_libproc: Callable[..., FakeLibproc],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = fake_libproc()
+    monkeypatch.setattr(fake, "proc_listchildpids", _raise_oserror)
+    assert _DarwinProcessBackend().children(1234) == []
+
+
+def test_darwin_is_postgres_is_unknowable_when_pidpath_raises(
+    fake_libproc: Callable[..., FakeLibproc],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = fake_libproc()
+    monkeypatch.setattr(fake, "proc_pidpath", _raise_oserror)
+    assert _DarwinProcessBackend().is_postgres(1234) is None
 
 
 # ---------------------------------------------------------------------------
