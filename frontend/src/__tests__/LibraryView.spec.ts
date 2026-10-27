@@ -245,10 +245,9 @@ describe('LibraryView', () => {
      expect(wrapper.text()).not.toContain('SDLC Map')
      expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(false)
      expect(postMock).not.toHaveBeenCalled()
-   })
+    })
 
-})
-})
+ })
 
 describe('LibraryView responsive layout (FAR-640)', () => {
   async function mountLibrary() {
