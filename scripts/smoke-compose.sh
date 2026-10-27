@@ -88,6 +88,9 @@ HTTP_BODY=""
 
 pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
 
+# A skipped check is not a passed one - never print it as PASS.
+skip() { printf '  \033[33mSKIP\033[0m %s\n' "$1"; }
+
 fail() {
   printf '  \033[31mFAIL\033[0m %s\n' "$1" >&2
   if [[ -n ${2:-} ]]; then printf '       fix: %s\n' "$2" >&2; fi
@@ -153,7 +156,7 @@ pass "readiness checkpointer ok"
 # 3. The checkpoint tables must exist. /healthz/ready can only tell you the
 #    probe failed; this names what is missing.
 if [[ "$SKIP_DB_CHECK" -eq 1 ]]; then
-  pass "checkpoint tables (skipped: --skip-db-check)"
+  skip "checkpoint tables (--skip-db-check: the DB assertions were not run)"
 else
   COMPOSE_ARGS=(-f "$COMPOSE_FILE")
   if [[ -n "$PROJECT_NAME" ]]; then COMPOSE_ARGS+=(-p "$PROJECT_NAME"); fi
