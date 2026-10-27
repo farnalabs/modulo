@@ -49,7 +49,27 @@ good faith.
 ### Required services
 
 The project needs a running PostgreSQL 16 and Redis 8 instance. Use Docker
-Compose to start them:
+Compose to start them.
+
+Both compose files **require** a real `FERNET_KEY` and refuse to start without
+one: a fixed placeholder cannot encrypt a stored credential, and a stack that
+starts without a valid key accepts a login and then fails the first time you
+save one (FAR-2181). Compose interpolates the whole file, so this applies even
+when you ask for only `db-local`/`redis-local`. Create `.env` once at the repo
+root:
+
+```bash
+printf 'FERNET_KEY=%s\n' "$(openssl rand -base64 32)" > .env
+```
+
+PowerShell equivalent — write it BOM-free, because a BOM breaks compose's
+`.env` parsing:
+
+```powershell
+[IO.File]::WriteAllText("$PWD\.env", "FERNET_KEY=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')")
+```
+
+Then start them:
 
 ```powershell
 docker compose -f docker-compose.local.yml up -d db-local redis-local
@@ -81,6 +101,9 @@ git clone https://github.com/farnalabs/modulo.git modulo
 cd modulo
 
 # 2. Start infrastructure
+#    Compose refuses to start without a valid FERNET_KEY — generate one once
+#    into .env (see "Required services" above for the PowerShell form).
+printf 'FERNET_KEY=%s\n' "$(openssl rand -base64 32)" > .env
 docker compose -f docker-compose.local.yml up -d db-local redis-local
 
 # 3. Install backend dependencies
@@ -150,8 +173,10 @@ executes and no trigger fires — the workers are mandatory. If you used
 docker compose up -d
 ```
 
-This starts the database, Redis, backend, and frontend together. The backend
-auto-seeds an admin user based on the `MODULO_USERS` environment variable.
+This starts the database, Redis, backend, and frontend together. It needs the
+`.env` from "Required services" above (`FERNET_KEY`) — compose fails loudly
+without it. The backend auto-seeds an admin user based on the `MODULO_USERS`
+environment variable.
 
 ### Environment variables
 
