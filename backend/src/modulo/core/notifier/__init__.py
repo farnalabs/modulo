@@ -50,6 +50,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from modulo.core.secret_patterns import mask_secret_values_in_text
 from modulo.core.ssrf import pinned_async_client
 from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
 from modulo.db.models.account import Account
@@ -803,9 +804,9 @@ class Notifier:
                 if resp.is_success:
                     succeeded = True
                     break
-                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                last_error = f"HTTP {resp.status_code}: {mask_secret_values_in_text(resp.text[:200])}"
             except httpx.RequestError as exc:
-                last_error = f"RequestError: {exc}"
+                last_error = mask_secret_values_in_text(f"RequestError: {exc}")
                 response_code = None
 
             if attempt < MAX_ATTEMPTS:

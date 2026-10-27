@@ -24,9 +24,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from jwt import InvalidTokenError as JWTError
 
 import modulo.api.mcp_server as ms
+import modulo.api.routes.api_keys as api_keys_routes
 from modulo.api.mcp_server import (
     _authenticate_api_key,
     _authenticate_oauth_jwt,
@@ -546,6 +548,76 @@ class TestSetUserKeysFlag:
         with patch.object(ms, "get_registry", side_effect=RuntimeError("no registry")):
             assert await _set_user_keys_flag(_ORG_ID) is False
         assert ms._ctx_user_keys_enabled.get() is False
+
+
+class TestFlagPolarityContractAcrossPaths:
+    """FAR-620: the SAME ``user_scoped_mcp_keys`` flag gates BOTH the mint path
+    (``api/routes/api_keys.py``) and the MCP auth path (this module). Both must
+    therefore agree on its polarity: ON permits, OFF (and an unreadable flag)
+    denies. A split — one path treating OFF as permissive while the other
+    treats it as a kill switch — lets a flag state mint keys that can never
+    authenticate, or authenticate keys that a kill switch was meant to revoke.
+    Pinning the agreement here makes such a polarity split fail CI.
+    """
+
+    @staticmethod
+    def _registry(resolved: bool | Exception) -> MagicMock:
+        registry = MagicMock()
+        if isinstance(resolved, Exception):
+            registry.resolve_flag = AsyncMock(side_effect=resolved)
+        else:
+            registry.resolve_flag = AsyncMock(return_value=resolved)
+        return registry
+
+    @classmethod
+    async def _mint_allowed(cls, resolved: bool | Exception) -> bool:
+        principal = MagicMock()
+        principal.organisation_id = _ORG_ID
+        principal.account_id = _USER_ID
+        req = api_keys_routes.ApiKeyCreate(name="user:parity", role="operator", scope="user")
+        denied_status: int | None = None
+        with patch.object(api_keys_routes, "get_registry", return_value=cls._registry(resolved)):
+            try:
+                await api_keys_routes._validate_create_request(req, principal)
+            except HTTPException as exc:
+                denied_status = exc.status_code
+        if denied_status is not None:
+            assert denied_status == 422
+            return False
+        return True
+
+    @classmethod
+    async def _auth_allowed(cls, resolved: bool | Exception) -> bool:
+        patches = _api_key_patches(_mock_api_key(scope="user"), "operator")
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patch.object(ms, "get_registry", return_value=cls._registry(resolved)),
+        ):
+            handled, err = await _authenticate_api_key(_mock_request(), _API_KEY)
+        assert (handled is True) == (err is None)
+        return handled
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("resolved", "expected"),
+        [
+            (True, True),
+            (False, False),
+            (RuntimeError("flag read exploded"), False),
+        ],
+        ids=["flag-on-permits", "flag-off-denies", "read-error-denies"],
+    )
+    async def test_mint_and_auth_agree_on_one_polarity(self, resolved: bool | Exception, expected: bool) -> None:
+        mint_allowed = await self._mint_allowed(resolved)
+        auth_allowed = await self._auth_allowed(resolved)
+        assert mint_allowed is expected
+        assert auth_allowed is expected
+        assert mint_allowed is auth_allowed
 
 
 def test_mcp_authorization_error_import_stable() -> None:
