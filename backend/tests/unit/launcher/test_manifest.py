@@ -327,6 +327,7 @@ def test_manifest_artifact_name_escape_refuses(tmp_path: Path, test_trust_store:
     "name",
     [
         "/etc/passwd",
+        "C:relative/artifact.tgz",
         r"C:\\Windows\\System32\\drivers\\etc\\hosts",
         r"\\\\server\\share\\artifact.tgz",
         "nested//artifact.tgz",

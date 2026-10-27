@@ -73,6 +73,7 @@ _STATE_FILENAME = "state.json"
 _DUMP_TIMEOUT_SECONDS = 1800
 _PRIVATE_MODE = 0o600
 _DIR_PRIVATE_MODE = 0o700
+_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:")
 
 # The launcher-owned public surface (consumed by install.sh via the bundled
 # runtime; vulture's dead-code gate special-cases __all__).
@@ -894,6 +895,7 @@ def _checksum_artifact(bundle_dir: Path, name: str) -> Path:
     if (
         path.is_absolute()
         or PureWindowsPath(name).is_absolute()
+        or _WINDOWS_DRIVE_PATH.match(name)
         or "\\" in name
         or any(component in {"", ".", ".."} for component in raw_components)
     ):

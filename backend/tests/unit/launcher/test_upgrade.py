@@ -1710,7 +1710,9 @@ def test_installer_rejects_symlinked_checksum_parent_before_install_mutation(tmp
     assert not (tmp_path / "install").exists()
 
 
-@pytest.mark.parametrize("listed_name", ["foo\\bar", "C:\\foo", "C:/foo", "\\\\server\\share"])
+@pytest.mark.parametrize(
+    "listed_name", ["foo\\bar", "C:relative/artifact.txt", "C:\\foo", "C:/foo", "\\\\server\\share"]
+)
 def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesystem_access(
     tmp_path: Path, listed_name: str
 ) -> None:
@@ -1848,7 +1850,7 @@ def test_extract_rejects_symlinked_checksum_parent(tmp_path: Path) -> None:
         upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
 
 
-@pytest.mark.parametrize("listed_name", ["./real/payload.txt", "real/../real/payload.txt"])
+@pytest.mark.parametrize("listed_name", ["./real/payload.txt", "real/../real/payload.txt", "C:relative/payload.txt"])
 def test_extract_rejects_explicit_dot_checksum_components(tmp_path: Path, listed_name: str) -> None:
     archive = _checksum_archive(tmp_path, listed_name)
     with pytest.raises(UpgradeError, match="unsafe artifact path"):

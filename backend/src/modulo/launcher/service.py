@@ -1,9 +1,11 @@
 """OS service management for the single-install launcher (FAR-674, ADR 031).
 
-Management surface for a **systemd USER unit** running ``modulo start`` in
-the FOREGROUND as the installing user. Linux + systemd only: the macOS
-service (launchd) is FAR-678's scope and the Windows service is a TODO(P3)
-seam — both refuse loudly here.
+Management surface for a user-scoped service running ``modulo start`` in
+the FOREGROUND as the installing user. Linux uses a **systemd USER unit**;
+macOS uses a **launchd LaunchAgent**. Windows service management remains a
+TODO(P3) seam and refuses loudly here. This module describes the service
+support seam; it does not claim that a signed or notarized macOS artifact is
+published.
 
 SERVICE-MODE CONTRACT (co-design with the OS manager, locked by tests):
 
@@ -134,8 +136,8 @@ def assert_linux() -> None:
     if sys.platform == "win32":
         # Deferred P3: Windows service seam (sc.exe / Task Scheduler).
         raise ServiceError(
-            "The service install is not implemented on Windows yet (TODO(P3)); the native "
-            "launcher is Linux-first (ADR 031). Use `modulo start` directly meanwhile."
+            "The service install is not implemented on Windows yet (TODO(P3)); Linux uses a "
+            "systemd user unit and macOS uses a launchd LaunchAgent. Use `modulo start` directly meanwhile."
         )
     if sys.platform not in ("linux", "darwin"):
         raise ServiceError(
@@ -200,8 +202,8 @@ def resolve_username() -> str:
     """The installing (and service-running) user.
 
     ``getpass.getuser`` is the cross-platform resolver (POSIX uid → name,
-    Windows env vars) — the launcher is Linux-first but this keeps the
-    module importable everywhere for the test seams.
+    Windows env vars). This keeps the service module importable everywhere for
+    the test seams even though Windows service management remains unsupported.
     """
     import getpass
 
