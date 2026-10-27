@@ -249,3 +249,4 @@ minimumReleaseAgeExclude:
   - '@tanstack/query-core@5.105.0'
   - '@tanstack/vue-query@5.105.0'
   - 'eslint-plugin-vue@10.12.0'
+  - '@lucide/vue@1.62.0'
