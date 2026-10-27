@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -220,41 +221,19 @@ def default_unit_path() -> Path:
 
 
 def render_launchd_plist(executable: Path) -> str:
-    """Render the LaunchAgent plist for macOS launchd (pure string).
+    """Render a LaunchAgent plist with argv-preserving XML serialization.
 
-    Carries the launchd service contract:
-    - Label: run.modulo.launcher
-    - ProgramArguments: [executable, "start"]
-    - RunAtLoad: true (starts on user login, ADR 031 Decision 9)
-    - KeepAlive: restarts on crash/failure, but stops on SuccessfulExit (false)
-      so supervisor's degraded exit 75 halts restart
-    - ProcessType: Interactive
+    ``plistlib`` performs the XML escaping required for executable paths while
+    retaining ``ProgramArguments`` as a list, which launchd passes verbatim.
     """
-    lines = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-        '<plist version="1.0">',
-        "<dict>",
-        f"\t<key>Label</key>\n\t<string>{LAUNCHD_LABEL}</string>",
-        "\t<key>ProgramArguments</key>",
-        "\t<array>",
-        f"\t\t<string>{executable}</string>",
-        "\t\t<string>start</string>",
-        "\t</array>",
-        "\t<key>RunAtLoad</key>",
-        "\t<true/>",
-        "\t<key>KeepAlive</key>",
-        "\t<dict>",
-        "\t\t<key>SuccessfulExit</key>",
-        "\t\t<false/>",
-        "\t</dict>",
-        "\t<key>ProcessType</key>",
-        "\t<string>Interactive</string>",
-        "</dict>",
-        "</plist>",
-        "",
-    ]
-    return "\n".join(lines)
+    payload = {
+        "Label": LAUNCHD_LABEL,
+        "ProgramArguments": [str(executable), "start"],
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ProcessType": "Interactive",
+    }
+    return plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=False).decode("utf-8")
 
 
 def render_unit(executable: Path) -> str:
