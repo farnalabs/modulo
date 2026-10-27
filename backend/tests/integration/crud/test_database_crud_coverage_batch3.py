@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from modulo.core.trigger_engine import TriggerConfigInvalidError, TriggerNotFoundError
 from modulo.db.crud.connector_instance import (
     clear_degraded_markers,
     create_connector_instance,
@@ -28,8 +29,6 @@ from modulo.db.crud.eval_run import get_evals_for_runs
 from modulo.db.crud.last_admin_guard import LastAdminLockoutError, assert_not_last_admin
 from modulo.db.crud.node_observation import observe_node
 from modulo.db.crud.trigger import (
-    TriggerConfigInvalidError,
-    TriggerNotFoundError,
     list_triggers,
     load_trigger_and_org_global,
     restore_trigger,
@@ -128,7 +127,8 @@ async def test_connector_cursor_and_org_filtering(
     assert page.total >= 2
     from modulo.db.crud.pagination import CursorPaginator
 
-    cursor = CursorPaginator.encode_cursor(page.items[0].created_at, page.items[0].id)
+    cursor_row = page.items[0]
+    cursor = CursorPaginator.encode_cursor(cursor_row.created_at, cursor_row.id)
     cursor_page = await list_connector_instances(
         rls_session,
         organisation_id=test_org,
@@ -137,7 +137,7 @@ async def test_connector_cursor_and_org_filtering(
         page_size=10,
     )
     assert cursor_page.total is not None
-    assert first.id not in {item.id for item in cursor_page.items}
+    assert cursor_row.id not in {item.id for item in cursor_page.items}
 
     await mark_instances_degraded(rls_session, {first.id: "temporary"})
     await clear_degraded_markers(rls_session, [first.id])

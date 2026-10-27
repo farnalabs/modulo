@@ -50,7 +50,7 @@ async def observe_node(
         organisation_id=organisation_id,
         run_id=run_id,
         node_id=coerce_uuid(node_id),
-        human_observed_by=observed_by,
+        account_id=observed_by,
         human_observed_at=datetime.now(UTC),
     )
     session.add(obs)

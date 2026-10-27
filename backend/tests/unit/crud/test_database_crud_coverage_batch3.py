@@ -222,13 +222,19 @@ async def test_node_observation_constructor_path_is_exercised() -> None:
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
     session.execute.return_value = result
-    with pytest.raises(TypeError, match="human_observed_by"):
-        await observe_node(
-            session,
-            organisation_id=_ORG_ID,
-            run_id=uuid.uuid4(),
-            node_id=str(uuid.uuid4()),
-        )
+    node_id = uuid.uuid4()
+    observed_by = uuid.uuid4()
+    observation = await observe_node(
+        session,
+        organisation_id=_ORG_ID,
+        run_id=uuid.uuid4(),
+        node_id=str(node_id),
+        observed_by=observed_by,
+    )
+    assert observation.account_id == observed_by
+    assert observation.node_id == node_id
+    session.add.assert_called_once_with(observation)
+    assert session.flush.await_count == 1
 
 
 def test_trigger_cursor_boundary_and_malformed_cursor() -> None:
