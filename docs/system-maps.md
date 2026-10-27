@@ -320,7 +320,7 @@ CREATE TABLE system_map_loop_configs (
 
 ### 3.4 Constraint and Binding Contract
 
-The initial node binding contract is deliberately relational and small. A node may bind to at most one `pipeline_id`, `connector_instance_id`, `owner_team_id`, or `eval_id`; each populated binding uses the existing primary-key foreign key for that resource. The service transaction must then validate that the resource belongs to the current organisation and, for team-scoped maps, that the team is permitted by the map's visibility and row-level security scope. `external_ref` remains the only provider-owned identifier. Guardrail and human-approval configurations are not relational System Map bindings in this revision: controls describe those concepts through `control_type` and validated `config_json` only.
+The initial node binding contract is deliberately relational and small. A node may bind to at most one `pipeline_id`, `connector_instance_id`, `owner_team_id`, or `eval_id`; each populated binding uses the existing primary-key foreign key for that resource. In declarative authoring, `pipeline_ref` is the node's top-level pipeline binding reference and `owner_team_ref` is the map's top-level owner-team binding reference. These authoring references resolve to the relational `pipeline_id` and `owner_team_id` projections before save or publish. Node-kind-specific properties belong in `config_json`, including the improvement-loop `config_json.action_pipeline_ref` reference that resolves to the loop projection's `action_pipeline_id`. The service transaction must then validate that each resolved resource belongs to the current organisation and, for team-scoped maps, that the team is permitted by the map's visibility and row-level security scope. `external_ref` remains the only provider-owned identifier. Guardrail and human-approval configurations are not relational System Map bindings in this revision: controls describe those concepts through `control_type` and validated `config_json` only.
 
 `account_id` and `updated_by` use the existing account foreign key. Before inserting or publishing a map or revision, the service verifies that each account is an active member of the current organisation. The account table remains global and receives no organisation column or composite foreign key.
 
@@ -345,9 +345,9 @@ The migration is executable in this order: create the new tables and their organ
 
 | Node Type | Purpose | Primary Properties | Modulo Binding |
 |---|---|---|---|
-| `pipeline` | Represents an automated, executable Modulo pipeline. | `pipeline_id`, `max_concurrent_runs`, `timeout_seconds` | Bound directly to `pipelines.id`. |
+| `pipeline` | Represents an automated, executable Modulo pipeline. | `pipeline_ref`, `execution.max_concurrent_runs`, `execution.timeout_seconds` | `pipeline_ref` resolves to the relational `pipeline_id` binding. |
 | `external_capability` | Represents work executed outside Modulo (e.g. GitHub Actions, ArgoCD, Jenkins, security scanner). | `provider`, `external_ref`, `execution_mode` | Optional `connector_instance_id` binding for status telemetry. |
-| `manual_capability` | Represents human engineering work (e.g. architectural spikes, design review, manual security audit). | `owner_role`, `owner_team_id`, `sla_hours` | Bound to a same-organisation team. |
+| `manual_capability` | Represents human engineering work (e.g. architectural spikes, design review, manual security audit). | `owner_role`, `service_level.sla_hours` | `owner_team_ref` resolves to the relational `owner_team_id` binding. |
 | `queue` | Represents an intermediate buffer or backlog holding items between capabilities. | `queue_type`, `capacity_limit`, `drain_rate_per_hour` | Capacity is represented directly by `capacity_limit`; no separate slot entity is referenced. |
 | `control` | Represents a deterministic evaluation gate, safety guardrail, or human approval barrier. | `control_type` (gate / guardrail / approval), `pass_threshold`, `fail_action` | Optional `eval_id` binding; guardrail and human-in-the-loop (HITL) references are outside the initial relational binding contract. |
 | `improvement_loop` | Represents an autonomous sidecar pipeline monitoring system signals and deploying incremental fixes. | Loop configuration (signal, window, action, budget, cooldown, metric) | Bound to `system_map_loop_configs` and an action pipeline. |
@@ -355,7 +355,7 @@ The migration is executable in this order: create the new tables and their organ
 
 ### 4.2 Node Property Contract
 
-`system_map_nodes.config_json` is a bounded authoring document, not an untyped escape hatch. The service validates it against the node-kind schema before save and publish. Unknown top-level properties are rejected, values are type-checked, strings have a maximum length of 255 characters, durations are positive integers in seconds, rates and thresholds are non-negative numbers, and references use the typed binding columns rather than JSON strings. The relational columns are the queryable projection; `config_json` stores authoring metadata and node-kind properties that are needed to render or validate the map but are not used as joins.
+`system_map_nodes.config_json` is a bounded authoring document, not an untyped escape hatch. The service validates it against the node-kind schema before save and publish. Unknown top-level properties are rejected, values are type-checked, strings have a maximum length of 255 characters, durations are positive integers in seconds, rates and thresholds are non-negative numbers. Stable identity, display, and resource-binding references explicitly listed in this contract may remain top-level node fields; every node-kind-specific property belongs under `config_json`, including `config_json.action_pipeline_ref` for improvement loops. Authoring references resolve to typed relational binding columns before save or publish. The relational columns are the queryable projection; `config_json` stores authoring metadata and node-kind properties that are needed to render or validate the map, while resolved relational fields provide joins.
 
 The initial schemas are:
 
@@ -366,7 +366,7 @@ The initial schemas are:
 | `manual_capability` | `owner_role` (string), `service_level.sla_hours` (number, greater than 0) | `escalation.channel` (enum: `email`, `chat`, `ticket`, `none`) | `owner_team_id`, `name`, `node_type` |
 | `queue` | `queue_type` (enum: `work`, `artifact`, `approval`, `signal`) | `capacity_limit` (integer, 1 or greater), `drain_rate_per_hour` (number, 0 or greater) | `capacity_limit`, `name`, `node_type` |
 | `control` | `control_type` (enum: `gate`, `guardrail`, `approval`), `fail_action` (enum: `block`, `warn`, `route_to_human`) | `pass_threshold` (number from 0 through 1) is required when `control_type` is `gate` or `guardrail`; absent for `approval` | `eval_id`, `name`, `node_type` |
-| `improvement_loop` | `target_signal`, `observation_window_seconds`, `action_pipeline_id`, `budget_limit_usd`, `cooldown_seconds`, `outcome_metric` | No additional properties in the initial contract | `system_map_loop_configs`, `name`, `node_type` |
+| `improvement_loop` | `target_signal`, `observation_window_seconds`, `config_json.action_pipeline_ref`, `budget_limit_usd`, `cooldown_seconds`, `outcome_metric` | No additional properties in the initial contract | `system_map_loop_configs.action_pipeline_id`, `name`, `node_type` |
 | `system_boundary` | `boundary_type` (enum: `network`, `team`, `environment`) | `compliance_scope` (string, max 255) | `name`, `node_type` |
 
 The loop fields are duplicated into `system_map_loop_configs` at publish time, where the relational checks enforce required numeric bounds. The authoring JSON remains the source for draft editing; the loop table is the published, queryable projection. Other node kinds use the typed columns and validated JSON together. A future property requires a schema version change and an explicit validator update.
@@ -392,7 +392,7 @@ System Maps enforces strict loop semantics:
 3. **The Six-Parameter Improvement Loop Contract:** Every `improvement_loop` node must define exactly six control parameters:
    - **Target Signal (`target_signal`):** The quantifiable operational symptom or defect to monitor (e.g. `failing_test_ratio`, `uncovered_architecture_gaps`, `critical_security_findings`).
    - **Observation Window (`observation_window_seconds`):** The time duration over which signal data is collected before deciding to act (e.g. 3600 seconds, 86400 seconds).
-   - **Action Pipeline (`action_pipeline_id`):** The executable Modulo pipeline dispatched to investigate and apply a remediation (e.g. Improve Architecture, Improve Security).
+   - **Action Pipeline (`config_json.action_pipeline_ref`):** The authoring reference for the executable Modulo pipeline dispatched to investigate and apply a remediation (e.g. Improve Architecture, Improve Security). It resolves to the relational `action_pipeline_id` binding in the published loop configuration.
    - **Budget Limit (`budget_limit_usd`):** Maximum model and compute spend allocated to this loop per calendar month.
    - **Cooldown Window (`cooldown_seconds`):** Minimum quiet period required after a remediation run before the loop is permitted to fire again, preventing rapid-fire oscillatory commits.
    - **Outcome Metric (`outcome_metric`):** The verifiable metric used to confirm whether the remediation succeeded or failed (e.g. `delta_vulnerabilities`, `delta_test_failures`).
@@ -682,8 +682,8 @@ entities:
         - key: loop_security
           name: "Improve Security Loop"
           type: improvement_loop
-          action_pipeline_ref: "Improve Security"
           config_json:
+            action_pipeline_ref: "Improve Security"
             target_signal: "security_vulnerability_count"
             observation_window_seconds: 14400
             budget_limit_usd: 150.00
@@ -708,7 +708,7 @@ entities:
 
 When Beta adds `system_maps` support, `modulo apply` will resolve its authoring references before it writes or publishes relational projections. The intended mapping is:
 
-| YAML field | Relational field | Accepted reference | Resolution rule |
+| YAML authoring field | Resolved relational projection | Accepted reference | Resolution rule |
 |---|---|---|---|
 | `owner_team_ref` | `owner_team_id` | Team UUID or exact team name | Resolve within the current organisation; the team must be active and permitted by the map's visibility. |
 | `pipeline_ref` | `pipeline_id` | Pipeline UUID or exact pipeline name | Resolve an active, non-deleted pipeline within the current organisation. |
