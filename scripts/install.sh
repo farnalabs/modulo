@@ -152,10 +152,11 @@ sha256_of() {
 
 verify_sums_in_dir() {
   # verify_sums_in_dir <dir> — verify every file listed in <dir>/SHA256SUMS.
-  # Do the no-follow regular-file checks BEFORE invoking either checksum tool;
+  # Validate every path component before invoking either checksum tool;
   # sha256sum --check follows symlinks named in the manifest.
   local dir="$1"
-  local sum path actual artifact
+  local sum path actual artifact component current last_component
+  local -a components
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -z "${line}" ]] && continue
     sum="${line%%  *}"
@@ -163,11 +164,23 @@ verify_sums_in_dir() {
     [[ "${sum}" =~ ^[[:xdigit:]]{64}$ && "${path}" != "${line}" && -n "${path}" ]] || \
       die "bundle integrity check FAILED: malformed SHA256SUMS line '${line}'"
     case "${path}" in
-      /* | ../* | */../* | */.. | . | ..)
+      /* | ../* | */../* | */.. | . | .. | *// | */)
         die "bundle integrity check FAILED: unsafe artifact path '${path}'"
         ;;
     esac
-    artifact="${dir}/${path}"
+    IFS='/' read -r -a components <<< "${path}"
+    current="${dir}"
+    last_component="${components[${#components[@]}-1]}"
+    for component in "${components[@]}"; do
+      [[ -n "${component}" && "${component}" != "." && "${component}" != ".." ]] || \
+        die "bundle integrity check FAILED: unsafe artifact path '${path}'"
+      current="${current}/${component}"
+      if [[ "${component}" != "${last_component}" ]]; then
+        [[ ! -L "${current}" && -d "${current}" ]] || \
+          die "bundle integrity check FAILED: unsafe or missing artifact path '${path}'"
+      fi
+    done
+    artifact="${current}"
     [[ -f "${artifact}" && ! -L "${artifact}" ]] || die "bundle integrity check FAILED: unsafe or missing artifact path '${path}'"
     actual="$(sha256_of "${artifact}")"
     [[ "${actual}" = "${sum}" ]] || die "bundle integrity check FAILED for ${path}: expected ${sum}, got ${actual}"
@@ -547,9 +560,10 @@ expected_bundle_dir="${tarball_name%.tar.gz}"
 extract_root="${tmp}/extracted"
 mkdir -p "${extract_root}"
 tar -xzf "${tmp}/${tarball_name}" -C "${extract_root}"
-shopt -s nullglob
-entries=("${extract_root}"/*)
-shopt -u nullglob
+entries=()
+while IFS= read -r -d '' entry; do
+  entries+=("${entry}")
+done < <(find "${extract_root}" -mindepth 1 -maxdepth 1 -print0)
 if [[ "${#entries[@]}" -ne 1 || ! -d "${entries[0]}" || -L "${entries[0]}" ]]; then
   die "unexpected archive layout: expected exactly one non-symlink top-level directory '${expected_bundle_dir}', in ${tarball_name}"
 fi
