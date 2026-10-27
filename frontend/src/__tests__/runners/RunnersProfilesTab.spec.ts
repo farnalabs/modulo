@@ -160,6 +160,22 @@ describe('RunnersProfilesTab', () => {
     expect(wrapper.find(`[data-testid="runner-profile-health-p-bundled"]`).classes()).toContain('text-destructive-text')
   })
 
+  it('flags an unavailable card without dimming its text below WCAG AA', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.$patch({ profiles: [BUNDLED_PROFILE] as never })
+    const status = makeStatus({ health_state: 'engine_unreachable', available: false })
+    const wrapper = mount(RunnersProfilesTab, { props: { status, reloadStatus } })
+    await nextTick()
+    await flushPromises()
+
+    const card = wrapper.find('[data-unavailable="true"]')
+    expect(card.exists()).toBe(true)
+    expect(card.classes()).toContain('border-dashed')
+    expect(card.classes()).not.toContain('opacity-60')
+  })
+
   it('marks a bundled runner whose image is not pulled', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
