@@ -23,8 +23,8 @@ overrides:
   "@redocly/openapi-core>js-yaml": "4.3.2"
   "postcss>nanoid": "^6.0.0"
   rollup: "4.65.0"
-  "@tanstack/query-core": "5.104.5"
-  "@tanstack/vue-query": "5.104.5"
+  "@tanstack/query-core": "5.105.0"
+  "@tanstack/vue-query": "5.105.0"
   # GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404): zod <4.6.6 affected. Scoped to its
   # only consumer (mutation-server-protocol, dev-only Stryker toolchain) and
   # capped to the 4.x major. Remove once mutation-server-protocol ships zod
@@ -246,3 +246,6 @@ minimumReleaseAgeExclude:
   - '@stryker-mutator/instrumenter@10.1.1'
   - '@stryker-mutator/util@10.1.1'
   - '@stryker-mutator/vitest-runner@10.1.1'
+  - '@tanstack/query-core@5.105.0'
+  - '@tanstack/vue-query@5.105.0'
+  - 'eslint-plugin-vue@10.12.0'
