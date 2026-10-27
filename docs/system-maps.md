@@ -330,7 +330,7 @@ CREATE TABLE system_map_loop_admissions (
     organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
     loop_config_id UUID NOT NULL,
     admission_key VARCHAR(255) NOT NULL,
-    run_id UUID,
+    run_id UUID NOT NULL,
     month_start DATE NOT NULL,
     reserved_budget_usd NUMERIC(10, 4) NOT NULL,
     actual_spend_usd NUMERIC(10, 4),
@@ -342,15 +342,25 @@ CREATE TABLE system_map_loop_admissions (
     CONSTRAINT uq_system_map_loop_admissions_key
         UNIQUE (organisation_id, loop_config_id, admission_key),
     CONSTRAINT fk_system_map_loop_admissions_loop_org
-        FOREIGN KEY (loop_config_id, organisation_id)
-        REFERENCES system_map_loop_configs(id, organisation_id) ON DELETE CASCADE,
+         FOREIGN KEY (loop_config_id, organisation_id)
+         REFERENCES system_map_loop_configs(id, organisation_id) ON DELETE CASCADE,
+    -- `runs` has no organisation-owned composite key in the current schema.
+    -- `run_id` is an immutable denormalized reference; the admission transaction
+    -- must lock and verify the run row's organisation_id before inserting it.
+    -- A reconciliation job fails closed on a missing, deleted, or cross-org run.
     CONSTRAINT ck_system_map_loop_admissions_status
-        CHECK (status IN ('reserved', 'released', 'consumed', 'rejected')),
+         CHECK (status IN ('reserved', 'released', 'consumed', 'rejected')),
     CONSTRAINT ck_system_map_loop_admissions_reserved_budget CHECK (reserved_budget_usd > 0),
     CONSTRAINT ck_system_map_loop_admissions_actual_spend
         CHECK (actual_spend_usd IS NULL OR actual_spend_usd >= 0),
     CONSTRAINT ck_system_map_loop_admissions_rejection
-        CHECK (status = 'rejected' OR rejection_reason IS NULL)
+         CHECK (
+             (status = 'rejected' AND rejection_reason IS NOT NULL
+              AND rejection_reason IN ('attribution', 'concurrency', 'cooldown', 'budget',
+                                       'unattributed', 'inactive_pipeline', 'unpublished_revision'))
+             OR
+             (status <> 'rejected' AND rejection_reason IS NULL)
+         )
 );
 
 CREATE INDEX ix_system_map_loop_admissions_active
@@ -363,6 +373,25 @@ CREATE INDEX ix_system_map_loop_admissions_month
 ### 3.4 Constraint and Binding Contract
 
 The initial node binding contract is deliberately relational and small. A node may bind to at most one `pipeline_id`, `connector_instance_id`, `owner_team_id`, or `eval_id`; each populated binding uses the existing primary-key foreign key for that resource. In declarative authoring, `pipeline_ref` is the node's top-level pipeline binding reference and `owner_team_ref` is the map's top-level owner-team binding reference. These authoring references resolve to the relational `pipeline_id` and `owner_team_id` projections before save or publish. Node-kind-specific properties belong in `config_json`, including the improvement-loop `config_json.action_pipeline_ref` reference that resolves to the loop projection's `action_pipeline_id`. The service transaction must then validate that each resolved resource belongs to the current organisation and, for team-scoped maps, that the team is permitted by the map's visibility and row-level security scope. `external_ref` remains the only provider-owned identifier. Guardrail and human-approval configurations are not relational System Map bindings in this revision: controls describe those concepts through `control_type` and validated `config_json` only.
+
+#### Deterministic attribution binding schema
+
+Every executable pipeline that can be attributed to a System Map has one explicit binding record in the trigger configuration or in an equivalent pipeline-to-map binding table. The binding is the following organisation-scoped tuple:
+
+```text
+(organisation_id, pipeline_id, trigger_id, system_map_id, node_key, binding_kind)
+```
+
+`trigger_id` is required for `binding_kind = trigger` and null for `binding_kind = action_pipeline`; `pipeline_id`, `system_map_id`, and `node_key` are required in both cases. `binding_kind` is `trigger` for a trigger-owned entry point or `action_pipeline` for an improvement-loop dispatch. The record also stores the intended `system_map_revision_id` only when a revision is pinned by an administrative operation; ordinary bindings resolve against the map's current published revision at admission time. The binding must satisfy these rules:
+
+- `organisation_id`, `pipeline_id`, and `system_map_id` are required and must belong to the same organisation. `node_key` is required and must be 1-128 characters. The service validates the pipeline and map under the organisation's RLS scope before writing the binding.
+- A unique constraint on `(organisation_id, pipeline_id, trigger_id, system_map_id, node_key, binding_kind)` makes retries idempotent. A second conditional uniqueness rule requires `trigger_id IS NOT NULL` for `binding_kind = trigger` and `trigger_id IS NULL` for `binding_kind = action_pipeline`. Admission requires exactly one applicable binding for the triggering pipeline and binding kind. Zero matches are rejected as missing attribution; more than one applicable match is rejected as ambiguous. Query order, map name, node name, and pipeline name are never tie-breakers.
+- Resolution precedence is explicit: (1) an exact trigger binding for the triggering `pipeline_id` and `trigger_id`; (2) otherwise the organisation-scoped action-pipeline binding for the triggering `pipeline_id` and `binding_kind`; (3) otherwise an explicit `unattributed` declaration supplied by the caller. The dispatcher never falls back to a default map or scans all published maps.
+- A trigger binding must identify the pipeline that the trigger directly dispatches. For an improvement loop, the `action_pipeline` binding belongs to the loop configuration's `action_pipeline_id` and `node_key`; it is not inferred from the loop node name, the map's other pipeline nodes, or the signal source. Each loop admission therefore resolves the action pipeline's binding as `binding_kind = action_pipeline` while holding the loop and published-revision locks.
+- The binding resolves to one node key in one published revision. If a map has multiple published revisions, only the revision selected by the map's locked `published_revision_id` is eligible. If the selected revision has no matching node, has multiple projected rows for the key, or the node's pipeline binding does not equal the triggering pipeline, admission fails closed with an attribution error.
+- A binding to a different organisation, deleted resource, archived revision, inactive pipeline, or out-of-scope team is rejected. An implicit match that could resolve to more than one map, revision, or node is always rejected rather than guessed.
+
+The resulting `system_map_id`, selected `system_map_revision_id`, node ID, and `node_key` are copied into the immutable run snapshot before execution. The binding record is the source of the decision; the snapshot is the source of historical attribution.
 
 `account_id` and `updated_by` use the existing account foreign key. Before inserting or publishing a map or revision, the service verifies that each account is an active member of the current organisation. The account table remains global and receives no organisation column or composite foreign key.
 
@@ -432,12 +461,15 @@ System Maps enforces strict loop semantics. Static publication validation checks
 
 - **One atomic admission transaction:** The dispatcher starts a database transaction, locks the published `system_map_loop_configs` row and its action-pipeline admission row in a fixed order, then locks the organisation admission row. It uses `SELECT ... FOR UPDATE` on those rows and performs every live check and reservation before inserting the run. The transaction commits the reservation and the run together. A trigger that loses any lock race waits, re-reads all limits and counters after the lock, and either retries with the same idempotency key or receives a deterministic capacity, cooldown, or budget outcome. It never makes a decision from a pre-lock read.
 - **Idempotency key:** Every loop signal carries a required `admission_key`, stable for the logical trigger occurrence and scoped to `(organisation_id, loop_config_id)`. The reservation table has a unique constraint on that tuple. A repeated delivery with the same key returns the existing reservation and run decision without consuming another slot, budget, or cooldown. A different key is a new admission attempt.
-- **Reservation record:** The implementation adds a relational `system_map_loop_admissions` table with `organisation_id`, `loop_config_id`, `admission_key`, `run_id`, `month_start`, `reserved_budget_usd`, `reserved_at`, `released_at`, and `status` (`reserved`, `released`, `consumed`, `rejected`). It has a unique `(organisation_id, loop_config_id, admission_key)` constraint and indexes for active reservations and the UTC month. The table is the source of truth for loop reservations; no mutable JSON counter is used.
+- **Reservation record:** The implementation adds a relational `system_map_loop_admissions` table with `organisation_id`, `loop_config_id`, `admission_key`, required immutable `run_id`, `month_start`, `reserved_budget_usd`, `reserved_at`, `released_at`, and `status` (`reserved`, `released`, `consumed`, `rejected`). It has a unique `(organisation_id, loop_config_id, admission_key)` constraint and indexes for active reservations and the UTC month. The table is the source of truth for loop reservations; no mutable JSON counter is used. Because `runs` currently lacks a matching organisation-owned composite key, `run_id` is not presented as an enforced foreign key: the admission transaction and reconciliation process must perform the required same-organisation application check described below.
 - **Cooldown:** While holding the loop row lock, admission finds the latest `reserved` or `consumed` reservation for that loop. If its `reserved_at` is less than `cooldown_seconds` before the current database time, the dispatcher records `rejected` with reason `cooldown` and creates no run. Cooldown begins at reservation commit, not at signal receipt or run completion, so concurrent triggers cannot pass through the same quiet period.
 - **Concurrency:** While holding the loop, pipeline, and organisation locks, admission counts `reserved` loop reservations whose runs are not terminal and applies the lower of the loop, action-pipeline, and organisation limits. If no capacity exists, it records `rejected` with reason `concurrency` and creates no run. A terminalisation transaction marks the reservation `consumed` and releases the loop slot in the same transaction as the terminal run update. A reservation cancelled before execution is marked `released`; it does not count as active and does not refund cooldown.
 - **Monthly budget:** Admission computes the UTC calendar-month sum of `reserved_budget_usd` for `reserved` and `consumed` rows, locks the month-scoped reservation set through the loop row lock, and inserts a new reservation only when the sum plus the new reservation is at most `budget_limit_usd`. It records `rejected` with reason `budget` when the cap would be exceeded. Terminalisation replaces the reservation with actual spend in the same row or an immutable settlement row; unused reserved budget is released only by an explicit cancellation/reconciliation transaction. Existing organisation and pipeline cost controls remain additional lower bounds and cannot be raised by this loop.
 - **Rollback and failures:** If run insertion, snapshot creation, or any later admission write fails, the transaction rolls back the reservation and the run together. If dispatch infrastructure fails after commit, the durable reservation remains visible and a reconciler either dispatches that run or marks the reservation `released` with an auditable reason; it never silently creates a second reservation. A rejected trigger is retained as a decision record and can be retried with the same key without double counting.
 - **Publication and dispatch both enforce controls:** publication rejects missing or invalid values and validates the reservation-table configuration; dispatch re-checks the published revision and current counters inside the admission transaction. The database uniqueness constraint and row locks enforce atomic reservation, while the service performs the live limit comparisons.
+- **Run reference integrity:** `run_id` is a required immutable denormalized reference because the current `runs` table does not expose an organisation-owned composite key that this proposed table can reference. Before inserting an admission, the same transaction locks `runs` by `id`, verifies that exactly one row exists with the same `organisation_id`, and rejects a missing, deleted, or cross-organisation row. The reconciliation job repeats that same-org check; it never repairs a mismatch by changing `organisation_id` or `run_id`, and marks the admission unrecoverable for operator review.
+- **Rejection auditability:** every `rejected` row has one non-null `rejection_reason` from the closed vocabulary in the DDL. Every other status has a null reason. Rejection writes are performed in the admission transaction, so the deterministic reason is committed with the decision and cannot be omitted or added later.
+- **Published-loop dispatch predicate:** the admission transaction locks the map row, then the selected revision row, then the loop configuration row, action pipeline row, and organisation admission row in that fixed order. It admits only when the locked rows satisfy `system_maps.published_revision_id = system_map_revisions.id`, `system_map_revisions.status = 'published'`, `system_map_loop_configs.revision_id = system_map_revisions.id`, and the action pipeline is active and same-organisation. The query must use `SELECT ... FOR UPDATE` with those predicates, not a pre-lock read followed by an unlocked status check. Publication takes the same map lock, validates that the candidate revision is complete, writes all projections, sets the map pointer, and commits as one transaction. A draft is therefore either still unpublished and ineligible, or fully published before a dispatcher can observe it. If a database constraint cannot enforce the cross-row status predicate, the application transaction lock is the enforcement boundary and any missing, stale, or contradictory row causes fail-closed rejection with `unpublished_revision`.
 
 1. **The delivery flow is acyclic:** Every relationship of type `flow` belongs to the primary delivery flow. The directed subgraph formed by all `flow` edges must be a Directed Acyclic Graph (DAG). Any draft containing a cycle among `flow` edges is rejected by the graph validator at save and publish time.
 2. **Improvement loops are modeled as control sidecars:** An `improvement_loop` is never placed as an inline node on a `flow` edge. It sits adjacent to the flow as an autonomous observer. It reads signals via `feeds_back_to` or metric streams, and acts upon capabilities or queues through `controls` or asynchronous trigger actions.
@@ -455,7 +487,7 @@ System Maps enforces strict loop semantics. Static publication validation checks
 ## 5. Data Contracts, Attribution & Provenance
 
 ### 5.1 Snapshot Attribution Freezing (Beta implementation contract)
-A pipeline run must not guess its position in the organizational delivery system at runtime. At run initialization, the trigger engine uses the explicit System Map binding carried by the trigger or action pipeline. It does not search all published maps or select a row by query order. Because an organisation may publish multiple maps and a map may contain multiple nodes bound to the same pipeline, an admission without one explicit binding is ambiguous and is rejected with an attribution error. There is no implicit default-map fallback. A run that is intentionally outside System Maps may be created only when the caller marks it `unattributed`; it is then shown as unknown provenance and is never assigned to a map node after the fact.
+A pipeline run must not guess its position in the organizational delivery system at runtime. At run initialization, the trigger engine uses the explicit System Map binding carried by the trigger or action pipeline, as defined by the organisation-scoped binding tuple in §3.4. It does not search all published maps or select a row by query order. Because an organisation may publish multiple maps and a map may contain multiple nodes bound to the same pipeline, an admission without one explicit binding is ambiguous and is rejected with an attribution error. There is no implicit default-map fallback. A run that is intentionally outside System Maps may be created only when the caller marks it `unattributed`; it is then shown as unknown provenance and is never assigned to a map node after the fact.
 
 This is **Beta implementation work**, not a claim about fields that exist in the current `Run` or `PipelineSnapshot` models. The proposed frozen attribution block is the following object, stored in the immutable `PipelineSnapshot` for the run:
 
