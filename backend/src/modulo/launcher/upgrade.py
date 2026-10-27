@@ -920,7 +920,7 @@ def _checksum_artifact(bundle_dir: Path, name: str) -> Path:
         raise UpgradeError(f"bundle integrity check FAILED: {name} (listed in SHA256SUMS) is not a regular file")
     try:
         artifact.resolve(strict=True).relative_to(bundle_dir.resolve(strict=True))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError) as exc:  # pragma: no cover - lstat/resolve TOCTOU guard
         raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}") from exc
     return artifact
 

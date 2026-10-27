@@ -167,6 +167,10 @@ verify_sums_in_dir() {
       *\\* | [[:alpha:]]:* | ../* | */../* | */.. | . | .. | /* | *// | */)
         die "bundle integrity check FAILED: unsafe artifact path '${path}'"
         ;;
+      *)
+        # Safe shape (a plain relative component chain); validated below.
+        :
+        ;;
     esac
     IFS='/' read -r -a components <<< "${path}"
     current="${dir}"

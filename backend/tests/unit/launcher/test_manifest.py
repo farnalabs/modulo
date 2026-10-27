@@ -614,3 +614,30 @@ def test_sign_roundtrips_through_installersh_sig_extraction(
     assert sig_hex_match is not None
     extracted = {"key_id": key_id_match.group(1), "signature": sig_hex_match.group(1)}
     assert verify_signature(payload, extracted, trust_store=test_trust_store) == _KEY_ID_CURRENT
+
+
+def test_signed_manifest_rejects_missing_artifact_parent(tmp_path: Path) -> None:
+    """A listed name whose parent directory is absent refuses (never silently skips)."""
+    manifest = ReleaseManifest(
+        release="bundle-v1.2.0",
+        platform="linux-amd64",
+        generated_at="2026-09-10T00:00:00Z",
+        components={},
+        artifact_checksums={"absent/artifact.tgz": ("0" * 64, "1.2.0")},
+    )
+    with pytest.raises(ManifestSecurityError, match="missing from the bundle"):
+        verify_artifacts(tmp_path, manifest)
+
+
+def test_signed_manifest_rejects_non_directory_artifact_parent(tmp_path: Path) -> None:
+    """A parent that exists but is a regular file is refused, not followed."""
+    (tmp_path / "nested").write_text("not a directory", encoding="utf-8")
+    manifest = ReleaseManifest(
+        release="bundle-v1.2.0",
+        platform="linux-amd64",
+        generated_at="2026-09-10T00:00:00Z",
+        components={},
+        artifact_checksums={"nested/artifact.tgz": ("0" * 64, "1.2.0")},
+    )
+    with pytest.raises(ManifestSecurityError, match="artifact parent is not a directory"):
+        verify_artifacts(tmp_path, manifest)

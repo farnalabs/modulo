@@ -301,26 +301,7 @@ def install(
 
     if sys.platform == "darwin":
         target = unit_path if unit_path is not None else default_launchd_plist_path()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(render_launchd_plist(resolved_executable), encoding="utf-8")
-        with contextlib.suppress(OSError):
-            target.chmod(0o644)
-
-        warnings: list[str] = []
-        runner(["launchctl", "unload", str(target)])
-        load_result = runner(["launchctl", "load", "-w", str(target)])
-        enabled = load_result.returncode == 0
-        if not enabled:
-            detail = (load_result.stderr or load_result.stdout or "").strip()
-            warnings.append(f"`launchctl load -w` failed: {detail or load_result.returncode}")
-        return ServiceInstallResult(
-            unit_path=target,
-            executable=resolved_executable,
-            enabled=enabled,
-            started=enabled,
-            linger_enabled=True,
-            warnings=warnings,
-        )
+        return _install_launchd(runner, target, resolved_executable)
 
     assert_systemd_available(runner)
     target = unit_path if unit_path is not None else default_unit_path()
@@ -346,6 +327,30 @@ def install(
         enabled=enabled,
         started=enabled,  # enable --now starts the unit when enable succeeds
         linger_enabled=linger_enabled,
+        warnings=warnings,
+    )
+
+
+def _install_launchd(runner: CommandRunner, target: Path, executable: Path) -> ServiceInstallResult:
+    """Write the LaunchAgent, then load it with ``launchctl load -w``."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(render_launchd_plist(executable), encoding="utf-8")
+    with contextlib.suppress(OSError):
+        target.chmod(0o644)
+
+    warnings: list[str] = []
+    runner(["launchctl", "unload", str(target)])
+    load_result = runner(["launchctl", "load", "-w", str(target)])
+    enabled = load_result.returncode == 0
+    if not enabled:
+        detail = (load_result.stderr or load_result.stdout or "").strip()
+        warnings.append(f"`launchctl load -w` failed: {detail or load_result.returncode}")
+    return ServiceInstallResult(
+        unit_path=target,
+        executable=executable,
+        enabled=enabled,
+        started=enabled,
+        linger_enabled=True,
         warnings=warnings,
     )
 
@@ -394,62 +399,43 @@ def uninstall(
     runner = runner if runner is not None else _default_runner
     assert_linux()
     target = unit_path if unit_path is not None else default_unit_path()
-    warnings: list[str] = []
 
     if sys.platform == "darwin":
-        unload_result = runner(["launchctl", "unload", "-w", str(target)])
-        stopped = unload_result.returncode == 0
-        disabled = stopped
-        if unload_result.returncode != 0:
-            detail = (unload_result.stderr or unload_result.stdout or "").strip()
-            warnings.append(f"`launchctl unload -w` failed (service may not be loaded): {detail}")
-        removed = False
-        try:
-            target.unlink(missing_ok=True)
-            removed = True
-        except OSError as exc:
-            warnings.append(f"could not remove {target}: {exc}")
-        return ServiceUninstallResult(
-            unit_removed=removed,
-            stopped=stopped,
-            disabled=disabled,
-            linger_disabled=True,
-            warnings=warnings,
-        )
+        return _uninstall_launchd(runner, target)
 
-    username = resolve_username()
+    return _uninstall_systemd(runner, target, linger_argv_builder)
 
-    stop_result = _systemctl(runner, ["stop", UNIT_FILENAME])
-    disable_result = _systemctl(runner, ["disable", UNIT_FILENAME])
-    stopped = stop_result.returncode == 0
-    disabled = disable_result.returncode == 0
-    for name, result in (("stop", stop_result), ("disable", disable_result)):
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout or "").strip()
-            warnings.append(f"`systemctl --user {name}` failed (unit may already be gone): {detail}")
-    removed = False
-    try:
-        target.unlink(missing_ok=True)
-        removed = True
-    except OSError as exc:
-        warnings.append(f"could not remove {target}: {exc}")
-    _systemctl(runner, ["daemon-reload"])
-    linger_argv = (
-        linger_argv_builder(username)
-        if linger_argv_builder is not None
-        else [
-            "pkexec",
-            "loginctl",
-            "disable-linger",
-            username,
-        ]
+
+def _uninstall_launchd(runner: CommandRunner, target: Path) -> ServiceUninstallResult:
+    """Unload the LaunchAgent, then remove its plist (best-effort, warned)."""
+    warnings: list[str] = []
+    unload_result = runner(["launchctl", "unload", "-w", str(target)])
+    stopped = unload_result.returncode == 0
+    if not stopped:
+        detail = (unload_result.stderr or unload_result.stdout or "").strip()
+        warnings.append(f"`launchctl unload -w` failed (service may not be loaded): {detail}")
+    removed = _remove_target(target, warnings)
+    return ServiceUninstallResult(
+        unit_removed=removed,
+        stopped=stopped,
+        disabled=stopped,
+        linger_disabled=True,
+        warnings=warnings,
     )
-    linger_disabled = False
-    try:
-        linger_result = runner(linger_argv)
-        linger_disabled = linger_result.returncode == 0
-    except OSError as exc:
-        warnings.append(f"linger disable was not attempted ({exc}); run `sudo loginctl disable-linger {username}`")
+
+
+def _uninstall_systemd(
+    runner: CommandRunner,
+    target: Path,
+    linger_argv_builder: Callable[[str], list[str]] | None,
+) -> ServiceUninstallResult:
+    """Stop, disable + remove the systemd user unit; disable linger (best-effort)."""
+    username = resolve_username()
+    warnings: list[str] = []
+    stopped, disabled = _stop_and_disable(runner, warnings)
+    removed = _remove_target(target, warnings)
+    _systemctl(runner, ["daemon-reload"])
+    linger_disabled = _disable_linger(runner, username, linger_argv_builder, warnings)
     if not linger_disabled and not warnings:
         warnings.append(
             f"could not disable linger non-interactively — run `sudo loginctl disable-linger {username}` if wanted"
@@ -463,6 +449,52 @@ def uninstall(
     )
 
 
+def _stop_and_disable(runner: CommandRunner, warnings: list[str]) -> tuple[bool, bool]:
+    """Stop + disable the user unit, warning on either failure."""
+    stop_result = _systemctl(runner, ["stop", UNIT_FILENAME])
+    disable_result = _systemctl(runner, ["disable", UNIT_FILENAME])
+    for name, result in (("stop", stop_result), ("disable", disable_result)):
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            warnings.append(f"`systemctl --user {name}` failed (unit may already be gone): {detail}")
+    return stop_result.returncode == 0, disable_result.returncode == 0
+
+
+def _remove_target(target: Path, warnings: list[str]) -> bool:
+    """Remove the unit/plist file; a failure is warned, never raised."""
+    try:
+        target.unlink(missing_ok=True)
+    except OSError as exc:
+        warnings.append(f"could not remove {target}: {exc}")
+        return False
+    return True
+
+
+def _disable_linger(
+    runner: CommandRunner,
+    username: str,
+    linger_argv_builder: Callable[[str], list[str]] | None,
+    warnings: list[str],
+) -> bool:
+    """``loginctl disable-linger`` via pkexec; a failure is warned, never raised."""
+    linger_argv = (
+        linger_argv_builder(username)
+        if linger_argv_builder is not None
+        else [
+            "pkexec",
+            "loginctl",
+            "disable-linger",
+            username,
+        ]
+    )
+    try:
+        linger_result = runner(linger_argv)
+    except OSError as exc:
+        warnings.append(f"linger disable was not attempted ({exc}); run `sudo loginctl disable-linger {username}`")
+        return False
+    return linger_result.returncode == 0
+
+
 def status(
     *,
     runner: CommandRunner | None = None,
@@ -472,7 +504,6 @@ def status(
     runner = runner if runner is not None else _default_runner
     assert_linux()
     from modulo.launcher.entry import default_data_dir
-    from modulo.launcher.supervisor import collect_status
 
     target = default_unit_path()
     resolved_data_dir: Path | None
@@ -482,23 +513,35 @@ def status(
         resolved_data_dir = None
 
     if sys.platform == "darwin":
-        list_result = runner(["launchctl", "list", LAUNCHD_LABEL])
-        active = "active" if list_result.returncode == 0 else "inactive"
-        enabled = "enabled" if list_result.returncode == 0 or target.is_file() else "disabled"
-        linger = "not_applicable (macOS LaunchAgent starts on login)"
-        return {
-            "unit": LAUNCHD_PLIST_FILENAME,
-            "unit_path": str(target),
-            "enabled": enabled,
-            "active": active,
-            "linger": linger,
-            "launcher": (
-                collect_status(resolved_data_dir)
-                if resolved_data_dir is not None
-                else {"error": "no usable default data dir on this platform"}
-            ),
-        }
+        return _launchd_status(runner, target, resolved_data_dir)
+    return _systemd_status(runner, target, resolved_data_dir)
 
+
+def _launcher_status(resolved_data_dir: Path | None) -> dict[str, Any]:
+    """The launcher's own health block, or a loud error when there is no data dir."""
+    if resolved_data_dir is None:
+        return {"error": "no usable default data dir on this platform"}
+    from modulo.launcher.supervisor import collect_status
+
+    return collect_status(resolved_data_dir)
+
+
+def _launchd_status(runner: CommandRunner, target: Path, resolved_data_dir: Path | None) -> dict[str, Any]:
+    """LaunchAgent state: active when launchctl knows the label, enabled when loaded or installed."""
+    list_result = runner(["launchctl", "list", LAUNCHD_LABEL])
+    loaded = list_result.returncode == 0
+    return {
+        "unit": LAUNCHD_PLIST_FILENAME,
+        "unit_path": str(target),
+        "enabled": "enabled" if loaded or target.is_file() else "disabled",
+        "active": "active" if loaded else "inactive",
+        "linger": "not_applicable (macOS LaunchAgent starts on login)",
+        "launcher": _launcher_status(resolved_data_dir),
+    }
+
+
+def _systemd_status(runner: CommandRunner, target: Path, resolved_data_dir: Path | None) -> dict[str, Any]:
+    """Systemd user-unit state + linger state + launcher health."""
     payload: dict[str, Any] = {"unit": UNIT_FILENAME, "unit_path": str(target)}
     enabled_result = _systemctl(runner, ["is-enabled", UNIT_FILENAME])
     payload["enabled"] = (enabled_result.stdout or "").strip() or f"exit {enabled_result.returncode}"
@@ -508,9 +551,5 @@ def status(
     linger_result = runner(["loginctl", "show-user", username, "--property=Linger"])
     linger_output = (linger_result.stdout or "").strip()
     payload["linger"] = "enabled" if "Linger=yes" in linger_output else "disabled/unknown"
-    payload["launcher"] = (
-        collect_status(resolved_data_dir)
-        if resolved_data_dir is not None
-        else {"error": "no usable default data dir on this platform"}
-    )
+    payload["launcher"] = _launcher_status(resolved_data_dir)
     return payload

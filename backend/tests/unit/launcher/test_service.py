@@ -479,3 +479,39 @@ def test_darwin_status(darwin_only: None, monkeypatch: pytest.MonkeyPatch, tmp_p
 def test_darwin_default_unit_path(darwin_only: None) -> None:
     assert default_unit_path() == default_launchd_plist_path()
     assert default_launchd_plist_path() == Path.home() / "Library" / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+
+
+def test_assert_linux_refuses_other_platforms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A platform that is neither Linux, macOS nor Windows is refused loudly."""
+    monkeypatch.setattr(sys, "platform", "freebsd14")
+    with pytest.raises(ServiceError, match="not implemented on freebsd14"):
+        assert_linux()
+
+
+def test_install_enable_failure_is_warned(linux_only: None, tmp_path: Path) -> None:
+    """A failing `enable --now` still returns a result, with the failure warned."""
+    executable = _executable(tmp_path)
+    runner = FakeRunner({("systemctl", "--user", "enable"): (1, "unit is masked")})
+    result = install(
+        runner=runner,
+        unit_path=tmp_path / "u" / "modulo.service",
+        executable=executable,
+    )
+    assert result.enabled is False
+    assert result.started is False
+    assert any("enable --now" in warning and "unit is masked" in warning for warning in result.warnings)
+
+
+def test_uninstall_linger_oserror_is_warned(linux_only: None, tmp_path: Path) -> None:
+    """A missing pkexec warns and documents the sudo fallback instead of raising."""
+    executable = tmp_path / "modulo"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if argv[:1] == ["pkexec"]:
+            raise OSError("pkexec not found")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    result = uninstall(runner=runner, unit_path=tmp_path / "u" / "modulo.service")
+    assert result.linger_disabled is False
+    assert any("sudo loginctl disable-linger" in warning for warning in result.warnings)

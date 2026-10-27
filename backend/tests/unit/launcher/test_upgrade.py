@@ -2762,3 +2762,17 @@ def test_fetch_release_assets_rejects_symlinked_tarball_escape(tmp_path):
 def test_validate_version_segment_accepts_normal_versions(raw, expected):
     stripped = upgrade_module._strip_bundle_prefix(raw)
     assert upgrade_module._validate_version_segment(stripped) == expected
+
+
+def test_extract_rejects_checksum_entry_with_missing_parent_directory(tmp_path: Path) -> None:
+    """A SHA256SUMS name whose parent dir is absent refuses (fail closed, never skips)."""
+    import tarfile
+
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    (bundle / "SHA256SUMS").write_text(f"{'0' * 64}  absent/payload.txt\n", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+    with pytest.raises(UpgradeError, match="unsafe artifact path"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")

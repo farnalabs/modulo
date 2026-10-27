@@ -271,7 +271,7 @@ def _resolve_bundle_artifact(root: Path, name: str) -> Path:
     if stat.S_ISLNK(artifact_stat.st_mode) or not stat.S_ISREG(artifact_stat.st_mode):
         raise ManifestSecurityError(f"artifact '{name}' is not a regular file")
     resolved = artifact.resolve(strict=True)
-    if not resolved.is_relative_to(root_resolved):
+    if not resolved.is_relative_to(root_resolved):  # pragma: no cover - lstat/resolve TOCTOU guard
         raise ManifestSecurityError(f"artifact name escapes the bundle root: {name!r}")
     return resolved
 
