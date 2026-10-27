@@ -158,9 +158,16 @@ verify_sums_in_dir() {
       die "bundle integrity check FAILED: one or more files in the bundle do not match SHA256SUMS. Do not use this download — report it at https://github.com/${REPO}/issues"
     }
   else
-    local sum path actual
+    local sum path actual artifact
     while read -r sum path; do
-      actual="$(sha256_of "${dir}/${path}")"
+      case "${path}" in
+        /* | ../* | */../* | */.. | . | ..)
+          die "bundle integrity check FAILED: unsafe artifact path '${path}'"
+          ;;
+      esac
+      artifact="${dir}/${path}"
+      [[ -f "${artifact}" && ! -L "${artifact}" ]] || die "bundle integrity check FAILED: unsafe or missing artifact path '${path}'"
+      actual="$(sha256_of "${artifact}")"
       [[ "$actual" = "$sum" ]] || die "bundle integrity check FAILED for ${path}: expected ${sum}, got ${actual}"
     done < "${dir}/SHA256SUMS"
   fi
@@ -315,19 +322,17 @@ preflight
 if [[ -n "${FROM_FILE}" ]]; then
   [[ -f "${FROM_FILE}" ]] || die "--from-file: no such file: ${FROM_FILE}"
   tarball_name="$(basename "${FROM_FILE}")"
-  case "${tarball_name}" in
-    modulo-*-linux-*.tar.gz)
-      VERSION_NUM="${tarball_name#modulo-}"
-      VERSION_NUM="${VERSION_NUM%%-linux-*}"
-      ;;
-    modulo-*-darwin-*.tar.gz)
-      VERSION_NUM="${tarball_name#modulo-}"
-      VERSION_NUM="${VERSION_NUM%%-darwin-*}"
-      ;;
-    *)
-      die "cannot derive the bundle version from '${tarball_name}' (expected modulo-<version>-${OS}-<arch>.tar.gz)"
-      ;;
-  esac
+  if [[ "${tarball_name}" =~ ^modulo-(.+)-(linux|darwin)-(amd64|arm64)\.tar\.gz$ ]]; then
+    VERSION_NUM="${BASH_REMATCH[1]}"
+    archive_os="${BASH_REMATCH[2]}"
+    archive_arch="${BASH_REMATCH[3]}"
+  else
+    die "cannot parse archive name '${tarball_name}' (expected modulo-<version>-${OS}-<arch>.tar.gz)"
+  fi
+  [[ "${archive_os}" = "${OS}" ]] || die \
+    "archive OS '${archive_os}' does not match detected host OS '${OS}' — refusing to install"
+  [[ "${archive_arch}" = "${ARCH}" ]] || die \
+    "archive architecture '${archive_arch}' does not match detected host architecture '${ARCH}' — refusing to install"
   RELEASE_TAG="(offline: ${tarball_name})"
 else
   if [[ -n "${VERSION:-}" ]] && [[ "${VERSION:-}" != "latest" ]]; then
@@ -526,14 +531,22 @@ fi
 
 # --- extract and verify the bundle's internal checksums ---------------------
 
-tar -xzf "${tmp}/${tarball_name}" -C "${tmp}"
-set -- "${tmp}"/*/
-if [[ "$#" -ne 1 ]]; then
-  die "unexpected archive layout: expected exactly one top-level directory, found $#, in ${tarball_name}"
+expected_bundle_dir="${tarball_name%.tar.gz}"
+extract_root="${tmp}/extracted"
+mkdir -p "${extract_root}"
+tar -xzf "${tmp}/${tarball_name}" -C "${extract_root}"
+shopt -s nullglob
+entries=("${extract_root}"/*)
+shopt -u nullglob
+if [[ "${#entries[@]}" -ne 1 || ! -d "${entries[0]}" || -L "${entries[0]}" ]]; then
+  die "unexpected archive layout: expected exactly one non-symlink top-level directory '${expected_bundle_dir}', in ${tarball_name}"
 fi
-first_entry="$1"
-bundle_dir="${first_entry%/}"
-[[ -f "${bundle_dir}/SHA256SUMS" ]] || die "malformed bundle: SHA256SUMS missing from the archive"
+bundle_dir="${entries[0]}"
+bundle_dir_name="${bundle_dir##*/}"
+[[ "${bundle_dir_name}" = "${expected_bundle_dir}" ]] || die \
+  "archive top-level directory '${bundle_dir_name}' does not match archive identity '${expected_bundle_dir}'"
+[[ -f "${bundle_dir}/SHA256SUMS" && ! -L "${bundle_dir}/SHA256SUMS" ]] || \
+  die "malformed bundle: SHA256SUMS missing from the archive"
 verify_sums_in_dir "${bundle_dir}"
 info "bundle internal SHA256SUMS verified"
 
