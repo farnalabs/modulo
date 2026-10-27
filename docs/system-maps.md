@@ -2,9 +2,8 @@
 
 **Status:** Draft
 **Target Milestone:** Beta
-**Ticket:** FAR-2201
 **Category:** Product & Technical Architecture Specification
-**Related:** `docs/architecture.md`, `docs/core-principles.md`, ADR 020 (analytics facts table), ADR 044 (agent dispatch model)
+**Related:** `docs/architecture.md`, `docs/core-principles.md`
 
 ---
 
@@ -95,9 +94,11 @@ System Maps adheres to four strict database design rules:
 3. **Draft isolation:** A draft revision can be edited, validated, and previewed without affecting active system overview dashboards or live pipeline run attributions.
 4. **Relational graph projections:** Map nodes and relationships are projected into queryable relational rows during publish. This enables SQL joins, foreign key integrity checks, and fast attribution lookups without parsing JSON blobs on every read.
 
-**Tenant integrity is a database rule, not only an application check.** Every row in this projection carries `organisation_id`. Before applying the DDL below, the existing `organisations`, `teams`, `accounts`, and `pipelines` tables must expose unique keys on `(id, organisation_id)` (or equivalent organisation-scoped keys). Every reference that can cross an organisation boundary uses a composite foreign key containing the child row's `organisation_id`: a revision references its map, a node or relationship references its revision, team and account bindings reference the same organisation, and pipeline bindings reference `(pipeline_id, organisation_id)`. The database therefore rejects a row whose UUID belongs to another organisation, even when the UUID itself is valid.
+**Tenant integrity has two explicit enforcement boundaries.** Every System Map row carries `organisation_id`. Foreign keys between the new System Map tables use composite keys where both tables own the organisation column, so a revision can reference only its map and a relationship can reference only nodes in its revision. References to existing Modulo resources use their existing primary-key foreign keys, then the service transaction validates that the referenced resource belongs to the current organisation and, where applicable, the permitted team scope under PostgreSQL row-level security (RLS). The service performs those checks while holding the relevant map or revision lock, before inserting or publishing the graph.
 
-Node keys remain stable within a revision for import/export and human-readable diffs. The relationship and loop-config tables still enforce those key references in SQL using composite foreign keys to `(revision_id, node_key, organisation_id)`. `external_ref` and values inside `config_json` are intentionally application-level data: they do not identify Modulo rows and cannot provide a relational tenant boundary. A future binding to another Modulo entity must add an organisation-scoped foreign key rather than relying on a validator.
+`accounts` is a global table and does not gain an `organisation_id` in this design. Account ownership and audit columns therefore use the existing `account_id` foreign key only. At write time, the service checks that the account is an active member of the current organisation before accepting it as `account_id` or `updated_by`; the transaction rejects an account that lacks membership. This is an application-level membership rule, not an invented account composite key.
+
+Node keys remain stable within a revision for import/export and human-readable diffs. The relationship and loop-config tables enforce those key references in SQL using composite foreign keys because those new tables own both `revision_id` and `organisation_id`. `external_ref` and values inside `config_json` are application-level data: they do not identify Modulo rows and cannot provide a relational tenant boundary.
 
 ### 3.2 Relational Entities
 
@@ -157,13 +158,11 @@ Node keys remain stable within a revision for import/export and human-readable d
 ### 3.3 Database Table Definitions
 
 ```sql
--- The referenced legacy tables must expose these organisation-scoped keys before
--- these tables are created. They may be ordinary UNIQUE constraints or equivalent
--- existing keys, but the column order must match the foreign keys below.
---   organisations(id)
---   teams(id, organisation_id)
---   accounts(id, organisation_id)
---   pipelines(id, organisation_id)
+-- Existing tables are not changed to add composite keys as a prerequisite.
+-- New System Map tables use composite keys only between tables defined here.
+-- Foreign keys to existing resources use their current primary keys; the service
+-- transaction validates organisation and team scope before each binding write.
+-- `accounts` remains global and is checked through organisation membership.
 
 -- Core System Map table
 CREATE TABLE system_maps (
@@ -178,15 +177,11 @@ CREATE TABLE system_maps (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMPTZ,
-    account_id UUID NOT NULL,
-    updated_by UUID,
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    updated_by UUID REFERENCES accounts(id) ON DELETE RESTRICT,
     CONSTRAINT uq_system_maps_id_org UNIQUE (id, organisation_id),
-    CONSTRAINT fk_system_maps_owner_team_org FOREIGN KEY (owner_team_id, organisation_id)
-        REFERENCES teams(id, organisation_id) ON DELETE RESTRICT,
-    CONSTRAINT fk_system_maps_account_org FOREIGN KEY (account_id, organisation_id)
-        REFERENCES accounts(id, organisation_id) ON DELETE RESTRICT,
-    CONSTRAINT fk_system_maps_updated_by_org FOREIGN KEY (updated_by, organisation_id)
-        REFERENCES accounts(id, organisation_id) ON DELETE RESTRICT,
+    CONSTRAINT fk_system_maps_owner_team FOREIGN KEY (owner_team_id)
+        REFERENCES teams(id) ON DELETE RESTRICT,
     CONSTRAINT ck_system_maps_visibility CHECK (visibility IN ('org', 'team')),
     CONSTRAINT ck_system_maps_team_owner CHECK (visibility = 'org' OR owner_team_id IS NOT NULL)
 );
@@ -210,12 +205,10 @@ CREATE TABLE system_map_revisions (
     change_summary TEXT,
     published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    account_id UUID NOT NULL,
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
     CONSTRAINT uq_system_map_revisions_id_org UNIQUE (id, organisation_id),
     CONSTRAINT fk_system_map_revisions_map_org FOREIGN KEY (map_id, organisation_id)
         REFERENCES system_maps(id, organisation_id) ON DELETE CASCADE,
-    CONSTRAINT fk_system_map_revisions_account_org FOREIGN KEY (account_id, organisation_id)
-        REFERENCES accounts(id, organisation_id) ON DELETE RESTRICT,
     CONSTRAINT ck_system_map_revisions_status CHECK (status IN ('draft', 'published', 'archived')),
     CONSTRAINT ck_system_map_revisions_number CHECK (revision_number > 0),
     CONSTRAINT uq_system_map_revisions_map_num UNIQUE (map_id, revision_number)
@@ -239,10 +232,10 @@ CREATE TABLE system_map_nodes (
     node_type VARCHAR(32) NOT NULL,
     name VARCHAR(255) NOT NULL,
     description TEXT,
-    pipeline_id UUID,
-    connector_instance_id UUID,
-    owner_team_id UUID,
-    eval_id UUID,
+    pipeline_id UUID REFERENCES pipelines(id) ON DELETE RESTRICT,
+    connector_instance_id UUID REFERENCES connector_instances(id) ON DELETE RESTRICT,
+    owner_team_id UUID REFERENCES teams(id) ON DELETE RESTRICT,
+    eval_id UUID REFERENCES evals(id) ON DELETE RESTRICT,
     external_ref VARCHAR(255),
     capacity_limit INT,
     config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -251,14 +244,6 @@ CREATE TABLE system_map_nodes (
     CONSTRAINT uq_system_map_nodes_rev_key_org UNIQUE (revision_id, node_key, organisation_id),
     CONSTRAINT fk_system_map_nodes_revision_org FOREIGN KEY (revision_id, organisation_id)
         REFERENCES system_map_revisions(id, organisation_id) ON DELETE CASCADE,
-    CONSTRAINT fk_system_map_nodes_pipeline_org FOREIGN KEY (pipeline_id, organisation_id)
-        REFERENCES pipelines(id, organisation_id) ON DELETE RESTRICT,
-    CONSTRAINT fk_system_map_nodes_connector_org FOREIGN KEY (connector_instance_id, organisation_id)
-        REFERENCES connector_instances(id, organisation_id) ON DELETE RESTRICT,
-    CONSTRAINT fk_system_map_nodes_owner_team_org FOREIGN KEY (owner_team_id, organisation_id)
-        REFERENCES teams(id, organisation_id) ON DELETE RESTRICT,
-    CONSTRAINT fk_system_map_nodes_eval_org FOREIGN KEY (eval_id, organisation_id)
-        REFERENCES evals(id, organisation_id) ON DELETE RESTRICT,
     CONSTRAINT ck_system_map_nodes_type CHECK (
         node_type IN (
             'pipeline',
@@ -316,7 +301,7 @@ CREATE TABLE system_map_loop_configs (
     node_key VARCHAR(128) NOT NULL,
     target_signal VARCHAR(255) NOT NULL,
     observation_window_seconds INT NOT NULL,
-    action_pipeline_id UUID NOT NULL,
+    action_pipeline_id UUID NOT NULL REFERENCES pipelines(id) ON DELETE RESTRICT,
     budget_limit_usd NUMERIC(10, 4) NOT NULL,
     cooldown_seconds INT NOT NULL,
     outcome_metric VARCHAR(255) NOT NULL,
@@ -326,8 +311,6 @@ CREATE TABLE system_map_loop_configs (
         REFERENCES system_map_revisions(id, organisation_id) ON DELETE CASCADE,
     CONSTRAINT fk_system_map_loop_node_org FOREIGN KEY (revision_id, node_key, organisation_id)
         REFERENCES system_map_nodes(revision_id, node_key, organisation_id) ON DELETE CASCADE,
-    CONSTRAINT fk_system_map_loop_pipeline_org FOREIGN KEY (action_pipeline_id, organisation_id)
-        REFERENCES pipelines(id, organisation_id) ON DELETE RESTRICT,
     CONSTRAINT ck_system_map_loop_obs_window CHECK (observation_window_seconds >= 60),
     CONSTRAINT ck_system_map_loop_budget CHECK (budget_limit_usd > 0),
     CONSTRAINT ck_system_map_loop_cooldown CHECK (cooldown_seconds >= 0),
@@ -337,20 +320,22 @@ CREATE TABLE system_map_loop_configs (
 
 ### 3.4 Constraint and Binding Contract
 
-The initial node binding contract is deliberately relational and small. A node may bind to at most one `pipeline_id`, `connector_instance_id`, `owner_team_id`, or `eval_id`; each populated binding has a composite foreign key with `organisation_id`. `external_ref` remains the only provider-owned identifier. Guardrail pins and HITL review configurations are not relational System Map bindings in this revision: controls describe those concepts through `control_type` and validated `config_json` only, while the implementation does not promise a foreign key to guardrail or HITL rows. Adding such a binding later requires a named projection table and a new composite foreign key, not an untracked JSON reference.
+The initial node binding contract is deliberately relational and small. A node may bind to at most one `pipeline_id`, `connector_instance_id`, `owner_team_id`, or `eval_id`; each populated binding uses the existing primary-key foreign key for that resource. The service transaction must then validate that the resource belongs to the current organisation and, for team-scoped maps, that the team is permitted by the map's visibility and row-level security scope. `external_ref` remains the only provider-owned identifier. Guardrail and human-approval configurations are not relational System Map bindings in this revision: controls describe those concepts through `control_type` and validated `config_json` only.
+
+`account_id` and `updated_by` use the existing account foreign key. Before inserting or publishing a map or revision, the service verifies that each account is an active member of the current organisation. The account table remains global and receives no organisation column or composite foreign key.
 
 The initial relationship vocabulary targets map nodes only. `owned_by`, `measured_by`, and `capacity_limited_by` are therefore removed from the first implementation: team ownership is represented by `owner_team_id`, metrics are selected by the node's metric configuration, and capacity is represented by `capacity_limit` or a queue node. This avoids relationships whose target entity has no typed row or tenant-safe key.
 
-The DDL is intentionally explicit about the organisation boundary:
+The DDL and service transaction divide tenant enforcement as follows:
 
 - `system_maps`, revisions, nodes, relationships, and loop configurations each store a non-null `organisation_id` and reference `organisations(id)`.
-- The composite `(id, organisation_id)` and `(revision_id, node_key, organisation_id)` keys are not redundant metadata. They are the targets that make every child reference tenant-safe.
-- A revision can reference only a map in the same organisation. A published-revision pointer can only point to a revision in the same organisation.
-- Nodes can reference only a pipeline in the node's organisation. Loop configurations apply the same check to their action pipeline. These are direct composite foreign keys, not validator-only checks or names resolved at runtime.
-- Relationship endpoints and loop-config nodes use stable `node_key` values within a revision. Their composite foreign keys reject a missing endpoint, a node from another revision, or a node from another organisation. The graph validator still enforces semantic rules such as allowed relationship types and flow acyclicity.
-- Team and account bindings use the same composite pattern. `visibility = 'team'` requires a same-organisation `owner_team_id`; map audit actors must also belong to the map's organisation.
+- Composite keys are created only on new tables where both columns are owned by this schema: `(id, organisation_id)` for row identity and `(revision_id, node_key, organisation_id)` for node identity within a revision.
+- A revision, published-revision pointer, relationship endpoint, or loop configuration can therefore reference only rows from the same new-schema organisation and revision.
+- A pipeline, connector, evaluation, or team binding uses that existing table's primary-key foreign key. The service transaction performs the same-organisation and permitted-team checks under RLS/team scope before writing or publishing. These checks are mandatory validation boundaries; they are not inferred from a composite key that the existing table does not provide.
+- Account bindings use the existing `account_id` foreign key. The service transaction checks active membership in the current organisation for `account_id` and `updated_by`.
+- The graph validator still enforces semantic rules such as allowed relationship types, required node properties, and flow acyclicity.
 
-If an existing shared table cannot provide the required `(id, organisation_id)` key, the migration must add that unique key before creating the System Maps foreign key. It must not replace the composite constraint with an application-only lookup. References stored only inside JSON, such as `external_ref` or a connector-specific configuration value, remain application-level because they do not identify a Modulo row.
+The migration is executable in this order: create the new tables and their organisation-owned composite keys; add ordinary foreign keys to existing resource primary keys; add the indexes used by the service's organisation and team validation queries; deploy the service transaction checks; backfill or publish only after those checks are active; then add attribution columns and terminalization writes. The migration does not alter `accounts`, and it does not require new composite unique keys on teams, pipelines, connectors, or evaluations. References stored only inside JSON, such as `external_ref` or a connector-specific configuration value, remain application-level because they do not identify a Modulo row.
 
 ---
 
@@ -364,11 +349,29 @@ If an existing shared table cannot provide the required `(id, organisation_id)` 
 | `external_capability` | Represents work executed outside Modulo (e.g. GitHub Actions, ArgoCD, Jenkins, security scanner). | `provider`, `external_ref`, `execution_mode` | Optional `connector_instance_id` binding for status telemetry. |
 | `manual_capability` | Represents human engineering work (e.g. architectural spikes, design review, manual security audit). | `owner_role`, `owner_team_id`, `sla_hours` | Bound to a same-organisation team. |
 | `queue` | Represents an intermediate buffer or backlog holding items between capabilities. | `queue_type`, `capacity_limit`, `drain_rate_per_hour` | Capacity is represented directly by `capacity_limit`; no separate slot entity is referenced. |
-| `control` | Represents a deterministic evaluation gate, safety guardrail, or human approval barrier. | `control_type` (gate / guardrail / approval), `pass_threshold`, `fail_action` | Optional `eval_id` binding; guardrail and HITL references are outside the initial relational binding contract. |
+| `control` | Represents a deterministic evaluation gate, safety guardrail, or human approval barrier. | `control_type` (gate / guardrail / approval), `pass_threshold`, `fail_action` | Optional `eval_id` binding; guardrail and human-in-the-loop (HITL) references are outside the initial relational binding contract. |
 | `improvement_loop` | Represents an autonomous sidecar pipeline monitoring system signals and deploying incremental fixes. | Loop configuration (signal, window, action, budget, cooldown, metric) | Bound to `system_map_loop_configs` and an action pipeline. |
 | `system_boundary` | Demarcates an organizational boundary, environment trust zone, or compliance perimeter. | `boundary_type` (network / team / environment), `compliance_scope` | Container grouping via `contains` relationships. |
 
-### 4.2 Relationship Typology
+### 4.2 Node Property Contract
+
+`system_map_nodes.config_json` is a bounded authoring document, not an untyped escape hatch. The service validates it against the node-kind schema before save and publish. Unknown top-level properties are rejected, values are type-checked, strings have a maximum length of 255 characters, durations are positive integers in seconds, rates and thresholds are non-negative numbers, and references use the typed binding columns rather than JSON strings. The relational columns are the queryable projection; `config_json` stores authoring metadata and node-kind properties that are needed to render or validate the map but are not used as joins.
+
+The initial schemas are:
+
+| Node kind | Required `config_json` paths | Optional paths and rules | Queryable projection |
+|---|---|---|---|
+| `pipeline` | `execution.max_concurrent_runs` (integer, 1 or greater), `execution.timeout_seconds` (integer, 1 or greater) | `display.metric` (enum: `throughput`, `latency`, `failure_rate`, `capacity`) | `pipeline_id`, `capacity_limit`, `name`, `node_type` |
+| `external_capability` | `provider` (string), `execution_mode` (enum: `webhook`, `poll`, `push`, `manual`) | `telemetry.status_path` (string, max 255), `telemetry.latency_path` (string, max 255) | `connector_instance_id`, `external_ref`, `name`, `node_type` |
+| `manual_capability` | `owner_role` (string), `service_level.sla_hours` (number, greater than 0) | `escalation.channel` (enum: `email`, `chat`, `ticket`, `none`) | `owner_team_id`, `name`, `node_type` |
+| `queue` | `queue_type` (enum: `work`, `artifact`, `approval`, `signal`) | `capacity_limit` (integer, 1 or greater), `drain_rate_per_hour` (number, 0 or greater) | `capacity_limit`, `name`, `node_type` |
+| `control` | `control_type` (enum: `gate`, `guardrail`, `approval`), `fail_action` (enum: `block`, `warn`, `route_to_human`) | `pass_threshold` (number from 0 through 1) is required when `control_type` is `gate` or `guardrail`; absent for `approval` | `eval_id`, `name`, `node_type` |
+| `improvement_loop` | `target_signal`, `observation_window_seconds`, `action_pipeline_id`, `budget_limit_usd`, `cooldown_seconds`, `outcome_metric` | No additional properties in the initial contract | `system_map_loop_configs`, `name`, `node_type` |
+| `system_boundary` | `boundary_type` (enum: `network`, `team`, `environment`) | `compliance_scope` (string, max 255) | `name`, `node_type` |
+
+The loop fields are duplicated into `system_map_loop_configs` at publish time, where the relational checks enforce required numeric bounds. The authoring JSON remains the source for draft editing; the loop table is the published, queryable projection. Other node kinds use the typed columns and validated JSON together. A future property requires a schema version change and an explicit validator update.
+
+### 4.3 Relationship Typology
 
 The first implementation exposes only relationships whose endpoints are rows in `system_map_nodes`. Ownership, measurement, and capacity limits remain node properties or bindings, so `owned_by`, `measured_by`, and `capacity_limited_by` are intentionally outside the initial relationship enum.
 
@@ -380,7 +383,7 @@ The first implementation exposes only relationships whose endpoints are rows in 
 | `feeds_back_to` | Source -> Target | Asynchronous diagnostic signal or metric emission. | Target is an upstream queue, signal buffer, or loop. |
 | `contains` | Boundary -> Node | Hierarchical enclosure inside a subsystem or perimeter. | Source must be `system_boundary`; ownership, metrics, and capacity use the node columns and bindings described in §3.4. |
 
-### 4.3 Loop Semantics & Acyclic Delivery Flow
+### 4.4 Loop Semantics & Acyclic Delivery Flow
 A core failure mode of naive delivery graphs is introducing arbitrary executable cycles into the pipeline flow. When a pipeline failure redirects an artifact back to an earlier pipeline without structural limits, the system risks infinite execution loops, unbounded cloud compute spend, and cascading queue collapse.
 
 System Maps enforces strict loop semantics:
@@ -406,11 +409,13 @@ If the pipeline is mapped to a `pipeline` node in the published map revision:
    - `system_map_id`: UUID of the parent System Map.
    - `system_map_revision_id`: UUID of the exact published revision active at trigger time.
    - `system_map_node_id`: UUID of the mapped `system_map_nodes` row.
-   - `system_map_node_key`: VARCHAR(128) string identifier of the mapped node within the revision (allowing `record_run_facts` to copy it directly into `run_daily_facts` at terminalization without joining `system_map_nodes`, in compliance with ADR 020).
-2. The run's immutable `PipelineSnapshot` captures this attribution block. If the System Map is updated or archived tomorrow, the historical run's attribution remains frozen.
+    - `system_map_node_key`: VARCHAR(128) string identifier of the mapped node within the revision, allowing the terminal fact writer to copy it directly into `run_daily_facts` without joining `system_map_nodes`.
+
+ 2. The run's immutable pipeline snapshot captures this attribution block. If the System Map is updated or archived later, the historical run's attribution remains frozen.
+
 
 ### 5.2 Attribution Storage in `run_daily_facts`
-To comply with ADR 020, analytics and system overview queries must survive the 90-day raw run retention purge without joining the `runs` table.
+Analytics and system overview queries must survive the raw run retention purge without joining the `runs` table.
 
 The `run_daily_facts` table is extended with three attribution columns:
 
@@ -437,7 +442,7 @@ CREATE INDEX ix_run_daily_facts_system_map_node
 ON run_daily_facts(organisation_id, system_map_id, system_map_node_key, run_date);
 ```
 
-When `core.analytics.record_run_facts` executes during run terminalization, it copies `system_map_id`, `system_map_revision_id`, and the node's string identifier (`system_map_node_key`) into the fact row. This guarantees that multi-year system performance trends, node throughput, and loop remediation statistics remain queryable without keeping raw run blobs.
+When the analytics fact writer executes during run terminalization, it copies `system_map_id`, `system_map_revision_id`, and the node's string identifier (`system_map_node_key`) into the fact row. This guarantees that long-term system performance trends, node throughput, and loop remediation statistics remain queryable without keeping raw run blobs.
 
 ### 5.3 Provenance Taxonomy
 Every aggregate metric displayed on a System Map node or evidence drawer carries an explicit provenance tag:
@@ -474,33 +479,34 @@ Modulo's own engineering system serves as the primary real-world implementation 
 
 The primary delivery flow consists of:
 1. Feature Specification (`manual_capability`)
-2. Prompt-to-PR / Worker Implementation (`pipeline`)
-3. Pre-PR Quality & Lint Gate (`control`)
-4. PR Reviewer & Security Gate (`pipeline` + `control`)
-5. Merge Queue Verification (`pipeline`)
-6. Production Deployment (`external_capability`)
+ 2. Governed implementation (`pipeline`)
+ 3. Pre-change quality gate (`control`)
+ 4. Review and security gate (`pipeline` + `control`)
+ 5. Release admission verification (`pipeline`)
+ 6. Production deployment (`external_capability`)
+
 
 ### 6.2 The Six Autonomous Improvement Loops
 Modulo operates six autonomous sidecar improvement loops. Each loop acts on a specific vulnerability, defect, or drift vector without blocking the forward delivery flow:
 
 ```
 [ Primary Flow ]
-Feature Spec ---> Worker Implement ---> QA/Lint Gate ---> PR Review ---> Merge Queue ---> Deploy
+Feature Spec ---> Governed Implement ---> Quality Gate ---> Review ---> Release Admission ---> Deploy
                          ^                  ^                  ^               ^
                          |                  |                  |               |
 [ Improvement Loops ]    |                  |                  |               |
-Improve Security --------+------------------+------------------+               |
-Improve Database ---------------------------+                                  |
-Improve Architecture ----+------------------+------------------+               |
-Improve Tests -----------+------------------+------------------+---------------+
-Improve UX --------------+------------------+
-Improve Docs ------------+
+Security Review ----------+------------------+------------------+               |
+Database Care -----------------------------+                                  |
+Architecture Review ----+------------------+------------------+               |
+Test Care --------------+------------------+------------------+---------------+
+Interface Review -------+------------------+
+Documentation Care -----+
 ```
 
 #### Loop 1: Improve Security
-- **Target Signal:** Static analysis findings (`bandit`, `semgrep`), dependency audit alerts (`pip-audit`), and permission boundary warnings.
+- **Target Signal:** Security scan findings, dependency advisories, and permission boundary warnings.
 - **Observation Window:** 14,400 seconds (4 hours).
-- **Action Pipeline:** `improve-security` pipeline. Scans repo, isolates findings into XS/S/M/L categories, fixes vulnerabilities in an isolated worktree, and submits a PR.
+- **Action:** A governed remediation workflow reviews findings, groups them by risk, applies fixes with review controls, and submits the changes for approval.
 - **Budget Limit:** $150.00 USD / month.
 - **Cooldown Window:** 7,200 seconds (2 hours).
 - **Outcome Metric:** Net decrease in unresolved static security findings.
@@ -508,42 +514,42 @@ Improve Docs ------------+
 #### Loop 2: Improve Database
 - **Target Signal:** Unindexed foreign keys, migration revision collisions, soft-delete bypasses, and un-optimized table scans.
 - **Observation Window:** 28,800 seconds (8 hours).
-- **Action Pipeline:** `improve-database` pipeline. Inspects models and migrations, writes idempotent forward migration scripts, and validates schema constraints.
+- **Action:** A governed database-maintenance workflow inspects schema definitions and migrations, writes forward-only changes, and validates constraints.
 - **Budget Limit:** $100.00 USD / month.
 - **Cooldown Window:** 14,400 seconds (4 hours).
 - **Outcome Metric:** Number of migration hygiene violations resolved.
 
 #### Loop 3: Improve Architecture
-- **Target Signal:** Uncovered product map behaviors, untested boundary branches, or drifted feature specifications.
+- **Target Signal:** Uncovered documented behaviors, untested boundary branches, or drifted feature specifications.
 - **Observation Window:** 43,200 seconds (12 hours).
-- **Action Pipeline:** `improve-architecture` pipeline. Walks `frontend/src/manifest.yaml`, identifies unverified behavior checkboxes, and writes regression tests.
+- **Action:** A governed architecture-review workflow compares the documented behavior inventory with implementation and adds regression coverage for unverified behavior.
 - **Budget Limit:** $200.00 USD / month.
 - **Cooldown Window:** 14,400 seconds (4 hours).
 - **Outcome Metric:** Percentage of product map behaviors covered by automated tests.
 
 #### Loop 4: Improve Tests
-- **Target Signal:** Test execution duration creep, test rot patterns (e.g. outdated fixtures), flaky test runs, and test-style violations.
+- **Target Signal:** Test execution duration creep, stale fixtures, flaky test runs, and structural test-quality findings.
 - **Observation Window:** 21,600 seconds (6 hours).
-- **Action Pipeline:** `improve-tests` pipeline. Runs test-style architecture scanners, removes dead mocks, refactors brittle assertions, and normalizes test structures.
+- **Action:** A governed test-maintenance workflow reviews test quality, removes misleading mocks, refactors brittle assertions, and normalizes test structure.
 - **Budget Limit:** $150.00 USD / month.
 - **Cooldown Window:** 7,200 seconds (2 hours).
 - **Outcome Metric:** Test suite runtime reduction and zero test-style findings.
 
 #### Loop 5: Improve UX
-- **Target Signal:** WCAG accessibility violations (contrast, missing labels, missing `aria-live` on dynamic regions), responsive layout shifts, and criteria deviations.
+- **Target Signal:** Accessibility violations, responsive layout shifts, and deviations from the product's interface standards.
 - **Observation Window:** 43,200 seconds (12 hours).
-- **Action Pipeline:** `improve-ux` pipeline. Audits frontend views against `ux-conformance/criteria.yaml` and delivers UI polish PRs.
+- **Action:** A governed interface-review workflow audits views against accessibility and interaction standards and submits reviewed interface changes.
 - **Budget Limit:** $120.00 USD / month.
 - **Cooldown Window:** 14,400 seconds (4 hours).
 - **Outcome Metric:** Conformance score on frontend routes.
 
 #### Loop 6: Improve Documentation
-- **Target Signal:** Stale path references, drifted CLI parameters, unverified docstring claims, and broken internal links.
+- **Target Signal:** Stale references, drifted command parameters, unverified documentation claims, and broken links.
 - **Observation Window:** 86,400 seconds (24 hours).
-- **Action Pipeline:** `improve-docs` pipeline. Runs doc validity sweeps, compares documented behavior against code call sites, and updates documentation.
+- **Action:** A governed documentation workflow checks claims against the product and updates the documentation when it finds drift.
 - **Budget Limit:** $80.00 USD / month.
 - **Cooldown Window:** 21,600 seconds (6 hours).
-- **Outcome Metric:** Zero doc-validity findings in `scripts/check_doc_validity.py`.
+- **Outcome Metric:** Zero unresolved documentation-validity findings.
 
 ---
 
@@ -622,7 +628,8 @@ When viewing revisions or editing a draft:
     added: [queue_review_backlog]
     removed: []
     modified:
-      pipeline_worker:
+       governed_implementation:
+
         capacity_limit: 5 -> 10
   relationships:
     added:
@@ -652,10 +659,12 @@ spec:
       type: manual_capability
       owner_team: "Product Architecture"
 
-    - key: pipeline_worker
-      name: "Autonomous Worker Delivery"
+     - key: governed_implementation
+       name: "Governed Implementation"
+
       type: pipeline
-      pipeline_ref: "Worker Implementation"
+       pipeline_ref: "Governed Implementation"
+
       capacity_limit: 8
 
     - key: gate_lint_test
@@ -677,20 +686,21 @@ spec:
         outcome_metric: "delta_vulnerabilities"
 
   relationships:
-    - key: flow_spec_to_worker
-      type: flow
-      source: spec_triage
-      target: pipeline_worker
+     - key: flow_spec_to_implementation
+       type: flow
+       source: spec_triage
+       target: governed_implementation
 
-    - key: flow_worker_to_gate
-      type: flow
-      source: pipeline_worker
-      target: gate_lint_test
+     - key: flow_implementation_to_gate
+       type: flow
+       source: governed_implementation
+       target: gate_lint_test
 
-    - key: ctrl_security_to_worker
-      type: controls
-      source: loop_security
-      target: pipeline_worker
+     - key: ctrl_security_to_implementation
+       type: controls
+       source: loop_security
+       target: governed_implementation
+
 ```
 
 ---
@@ -703,10 +713,10 @@ The legacy `feat-lifecycle-maps` implementation focused on tracking individual w
 Several underlying technical components remain sound and will be retained.
 
 ### 9.2 What Is Retained
-1. **Layered Auto-Layout Algorithm:** The Sugiyama-style layered graph auto-layout engine (`frontend/src/__tests__/lifecycleMapLayout.spec.ts`) cleanly positions nodes and computes routing paths. This algorithm is retained and extended to support top/bottom sidecar channels.
-2. **Deterministic Work-Item Key Derivation:** The `uuid5` canonical work-item reference normalizer (`modulo.db.lifecycle_refs`) reliably collapses variations of GitHub PR URLs, Linear keys, and Jira ticket formats. This logic is preserved in the Evidence Drawer for optional drill-down lookups.
-3. **Cursor-Based Fact Pagination:** The keyset pagination patterns developed for journey detail endpoints are reused for the Node Inspector evidence tables.
-4. **Concurrency Locking Patterns:** The row-locking safeguards (`FOR UPDATE` bounded helpers) that prevent concurrent revision save collisions are preserved.
+1. **Layered Auto-Layout Algorithm:** The existing layered graph layout engine cleanly positions nodes and computes routing paths. This algorithm is retained and extended to support top and bottom sidecar channels.
+2. **Deterministic Work-Item Key Derivation:** The existing canonical work-item reference normalizer reliably collapses equivalent external pull request, issue, and commit references. This logic is preserved in the Evidence Drawer for optional drill-down lookups.
+3. **Cursor-Based Fact Pagination:** The existing keyset pagination patterns are reused for the Node Inspector evidence tables.
+4. **Concurrency Locking Patterns:** The existing row-locking safeguards that prevent concurrent revision save collisions are preserved.
 
 ### 9.3 What Is Deprecated and Discarded
 1. **Mutable Stage State Columns:** The `lifecycle_map_stages` table which stored mutable stage position and status lists is retired. Replaced by `system_map_nodes` projections.
@@ -715,7 +725,7 @@ Several underlying technical components remain sound and will be retained.
 
 ### 9.4 Database Migration Plan
 1. A new migration creates `system_maps`, `system_map_revisions`, `system_map_nodes`, `system_map_relationships`, and `system_map_loop_configs`.
-2. Existing `lifecycle_maps` tables remain untouched in Alpha (hidden behind internal flags per FAR-2200).
+2. Existing `lifecycle_maps` tables remain untouched during the first release of System Maps. The existing feature remains available according to its current product configuration.
 3. In Beta, an opt-in migration script transforms legacy `lifecycle_maps` content into initial `system_maps` draft revisions, converting legacy stages into `pipeline` or `manual_capability` nodes.
 4. The deprecated `lifecycle_maps` tables are formally dropped at GA.
 
@@ -741,14 +751,14 @@ Several underlying technical components remain sound and will be retained.
   - `modulo apply` declarative YAML support for System Maps.
 - **Exit Criteria:** Platform engineers can create, validate, publish, and update custom system maps via UI and CLI.
 
-### Beta 3: Improvement Loop Sidecars & Autonomous Feedback Metrics
+### Beta 3: Improvement Loop Sidecars and Autonomous Feedback Metrics
 - **Scope:**
   - Implementation of `system_map_loop_configs` relational storage and validation.
   - Dedicated sidecar rendering channels for improvement loops on the canvas.
-  - Signal monitoring daemon connecting target metrics to loop action pipeline triggers.
+  - Signal monitoring service connecting target metrics to loop action triggers.
   - Cooldown and budget enforcement for improvement loops.
   - Loop outcome reporting (measuring signal before and after remediation runs).
-- **Exit Criteria:** Modulo's six dogfood improvement loops run with visible budget, cooldown, and outcome tracking on the map.
+- **Exit Criteria:** Modulo's six improvement loops run with visible budget, cooldown, and outcome tracking on the map.
 
 ### Beta 4: Operational Recommendations, Bottleneck Detection & Autonomy Attestation
 - **Scope:**
