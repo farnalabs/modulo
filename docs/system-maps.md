@@ -150,6 +150,7 @@ Node keys remain stable within a revision for import/export and human-readable d
         | observation_window_seconds  |
         | action_pipeline_id (FK)     |
         | budget_limit_usd (NUMERIC)  |
+        | max_concurrent_runs (INT)   |
         | cooldown_seconds (INT)      |
         | outcome_metric (VARCHAR)    |
         +-----------------------------+
@@ -303,6 +304,7 @@ CREATE TABLE system_map_loop_configs (
     observation_window_seconds INT NOT NULL,
     action_pipeline_id UUID NOT NULL REFERENCES pipelines(id) ON DELETE RESTRICT,
     budget_limit_usd NUMERIC(10, 4) NOT NULL,
+    max_concurrent_runs INT NOT NULL,
     cooldown_seconds INT NOT NULL,
     outcome_metric VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -313,6 +315,7 @@ CREATE TABLE system_map_loop_configs (
         REFERENCES system_map_nodes(revision_id, node_key, organisation_id) ON DELETE CASCADE,
     CONSTRAINT ck_system_map_loop_obs_window CHECK (observation_window_seconds >= 60),
     CONSTRAINT ck_system_map_loop_budget CHECK (budget_limit_usd > 0),
+    CONSTRAINT ck_system_map_loop_concurrency CHECK (max_concurrent_runs >= 1),
     CONSTRAINT ck_system_map_loop_cooldown CHECK (cooldown_seconds >= 0),
     CONSTRAINT uq_system_map_loop_rev_node_org UNIQUE (revision_id, node_key, organisation_id)
 );
@@ -366,7 +369,7 @@ The initial schemas are:
 | `manual_capability` | `owner_role` (string), `service_level.sla_hours` (number, greater than 0) | `escalation.channel` (enum: `email`, `chat`, `ticket`, `none`) | `owner_team_id`, `name`, `node_type` |
 | `queue` | `queue_type` (enum: `work`, `artifact`, `approval`, `signal`) | `capacity_limit` (integer, 1 or greater), `drain_rate_per_hour` (number, 0 or greater) | `capacity_limit`, `name`, `node_type` |
 | `control` | `control_type` (enum: `gate`, `guardrail`, `approval`), `fail_action` (enum: `block`, `warn`, `route_to_human`) | `pass_threshold` (number from 0 through 1) is required when `control_type` is `gate` or `guardrail`; absent for `approval` | `eval_id`, `name`, `node_type` |
-| `improvement_loop` | `target_signal`, `observation_window_seconds`, `config_json.action_pipeline_ref`, `budget_limit_usd`, `cooldown_seconds`, `outcome_metric` | No additional properties in the initial contract | `system_map_loop_configs.action_pipeline_id`, `name`, `node_type` |
+| `improvement_loop` | `target_signal`, `observation_window_seconds`, `config_json.action_pipeline_ref`, `budget_limit_usd`, `max_concurrent_runs`, `cooldown_seconds`, `outcome_metric` | No additional properties in the initial contract | `system_map_loop_configs.action_pipeline_id`, `name`, `node_type` |
 | `system_boundary` | `boundary_type` (enum: `network`, `team`, `environment`) | `compliance_scope` (string, max 255) | `name`, `node_type` |
 
 The loop fields are duplicated into `system_map_loop_configs` at publish time, where the relational checks enforce required numeric bounds. The authoring JSON remains the source for draft editing; the loop table is the published, queryable projection. Other node kinds use the typed columns and validated JSON together. A future property requires a schema version change and an explicit validator update.
@@ -387,14 +390,21 @@ The first implementation exposes only relationships whose endpoints are rows in 
 A core failure mode of naive delivery graphs is introducing arbitrary executable cycles into the pipeline flow. When a pipeline failure redirects an artifact back to an earlier pipeline without structural limits, the system risks infinite execution loops, unbounded cloud compute spend, and cascading queue collapse.
 
 System Maps enforces strict loop semantics:
+
+- **Cooldown is executable:** the loop dispatcher records the last admitted remediation run and rejects or defers a trigger until `cooldown_seconds` has elapsed.
+- **Budget is executable:** the dispatcher accounts spend for every run admitted by the loop against `budget_limit_usd` in the UTC calendar month. It rejects or defers a trigger when admitting it would exceed the remaining loop budget. The loop cap is in addition to, and cannot raise, existing organisation and pipeline cost controls.
+- **Concurrency is executable:** the dispatcher counts active runs admitted by the loop and refuses admission above `max_concurrent_runs`. The loop-specific cap is in addition to, and cannot raise, the action pipeline's `max_concurrent_runs` or the organisation's concurrency limits.
+- **Publication and dispatch both enforce these controls:** publication rejects missing or invalid values; dispatch re-checks the published revision and current counters at admission time so a valid publication cannot bypass a live safety limit.
+
 1. **The delivery flow is acyclic:** Every relationship of type `flow` belongs to the primary delivery flow. The directed subgraph formed by all `flow` edges must be a Directed Acyclic Graph (DAG). Any draft containing a cycle among `flow` edges is rejected by the graph validator at save and publish time.
 2. **Improvement loops are modeled as control sidecars:** An `improvement_loop` is never placed as an inline node on a `flow` edge. It sits adjacent to the flow as an autonomous observer. It reads signals via `feeds_back_to` or metric streams, and acts upon capabilities or queues through `controls` or asynchronous trigger actions.
-3. **The Six-Parameter Improvement Loop Contract:** Every `improvement_loop` node must define exactly six control parameters:
+3. **The Seven-Parameter Improvement Loop Contract:** Every `improvement_loop` node must define exactly seven control parameters:
    - **Target Signal (`target_signal`):** The quantifiable operational symptom or defect to monitor (e.g. `failing_test_ratio`, `uncovered_architecture_gaps`, `critical_security_findings`).
    - **Observation Window (`observation_window_seconds`):** The time duration over which signal data is collected before deciding to act (e.g. 3600 seconds, 86400 seconds).
    - **Action Pipeline (`config_json.action_pipeline_ref`):** The authoring reference for the executable Modulo pipeline dispatched to investigate and apply a remediation (e.g. Improve Architecture, Improve Security). It resolves to the relational `action_pipeline_id` binding in the published loop configuration.
-   - **Budget Limit (`budget_limit_usd`):** Maximum model and compute spend allocated to this loop per calendar month.
-   - **Cooldown Window (`cooldown_seconds`):** Minimum quiet period required after a remediation run before the loop is permitted to fire again, preventing rapid-fire oscillatory commits.
+   - **Budget Limit (`budget_limit_usd`):** Maximum model and compute spend allocated to this loop per UTC calendar month. Publication requires a positive value; dispatch accounts each admitted run against the remaining loop budget and refuses or defers admission when the cap would be exceeded.
+   - **Maximum Concurrent Runs (`max_concurrent_runs`):** Maximum number of active remediation runs admitted by this loop at once. Publication requires an integer of at least 1; dispatch refuses admission above this cap and also applies the lower action-pipeline and organisation concurrency limits.
+   - **Cooldown Window (`cooldown_seconds`):** Minimum quiet period required after a remediation run before the loop is permitted to fire again, preventing rapid-fire oscillatory commits. Dispatch enforces this interval from the last admitted run.
    - **Outcome Metric (`outcome_metric`):** The verifiable metric used to confirm whether the remediation succeeded or failed (e.g. `delta_vulnerabilities`, `delta_test_failures`).
 
 ---
@@ -614,12 +624,13 @@ Clicking any node on the System Map opens the **Node Inspector** drawer on the r
 ```
 
 ### 8.2 Authoring Rules & Validation
-Before a draft revision can transition to `published`, it must pass five strict graph validation checks:
+Before a draft revision can transition to `published`, it must pass these strict graph validation checks:
 1. **Connectivity:** Every node (except explicit `system_boundary` nodes) must have at least one incoming or outgoing relationship.
 2. **Acyclic Delivery Flow:** The directed graph of all `flow` relationships must contain zero cycles.
 3. **Control Integrity:** A `controls` relationship must originate from a `control` or `improvement_loop` node.
-4. **Loop Completeness:** Every `improvement_loop` node must carry a valid configuration in `system_map_loop_configs` with all six parameters specified.
-5. **Binding Existence:** All referenced `pipeline_id` values must resolve to active, non-deleted pipelines in the same organization.
+4. **Loop Completeness and Safety:** Every `improvement_loop` node must carry a valid configuration in `system_map_loop_configs` with all seven parameters specified: target signal, observation window, action pipeline, positive monthly budget, `max_concurrent_runs >= 1`, cooldown, and outcome metric. Publication rejects missing, non-positive, or non-integer safety values. The loop dispatcher must enforce the published cooldown, budget cap, and concurrency cap again at every admission.
+5. **Relational Binding Resolution and Scope:** Every declared `pipeline_id`, `connector_instance_id`, `owner_team_id`, `eval_id`, and improvement-loop `action_pipeline_id` must resolve unambiguously to an existing, active resource in the current organisation and, where applicable, the permitted team scope. UUIDs and exact case-insensitive names are accepted; zero matches, deleted resources, cross-organisation resources, or out-of-scope team resources reject publication. More than one name match is an ambiguity error that requires a UUID. A missing optional binding is allowed only when that node kind marks the binding optional; a missing required binding rejects publication.
+6. **Graph and Projection Consistency:** Every resolved binding must be written to the published relational projection, and publication must fail atomically if any resolution, scope check, or projection write fails.
 
 ### 8.3 Visual and Structured Diffing
 When viewing revisions or editing a draft:
@@ -646,7 +657,7 @@ An organization can roll back to a prior published revision at any time. Rolling
 4. Leaves historical fact records and past run snapshots untouched.
 
 ### 8.5 Declarative GitOps Authoring (`modulo apply`)
-System Maps is planned as a Beta extension to the declarative `modulo apply` engine. The current engine accepts the `api_version: modulo.dev/v1` envelope with an `entities:` mapping. The `system_maps` entity kind shown below is therefore a valid current declarative shape, but it is not yet a supported apply target: Beta work must add the engine and schema support before `modulo apply` can create or update System Maps. Do not treat this example as evidence that the current engine already accepts `system_maps`.
+System Maps is planned as a Beta extension to the declarative `modulo apply` engine. The current engine accepts the `api_version: modulo.dev/v1` envelope with an `entities:` mapping, but it does not currently register a `system_maps` entity kind. The example below uses that current envelope to illustrate the planned Beta payload; it is syntactically valid YAML, but it is illustrative/future only until the `system_maps` schema kind and apply handlers are added. The current engine rejects this entity set, so do not present the example as a currently applicable configuration.
 
 ```yaml
 api_version: modulo.dev/v1
@@ -687,6 +698,7 @@ entities:
             target_signal: "security_vulnerability_count"
             observation_window_seconds: 14400
             budget_limit_usd: 150.00
+            max_concurrent_runs: 1
             cooldown_seconds: 7200
             outcome_metric: "delta_vulnerabilities"
       relationships:
@@ -711,8 +723,10 @@ When Beta adds `system_maps` support, `modulo apply` will resolve its authoring 
 | YAML authoring field | Resolved relational projection | Accepted reference | Resolution rule |
 |---|---|---|---|
 | `owner_team_ref` | `owner_team_id` | Team UUID or exact team name | Resolve within the current organisation; the team must be active and permitted by the map's visibility. |
-| `pipeline_ref` | `pipeline_id` | Pipeline UUID or exact pipeline name | Resolve an active, non-deleted pipeline within the current organisation. |
-| `config_json.action_pipeline_ref` | `action_pipeline_id` | Pipeline UUID or exact pipeline name | Resolve an active, non-deleted action pipeline within the current organisation. |
+| `pipeline_ref` | `pipeline_id` | Pipeline UUID or exact pipeline name | Resolve an active, non-deleted pipeline within the current organisation and permitted team scope. |
+| `connector_instance_ref` | `connector_instance_id` | Connector UUID or exact connector name | Resolve an existing, non-deleted connector instance within the current organisation and permitted team scope; zero or ambiguous matches fail. |
+| `eval_ref` | `eval_id` | Evaluation UUID or exact evaluation name | Resolve an existing evaluation within the current organisation and permitted team scope; zero or ambiguous matches fail. |
+| `config_json.action_pipeline_ref` | `action_pipeline_id` | Pipeline UUID or exact pipeline name | Resolve an active, non-deleted action pipeline within the current organisation and permitted team scope. |
 
 UUIDs are matched by ID. Names are matched exactly after the documented case-insensitive comparison; surrounding whitespace is not significant, but partial names, aliases, and cross-organisation names are not accepted. A name that matches zero rows fails the apply. A name that matches more than one row also fails the apply with an ambiguity error and requires the author to use the UUID form. A UUID from another organisation, a deleted resource, or a resource outside the permitted team scope fails validation. Apply is atomic: it does not publish a partially resolved graph.
 
