@@ -52,6 +52,11 @@ uv sync
 # decrypt the credentials the workers stored.
 cat > .env <<EOF
 DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/modulo
+# Cross-org system crons (dispatcher_reconcile gates /healthz/ready) connect as
+# the dedicated modulo_system role; the API boot creates that role with this
+# password. Without it the system worker refuses those crons and readiness
+# never reaches "ok".
+MODULO_SYSTEM_DATABASE_URL=postgresql+asyncpg://modulo_system:modulo@localhost:5434/modulo
 MODULO_DB=postgres
 SECRET_KEY=local-dev-secret-key-not-for-production
 FERNET_KEY=$FERNET_KEY
@@ -92,7 +97,23 @@ SAQ_AUTH_USERNAME=admin SAQ_AUTH_PASSWORD=admin uv run python -m modulo.core.saq
 Notes:
 - `python -m saq` takes the **settings module** as its only positional arg; there is no `worker` subcommand in SAQ 0.26.4.
 - A local Redis is required (`REDIS_URL`, e.g. `redis://localhost:6380/0` from the compose `redis-local` service).
+- `MODULO_SYSTEM_DATABASE_URL` (set in the step-2 `.env`) is what lets the system worker run its cross-org crons. Without it, `dispatcher_reconcile` never runs and `/healthz/ready` stays `503`.
 - The compose stack (`docker-compose.local.yml`) ships `saq-runner` + `saq-system` services that launch both workers; `saq-system` is **required** for local cron/triggers to fire.
+
+### Check readiness
+
+`/healthz/ready` reports `"status": "ok"` only once the system worker above has
+run `dispatcher_reconcile` at least once. Give it a few seconds after starting
+the workers, then:
+
+```bash
+curl -s http://localhost:8000/healthz/ready | python -m json.tool
+# look for: "status": "ok"
+```
+
+A permanent `503` with `dispatcher_reconcile has never run` means the system
+worker is not running (or is failing) - any health-gated orchestrator will
+refuse to route traffic to an API that otherwise works.
 
 ## 3c. Smoke-check the stack
 
