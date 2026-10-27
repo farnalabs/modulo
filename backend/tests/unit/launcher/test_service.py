@@ -107,6 +107,18 @@ def test_unit_restart_sec_comes_from_the_shared_policy(tmp_path: Path) -> None:
     assert f"RestartSec={int(policy_module.SERVICE_RESTART_SECONDS)}s" in unit
 
 
+def test_render_launchd_plist_escapes_special_path_characters_and_preserves_argv(tmp_path: Path) -> None:
+    import plistlib
+
+    executable = tmp_path / "dir with spaces" / "modulo<&>"
+    plist_str = render_launchd_plist(executable)
+    parsed = plistlib.loads(plist_str.encode("utf-8"))
+    assert parsed["ProgramArguments"] == [str(executable), "start"]
+    assert "&amp;" in plist_str
+    assert "&lt;" in plist_str
+    assert "&gt;" in plist_str
+
+
 def test_render_launchd_plist_pure_string_and_keys(tmp_path: Path) -> None:
     import plistlib
 
@@ -115,7 +127,7 @@ def test_render_launchd_plist_pure_string_and_keys(tmp_path: Path) -> None:
     assert isinstance(plist_str, str)
     assert '<?xml version="1.0" encoding="UTF-8"?>' in plist_str
     assert f"<string>{LAUNCHD_LABEL}</string>" in plist_str
-    assert f"<string>{executable}</string>" in plist_str
+    assert str(executable) in plist_str
     assert "<string>start</string>" in plist_str
     assert "<key>RunAtLoad</key>" in plist_str
     assert "<key>KeepAlive</key>" in plist_str
@@ -386,7 +398,7 @@ def test_darwin_install_round_trip(darwin_only: None, tmp_path: Path) -> None:
     assert not result.warnings
     assert unit_path.exists()
     content = unit_path.read_text(encoding="utf-8")
-    assert f"<string>{executable}</string>" in content
+    assert str(executable) in content
     assert ["launchctl", "unload", str(unit_path)] in [list(argv) for argv in runner.calls]
     assert ["launchctl", "load", "-w", str(unit_path)] in [list(argv) for argv in runner.calls]
 

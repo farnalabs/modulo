@@ -3,6 +3,8 @@
 # Modulo native installer (Linux) — single-install distribution, P1a.
 # Spec: ADR 031 (single-install native distribution); this ticket: FAR-670.
 #        + pre-upgrade upgrade path (FAR-672).
+# macOS service/data seams exist, but no signed native Darwin artifact is
+# published yet; this installer fails closed on Darwin rather than implying one.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
@@ -261,8 +263,8 @@ resolve_latest_tag() {
 preflight() {
   case "$(uname -s)" in
     Linux) OS="linux" ;;
-    Darwin) OS="darwin" ;;
-    *) die "this installer supports Linux and macOS. Windows installers come later — see ADR 031." ;;
+    Darwin) die "macOS native artifact is not yet published; the macOS service/data/launcher seam is present, but no complete signed and notarized Darwin bundle is available yet." ;;
+    *) die "this installer supports Linux. macOS native artifact is not yet published; Windows installers come later — see ADR 031." ;;
   esac
   command -v curl >/dev/null 2>&1 || die "curl is required (install it, e.g. 'apt install curl')"
   command -v tar >/dev/null 2>&1 || die "tar is required (install it, e.g. 'apt install tar')"
@@ -402,7 +404,11 @@ b64_to_der() {
   # b64_to_der <b64> <output>: decode the trust-store SPKI DER key file.
   local key_body="$1" output="$2"
   [[ -n "$key_body" ]] || die "b64_to_der: empty key body"
-  printf '%s' "$key_body" | base64 -d > "$output" 2>/dev/null || die "base64 decode of the trust-store key failed (coreutils base64 required)"
+  if [[ "${OS}" = "darwin" ]]; then
+    printf '%s' "$key_body" | base64 -D > "$output" 2>/dev/null || die "base64 decode of the trust-store key failed (macOS base64 -D required)"
+  else
+    printf '%s' "$key_body" | base64 -d > "$output" 2>/dev/null || die "base64 decode of the trust-store key failed (Linux base64 -d required)"
+  fi
 }
 
 verify_shipped_manifest() {
@@ -506,7 +512,7 @@ if [[ -n "${FROM_FILE}" ]]; then
     die "offline install REFUSED: the SIGNED release manifest must sit beside the tarball: ${manifest_file} (+ .sig). The bundle's internal SHA256SUMS is verified too, but a signature over the SIGNED manifest is REQUIRED (ADR 031 Decision 3) - download exactly these two release assets from the matched bundle release."
   fi
   verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}" "bundle-v${VERSION_NUM}"
-  cp -- "${FROM_FILE}" "${tmp}/${tarball_name}"
+  cp "${FROM_FILE}" "${tmp}/${tarball_name}"
 else
   info "Installing Modulo bundle ${RELEASE_TAG} (${OS}-${ARCH})"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/${tarball_name}" "${tmp}/${tarball_name}"

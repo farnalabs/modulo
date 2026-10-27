@@ -891,6 +891,11 @@ def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
             f"{tarball.name}, found {len(top_levels)}"
         )
     bundle_dir = top_levels[0]
+    expected_prefix = tarball.name.removesuffix(".tar.gz")
+    if bundle_dir.name != expected_prefix:
+        raise UpgradeError(
+            f"archive top-level directory '{bundle_dir.name}' does not match archive identity '{expected_prefix}'"
+        )
     sums_path = bundle_dir / "SHA256SUMS"
     if not sums_path.is_file():
         raise UpgradeError(f"malformed bundle: SHA256SUMS missing from {tarball.name}")
@@ -937,22 +942,7 @@ def stop_running_stack(data_dir: Path, *, unit_file: Path | None = None) -> None
 
     unit_path = unit_file if unit_file is not None else service_module.default_unit_path()
     if unit_path.is_file():
-        try:
-            stop_result = subprocess.run(  # noqa: S603
-                ["systemctl", "--user", "stop", service_module.UNIT_FILENAME],  # noqa: S607
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30,
-            )
-            if stop_result.returncode != 0:
-                _log.warning(
-                    "upgrade.unit_stop_failed rc=%s stderr=%s",
-                    stop_result.returncode,
-                    stop_result.stderr[-300:],
-                )
-        except subprocess.TimeoutExpired:
-            _log.warning("upgrade.unit_stop_timed_out after 30s - falling through to the supervisor stop")
+        _stop_service(unit_path)
     request_stop(data_dir)
     holder = _read_lock_holder(data_dir.parent / (data_dir.name + ".lock"))
     if holder is not None and _pid_alive(holder.pid):
@@ -964,35 +954,12 @@ def stop_running_stack(data_dir: Path, *, unit_file: Path | None = None) -> None
 
 
 def _restart_unit_best_effort(*, why: str) -> None:
-    """Best-effort `systemctl --user start` of the FAR-674 unit (+ loud log).
-
-    Post-stop aborts otherwise leave the bundled stack DARK: the unit was
-    stopped, the supervisor's stop already ran, and no path restarts it.
-    The stack is restarted whenever a unit exists so a refusal never has a
-    dark side-effect; without the unit there is nothing to restart (the
-    foreground launcher either lives or was never running).
-    """
+    """Best-effort restart through the host service manager."""
     try:
-        from modulo.launcher import service as service_module
-
-        if not service_module.default_unit_path().is_file():
+        unit_path = _service_unit_path()
+        if not unit_path.is_file():
             return
-        restart = subprocess.run(  # noqa: S603
-            ["systemctl", "--user", "start", service_module.UNIT_FILENAME],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        if restart.returncode == 0:
-            _log.warning("upgrade.unit_started_after_abort reason=%s", why)
-        else:
-            _log.error(
-                "upgrade.unit_restart_after_abort_FAILED rc=%s stderr=%s (%s)",
-                restart.returncode,
-                restart.stderr[-300:],
-                why,
-            )
+        _restart_service(unit_path, why=why)
     except Exception:  # best-effort path, never masks the primary error
         _log.exception("upgrade.unit_restart_best_effort_failed (%s)", why)
 
@@ -1324,13 +1291,53 @@ def _resolve_current_target(install_root: Path) -> Path:
 
 
 def assert_upgrade_platform() -> None:
-    import sys
-
+    if sys.platform == "darwin":
+        raise UpgradeError(
+            "macOS native artifact is not yet published; the macOS service/data/launcher seam exists, "
+            "but no complete signed and notarized Darwin bundle is available for upgrade"
+        )
     if sys.platform == "win32":
         raise UpgradeError(
             "the full modulo upgrade flow is not implemented on Windows yet (TODO(P3)): "
             "the versioned-dir/current-symlink swap is a POSIX symlink primitive today"
         )
+
+
+def _service_unit_path() -> Path:
+    from modulo.launcher import service as service_module
+
+    return service_module.default_unit_path()
+
+
+def _run_service_command(argv: list[str], *, why: str) -> None:
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=30)  # noqa: S603
+    except subprocess.TimeoutExpired:
+        _log.warning("upgrade.service_command_timed_out argv=%s (%s)", argv, why)
+        return
+    if result.returncode == 0:
+        _log.warning("upgrade.unit_started_after_abort argv=%s (%s)", argv, why)
+        return
+    detail = (result.stderr or result.stdout or "").strip()
+    _log.error("upgrade.unit_restart_after_abort_FAILED rc=%s stderr=%s (%s)", result.returncode, detail[-300:], why)
+
+
+def _stop_service(unit_path: Path) -> None:
+    if sys.platform == "darwin":
+        _run_service_command(["launchctl", "unload", "-w", str(unit_path)], why="upgrade stop")
+    else:
+        from modulo.launcher import service as service_module
+
+        _run_service_command(["systemctl", "--user", "stop", service_module.UNIT_FILENAME], why="upgrade stop")
+
+
+def _restart_service(unit_path: Path, *, why: str) -> None:
+    if sys.platform == "darwin":
+        _run_service_command(["launchctl", "load", "-w", str(unit_path)], why=why)
+    else:
+        from modulo.launcher import service as service_module
+
+        _run_service_command(["systemctl", "--user", "start", service_module.UNIT_FILENAME], why=why)
 
 
 def _resolve_upgrade_assets(
@@ -1355,12 +1362,12 @@ def _resolve_upgrade_assets(
     tarball = Path(from_file)
     if not tarball.is_file():
         raise UpgradeError(f"--from-file: no such file: {from_file}")
+    filename = tarball.name.removeprefix("modulo-")
+    os_token = _host_os()
+    if f"-{os_token}-" not in filename:
+        raise UpgradeError(f"--from-file archive OS does not match the detected host ({os_token}): {tarball.name}")
     version = _strip_bundle_prefix(
-        tarball.name.removeprefix("modulo-")
-        .removesuffix("-linux-amd64.tar.gz")
-        .removesuffix("-linux-arm64.tar.gz")
-        .removesuffix("-darwin-amd64.tar.gz")
-        .removesuffix("-darwin-arm64.tar.gz")
+        filename.removesuffix(f"-{os_token}-amd64.tar.gz").removesuffix(f"-{os_token}-arm64.tar.gz")
     )
     manifest_file = tarball.parent / _RELEASE_MANIFEST_NAME
     signature_file = tarball.parent / f"{_RELEASE_MANIFEST_NAME}.sig"

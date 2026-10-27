@@ -827,6 +827,32 @@ def _manifest_triple(staging, target_version="1.2.0", *, manifest_release=None):
     return SimpleNamespace(tarball=tarball_path, manifest=manifest_path, signature=signature_path)
 
 
+def test_from_file_rejects_archive_for_other_host_os(tmp_path, monkeypatch):
+    archive = tmp_path / "modulo-1.2.0-darwin-arm64.tar.gz"
+    archive.write_bytes(b"archive")
+    monkeypatch.setattr(upgrade_module, "_host_os", lambda: "linux")
+    with pytest.raises(UpgradeError, match="OS does not match"):
+        upgrade_module._resolve_upgrade_assets(
+            from_file=archive,
+            target_version=None,
+            staging_dir=tmp_path / "stage",
+            fetch=None,
+        )
+
+
+def test_extract_rejects_mismatched_top_level_identity(tmp_path):
+    import tarfile
+
+    wrong_dir = tmp_path / "modulo-1.2.0-linux-amd64"
+    wrong_dir.mkdir()
+    (wrong_dir / "SHA256SUMS").write_text("", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-arm64.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(wrong_dir, arcname=wrong_dir.name)
+    with pytest.raises(UpgradeError, match="top-level directory"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
 def test_verify_release_stage_happy(tmp_path, patched_trust_store):
     release = _manifest_triple(tmp_path)
     manifest = upgrade_module._verify_release_stage(release.manifest, release.signature, release.tarball, "1.2.0")
@@ -1530,13 +1556,23 @@ class TestAssertUpgradePlatform:
         with pytest.raises(UpgradeError, match="Windows"):
             upgrade_module.assert_upgrade_platform()
 
-    def test_darwin_does_not_raise(self, monkeypatch):
+    def test_darwin_fails_closed_until_artifact_is_published(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "darwin")
-        upgrade_module.assert_upgrade_platform()
+        with pytest.raises(UpgradeError, match="macOS native artifact is not yet published"):
+            upgrade_module.assert_upgrade_platform()
 
     def test_linux_does_not_raise(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "linux")
         upgrade_module.assert_upgrade_platform()
+
+
+def test_installer_uses_portable_commands_and_fails_closed_for_darwin():
+    install_script = Path(__file__).resolve().parents[4] / "scripts" / "install.sh"
+    source = install_script.read_text(encoding="utf-8")
+    assert "base64 -D" in source
+    assert "base64 -d" in source
+    assert 'cp -- "${FROM_FILE}"' not in source
+    assert "macOS native artifact is not yet published" in source
 
 
 def test_host_os(monkeypatch):
@@ -1546,7 +1582,8 @@ def test_host_os(monkeypatch):
     assert upgrade_module._host_os() == "linux"
 
 
-def test_resolve_upgrade_assets_darwin_tarball(tmp_path):
+def test_resolve_upgrade_assets_darwin_tarball(tmp_path, monkeypatch):
+    monkeypatch.setattr(upgrade_module, "_host_os", lambda: "darwin")
     tarball = tmp_path / "modulo-1.2.3-darwin-arm64.tar.gz"
     tarball.write_text("dummy", encoding="utf-8")
     manifest = tmp_path / "RELEASE_MANIFEST.json"
@@ -2016,9 +2053,9 @@ class TestExtractAndVerifyBundle:
         bundle_dir = tmp_path / "bundle"
         bundle_dir.mkdir()
         (bundle_dir / "somefile.txt").write_text("data", encoding="utf-8")
-        tarball = tmp_path / "test.tar.gz"
+        tarball = tmp_path / "modulo-1.0.0-linux-amd64.tar.gz"
         with tarfile_mod.open(tarball, "w:gz") as archive:
-            archive.add(str(bundle_dir), arcname="bundle-root")
+            archive.add(str(bundle_dir), arcname="modulo-1.0.0-linux-amd64")
         staging = tmp_path / "staging"
         with pytest.raises(UpgradeError, match="SHA256SUMS missing"):
             upgrade_module.extract_and_verify_bundle(tarball, staging)
@@ -2051,9 +2088,9 @@ class TestExtractAndVerifyBundle:
         bundle_dir.mkdir()
         (bundle_dir / "SHA256SUMS").write_text("short  file.txt\n", encoding="utf-8")
         (bundle_dir / "file.txt").write_text("data", encoding="utf-8")
-        tarball = tmp_path / "test.tar.gz"
+        tarball = tmp_path / "modulo-1.0.0-linux-amd64.tar.gz"
         with tarfile_mod.open(tarball, "w:gz") as archive:
-            archive.add(str(bundle_dir), arcname="bundle-root")
+            archive.add(str(bundle_dir), arcname="modulo-1.0.0-linux-amd64")
         staging = tmp_path / "staging"
         with pytest.raises(UpgradeError, match="malformed SHA256SUMS"):
             upgrade_module.extract_and_verify_bundle(tarball, staging)
@@ -2065,9 +2102,9 @@ class TestExtractAndVerifyBundle:
         bundle_dir.mkdir()
         fake_hash = "a" * 64
         (bundle_dir / "SHA256SUMS").write_text(f"{fake_hash}  missing.txt\n", encoding="utf-8")
-        tarball = tmp_path / "test.tar.gz"
+        tarball = tmp_path / "modulo-1.0.0-linux-amd64.tar.gz"
         with tarfile_mod.open(tarball, "w:gz") as archive:
-            archive.add(str(bundle_dir), arcname="bundle-root")
+            archive.add(str(bundle_dir), arcname="modulo-1.0.0-linux-amd64")
         staging = tmp_path / "staging"
         with pytest.raises(UpgradeError, match="is missing"):
             upgrade_module.extract_and_verify_bundle(tarball, staging)
@@ -2112,6 +2149,34 @@ class TestVerifyExtractedBundleArtifacts:
             pytest.raises(UpgradeError, match="bundle-side manifest verification FAILED"),
         ):
             upgrade_module._verify_extracted_bundle_artifacts(tmp_path, manifest, "tarball")
+
+
+class TestDarwinServiceLifecycle:
+    def test_stop_and_restart_use_launchctl(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        plist_path = tmp_path / "LaunchAgents" / "run.modulo.launcher.plist"
+        plist_path.parent.mkdir()
+        plist_path.write_text("<plist/>", encoding="utf-8")
+        calls = []
+        monkeypatch.setattr(upgrade_module.sys, "platform", "darwin")
+
+        def run_service(argv, **kwargs):
+            calls.append(argv)
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        monkeypatch.setattr(upgrade_module.subprocess, "run", run_service)
+        with (
+            patch("modulo.launcher.supervisor.request_stop"),
+            patch("modulo.launcher.supervisor._read_lock_holder", return_value=None),
+            patch.object(upgrade_module, "_service_unit_path", return_value=plist_path),
+        ):
+            upgrade_module.stop_running_stack(data_dir, unit_file=plist_path)
+            upgrade_module._restart_unit_best_effort(why="regression")
+        assert calls == [
+            ["launchctl", "unload", "-w", str(plist_path)],
+            ["launchctl", "load", "-w", str(plist_path)],
+        ]
 
 
 class TestStopRunningStack:
