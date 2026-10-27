@@ -126,21 +126,24 @@ System Maps adheres to four strict database design rules:
         | pipeline_id (UUID, FK, opt) |     | relationship_type (ENUM)    |
         | external_ref (VARCHAR, opt) |     | config_json (JSONB)         |
         | capacity_limit (INT, opt)   |     +-----------------------------+
-        | config_json (JSONB)         |                    |
-        +-----------------------------+                    | 1:1 (optional)
-                       |                                   v
-                       | 1:1 (if loop)      +-----------------------------+
-                       v                    |   system_map_loop_configs   |
-        +-----------------------------+     +-----------------------------+
-        |   system_map_loop_configs   |     | id (UUID, PK)               |
-        +-----------------------------+     | node_id (UUID, FK)          |
-                                            | target_signal (VARCHAR)     |
-                                            | observation_window_seconds  |
-                                            | action_pipeline_id (FK)     |
-                                            | budget_limit_usd (NUMERIC)  |
-                                            | cooldown_seconds (INT)      |
-                                            | outcome_metric (VARCHAR)    |
-                                            +-----------------------------+
+        | config_json (JSONB)         |
+        +-----------------------------+
+                       |
+                       | 1:1 (if loop)
+                       v
+        +-----------------------------+
+        |   system_map_loop_configs   |
+        +-----------------------------+
+        | id (UUID, PK)               |
+        | revision_id (UUID, FK)      |
+        | node_key (VARCHAR, FK)      |
+        | target_signal (VARCHAR)     |
+        | observation_window_seconds  |
+        | action_pipeline_id (FK)     |
+        | budget_limit_usd (NUMERIC)  |
+        | cooldown_seconds (INT)      |
+        | outcome_metric (VARCHAR)    |
+        +-----------------------------+
 ```
 
 ### 3.3 Database Table Definitions
@@ -328,6 +331,7 @@ If the pipeline is mapped to a `pipeline` node in the published map revision:
    - `system_map_id`: UUID of the parent System Map.
    - `system_map_revision_id`: UUID of the exact published revision active at trigger time.
    - `system_map_node_id`: UUID of the mapped `system_map_nodes` row.
+   - `system_map_node_key`: VARCHAR(128) string identifier of the mapped node within the revision (allowing `record_run_facts` to copy it directly into `run_daily_facts` at terminalization without joining `system_map_nodes`, in compliance with ADR 020).
 2. The run's immutable `PipelineSnapshot` captures this attribution block. If the System Map is updated or archived tomorrow, the historical run's attribution remains frozen.
 
 ### 5.2 Attribution Storage in `run_daily_facts`
@@ -686,7 +690,7 @@ Several underlying technical components remain sound and will be retained.
 | **Runaway Improvement Loops** | An autonomous improvement loop spins out of control, generating dozens of conflicting PRs. | Hard DB-enforced constraints: mandatory cooldown windows, monthly spend caps, and maximum concurrent runs per loop. |
 | **Data Sync Drift with Issue Trackers** | Work-item keys displayed in the Evidence Drawer drift out of sync with external trackers. | Work items are non-authoritative drill-down references; Modulo never writes back ticket status to external trackers. |
 
-### 11.3 Open Decisions for Duncan
+### 11.3 Open Architecture & Product Decisions
 
 #### Decision 1: Default Landing Page Behavior
 - **Tension:** Should `/` automatically navigate to System Maps for all users once a map is published, or should it remain configurable per user role?
