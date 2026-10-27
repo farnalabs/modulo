@@ -106,8 +106,23 @@ The shortest local evaluation uses Docker Desktop and Docker Compose:
 ```bash
 git clone https://github.com/farnalabs/modulo.git
 cd modulo
+# Generate the credential-encryption key ONCE, before the first start.
+printf 'FERNET_KEY=%s\n' "$(openssl rand -base64 32)" > .env
 docker compose up -d
 ```
+
+`FERNET_KEY` encrypts every stored credential (model backends, connectors). It
+must be a real Fernet key — url-safe base64 of exactly 32 bytes — so it can
+never be a fixed value in the Compose file. Compose refuses to start without
+it and prints the generation command, rather than starting a stack that boots,
+lets you sign in, and then fails the first time you save a credential.
+
+On Windows PowerShell, generate the key with
+`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+and write it to `.env` as `FERNET_KEY=<value>`.
+
+Keep `.env`: it is gitignored, and a different key on a later start makes the
+credentials already stored in the database unreadable.
 
 The first run builds the backend and frontend images and may take a few
 minutes; after that, the demo itself takes about five minutes.
@@ -115,6 +130,14 @@ minutes; after that, the demo itself takes about five minutes.
 After the services become healthy, open <http://localhost:5173> and sign in
 with the local demo credentials `admin` / `admin`. These credentials and the
 Compose secrets are for local evaluation only.
+
+To prove the stack can actually store a credential and initialise the
+checkpointer — the two things a healthy-looking stack can still be broken at —
+run the smoke check:
+
+```bash
+./scripts/smoke-compose.sh
+```
 
 The Compose stack includes PostgreSQL and Redis. Redis is required for pipeline
 execution and scheduled triggers — it is started automatically by

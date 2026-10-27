@@ -72,7 +72,13 @@ The local Docker Compose file includes an optional observability stack behind th
 
 ### Start
 
+The local compose file — like the root `docker-compose.yml` — refuses to start
+without a valid `FERNET_KEY` (compose prints
+`required variable FERNET_KEY is missing a value` and the generation command).
+Generate the key once and put it in `.env` at the repo root:
+
 ```bash
+printf 'FERNET_KEY=%s\n' "$(openssl rand -base64 32)" > .env
 docker compose -f docker-compose.local.yml --profile observability up -d
 ```
 
@@ -119,7 +125,8 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 The root `docker-compose.yml` ships a **`watchdog` service** - a [Gatus](https://gatus.io)
 instance that runs **by default**, so `docker compose up -d` starts it along with
 the rest of the stack. It exists for the one failure Modulo cannot report about
-itself: Modulo being down.
+itself: Modulo being down. (Like the rest of that file it needs a valid
+`FERNET_KEY` in `.env` - see the README quick start.)
 
 | | |
 |---|---|

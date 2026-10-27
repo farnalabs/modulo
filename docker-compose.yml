@@ -58,7 +58,17 @@ services:
       MODULO_SYSTEM_DATABASE_URL: postgresql+asyncpg://modulo_system:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
-      FERNET_KEY: modulo-docker-compose-fernet-key-min-32-bytes!!
+      # FAR-2181: FERNET_KEY encrypts every stored credential. `Settings` only
+      # checks its LENGTH (>= 32 bytes), so the 47-char placeholder this file
+      # used to ship booted fine and then failed on the FIRST credential write:
+      # checkpointer init died, `checkpoints` / `checkpoint_migrations` were
+      # never created, /healthz/ready reported the checkpointer degraded, and
+      # POST /api/v1/model-backends returned 500 while login still returned 200.
+      # A Fernet key must be url-safe base64 of exactly 32 bytes
+      # (`Fernet.generate_key()`), so it can never be a fixed literal here.
+      # Required, never defaulted: compose refuses to start without it, which is
+      # loud at `up` instead of silent at the first credential write.
+      FERNET_KEY: '${FERNET_KEY:?FERNET_KEY is required - generate one (openssl rand -base64 32) and put FERNET_KEY=<value> in .env at the repo root; see docs/quickstart.md step 1}'
       REDIS_URL: redis://redis:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
@@ -90,7 +100,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://modulo_app:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
-      FERNET_KEY: modulo-docker-compose-fernet-key-min-32-bytes!!
+      # FAR-2181: same required key as the backend service above - every process
+      # that reads or writes a stored credential must hold the SAME Fernet key.
+      FERNET_KEY: '${FERNET_KEY:?FERNET_KEY is required - generate one (openssl rand -base64 32) and put FERNET_KEY=<value> in .env at the repo root; see docs/quickstart.md step 1}'
       REDIS_URL: redis://redis:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
@@ -129,7 +141,8 @@ services:
       MODULO_SYSTEM_DATABASE_URL: postgresql+asyncpg://modulo_system:${POSTGRES_PASSWORD:-changeme}@db:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: modulo-docker-compose-secret-key-32bytes!
-      FERNET_KEY: modulo-docker-compose-fernet-key-min-32-bytes!!
+      # FAR-2181: same required key as the backend service above.
+      FERNET_KEY: '${FERNET_KEY:?FERNET_KEY is required - generate one (openssl rand -base64 32) and put FERNET_KEY=<value> in .env at the repo root; see docs/quickstart.md step 1}'
       REDIS_URL: redis://redis:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
