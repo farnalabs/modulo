@@ -160,11 +160,10 @@ class TestApiKeyAuthScopeStamping:
         assert ms._ctx_user_keys_enabled.get() is False
 
     @pytest.mark.asyncio
-    async def test_user_key_flag_on_sets_key_scope_user(self) -> None:
-        """Flag ON: the REAL ``_set_user_keys_flag`` resolves via the registry
-        and stamps ``_ctx_user_keys_enabled``."""
+    async def test_user_key_flag_off_allows(self) -> None:
+        """Flag OFF (permissive) ⇒ a stored user-scoped key is ALLOWED."""
         registry = MagicMock()
-        registry.resolve_flag = AsyncMock(return_value=True)
+        registry.resolve_flag = AsyncMock(return_value=False)
         patches = _api_key_patches(_mock_api_key(scope="user"), "operator")
         with (
             patches[0],
@@ -179,16 +178,14 @@ class TestApiKeyAuthScopeStamping:
         assert handled is True
         assert err is None
         assert ms._ctx_key_scope.get() == "user"
-        assert ms._ctx_user_keys_enabled.get() is True
+        assert ms._ctx_user_keys_enabled.get() is False
 
     @pytest.mark.asyncio
-    async def test_user_key_flag_off_denies_401(self) -> None:
-        """Flag OFF ⇒ a stored user-scoped key is DENIED AT AUTH (401) —
-        disabling revokes, never broadens. Uses the REAL flag helper with a
-        False-resolving registry (the same fail-closed default an empty org
-        override produces)."""
+    async def test_user_key_flag_on_denies_401(self) -> None:
+        """Flag ON (restrictive) ⇒ a stored user-scoped key is DENIED AT AUTH
+        (401) — enabling the restriction revokes, never broadens."""
         registry = MagicMock()
-        registry.resolve_flag = AsyncMock(return_value=False)
+        registry.resolve_flag = AsyncMock(return_value=True)
         patches = _api_key_patches(_mock_api_key(scope="user"), "operator")
         with (
             patches[0],
@@ -206,7 +203,8 @@ class TestApiKeyAuthScopeStamping:
 
     @pytest.mark.asyncio
     async def test_user_key_flag_read_failure_fails_closed_401(self) -> None:
-        """A flag resolution error is treated as OFF (fail-closed)."""
+        """A flag resolution error is treated as ON (restrictive/fail-closed),
+        so user-scoped keys are denied (401) — never broadens access."""
         patches = _api_key_patches(_mock_api_key(scope="user"), "operator")
         with (
             patches[0],
@@ -249,7 +247,7 @@ class TestUserKeyLiveRoleClamp:
     @pytest.mark.asyncio
     async def test_runner_user_key_live_viewer_degrades_to_viewer(self) -> None:
         registry = MagicMock()
-        registry.resolve_flag = AsyncMock(return_value=True)
+        registry.resolve_flag = AsyncMock(return_value=False)
         patches = _api_key_patches(_mock_api_key(role="runner", scope="user"), "viewer")
         with (
             patches[0],
@@ -265,6 +263,7 @@ class TestUserKeyLiveRoleClamp:
         assert err is None
         assert ms._ctx_role.get() == "viewer"
         assert ms._ctx_key_scope.get() == "user"
+        assert ms._ctx_user_keys_enabled.get() is False
 
     @pytest.mark.asyncio
     async def test_runner_user_key_clamp_matches_org_key(self) -> None:
@@ -273,7 +272,10 @@ class TestUserKeyLiveRoleClamp:
         results: list[str | None] = []
         for scope in ("org", "user"):
             registry = MagicMock()
-            registry.resolve_flag = AsyncMock(return_value=True)
+            # For user-scoped keys, flag must be OFF (permissive) to allow;
+            # org keys never consult the flag.
+            flag_value = scope != "user"
+            registry.resolve_flag = AsyncMock(return_value=flag_value)
             patches = _api_key_patches(_mock_api_key(role="runner", scope=scope), "viewer")
             with (
                 patches[0],
@@ -294,7 +296,7 @@ class TestUserKeyLiveRoleClamp:
         """Missing/deactivated membership (live None) ⇒ the key dies with 401
         for a user-scoped key, exactly as for an org key."""
         registry = MagicMock()
-        registry.resolve_flag = AsyncMock(return_value=True)
+        registry.resolve_flag = AsyncMock(return_value=False)
         patches = _api_key_patches(_mock_api_key(role="runner", scope="user"), None)
         with (
             patches[0],
@@ -533,19 +535,21 @@ class TestSetUserKeysFlag:
         assert ms._ctx_user_keys_enabled.get() is True
 
     @pytest.mark.asyncio
-    async def test_read_failure_fails_closed(self) -> None:
+    async def test_read_failure_fails_closed_restrictive(self) -> None:
+        """Fail-closed: a flag resolution error defaults to True (restrictive),
+        so user-scoped keys are denied — never broadens access."""
         registry = MagicMock()
         registry.resolve_flag = AsyncMock(side_effect=RuntimeError("db down"))
         with patch.object(ms, "get_registry", return_value=registry):
-            assert await _set_user_keys_flag(_ORG_ID) is False
-        assert ms._ctx_user_keys_enabled.get() is False
+            assert await _set_user_keys_flag(_ORG_ID) is True
+        assert ms._ctx_user_keys_enabled.get() is True
 
     @pytest.mark.asyncio
-    async def test_resolve_flag_exception_path_returns_false(self) -> None:
-        """A registry construction failure is also fail-closed."""
+    async def test_resolve_flag_exception_path_returns_true(self) -> None:
+        """A registry construction failure also fails closed (restrictive)."""
         with patch.object(ms, "get_registry", side_effect=RuntimeError("no registry")):
-            assert await _set_user_keys_flag(_ORG_ID) is False
-        assert ms._ctx_user_keys_enabled.get() is False
+            assert await _set_user_keys_flag(_ORG_ID) is True
+        assert ms._ctx_user_keys_enabled.get() is True
 
 
 def test_mcp_authorization_error_import_stable() -> None:
