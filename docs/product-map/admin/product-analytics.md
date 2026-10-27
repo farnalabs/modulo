@@ -71,18 +71,25 @@ organisation's plan or tier.
       `PUT /api/v1/product-analytics/instance-switch` (audited in the
       org-independent system ledger) or the switch control on the admin page.
       `consent.resolve_instance_analytics_switch` applies the precedence:
-      stored operator value -> `MODULO_PRODUCT_ANALYTICS_ENABLED` -> the
-      licence's `product_analytics_required` claim (default ON) -> OFF. An
-      explicit operator value always wins, including OFF over a licence
+      stored operator value -> `MODULO_PRODUCT_ANALYTICS_ENABLED` (honoured
+      only when no stored value exists) -> the licence's
+      `product_analytics_required` claim (default ON) -> OFF. An explicit
+      operator value always wins, including OFF over a licence, and the
+      transparency surface reports the resolved value plus its source
+      (`instance_switch_source`: `operator` / `environment` / `licence` /
+      `default`), so an operator can always see why analytics is on and turn
+      it off from the same page
       (`core/product_analytics/consent.py`,
       `api/routes/product_analytics_transparency.py`,
       `tests/unit/product_analytics/test_license_enforcement.py`,
       `tests/unit/api/routes/test_product_analytics_transparency.py`,
       `frontend/src/views/AdminProductAnalyticsView.vue`)
-- [x] Analytics never degrades an organisation's plan or tier. The partner
-      `product_analytics_required` claim is contractual, not a software
-      control: it only supplies the switch DEFAULT, and the dump loop collects
-      consenting orgs with no licence/tier inspection
+- [x] Analytics never degrades an organisation's plan or tier. A partner
+      licence carrying `product_analytics_required` *expects* analytics to be
+      on, but that expectation is contractual, not a software control: the
+      claim only supplies the switch DEFAULT, the operator's explicit value
+      still wins (including OFF), and the dump loop collects consenting orgs
+      with no licence/tier inspection
       (`core/product_analytics/metrics_dump.py` `_get_consenting_orgs`,
       `tests/unit/product_analytics/test_metrics_dump.py`
       `TestGetConsentingOrgsIsConsentOnly`). The former "degrade to Community"
@@ -201,6 +208,21 @@ intentional, not an open question:
   payload-dedup contract change on the vendor side, not taken in FAR-1717.
 
 ## QA History
+- 2026-10-27: **FAR-2179 - drop the inert kill-switch row; document the switch**.
+  FAR-2063 retired the licence-enforcement kill switch in code but left any
+  pre-existing `system_config.product_analytics_license_enforcement_kill_switch`
+  row behind, where it reads as a live setting. Migration
+  `0336_drop_analytics_kill_switch_row` deletes it if present (existence-gated,
+  key-scoped, idempotent, value logged before removal) and is a no-op when it is
+  absent; absence is also the older image's "enforcement enabled" default, so a
+  rollback is safe. Documentation audit against
+  `consent.resolve_instance_analytics_switch`: the configuration reference now
+  states the full resolution order (stored value -> env var -> licence default ->
+  OFF), that the licence claim is a partner expectation rather than a control,
+  that the transparency endpoint reports the effective value and its source, and
+  that the endpoint/secret transport variables sit alongside it. The admin UI
+  already told the operator their choice always wins, including OFF over a
+  licence that requires analytics.
 - 2026-10-26: **FAR-2063 - instance switch write path + licence-derived default**.
   The master switch had no writer (`product_analytics_enabled` was read in
   several places and written by nothing) and the licence "enforcement" was
