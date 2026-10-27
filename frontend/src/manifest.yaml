@@ -1933,6 +1933,9 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+      - testid: my-profile-profile-loading
+        type: element
+        dynamic_testid: false
       - testid: my-profile-my-teams-loading
         type: element
         dynamic_testid: false

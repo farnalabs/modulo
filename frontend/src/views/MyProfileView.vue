@@ -14,6 +14,21 @@
       />
     </div>
 
+    <div v-else-if="profileLoading" class="card p-6 space-y-6" data-testid="my-profile-profile-loading">
+      <output class="sr-only" aria-live="polite">{{ $t('common.loading') }}</output>
+      <div class="space-y-4" aria-busy="true">
+        <div class="flex items-center gap-4 pb-4 border-b border-border">
+          <SkeletonBlock height-class="h-14 w-14 rounded-full" />
+          <div class="space-y-2">
+            <SkeletonBlock height-class="h-5 w-40" />
+            <SkeletonBlock height-class="h-4 w-56" />
+            <SkeletonBlock height-class="h-4 w-16" />
+          </div>
+        </div>
+        <SkeletonBlock height-class="h-4 w-48" />
+      </div>
+    </div>
+
     <div v-else class="card p-6 space-y-6">
       <div class="flex items-center gap-4 pb-4 border-b border-border">
         <div class="flex h-14 w-14 items-center justify-center rounded-full bg-primary text-xl font-bold text-primary-foreground" aria-hidden="true">
@@ -184,6 +199,7 @@ type PipelineItem = components['schemas']['PipelineResponse']
 const EMPTY_PROFILE: Profile = { id: '', email: '', display_name: '', org_role: '', active: true, created_at: '', is_system_admin: false, must_change_password: false }
 
 const profile = ref<Profile>({ ...EMPTY_PROFILE })
+const profileLoading = ref(true)
 const profileLoadError = ref('')
 
 const myTeams = ref<MyTeam[]>([])
@@ -231,6 +247,7 @@ function teamRoleLabel(role: string): string {
 }
 
 async function loadProfile() {
+  profileLoading.value = true
   profileLoadError.value = ''
   try {
     const { data, error } = await api.GET('/api/v1/auth/me')
@@ -243,6 +260,8 @@ async function loadProfile() {
     }
   } catch (e) {
     profileLoadError.value = formatApiError(e)
+  } finally {
+    profileLoading.value = false
   }
 }
 
