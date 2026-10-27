@@ -310,8 +310,11 @@ def test_entrypoint_forwards_sigterm_and_completes_a_bounded_drain(tmp_path: Pat
             "the SIGTERM handler ran more than once — the trap is re-signalling its own shell:\n" + log
         )
         assert "WORKER_DRAIN: complete" in log, log
-        assert "not restarting (worker shutdown requested)" in log, (
-            "the crash-guard wrapper restarted a worker during the drain:\n" + log
+        assert "SAQ runs worker drained — not restarting (worker shutdown requested)" in log, (
+            "the runs crash-guard wrapper restarted a worker during the drain:\n" + log
+        )
+        assert "SAQ system worker drained — not restarting (worker shutdown requested)" in log, (
+            "the system crash-guard wrapper restarted a worker during the drain:\n" + log
         )
     finally:
         harness.cleanup()
