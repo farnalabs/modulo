@@ -150,12 +150,16 @@ _AUG_ARTEFACTS: dict[str, frozenset[str]] = {
     "backend/LICENSE": _ALL_CONCEPTS,
     "docs/continuity-and-escrow.md": _ALL_CONCEPTS,
     # The answer bank states the RESTRICTION only, so it is held to the
-    # carve-out concepts rather than the full grant. It does not currently
-    # state the "substantially the same functionality" qualifier, so it is not
-    # held to it here: add "same_functionality_qualifier" to this set in the
-    # same change that adds the qualifier to the answer bank.
+    # carve-out concepts rather than the full grant. It does state the
+    # "substantially the same functionality" qualifier, so it is held to that
+    # too: dropping the qualifier from the answer bank fails this test.
     "docs/security/security-questionnaire-answer-bank.md": frozenset(
-        {"hosted_service_carve_out", "derivative_in_carve_out", "third_party_recipient"}
+        {
+            "hosted_service_carve_out",
+            "derivative_in_carve_out",
+            "same_functionality_qualifier",
+            "third_party_recipient",
+        }
     ),
 }
 
