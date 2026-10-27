@@ -7,6 +7,7 @@ method returns ``None`` on any failure and never raises.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 
 import httpx
@@ -157,6 +158,31 @@ class TestClientLifecycle:
         assert first.is_closed is False
         assert second is first
         assert client._http_client is first
+
+    async def test_concurrent_get_client_builds_once(
+        self, client: LibraryClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ``asyncio.Lock`` guard: concurrent callers share a single build.
+
+        Without the lock both tasks observe ``_http_client is None`` across the
+        awaited build and each constructs its own client — the loser's client
+        is leaked (never closed) and connection pooling is lost.
+        """
+        builds = 0
+
+        async def _counting_build(_url: str, **kwargs: object) -> httpx.AsyncClient:
+            nonlocal builds
+            builds += 1
+            await asyncio.sleep(0)
+            return httpx.AsyncClient(**kwargs)
+
+        monkeypatch.setattr("modulo.core.library_sync.client.pinned_async_client", _counting_build)
+
+        first, second = await asyncio.gather(client._get_client(), client._get_client())
+
+        assert builds == 1
+        assert first is second
+        await client.close()
 
 
 class TestFetchBlob:
