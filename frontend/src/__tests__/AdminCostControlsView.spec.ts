@@ -417,6 +417,33 @@ describe('AdminCostControlsView', () => {
     expect(wrapper.text()).toContain('Failed to save billing period')
   })
 
+  it('saves team budgets on success, API error, and thrown error', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as any
+    const team = vm.teams[0]
+    team.editingBudget = 7000
+    mockPut.mockResolvedValueOnce({ data: null, error: undefined })
+    await vm.saveTeamBudget(team)
+    expect(team.saveError).toBeNull()
+    mockPut.mockResolvedValueOnce({ data: null, error: { detail: 'team denied' } })
+    await vm.saveTeamBudget(team)
+    expect(team.saveError).toContain('team denied')
+    mockPut.mockRejectedValueOnce(new Error('team crashed'))
+    await vm.saveTeamBudget(team)
+    expect(team.saveError).toContain('team crashed')
+  })
+
+  it('handles budget save API and thrown errors', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as any
+    mockPut.mockResolvedValueOnce({ data: null, error: { detail: 'budget denied' } })
+    await vm.saveBudget()
+    expect(wrapper.text()).toContain('budget denied')
+    mockPut.mockRejectedValueOnce(new Error('budget crashed'))
+    await vm.saveBudget()
+    expect(wrapper.text()).toContain('budget crashed')
+  })
+
   it('calls loadAll on mount (costs, limits, settings, feature-flags)', async () => {
     mount(AdminCostControlsView, {
       global: { plugins: [pinia] },

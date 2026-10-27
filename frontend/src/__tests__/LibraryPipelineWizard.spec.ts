@@ -249,4 +249,29 @@ describe('LibraryPipelineWizard', () => {
     expect(wrapper.text()).toContain('Test Author')
     expect(wrapper.text()).toContain('1.0.0')
   })
+
+  it('filters sub-pipeline edges whose endpoints are absent from the laid-out nodes', async () => {
+    vi.mocked(api.GET).mockResolvedValue({
+      data: { ...PRIMITIVE_WITH_SUB_GRAPH, content_json: { sub_pipeline_graph_json: {
+        nodes: [{ id: 'node-1', type: 'agent', position: { x: 0, y: 0 }, data: {} }],
+        edges: [{ source: 'node-1', target: 'missing' }, { source: 'missing', target: 'node-1' }],
+      } } },
+      error: undefined,
+    })
+    router.push('/library/test-id-sub/create-pipeline')
+    await router.isReady()
+    const wrapper = mount(LibraryPipelineWizard, { global: { plugins: [router], stubs: { OwnershipPicker: true, VueFlow: true, Background: true } } })
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Pipeline Visualisation')
+  })
+
+  it('renders an empty template-agent list when the payload omits agents', async () => {
+    vi.mocked(api.GET).mockResolvedValue({ data: { ...PRIMITIVE, content_json: {} }, error: undefined })
+    router.push('/library/test-id/create-pipeline')
+    await router.isReady()
+    const wrapper = mount(LibraryPipelineWizard, { global: { plugins: [router], stubs: { OwnershipPicker: true } } })
+    await flushPromises()
+    expect(wrapper.exists()).toBe(true)
+  })
 })

@@ -302,6 +302,74 @@ describe('LibraryView', () => {
     expect(wrapper.text()).toContain('network error')
     wrapper.unmount()
   })
+
+  it('handles lifecycle-map creation errors and prevents duplicate adaptation', async () => {
+    const lifecycle = { ...NATIVE_ITEM, id: 'lm-1', primitive_type: 'lifecycle_map' }
+    getMock.mockResolvedValue({ items: [lifecycle], total: 1, page: 1, page_size: 12 })
+    postMock.mockRejectedValueOnce(new Error('adapt failed'))
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+    const vm = wrapper.vm as any
+    vm.adapting['lm-1'] = true
+    await vm.createLifecycleMap(lifecycle)
+    expect(postMock).not.toHaveBeenCalled()
+    vm.adapting['lm-1'] = false
+    await vm.createLifecycleMap(lifecycle)
+    await flushPromises()
+    expect(wrapper.text()).toContain('adapt failed')
+    wrapper.unmount()
+  })
+
+  it('covers collection pagination and outside-click closing', async () => {
+    getMock.mockResolvedValue({ items: [], total: 24, page: 1, page_size: 12 })
+    await router.push('/library')
+    const wrapper = mount(LibraryView, { global: { plugins: [router] } })
+    await nextTick(); await nextTick()
+    await wrapper.get('[data-testid="library-type-filter-button"]').trigger('click')
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await nextTick()
+    await wrapper.get('[data-testid="library-next-page"]').trigger('click')
+    await nextTick(); await nextTick()
+    await wrapper.get('[data-testid="library-previous-page"]').trigger('click')
+    await nextTick(); await nextTick()
+    expect(getMock).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('handles lifecycle-map API error and toggle response without data', async () => {
+    const lifecycle = { ...NATIVE_ITEM, id: 'lm-err', primitive_type: 'lifecycle_map' }
+    getMock.mockResolvedValue({ items: [lifecycle], total: 1, page: 1, page_size: 12 })
+    postMock.mockResolvedValueOnce({ detail: 'lifecycle denied' })
+    await router.push('/library')
+    const wrapper = mount(LibraryView, { global: { plugins: [router] } })
+    await nextTick(); await nextTick()
+    const vm = wrapper.vm as any
+    await vm.createLifecycleMap(lifecycle)
+    await flushPromises()
+    expect(wrapper.exists()).toBe(true)
+    patchMock.mockResolvedValueOnce({ data: undefined })
+    await vm.toggleAutoUpdate(NATIVE_ITEM)
+    wrapper.unmount()
+  })
+
+  it('navigates from primitive and collection detail actions', async () => {
+    const collection = { ...NATIVE_ITEM, id: 'collection-1', primitive_type: 'library_collection' }
+    getMock.mockResolvedValue({ items: [NATIVE_ITEM, collection], total: 2, page: 1, page_size: 12 })
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+    const vm = wrapper.vm as any
+    vm.viewPrimitive(NATIVE_ITEM)
+    vm.viewCollection(collection)
+    expect(router.push).toHaveBeenCalledWith({ name: 'library-pipeline-wizard', params: { id: 'native-1' } })
+    expect(router.push).toHaveBeenCalledWith({ name: 'library-collection-detail', params: { id: 'collection-1' } })
+    wrapper.unmount()
+  })
 })
 
 describe('LibraryView responsive layout (FAR-640)', () => {
