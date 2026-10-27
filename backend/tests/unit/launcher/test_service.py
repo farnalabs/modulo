@@ -515,3 +515,35 @@ def test_uninstall_linger_oserror_is_warned(linux_only: None, tmp_path: Path) ->
     result = uninstall(runner=runner, unit_path=tmp_path / "u" / "modulo.service")
     assert result.linger_disabled is False
     assert any("sudo loginctl disable-linger" in warning for warning in result.warnings)
+
+
+def test_uninstall_warns_when_linger_disable_fails_without_other_warnings(linux_only: None, tmp_path: Path) -> None:
+    """A silent linger failure still earns the documented sudo fallback warning."""
+    runner = FakeRunner({("pkexec", "loginctl", "disable-linger"): (1, "Access denied")})
+    result = uninstall(runner=runner, unit_path=tmp_path / "u" / "modulo.service")
+    assert result.stopped is True
+    assert result.disabled is True
+    assert result.unit_removed is True
+    assert result.linger_disabled is False
+    assert any("could not disable linger non-interactively" in warning for warning in result.warnings)
+
+
+def test_uninstall_warns_when_the_unit_cannot_be_removed(linux_only: None, tmp_path: Path) -> None:
+    """A unit path that cannot be unlinked is warned and reported unremoved, never raised."""
+    unit_path = tmp_path / "u" / "modulo.service"
+    unit_path.mkdir(parents=True)
+    result = uninstall(runner=FakeRunner(), unit_path=unit_path)
+    assert result.unit_removed is False
+    assert any("could not remove" in warning for warning in result.warnings)
+
+
+def test_status_reports_error_when_no_default_data_dir(linux_only: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No usable default data dir surfaces the loud error block instead of raising."""
+    from modulo.launcher import entry as entry_module
+
+    def refuse() -> Path:
+        raise RuntimeError("no usable default data dir")
+
+    monkeypatch.setattr(entry_module, "default_data_dir", refuse)
+    payload = status(runner=FakeRunner())
+    assert payload["launcher"] == {"error": "no usable default data dir on this platform"}
