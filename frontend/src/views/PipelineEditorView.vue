@@ -61,19 +61,7 @@
                 <router-link :to="`/pipelines?folder_id=${f.id}`" class="hover:text-foreground">{{ f.name }}</router-link>
               </span>
             </span>
-            <template v-if="linkedLifecycleMaps.length > 0">
-              <span :class="groupDividerClass" />
-              <span class="flex items-center gap-1 text-xs text-muted-foreground">
-                <router-link
-                  v-for="map in linkedLifecycleMaps"
-                  :key="map.id"
-                  :to="`/lifecycle-maps/${map.id}`"
-                  class="whitespace-nowrap hover:text-foreground"
-                >
-                  {{ map.name }}
-                </router-link>
-              </span>
-            </template>
+
             <!-- FAR-1812: version indicator chip — `v{n}` beside the pipeline
                  name/status. Reads the VIEWED version while in the historic
                  view and the current (latest) version otherwise; hides only
@@ -1420,17 +1408,7 @@
               </div>
             </dd>
           </div>
-          <!-- Lifecycle maps -->
-          <div v-if="linkedLifecycleMaps.length > 0">
-            <dt class="text-muted-foreground text-xs uppercase tracking-wider">{{ $t('views.PipelineEditorView.lifecycle_maps') }}</dt>
-            <dd>
-              <div v-for="map in linkedLifecycleMaps" :key="map.id" class="flex items-center gap-1">
-                <router-link :to="`/lifecycle-maps/${map.id}`" class="text-xs text-indigo-500 hover:text-indigo-400">
-                  {{ map.name }}
-                </router-link>
-              </div>
-            </dd>
-          </div>
+
         </dl>
         <div v-if="!isViewing" class="mt-6 space-y-2">
           <Button v-if="selectedNodeData.node_type === 'manual'" type="button" class="w-full" data-testid="pipeline-editor-convert-to-agent" @click="openAgentPicker">
@@ -2973,7 +2951,6 @@ const folders = ref<FolderItem[]>([])
 // breadcrumb is derived from this list, so a silent failure leaves it wrong or
 // absent with no way to recover short of a reload. Mirrors PipelineListView.
 const folderError = ref<string | null>(null)
-const linkedLifecycleMaps = ref<any[]>([])
 
 const folderPath = computed(() => {
   const path: { name: string; id: string }[] = []
@@ -4610,25 +4587,6 @@ async function loadFolders() {
   }
 }
 
-async function loadLifecycleMaps() {
-  pageError.value = null
-  try {
-    const response = await get<any[] | { items?: any[] }>('/api/v1/lifecycle-maps')
-    const summaries = Array.isArray(response) ? response : (response.items ?? [])
-    const first10 = (summaries ?? []).slice(0, 10)
-    const fullMaps = await Promise.all(
-      first10.map((m: any) =>
-        get<any>(`/api/v1/lifecycle-maps/${m.id}`).catch(() => null)
-      )
-    )
-    linkedLifecycleMaps.value = fullMaps.filter(
-      (m: any) => m && m.stages?.some((s: any) => s.pipeline_id === pipelineId)
-    )
-  } catch (e) {
-    console.warn('Failed to load lifecycle maps', e)
-  }
-}
-
 // Declared before useDataFetch: vue-query invokes the fetcher synchronously
 // during setup, and the fetcher + the loaders it calls (loadPipeline,
 // loadGraph, loadLifecycleMaps) read/write pageError — the binding must be
@@ -5410,8 +5368,8 @@ const { loading, load: reloadPage } = useDataFetch<null>(
       loadPipeline(),
       loadGraph(),
       loadCatalog(),
-      loadFolders(),
-      loadLifecycleMaps(),
+       loadFolders(),
+
       resolveVersionAlias(),
     ])
     // useDataFetch's queryFn forwards `result.data`; vue-query rejects an

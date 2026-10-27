@@ -386,8 +386,9 @@ class TestInactiveCatalogFlags:
 class TestDefaultOffFlags:
     """Flags shipped default-OFF on every tier (the ``mobile_sidebar_rail``
     two-mechanism precedent, extended by ``user_scoped_mcp_keys`` FAR-620 and
-    ``lifecycle_map_journeys`` FAR-654): each is listed in the catalog for
-    per-org toggling AND hardcoded in ``_refresh``'s inactive set
+    each is listed in the catalog for per-org toggling AND hardcoded in
+     ``_refresh``'s inactive set
+
     (``DEFAULT_OFF_FLAGS``), so the community-tier tier-rank fallback can
     never activate it and only an explicit override can turn it on.
 

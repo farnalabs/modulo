@@ -31,7 +31,12 @@ from modulo.api.dependencies import get_db_session, require_system_permission, r
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
-from modulo.core.feature_flags import FeatureFlagRegistry, feature_overrides_from_settings, resolve_plan_context
+from modulo.core.feature_flags import (
+    RETIRED_INTERNAL_FLAGS,
+    FeatureFlagRegistry,
+    feature_overrides_from_settings,
+    resolve_plan_context,
+)
 from modulo.core.license import get_license, verify_license_key
 from modulo.db.crud.organisation import get_organisation, update_org_settings_patch
 from modulo.db.rls import set_rls_org
@@ -356,6 +361,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
+                if f.name not in RETIRED_INTERNAL_FLAGS
             ],
             "would_activate": [
                 {
@@ -365,6 +371,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.tier_gap_flags()
+                if f.name not in RETIRED_INTERNAL_FLAGS
                 if f.name not in org_overrides
             ],
         }
@@ -431,6 +438,11 @@ async def get_feature_flag(
 ) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
+        if flag_name in RETIRED_INTERNAL_FLAGS:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown feature flag: {flag_name}",
+            )
         flag = registry.get_flag(flag_name)
         if flag is None:
             raise HTTPException(

@@ -2164,12 +2164,13 @@ async def create_lifecycle_map_from_primitive_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("library.copy"),
 ) -> LifecycleMapResponse:
-    """Copy-to-adapt a ``lifecycle_map`` library primitive into a real map.
+    """Copy-to-adapt an internal lifecycle-map primitive for dogfood use.
 
-    Creates a NEW lifecycle map in the org from the primitive's exported
-    content (name collisions are suffixed with "(imported)"), so a shared map
-    can be copied and adapted without touching the source.
+    Lifecycle Maps are not an Alpha-facing library capability. This legacy
+    materialisation endpoint remains available only to operator principals for
+    internal investigation and persisted-data compatibility.
     """
+    require_in_dev_operator(principal, "library.copy.in_dev")
     try:
         async with session.begin():
             await _set_rls_context(session, principal)

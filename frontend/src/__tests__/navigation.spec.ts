@@ -19,7 +19,9 @@ const mockManifest = vi.hoisted(() => ({
     '/library': { name: 'library', breadcrumb: 'Library', sidebar_group: 'core', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
     '/runs': { name: 'runs-list', breadcrumb: 'Runs', sidebar_group: 'core', sidebar_order: 5, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/runs/:id': { name: 'run-detail', breadcrumb: 'Run Detail', sidebar_group: 'core', sidebar_order: 8, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null },
-    '/lifecycle-maps': { name: 'lifecycle-maps', breadcrumb: 'Lifecycle Maps', sidebar_group: 'core', sidebar_order: 9, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
+     '/lifecycle-maps': { name: 'lifecycle-maps', breadcrumb: 'Lifecycle Maps', sidebar_group: null, sidebar_order: null, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'in_dev', exact: true },
+     '/lifecycle-maps/:id': { name: 'lifecycle-map-detail', breadcrumb: 'Lifecycle Map', sidebar_group: null, sidebar_order: null, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'in_dev' },
+
     '/runs/diff': { name: 'runs-diff', breadcrumb: 'Output Diff', sidebar_group: 'monitor', sidebar_order: 2, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/evals/editor': { name: 'eval-editor', breadcrumb: 'Evals', sidebar_group: 'monitor', sidebar_order: 3, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
     '/evals/proposals': { name: 'eval-proposals-queue', breadcrumb: 'Eval Proposals', sidebar_group: 'monitor', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
@@ -131,12 +133,13 @@ describe('navigation.ts', () => {
     expect(system.items.some((item) => item.to === '/settings/email')).toBe(false)
   })
 
-  it('items within groups are sorted by sidebar_order', () => {
-    const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items).toHaveLength(5)
-    expect(core.items[0].to).toBe('/')
-    expect(core.items.map(i => i.to)).toEqual(['/', '/pipelines', '/library', '/runs', '/lifecycle-maps'])
-  })
+   it('items within groups are sorted by sidebar_order', () => {
+     const core = navGroups.find((g) => g.id === 'core')!
+     expect(core.items).toHaveLength(4)
+     expect(core.items[0].to).toBe('/')
+     expect(core.items.map(i => i.to)).toEqual(['/', '/pipelines', '/library', '/runs'])
+   })
+
 
   it('excludes detail_page items from sidebar', () => {
     const core = navGroups.find((g) => g.id === 'core')!
@@ -150,13 +153,11 @@ describe('navigation.ts', () => {
     expect(myProfile).toBeUndefined()
   })
 
-  it('includes lifecycle-maps in the core group', () => {
-    const allItems = navGroups.flatMap((g) => g.items)
-    const lifecycle = allItems.find((item) => item.to === '/lifecycle-maps')
-    expect(lifecycle).toBeDefined()
-    const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items.find((item) => item.to === '/lifecycle-maps')).toBeDefined()
-  })
+   it('does not expose the internal lifecycle-map route in the sidebar', () => {
+     const allItems = navGroups.flatMap((g) => g.items)
+     expect(allItems.find((item) => item.to === '/lifecycle-maps')).toBeUndefined()
+   })
+
 
   it('sets requiredRoles and requiredTier on items', () => {
     const admin = navGroups.find((g) => g.id === 'admin')!
@@ -165,7 +166,20 @@ describe('navigation.ts', () => {
     expect(teams.requiredTier).toBe('team')
   })
 
-  it('canSeeItem returns true when no restrictions', () => {
+   it('hides in_dev navigation items when dev mode is off', () => {
+     const item: NavItem = {
+       to: '/lifecycle-maps',
+       icon: 'Map',
+       label: 'Lifecycle Maps',
+       labelKey: 'item_lifecycle_maps',
+       visibility: 'in_dev',
+     }
+     expect(isNavItemVisible(item, visibilityContext())).toBe(false)
+     expect(isNavItemVisible(item, visibilityContext({ devMode: true }))).toBe(true)
+   })
+
+   it('canSeeItem returns true when no restrictions', () => {
+
     const item: NavItem = {
       to: '/',
       icon: 'LayoutDashboard',
@@ -327,10 +341,11 @@ describe('navigation.ts', () => {
     expect(admin.defaultCollapsed).toBe(true)
   })
 
-  it('core has exactly 5 items (lifecycle-maps restored, connectors moved, stages removed)', () => {
-    const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items).toHaveLength(5)
-  })
+   it('core has exactly 4 Alpha-facing items', () => {
+     const core = navGroups.find((g) => g.id === 'core')!
+     expect(core.items).toHaveLength(4)
+   })
+
 
   it('warns and skips a route whose sidebar group is missing', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
