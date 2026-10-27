@@ -219,9 +219,9 @@ the harness composition guard
 
 | Environment state | `runner_docker` registered? |
 |---|---|
-| Any `MODULO_RUNNER_*` variable set (e.g. `MODULO_RUNNER_MACHINE_ID`) | YES – the overlay sets `MODULO_DOCKER_HOST`, which is itself a `MODULO_*`-prefixed signal |
 | `MODULO_DOCKER_HOST` or `DOCKER_HOST` set | YES |
-| None of the above | NO – `runner_docker` does not register, regardless of anything else; `DOCKER_HOST` alone (unset) registers nothing new and the legacy behaviour is unchanged |
+| Only an unrelated `MODULO_RUNNER_*` variable set (e.g. `MODULO_RUNNER_MACHINE_ID`) | NO – it is not a registration signal (FAR-996); the runner overlay registers because it also sets `MODULO_DOCKER_HOST` |
+| No Docker endpoint set | NO – `runner_docker` does not register, regardless of anything else |
 
 An unregistered-but-bound provider raises `ProviderNotConfiguredError`
 (surfaced as the typed dispatch-unbound error) naming `MODULO_DOCKER_HOST`

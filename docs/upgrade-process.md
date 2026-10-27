@@ -34,6 +34,11 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
    uv run alembic history
    uv run alembic upgrade heads --sql  # preview SQL without applying
    ```
+   Run these from `backend/` with `DATABASE_URL` (or the owner-role override
+   `DATABASE_ADMIN_URL`) set in the process environment or in the `.env` file
+   in `backend/`. `backend/alembic.ini` deliberately carries no default URL, so
+   Alembic refuses with an explicit error when neither is configured rather
+   than silently targeting a local database (FAR-2183).
 3. **Back up the database** – always take a backup before upgrading
    (from the repository root - `scripts/` lives at the repo root, not in
    `backend/`):
