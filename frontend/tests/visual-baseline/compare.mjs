@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable no-console -- this is a CLI: the delta table on stdout is its deliverable. */
 /**
  * PrimeVue baseline comparator (FAR-2205).
  *
@@ -67,6 +68,71 @@ function readJson(dir, slug) {
   return JSON.parse(readFileSync(join(dir, `${slug}.json`), 'utf8'))
 }
 
+/**
+ * Resolve `light-dark(light, dark)` to its DARK branch.
+ *
+ * PrimeVue 5 emits `light-dark(a, b)` into its token declarations and lets the
+ * browser resolve it; PrimeVue 4 (and its theme engine) pre-resolves to `b`
+ * under the `.dark` selector. The capture emulates the app's default dark
+ * colour scheme, so resolving to the dark branch makes the two spellings
+ * comparable — otherwise every colour token would read as "changed" purely
+ * because one version stores both branches instead of the active one.
+ */
+function resolveLightDark(value) {
+  if (typeof value !== 'string' || !value.includes('light-dark(')) return value
+  const PREFIX = 'light-dark('
+  let out = ''
+  let i = 0
+  while (i < value.length) {
+    const idx = value.indexOf(PREFIX, i)
+    if (idx === -1) {
+      out += value.slice(i)
+      break
+    }
+    out += value.slice(i, idx)
+
+    // Find the matching close paren for this light-dark(.
+    let depth = 0
+    let end = idx + PREFIX.length - 1
+    for (; end < value.length; end++) {
+      if (value[end] === '(') depth++
+      else if (value[end] === ')') {
+        depth--
+        if (depth === 0) break
+      }
+    }
+
+    const inner = value.slice(idx + PREFIX.length, end)
+    // Split on the top-level comma: light branch, dark branch.
+    let innerDepth = 0
+    let split = -1
+    for (let k = 0; k < inner.length; k++) {
+      if (inner[k] === '(') innerDepth++
+      else if (inner[k] === ')') innerDepth--
+      else if (inner[k] === ',' && innerDepth === 0) {
+        split = k
+        break
+      }
+    }
+
+    // The capture emulates the app's dark colour scheme, so the dark branch is
+    // the effective value. Recurse: the dark branch itself may be a light-dark.
+    out += resolveLightDark(split === -1 ? inner : inner.slice(split + 1).trim())
+    i = end + 1
+  }
+  return out
+}
+
+/** Origin (host:port) is worktree-derived, so compare path+query only. */
+function pathOf(url) {
+  try {
+    const parsed = new URL(url)
+    return parsed.pathname + parsed.search
+  } catch {
+    return url
+  }
+}
+
 function comparePng(expectedPath, actualPath) {
   const a = PNG.sync.read(readFileSync(expectedPath))
   const b = PNG.sync.read(readFileSync(actualPath))
@@ -130,8 +196,8 @@ for (const slug of [...expectedSlugs].filter((s) => actualSlugs.has(s)).sort()) 
   const tokenChanges = []
   const tokenNames = new Set([...Object.keys(expected.tokens || {}), ...Object.keys(actual.tokens || {})])
   for (const name of [...tokenNames].sort()) {
-    const before = expected.tokens?.[name]
-    const after = actual.tokens?.[name]
+    const before = resolveLightDark(expected.tokens?.[name])
+    const after = resolveLightDark(actual.tokens?.[name])
     if (before !== after) tokenChanges.push({ token: name, before, after })
   }
 
@@ -175,9 +241,9 @@ for (const slug of [...expectedSlugs].filter((s) => actualSlugs.has(s)).sort()) 
   }
 
   report.pages[slug] = {
-    urlBefore: expected.url,
-    urlAfter: actual.url,
-    urlChanged: expected.url !== actual.url,
+    urlBefore: pathOf(expected.url),
+    urlAfter: pathOf(actual.url),
+    urlChanged: pathOf(expected.url) !== pathOf(actual.url),
     tokenChanges,
     componentChanges,
     screenshot,

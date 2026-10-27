@@ -33,9 +33,11 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Add Connector"
+     "__text": "Add Connector",
+     "__class": "p-button p-component border-primary/30 hover:border-primary/60"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -66,15 +68,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-admin-model-backends": {
@@ -111,9 +120,11 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Add Model Backend"
+     "__text": "Add Model Backend",
+     "__class": "p-button p-component border-primary/30 hover:border-primary/60"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -144,15 +155,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-admin-run-retention": {
@@ -163,6 +181,7 @@
   },
   "components": {
    ".p-button": [],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -193,15 +212,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-admin-users-dialog": {
@@ -238,7 +264,8 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "+ Add User"
+     "__text": "+ Add User",
+     "__class": "p-button p-component border-primary/30"
     },
     {
      "display": "flex",
@@ -266,7 +293,8 @@
      "height": "36px",
      "gap": "0px",
      "box-shadow": "none",
-     "__text": ""
+     "__text": "",
+     "__class": "p-button p-component p-button-icon-only p-button-secondary p-button-rounded p-button-text p-dialog-close-button"
     },
     {
      "display": "flex",
@@ -294,7 +322,8 @@
      "height": "38px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Generate"
+     "__text": "Generate",
+     "__class": "p-button p-component p-button-secondary p-button-outlined shrink-0 border-primary/30"
     },
     {
      "display": "flex",
@@ -322,7 +351,8 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Cancel"
+     "__text": "Cancel",
+     "__class": "p-button p-component p-button-secondary p-button-outlined"
     },
     {
      "display": "flex",
@@ -350,9 +380,11 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Create"
+     "__text": "Create",
+     "__class": "p-button p-component"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [
     {
@@ -381,7 +413,8 @@
      "height": "436px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0.1) 0px 20px 25px -5px, rgba(0, 0, 0, 0.1) 0px 8px 10px -6px",
-     "__text": "Create UserPasswordInviteEmailDisplay NamePasswordGenerateRoleRunnerCreateCancel"
+     "__text": "Create UserPasswordInviteEmailDisplay NamePasswordGenerateRoleRunnerCreateCancel",
+     "__class": "p-dialog p-component"
     }
    ],
    ".p-card": [],
@@ -412,10 +445,12 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [
     {
      "display": "inline-flex",
@@ -443,13 +478,49 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(18, 18, 23, 0.05) 0px 1px 2px 0px",
-     "__text": "Runner"
+     "__text": "Runner",
+     "__class": "p-select p-component p-inputwrapper p-inputwrapper-filled w-full"
+    }
+   ],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(255, 255, 255)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(255, 255, 255)",
+     "border-radius": "0px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "372px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Runner",
+     "__class": "p-select-label"
     }
    ],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-admin-users": {
@@ -486,9 +557,11 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "+ Add User"
+     "__text": "+ Add User",
+     "__class": "p-button p-component border-primary/30"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -519,15 +592,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-dashboard-tooltip": {
@@ -538,6 +618,7 @@
   },
   "components": {
    ".p-button": [],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -568,12 +649,18 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
    ".p-tooltip": [
@@ -603,7 +690,39 @@
      "height": "38px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Release Pipeline"
+     "__text": "Release Pipeline",
+     "__class": "p-tooltip p-component p-tooltip-top"
+    }
+   ],
+   ".p-tooltip-text": [
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "12px",
+     "font-weight": "400",
+     "line-height": "18px",
+     "letter-spacing": "normal",
+     "color": "rgb(255, 255, 255)",
+     "background-color": "rgb(63, 63, 70)",
+     "border-top-width": "0px",
+     "border-top-style": "solid",
+     "border-top-color": "rgb(37, 45, 55)",
+     "border-radius": "6px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "113px",
+     "height": "30px",
+     "gap": "normal",
+     "box-shadow": "rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px",
+     "__text": "Release Pipeline",
+     "__class": "p-tooltip-text"
     }
    ]
   }
@@ -616,6 +735,7 @@
   },
   "components": {
    ".p-button": [],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -646,15 +766,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-parameter-schemas-tabs": {
@@ -691,7 +818,8 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Create"
+     "__text": "Create",
+     "__class": "p-button p-component"
     },
     {
      "display": "flex",
@@ -719,7 +847,8 @@
      "height": "28px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Add Parameter"
+     "__text": "Add Parameter",
+     "__class": "p-button p-component p-button-secondary p-button-outlined p-button-sm"
     },
     {
      "display": "flex",
@@ -747,7 +876,8 @@
      "height": "auto",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "New Set"
+     "__text": "New Set",
+     "__class": "p-button p-component p-button-sm"
     },
     {
      "display": "flex",
@@ -775,9 +905,11 @@
      "height": "auto",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Validate"
+     "__text": "Validate",
+     "__class": "p-button p-component"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -808,11 +940,16 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [
     {
      "display": "flex",
@@ -840,7 +977,39 @@
      "height": "456px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "SchemaParameter SetsReferencesValidateNew Parameter SchemaCreateCancelNameDescri"
+     "__text": "SchemaParameter SetsReferencesValidateNew Parameter SchemaCreateCancelNameDescri",
+     "__class": "p-tabs p-component w-full"
+    }
+   ],
+   ".p-tablist": [
+    {
+     "display": "flex",
+     "position": "relative",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "16px",
+     "font-weight": "400",
+     "line-height": "24px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgb(19, 24, 32)",
+     "border-top-width": "0px",
+     "border-top-style": "solid",
+     "border-top-color": "rgb(37, 45, 55)",
+     "border-radius": "0px",
+     "padding-top": "0px",
+     "padding-right": "0px",
+     "padding-bottom": "0px",
+     "padding-left": "0px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "976px",
+     "height": "50px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "SchemaParameter SetsReferencesValidate",
+     "__class": "p-tablist"
     }
    ],
    ".p-tab": [
@@ -870,7 +1039,8 @@
      "height": "49px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Schema"
+     "__text": "Schema",
+     "__class": "p-tab p-tab-active"
     },
     {
      "display": "block",
@@ -898,7 +1068,8 @@
      "height": "49px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Parameter Sets"
+     "__text": "Parameter Sets",
+     "__class": "p-tab"
     },
     {
      "display": "block",
@@ -926,7 +1097,8 @@
      "height": "49px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "References"
+     "__text": "References",
+     "__class": "p-tab"
     },
     {
      "display": "block",
@@ -954,11 +1126,13 @@
      "height": "49px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Validate"
+     "__text": "Validate",
+     "__class": "p-tab"
     }
    ],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-pipeline-editor": {
@@ -969,6 +1143,7 @@
   },
   "components": {
    ".p-button": [],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -999,10 +1174,12 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [
     {
      "display": "inline-flex",
@@ -1030,13 +1207,49 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(18, 18, 23, 0.05) 0px 1px 2px 0px",
-     "__text": "Inline Prompt"
+     "__text": "Inline Prompt",
+     "__class": "p-select p-component p-inputwrapper p-inputwrapper-filled toolbar-select w-40 text-xs"
+    }
+   ],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(255, 255, 255)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(255, 255, 255)",
+     "border-radius": "0px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "122px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Inline Prompt",
+     "__class": "p-select-label"
     }
    ],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-pipelines-folder-dialog": {
@@ -1073,7 +1286,8 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "New Pipeline"
+     "__text": "New Pipeline",
+     "__class": "p-button p-component"
     },
     {
      "display": "flex",
@@ -1101,7 +1315,8 @@
      "height": "36px",
      "gap": "0px",
      "box-shadow": "none",
-     "__text": ""
+     "__text": "",
+     "__class": "p-button p-component p-button-icon-only p-button-secondary p-button-rounded p-button-text p-dialog-close-button"
     },
     {
      "display": "flex",
@@ -1129,7 +1344,8 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Cancel"
+     "__text": "Cancel",
+     "__class": "p-button p-component p-button-secondary p-button-outlined"
     },
     {
      "display": "flex",
@@ -1157,9 +1373,11 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Save"
+     "__text": "Save",
+     "__class": "p-button p-component"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [
     {
      "display": "inline-block",
@@ -1187,7 +1405,8 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(18, 18, 23, 0.05) 0px 1px 2px 0px",
-     "__text": ""
+     "__text": "",
+     "__class": "p-inputtext p-component w-full"
     }
    ],
    ".p-dialog": [
@@ -1217,7 +1436,8 @@
      "height": "279px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0.1) 0px 20px 25px -5px, rgba(0, 0, 0, 0.1) 0px 8px 10px -6px",
-     "__text": "New FolderFolder nameParent folderNo parent (root level)CancelSave"
+     "__text": "New FolderFolder nameParent folderNo parent (root level)CancelSave",
+     "__class": "p-dialog p-component"
     }
    ],
    ".p-card": [],
@@ -1248,10 +1468,12 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [
     {
      "display": "inline-flex",
@@ -1279,13 +1501,49 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(18, 18, 23, 0.05) 0px 1px 2px 0px",
-     "__text": "No parent (root level)"
+     "__text": "No parent (root level)",
+     "__class": "p-select p-component p-inputwrapper w-full"
+    }
+   ],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(161, 161, 170)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(161, 161, 170)",
+     "border-radius": "0px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "372px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "No parent (root level)",
+     "__class": "p-select-label p-placeholder"
     }
    ],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-pipelines-row-menu": {
@@ -1322,9 +1580,11 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "New Pipeline"
+     "__text": "New Pipeline",
+     "__class": "p-button p-component"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -1355,7 +1615,8 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [
@@ -1385,14 +1646,167 @@
      "height": "194px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px",
-     "__text": "RunsRun as variantRenameArchivePauseMove to Folder"
+     "__text": "RunsRun as variantRenameArchivePauseMove to Folder",
+     "__class": "p-menu p-component p-menu-overlay"
+    }
+   ],
+   ".p-menu-item-label": [
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "solid",
+     "border-top-color": "rgb(37, 45, 55)",
+     "border-radius": "0px",
+     "padding-top": "0px",
+     "padding-right": "0px",
+     "padding-bottom": "0px",
+     "padding-left": "0px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "32px",
+     "height": "21px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Runs",
+     "__class": "p-menu-item-label"
+    },
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "solid",
+     "border-top-color": "rgb(37, 45, 55)",
+     "border-radius": "0px",
+     "padding-top": "0px",
+     "padding-right": "0px",
+     "padding-bottom": "0px",
+     "padding-left": "0px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "93px",
+     "height": "21px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Run as variant",
+     "__class": "p-menu-item-label"
+    },
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "solid",
+     "border-top-color": "rgb(37, 45, 55)",
+     "border-radius": "0px",
+     "padding-top": "0px",
+     "padding-right": "0px",
+     "padding-bottom": "0px",
+     "padding-left": "0px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "53px",
+     "height": "21px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Rename",
+     "__class": "p-menu-item-label"
+    },
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "solid",
+     "border-top-color": "rgb(37, 45, 55)",
+     "border-radius": "0px",
+     "padding-top": "0px",
+     "padding-right": "0px",
+     "padding-bottom": "0px",
+     "padding-left": "0px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "50px",
+     "height": "21px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Archive",
+     "__class": "p-menu-item-label"
+    },
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "solid",
+     "border-top-color": "rgb(37, 45, 55)",
+     "border-radius": "0px",
+     "padding-top": "0px",
+     "padding-right": "0px",
+     "padding-bottom": "0px",
+     "padding-left": "0px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "40px",
+     "height": "21px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Pause",
+     "__class": "p-menu-item-label"
     }
    ],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-pipelines": {
@@ -1429,9 +1843,11 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "New Pipeline"
+     "__text": "New Pipeline",
+     "__class": "p-button p-component"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -1462,15 +1878,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-run-detail": {
@@ -1481,6 +1904,7 @@
   },
   "components": {
    ".p-button": [],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -1511,15 +1935,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-runs-select-open": {
@@ -1530,6 +1961,7 @@
   },
   "components": {
    ".p-button": [],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -1560,10 +1992,12 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [
     {
      "display": "inline-flex",
@@ -1591,7 +2025,8 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "All Status"
+     "__text": "All Status",
+     "__class": "p-select p-component p-inputwrapper p-focus p-inputwrapper-filled p-inputwrapper-focus p-select-open w-full sm:w-auto sm:min-w-[140px]"
     },
     {
      "display": "inline-flex",
@@ -1619,13 +2054,254 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(18, 18, 23, 0.05) 0px 1px 2px 0px",
-     "__text": "All Trigger Type"
+     "__text": "All Trigger Type",
+     "__class": "p-select p-component p-inputwrapper p-inputwrapper-filled w-full sm:w-auto sm:min-w-[140px]"
+    }
+   ],
+   ".p-select-overlay": [
+    {
+     "display": "block",
+     "position": "absolute",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "16px",
+     "font-weight": "400",
+     "line-height": "24px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgb(19, 24, 32)",
+     "border-top-width": "1px",
+     "border-top-style": "solid",
+     "border-top-color": "rgb(63, 63, 70)",
+     "border-radius": "6px",
+     "padding-top": "0px",
+     "padding-right": "0px",
+     "padding-bottom": "0px",
+     "padding-left": "0px",
+     "margin-top": "2px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "140px",
+     "height": "254px",
+     "gap": "normal",
+     "box-shadow": "rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px",
+     "__text": "StatusAll StatusPendingRunningAwaiting HumanParkedCompleteFailedCancelledEval Fa",
+     "__class": "p-select-overlay p-component"
+    }
+   ],
+   ".p-select-option": [
+    {
+     "display": "flex",
+     "position": "relative",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgba(255, 255, 255, 0.87)",
+     "background-color": "color(srgb 0.203922 0.827451 0.6 / 0.24)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgba(255, 255, 255, 0.87)",
+     "border-radius": "4px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "130px",
+     "height": "34px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "All Status",
+     "__class": "p-select-option p-select-option-selected p-focus"
+    },
+    {
+     "display": "flex",
+     "position": "relative",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(232, 237, 242)",
+     "border-radius": "4px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "130px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Pending",
+     "__class": "p-select-option"
+    },
+    {
+     "display": "flex",
+     "position": "relative",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(232, 237, 242)",
+     "border-radius": "4px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "130px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Running",
+     "__class": "p-select-option"
+    },
+    {
+     "display": "flex",
+     "position": "relative",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(232, 237, 242)",
+     "border-radius": "4px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "130px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Awaiting Human",
+     "__class": "p-select-option"
+    },
+    {
+     "display": "flex",
+     "position": "relative",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(232, 237, 242)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(232, 237, 242)",
+     "border-radius": "4px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "130px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "Parked",
+     "__class": "p-select-option"
+    }
+   ],
+   ".p-select-label": [
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(255, 255, 255)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(255, 255, 255)",
+     "border-radius": "0px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "102px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "All Status",
+     "__class": "p-select-label"
+    },
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(255, 255, 255)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(255, 255, 255)",
+     "border-radius": "0px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "124px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "All Trigger Type",
+     "__class": "p-select-label"
     }
    ],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-runs": {
@@ -1636,6 +2312,7 @@
   },
   "components": {
    ".p-button": [],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -1666,10 +2343,12 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [
     {
      "display": "inline-flex",
@@ -1697,7 +2376,8 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(18, 18, 23, 0.05) 0px 1px 2px 0px",
-     "__text": "All Status"
+     "__text": "All Status",
+     "__class": "p-select p-component p-inputwrapper p-inputwrapper-filled w-full sm:w-auto sm:min-w-[140px]"
     },
     {
      "display": "inline-flex",
@@ -1725,13 +2405,78 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(18, 18, 23, 0.05) 0px 1px 2px 0px",
-     "__text": "All Trigger Type"
+     "__text": "All Trigger Type",
+     "__class": "p-select p-component p-inputwrapper p-inputwrapper-filled w-full sm:w-auto sm:min-w-[140px]"
+    }
+   ],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(255, 255, 255)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(255, 255, 255)",
+     "border-radius": "0px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "102px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "All Status",
+     "__class": "p-select-label"
+    },
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(255, 255, 255)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(255, 255, 255)",
+     "border-radius": "0px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "124px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "All Trigger Type",
+     "__class": "p-select-label"
     }
    ],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-schemas": {
@@ -1742,6 +2487,7 @@
   },
   "components": {
    ".p-button": [],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -1772,15 +2518,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-settings-license-dialog": {
@@ -1817,7 +2570,8 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Get a Team License"
+     "__text": "Get a Team License",
+     "__class": "p-button p-component mt-4 border-primary/30 hover:border-primary/60"
     },
     {
      "display": "flex",
@@ -1845,7 +2599,8 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Apply Key"
+     "__text": "Apply Key",
+     "__class": "p-button p-component"
     },
     {
      "display": "flex",
@@ -1873,7 +2628,8 @@
      "height": "36px",
      "gap": "0px",
      "box-shadow": "none",
-     "__text": ""
+     "__text": "",
+     "__class": "p-button p-component p-button-icon-only p-button-secondary p-button-rounded p-button-text p-dialog-close-button"
     },
     {
      "display": "flex",
@@ -1901,7 +2657,8 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Cancel"
+     "__text": "Cancel",
+     "__class": "p-button p-component p-button-secondary p-button-outlined"
     },
     {
      "display": "flex",
@@ -1929,9 +2686,11 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Confirm Apply"
+     "__text": "Confirm Apply",
+     "__class": "p-button p-component"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [
     {
@@ -1960,7 +2719,8 @@
      "height": "259px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0.1) 0px 20px 25px -5px, rgba(0, 0, 0, 0.1) 0px 8px 10px -6px",
-     "__text": "Apply License KeyThis will replace your organisation's current license key. It t"
+     "__text": "Apply License KeyThis will replace your organisation's current license key. It t",
+     "__class": "p-dialog p-component"
     }
    ],
    ".p-card": [],
@@ -1991,7 +2751,8 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     },
     {
      "display": "flex",
@@ -2019,15 +2780,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Community"
+     "__text": "Community",
+     "__class": "p-badge p-component p-badge-secondary border border-border"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-settings-license": {
@@ -2064,7 +2832,8 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Get a Team License"
+     "__text": "Get a Team License",
+     "__class": "p-button p-component mt-4 border-primary/30 hover:border-primary/60"
     },
     {
      "display": "flex",
@@ -2092,9 +2861,11 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Apply Key"
+     "__text": "Apply Key",
+     "__class": "p-button p-component"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -2125,7 +2896,8 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     },
     {
      "display": "flex",
@@ -2153,15 +2925,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Community"
+     "__text": "Community",
+     "__class": "p-badge p-component p-badge-secondary border border-border"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-settings-mcp": {
@@ -2198,7 +2977,8 @@
      "height": "28px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Copy"
+     "__text": "Copy",
+     "__class": "p-button p-component p-button-secondary p-button-outlined p-button-sm"
     },
     {
      "display": "flex",
@@ -2226,7 +3006,8 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Create MCP API Key"
+     "__text": "Create MCP API Key",
+     "__class": "p-button p-component"
     },
     {
      "display": "inline-flex",
@@ -2254,7 +3035,8 @@
      "height": "28px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Copy"
+     "__text": "Copy",
+     "__class": "p-button p-component p-button-secondary p-button-outlined p-button-sm mt-2"
     },
     {
      "display": "flex",
@@ -2282,9 +3064,11 @@
      "height": "35px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Register OAuth Client"
+     "__text": "Register OAuth Client",
+     "__class": "p-button p-component"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [
@@ -2314,7 +3098,8 @@
      "height": "291px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px",
-     "__text": "MCP Server StatusThe URL clients use to connect to the MCP serverMODULO_PUBLIC_U"
+     "__text": "MCP Server StatusThe URL clients use to connect to the MCP serverMODULO_PUBLIC_U",
+     "__class": "p-card p-component"
     },
     {
      "display": "flex",
@@ -2342,7 +3127,8 @@
      "height": "272px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px",
-     "__text": "API KeysCreate and manage API keys for MCP client authenticationCreate MCP API K"
+     "__text": "API KeysCreate and manage API keys for MCP client authenticationCreate MCP API K",
+     "__class": "p-card p-component settings-mcp-api-keys-card"
     },
     {
      "display": "flex",
@@ -2370,7 +3156,8 @@
      "height": "270px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px",
-     "__text": "Configuration SnippetsCopy these snippets to configure MCP clientsClient:opencod"
+     "__text": "Configuration SnippetsCopy these snippets to configure MCP clientsClient:opencod",
+     "__class": "p-card p-component"
     },
     {
      "display": "flex",
@@ -2398,7 +3185,8 @@
      "height": "256px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0.1) 0px 1px 3px 0px, rgba(0, 0, 0, 0.1) 0px 1px 2px -1px",
-     "__text": "Registered OAuth ClientsMCP OAuth client applications registered for token-based"
+     "__text": "Registered OAuth ClientsMCP OAuth client applications registered for token-based",
+     "__class": "p-card p-component"
     }
    ],
    ".p-badge": [
@@ -2428,7 +3216,8 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     },
     {
      "display": "flex",
@@ -2456,10 +3245,12 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Local Only"
+     "__text": "Local Only",
+     "__class": "p-badge p-component p-badge-secondary"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [
     {
      "display": "inline-flex",
@@ -2487,13 +3278,49 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(18, 18, 23, 0.05) 0px 1px 2px 0px",
-     "__text": "opencode / Claude Code"
+     "__text": "opencode / Claude Code",
+     "__class": "p-select p-component p-inputwrapper p-inputwrapper-filled w-full"
+    }
+   ],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"JetBrains Mono Variable\", \"JetBrains Mono\", \"SF Mono\", \"Cascadia Code\", Consolas, monospace",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(255, 255, 255)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(255, 255, 255)",
+     "border-radius": "0px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "196px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "opencode / Claude Code",
+     "__class": "p-select-label"
     }
    ],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "desktop-settings-triggers": {
@@ -2530,7 +3357,8 @@
      "height": "56px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Create Trigger"
+     "__text": "Create Trigger",
+     "__class": "p-button p-component border-primary/30 hover:border-primary/60"
     },
     {
      "display": "flex",
@@ -2558,9 +3386,11 @@
      "height": "56px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "Pause all"
+     "__text": "Pause all",
+     "__class": "p-button p-component p-button-primary"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -2591,15 +3421,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary border border-border text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "mobile-dashboard": {
@@ -2610,6 +3447,7 @@
   },
   "components": {
    ".p-button": [],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -2640,15 +3478,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary shrink-0 border border-border hidden! min-[440px]:inline-flex! text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "mobile-pipelines": {
@@ -2685,9 +3530,11 @@
      "height": "56px",
      "gap": "8px",
      "box-shadow": "none",
-     "__text": "New Pipeline"
+     "__text": "New Pipeline",
+     "__class": "p-button p-component"
     }
    ],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -2718,15 +3565,22 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary shrink-0 border border-border hidden! min-[440px]:inline-flex! text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  },
  "mobile-runs": {
@@ -2737,6 +3591,7 @@
   },
   "components": {
    ".p-button": [],
+   ".p-button-label": [],
    ".p-inputtext": [],
    ".p-dialog": [],
    ".p-card": [],
@@ -2767,10 +3622,12 @@
      "height": "20px",
      "gap": "normal",
      "box-shadow": "none",
-     "__text": "Enterprise"
+     "__text": "Enterprise",
+     "__class": "p-badge p-component p-badge-secondary shrink-0 border border-border hidden! min-[440px]:inline-flex! text-[10px] px-1.5 py-0 leading-none"
     }
    ],
    ".p-menu": [],
+   ".p-menu-item-label": [],
    ".p-select": [
     {
      "display": "inline-flex",
@@ -2798,7 +3655,8 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(18, 18, 23, 0.05) 0px 1px 2px 0px",
-     "__text": "All Status"
+     "__text": "All Status",
+     "__class": "p-select p-component p-inputwrapper p-inputwrapper-filled w-full sm:w-auto sm:min-w-[140px]"
     },
     {
      "display": "inline-flex",
@@ -2826,13 +3684,78 @@
      "height": "35px",
      "gap": "normal",
      "box-shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(18, 18, 23, 0.05) 0px 1px 2px 0px",
-     "__text": "All Trigger Type"
+     "__text": "All Trigger Type",
+     "__class": "p-select p-component p-inputwrapper p-inputwrapper-filled w-full sm:w-auto sm:min-w-[140px]"
+    }
+   ],
+   ".p-select-overlay": [],
+   ".p-select-option": [],
+   ".p-select-label": [
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(255, 255, 255)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(255, 255, 255)",
+     "border-radius": "0px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "222px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "All Status",
+     "__class": "p-select-label"
+    },
+    {
+     "display": "block",
+     "position": "static",
+     "font-family": "\"Inter Variable\", Inter, system-ui, -apple-system, sans-serif",
+     "font-size": "14px",
+     "font-weight": "400",
+     "line-height": "21px",
+     "letter-spacing": "normal",
+     "color": "rgb(255, 255, 255)",
+     "background-color": "rgba(0, 0, 0, 0)",
+     "border-top-width": "0px",
+     "border-top-style": "none",
+     "border-top-color": "rgb(255, 255, 255)",
+     "border-radius": "0px",
+     "padding-top": "6px",
+     "padding-right": "10px",
+     "padding-bottom": "6px",
+     "padding-left": "10px",
+     "margin-top": "0px",
+     "margin-right": "0px",
+     "margin-bottom": "0px",
+     "margin-left": "0px",
+     "width": "222px",
+     "height": "33px",
+     "gap": "normal",
+     "box-shadow": "none",
+     "__text": "All Trigger Type",
+     "__class": "p-select-label"
     }
    ],
    ".p-tabs": [],
+   ".p-tablist": [],
    ".p-tab": [],
    ".p-popover": [],
-   ".p-tooltip": []
+   ".p-tooltip": [],
+   ".p-tooltip-text": []
   }
  }
 }

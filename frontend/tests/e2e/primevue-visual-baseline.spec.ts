@@ -264,16 +264,23 @@ async function mockPermissions(page: import('@playwright/test').Page): Promise<v
 /** Component roots whose *rendered* appearance we fingerprint. */
 const COMPONENT_SELECTORS = [
   '.p-button',
+  '.p-button-label',
   '.p-inputtext',
   '.p-dialog',
   '.p-card',
   '.p-badge',
   '.p-menu',
+  '.p-menu-item-label',
   '.p-select',
+  '.p-select-overlay',
+  '.p-select-option',
+  '.p-select-label',
   '.p-tabs',
+  '.p-tablist',
   '.p-tab',
   '.p-popover',
   '.p-tooltip',
+  '.p-tooltip-text',
 ] as const
 
 const FINGERPRINT_PROPS = [
@@ -321,6 +328,7 @@ function collectComponentFingerprints(args: {
       const record: Record<string, string> = {}
       for (const prop of args.props) record[prop] = cs.getPropertyValue(prop)
       record.__text = (node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+      record.__class = node.getAttribute('class') || ''
       return record
     })
   }
@@ -329,11 +337,39 @@ function collectComponentFingerprints(args: {
 
 async function settle(page: import('@playwright/test').Page): Promise<void> {
   await page.waitForLoadState('networkidle')
-  // Two frames so lazy charts/layout settle before the screenshot.
+
+  // Wait for web fonts, then for the layout to STOP CHANGING. The pipeline
+  // editor animates its fitView transform over a few hundred milliseconds; a
+  // capture taken mid-animation records a node position that has nothing to do
+  // with the dependency version under test (observed: the same dependency
+  // state captured the node 40px apart on two runs). Poll the transformation
+  // pane until two consecutive samples are equal, bounded so a genuinely
+  // animated page cannot hang the capture.
+  await page.evaluate(() => document.fonts?.ready ?? Promise.resolve())
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        const sample = (): string =>
+          document.querySelector('.vue-flow__transformationpane')?.getAttribute('style') ??
+          `${document.body.scrollHeight}:${document.body.scrollWidth}`
+        let last = sample()
+        let stable = 0
+        let ticks = 0
+        const tick = (): void => {
+          ticks += 1
+          const next = sample()
+          if (next === last) stable += 1
+          else {
+            stable = 0
+            last = next
+          }
+          if (stable >= 2 || ticks >= 30) {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+            return
+          }
+          setTimeout(tick, 100)
+        }
+        setTimeout(tick, 100)
       }),
   )
 }
@@ -354,7 +390,7 @@ test.describe('PrimeVue visual baseline capture', () => {
       if (route.mock) await route.mock(page)
 
       await page.goto(route.path)
-      await page.locator(route.ready).first().waitFor({ state: 'visible', timeout: 20_000 })
+      await page.locator(route.ready).first().waitFor({ state: 'visible', timeout: 60_000 })
       await settle(page)
 
       const slug = `desktop-${route.slug}`
@@ -389,7 +425,7 @@ test.describe('PrimeVue visual baseline capture', () => {
       await mockPermissions(page)
 
       await page.goto(capture.path)
-      await page.locator(capture.ready).first().waitFor({ state: 'visible', timeout: 20_000 })
+      await page.locator(capture.ready).first().waitFor({ state: 'visible', timeout: 60_000 })
       await settle(page)
 
       await capture.interact(page)
@@ -434,7 +470,7 @@ test.describe('PrimeVue visual baseline capture', () => {
       if (route.mock) await route.mock(page)
 
       await page.goto(route.path)
-      await page.locator(route.ready).first().waitFor({ state: 'visible', timeout: 20_000 })
+      await page.locator(route.ready).first().waitFor({ state: 'visible', timeout: 60_000 })
       await settle(page)
 
       const mobileSlug = `mobile-${route.slug}`
