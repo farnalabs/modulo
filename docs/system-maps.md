@@ -319,6 +319,45 @@ CREATE TABLE system_map_loop_configs (
     CONSTRAINT ck_system_map_loop_cooldown CHECK (cooldown_seconds >= 0),
     CONSTRAINT uq_system_map_loop_rev_node_org UNIQUE (revision_id, node_key, organisation_id)
 );
+
+-- Admission reservations make concurrent loop triggers serialize on a durable
+-- row rather than relying on an in-memory counter. The service locks the loop
+-- config, action pipeline, and organisation admission rows in that order before
+-- reading or inserting reservations. The database uniqueness constraint makes
+-- retries with one admission key idempotent.
+CREATE TABLE system_map_loop_admissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    loop_config_id UUID NOT NULL,
+    admission_key VARCHAR(255) NOT NULL,
+    run_id UUID,
+    month_start DATE NOT NULL,
+    reserved_budget_usd NUMERIC(10, 4) NOT NULL,
+    actual_spend_usd NUMERIC(10, 4),
+    reserved_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    released_at TIMESTAMPTZ,
+    status VARCHAR(20) NOT NULL,
+    rejection_reason VARCHAR(32),
+    CONSTRAINT uq_system_map_loop_admissions_id_org UNIQUE (id, organisation_id),
+    CONSTRAINT uq_system_map_loop_admissions_key
+        UNIQUE (organisation_id, loop_config_id, admission_key),
+    CONSTRAINT fk_system_map_loop_admissions_loop_org
+        FOREIGN KEY (loop_config_id, organisation_id)
+        REFERENCES system_map_loop_configs(id, organisation_id) ON DELETE CASCADE,
+    CONSTRAINT ck_system_map_loop_admissions_status
+        CHECK (status IN ('reserved', 'released', 'consumed', 'rejected')),
+    CONSTRAINT ck_system_map_loop_admissions_reserved_budget CHECK (reserved_budget_usd > 0),
+    CONSTRAINT ck_system_map_loop_admissions_actual_spend
+        CHECK (actual_spend_usd IS NULL OR actual_spend_usd >= 0),
+    CONSTRAINT ck_system_map_loop_admissions_rejection
+        CHECK (status = 'rejected' OR rejection_reason IS NULL)
+);
+
+CREATE INDEX ix_system_map_loop_admissions_active
+    ON system_map_loop_admissions(organisation_id, loop_config_id, reserved_at)
+    WHERE status = 'reserved';
+CREATE INDEX ix_system_map_loop_admissions_month
+    ON system_map_loop_admissions(organisation_id, loop_config_id, month_start, status);
 ```
 
 ### 3.4 Constraint and Binding Contract
@@ -389,12 +428,16 @@ The first implementation exposes only relationships whose endpoints are rows in 
 ### 4.4 Loop Semantics & Acyclic Delivery Flow
 A core failure mode of naive delivery graphs is introducing arbitrary executable cycles into the pipeline flow. When a pipeline failure redirects an artifact back to an earlier pipeline without structural limits, the system risks infinite execution loops, unbounded cloud compute spend, and cascading queue collapse.
 
-System Maps enforces strict loop semantics:
+System Maps enforces strict loop semantics. Static publication validation checks bounds and completeness; live dispatch admission is the only place that decides whether a trigger may create a run.
 
-- **Cooldown is executable:** the loop dispatcher records the last admitted remediation run and rejects or defers a trigger until `cooldown_seconds` has elapsed.
-- **Budget is executable:** the dispatcher accounts spend for every run admitted by the loop against `budget_limit_usd` in the UTC calendar month. It rejects or defers a trigger when admitting it would exceed the remaining loop budget. The loop cap is in addition to, and cannot raise, existing organisation and pipeline cost controls.
-- **Concurrency is executable:** the dispatcher counts active runs admitted by the loop and refuses admission above `max_concurrent_runs`. The loop-specific cap is in addition to, and cannot raise, the action pipeline's `max_concurrent_runs` or the organisation's concurrency limits.
-- **Publication and dispatch both enforce these controls:** publication rejects missing or invalid values; dispatch re-checks the published revision and current counters at admission time so a valid publication cannot bypass a live safety limit.
+- **One atomic admission transaction:** The dispatcher starts a database transaction, locks the published `system_map_loop_configs` row and its action-pipeline admission row in a fixed order, then locks the organisation admission row. It uses `SELECT ... FOR UPDATE` on those rows and performs every live check and reservation before inserting the run. The transaction commits the reservation and the run together. A trigger that loses any lock race waits, re-reads all limits and counters after the lock, and either retries with the same idempotency key or receives a deterministic capacity, cooldown, or budget outcome. It never makes a decision from a pre-lock read.
+- **Idempotency key:** Every loop signal carries a required `admission_key`, stable for the logical trigger occurrence and scoped to `(organisation_id, loop_config_id)`. The reservation table has a unique constraint on that tuple. A repeated delivery with the same key returns the existing reservation and run decision without consuming another slot, budget, or cooldown. A different key is a new admission attempt.
+- **Reservation record:** The implementation adds a relational `system_map_loop_admissions` table with `organisation_id`, `loop_config_id`, `admission_key`, `run_id`, `month_start`, `reserved_budget_usd`, `reserved_at`, `released_at`, and `status` (`reserved`, `released`, `consumed`, `rejected`). It has a unique `(organisation_id, loop_config_id, admission_key)` constraint and indexes for active reservations and the UTC month. The table is the source of truth for loop reservations; no mutable JSON counter is used.
+- **Cooldown:** While holding the loop row lock, admission finds the latest `reserved` or `consumed` reservation for that loop. If its `reserved_at` is less than `cooldown_seconds` before the current database time, the dispatcher records `rejected` with reason `cooldown` and creates no run. Cooldown begins at reservation commit, not at signal receipt or run completion, so concurrent triggers cannot pass through the same quiet period.
+- **Concurrency:** While holding the loop, pipeline, and organisation locks, admission counts `reserved` loop reservations whose runs are not terminal and applies the lower of the loop, action-pipeline, and organisation limits. If no capacity exists, it records `rejected` with reason `concurrency` and creates no run. A terminalisation transaction marks the reservation `consumed` and releases the loop slot in the same transaction as the terminal run update. A reservation cancelled before execution is marked `released`; it does not count as active and does not refund cooldown.
+- **Monthly budget:** Admission computes the UTC calendar-month sum of `reserved_budget_usd` for `reserved` and `consumed` rows, locks the month-scoped reservation set through the loop row lock, and inserts a new reservation only when the sum plus the new reservation is at most `budget_limit_usd`. It records `rejected` with reason `budget` when the cap would be exceeded. Terminalisation replaces the reservation with actual spend in the same row or an immutable settlement row; unused reserved budget is released only by an explicit cancellation/reconciliation transaction. Existing organisation and pipeline cost controls remain additional lower bounds and cannot be raised by this loop.
+- **Rollback and failures:** If run insertion, snapshot creation, or any later admission write fails, the transaction rolls back the reservation and the run together. If dispatch infrastructure fails after commit, the durable reservation remains visible and a reconciler either dispatches that run or marks the reservation `released` with an auditable reason; it never silently creates a second reservation. A rejected trigger is retained as a decision record and can be retried with the same key without double counting.
+- **Publication and dispatch both enforce controls:** publication rejects missing or invalid values and validates the reservation-table configuration; dispatch re-checks the published revision and current counters inside the admission transaction. The database uniqueness constraint and row locks enforce atomic reservation, while the service performs the live limit comparisons.
 
 1. **The delivery flow is acyclic:** Every relationship of type `flow` belongs to the primary delivery flow. The directed subgraph formed by all `flow` edges must be a Directed Acyclic Graph (DAG). Any draft containing a cycle among `flow` edges is rejected by the graph validator at save and publish time.
 2. **Improvement loops are modeled as control sidecars:** An `improvement_loop` is never placed as an inline node on a `flow` edge. It sits adjacent to the flow as an autonomous observer. It reads signals via `feeds_back_to` or metric streams, and acts upon capabilities or queues through `controls` or asynchronous trigger actions.
@@ -412,7 +455,7 @@ System Maps enforces strict loop semantics:
 ## 5. Data Contracts, Attribution & Provenance
 
 ### 5.1 Snapshot Attribution Freezing (Beta implementation contract)
-A pipeline run must not guess its position in the organizational delivery system at runtime. At run initialization, the trigger engine will evaluate the organization's published System Map and resolve the matching `pipeline` node, if one exists.
+A pipeline run must not guess its position in the organizational delivery system at runtime. At run initialization, the trigger engine uses the explicit System Map binding carried by the trigger or action pipeline. It does not search all published maps or select a row by query order. Because an organisation may publish multiple maps and a map may contain multiple nodes bound to the same pipeline, an admission without one explicit binding is ambiguous and is rejected with an attribution error. There is no implicit default-map fallback. A run that is intentionally outside System Maps may be created only when the caller marks it `unattributed`; it is then shown as unknown provenance and is never assigned to a map node after the fact.
 
 This is **Beta implementation work**, not a claim about fields that exist in the current `Run` or `PipelineSnapshot` models. The proposed frozen attribution block is the following object, stored in the immutable `PipelineSnapshot` for the run:
 
@@ -427,11 +470,12 @@ This is **Beta implementation work**, not a claim about fields that exist in the
 
 Contract:
 
-- Every field is nullable. An unmapped run stores `null` for all four fields.
-- A mapped run stores all four fields: the parent System Map UUID, the published revision UUID active at trigger time, the projected node UUID, and the node key (1-128 characters).
+- `system_map_id`, `system_map_revision_id`, and `system_map_node_id` are nullable only for an explicitly `unattributed` run. `system_map_node_key` is nullable with them. A mapped run stores all four fields: the parent map UUID, the published revision UUID active at trigger time, the projected node UUID, and the node key (1-128 characters).
+- The trigger or action-pipeline binding supplies the target `system_map_id` and `system_map_node_key` (or the exact node UUID). Validation resolves exactly one published revision and one node in that map. Zero matches, multiple matches, a binding to a different organisation, or a binding that is not permitted by scope rejects run admission. Query order is never a tie-breaker.
 - The trigger engine writes the block once, when it creates the run snapshot, before execution begins. It does not resolve the current map again during execution or terminalization.
 - The block is immutable for the lifetime of the run. Editing, republishing, or archiving a System Map cannot change an existing run's attribution.
 - A future relational projection may also store the same values on `Run`, but `PipelineSnapshot` is the source of truth for the frozen attribution contract. The implementation must not read a live `system_map_nodes` row to reconstruct historical attribution.
+- Validation requires every map-bound trigger and action pipeline to carry this explicit binding. Validation also requires an explicit `unattributed` choice for intentionally unbound execution. The provenance record retains that choice, so an unmatched or rejected attribution is not silently converted into a node match.
 
 ### 5.2 Attribution Storage in `run_daily_facts` (Beta implementation contract)
 Analytics and System Overview queries must survive raw run retention without joining the `runs` table. This is also **Beta implementation work**. The durable historical identity retained in `run_daily_facts` is the three-value tuple `system_map_id`, `system_map_revision_id`, and `system_map_node_key`. The projected `system_map_node_id` remains part of the run or snapshot source of truth when needed, but is not copied into the facts table or required for fact completeness. A `node_key` is revision-local by design: it remains meaningful after the physical node row, topology projection, or archived revision is no longer available, while the map and revision IDs identify the exact historical namespace in which that key was used.
@@ -468,19 +512,21 @@ Every metric or evidence item displayed on a System Map node carries exactly one
 | `observed` | Modulo directly recorded the external event or response, or directly measured the runtime fact. | **Observed** - run completed at 14:03; connector received HTTP 200. |
 | `reported` | An agent, external system, connector payload, webhook, or operator asserted a claim that Modulo has not independently verified. | **Reported** - GitHub says the pull request merged. |
 | `derived` | Modulo calculated the value deterministically from observed facts. | **Derived** - p95 latency calculated from terminal run facts. |
-| `unknown` | The value is unavailable, contradictory, stale beyond its validity window, or otherwise cannot be classified reliably. | **Unknown** - source unavailable or conflicting. |
+| `unknown` | Modulo cannot classify the value reliably because it is unavailable, contradictory, stale beyond its validity window, or missing required attribution. | **Unknown** - source unavailable, conflicting, or unattributed. |
 
-Receipt and content have separate provenance. Modulo may **observe** that a self-report envelope arrived, including its sender, timestamp, signature status, and raw receipt metadata. The claim inside that envelope remains **reported** unless Modulo independently records the underlying event. The UI therefore renders separate badges rather than upgrading the claim: for example, `Envelope observed` beside `Claim reported`, with `Derived` shown only for calculations based on observed facts. An unavailable or contradictory source is labelled `Unknown`, never silently treated as zero or observed.
+`unknown` is a required displayed provenance badge. Evidence rows and aggregate cards render it exactly as **Unknown**, never as a blank, zero, `Unobserved`, or an inferred node value. `observed`, `reported`, and `derived` render as **Observed**, **Reported**, and **Derived** respectively. Each badge tooltip names the source and calculation path when available, and says why the value is unknown when it is not.
 
-These labels prevent self-reported external data from being mistaken for Modulo's own audit evidence. The evidence drawer and aggregate cards use the same four labels, with a tooltip containing the source and calculation path.
+Receipt and content have separate provenance. Modulo may **observe** that a self-report envelope arrived, including its sender, timestamp, signature status, and raw receipt metadata. The claim inside that envelope remains **reported** unless Modulo independently records the underlying event. The UI therefore renders separate badges rather than upgrading the claim: for example, `Envelope observed` beside `Claim reported`, with `Derived` shown only for calculations based on observed facts.
 
+`Unobserved` is not a provenance value. It is a separate coverage/data-state label that means the node or external capability has no active telemetry observation for the selected period. It renders as **Unobserved** beside the provenance badge when applicable. A missing metric therefore renders **Unknown** for provenance plus **Unobserved** for coverage, while an explicitly unattributed run renders **Unknown** plus **Unattributed**. Neither state is coerced to zero or silently treated as observed.
 
 ### 5.4 Honest Reporting of Missing Data
 When a pipeline or execution path is not mapped to a System Map, or when an external step lacks telemetry:
 - Modulo never coerces missing metrics to zero.
-- Unmapped runs are grouped under an explicit `Unattributed Flow` category.
-- Nodes lacking active telemetry instrumentation display an `Unobserved` status chip.
-- Dashboard totals separate observed throughput from unattributed throughput.
+- Unmapped runs are grouped under an explicit `Unattributed Flow` category and carry an **Unknown** provenance badge.
+- Nodes lacking active telemetry instrumentation display an **Unobserved** coverage/data-state label, independently of their provenance badge.
+- Dashboard totals separate observed throughput, reported throughput, derived aggregates, and unknown or unattributed throughput.
+- Evidence and aggregate views always show a provenance badge, including **Unknown** when the source is missing.
 
 ---
 
@@ -597,7 +643,7 @@ Clicking any node on the System Map opens the **Node Inspector** drawer on the r
   - Recent run history with status chips, trigger types, and execution origins.
   - Drill-down links to raw run execution views (`/runs/:id`).
   - Optional work-item references (PR numbers, commit SHAs, issue keys) associated with runs passing through this node.
-  - Provenance badges (`observed`, `derived`, `reported`) on each listed data item.
+  - Provenance badges (`Observed`, `Derived`, `Reported`, or required `Unknown`) on each listed data item, plus `Unobserved` when the coverage/data state has no active telemetry.
 
 ---
 
@@ -814,7 +860,7 @@ Several underlying technical components remain sound and will be retained.
 | **Query Contention on Live Dashboard** | Frequent polling of System Maps dashboard overloads the PostgreSQL database. | Query analytics facts (`run_daily_facts`) and cached active run counts; never run unindexed full-table scans over raw `runs` or `audit_events`. |
 | **Graph Clutter & Sprawl** | Large enterprises model hundreds of nodes, turning the canvas into an illegible tangle. | Enforce hierarchical `system_boundary` containment; support drill-down sub-maps; provide collapsed subsystem nodes. |
 | **False-Positive Bottleneck Alerts** | Normal batch cadences (e.g. nightly builds) trigger spurious bottleneck warnings. | Require minimum sample sizes and observation windows before flagging a queue as stalled or bottlenecked. |
-| **Runaway Improvement Loops** | An autonomous improvement loop spins out of control, generating dozens of conflicting PRs. | Hard DB-enforced constraints: mandatory cooldown windows, monthly spend caps, and maximum concurrent runs per loop. |
+| **Runaway Improvement Loops** | An autonomous improvement loop spins out of control, generating dozens of conflicting PRs. | Atomic admission reservations under database row locks, a unique loop-plus-admission idempotency key, and transactionally reconciled cooldown, monthly budget, and concurrency reservations. |
 | **Data Sync Drift with Issue Trackers** | Work-item keys displayed in the Evidence Drawer drift out of sync with external trackers. | Work items are non-authoritative drill-down references; Modulo never writes back ticket status to external trackers. |
 
 ### 11.3 Open Architecture & Product Decisions
