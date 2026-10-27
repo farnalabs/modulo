@@ -11,7 +11,7 @@ describe('AdminSystemOrgsView', () => {
     expect(wrapper.text()).toContain('POST /api/v1/admin/orgs')
     expect(wrapper.text()).toContain('{ "name": "...", "slug": "..." }')
     expect(wrapper.text()).toContain('Create User in Organisation')
-    expect(wrapper.text()).toContain('POST /api/v1/admin/orgs//users')
+    expect(wrapper.text()).toContain('POST /api/v1/admin/orgs/{org_id}/users')
     expect(wrapper.text()).toContain('admin')
     expect(wrapper.text()).toContain('operator')
     expect(wrapper.text()).toContain('runner')
