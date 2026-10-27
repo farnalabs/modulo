@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1707,6 +1708,46 @@ def test_installer_rejects_symlinked_checksum_parent_before_install_mutation(tmp
     assert result.returncode != 0
     assert "unsafe or missing artifact path 'nested/artifact.txt'" in result.stderr
     assert not (tmp_path / "install").exists()
+
+
+@pytest.mark.parametrize("listed_name", ["foo\\bar", "C:\\foo", "C:/foo", "\\\\server\\share"])
+def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesystem_access(
+    tmp_path: Path, listed_name: str
+) -> None:
+    """The shell verifier must enforce Python's Windows-path policy itself.
+
+    The extracted function is run with a deliberately nonexistent bundle root.
+    A rejection mentioning the unsafe manifest path proves validation happens
+    before the final ``SHA256SUMS`` redirect or any artifact lookup.
+    """
+    source = (Path(__file__).resolve().parents[4] / "scripts" / "install.sh").read_text(encoding="utf-8")
+    function_start = source.index("verify_sums_in_dir() {")
+    function_end = source.index("\n\nvalidate_legacy_shim_collision()", function_start)
+    verifier = source[function_start:function_end]
+    sums_dir = tmp_path / "bundle"
+    sums_dir.mkdir()
+    manifest = sums_dir / "SHA256SUMS"
+    manifest.write_text(f"{'a' * 64}  {listed_name}\n", encoding="utf-8")
+    harness = tmp_path / "verify.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "die() { printf 'ERROR: %b\\n' \"$*\" >&2; exit 1; }\n"
+        "sha256_of() { die 'sha256_of must not be reached'; }\n"
+        f"{verifier}\n"
+        f"verify_sums_in_dir {shlex.quote(str(sums_dir))}\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    bash_bin = shutil.which("bash")
+    assert bash_bin is not None
+    result = subprocess.run(  # noqa: S603 - resolved bash and test-owned harness
+        [bash_bin, str(harness)], capture_output=True, text=True, timeout=30, check=False
+    )
+    assert result.returncode != 0
+    assert "unsafe artifact path" in result.stderr
+    assert "sha256_of must not be reached" not in result.stderr
+    assert "No such file" not in result.stderr
 
 
 def test_installer_rejects_legacy_shim_before_install_root_mutation(tmp_path: Path) -> None:

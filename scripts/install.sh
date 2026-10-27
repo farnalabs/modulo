@@ -164,7 +164,7 @@ verify_sums_in_dir() {
     [[ "${sum}" =~ ^[[:xdigit:]]{64}$ && "${path}" != "${line}" && -n "${path}" ]] || \
       die "bundle integrity check FAILED: malformed SHA256SUMS line '${line}'"
     case "${path}" in
-      /* | ../* | */../* | */.. | . | .. | *// | */)
+      *\\* | [[:alpha:]]:[/\\]* | ../* | */../* | */.. | . | .. | /* | *// | */)
         die "bundle integrity check FAILED: unsafe artifact path '${path}'"
         ;;
     esac
