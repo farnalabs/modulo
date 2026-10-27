@@ -1235,6 +1235,7 @@ async def admin_update_user(
             detail="Cannot deactivate yourself",
         )
 
+    org_role = ""
     try:
         # This endpoint owns the mutation transaction.  A nested savepoint would
         # release the role/deactivation writes when the surrounding request
@@ -1365,7 +1366,6 @@ async def admin_update_user(
 
         _raise_this_feature_not_available()
 
-    org_role = req.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
     return _to_user_list_item(account, org_role, org_membership=target_membership)
 
 
