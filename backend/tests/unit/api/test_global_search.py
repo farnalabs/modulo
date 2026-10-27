@@ -229,6 +229,23 @@ class TestGlobalSearchEndpoint:
         assert body["results"][0]["url"] == f"/pipelines/{pipe_id}"
         assert body["total_by_type"]["pipeline"] == 1
 
+    def test_ordinary_admin_search_excludes_lifecycle_maps(self, client: TestClient, mock_db: AsyncMock) -> None:
+        mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
+        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
+            resp = client.get("/api/v1/admin/search?q=map&type=library")
+        assert resp.status_code == 200
+        assert not resp.json()["results"]
+        query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
+        assert query_params[0]["include_lifecycle_maps"] is False
+
+    def test_internal_admin_search_includes_lifecycle_maps(self, client: TestClient, mock_db: AsyncMock) -> None:
+        mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
+        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+            resp = client.get("/api/v1/admin/search?q=map&type=library")
+        assert resp.status_code == 200
+        query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
+        assert query_params[0]["include_lifecycle_maps"] is True
+
     def test_all_types_search(self, client: TestClient, mock_db: AsyncMock) -> None:
         pipe_id = uuid.uuid4()
         run_id = uuid.uuid4()

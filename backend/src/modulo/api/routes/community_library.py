@@ -21,7 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
-from modulo.api.routes.library import LibraryPrimitiveResponse
+from modulo.api.routes.library import (
+    LibraryPrimitiveResponse,
+    _can_access_lifecycle_map_primitives,
+    _require_lifecycle_map_internal_access,
+)
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -42,6 +46,17 @@ router = APIRouter(prefix="/api/v1/libraries/community", tags=["community-librar
 _log = logging.getLogger(__name__)
 
 _CODE_COMMUNITY_LIBRARY_INSTALL = "community_library.install"
+_LIFECYCLE_MAP_PRIMITIVE_TYPE = "lifecycle_map"
+
+
+def _can_access_lifecycle_map_community(
+    principal: TenantPrincipal,
+) -> bool:
+    """Return whether this caller may see internal lifecycle-map primitives."""
+    return _can_access_lifecycle_map_primitives(
+        principal,
+        dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+    )
 
 
 async def _community_objects_enabled(session: AsyncSession, org_id: UUID) -> bool:
@@ -84,6 +99,8 @@ async def list_community(
     synced_at: str | None = None
     try:
         items = await list_community_entries(session, principal.organisation_id)
+        if not _can_access_lifecycle_map_community(principal):
+            items = [item for item in items if item.get("type") != _LIFECYCLE_MAP_PRIMITIVE_TYPE]
         manifest = await get_cached_manifest(session)
         if isinstance(manifest, dict):
             generated = manifest.get("generated_at")
@@ -145,7 +162,9 @@ async def get_entry(
     except (ValueError, KeyError):
         _log.exception("community_library.get_entry")
         entry = None
-    if entry is None:
+    if entry is None or (
+        entry.get("type") == _LIFECYCLE_MAP_PRIMITIVE_TYPE and not _can_access_lifecycle_map_community(_principal)
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Community entry not found",
@@ -178,6 +197,14 @@ async def install(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_MSG_COMMUNITY_LIBRARY_DISABLED,
         )
+    entry = await get_community_entry(session, entry_id)
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Community entry not found",
+        )
+    if entry.get("type") == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
+        _require_lifecycle_map_internal_access(principal)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
