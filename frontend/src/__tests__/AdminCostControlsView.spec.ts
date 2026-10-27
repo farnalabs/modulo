@@ -341,6 +341,45 @@ describe('AdminCostControlsView', () => {
     expect(settings.billingPeriod).toBe('quarterly')
     expect(settings.alertThresholds).toEqual([50, 90])
     expect(settings.circuitBreakerEnabled).toBe(true)
+
+    const circuitBreaker = wrapper.find('[data-testid="cc-circuit-breaker"] input').element as HTMLInputElement
+    expect(circuitBreaker.checked).toBe(true)
+    const currency = wrapper.find('[data-testid="cc-currency"]').text()
+    expect(currency).toContain('EUR')
+  })
+
+  it('blocks unchecking the last alert threshold and surfaces an error', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as any
+    vm.settings.alertThresholds = [50]
+    mockPut.mockClear()
+
+    await vm.toggleThreshold(50)
+
+    expect(mockPut).not.toHaveBeenCalled()
+    expect(vm.settings.alertThresholds).toEqual([50])
+    expect(wrapper.text()).toContain('At least one alert threshold must remain enabled')
+    wrapper.unmount()
+  })
+
+  it('shows locked state when feature is disabled', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({
+          data: { license: { tier: 'community', has_license_key: false, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'team', currently_active: false, depends_on: null }], would_activate: [] },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(AdminCostControlsView, {
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Available on higher plan tier')
+    wrapper.unmount()
   })
 
   it('sends snake_case keys when toggling circuit breaker', async () => {

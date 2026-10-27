@@ -83,6 +83,7 @@ function mountView() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // PageTabs resolves tier-locked state via the plan store (FAR-47).
   setActivePinia(createPinia())
   authState.isSystemAdmin = false
   if (routerMocks.query) delete routerMocks.query.scope
@@ -171,6 +172,9 @@ describe('AdminErrorsView', () => {
   })
 
   it('re-polls the scheduler-starvation endpoint every 60 seconds', async () => {
+    // The banner monitors a LIVE incident — a mount-only fetch (staleTime 30s,
+    // refetchOnWindowFocus off) would freeze exactly during the long wedge it
+    // exists to surface. The view re-polls every 60s.
     getMock.mockImplementation(async (path: string) => {
       if (path === '/api/v1/errors/scheduler-starvation') {
         return { items: [], total: 0, threshold_minutes: 10 }
@@ -229,6 +233,7 @@ describe('AdminErrorsView', () => {
     await flushPromises()
     await nextTick()
 
+    // The level/status/source Selects auto-apply on change — no Apply button.
     const vm = wrapper.vm as unknown as { filterLevel: string }
     vm.filterLevel = 'error'
     await nextTick()
@@ -248,6 +253,8 @@ describe('AdminErrorsView', () => {
 
     const truncated = wrapper.find('[data-testid="admin-errors-message-truncated"]')
     expect(truncated.exists()).toBe(true)
+    // The inline-span bug: truncate only applies to block-level boxes, so the
+    // element must carry truncate + a max-width bound (flex item is blockified).
     expect(truncated.classes()).toContain('truncate')
     expect(truncated.classes()).toContain('max-w-xs')
     expect(truncated.classes()).not.toContain('whitespace-normal')
@@ -274,6 +281,7 @@ describe('AdminErrorsView', () => {
     expect(wrapper.find('[data-testid="admin-errors-message-truncated"]').exists()).toBe(false)
     const full = wrapper.find('[data-testid="admin-errors-message-full"]')
     expect(full.exists()).toBe(true)
+    // Expanded message wraps within the bounded column instead of stretching it.
     expect(full.classes()).toContain('whitespace-normal')
     expect(full.classes()).toContain('break-words')
     expect(full.classes()).toContain('max-w-xs')
@@ -312,6 +320,9 @@ describe('AdminErrorsView', () => {
     await nextTick()
 
     const toggle = wrapper.find('[data-testid="admin-errors-expand-eg-long-1"]')
+    // The DataTable row forwards keydown (Enter/Space) to row navigation; the
+    // button must stop propagation so keyboard activation stays local. The
+    // explicit key payload matches DataTable's `event.key === 'Enter'` check.
     await toggle.trigger('keydown', { key: 'Enter' })
     await nextTick()
     expect(routerMocks.push).not.toHaveBeenCalled()
@@ -403,17 +414,21 @@ describe('AdminErrorsView', () => {
     await flushPromises()
     await nextTick()
 
+    // Organisation is the default; the block renders and the hint is absent.
     expect(wrapper.find('[data-testid="admin-errors-scope"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="admin-errors-scope-organisation"]').attributes('aria-pressed')).toBe('true')
     expect(wrapper.find('[data-testid="admin-errors-scope-hint"]').exists()).toBe(false)
 
     const vm = wrapper.vm as unknown as { setScope: (s: 'organisation' | 'instance') => void }
+    // No-op when re-selecting the active scope.
     vm.setScope('organisation')
     expect(routerMocks.push).not.toHaveBeenCalled()
 
     vm.setScope('instance')
     expect(routerMocks.push).toHaveBeenCalledWith({ path: '/admin/errors', query: { scope: 'instance' } })
 
+    // Driving the reactive route query flips the computed scope -> watcher
+    // resets pagination/expand state and reloads through the new endpoint.
     routerMocks.query!.scope = 'instance'
     await nextTick()
     await flushPromises()

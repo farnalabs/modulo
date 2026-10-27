@@ -328,30 +328,53 @@ describe('LibraryView', () => {
     await router.push('/library')
     const wrapper = mount(LibraryView, { global: { plugins: [router] } })
     await nextTick(); await nextTick()
+
+    // The type-filter dropdown opens on click and closes on an outside mousedown.
     await wrapper.get('[data-testid="library-type-filter-button"]').trigger('click')
+    expect(wrapper.find('[data-testid="library-type-filter-dropdown"]').exists()).toBe(true)
     document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     await nextTick()
+    expect(wrapper.find('[data-testid="library-type-filter-dropdown"]').exists()).toBe(false)
+
+    const pagesRequested = () =>
+      getMock.mock.calls
+        .map((c: unknown[]) => (c[1] as { params?: { query?: { page?: number } } })?.params?.query?.page)
+        .filter((p): p is number => typeof p === 'number')
+
     await wrapper.get('[data-testid="library-next-page"]').trigger('click')
     await nextTick(); await nextTick()
+    expect(pagesRequested()).toContain(2)
+
     await wrapper.get('[data-testid="library-previous-page"]').trigger('click')
     await nextTick(); await nextTick()
-    expect(getMock).toHaveBeenCalled()
+    expect(pagesRequested().slice(-1)).toEqual([1])
     wrapper.unmount()
   })
 
   it('handles lifecycle-map API error and toggle response without data', async () => {
     const lifecycle = { ...NATIVE_ITEM, id: 'lm-err', primitive_type: 'lifecycle_map' }
     getMock.mockResolvedValue({ items: [lifecycle], total: 1, page: 1, page_size: 12 })
-    postMock.mockResolvedValueOnce({ detail: 'lifecycle denied' })
+    postMock.mockRejectedValueOnce(new Error('lifecycle denied'))
     await router.push('/library')
     const wrapper = mount(LibraryView, { global: { plugins: [router] } })
     await nextTick(); await nextTick()
     const vm = wrapper.vm as any
+
     await vm.createLifecycleMap(lifecycle)
     await flushPromises()
-    expect(wrapper.exists()).toBe(true)
-    patchMock.mockResolvedValueOnce({ data: undefined })
-    await vm.toggleAutoUpdate(NATIVE_ITEM)
+    expect(wrapper.text()).toContain('lifecycle denied')
+    expect(vm.adapting['lm-err']).toBe(false)
+
+    patchMock.mockResolvedValueOnce(undefined)
+    await vm.toggleAutoUpdate(lifecycle)
+    expect(patchMock).toHaveBeenCalledWith('/api/v1/libraries/{primitive_id}', {
+      params: { path: { primitive_id: 'lm-err' } },
+      body: { auto_update: false },
+    })
+    // An undefined response body must not replace the primitive, and the
+    // per-row spinner must still be cleared.
+    expect(vm.primitives.find((p: { id: string }) => p.id === 'lm-err').auto_update).toBe(true)
+    expect(vm.toggleLoading['lm-err']).toBe(false)
     wrapper.unmount()
   })
 

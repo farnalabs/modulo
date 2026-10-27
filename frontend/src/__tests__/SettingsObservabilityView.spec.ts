@@ -86,6 +86,18 @@ describe('SettingsObservabilityView', () => {
     expect(wrapper.text()).toContain('Observability')
   })
 
+  it('shows locked message when observability is disabled by plan', async () => {
+    // Mount without the FeatureGate passthrough stub so the real gate renders
+    // its locked composition; the default GET mock returns no active flag.
+    const wrapper = mount(SettingsObservabilityView, {
+      global: { plugins: [createPinia()] },
+    })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Available on higher plan tier')
+  })
+
   it('shows loading skeleton while fetching settings', async () => {
     vi.mocked(api.GET as unknown as () => Promise<unknown>).mockReturnValue(new Promise(() => {}))
 
