@@ -323,6 +323,86 @@ def test_manifest_artifact_name_escape_refuses(tmp_path: Path, test_trust_store:
         verify_artifacts(tmp_path, verified)
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "/etc/passwd",
+        r"C:\\Windows\\System32\\drivers\\etc\\hosts",
+        r"\\\\server\\share\\artifact.tgz",
+        "nested//artifact.tgz",
+        "nested/./artifact.tgz",
+        "nested/../artifact.tgz",
+    ],
+)
+def test_signed_manifest_rejects_non_bundle_path_shapes(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict, name: str
+) -> None:
+    body = _manifest_body(artifact_count=1)
+    body["artifacts"][0]["name"] = name
+    payload = json.dumps(body, indent=2, sort_keys=True).encode("utf-8")
+    manifest_path = tmp_path / manifest_module.MANIFEST_NAME
+    signature_path = tmp_path / manifest_module.SIGNATURE_NAME
+    manifest_path.write_bytes(payload)
+    signature_path.write_text(
+        json.dumps(
+            sign_release_bytes(payload, key_id=_KEY_ID_CURRENT, private_key_hex=test_signing_keys[_KEY_ID_CURRENT])
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ManifestSecurityError, match="escapes the bundle root"):
+        verify_release_from_files(
+            manifest_path=manifest_path,
+            signature_path=signature_path,
+            artifacts_root=tmp_path,
+            artifact_names=[name],
+            trust_store=test_trust_store,
+        )
+
+
+def test_signed_manifest_rejects_symlinked_parent(tmp_path: Path) -> None:
+    parent = tmp_path / "nested"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    parent.symlink_to(outside, target_is_directory=True)
+    manifest = ReleaseManifest(
+        release="bundle-v1.2.0",
+        platform="linux-amd64",
+        generated_at="2026-09-10T00:00:00Z",
+        components={},
+        artifact_checksums={"nested/artifact.tgz": ("0" * 64, "1.2.0")},
+    )
+    with pytest.raises(ManifestSecurityError, match="symlinked parent"):
+        verify_artifacts(tmp_path, manifest)
+
+
+def test_signed_manifest_rejects_final_symlink_and_nonregular_artifacts(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.tgz"
+    outside.write_text("external", encoding="utf-8")
+    symlink = tmp_path / "symlink.tgz"
+    symlink.symlink_to(outside)
+    manifest = ReleaseManifest(
+        release="bundle-v1.2.0",
+        platform="linux-amd64",
+        generated_at="2026-09-10T00:00:00Z",
+        components={},
+        artifact_checksums={"symlink.tgz": ("0" * 64, "1.2.0")},
+    )
+    with pytest.raises(ManifestSecurityError, match="not a regular file"):
+        verify_artifacts(tmp_path, manifest)
+
+    directory = tmp_path / "directory.tgz"
+    directory.mkdir()
+    directory_manifest = ReleaseManifest(
+        release=manifest.release,
+        platform=manifest.platform,
+        generated_at=manifest.generated_at,
+        components={},
+        artifact_checksums={"directory.tgz": ("0" * 64, "1.2.0")},
+    )
+    with pytest.raises(ManifestSecurityError, match="not a regular file"):
+        verify_artifacts(tmp_path, directory_manifest)
+
+
 # ---------------------------------------------------------------------------
 # --from-file path: verify_release_from_files (offline/corporate installs)
 # ---------------------------------------------------------------------------

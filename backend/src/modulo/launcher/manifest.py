@@ -48,6 +48,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -233,6 +235,47 @@ def verify_manifest(
     return manifest
 
 
+_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:")
+
+
+def _resolve_bundle_artifact(root: Path, name: str) -> Path:
+    """Validate *name* before resolving or touching any bundle filesystem path."""
+    parts = name.split("/")
+    if (
+        not name
+        or "\\" in name
+        or name.startswith(("/", "//"))
+        or _WINDOWS_DRIVE_PATH.match(name)
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        raise ManifestSecurityError(f"artifact name escapes the bundle root: {name!r}")
+
+    root_resolved = root.resolve(strict=True)
+    current = root
+    for part in parts[:-1]:
+        current = current / part
+        try:
+            current_stat = current.lstat()
+        except OSError as exc:
+            raise ManifestSecurityError(f"artifact '{name}' missing from the bundle") from exc
+        if stat.S_ISLNK(current_stat.st_mode):
+            raise ManifestSecurityError(f"artifact name uses a symlinked parent: {name!r}")
+        if not stat.S_ISDIR(current_stat.st_mode):
+            raise ManifestSecurityError(f"artifact parent is not a directory: {name!r}")
+
+    artifact = current / parts[-1]
+    try:
+        artifact_stat = artifact.lstat()
+    except OSError as exc:
+        raise ManifestSecurityError(f"artifact '{name}' missing from the bundle") from exc
+    if stat.S_ISLNK(artifact_stat.st_mode) or not stat.S_ISREG(artifact_stat.st_mode):
+        raise ManifestSecurityError(f"artifact '{name}' is not a regular file")
+    resolved = artifact.resolve(strict=True)
+    if not resolved.is_relative_to(root_resolved):
+        raise ManifestSecurityError(f"artifact name escapes the bundle root: {name!r}")
+    return resolved
+
+
 def verify_artifacts(root: Path, manifest: ReleaseManifest) -> None:
     """Verify every listed artifact's sha256 against the on-disk bundle.
 
@@ -241,16 +284,12 @@ def verify_artifacts(root: Path, manifest: ReleaseManifest) -> None:
     the artifacts. A missing artifact file is a failure, never a skip.
     """
     for name, (expected, _version) in sorted(manifest.artifact_checksums.items()):
-        artifact = root / name
-        if artifact.name.split("/")[-1] != Path(name).name or ".." in Path(name).parts:
-            raise ManifestSecurityError(f"artifact name escapes the bundle root: {name!r}")
-        if not artifact.is_file():
-            raise ManifestSecurityError(f"artifact '{name}' missing from the bundle")
+        artifact = _resolve_bundle_artifact(root, name)
         actual = _digest_of(artifact)
         if actual != expected:
             raise ManifestSecurityError(
                 f"artifact '{name}' sha256 MISMATCH: expected {expected}, got {actual} — do not "
-                "use this download; report it at https://github.com/farnalabs/modulo/issues"
+                f"use this download; report it at https://github.com/farnalabs/modulo/issues"
             )
 
 
@@ -329,14 +368,13 @@ def verify_release_from_files(
         verify_artifacts(artifacts_root, manifest)
     else:
         for name in artifact_names:
-            _verify_single_artifact(artifacts_root / name, manifest, name)
+            _verify_single_artifact(artifacts_root, manifest, name)
     return manifest
 
 
-def _verify_single_artifact(artifact: Path, manifest: ReleaseManifest, name: str) -> None:
+def _verify_single_artifact(root: Path, manifest: ReleaseManifest, name: str) -> None:
     expected = manifest.checksum_for(name)
-    if not artifact.is_file():
-        raise ManifestSecurityError(f"artifact '{name}' listed in the manifest is MISSING from {artifact.parent}")
+    artifact = _resolve_bundle_artifact(root, name)
     actual = _digest_of(artifact)
     if actual != expected:
         raise ManifestSecurityError(f"artifact '{name}' sha256 MISMATCH: expected {expected}, got {actual}")
