@@ -97,6 +97,31 @@ class TestCanonicalManifestBytes:
         reordered = {"schema_version": "1", "entries": [{"id": "a"}], "revoked": [{"id": "x"}]}
         assert canonical_manifest_bytes(manifest) == canonical_manifest_bytes(reordered)
 
+    def test_non_ascii_is_emitted_as_literal_utf8(self) -> None:
+        """``ensure_ascii=False`` is the vendor↔verifier interop contract.
+
+        The hosted library signs these exact bytes, so an ``ensure_ascii=True``
+        regression would keep every self-signed manifest in this repo verifying
+        while rejecting each real non-ASCII entry as a bad signature.
+        """
+        manifest = {
+            "schema_version": "1",
+            "entries": [{"id": "agent-1", "slug": "café"}],
+            "signature": {"algorithm": "ed25519", "value": "abc"},
+        }
+        expected = json.dumps(
+            {"schema_version": "1", "entries": [{"id": "agent-1", "slug": "café"}]},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        canonical = canonical_manifest_bytes(manifest)
+
+        assert canonical == expected
+        assert "café".encode() in canonical
+        assert b"\\u00e9" not in canonical
+
 
 class TestParseManifest:
     def test_extracts_entries_and_revoked(self) -> None:
@@ -117,3 +142,16 @@ class TestParseManifest:
         data = parse_manifest({"schema_version": "1"})
         assert not data.entries
         assert not data.revoked
+
+    @pytest.mark.parametrize("field", ["entries", "revoked"])
+    def test_tolerates_malformed_lists(self, field: str) -> None:
+        """A non-list value is dropped, not iterated character-by-character."""
+        data = parse_manifest({field: "not-a-list"})
+
+        assert getattr(data, field) == []
+
+    def test_degrades_non_string_scalars_to_none(self) -> None:
+        data = parse_manifest({"schema_version": 1, "generated_at": {"nested": True}})
+
+        assert data.schema_version is None
+        assert data.generated_at is None
