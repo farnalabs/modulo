@@ -294,8 +294,6 @@ export function getVisibleNavGroups(ctx: NavVisibilityContext): NavGroup[] {
 let _cachedGroups: NavGroup[] | null = null
 
 export function getNavGroups(): NavGroup[] {
-  if (_cachedGroups === null) {
-    _cachedGroups = buildSidebarGroups()
-  }
+  _cachedGroups ??= buildSidebarGroups()
   return _cachedGroups.map((g) => ({ ...g, items: [...g.items] }))
 }

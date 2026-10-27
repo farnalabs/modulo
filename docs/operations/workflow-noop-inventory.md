@@ -11,7 +11,7 @@ deploy runs that shipped nothing (2026-10-25), and FAR-528 before it (a
 throttled deploy green for two days).
 
 **A legitimate no-op is not a defect.** A docs-only change skipping the code
-jobs, an empty merge queue, a nightly canary with no release to verify — these
+jobs, an empty merge queue, a nightly canary with no release to verify – these
 are fine when nothing consumes the run as evidence that the work happened.
 
 ## The signalling convention: a named step, never a job output
@@ -19,37 +19,37 @@ are fine when nothing consumes the run as evidence that the work happened.
 The durable machine-readable outcome is a **step that runs only on the no-op
 path**. The Actions jobs API (`GET /repos/{owner}/{repo}/actions/runs/{id}/jobs`)
 returns each job's `steps` with `name` and `conclusion`, but **not** the job's
-`outputs` — verified against the live API on 2026-10-26 (the job object's keys
+`outputs` – verified against the live API on 2026-10-26 (the job object's keys
 contained `steps` and no `outputs`). So:
 
 * a job output is only visible **inside** the run (to `needs.<job>.outputs`);
 * a consumer looking at run history (a workflow, the app, a person) can only
-  read **step presence/conclusion** — or the job/run conclusion.
+  read **step presence/conclusion** – or the job/run conclusion.
 
 Both existing precedent and every fix here follow that: `deploy_run_attempts.py`
 reads the "Deploy to app.modulo.run" **job** conclusion, the k8s-conformance
 staleness job reads the "Run the runtime-provider conformance suite" **step**
 conclusion, and the FAR-2157 markers are dedicated steps. A future edit that
-replaces a marker with a job output silently disarms the signal — the guard suite
+replaces a marker with a job output silently disarms the signal – the guard suite
 `backend/tests/architecture/test_workflow_noop_signal.py` fails if it happens.
 
 ## Inventory
 
 | Workflow | Substantive work | Path to success without it | Machine-readable outcome | Summary says so | Consumers of the conclusion | Classification |
 |---|---|---|---|---|---|---|
-| `audit-chain-monitor.yml` | Verify the audit chain + 24h continuity | No admin credentials → every check skips | **Added:** `authenticated=false` + NOT RUN marker step | **Added:** NOT RUN summary | Operator / run history / **FAR-2160 escalation** (the next cycle reads the marker step's *conclusion* from run history) | **Masking — fixed; blind cycles escalate (FAR-2160)** |
+| `audit-chain-monitor.yml` | Verify the audit chain + 24h continuity | No admin credentials → every check skips | **Added:** `authenticated=false` + NOT RUN marker step | **Added:** NOT RUN summary | Operator / run history / **FAR-2160 escalation** (the next cycle reads the marker step's *conclusion* from run history) | **Masking – fixed; blind cycles escalate (FAR-2160)** |
 | `backup-restore-nightly.yml` | Backup → restore → downgrade → upgrade gate | None (every step runs) | Gate fails loudly | n/a | Operator | Legitimate |
 | `bdd.yml` | BDD/E2E suite | Docs/frontend-only PR → suite steps skip (`Detect changed paths`) | Step-level skip, documented | Log | PR checks (none required) | Legitimate no-op (nothing to run) |
-| `branch-fixer.yml` | Dispatch the Branch Fixer | None — always dispatches; a failed dispatch exits 1 | Dispatch result + fail | n/a | PR Housekeeper (re-drives from PR state) | Legitimate |
+| `branch-fixer.yml` | Dispatch the Branch Fixer | None – always dispatches; a failed dispatch exits 1 | Dispatch result + fail | n/a | PR Housekeeper (re-drives from PR state) | Legitimate |
 | `bundle-release.yml` | Version parity + build the single-install bundle | None | Fails loud | n/a | `release-unified.yml` (`workflow_call`) | Legitimate |
 | `changelog-classify.yml` | Classify the PR's changelog label | Job always exits 0 | **Check run** with the real verdict (neutral/success/failure) | Check title/summary | Merge queue `checks_pass` | Legitimate (verdict is a check) |
 | `ci.yml` | Lint/test/build gates | Path-gated jobs skip their steps for docs-only/frontend-only PRs | Step-level skip, documented; self-report is fail-open with a warning | Log | Merge queue CI gate, Branch Fixer | Legitimate no-op |
 | `codescene-analysis.yml` | CodeScene delta analysis | None (missing token fails) | Fails loud | n/a | Operator | Legitimate |
 | `dast-auth.yml` | Authenticated DAST scan | None (missing creds exit 1) | Fails loud | n/a | Operator | Legitimate |
 | `dast.yml` | Baseline DAST scan | Never fails on findings **by design** | ZAP report artefact | Summary | Enforcement is deploy.yml's `dast-gate` | Legitimate (documented report-only) |
-| `deploy-staleness-check.yml` | Prod staleness + consecutive-failure escalation | Every source unreadable → `healthy` empty, verdict step skipped | **Added:** UNKNOWN-tick marker step | **Added:** NOT MEASURED summary | Its own next tick (transition email state vector) | **Masking — fixed** |
-| `deploy-watchdog.yml` | Fly-level self-heal / re-dispatch | Same UNKNOWN verdict shape | **Added:** UNKNOWN-tick marker step; explicit verdicts elsewhere | **Added:** NOT MEASURED summary | Its own next tick | **Masking — fixed** |
-| `deploy.yml` | Staging + prod deploy | Throttle / already-in-progress → success, nothing shipped | `deployed` output + `NO DEPLOY` markers (FAR-2152 / PR #2405) | Yes (`NO DEPLOY — …`) | deploy-staleness-check, deploy-watchdog, weekly report | **Masking — fixed in #2405 (not redone)** |
+| `deploy-staleness-check.yml` | Prod staleness + consecutive-failure escalation | Every source unreadable → `healthy` empty, verdict step skipped | **Added:** UNKNOWN-tick marker step | **Added:** NOT MEASURED summary | Its own next tick (transition email state vector) | **Masking – fixed** |
+| `deploy-watchdog.yml` | Fly-level self-heal / re-dispatch | Same UNKNOWN verdict shape | **Added:** UNKNOWN-tick marker step; explicit verdicts elsewhere | **Added:** NOT MEASURED summary | Its own next tick | **Masking – fixed** |
+| `deploy.yml` | Staging + prod deploy | Throttle / already-in-progress → success, nothing shipped | `deployed` output + `NO DEPLOY` markers (FAR-2152 / PR #2405) | Yes (a `NO DEPLOY` marker in the summary) | deploy-staleness-check, deploy-watchdog, weekly report | **Masking – fixed in #2405 (not redone)** |
 | `determination-eval.yml` | Score determination fixtures | None | Fails loud | Log | Operator | Legitimate |
 | `duplicate-delivery-guard.yml` | Warn on duplicate open PR titles | Guard not on the base commit yet (self-bootstrap) | `::warning::`, documented as expected | Log | PR checks | Legitimate (short-lived self-bootstrap) |
 | `fast-lane-post-merge-audit.yml` | Audit that fast-lane merges got a review | No fast-lane merges in the window | Step log | Log | Operator | Legitimate no-op |
@@ -57,18 +57,18 @@ replaces a marker with a job output silently disarms the signal — the guard su
 | `fast-lane-suspension.yml` | Record a suspension marker from a comment | Comment lacks the marker (trigger filter) | Log | Log | Operator | Legitimate (trigger-filtered) |
 | `flyctl-version-drift.yml` | Detect a stale flyctl pin | Pin current and no open issue | Fails loud on unknown; "nothing to do" in summary | Yes | Operator | Legitimate |
 | `issue-notify.yml` | Email on a new external issue | Issue is internal / from a bot | Log; send failure exits 1 | Log | Operator | Legitimate (no notification needed) |
-| `k8s-conformance.yml` | Kind + managed conformance gate | Path-filtered kind leg skips the suite | **Staleness job reads the suite STEP conclusion** (FAR-1620) | Yes | The workflow's own staleness job | Legitimate (consumer measures the artefact — exemplar) |
+| `k8s-conformance.yml` | Kind + managed conformance gate | Path-filtered kind leg skips the suite | **Staleness job reads the suite STEP conclusion** (FAR-1620) | Yes | The workflow's own staleness job | Legitimate (consumer measures the artefact – exemplar) |
 | `main-integration.yml` | Integration tests on main | None | Fails loud | n/a | Operator | Legitimate |
 | `merge-queue-watchdog.yml` | Detect/cancel stuck queue runs, re-arm | Healthy queue → no action | Emits alert outputs; **section 5 measures the last merged PR** | Yes | Operator / Linear | Legitimate (consumer measures merges) |
-| `merge-queue.yml` | Merge approved + green PRs | No approved PRs, or approved but none mergeable → merges nothing | **Added:** `NO MERGE` summary on both no-op paths (step presence on the no-op path) | **Added** | merge-queue-watchdog (already measures merged PRs) | **Masking (legibility) — fixed** |
+| `merge-queue.yml` | Merge approved + green PRs | No approved PRs, or approved but none mergeable → merges nothing | **Added:** `NO MERGE` summary on both no-op paths (step presence on the no-op path) | **Added** | merge-queue-watchdog (already measures merged PRs) | **Masking (legibility) – fixed** |
 | `mutation-testing.yml` | Weekly mutation baseline | None | Fails loud | Report | Operator | Legitimate |
-| `native-gate0.yml` | Offline bundle boot proof on PRs | None — asserts every precondition | Fails loud | Log | PR checks | Legitimate (exemplar) |
-| `native-release-smoke.yml` | Install + smoke a published bundle | (a) No published `bundle-v*` release → canary skip; (b) a `workflow_dispatch` with NEITHER `canary_version` NOR `rollback_version` → no verification job is eligible, so only housekeeping runs | (a) `::notice::`, documented "honestly not applicable"; (b) **Added:** `dispatch-guard` job fails with an `::error::` naming both inputs | (a) Log; (b) error annotation | (a) `canary-housekeeping` deliberately treats it as not-applicable; (b) operator | (a) Legitimate (documented); (b) **Masking — fixed (FAR-2161)** |
-| `pr-conflict-reconcile.yml` | Dispatch the fixer for conflicted PRs | `gh pr list` fails → fail-open skip | `api_failed` output + **Added:** NOTHING RECONCILED summary | **Added** | Operator | **Masking (minor) — fixed** |
+| `native-gate0.yml` | Offline bundle boot proof on PRs | None – asserts every precondition | Fails loud | Log | PR checks | Legitimate (exemplar) |
+| `native-release-smoke.yml` | Install + smoke a published bundle | (a) No published `bundle-v*` release → canary skip; (b) a `workflow_dispatch` with NEITHER `canary_version` NOR `rollback_version` → no verification job is eligible, so only housekeeping runs | (a) `::notice::`, documented "honestly not applicable"; (b) **Added:** `dispatch-guard` job fails with an `::error::` naming both inputs | (a) Log; (b) error annotation | (a) `canary-housekeeping` deliberately treats it as not-applicable; (b) operator | (a) Legitimate (documented); (b) **Masking – fixed (FAR-2161)** |
+| `pr-conflict-reconcile.yml` | Dispatch the fixer for conflicted PRs | `gh pr list` fails → fail-open skip | `api_failed` output + **Added:** NOTHING RECONCILED summary | **Added** | Operator | **Masking (minor) – fixed** |
 | `pr-review.yml` | Dispatch the PR reviewer | Draft / dedup / superseded / manual-delivery / fork → no dispatch | `ready=false` output + `::notice::` | Log | PR Housekeeper re-drives from the **review artefact** | Legitimate (consumer measures the artefact) |
 | `publish-images.yml` | Publish container images to GHCR | None | Fails loud | n/a | Operator | Legitimate |
 | `rc-validate.yml` | Pen-test an RC against prod | None (missing secrets exit 1) | Fails loud | n/a | Operator | Legitimate |
-| `release-unified.yml` | Cut / recut / promote / dry-run | None — each mode has its jobs | Fails loud on every guard | Yes | Operator | Legitimate |
+| `release-unified.yml` | Cut / recut / promote / dry-run | None – each mode has its jobs | Fails loud on every guard | Yes | Operator | Legitimate |
 | `release.yml` | (retired entry point) | n/a | **Fails loudly**, naming the replacement | Log | Operator | Legitimate (deliberately red) |
 | `runner-ci-backstop.yml` | Weekly forced harness run | None | Fails loud | n/a | Operator | Legitimate |
 | `runner-ci-harness.yml` | Bundled-runner harness | Path filter skips when the surface is untouched | Skip documented; the weekly backstop forces it | Log | `runner-ci-backstop.yml` | Legitimate |
@@ -76,12 +76,12 @@ replaces a marker with a job output silently disarms the signal — the guard su
 | `signing-canary.yml` | Sign + verify a release artefact | Dispatch from a non-main branch skips (documented) | Log | Log | Operator | Legitimate (manual-only edge) |
 | `tier1b-nightly.yml` | Heavy Tier 1b suite | None | Fails loud | n/a | Operator | Legitimate |
 | `web-watchdog.yml` | Restart a wedged app machine | Machine healthy / state unknown → no action | **`no-op: …` in the job summary on every path** | Yes | Operator | Legitimate (exemplar) |
-| `workflow-lint.yml` | actionlint over the workflow tree | None — refuses to run without shellcheck | Fails loud when it would otherwise be blind | Log | PR checks | Legitimate (exemplar) |
+| `workflow-lint.yml` | actionlint over the workflow tree | None – refuses to run without shellcheck | Fails loud when it would otherwise be blind | Log | PR checks | Legitimate (exemplar) |
 
 Notes:
 
 * **`housekeeping`** (named as a candidate) is not a GitHub workflow in this
-  repo — it is the app-side housekeeping pipeline plus the local skill. Nothing
+  repo – it is the app-side housekeeping pipeline plus the local skill. Nothing
   to classify here; the workflow-lint/housekeeping distinction is not a workflow
   no-op.
 * **`deploy.yml`, `deploy-watchdog.yml` (throttled-run handling),

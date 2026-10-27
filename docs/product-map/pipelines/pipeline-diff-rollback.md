@@ -130,7 +130,7 @@ centralized authorization cleanup.
       who must approve the run), `timeout_seconds`, `template_id`,
       `model_class` and `single_pr_per_run` alongside the identity fields
       (`agent_id` / `label` / `role` / `node_type` / schema / connector /
-      environment bindings) and the port signature — so the restore dialog's embedded
+      environment bindings) and the port signature – so the restore dialog's embedded
       change summary cannot tell an operator a version pair is identical when
       the two graphs behave differently
       (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py::_compute_node_changes`,
@@ -147,7 +147,7 @@ centralized authorization cleanup.
       of RLS: `list_snapshots` (applied to BOTH the page query and its count, so
       the pair can never disagree about what is in scope), `delete_snapshot`,
       and `diff_snapshots` (which now resolves BOTH sides through the scoped
-      `get_snapshot_detail`, the same pattern `tag_snapshot` uses) — every REST
+      `get_snapshot_detail`, the same pattern `tag_snapshot` uses) – every REST
       route and the MCP `get_pipeline_diff` tool pass the caller's organisation,
       so an out-of-scope id resolves to `None` → 404 even on a layer where RLS
       context is missing
@@ -189,12 +189,12 @@ centralized authorization cleanup.
   (1) MAJOR, behaviour completeness: the per-field node comparison covered ONLY
   the identity fields plus bindings/schema/ports, so a version pair differing
   only in a node-level `hitl_config`, `timeout_seconds`, `template_id`,
-  `model_class` or `single_pr_per_run` was reported as MODIFIED-NOWHERE — the
+  `model_class` or `single_pr_per_run` was reported as MODIFIED-NOWHERE – the
   compare view said "No structural changes" and the restore dialog's embedded
   summary said there were no differences, for a graph that removes an approval
   gate or changes what a node executes. `_compute_node_changes` now compares
   those fields, and the edge comparison now covers `condition_expression`
-  (legacy `condition` normalised before comparison) — a routing-expression-only
+  (legacy `condition` normalised before comparison) – a routing-expression-only
   edit was invisible for the same reason. `_rebuild_graph` carries
   `condition_expression` so the frozen side shows the field the change names.
   Labelled in the compare view (`field_hitl_config` / `field_hitl_review_config`

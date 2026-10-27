@@ -25,6 +25,7 @@ the involved tables only (no migrations): the raw UPDATE's Postgres-style
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -118,6 +119,27 @@ def _redis_client(**kwargs: Any) -> _FakeRedis:
 # ---------------------------------------------------------------------------
 
 
+class TestRedisFailureIsolation:
+    @pytest.mark.asyncio
+    async def test_redis_failure_closes_client_and_returns_none(self):
+        client = _FakeRedis()
+        client.incrby = AsyncMock(side_effect=RuntimeError("redis down"))
+        with patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client):
+            assert await _redis_incr_window("key", 60) is None
+        assert client.closed is True
+
+    @pytest.mark.asyncio
+    async def test_redis_cancellation_propagates_and_closes_client(self):
+        client = _FakeRedis()
+        client.incrby = AsyncMock(side_effect=asyncio.CancelledError())
+        with (
+            patch("modulo.core.run_outputs_dualwrite._open_redis", return_value=client),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _redis_incr_window("key", 60)
+        assert client.closed is True
+
+
 class TestOrchestration:
     @pytest.mark.asyncio
     async def test_terminalize_uses_error_code_and_lock_timeout(self) -> None:
@@ -145,6 +167,73 @@ class TestOrchestration:
             rowcount = await orchestrate_dual_write_failure(exc)
         assert rowcount == 0
         mark.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.asyncio
+    async def test_event_suppression_skips_ingestion(self) -> None:
+        exc = _dual_write_error()
+        with (
+            patch("modulo.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=2),
+            patch("modulo.core.run_outputs_dualwrite._emit_error_event", new_callable=AsyncMock) as emit,
+        ):
+            from modulo.core.run_outputs_dualwrite import _emit_dual_write_failed_event
+
+            await _emit_dual_write_failed_event(exc, rowcount=1, error_detail="detail")
+        emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_event_sanitizes_and_truncates_detail(self) -> None:
+        exc = _dual_write_error(origin="origin", sqlstate="57014")
+        with (
+            patch("modulo.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=1),
+            patch("modulo.core.run_outputs_dualwrite._emit_error_event", new_callable=AsyncMock) as emit,
+        ):
+            from modulo.core.run_outputs_dualwrite import _emit_dual_write_failed_event
+
+            await _emit_dual_write_failed_event(exc, rowcount=1, error_detail="x" * 3000)
+        context = emit.await_args.kwargs["context_json"]
+        assert len(context["error_detail"]) == 2001
+        assert context["error_detail"].endswith("…")
+
+    @pytest.mark.asyncio
+    async def test_event_emission_failure_is_observed_and_swallowed(self) -> None:
+        from modulo.core.run_outputs_dualwrite import _emit_dual_write_failed_event
+
+        exc = _dual_write_error()
+        with (
+            patch("modulo.core.run_outputs_dualwrite._redis_incr_window", new_callable=AsyncMock, return_value=None),
+            patch(
+                "modulo.core.run_outputs_dualwrite._emit_error_event",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("ingest"),
+            ),
+            pytest.raises(RuntimeError, match="ingest"),
+        ):
+            await _emit_dual_write_failed_event(exc, rowcount=0, error_detail=None)
+
+    @pytest.mark.asyncio
+    async def test_event_ingestion_sets_tenant_context(self):
+        session = MagicMock()
+        session_cm = MagicMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+        session.begin.return_value = MagicMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+        factory = MagicMock(return_value=session_cm)
+        ingest = AsyncMock()
+        with (
+            patch("modulo.core.error_tracking.saq_hooks._open_factory", return_value=factory),
+            patch("modulo.core.error_tracking.ErrorIngestionService.ingest", ingest),
+            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock) as set_org,
+        ):
+            from modulo.core.run_outputs_dualwrite import _emit_error_event
+
+            await _emit_error_event(uuid.uuid4(), level="error", message="x", context_json={"a": 1})
+        set_org.assert_awaited_once()
+        ingest.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_event_failure_is_swallowed(self) -> None:

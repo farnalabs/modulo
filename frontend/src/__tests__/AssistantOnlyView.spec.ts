@@ -38,7 +38,11 @@ vi.mock('@/composables/useUiCommandExecutor', () => ({
 }))
 
 vi.mock('@/components/assistant/AssistantChat.vue', () => ({
-  default: { name: 'AssistantChat', template: '<div data-testid="assistant-chat-stub" />' },
+  default: {
+    name: 'AssistantChat',
+    methods: { disconnect: vi.fn() },
+    template: '<div data-testid="assistant-chat-stub" />',
+  },
 }))
 vi.mock('@/components/assistant/AssistantSkillManager.vue', () => ({
   default: { name: 'AssistantSkillManager', template: '<div />' },
@@ -153,5 +157,152 @@ describe('AssistantOnlyView', () => {
     expect(banner.exists()).toBe(true)
     expect(banner.text()).not.toContain('components.assistant.AssistantOnlyView.banner')
     expect(banner.text()).toContain('chat-only view')
+  })
+
+  it('returns home from the header button', async () => {
+    const router = await import('vue-router')
+    const wrapper = mount(AssistantOnlyView)
+    await flushPromises()
+
+    await wrapper.find('[data-testid="assistant-only-return-home"]').trigger('click')
+    expect(router.useRouter().push).toHaveBeenCalledWith('/')
+  })
+
+  it('starts a fresh tab and resets the selected sub-tab', async () => {
+    const tabsStore = useAssistantTabsStore()
+    const addTabSpy = vi.spyOn(tabsStore, 'addTab').mockResolvedValue(makeSession('session-new', 'New') as never)
+    const wrapper = mount(AssistantOnlyView)
+    await flushPromises()
+
+    await wrapper.find('[data-testid="assistant-only-new-tab"]').trigger('click')
+    expect(addTabSpy).toHaveBeenCalledOnce()
+    expect((wrapper.vm as unknown as { subTab: string }).subTab).toBe('chat')
+  })
+
+  it('switches and closes session tabs while disconnecting the chat', async () => {
+    const store = useAssistantStore()
+    store.sessions = [makeSession('session-1', 'Alpha'), makeSession('session-2', 'Beta')] as never
+    store.activeSessionId = 'session-1'
+    ;(api.GET as any).mockResolvedValue({ error: null, data: { items: [makeSession('session-1', 'Alpha'), makeSession('session-2', 'Beta')], total: 2 } })
+    localStorage.setItem('assistant-active-session', 'session-1')
+    const tabsStore = useAssistantTabsStore()
+    tabsStore.tabs.push(
+      { tabId: 'tab-1', sessionId: 'session-1' },
+      { tabId: 'tab-2', sessionId: 'session-2' },
+    )
+    const resumeSpy = vi.spyOn(tabsStore, 'resumeTab').mockResolvedValue(undefined)
+    const closeSpy = vi.spyOn(tabsStore, 'closeTab')
+    const wrapper = mount(AssistantOnlyView)
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="assistant-only-tab-tab-2"]').trigger('click')
+    expect(resumeSpy).toHaveBeenCalledWith('session-2')
+    await wrapper.find('[data-testid="assistant-only-tab-close-tab-2"]').trigger('click')
+    expect(closeSpy).toHaveBeenCalledWith('tab-2')
+  })
+
+  it('changes sub-tabs and supports keyboard navigation', async () => {
+    localStorage.setItem('assistant-active-session', 'session-1')
+    ;(api.GET as any).mockResolvedValue({ error: null, data: { items: [makeSession('session-1', 'Alpha')], total: 1 } })
+    const wrapper = mount(AssistantOnlyView)
+    await flushPromises()
+
+    await wrapper.find('[data-testid="assistant-only-subtab-skills"]').trigger('click')
+    expect((wrapper.vm as unknown as { subTab: string }).subTab).toBe('skills')
+    await wrapper.find('[data-testid="assistant-only-subtab-skills"]').trigger('keydown', { key: 'ArrowRight' })
+    expect((wrapper.vm as unknown as { subTab: string }).subTab).toBe('sources')
+    await wrapper.find('[data-testid="assistant-only-subtab-sources"]').trigger('keydown', { key: 'ArrowLeft' })
+    expect((wrapper.vm as unknown as { subTab: string }).subTab).toBe('skills')
+    await wrapper.find('[data-testid="assistant-only-subtab-skills"]').trigger('keydown', { key: 'End' })
+    expect((wrapper.vm as unknown as { subTab: string }).subTab).toBe('sessions')
+    await wrapper.find('[data-testid="assistant-only-subtab-sessions"]').trigger('keydown', { key: 'Home' })
+    expect((wrapper.vm as unknown as { subTab: string }).subTab).toBe('chat')
+  })
+
+  it('supports session tab keyboard navigation and handles session drawer selection', async () => {
+    localStorage.setItem('assistant-active-session', 'session-1')
+    ;(api.GET as any).mockResolvedValue({
+      error: null,
+      data: { items: [makeSession('session-1', 'Alpha'), makeSession('session-2', 'Beta')], total: 2 },
+    })
+    const tabsStore = useAssistantTabsStore()
+    tabsStore.tabs.push(
+      { tabId: 'tab-1', sessionId: 'session-1' },
+      { tabId: 'tab-2', sessionId: 'session-2' },
+    )
+    const wrapper = mount(AssistantOnlyView)
+    await flushPromises()
+    await nextTick()
+
+    const tab1 = wrapper.find('[data-testid="assistant-only-tab-tab-1"]')
+    await tab1.trigger('keydown', { key: 'ArrowRight' })
+    expect((wrapper.vm as unknown as { subTab: string }).subTab).toBe('chat')
+    const tab2 = wrapper.find('[data-testid="assistant-only-tab-tab-2"]')
+    await tab2.trigger('keydown', { key: 'ArrowLeft' })
+    await tab1.trigger('keydown', { key: 'End' })
+    await tab2.trigger('keydown', { key: 'Home' })
+
+    const drawer = wrapper.findComponent({ name: 'AssistantSessionDrawer' })
+    drawer.vm.$emit('select-session')
+    await nextTick()
+    expect((wrapper.vm as unknown as { subTab: string }).subTab).toBe('chat')
+  })
+
+  it('handles clicking the already active tab to switch to the chat view', async () => {
+    localStorage.setItem('assistant-active-session', 'session-1')
+    ;(api.GET as any).mockResolvedValue({ error: null, data: { items: [makeSession('session-1', 'Alpha')], total: 1 } })
+    const tabsStore = useAssistantTabsStore()
+    tabsStore.tabs.push({ tabId: 'tab-1', sessionId: 'session-1' })
+    const wrapper = mount(AssistantOnlyView)
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { subTab: string }
+    vm.subTab = 'sources'
+    await wrapper.find('[data-testid="assistant-only-tab-tab-1"]').trigger('click')
+    expect(vm.subTab).toBe('chat')
+  })
+
+  it('fetches plan when planStore is not loaded yet', async () => {
+    const fetchPlanMock = vi.fn().mockResolvedValue(undefined)
+    ;(usePlanStore as any).mockReturnValueOnce({
+      devMode: true,
+      loaded: false,
+      features: {},
+      fetchPlan: fetchPlanMock,
+      featureEnabled: vi.fn(() => true),
+    })
+    mount(AssistantOnlyView)
+    await flushPromises()
+
+    expect(fetchPlanMock).toHaveBeenCalled()
+  })
+
+  it('renders a streaming indicator on the active tab', async () => {
+    localStorage.setItem('assistant-active-session', 'session-1')
+    ;(api.GET as any).mockResolvedValue({ error: null, data: { items: [makeSession('session-1', 'Alpha')], total: 1 } })
+    const store = useAssistantStore()
+    store.isStreaming = true
+    const tabsStore = useAssistantTabsStore()
+    tabsStore.tabs.push({ tabId: 'tab-1', sessionId: 'session-1' })
+    const wrapper = mount(AssistantOnlyView)
+    await flushPromises()
+
+    expect(wrapper.find('.assistant-live-dot').exists()).toBe(true)
+  })
+
+  it('renders a session number or short id when a session has no name', async () => {
+    const store = useAssistantStore()
+    store.sessions = [makeSession('abcdefghijk', '')] as never
+    store.activeSessionId = 'abcdefghijk'
+    ;(api.GET as any).mockResolvedValue({ error: null, data: { items: [makeSession('abcdefghijk', '')], total: 1 } })
+    localStorage.setItem('assistant-active-session', 'abcdefghijk')
+    const tabsStore = useAssistantTabsStore()
+    tabsStore.tabs.push({ tabId: 'tab-1', sessionId: 'abcdefghijk' })
+    const wrapper = mount(AssistantOnlyView)
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="assistant-only-tab-tab-1"]').text()).toContain('Session #1')
   })
 })

@@ -202,6 +202,7 @@ the full command surface.
 - [Configuration reference](docs/configuration-reference.md)
 - [Agent configuration](docs/agent-config.md)
 - [Deployment guide](docs/deployment.md)
+- [Continuity and escrow](docs/continuity-and-escrow.md)
 - [System requirements](docs/system-requirements.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Upgrade process](docs/upgrade-process.md)
@@ -252,7 +253,10 @@ Do not report vulnerabilities in a public issue. Use GitHub's private **Report a
 
 ## License
 
-Modulo is licensed under the [Business Source License 1.1](LICENSE). Production
-and commercial use is permitted, except offering Modulo as a paid hosted or
-managed service to third parties. Each release converts to the Apache License
-2.0 on its stated Change Date, three years after release.
+Modulo is licensed under the [Business Source License 1.1](LICENSE).
+Production use of Modulo is permitted, including personal, internal and
+commercial use, for Modulo itself and for any modified version or derivative
+work you create, except offering Modulo or such a version to third parties as
+a paid hosted or managed service that provides substantially the same
+functionality as Modulo. Each release converts to the Apache License 2.0 on its
+stated Change Date, three years after release.

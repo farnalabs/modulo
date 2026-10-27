@@ -58,6 +58,19 @@ def _resolve_head(pr: dict, base_repo: str) -> tuple[str, str]:
     return head_full, ""
 
 
+def _is_dependabot(pr: dict) -> bool:
+    """True for a PR authored by the Dependabot app.
+
+    Dependabot is a GitHub App, so its PRs carry ``author_association`` NONE
+    even though its branches live on the base repository. The ``[bot]`` login
+    suffix is reserved for GitHub Apps and cannot be claimed by a user account;
+    the ``type`` check is belt and braces. Callers must already have verified
+    the head is same-repo.
+    """
+    user = pr.get("user") or {}
+    return user.get("login") == "dependabot[bot]" and user.get("type") == "Bot"
+
+
 def _resolve_association(pr: dict) -> tuple[str, str]:
     """Return (association, error_reason); error_reason is '' on success."""
     association = pr.get("author_association")
@@ -86,6 +99,9 @@ def decide(pr: dict, base_repo: str) -> tuple[str, str]:
             "external",
             f"PR head is from {head_full}, not {base_repo} (fork / external contributor) - fail closed",
         )
+
+    if _is_dependabot(pr):
+        return "ok", f"same-repo dependabot app (head={head_full})"
 
     association, association_err = _resolve_association(pr)
     if association_err:

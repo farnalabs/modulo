@@ -95,7 +95,8 @@ backend:
   image:
     repository: ghcr.io/farnalabs/modulo/backend
     digest: ""
-    tag: "latest"
+    # Empty means "use the chart's appVersion" (the released image tag).
+    tag: ""
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -125,7 +126,8 @@ saqRunner:
   image:
     repository: ghcr.io/farnalabs/modulo/backend
     digest: ""
-    tag: "latest"
+    # Empty means "use the chart's appVersion" (the released image tag).
+    tag: ""
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -146,7 +148,8 @@ saqSystem:
   image:
     repository: ghcr.io/farnalabs/modulo/backend
     digest: ""
-    tag: "latest"
+    # Empty means "use the chart's appVersion" (the released image tag).
+    tag: ""
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -164,7 +167,8 @@ frontend:
   image:
     repository: ghcr.io/farnalabs/modulo/frontend
     digest: ""
-    tag: "latest"
+    # Empty means "use the chart's appVersion" (the released image tag).
+    tag: ""
     pullPolicy: IfNotPresent
   resources:
     requests:

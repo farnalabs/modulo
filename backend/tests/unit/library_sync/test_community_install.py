@@ -113,6 +113,7 @@ class _FakeSession:
         self.id_query_params: list[Any] = []
         self._in_tx = False
         self.rolled_back = False
+        self.commits = 0
 
     def in_transaction(self) -> bool:
         return self._in_tx
@@ -128,6 +129,7 @@ class _FakeSession:
         return None
 
     async def commit(self) -> None:
+        self.commits += 1
         if self._in_tx:
             self._in_tx = False
 
@@ -313,7 +315,22 @@ class TestListCommunityEntries:
         assert len(entries) == 2
         # began=False in ``_installed_registry_keys`` must skip the commit and
         # leave the caller's transaction open.
+        assert session.commits == 0
         assert session._in_tx is True
+
+    async def test_commits_the_read_only_transaction_it_opened(self, fake_manifest: None) -> None:
+        """Browsing with no caller txn opens one and commits it closed.
+
+        ``_installed_registry_keys`` only reads, and its ``finally`` must commit
+        the txn it began — a bare rollback would violate the no-bare-rollback
+        architecture rule, while a leftover open txn would leak the connection.
+        """
+        session = _FakeSession(installed_rows=[("code-reviewer", "1.0.0")])
+
+        await list_community_entries(session, ORG_ID)
+
+        assert session.commits == 1
+        assert session._in_tx is False
 
 
 class TestGetCommunityEntry:
@@ -356,6 +373,44 @@ class TestInstallCommunityEntry:
         assert prim.owner_team_id is None
         assert prim.content_json == {"description": "A test agent", "name": "code-reviewer"}
         assert session.added == [prim]
+
+    async def test_flushes_without_committing(self, fake_manifest: None, fake_blob: None, fake_settings: None) -> None:
+        """The documented contract is "flushes but does not commit".
+
+        The caller owns the commit, so the transaction the install opened must
+        still be open when it returns — a spurious commit here would land a
+        half-finished caller unit of work.
+        """
+        session = _FakeSession()
+
+        await install_community_entry(session, ORG_ID, "entry-1")
+
+        assert session.commits == 0
+        assert session._in_tx is True
+
+    async def test_records_created_by_as_account_id(
+        self, fake_manifest: None, fake_blob: None, fake_settings: None
+    ) -> None:
+        """``created_by`` is the install's provenance and must reach ``account_id``."""
+        creator = uuid.uuid4()
+
+        prim = await install_community_entry(_FakeSession(), ORG_ID, "entry-1", created_by=creator)
+
+        assert prim.account_id == creator
+
+    async def test_non_string_description_degrades_to_none(
+        self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch, fake_settings: None
+    ) -> None:
+        """Only a ``str`` description is persisted; anything else becomes NULL."""
+
+        async def _blob(_sha256: str) -> dict[str, Any]:
+            return {"description": {"nested": True}, "name": "code-reviewer"}
+
+        monkeypatch.setattr(community_module, "_fetch_blob", _blob)
+
+        prim = await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
+
+        assert prim.description is None
 
     async def test_raises_already_installed(self, fake_manifest: None) -> None:
         session = _FakeSession(existing_id=uuid.uuid4())

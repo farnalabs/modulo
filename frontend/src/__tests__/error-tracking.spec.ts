@@ -556,4 +556,49 @@ describe('ErrorTracker advanced behaviour', () => {
 
     expect(spy.captureError).not.toHaveBeenCalled()
   })
+
+  it('does not install handlers or forward events when disabled at construction', () => {
+    ;(window as unknown as Record<string, unknown>).__MODULO_ERROR_TRACKING_DISABLED__ = true
+    const spy = makeBackendSpy()
+    const tracker = createErrorTracker({ monitorBackends: [spy.backend] })
+    const addListener = vi.spyOn(window, 'addEventListener')
+
+    tracker.captureError(new Error('ignored'))
+    tracker.captureMessage('ignored', 'warning')
+
+    expect(spy.captureError).not.toHaveBeenCalled()
+    expect(spy.captureMessage).not.toHaveBeenCalled()
+    expect(addListener).not.toHaveBeenCalledWith('error', expect.any(Function))
+  })
+
+  it('normalises non-Error window failures and rejection reasons', () => {
+    const tracker = createErrorTracker()
+    const captureError = vi.spyOn(tracker, 'captureError')
+
+    window.dispatchEvent(new ErrorEvent('error', { message: '', error: 'raw failure' }))
+    expect(captureError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'raw failure' }),
+      expect.objectContaining({ source: '', line: 0, col: 0 }),
+    )
+
+    if (typeof PromiseRejectionEvent !== 'undefined') {
+      window.dispatchEvent(new PromiseRejectionEvent('unhandledrejection', {
+        reason: 42,
+        promise: Promise.resolve(),
+      }))
+      expect(captureError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: '42' }),
+        { type: 'unhandled_promise_rejection' },
+      )
+    }
+  })
+
+  it('installs a warning handler without requiring an original handler', () => {
+    const tracker = createErrorTracker()
+    const app = createApp({ render() { return h('div') } })
+
+    app.use(tracker.vuePlugin)
+    expect(app.config.warnHandler).toBeDefined()
+    expect(() => app.config.warnHandler?.('warning', null, 'trace')).not.toThrow()
+  })
 })

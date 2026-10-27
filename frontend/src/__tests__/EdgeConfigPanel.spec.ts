@@ -239,6 +239,31 @@ describe('EdgeConfigPanel template', () => {
     expect((input.element as HTMLInputElement).placeholder).toBe('Link to Modulo trigger config')
   })
 
+  it('emits updates from every editable field and normalizes empty values', async () => {
+    const wrapper = mountPanel()
+    await flushPromises()
+    await wrapper.find('#edgeconfigpanel-field-4').setValue('Updated description')
+    await wrapper.find('#edgeconfigpanel-field-3').setValue('result.ok')
+    await wrapper.find('#edgeconfigpanel-field-1').setValue('trigger-1')
+    const selects = wrapper.findAll('select')
+    await selects[1].setValue('hourly')
+    await selects[0].setValue('webhook')
+    await flushPromises()
+
+    const updates = wrapper.emitted('update') as Array<[string, unknown]>
+    expect(updates).toContainEqual(['description', 'Updated description'])
+    expect(updates).toContainEqual(['condition_expression', 'result.ok'])
+    expect(updates).toContainEqual(['trigger_link', 'trigger-1'])
+    expect(updates).toContainEqual(['estimated_frequency', 'hourly'])
+    expect(updates).toContainEqual(['trigger_type', 'webhook'])
+
+    await wrapper.find('#edgeconfigpanel-field-3').setValue('')
+    await wrapper.find('#edgeconfigpanel-field-1').setValue('')
+    await flushPromises()
+    expect(wrapper.emitted('update')).toContainEqual(['condition_expression', null])
+    expect(wrapper.emitted('update')).toContainEqual(['trigger_link', null])
+  })
+
   it('renders the description textarea placeholder', async () => {
     const wrapper = mountPanel()
     await flushPromises()

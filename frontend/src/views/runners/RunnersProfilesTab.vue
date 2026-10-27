@@ -40,7 +40,8 @@
           v-for="row in filteredRows"
           :key="row.profile.id"
           class="card p-5 flex flex-col gap-3"
-          :class="{ 'opacity-60': !row.available }"
+          :class="{ 'border-dashed': !row.available }"
+          :data-unavailable="!row.available || undefined"
         >
           <div class="flex items-start justify-between">
             <div class="min-w-0">

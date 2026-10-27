@@ -359,5 +359,5 @@ class CredentialRedactor:
             if repaired is exc:
                 raise
             if self._chain_cause:
-                raise repaired from exc.__cause__
-            raise repaired from None
+                raise repaired from exc.__cause__  # NOSONAR python:S112 — repaired preserves original exception class
+            raise repaired from None  # NOSONAR python:S112 — repaired preserves original exception class
