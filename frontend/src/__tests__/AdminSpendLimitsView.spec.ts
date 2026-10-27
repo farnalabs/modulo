@@ -159,4 +159,36 @@ describe('AdminSpendLimitsView', () => {
     expect(overBudget).toBeDefined()
     wrapper.unmount()
   })
+
+  it('saves team limits through success, API error, and thrown error paths', async () => {
+    const wrapper = await mountWithFeatures()
+    const apiPut = (await import('../lib/api/client')).api.PUT as ReturnType<typeof vi.fn>
+    const save = wrapper.find('[data-testid="admin-spend-limits-team-save-team-1"]')
+
+    apiPut.mockResolvedValueOnce({ data: null, error: { detail: 'team denied' } })
+    await save.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('team denied')
+
+    apiPut.mockRejectedValueOnce(new Error('team offline'))
+    await save.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('team offline')
+  })
+
+  it('surfaces org-limit API and thrown errors', async () => {
+    const wrapper = await mountWithFeatures()
+    const apiPut = (await import('../lib/api/client')).api.PUT as ReturnType<typeof vi.fn>
+    const save = wrapper.find('[data-testid="admin-spend-limits-org-save"]')
+
+    apiPut.mockResolvedValueOnce({ data: null, error: { detail: 'org denied' } })
+    await save.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('org denied')
+
+    apiPut.mockRejectedValueOnce(new Error('org offline'))
+    await save.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('org offline')
+  })
 })
