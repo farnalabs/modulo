@@ -498,7 +498,10 @@ async def _search_audit(
                 WHERE organisation_id = :org_id
                     AND (
                         :include_lifecycle_maps
-                        OR NOT (resource_type = 'lifecycle_map' OR event_type LIKE 'lifecycle_map.%')
+                        OR NOT (
+                            LOWER(REPLACE(COALESCE(resource_type, ''), '-', '_')) LIKE 'lifecycle_map%'
+                            OR LOWER(REPLACE(COALESCE(event_type, ''), '-', '_')) LIKE 'lifecycle_map%'
+                        )
                     )
                     AND (
                         LOWER(event_type) LIKE LOWER(:like)
@@ -525,7 +528,10 @@ async def _search_audit(
                 WHERE organisation_id = :org_id
                     AND (
                         :include_lifecycle_maps
-                        OR NOT (resource_type = 'lifecycle_map' OR event_type LIKE 'lifecycle_map.%')
+                        OR NOT (
+                            LOWER(REPLACE(COALESCE(resource_type, ''), '-', '_')) LIKE 'lifecycle_map%'
+                            OR LOWER(REPLACE(COALESCE(event_type, ''), '-', '_')) LIKE 'lifecycle_map%'
+                        )
                     )
                     AND (
                         LOWER(event_type) LIKE LOWER(:like)
