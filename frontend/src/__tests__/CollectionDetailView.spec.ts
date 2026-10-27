@@ -146,6 +146,23 @@ describe('CollectionDetailView (FAR-760)', () => {
     expect(wrapper.find('[data-testid="collection-publish"]').exists()).toBe(true)
     expect(wrapper.find('[role="alert"]').exists()).toBe(true)
   })
+
+  it('handles publish catch path (exception from POST)', async () => {
+    postMock.mockRejectedValue(new Error('network error'))
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-publish"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('network error')
+  })
 })
 
 describe('CollectionDetailView install action (FAR-826)', () => {
@@ -406,8 +423,25 @@ describe('CollectionDetailView install action (FAR-826)', () => {
     expect(wrapper.findAll('button').find((b) => b.text() === 'Retry')).toBeUndefined()
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
-})
 
+  it('handles install catch path (exception from POST)', async () => {
+    mockPublishedCollection([])
+    vi.mocked(api.POST).mockRejectedValueOnce(new Error('network error'))
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-install"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="collection-install-error"][role="alert"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('network error')
+  })
+})
 
 // WCAG 4.1.3 (Status Messages): a status message must be announced without
 // moving focus. An aria-live region that enters the DOM in the same mutation
@@ -492,9 +526,9 @@ describe('CollectionDetailView install warning announcement (FAR-1231)', () => {
     // was already on the page, which is what gets announced.
     expect(wrapper.find(LIVE_REGION).element).toBe(live.element)
     expect(wrapper.find(WARNING_REGION).exists()).toBe(true)
-    expect(wrapper.find(LIVE_REGION).text()).toContain(warning)
     // The element is no longer `:empty`, so the sr-only rule stops matching
     // and the warning box lays out normally.
+    expect(wrapper.find(LIVE_REGION).text()).toContain(warning)
   })
 
   it('leaves the live region empty when the installed bundle stripped nothing', async () => {
@@ -655,6 +689,24 @@ describe('CollectionDetailView update-available flow (FAR-759)', () => {
     expect(wrapper.find('[data-testid="collection-upgrade-error"]').exists()).toBe(true)
   })
 
+  it('handles upgrade catch path (exception from POST)', async () => {
+    mockPublishedCollectionWithUpdate(true)
+    vi.mocked(api.POST).mockRejectedValueOnce(new Error('network error'))
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-upgrade"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="collection-upgrade-error"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('network error')
+  })
+
   it('renders a placeholder version when the update has no available version', async () => {
     getMock.mockImplementation(async (path: string) => {
       if (String(path).includes('/installs')) {
@@ -679,5 +731,150 @@ describe('CollectionDetailView update-available flow (FAR-759)', () => {
     const badge = wrapper.find('[data-testid="collection-update-available"]')
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toContain('?')
+  })
+})
+
+describe('CollectionDetailView grantAgents flow', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getMock.mockResolvedValue(makeCollection({ status: 'published' }))
+    postMock.mockResolvedValue({ status: 'published' })
+  })
+
+  it('shows Grant Access button for community-sourced install without agents granted', async () => {
+    mockPublishedCollection([
+      { ...makeInstall(), community_sourced: true, agents_granted: false, install_id: 'install-1' },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const grantBtn = wrapper.find('[data-testid="collection-grant-agents"]')
+    expect(grantBtn.exists()).toBe(true)
+    expect(grantBtn.text()).toContain('Grant Access')
+  })
+
+  it('calls grantAgents endpoint and updates the install', async () => {
+    mockPublishedCollection([
+      { ...makeInstall(), community_sourced: true, agents_granted: false, install_id: 'install-1' },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const updatedInstall = { ...makeInstall(), community_sourced: true, agents_granted: true, install_id: 'install-1' }
+    postMock.mockResolvedValueOnce(updatedInstall)
+
+    await wrapper.find('[data-testid="collection-grant-agents"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(postMock).toHaveBeenCalledWith(
+      '/api/v1/libraries/collections/{primitive_id}/installs/{install_id}/grant',
+      expect.objectContaining({
+        params: {
+          path: { primitive_id: 'col-1', install_id: 'install-1' },
+        },
+      }),
+    )
+    expect(wrapper.text()).toContain('Granted')
+  })
+
+  it('handles grantAgents error', async () => {
+    mockPublishedCollection([
+      { ...makeInstall(), community_sourced: true, agents_granted: false, install_id: 'install-1' },
+    ])
+    postMock.mockRejectedValueOnce(new Error('grant failed'))
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-grant-agents"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('grant failed')
+  })
+})
+
+describe('CollectionDetailView connector checklist', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    postMock.mockResolvedValue({ status: 'published' })
+  })
+
+  it('renders connector checklist with status badges', async () => {
+    mockPublishedCollection([
+      {
+        ...makeInstall(),
+        connector_checklist: [
+          { connector_type_id: 'github', status: 'configured+bound' },
+          { connector_type_id: 'slack', status: 'configured' },
+          { connector_type_id: 'jira', status: 'missing' },
+        ],
+      },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('github')
+    expect(wrapper.text()).toContain('slack')
+    expect(wrapper.text()).toContain('jira')
+    expect(wrapper.text()).toContain('configured+bound')
+    expect(wrapper.text()).toContain('configured')
+    expect(wrapper.text()).toContain('missing')
+  })
+
+  it('shows Create Connector link for unconfigured connectors', async () => {
+    mockPublishedCollection([
+      {
+        ...makeInstall(),
+        connector_checklist: [
+          { connector_type_id: 'github', status: 'missing' },
+        ],
+      },
+    ])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const createLink = wrapper.find('[data-testid="collection-create-connector"]')
+    expect(createLink.exists()).toBe(true)
+  })
+
+  it('renders runnable status', async () => {
+    mockPublishedCollection([{ ...makeInstall(), runnable: true }])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Ready to run')
+  })
+
+  it('renders not runnable status', async () => {
+    mockPublishedCollection([{ ...makeInstall(), runnable: false }])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Not yet runnable')
   })
 })
