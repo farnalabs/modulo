@@ -51,7 +51,8 @@ Evidence: `docs/operations/network-egress.md`; `docs/security/secret-management.
 **Q: How is Modulo licensed?**
 
 A: BUSL-1.1 (source-available, not OSI open source). The licence restricts
-offering Modulo to third parties as a hosted service.
+offering Modulo, or a modified or derivative version of it, to third parties as
+a paid hosted or managed service.
 
 Evidence: `backend/pyproject.toml` (project licence); repository `LICENSE`.
 
