@@ -24,7 +24,7 @@ Verified properties:
 |---|---|
 | The source builds with no Farnalabs-held secret. | The production all-in-one image builds from a clean checkout with no credential or build secret from Farnalabs. [Build the image from source](#build-the-image-from-source) below gives the command, which was run against this checkout for this page. |
 | The Community tier needs no licence key. | A deployment with no `MODULO_LICENSE_KEY` boots and runs on Community (`backend/src/modulo/core/license_bootstrap.py`: "Booting with no licence at all stays valid"). |
-| You may modify and patch the source. | The BUSL Additional Use Grant permits production use of Modulo and of any modified version or derivative work you create, including internal and commercial use, except offering Modulo or such a version as a paid hosted or managed service that provides substantially the same functionality as Modulo. See `LICENSE`. |
+| You may modify and patch the source. | The BUSL Additional Use Grant permits production use of Modulo and of any modified version or derivative work you create, including personal, internal and commercial use, provided that you may not use Modulo or any such modified version or derivative work to offer a paid hosted or managed service to third parties where that service provides substantially the same functionality as Modulo. See `LICENSE`. |
 | Each released version converts to Apache-2.0. | `LICENSE`: the Change Date for the distributed version is 2029-07-12, and "For each version of the Licensed Work, the Change Date is three years after that version is first publicly released." |
 
 ## What you keep, and what you do not
