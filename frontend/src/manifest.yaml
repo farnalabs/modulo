@@ -896,6 +896,8 @@ routes:
         exact: true
         visibility: in_dev
         <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [library.search.in_dev]
         deprecated: false
 
     /lifecycle-maps/:id/editor:
@@ -911,6 +913,8 @@ routes:
           - id
         visibility: in_dev
         <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [library.search.in_dev]
         deprecated: false
 
     /feedback/inbox:
@@ -938,6 +942,8 @@ routes:
           - id
         visibility: in_dev
         <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [library.search.in_dev]
         deprecated: false
 
     /admin/runners/profiles:

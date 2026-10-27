@@ -19,8 +19,10 @@ const { planStoreStub, featureEnabled } = vi.hoisted(() => {
     loaded: true,
     features: {} as Record<string, unknown>,
     devMode: false,
+    userPermissions: [] as string[],
     isAtMinimumTier: () => true,
     featureEnabled,
+    fetchPermissions: vi.fn(async () => {}),
     fetchPlan: vi.fn(async () => {}),
   }
   return { planStoreStub, featureEnabled }
@@ -40,10 +42,14 @@ import { clearAccessToken, setAccessToken } from '../lib/api/auth'
 // must decode to an admin payload or navigation is denied before the flag is
 // ever consulted. Build a decodable JWT (header.payload.signature) whose
 // payload carries org_role: admin.
-function adminToken(): string {
+function tokenForRole(orgRole: string): string {
   const b64url = (obj: Record<string, unknown>) =>
     btoa(JSON.stringify(obj)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
-  return `${b64url({ alg: 'none', typ: 'JWT' })}.${b64url({ org_role: 'admin' })}.test-signature`
+  return `${b64url({ alg: 'none', typ: 'JWT' })}.${b64url({ org_role: orgRole })}.test-signature`
+}
+
+function adminToken(): string {
+  return tokenForRole('admin')
 }
 
 beforeEach(() => {
@@ -52,6 +58,26 @@ beforeEach(() => {
   clearAccessToken()
   featureEnabled.mockReturnValue(false)
   planStoreStub.loaded = true
+  planStoreStub.devMode = false
+  planStoreStub.userPermissions = []
+})
+
+describe('FAR-2200: Lifecycle Map internal route guard', () => {
+  it('redirects a dev-mode viewer without the internal permission', async () => {
+    setAccessToken(tokenForRole('viewer'))
+    planStoreStub.devMode = true
+    await router.push({ name: 'lifecycle-maps' })
+    expect(router.currentRoute.value.name).toBe('dashboard')
+    expect(planStoreStub.fetchPermissions).toHaveBeenCalled()
+  }, 20_000)
+
+  it('allows an internal operator with the permission in dev mode', async () => {
+    setAccessToken(adminToken())
+    planStoreStub.devMode = true
+    planStoreStub.userPermissions = ['library.search.in_dev']
+    await router.push({ name: 'lifecycle-maps' })
+    expect(router.currentRoute.value.name).toBe('lifecycle-maps')
+  }, 20_000)
 })
 
 describe('FAR-656: manifest route feature_flag guard', () => {
