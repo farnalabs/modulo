@@ -76,7 +76,7 @@ Usage: {{ include "modulo.image" (dict "image" .Values.backend.image) }}
 {{- if .image.digest -}}
 {{- printf "%s@%s" .image.repository .image.digest -}}
 {{- else -}}
-{{- printf "%s:%s" .image.repository (.image.tag | default "latest") -}}
+{{- printf "%s:%s" .image.repository (.image.tag | default "0.3.323") -}}
 {{- end -}}
 {{- end }}
 

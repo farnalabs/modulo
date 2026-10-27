@@ -177,7 +177,7 @@ backend:
     # Digest takes precedence over tag when both are set.
     # Example: sha256:abc123...
     digest: ""
-    tag: "latest"
+    tag: "0.3.323"
     pullPolicy: IfNotPresent
 
   service:
@@ -241,7 +241,7 @@ saqRunner:
   image:
     repository: ghcr.io/farnalabs/modulo/backend
     digest: ""
-    tag: "latest"
+    tag: "0.3.323"
     pullPolicy: IfNotPresent
 
   # Command derived from docker-compose.yml: python -m saq modulo.core.saq_worker.runs_settings
@@ -272,7 +272,7 @@ saqSystem:
   image:
     repository: ghcr.io/farnalabs/modulo/backend
     digest: ""
-    tag: "latest"
+    tag: "0.3.323"
     pullPolicy: IfNotPresent
 
   # Command derived from docker-compose.yml: python -m modulo.core.saq_worker
@@ -305,7 +305,7 @@ frontend:
   image:
     repository: ghcr.io/farnalabs/modulo/frontend
     digest: ""
-    tag: "latest"
+    tag: "0.3.323"
     pullPolicy: IfNotPresent
 
   service:
