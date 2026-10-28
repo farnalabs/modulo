@@ -95,6 +95,7 @@ from modulo.core.pipeline_engine.decorator import (
 )
 from modulo.core.pipeline_engine.error_codes import (
     _CODE_CONNECTOR_FAILED,
+    _CODE_CONNECTOR_UNKNOWN,
     _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
     _CODE_SANDBOX_AGENT_FAILED,
     _CODE_SANDBOX_NO_OUTPUT_JSON,
@@ -1428,35 +1429,66 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     return reason
 
 
-def _connector_failure_artifact_reason(node_output: dict[str, Any]) -> str | None:
-    """Return the first failure reason from a connector output's artifacts."""
+def _connector_failure_artifact_reason(
+    node_output: dict[str, Any],
+    expected_node_id: str | None = None,
+) -> str | None:
+    """Return the first failure reason from a runner-stamped connector output's artifacts."""
     artifacts = node_output.get("artifacts")
     if not isinstance(artifacts, list):
         return None
+    marked = node_output.get("connector_failure") is True
     for artifact in artifacts:
         if not isinstance(artifact, dict) or artifact.get("status") != "failed":
             continue
+        if not marked:
+            art_node_id = artifact.get("node_id")
+            if expected_node_id is not None:
+                if art_node_id != expected_node_id:
+                    continue
+            elif not isinstance(art_node_id, str) or not art_node_id:
+                continue
         error = artifact.get("error")
         return error if isinstance(error, str) and error else "Connector reported failure"
     return None
 
 
-def _node_output_connector_failure(node_output: Any, node_type: str | None = None) -> str | None:
+def _node_output_connector_error_code(node_output: Any) -> str:
+    """Return the error code for a connector failure envelope."""
+    if isinstance(node_output, dict):
+        code = node_output.get("error_code")
+        if isinstance(code, str) and code:
+            return code
+        artifacts = node_output.get("artifacts")
+        if isinstance(artifacts, list):
+            for artifact in artifacts:
+                if isinstance(artifact, dict) and artifact.get("status") == "failed":
+                    art_code = artifact.get("error_code")
+                    if isinstance(art_code, str) and art_code:
+                        return art_code
+    return _CODE_CONNECTOR_FAILED
+
+
+def _node_output_connector_failure(
+    node_output: Any,
+    node_type: str | None = None,
+    expected_node_id: str | None = None,
+) -> str | None:
     """Return a connector/dispatch failure reason from a captured envelope.
 
     Connector nodes return failed artifacts as their normal error contract; they
     do not need to cooperate with a second marker just to make terminalisation
-    observe the failure.  The node type is the trust boundary: without it, a
-    sandbox failure artifact must not be reclassified as a connector failure.
-    The legacy ``connector_failure`` marker remains accepted for stored/live
-    envelopes that predate the shape-based recognition.
+    observe the failure.  The node type and expected_node_id form the trust boundary:
+    artifact entries must be runner-stamped (matching expected_node_id or carrying
+    a non-empty string node_id) or the envelope must carry connector_failure,
+    preventing raw embedded payloads from false-downgrading runs.
     """
     if not isinstance(node_output, dict):
         return None
     marked = node_output.get("connector_failure") is True
     if not marked and node_type not in {"connector", "dispatch"}:
         return None
-    reason = _connector_failure_artifact_reason(node_output)
+    reason = _connector_failure_artifact_reason(node_output, expected_node_id=expected_node_id)
     if reason is not None:
         return reason
     return "Connector reported failure" if marked else None
@@ -1984,6 +2016,7 @@ class _StreamState:
     # phase 1): such a run must NEVER land 'complete'.
     agent_failure_reason: str | None = None
     connector_failure_reason: str | None = None
+    connector_failure_code: str | None = None
     # FAR-227: set when a captured sandbox-agent node output carries the
     # sandbox-session-lost marker (the E2B wrapper's fallback echo — a dead
     # opencode session). Routes to retryable ``sandbox.no_output_json``.
@@ -2096,10 +2129,11 @@ def _stream_terminal_reason(
             usage,
         )
     if state.connector_failure_reason and not state.stall_reason:
+        code = state.connector_failure_code or _CODE_CONNECTOR_FAILED
         return _terminal_failure(
             broker,
             "failed",
-            _CODE_CONNECTOR_FAILED,
+            code,
             _sanitize_detail(state.connector_failure_reason, limit=5000),
             usage,
         )
@@ -5468,21 +5502,30 @@ class PipelineExecutor:
         stored_telemetry = stored_node_telemetry or {}
         node_ids = set(completed_node_outputs) | set(stored_outputs) | set(stored_telemetry)
         details: list[str] = []
+        has_side_effect_unknown = False
         for node_id in node_ids:
             node_type = node_type_map.get(node_id)
             if node_type not in {"connector", "dispatch"}:
                 continue
-            views = self._sandbox_failure_scan_views(completed_node_outputs.get(node_id))
-            views.extend(self._sandbox_failure_scan_views(stored_outputs.get(node_id)))
-            views.extend(self._sandbox_failure_scan_views(node_telemetry(stored_telemetry, stored_outputs, node_id)))
-            for view in views:
-                reason = _node_output_connector_failure(view, node_type)
+            candidates: list[dict[str, Any]] = []
+            c1 = completed_node_outputs.get(node_id)
+            if isinstance(c1, dict):
+                candidates.append(c1)
+            t1 = node_telemetry(stored_telemetry, stored_outputs, node_id)
+            if isinstance(t1, dict):
+                candidates.append(t1)
+            for view in candidates:
+                reason = _node_output_connector_failure(view, node_type, expected_node_id=node_id)
                 if reason is not None:
+                    code = _node_output_connector_error_code(view)
+                    if code == _CODE_CONNECTOR_UNKNOWN:
+                        has_side_effect_unknown = True
                     details.append(reason)
                     break
         if not details:
             return final_status, error_code, error_detail
-        return "failed", _CODE_CONNECTOR_FAILED, "; ".join(sorted(set(details)))
+        chosen_code = _CODE_CONNECTOR_UNKNOWN if has_side_effect_unknown else _CODE_CONNECTOR_FAILED
+        return "failed", chosen_code, "; ".join(sorted(set(details)))
 
     def _downgrade_masked_sandbox_failures(
         self,
@@ -8438,6 +8481,9 @@ class PipelineExecutor:
         # interception rewrites it) — the wrapper's ``no_output_reason`` is the
         # only place the killing provider error (e.g. HTTP 402) survives.
         session_lost_text = _node_output_sandbox_session_lost_text(output) if session_lost else None
+        node_type = ctx.node_type_map.get(name) if ctx.node_type_map else None
+        connector_failure = _node_output_connector_failure(output, node_type, expected_node_id=name)
+        connector_failure_code = _node_output_connector_error_code(output) if connector_failure else None
         # FAR-305: standalone post-node eval path — run any node-scoped evals
         # for this node against its inner output dict. This is independent of
         # HITL gates: a plain node (no gate) now gets its node-scoped evals
@@ -8458,10 +8504,9 @@ class PipelineExecutor:
             state.stall_reason = stall_reason
         if agent_failure:
             state.agent_failure_reason = agent_failure
-        node_type = ctx.node_type_map.get(name) if ctx.node_type_map else None
-        connector_failure = _node_output_connector_failure(output, node_type)
         if connector_failure:
             state.connector_failure_reason = connector_failure
+            state.connector_failure_code = connector_failure_code
         if session_lost:
             state.session_lost_reason = session_lost
             state.session_lost_retained_text = session_lost_text

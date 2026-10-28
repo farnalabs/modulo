@@ -454,7 +454,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         retryable=False,
         alert_severity="critical",
         guidance=(
-            "Connector write was cancelled mid-send; upstream side-effect state unknown. "
+            "Connector write was cancelled mid-send or raised an error; upstream side-effect state unknown. "
             "Re-run with the same idempotency key or confirm manually."
         ),
     ),

@@ -1975,6 +1975,7 @@ async def test_connector_node_connector_raise_returns_failure_envelope(monkeypat
         result = await fn({"run_context": {"input": {}}})
         assert result["artifacts"][0]["status"] == "failed"
         assert result["artifacts"][0]["error"] == "boom"
+        assert result["artifacts"][0]["error_code"] == "connector.failed"
         assert result["connector_failure"] is True
         # The raised connector error is classified by the SINGLE authority even
         # for a query op (the resolution is fail-open with no session factory).
@@ -2006,6 +2007,7 @@ async def test_connector_node_write_reported_failure_returns_failed_artifact(mon
 
     assert result["artifacts"][0]["status"] == "failed"
     assert result["artifacts"][0]["output"]["exit_code"] == 1
+    assert result["artifacts"][0]["error_code"] == "connector.failed"
     assert result["connector_failure"] is True
 
 
@@ -2046,6 +2048,7 @@ async def test_connector_node_write_raise_returns_failure_envelope(monkeypatch: 
         result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
         assert result["artifacts"][0]["status"] == "failed"
         assert result["artifacts"][0]["error"] == "write exploded"
+        assert result["artifacts"][0]["error_code"] == "connector.side_effect_unknown"
         assert result["connector_failure"] is True
         resolve.assert_awaited_once()
         assert isinstance(resolve.await_args.kwargs["exception"], RuntimeError)

@@ -79,6 +79,18 @@ describe('RunErrorTag', () => {
     expect(sessionLost.text()).toBe('Session lost')
   })
 
+  it('renders connector error codes with their i18n labels and descriptions', () => {
+    const failed = mount(RunErrorTag, { props: { code: 'connector.failed' } })
+    expect(failed.text()).toBe('Connector failed')
+    expect(failed.text()).not.toBe('Unknown error')
+    expect(failed.classes()).toContain('text-warning-text')
+    expect(failed.attributes('title')).toContain('The connector reported that its operation failed.')
+
+    const unknown = mount(RunErrorTag, { props: { code: 'connector.side_effect_unknown' } })
+    expect(unknown.text()).toBe('Connector side effects unknown')
+    expect(unknown.attributes('title')).toContain('upstream side-effect state is unknown')
+  })
+
   it.each(MODEL_ERROR_CODES)(
     'renders $code with its own label and the shared destructive model.* pill',
     ({ code, label, titleIncludes }) => {

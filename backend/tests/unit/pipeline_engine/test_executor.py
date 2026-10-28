@@ -5565,24 +5565,37 @@ class TestNodeOutputConnectorFailure:
         assert _node_output_connector_failure(output, "sandbox_agent") == "Connector reported failure"
 
     def test_connector_node_with_failed_artifact_returns_error(self):
-        output = {"artifacts": [{"status": "failed", "error": "GitHub API error"}]}
+        output = {"artifacts": [{"node_id": "c1", "status": "failed", "error": "GitHub API error"}]}
+        assert _node_output_connector_failure(output, "connector", expected_node_id="c1") == "GitHub API error"
         assert _node_output_connector_failure(output, "connector") == "GitHub API error"
 
     def test_dispatch_node_with_failed_artifact_returns_error(self):
-        output = {"artifacts": [{"status": "failed", "error": "Dispatch timeout"}]}
+        output = {"artifacts": [{"node_id": "d1", "status": "failed", "error": "Dispatch timeout"}]}
+        assert _node_output_connector_failure(output, "dispatch", expected_node_id="d1") == "Dispatch timeout"
         assert _node_output_connector_failure(output, "dispatch") == "Dispatch timeout"
 
     def test_connector_node_with_failed_artifact_no_error_returns_generic(self):
-        output = {"artifacts": [{"status": "failed"}]}
+        output = {"artifacts": [{"node_id": "c1", "status": "failed"}]}
+        assert (
+            _node_output_connector_failure(output, "connector", expected_node_id="c1") == "Connector reported failure"
+        )
         assert _node_output_connector_failure(output, "connector") == "Connector reported failure"
 
     def test_dispatch_node_with_failed_artifact_no_error_returns_generic(self):
-        output = {"artifacts": [{"status": "failed"}]}
+        output = {"artifacts": [{"node_id": "d1", "status": "failed"}]}
+        assert _node_output_connector_failure(output, "dispatch", expected_node_id="d1") == "Connector reported failure"
         assert _node_output_connector_failure(output, "dispatch") == "Connector reported failure"
 
     def test_artifact_not_dict_skipped(self):
-        output = {"artifacts": ["not a dict", {"status": "failed", "error": "real error"}]}
+        output = {"artifacts": ["not a dict", {"node_id": "c1", "status": "failed", "error": "real error"}]}
+        assert _node_output_connector_failure(output, "connector", expected_node_id="c1") == "real error"
         assert _node_output_connector_failure(output, "connector") == "real error"
+
+    def test_unstamped_failed_artifact_returns_none(self):
+        """Un-stamped artifact entries (raw third-party payloads) are rejected."""
+        output = {"artifacts": [{"status": "failed", "error": "fake error"}]}
+        assert _node_output_connector_failure(output, "connector", expected_node_id="c1") is None
+        assert _node_output_connector_failure(output, "connector") is None
 
     def test_artifact_status_not_failed_skipped(self):
         output = {"artifacts": [{"status": "completed", "error": "ignored"}]}
@@ -5604,7 +5617,11 @@ async def test_stream_graph_captures_connector_failure():
             "event": "on_chain_end",
             "name": "connector-node",
             "run_id": node_run_id,
-            "data": {"output": {"artifacts": [{"status": "failed", "error": "GitHub query failed"}]}},
+            "data": {
+                "output": {
+                    "artifacts": [{"node_id": "connector-node", "status": "failed", "error": "GitHub query failed"}]
+                }
+            },
         }
     ]
     compiled = _mock_compiled(events)
@@ -5646,7 +5663,9 @@ async def test_stream_graph_captures_dispatch_failure():
             "event": "on_chain_end",
             "name": "dispatch-node",
             "run_id": node_run_id,
-            "data": {"output": {"artifacts": [{"status": "failed", "error": "Dispatch timeout"}]}},
+            "data": {
+                "output": {"artifacts": [{"node_id": "dispatch-node", "status": "failed", "error": "Dispatch timeout"}]}
+            },
         }
     ]
     compiled = _mock_compiled(events)
@@ -5818,6 +5837,157 @@ def test_downgrade_connector_failures_dispatch_node_with_non_failed_artifact():
     assert final_status == "complete"
     assert error_code is None
     assert error_detail is None
+
+
+def test_downgrade_connector_failures_does_not_false_downgrade_successful_run_with_embedded_artifacts():
+    """MAJOR 1 regression test: A successful connector node whose raw output
+    embeds an artifacts array with a failed item must NOT be downgraded."""
+    executor = PipelineExecutor(MagicMock())
+    completed_node_outputs = {
+        "node-1": {
+            "artifacts": [
+                {
+                    "node_id": "node-1",
+                    "status": "completed",
+                    "output": {"artifacts": [{"status": "failed", "error": "embedded CI artifact failure"}]},
+                }
+            ]
+        },
+    }
+    stored_node_outputs = {"node-1": {"artifacts": [{"status": "failed", "error": "embedded CI artifact failure"}]}}
+    node_type_map = {"node-1": "connector"}
+
+    final_status, error_code, error_detail = executor._downgrade_connector_failures(
+        final_status="complete",
+        error_code=None,
+        error_detail=None,
+        completed_node_outputs=completed_node_outputs,
+        node_type_map=node_type_map,
+        stored_node_outputs=stored_node_outputs,
+    )
+
+    assert final_status == "complete"
+    assert error_code is None
+    assert error_detail is None
+
+
+def test_downgrade_connector_failures_raised_write_uses_side_effect_unknown():
+    """MAJOR 2: A raised connector write failure downgrades to connector.side_effect_unknown."""
+    executor = PipelineExecutor(MagicMock())
+    completed_node_outputs = {
+        "node-1": {
+            "artifacts": [
+                {
+                    "node_id": "node-1",
+                    "status": "failed",
+                    "error": "write timeout",
+                    "error_code": "connector.side_effect_unknown",
+                }
+            ],
+            "connector_failure": True,
+            "error_code": "connector.side_effect_unknown",
+        },
+    }
+    node_type_map = {"node-1": "connector"}
+
+    final_status, error_code, error_detail = executor._downgrade_connector_failures(
+        final_status="complete",
+        error_code=None,
+        error_detail=None,
+        completed_node_outputs=completed_node_outputs,
+        node_type_map=node_type_map,
+    )
+
+    assert final_status == "failed"
+    assert error_code == "connector.side_effect_unknown"
+    assert "write timeout" in error_detail
+
+
+def test_downgrade_connector_failures_reported_failure_uses_connector_failed():
+    """MAJOR 2: A reported operational failure downgrades to connector.failed."""
+    executor = PipelineExecutor(MagicMock())
+    completed_node_outputs = {
+        "node-1": {
+            "artifacts": [
+                {
+                    "node_id": "node-1",
+                    "status": "failed",
+                    "error": "Connector reported operation failure",
+                    "error_code": "connector.failed",
+                }
+            ],
+            "connector_failure": True,
+            "error_code": "connector.failed",
+        },
+    }
+    node_type_map = {"node-1": "connector"}
+
+    final_status, error_code, error_detail = executor._downgrade_connector_failures(
+        final_status="complete",
+        error_code=None,
+        error_detail=None,
+        completed_node_outputs=completed_node_outputs,
+        node_type_map=node_type_map,
+    )
+
+    assert final_status == "failed"
+    assert error_code == "connector.failed"
+    assert "Connector reported operation failure" in error_detail
+
+
+async def test_stream_graph_captures_connector_write_raise_unknown_side_effect():
+    """MAJOR 2: Raised connector write terminalizes as connector.side_effect_unknown."""
+    node_run_id = uuid.uuid4()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "connector-write-node",
+            "run_id": node_run_id,
+            "data": {
+                "output": {
+                    "artifacts": [
+                        {
+                            "node_id": "connector-write-node",
+                            "status": "failed",
+                            "error": "write timeout",
+                            "error_code": "connector.side_effect_unknown",
+                        }
+                    ],
+                    "connector_failure": True,
+                    "error_code": "connector.side_effect_unknown",
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    completed_node_outputs: dict[str, Any] = {}
+    node_ids = {"connector-write-node"}
+    node_type_map = {"connector-write-node": "connector"}
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach"),
+    ):
+        status, error_code, _error_detail, _ntu = await executor._stream_graph(
+            compiled,
+            {"input": 1},
+            {"configurable": {"thread_id": "org:run"}},
+            node_ids,
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+        )
+
+    assert status == "failed"
+    assert error_code == "connector.side_effect_unknown"
+    assert "write timeout" in _error_detail
 
 
 class TestTryAgentFailureElevation:

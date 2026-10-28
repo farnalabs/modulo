@@ -7451,6 +7451,7 @@ async def _connector_action_failure(
     connector: Any,
     state: dict[str, Any],
     node_id: str,
+    op: str,
     resource: str,
     filters: dict[str, Any],
     data: dict[str, Any],
@@ -7482,16 +7483,19 @@ async def _connector_action_failure(
         intent_active=intent_active,
         exception=exc,
     )
+    error_code = "connector.side_effect_unknown" if op == "write" else "connector.failed"
     return {
         "artifacts": [
             {
                 "node_id": node_id,
                 "status": "failed",
                 "error": str(exc),
+                "error_code": error_code,
                 "output": None,
             }
         ],
         "connector_failure": True,
+        "error_code": error_code,
     }
 
 
@@ -7542,10 +7546,12 @@ async def _connector_success_phase(
                         "node_id": node_id,
                         "status": "failed",
                         "error": "Connector reported operation failure",
+                        "error_code": "connector.failed",
                         "output": result,
                     }
                 ],
                 "connector_failure": True,
+                "error_code": "connector.failed",
             }
     return _guard_connector_secret_output(result, node_id)
 
@@ -7672,6 +7678,7 @@ async def _connector_invoke_phase(
             connector,
             state,
             node_id,
+            op,
             resource,
             filters,
             data,
