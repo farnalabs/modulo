@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { effect } from 'vue'
+import { effect, ref } from 'vue'
 import { createSyncAdapter, useDirtyTracker } from '../../composables/useSyncStore'
+import { clearAllRegistrations, disposeSyncHandlers, getHandlers, registerHandler, registerSyncHandlers } from '../../stores/syncRegistry'
 import type { EventBusEvent } from '../../types/events'
 
 const event = (action: EventBusEvent['action'], id: string): EventBusEvent => ({
@@ -42,6 +43,53 @@ describe('createSyncAdapter', () => {
     expect(remove).toHaveBeenCalledWith('deleted-1')
     expect(fetch).not.toHaveBeenCalled()
     expect(error).toHaveBeenCalledWith('[SyncAdapter] remove error', expect.any(Error))
+  })
+})
+
+describe('syncRegistry', () => {
+  afterEach(() => {
+    clearAllRegistrations()
+  })
+
+  it('registers, snapshots, and unregisters handlers without leaking empty resource sets', () => {
+    const first = vi.fn()
+    const second = vi.fn()
+    const removeFirst = registerHandler('pipeline', first)
+    registerHandler('pipeline', second)
+
+    const snapshot = getHandlers('pipeline')
+    expect(snapshot).toEqual(new Set([first, second]))
+    snapshot.clear()
+    expect(getHandlers('pipeline')).toEqual(new Set([first, second]))
+
+    removeFirst()
+    expect(getHandlers('pipeline')).toEqual(new Set([second]))
+    const removeDuplicate = registerHandler('pipeline', second)
+    removeDuplicate()
+    expect(getHandlers('pipeline')).toEqual(new Set())
+    removeFirst()
+    expect(getHandlers('pipeline')).toEqual(new Set())
+
+    const removeSecondFinal = registerHandler('run', second)
+    removeSecondFinal()
+    expect(getHandlers('run')).toEqual(new Set())
+  })
+
+  it('registers and disposes shared handlers for every resource type', () => {
+    const syncingIds = ref(new Set<string>(['pipeline-1']))
+    const unsubHandlers: Array<() => void> = []
+    const handler = vi.fn()
+
+    registerSyncHandlers(unsubHandlers, syncingIds, ['pipeline', 'run'], handler)
+    expect(unsubHandlers).toHaveLength(2)
+    expect(getHandlers('pipeline')).toEqual(new Set([handler]))
+    expect(getHandlers('run')).toEqual(new Set([handler]))
+
+    disposeSyncHandlers(unsubHandlers, syncingIds)
+    expect(unsubHandlers).toEqual([])
+    expect(syncingIds.value).toEqual(new Set())
+    expect(getHandlers('pipeline')).toEqual(new Set())
+    expect(getHandlers('run')).toEqual(new Set())
   })
 })
 

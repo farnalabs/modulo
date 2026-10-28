@@ -346,6 +346,40 @@ describe('SettingsSsoView — edit provider', () => {
     expect((api.PUT as Mock).mock.calls[0][1].body.client_secret).toBe('sk-rotated')
   })
 
+  it('saves a SAML provider using metadata fields in the update body', async () => {
+    ;(api.GET as Mock).mockResolvedValue({ data: [provider({ provider_type: 'saml', client_id: null, entity_id: 'old-entity', metadata_url: 'https://old.example/metadata' })], error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    await openEditForm(wrapper)
+
+    await wrapper.find('#ssoproviderform-field-9').setValue('SAML Updated')
+    await wrapper.find('#ssoproviderform-field-4').setValue('https://new.example/metadata')
+    await wrapper.find('#ssoproviderform-field-2').setValue('new-entity')
+    await wrapper.findAll('button').find((b) => b.text() === 'Save')!.trigger('click')
+    await nextTick()
+
+    const body = (api.PUT as Mock).mock.calls[0][1].body
+    expect(body.metadata_url).toBe('https://new.example/metadata')
+    expect(body.entity_id).toBe('new-entity')
+    expect(body.client_id).toBeUndefined()
+    expect(body.discovery_url).toBeUndefined()
+  })
+
+  it('saves a native OIDC provider without custom discovery fields', async () => {
+    ;(api.GET as Mock).mockResolvedValue({ data: [provider({ preset: 'google' })], error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    await openEditForm(wrapper)
+
+    await wrapper.findAll('button').find((b) => b.text() === 'Save')!.trigger('click')
+    await nextTick()
+
+    const body = (api.PUT as Mock).mock.calls[0][1].body
+    expect(body.preset).toBe('google')
+    expect(body.discovery_url).toBeUndefined()
+    expect(body.scopes).toBeUndefined()
+  })
+
   it('shows a save failure in the edit form', async () => {
     ;(api.PUT as Mock).mockResolvedValue({ data: undefined, error: { detail: 'update rejected' } })
     const wrapper = mountView()
@@ -417,6 +451,18 @@ describe('SettingsSsoView — toggle provider', () => {
     expect(wrapper.find('[data-testid="settings-sso-toggle"]').attributes('aria-checked')).toBe('false')
   })
 
+  it('does not refetch after a toggle response without data', async () => {
+    ;(api.PUT as Mock).mockResolvedValue({ data: undefined, error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    const getCalls = (api.GET as Mock).mock.calls.length
+
+    await wrapper.find('[data-testid="settings-sso-toggle"]').trigger('click')
+    await nextTick()
+
+    expect((api.GET as Mock).mock.calls.length).toBe(getCalls)
+  })
+
   it('shows a toggle failure from the error envelope', async () => {
     ;(api.PUT as Mock).mockResolvedValue({ data: undefined, error: { detail: 'toggle blocked' } })
     const wrapper = mountView()
@@ -478,6 +524,18 @@ describe('SettingsSsoView — delete provider', () => {
     expect(api.DELETE).not.toHaveBeenCalled()
   })
 
+  it('does not remove a provider when DELETE returns neither success status nor error', async () => {
+    ;(api.DELETE as Mock).mockResolvedValue({ response: { status: 202, ok: false }, error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    await openDeleteConfirm(wrapper)
+    await wrapper.find('[data-testid="settings-sso-delete-confirm"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Acme SSO')
+    expect(wrapper.text()).toContain('Delete "Acme SSO"?')
+  })
+
   it('a DELETE error envelope surfaces the failure and keeps the provider', async () => {
     ;(api.DELETE as Mock).mockResolvedValue({ response: { status: 409 }, error: { detail: 'in use' } })
     const wrapper = mountView()
@@ -520,6 +578,20 @@ describe('SettingsSsoView — test connection', () => {
     expect(wrapper.text()).toContain('Connection successful')
     expect(wrapper.text()).toContain('All good')
     expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(true)
+  })
+
+  it('clears a previous test timer before scheduling a new successful result', async () => {
+    ;(api.POST as Mock).mockResolvedValue({ data: { success: true, message: 'All good', provider_info: null }, error: undefined })
+    const wrapper = mountView()
+    await nextTick()
+    const test = wrapper.find('[data-testid="settings-sso-test"]')
+
+    await test.trigger('click')
+    await nextTick()
+    await test.trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Connection successful')
   })
 
   it('shows a failed test result without the provider info viewer', async () => {

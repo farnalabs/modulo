@@ -119,6 +119,14 @@ describe('ProductAnalyticsSettings', () => {
     expect(wrapper.text()).toContain('Coming soon')
   })
 
+  it('disables the toggle while the store is loading', () => {
+    storeHarness.state.loading = true
+
+    const wrapper = mountSettings()
+
+    expect(wrapper.findComponent(ToggleSwitch).props('disabled')).toBe(true)
+  })
+
   it('shows level_all badge when opted in', async () => {
     storeHarness.state.isOptedIn = true
 
