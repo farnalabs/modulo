@@ -7,6 +7,7 @@ import DataCard from '../components/ui/DataCard.vue'
 import MetricCard from '../components/ui/MetricCard.vue'
 import SummaryCard from '../components/ui/SummaryCard.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
+import StatCard from '../components/StatCard.vue'
 
 describe('BaseCard', () => {
   it('maps visual props, custom classes, test ids, and named slots', () => {
@@ -63,7 +64,14 @@ describe('CardHeader and DataCard', () => {
     expect(customHeader.find('h4').text()).toBe('Custom heading')
   })
 
-  it('keeps SectionCard headings at h2', () => {
+   it('does not render an empty header for a title-less, action-less DataCard', () => {
+     const wrapper = mount(DataCard, { slots: { default: '<p>Body</p>' } })
+
+     expect(wrapper.find('.card-header').exists()).toBe(false)
+     expect(wrapper.find('.card-content').text()).toBe('Body')
+   })
+
+   it('keeps SectionCard headings at h2', () => {
     const wrapper = mount(SectionCard, { props: { title: 'Settings' } })
 
     expect(wrapper.find('h2').text()).toBe('Settings')
@@ -80,16 +88,42 @@ describe('MetricCard', () => {
     expect(wrapper.attributes('data-testid')).toBe('metric-card')
     expect(wrapper.text()).toContain('+2 (16.3%)')
     expect(wrapper.text()).toContain('▲')
-    expect(wrapper.find('.text-success-text').exists()).toBe(true)
-  })
+   expect(wrapper.find('.text-success-text').exists()).toBe(true)
+   })
 
-  it('renders progress when delta is absent and clamps the visual width', () => {
-    const wrapper = mount(MetricCard, {
-      props: { label: 'Capacity', value: 'Full', progress: { value: 120, max: 100 } },
-    })
+   it('preserves the absent test id when no custom id is provided', () => {
+     expect(mount(MetricCard, { props: { label: 'Runs', value: 1 } }).attributes('data-testid')).toBeUndefined()
+   })
 
-    expect(wrapper.find('.bg-destructive').exists()).toBe(true)
-    expect(wrapper.find('[style="width: 100%;"]').exists()).toBe(true)
+   it.each([
+     [{ value: 120, max: 100 }, '100%'],
+     [{ value: -10, max: 100 }, '0%'],
+     [{ value: 50, max: 0 }, '0%'],
+     [{ value: 50, max: -10 }, '0%'],
+   ])('clamps progress safely for %o', (progress, width) => {
+     const wrapper = mount(MetricCard, {
+       props: { label: 'Capacity', value: 'Full', progress },
+     })
+
+     expect(wrapper.find('[style]').attributes('style')).toContain(`width: ${width}`)
+   })
+
+   it('uses the destructive style for over-max progress', () => {
+     const wrapper = mount(MetricCard, {
+       props: { label: 'Capacity', value: 'Full', progress: { value: 120, max: 100 } },
+     })
+
+     expect(wrapper.find('.bg-destructive').exists()).toBe(true)
+   })
+})
+
+describe('StatCard', () => {
+  it('binds a custom test id and preserves the default', () => {
+    const custom = mount(StatCard, { props: { label: 'Runs', value: 12, dataTestId: 'custom-stat' } })
+    const fallback = mount(StatCard, { props: { label: 'Runs', value: 12 } })
+
+    expect(custom.find('[data-testid="custom-stat"]').exists()).toBe(true)
+    expect(fallback.find('[data-testid="dashboard-stats-card"]').exists()).toBe(true)
   })
 })
 

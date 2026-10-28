@@ -5,7 +5,7 @@
     :footnote="timeWindow
       ? $t('views.RiskAssessmentView.time_window_note', { days: timeWindow })
       : undefined"
-    data-testid="risk-assessment-summary-card"
+     :data-testid="dataTestId ?? 'risk-assessment-summary-card'"
     grid-test-id="risk-assessment-summary-grid"
     footnote-test-id="risk-assessment-time-window"
   >

@@ -3,7 +3,7 @@
     <BaseCard
       variant="bordered"
       padding="md"
-      data-testid="dashboard-stats-card"
+       :data-testid="dataTestId ?? 'dashboard-stats-card'"
       :class="`card-hover ${props.class ?? ''}`"
     >
       <div class="flex items-center gap-3">

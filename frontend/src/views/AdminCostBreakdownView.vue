@@ -3,12 +3,7 @@
     <PageHeader
       :title="$t('views.AdminCostBreakdownView.cost_breakdown')"
       :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')"
-      :tabs="[
-        { label: $t('views.AdminCostBreakdownView.tabs_overview'), to: '/admin/costs' },
-        { label: $t('views.AdminCostBreakdownView.tabs_spend_limits'), to: '/admin/costs/limits' },
-        { label: $t('views.AdminCostBreakdownView.tabs_cost_components'), to: '/admin/costs/components' },
-        { label: $t('views.AdminCostBreakdownView.tabs_cost_controls'), to: '/admin/costs/controls' },
-      ]"
+       :tabs="costPageTabs"
     />
 
     <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
@@ -50,8 +45,9 @@
         <DataCard
           :title="$t('views.AdminCostBreakdownView.per_team_cost_breakdown')"
           :description="$t('views.AdminCostBreakdownView.monthly_spend_run_count_and_avg_by_team')"
-          padding="none"
-        >
+           padding="none"
+           heading-level="h2"
+         >
           <template #default>
             <EmptyState
               v-if="items.length === 0"
@@ -107,8 +103,9 @@
           </template>
         </DataCard>
 
-        <DataCard
-          :title="$t('views.AdminCostBreakdownView.cost_anomaly_alerts')"
+         <DataCard
+           heading-level="h2"
+           :title="$t('views.AdminCostBreakdownView.cost_anomaly_alerts')"
           :description="$t('views.AdminCostBreakdownView.days_where_spend_exceeded_2x_avg')"
         >
           <template #default>
@@ -172,8 +169,10 @@ import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
+import { useCostPageTabs } from '../composables/useCostPageTabs'
 
 const { t } = useI18n()
+const costPageTabs = useCostPageTabs()
 const planStore = usePlanStore()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 

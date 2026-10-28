@@ -30,7 +30,7 @@
           <div
             class="h-full rounded-full transition-all duration-500"
             :class="progressBarClass"
-            :style="{ width: Math.min(progress.value, progress.max) / progress.max * 100 + '%' }"
+            :style="{ width: `${progressPercent}%` }"
           />
         </div>
       </div>
@@ -119,9 +119,16 @@ const deltaPctText = computed(() => {
   return `${Math.abs(d).toFixed(1)}%`
 })
 
+const progressPercent = computed(() => {
+  const progress = props.progress
+  if (!progress || !Number.isFinite(progress.max) || progress.max <= 0) return 0
+  if (!Number.isFinite(progress.value)) return 0
+  return Math.min(Math.max(progress.value, 0), progress.max) / progress.max * 100
+})
+
 const progressBarClass = computed(() => {
   if (!props.progress) return 'bg-primary'
-  const pct = (props.progress.value / props.progress.max) * 100
+  const pct = progressPercent.value
   const color = props.progress.color ?? 'primary'
   if (pct >= 100) return 'bg-destructive'
   if (pct >= 90) return 'bg-warning'

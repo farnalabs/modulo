@@ -295,11 +295,14 @@ describe('RiskAssessmentSummaryCard', () => {
         totalRows: 9,
         actionCounts: { block: 1, warn: 2, continue: 3, escalate: 4 },
         facetDegraded: true,
-        timeWindow: 30,
-      },
+         timeWindow: 30,
+         dataTestId: 'custom-risk-summary',
+       },
     })
 
-    expect(wrapper.find('[data-testid="risk-assessment-total"]').text()).toBe('9')
+     expect(wrapper.find('[data-testid="custom-risk-summary"]').exists()).toBe(true)
+     expect(wrapper.find('[data-testid="risk-assessment-summary-card"]').exists()).toBe(false)
+     expect(wrapper.find('[data-testid="risk-assessment-total"]').text()).toBe('9')
     expect(wrapper.find('[data-testid="risk-assessment-block-count"]').text()).toBe('1')
     expect(wrapper.find('[data-testid="risk-assessment-warn-count"]').text()).toBe('2')
     expect(wrapper.find('[data-testid="risk-assessment-continue-count"]').text()).toBe('3')

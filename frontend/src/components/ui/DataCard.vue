@@ -15,7 +15,7 @@
       :description-class="descriptionClass"
       :data-testid="dataTestId ? `${dataTestId}-header` : undefined"
     >
-      <template #actions>
+      <template v-if="$slots.headerActions" #actions>
         <slot name="headerActions" />
       </template>
     </CardHeader>

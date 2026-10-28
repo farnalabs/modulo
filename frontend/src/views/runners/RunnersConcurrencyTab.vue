@@ -5,8 +5,9 @@
     <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
 
     <template v-else>
-      <DataCard
-        :title="$t('views.RunnersConcurrencyTab.max_concurrent_runner_runs')"
+       <DataCard
+         heading-level="h2"
+         :title="$t('views.RunnersConcurrencyTab.max_concurrent_runner_runs')"
         :description="$t('views.RunnersConcurrencyTab.semantics_hint')"
       >
         <template #default>

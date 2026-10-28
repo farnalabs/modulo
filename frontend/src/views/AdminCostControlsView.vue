@@ -3,12 +3,7 @@
     <PageHeader
       :title="$t('views.AdminCostBreakdownView.cost_controls')"
       :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')"
-      :tabs="[
-        { label: 'Overview', to: '/admin/costs' },
-        { label: 'Spend Limits', to: '/admin/costs/limits' },
-        { label: 'Cost Components', to: '/admin/costs/components' },
-        { label: 'Cost Controls', to: '/admin/costs/controls' },
-      ]"
+       :tabs="costPageTabs"
     />
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
@@ -67,6 +62,7 @@
            :description="$t('views.AdminCostControlsView.set_per_team_budget_caps')"
 
            padding="none"
+           heading-level="h2"
          >
            <template #default>
             <EmptyState v-if="teams.length === 0" :title="$t('views.AdminCostControlsView.no_teams_found')" />
@@ -259,8 +255,10 @@ import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
 import Select from '../components/shared/AppSelect.vue'
 import { formatMoney } from '../lib/money'
+import { useCostPageTabs } from '../composables/useCostPageTabs'
 
 const planStore = usePlanStore()
+const costPageTabs = useCostPageTabs()
 const { t } = useI18n()
 
 interface CostReportComponent {

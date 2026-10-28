@@ -3,12 +3,7 @@
     <PageHeader
       :title="$t('views.CostComponentsView.cost_components')"
       :subtitle="$t('views.CostComponentsView.configure_the_named_cost_components_that_make_up_a_runs_cost')"
-      :tabs="[
-        { label: 'Overview', to: '/admin/costs' },
-        { label: 'Spend Limits', to: '/admin/costs/limits' },
-        { label: 'Cost Components', to: '/admin/costs/components' },
-        { label: 'Cost Controls', to: '/admin/costs/controls' },
-      ]"
+       :tabs="costPageTabs"
     >
       <template #right>
         <Button class="border-primary/30 hover:border-primary/60" data-testid="cost-components-add" @click="openCreate">
@@ -46,8 +41,8 @@
         />
 
         <DataCard v-else padding="none">
-          <template #default>
-            <div class="-mx-5 -my-5">
+           <template #default>
+             <div>
             <DataTable
               :columns="[
                 { key: 'display_name', label: $t('views.CostComponentsView.display_name') },
@@ -259,8 +254,10 @@ import { DataTable } from '../components/ui/data-table'
 import Select from '../components/shared/AppSelect.vue'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
+import { useCostPageTabs } from '../composables/useCostPageTabs'
 
 const planStore = usePlanStore()
+const costPageTabs = useCostPageTabs()
 
 const { currencyCode, loadCurrency } = useOrgCurrency()
 

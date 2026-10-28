@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 
 const mockPut = vi.hoisted(() => vi.fn().mockResolvedValue({ data: null, error: undefined }))
@@ -116,7 +117,7 @@ describe('AdminCostControlsView', () => {
       return defaultGet(path)
     })
     const wrapper = await mountView()
-    expect(wrapper.find('[data-testid="cc-remaining"]').classes()).toContain('text-warning-text')
+    expect(wrapper.find('[data-testid="cc-remaining"] .text-warning-text').exists()).toBe(true)
   })
 
   it('displays team budget rows', async () => {
@@ -483,18 +484,23 @@ describe('AdminCostControlsView', () => {
     expect(wrapper.text()).toContain('budget crashed')
   })
 
-  it('covers zero-budget and progress-bar threshold branches', async () => {
+  it('renders remaining-budget warning and destructive styling through the DOM', async () => {
     const wrapper = await mountView()
     const vm = wrapper.vm as any
     vm.settings.budget = 0
     vm.totalSpend = 0
-    expect(vm.remainingClass).toBe('')
+    await nextTick()
+    expect(wrapper.find('[data-testid="cc-remaining"] .text-muted-foreground').exists()).toBe(true)
     expect(vm.progressBarClass).toBe('bg-primary')
+
     vm.settings.budget = 100
     vm.totalSpend = 110
-    expect(vm.remainingClass).toBe('text-destructive')
+    await nextTick()
+    expect(wrapper.find('[data-testid="cc-remaining"] .text-destructive').exists()).toBe(true)
     expect(vm.progressBarClass).toBe('bg-destructive')
+
     vm.totalSpend = 80
+    await nextTick()
     expect(vm.progressBarClass).toBe('bg-amber-500')
   })
 

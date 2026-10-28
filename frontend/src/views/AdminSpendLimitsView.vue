@@ -3,12 +3,7 @@
     <PageHeader
       :title="$t('views.AdminCostBreakdownView.spend_limits')"
       :subtitle="$t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level')"
-      :tabs="[
-        { label: 'Overview', to: '/admin/costs' },
-        { label: 'Spend Limits', to: '/admin/costs/limits' },
-        { label: 'Cost Components', to: '/admin/costs/components' },
-        { label: 'Cost Controls', to: '/admin/costs/controls' },
-      ]"
+       :tabs="costPageTabs"
     />
 
     <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled>
@@ -18,8 +13,9 @@
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
 
       <template v-else>
-        <DataCard
-          :title="$t('views.AdminSpendLimitsView.org_level_daily_spend_limit')"
+         <DataCard
+           heading-level="h2"
+           :title="$t('views.AdminSpendLimitsView.org_level_daily_spend_limit')"
           :description="$t('views.AdminSpendLimitsView.maximum_daily_spend_across_all_teams_in_usd')"
         >
           <template #default>
@@ -38,8 +34,9 @@
          </DataCard>
 
         <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
-          <DataCard
-            :title="$t('views.AdminSpendLimitsView.hard_spend_ceilings')"
+           <DataCard
+             heading-level="h2"
+             :title="$t('views.AdminSpendLimitsView.hard_spend_ceilings')"
             :description="$t('views.AdminSpendLimitsView.hard_spend_ceilings_subtitle')"
           >
             <template #default>
@@ -102,8 +99,9 @@
           </DataCard>
         </FeatureGate>
 
-        <DataCard
-          :title="$t('views.AdminSpendLimitsView.per_team_spend_limits')"
+         <DataCard
+           heading-level="h2"
+           :title="$t('views.AdminSpendLimitsView.per_team_spend_limits')"
           :description="$t('views.AdminSpendLimitsView.override_the_org_level_limit_for_specific_teams')"
         >
           <template #default>
@@ -144,8 +142,9 @@
           </template>
         </DataCard>
 
-        <DataCard
-          :title="$t('views.AdminSpendLimitsView.current_spend')"
+         <DataCard
+           heading-level="h2"
+           :title="$t('views.AdminSpendLimitsView.current_spend')"
           :description="$t('views.AdminSpendLimitsView.todays_accrued_costs_across_all_teams')"
         >
           <template #default>
@@ -196,8 +195,10 @@ import Button from 'primevue/button'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 import type { components } from '../lib/api/schema'
+import { useCostPageTabs } from '../composables/useCostPageTabs'
 
 const planStore = usePlanStore()
+const costPageTabs = useCostPageTabs()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 
 interface SpendLimitData {
