@@ -13,6 +13,7 @@ unit-tests:
   - backend/tests/unit/api/test_evidence_routes.py
   - backend/tests/unit/core/evidence/test_evidence_redaction.py
   - backend/tests/integration/db/test_evidence_redaction_rules.py
+  - frontend/src/__tests__/EvidenceView.spec.ts
   - frontend/src/__tests__/AdminEvidenceRedactionView.spec.ts
 depends-on:
   - feat-core-evidence-store
@@ -109,3 +110,30 @@ the page is careful about identity:
   not part of this entry; the decision-record NULL-duplicate grouping
   (acceptance criteria 12-14) belongs to the decision-record read path and is
   not implemented here.
+
+## QA History
+
+- 2026-10-28: **Improve Architecture product-map walk** (first pass on this
+  entry). Fixed MINOR (product-map completeness): the `/evidence` page shipped
+  six static testids (`evidence-run-id`, `evidence-node-id`, `evidence-key`,
+  `evidence-load`, `evidence-loading`, `evidence-count`) plus the shared
+  `ErrorAlert` retry, but the manifest had **no `elements` inventory for the
+  route at all** - so the page's whole testable surface was invisible to
+  Assistant's `search_documentation` indexer and to `/api/v1/manifest`. The
+  blind spot was structural: `OWNED_PAGES` in
+  `backend/tests/architecture/test_product_map_consistency.py` (the map that
+  drives both the reverse-testid-coverage guard and the phantom-element guard)
+  omitted `/evidence`, so `test_mapped_route_elements_cover_owning_view_testids`
+  proved nothing about the page even though its docstring claims to cover
+  "every whole-page view component". Registered the inventory and added
+  `/evidence` to `OWNED_PAGES`, so a future testid on the page must be
+  documented or CI fails. Also added the shipped
+  `frontend/src/__tests__/EvidenceView.spec.ts` (18 specs covering the load
+  form, blank-run-id rejection, no-fetch-on-mount, auto-load from query params,
+  redacted-value rendering, loading/empty/error states, retry, and
+  circular/undefined value formatting) to the frontmatter - it existed but was
+  not listed. Verified the rest of the entry against the code: the list/detail
+  reads are org-scoped and redacted server-side, the rule upsert is
+  admin-gated and audited, migration 0320 + org creation both seed the
+  `*`/viewer catch-all, and the editor's create/edit guards match the
+  documented contract. No behaviour change.
