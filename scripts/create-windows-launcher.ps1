@@ -1,34 +1,23 @@
 #!/usr/bin/env pwsh
-# Create the Windows launcher placeholder.
-# Usage: create-windows-launcher.ps1 -Version <version> -OutputPath <path>
-#
-# The real Windows launcher is a native PE produced by the Windows native build
-# (FAR-679). Until that lands, this writes a batch-text placeholder so the
-# installer bundle layout (modulo.exe at the bundle root, referenced by
-# modulo.iss and the NT SERVICE ImagePath) can be staged and validated
-# end-to-end. It is NOT executable as a native binary and must not ship in a
-# promoted release.
+# Validate the Windows native-launcher contract without manufacturing a fake PE.
+# A real Windows runtime must provide modulo.exe before installer publication.
 
+[CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$Version,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
     [string]$OutputPath
 )
 
-$launcherContent = @"
-@echo off
-REM Modulo Windows launcher - placeholder, not a native binary (FAR-679).
-echo Modulo Windows installer - placeholder executable
-echo Version: $Version
-echo Architecture: amd64
-"@
+$ErrorActionPreference = 'Stop'
 
-$parent = Split-Path -Parent $OutputPath
-if ($parent -and -not (Test-Path $parent)) {
-    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+if ([System.IO.Path]::GetExtension($OutputPath) -ne '.exe') {
+    throw "Windows launcher output must be a native .exe path: $OutputPath"
 }
 
-Set-Content -Path $OutputPath -Value $launcherContent -Encoding UTF8
-Write-Host "Created launcher at $OutputPath for version $Version"
+Write-Host "Windows native runtime prerequisite validated for version $Version."
+Write-Host "No placeholder launcher written; a real PE executable is required before publication."

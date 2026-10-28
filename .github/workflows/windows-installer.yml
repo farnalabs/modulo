@@ -1,38 +1,28 @@
 name: "Windows: Build Installer (Inno Setup)"
 
-# FAR-679 — Windows native installer (Inno Setup, NT SERVICE, Azure signing)
-# Builds a Windows installer (.exe) for the Modulo native bundle
-# Triggered by release-unified.yml on promote, or manually for dry-run
+# FAR-679: native Windows packaging is deliberately fail-closed until a real
+# Windows runtime exists. A Linux bundle is never relabeled as Windows, and
+# dry-run validates the launcher/Inno contracts without creating an installer.
 
 on:
   workflow_call:
     inputs:
       version:
-        description: "Release version in X.Y.Z form (e.g. 0.4.0)"
+        description: "Release version in X.Y.Z form"
         type: string
         required: true
       rc_tag:
-        description: "RC tag being released (e.g. v0.4.0-rc1)"
+        description: "RC tag being released"
         type: string
         required: true
       ref:
-        description: "Git ref to build from (the RC tag for cut/recut; main for a dry-run)"
+        description: "Git ref to validate"
         type: string
         required: true
       mode:
         description: "Build mode: dry-run, cut, recut, promote"
         type: string
         default: dry-run
-    secrets:
-      AZURE_CLIENT_ID:
-        required: true
-      AZURE_TENANT_ID:
-        required: true
-      AZURE_SUBSCRIPTION_ID:
-        required: true
-      GH_TOKEN:
-        required: true
-
 concurrency:
   group: windows-installer-${{ github.workflow }}-${{ inputs.version }}
   cancel-in-progress: false
@@ -53,210 +43,91 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
-
-      - name: Assert bundle-versions.env has Windows-compatible entries
+      - name: Validate shared bundle pins
         run: |
-          Set-StrictMode -Version Latest
-          $content = Get-Content scripts/bundle-versions.env -Raw
-          Write-Host "bundle-versions.env loaded for Windows build"
-          # Future: assert Windows-specific pins exist (e.g., Windows python, redis, pg builds)
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path -LiteralPath 'scripts/bundle-versions.env')) {
+            throw 'scripts/bundle-versions.env is missing'
+          }
+          Write-Host 'bundle-versions.env loaded; no native Windows pins are currently available.'
 
   build:
-    name: Build Windows Installer
+    name: Validate Windows installer prerequisite
     needs: version-parity
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
     env:
       VERSION_NUM: ${{ inputs.version }}
-      RC_TAG: ${{ inputs.rc_tag }}
       MODE: ${{ inputs.mode }}
-      ARCH: amd64
-      BUNDLE_DIR: ${{ github.workspace }}\modulo-${{ inputs.version }}-windows-amd64
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    outputs:
-      sha256: ${{ steps.compute_sha256.outputs.sha256 }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
-
-      - name: Download linux bundle artefact (source for the Windows bundle)
-        uses: actions/download-artifact@v4
-        with:
-          # bundle-release.yml builds linux-amd64 only; there is no arm64 leg
-          # yet, so this is the only artefact that exists.
-          name: bundle-artefacts-amd64
-          path: ${{ runner.temp }}/linux-bundle
-
       - name: Set up Inno Setup
         uses: MinionGuy/Setup-Inno@master
         with:
           version: 6.2.2
-
-      - name: Stage Windows bundle from the Linux bundle
+      - name: Validate launcher helper contract
         run: |
-          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
-
-          # Use the Linux bundle as source (we rebuild the Windows-specific parts).
-          $bundleRoot = $env:BUNDLE_DIR
-          $linuxBundle = "${{ runner.temp }}/linux-bundle"
-          $tarball = Get-ChildItem $linuxBundle -Filter "*.tar.gz" | Select-Object -First 1
-
-          if (-not $tarball) {
-            Write-Error "No Linux bundle artefact found - cannot build Windows installer without a source bundle"
-            exit 1
+          & "$env:GITHUB_WORKSPACE/scripts/create-windows-launcher.ps1" -Version $env:VERSION_NUM -OutputPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')
+          if (Test-Path -LiteralPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')) {
+            throw 'launcher helper created a fake executable'
           }
-
-          # Extract into a staging directory, then move the extracted root into
-          # its windows-arch bundle path. Extract-then-rename keeps the bundle
-          # exactly one level deep (`$bundleRoot\*`) and matches the Linux layout.
-          $stage = "${{ runner.temp }}/windows-bundle-stage"
-          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-
-          tar -xzf $tarball.FullName -C $stage
-          if ($LASTEXITCODE -ne 0) { Write-Error "Failed to extract $($tarball.FullName)"; exit 1 }
-
-          $extracted = Get-ChildItem $stage -Directory | Select-Object -First 1
-          if (-not $extracted) { Write-Error "The bundle tarball did not extract a bundle directory"; exit 1 }
-
-          if (Test-Path $bundleRoot) { Remove-Item $bundleRoot -Recurse -Force }
-          Move-Item -Path $extracted.FullName -Destination $bundleRoot
-          Write-Host "Staged Windows bundle at $bundleRoot"
-
-          # Write the Windows launcher via the external script. Its param block
-          # is the contract: -Version and -OutputPath only.
-          $launcherPath = Join-Path $bundleRoot "modulo.exe"
-          & "${{ github.workspace }}/scripts/create-windows-launcher.ps1" -Version "${{ inputs.version }}" -OutputPath $launcherPath
-          if ($LASTEXITCODE -ne 0) { Write-Error "Failed to create launcher at $launcherPath"; exit 1 }
-
-          # The Inno script is compiled as-is; its values arrive as /D defines
-          # in the iscc call below (`{#VERSION_NUM}` etc.), never by rewriting
-          # the file on disk.
-          Write-Host "Bundle ready: $bundleRoot"
-
-      - name: Build installer with Inno Setup
+      - name: Validate Inno Setup script
         run: |
-          Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
-          $issPath = "deploy/windows/modulo.iss"
-          $outputDir = Join-Path $env:GITHUB_WORKSPACE "build\windows"
-          $outputFile = "modulo-${{ inputs.version }}-windows-amd64.exe"
-
-          if ("${{ inputs.mode }}" -eq "dry-run") {
-            Write-Host "DRY-RUN: Would build Windows installer with Inno Setup"
-            Write-Host "Output: $outputDir\$outputFile"
-            Write-Host "Architecture: amd64"
-            exit 0
-          }
-
+          $outputDir = Join-Path $env:RUNNER_TEMP 'inno-contract'
           New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-
-          # Values arrive as ISPP defines (/D). The script contains no #{...}
-          # placeholders for the workflow to rewrite, and no /D means a compile
-          # error rather than a silently wrong installer.
-          $isccArgs = @(
-            "/Qp",
-            "/O$outputDir",
-            "/DVERSION_NUM=${{ inputs.version }}",
-            "/DBUNDLE_ARCH=amd64",
-            "/DBUNDLE_DIR=$env:BUNDLE_DIR",
-            $issPath
-          )
-          & iscc @isccArgs
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Inno Setup compile failed with exit code $LASTEXITCODE"
-            exit 1
+          & iscc "/Qp" "/DVERSION_NUM=$env:VERSION_NUM" '/DBUNDLE_ARCH=amd64' "/DBUNDLE_DIR=$env:RUNNER_TEMP/native-bundle" "/O$outputDir" '/Fcontract-check' 'deploy/windows/modulo.iss'
+      - name: Validate native Windows runtime prerequisite
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host 'Native Windows runtime/binaries are not yet available.'
+          Write-Host 'The current bundle artifact is Linux-only and must not be relabeled as Windows.'
+          if ($env:MODE -ne 'dry-run') {
+            throw 'Cannot publish Windows installer: no real Windows-native runtime/binaries exist.'
           }
+      - name: Dry-run summary
+        if: ${{ inputs.mode == 'dry-run' }}
+        run: |
+          @'
+          ## Windows installer dry-run
 
-          # Verify output
-          $exePath = Join-Path $outputDir $outputFile
-          if (-not (Test-Path $exePath)) {
-            Write-Error "Installer not found at $exePath"
-            exit 1
-          }
+          Native Windows artifacts are not yet available. No placeholder Linux launcher or incomplete installer was created or published.
+          '@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
-          Write-Host "Installer built: $exePath"
-          (Get-Item $exePath).Length | ForEach-Object { "Size: $([math]::Round($_/1MB, 2)) MB" }
-
+  sign:
+    name: Sign Windows installer (Azure Trusted Signing)
+    needs: build
+    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
       - name: Log in to Azure (OIDC)
-        if: ${{ inputs.mode != 'dry-run' }}
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Sign installer (Azure Artifact Signing)
-        if: ${{ inputs.mode != 'dry-run' }}
+      - name: Sign with Azure Trusted Signing
         uses: Azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
-          # Same account/profile the nightly signing canary proves works.
           endpoint: https://eus.codesigning.azure.net/
           signing-account-name: farnasigning
           certificate-profile-name: farna-public-trust
-          files-folder: build/windows
+          files-folder: ${{ runner.temp }}\\native-installer
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      - name: Verify the Authenticode signature
-        if: ${{ inputs.mode != 'dry-run' }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $exePath = "build/windows/modulo-${{ inputs.version }}-windows-amd64.exe"
-
-          $sig = Get-AuthenticodeSignature -FilePath $exePath
-          if (-not $sig.SignerCertificate) {
-            Write-Error "No signer certificate on $exePath (status: $($sig.Status))"
-            exit 1
-          }
-          Write-Host "Signature status: $($sig.Status)"
-          Write-Host "Signer          : $($sig.SignerCertificate.Subject)"
-          if ($sig.Status -ne 'Valid') {
-            Write-Error "Signature status is $($sig.Status), expected Valid"
-            exit 1
-          }
-
-      - name: Generate SHA256SUMS
-        id: compute_sha256
-        if: ${{ inputs.mode != 'dry-run' }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $outputDir = Join-Path $env:GITHUB_WORKSPACE "build\windows"
-          $exeName = "modulo-${{ inputs.version }}-windows-amd64.exe"
-          $sha256 = (Get-FileHash (Join-Path $outputDir $exeName) -Algorithm SHA256).Hash
-          "$sha256  $exeName" | Out-File -Encoding utf8 (Join-Path $outputDir "SHA256SUMS")
-          Get-Content (Join-Path $outputDir "SHA256SUMS")
-          "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-      - name: Upload installer artefact
-        if: ${{ inputs.mode != 'dry-run' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-installer-${{ inputs.version }}
-          path: build/windows/modulo-${{ inputs.version }}-windows-amd64.exe
-          retention-days: 30
-
-      - name: Upload SHA256SUMS
-        if: ${{ inputs.mode != 'dry-run' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-installer-sha256-${{ inputs.version }}
-          path: build/windows/SHA256SUMS
-          retention-days: 30
-
   attest:
-    name: Attest installer
-    needs: build
-    if: ${{ inputs.mode != 'dry-run' }}
+    name: Attest Windows installer
+    needs: [build, sign]
+    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' && needs.sign.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -264,70 +135,23 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Download installer
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-installer-${{ inputs.version }}
-          path: build/windows
-
-      - name: Verify installer exists
-        shell: bash
+      - name: Refuse incomplete native artifact
         run: |
           set -euo pipefail
-          ls -la build/windows/
-
-      # A reusable workflow can only be called at JOB level (`uses:` on a job),
-      # never from a step - so this uses the GitHub-native attestation action
-      # the rest of the release pipeline already relies on.
-      - name: Generate build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: build/windows/modulo-${{ inputs.version }}-windows-amd64.exe
-
-      - name: Verify attestation
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          set -euo pipefail
-          gh attestation verify "build/windows/modulo-${{ inputs.version }}-windows-amd64.exe" \
-            --repo farnalabs/modulo \
-            --signer-workflow farnalabs/modulo/.github/workflows/windows-installer.yml
+          echo "::error::Native Windows artifact publication is disabled until a real Windows build exists."
+          exit 1
 
   publish:
-    name: Publish to GitHub Release
+    name: Publish Windows installer
     needs: [build, attest]
-    if: ${{ inputs.mode == 'promote' }}
+    if: ${{ inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - name: Download installer
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-installer-${{ inputs.version }}
-          path: build/windows
-
-      - name: Create GitHub Release asset
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: bundle-v${{ inputs.version }}
-          files: build/windows/modulo-${{ inputs.version }}-windows-amd64.exe
-          name: "Windows Installer (${{ inputs.version }})"
-          body: |
-            Modulo Windows Installer v${{ inputs.version }}
-
-            SHA256: ${{ needs.build.outputs.sha256 }}
-
-            This installer includes:
-            - Native Windows executable (modulo.exe)
-            - Bundled Python runtime
-            - Bundled PostgreSQL 16 + Redis 8
-            - NT SERVICE installation with virtual account
-            - PATH registration
-            - Azure Trusted Signing certificate
-
-            Installation: Run the installer as Administrator.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+      - name: Refuse incomplete native artifact
+        run: |
+          set -euo pipefail
+          echo "::error::Cannot publish Windows installer: native artifact is unavailable."
+          exit 1

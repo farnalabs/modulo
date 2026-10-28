@@ -828,9 +828,7 @@ jobs:
   # Build Windows installer (cut and recut)
   # ---------------------------------------------------------------------------
   windows-installer:
-    name: Build Windows installer
-    # The installer stages its bundle from the `bundle-artefacts-*` artifact, so
-    # it must not start until the bundle job has uploaded it.
+    name: Validate Windows installer prerequisite
     needs: [release, bundle]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     uses: ./.github/workflows/windows-installer.yml
@@ -839,19 +837,14 @@ jobs:
       rc_tag: ${{ needs.release.outputs.rc_tag }}
       ref: ${{ needs.release.outputs.rc_tag }}
       mode: ${{ inputs.mode }}
-    secrets:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      GH_TOKEN: ${{ github.token }}
+    secrets: inherit
+
 
   # ---------------------------------------------------------------------------
   # Build macOS installer (cut and recut)
   # ---------------------------------------------------------------------------
   macos-installer:
-    name: Build macOS installer
-    # The installer stages its bundle from the `bundle-artefacts-*` artifact, so
-    # it must not start until the bundle job has uploaded it.
+    name: Validate macOS installer prerequisite
     needs: [release, bundle]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     uses: ./.github/workflows/macos-installer.yml
@@ -860,12 +853,9 @@ jobs:
       rc_tag: ${{ needs.release.outputs.rc_tag }}
       ref: ${{ needs.release.outputs.rc_tag }}
       mode: ${{ inputs.mode }}
-    secrets:
-      APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      GH_TOKEN: ${{ github.token }}
+    secrets: inherit
+
+
   # ---------------------------------------------------------------------------
   # Create the GitHub Release from the bundle artefacts (cut and recut)
   # ---------------------------------------------------------------------------
@@ -873,9 +863,6 @@ jobs:
     name: Create GitHub Release
     # Do not publish the bundle-v* tag until its tarball has a provenance
     # attestation; native-release-smoke is fail-closed on that attestation.
-    # The release MUST contain the native installers, so publish waits for
-    # them: without this the download-artifact steps below race the installer
-    # jobs and the asset-exists check fails every cut/recut.
     needs: [release, bundle, attest-artefacts, windows-installer, macos-installer]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     runs-on: ubicloud-standard-2
