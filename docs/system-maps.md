@@ -784,16 +784,44 @@ Documentation Care -----+
 ## 7. User Experience, Navigation & First Login
 
 ### 7.1 Primary Navigation & First Login
-System Maps is a first-class operational view.
+System Maps is a first-class operational view integrated into the Dashboard.
 
-1. **Navigation Entry:** System Maps is positioned in the primary navigation under the **BUILD** group, directly accessible at `/system-maps`.
-2. **Default Home View:** When an organization has a published System Map marked as default (`is_default = TRUE`), the root route `/` automatically renders the **System Overview** dashboard instead of a generic run list.
-3. **Empty / First-Run State:** If no System Map has been published, `/` renders a guided onboarding layout offering three options:
+1. **Navigation Entry:** System Maps is positioned in the primary navigation under the **BUILD** group as a tab/section within the existing **Dashboard** page at `/dashboard#system-maps`. The standalone `/system-maps` route is not used.
+2. **Default Home View:** When an organization has a published System Map marked as default (`is_default = TRUE`), the Dashboard (`/dashboard`) automatically displays the **System Overview** tab as the active section instead of the generic runs list.
+3. **Empty / First-Run State:** If no System Map has been published, the Dashboard's System Overview tab renders a guided onboarding layout offering four options:
+   - **Discover my system** — automatically scan existing pipelines, connectors, triggers, folders, and improvement-loop pipelines to produce a draft System Map for review, correction, and publication.
    - Select an opinionated system template (e.g. "Agentic PR Delivery with Autonomous Review").
    - Import an existing System Map specification via YAML or JSON.
    - Continue to the raw Pipelines management view.
 
-### 7.2 Visual Language & Canvas Layout
+### 7.2 "Discover My System" Automatic Topology Discovery
+
+The **Discover my system** flow scans the organization's existing Modulo resources to generate an initial draft System Map:
+
+1. **Scan Sources:**
+   - **Pipelines** — all active pipelines with their node types, triggers, and connector bindings.
+   - **Connectors** — configured connector instances and their operational status.
+   - **Triggers** — webhook, cron, polling, and agent-signal triggers with their target pipelines.
+   - **Folders** — pipeline folder hierarchy for logical grouping.
+   - **Improvement-loop pipelines** — pipelines tagged or configured as improvement loops (via `improvement_loop` node type or metadata).
+
+2. **Inference Rules:**
+   - Each pipeline becomes a `pipeline` node.
+   - Each trigger targeting a pipeline creates a `flow` edge from a synthetic trigger source to the pipeline node.
+   - Connector instances bound to pipeline nodes become `external_capability` nodes with `flow` edges from the pipeline.
+   - Folders become `system_boundary` nodes with `contains` relationships to their member pipelines.
+   - Pipelines identified as improvement loops (by metadata or naming convention) become `improvement_loop` nodes with `feeds_back_to` edges to the capability they monitor.
+
+3. **User Review & Correction:**
+   - The generated draft opens in the visual editor with all inferred nodes and edges highlighted as *suggested*.
+   - Users can add, remove, re-type, or reposition nodes; edit configurations; and validate the graph.
+   - The graph validator enforces DAG delivery flow, control integrity, and binding scope before publish.
+
+4. **Publication:**
+   - After review, the user publishes the draft as revision 1 of a new System Map.
+   - The map can be marked as default to appear in the Dashboard System Overview tab.
+
+### 7.3 Visual Language & Canvas Layout
 The System Map view uses a layered, directional canvas:
 - **Left-to-Right Delivery Flow:** The primary `flow` edges render from left to right using a modified Sugiyama hierarchical layout.
 - **Top and Bottom Sidecars:** Improvement loops and external signal monitors render in dedicated sidecar channels above and below the main flow line, clearly differentiating primary delivery from background control loops.
@@ -983,9 +1011,10 @@ Several underlying technical components remain sound and will be retained.
   - Database migration creating `system_maps`, `system_map_revisions`, `system_map_nodes`, and `system_map_relationships`.
   - Snapshot attribution freezing in `create_run`.
   - Attribution column additions to `run_daily_facts`.
-  - Read-only System Overview UI displaying published system topography.
+  - Read-only System Overview **tab within the Dashboard** displaying published system topography.
   - Node Inspector showing aggregated throughput, latency, and failure metrics derived from `run_daily_facts`.
-- **Exit Criteria:** A predefined system map renders live operational metrics without modifying running pipelines.
+  - **Empty-state onboarding with "Discover my system" flow** — scans pipelines, connectors, triggers, folders, and improvement-loop pipelines to generate a draft System Map for review and publication.
+- **Exit Criteria:** A predefined system map renders live operational metrics without modifying running pipelines; a new organization can discover, review, and publish their first System Map from the Dashboard.
 
 ### Beta 2: Visual Authoring, Revision Lifecycle & Draft/Publish
 - **Scope:**
@@ -994,7 +1023,8 @@ Several underlying technical components remain sound and will be retained.
   - Graph validation engine enforcing DAG delivery flow and control constraints.
   - Draft, publish, diff, and rollback revision workflow.
   - `modulo apply` declarative YAML support for System Maps.
-- **Exit Criteria:** Platform engineers can create, validate, publish, and update custom system maps via UI and CLI.
+  - **"Discover my system" re-scan action** — re-run the automatic topology discovery on an existing draft to incorporate newly created pipelines, connectors, or folders.
+- **Exit Criteria:** Platform engineers can create, validate, publish, and update custom system maps via UI and CLI; automatic discovery can be re-run on drafts to stay current.
 
 ### Beta 3: Improvement Loop Sidecars and Autonomous Feedback Metrics
 - **Scope:**
@@ -1035,13 +1065,12 @@ Several underlying technical components remain sound and will be retained.
 
 ### 11.3 Open Architecture & Product Decisions
 
-#### Decision 1: Default Landing Page Behavior
-- **Tension:** Should `/` automatically navigate to System Maps for all users once a map is published, or should it remain configurable per user role?
+#### Decision 1: Default Landing Page Behavior — RESOLVED
+- **Resolution:** System Maps is integrated as a **System Overview tab within the existing Dashboard page** (`/dashboard#system-maps`), not a separate route. When a default map exists, the Dashboard activates the System Overview tab by default. Individual users can toggle their preferred Dashboard default tab (`System Overview` vs `Runs List`) in account preferences.
 - **Trade-offs:**
-  - Making System Maps the default home page reinforces Modulo's category positioning as a systems governance platform and gives immediate visibility into delivery health.
-  - However, operational engineers who spend their day investigating individual failed runs may prefer the tabular Runs view as their default.
-- **Recommendation:** Default to the System Overview dashboard for the organization, but allow individual users to toggle their preferred landing view (`System Overview` vs `Runs List`) in their account preferences.
-- **Reasoning:** System Maps establishes the product identity upon login, while preserving efficiency for operators who need direct tabular run inspection.
+  - Integrating into Dashboard preserves the existing navigation structure and avoids a standalone route.
+  - Defaulting to System Overview on first login establishes product identity; per-user tab preference preserves operator efficiency.
+- **Reasoning:** This avoids fragmenting the primary navigation while still making System Maps the organizational default view.
 
 #### Decision 2: Plan Tier Gating for System Maps
 - **Tension:** What functionality in System Maps belongs in the free Community tier versus the paid Team and Enterprise tiers?
@@ -1054,10 +1083,10 @@ Several underlying technical components remain sound and will be retained.
   - **Enterprise Tier:** Declarative GitOps sync (`modulo apply`), compliance autonomy attestation export, and cross-organization boundaries.
 - **Reasoning:** This allows any self-hoster to model and observe their delivery pipeline for free, while charging for multi-team scale, long-term trend retention, and automated governance controls.
 
-#### Decision 3: Automatic Topology Discovery vs Explicit Modeling
-- **Tension:** Should System Maps automatically generate nodes and edges by observing pipeline triggers and connector webhooks, or should authoring be strictly explicit?
+#### Decision 3: Automatic Topology Discovery — RESOLVED
+- **Resolution:** Automatic topology discovery is **adopted** as the "Discover my system" flow. It scans existing pipelines, connectors, triggers, folders, and improvement-loop pipelines to produce a draft System Map. The user reviews, corrects, and publishes the draft. Available in the empty-state onboarding (Beta 1) and as a re-scan action on drafts (Beta 2).
 - **Trade-offs:**
-  - Auto-discovery reduces initial setup friction by generating an initial draft from existing pipelines and connectors.
-  - However, automated inference often produces messy, unreadable topologies with misleading edge semantics, confusing users about system boundaries.
-- **Recommendation:** Start with explicit authoring and template-based initialization in Beta 1 and Beta 2. Introduce an optional "Infer System Draft" wizard in Beta 3 that suggests node connections based on webhook triggers, but requires human approval before publishing.
-- **Reasoning:** Explicit architecture preserves conceptual clarity. Modulo should never guess delivery topology without confirmation.
+  - Reduces initial setup friction by generating a meaningful starting point from real resources.
+  - Inferred edges are marked as *suggested* and require human validation before publish, preserving conceptual clarity.
+  - Re-scan on drafts keeps maps current as the organization adds pipelines and connectors.
+- **Reasoning:** Explicit authoring alone creates a cold-start barrier. Guided discovery with mandatory review balances friction reduction with architectural intent.
