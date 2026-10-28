@@ -274,13 +274,29 @@ def test_list_libraries_multi_type_whitespace_normalized(client: TestClient) -> 
     assert call_kwargs["primitive_types"] == ["workflow", "agent", "schema"]
 
 
-def test_list_libraries_empty_primitive_types_keeps_no_filter_path(client: TestClient) -> None:
+def test_list_libraries_separator_only_primitive_types_narrow_to_visible_types(client: TestClient) -> None:
+    """A separator-only value must never clear the type filter (FAR-2200 review)."""
     mock_list = _stub_list_call(client=client, primitive_types=",  ,")
 
     assert mock_list.await_args is not None
     call_kwargs = mock_list.await_args.kwargs
-    assert call_kwargs["primitive_types"] is None
     assert call_kwargs["primitive_type"] is None
+    assert call_kwargs["primitive_types"]
+    assert "lifecycle_map" not in call_kwargs["primitive_types"]
+
+
+@pytest.mark.parametrize("raw", [",", ",,", ", ,", "  ,  "])
+def test_list_libraries_separator_only_types_hide_lifecycle_maps_from_viewer(
+    viewer_client: TestClient, raw: str
+) -> None:
+    """Regression: separator-only primitive_types leaked lifecycle_map primitives."""
+    mock_list = _stub_list_call(client=viewer_client, primitive_types=raw)
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] is None
+    assert call_kwargs["primitive_types"]
+    assert "lifecycle_map" not in call_kwargs["primitive_types"]
 
 
 def test_list_libraries_backwards_compatible_single_primitive_type(client: TestClient) -> None:

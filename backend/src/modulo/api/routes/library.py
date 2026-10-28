@@ -235,10 +235,11 @@ def _filter_lifecycle_map_types(
         return primitive_type, ",".join(primitive_types) if primitive_types is not None else None
     if primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE:
         return "__hidden_lifecycle_map__", None
-    if primitive_types is None:
+    if not primitive_types:
+        # ``None`` (no filter) and ``[]`` (separator-only value) both mean "no
+        # type restriction requested". Neither may clear the filter entirely,
+        # or every primitive type (including lifecycle_map) leaks through.
         return None, ",".join(ptype for ptype in PRIMITIVE_TYPES if ptype != LIFECYCLE_MAP_PRIMITIVE_TYPE)
-    if primitive_types == []:
-        return None, None
     filtered_types = [ptype for ptype in primitive_types if ptype != LIFECYCLE_MAP_PRIMITIVE_TYPE]
     if filtered_types:
         return primitive_type, ",".join(filtered_types)
