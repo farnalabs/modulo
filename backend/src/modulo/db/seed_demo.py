@@ -1106,7 +1106,8 @@ async def _seed_demo_pipeline_and_runs(
     org: Organisation,
     account: Account,
     agent_ids: Mapping[str, uuid.UUID] | None = None,
-    teams: list[Team] | None = None,
+    *,
+    teams: list[Team],
 ) -> dict[str, tuple[Pipeline, PipelineSnapshot]]:
     """Seed all demo pipelines (graph + edges + snapshot) and their runs.
 
@@ -1251,7 +1252,7 @@ async def _seed_demo_run(
     pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
     specs_by_name: Mapping[str, _PipelineSpec],
     *,
-    teams: list[Team] | None = None,
+    teams: list[Team],
 ) -> None:
     """Create or converge one deterministic demo run (fixed run_number).
 
@@ -1280,9 +1281,7 @@ async def _seed_demo_run(
         completed=completed,
         trace=trace,
     )
-    if teams:
-        desired["owner_team_id"] = teams[(run_number - 1) % len(teams)].id
-
+    desired["owner_team_id"] = teams[(run_number - 1) % len(teams)].id
     if run is not None:
         # Converge display fields on existing runs (never touch identity).
         _converge_demo_run(run, desired, run_number)
@@ -1476,6 +1475,77 @@ async def _seed_demo_agents(session: AsyncSession, org: Organisation, account: A
     return agent_ids
 
 
+async def _get_or_create_demo_eval(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline: Pipeline,
+    label: str,
+) -> Eval:
+    """Return the demo eval definition for *pipeline*, creating it once if absent."""
+    result = await session.execute(
+        select(Eval).where(Eval.organisation_id == org.id, Eval.pipeline_id == pipeline.id, Eval.name == label)
+    )
+    evaluation = result.scalar_one_or_none()
+    if evaluation is None:
+        evaluation = Eval(
+            organisation_id=org.id,
+            pipeline_id=pipeline.id,
+            account_id=account.id,
+            name=label,
+            eval_type="model_judge",
+            config_json={"description": "Demo evaluation result; no live provider was called."},
+            pass_threshold=Decimal("0.75"),
+        )
+        session.add(evaluation)
+        await session.flush()
+    return evaluation
+
+
+def _demo_eval_passed(run: Run) -> bool:
+    """Deterministic synthetic verdict for one demo run."""
+    return run.status == "complete" and run.run_number % 3 != 0  # nosemgrep: raw-status-complete
+
+
+async def _ensure_demo_eval_result(
+    session: AsyncSession,
+    org: Organisation,
+    evaluation: Eval,
+    run: Run,
+    index: int,
+) -> None:
+    """Create the demo eval result for *run* unless it already exists."""
+    existing = (
+        await session.execute(
+            select(EvalResult).where(
+                EvalResult.organisation_id == org.id,
+                EvalResult.eval_id == evaluation.id,
+                EvalResult.run_id == run.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return
+    passed = _demo_eval_passed(run)
+    session.add(
+        EvalResult(
+            organisation_id=org.id,
+            eval_id=evaluation.id,
+            run_id=run.id,
+            node_id=None,
+            eval_definition_version=evaluation.version,
+            passed=passed,
+            outcome="pass" if passed else "fail",
+            score=0.91 if passed else 0.62,
+            judge_result_json={"source": "demo_seed", "sample": True, "eval_index": index},
+            detail="Synthetic read-only demo evaluation result.",
+            observed=True,
+            evaluated_at=run.completed_at or run.started_at or datetime.now(UTC),
+            resolution="accepted" if passed else "pending",
+        )
+    )
+
+
 async def _seed_demo_evals(
     session: AsyncSession,
     org: Organisation,
@@ -1488,22 +1558,7 @@ async def _seed_demo_evals(
         start=1,
     ):
         pipeline, _ = pipeline_lookup[pipeline_name]
-        result = await session.execute(
-            select(Eval).where(Eval.organisation_id == org.id, Eval.pipeline_id == pipeline.id, Eval.name == label)
-        )
-        evaluation = result.scalar_one_or_none()
-        if evaluation is None:
-            evaluation = Eval(
-                organisation_id=org.id,
-                pipeline_id=pipeline.id,
-                account_id=account.id,
-                name=label,
-                eval_type="model_judge",
-                config_json={"description": "Demo evaluation result; no live provider was called."},
-                pass_threshold=Decimal("0.75"),
-            )
-            session.add(evaluation)
-            await session.flush()
+        evaluation = await _get_or_create_demo_eval(session, org, account, pipeline, label)
         runs = list(
             (
                 await session.execute(
@@ -1514,34 +1569,7 @@ async def _seed_demo_evals(
             ).scalars()
         )
         for run in runs[:6]:
-            existing = (
-                await session.execute(
-                    select(EvalResult).where(
-                        EvalResult.organisation_id == org.id,
-                        EvalResult.eval_id == evaluation.id,
-                        EvalResult.run_id == run.id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing is None:
-                passed = run.status == "complete" and run.run_number % 3 != 0  # nosemgrep: raw-status-complete
-                session.add(
-                    EvalResult(
-                        organisation_id=org.id,
-                        eval_id=evaluation.id,
-                        run_id=run.id,
-                        node_id=None,
-                        eval_definition_version=evaluation.version,
-                        passed=passed,
-                        outcome="pass" if passed else "fail",
-                        score=0.91 if passed else 0.62,
-                        judge_result_json={"source": "demo_seed", "sample": True, "eval_index": index},
-                        detail="Synthetic read-only demo evaluation result.",
-                        observed=True,
-                        evaluated_at=run.completed_at or run.started_at or datetime.now(UTC),
-                        resolution="accepted" if passed else "pending",
-                    )
-                )
+            await _ensure_demo_eval_result(session, org, evaluation, run, index)
     await session.flush()
 
 
@@ -2056,54 +2084,82 @@ _DEMO_TEAM_SPECS = (
 )
 
 
+async def _get_or_create_demo_team(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    name: str,
+    description: str,
+) -> Team:
+    """Return the demo team for *name*, creating it race-safely if absent.
+
+    Race-safe: the insert runs in a savepoint keyed on the (org, name) unique
+    constraint, so a concurrent boot that already committed only rolls back
+    this insert.
+    """
+    result = await session.execute(select(Team).where(Team.organisation_id == org.id, Team.name == name))
+    team = result.scalar_one_or_none()
+    if team is None:
+        team = Team(
+            organisation_id=org.id,
+            name=name,
+            description=description,
+            account_id=account.id,
+            notification_endpoints=[],
+            settings={},
+        )
+        try:
+            async with session.begin_nested():
+                session.add(team)
+                await session.flush()
+        except IntegrityError:
+            result = await session.execute(select(Team).where(Team.organisation_id == org.id, Team.name == name))
+            team = result.scalar_one_or_none()
+            if team is None:
+                raise
+        else:
+            _log.info("demo_seed.team_created", extra={"team_id": str(team.id)})
+    return team
+
+
+async def _ensure_demo_team_membership(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    team: Team,
+    role: str,
+) -> None:
+    """Ensure the demo user is a member of *team* with *role*."""
+    member_result = await session.execute(
+        select(TeamMembership).where(TeamMembership.team_id == team.id, TeamMembership.account_id == account.id)
+    )
+    membership = member_result.scalar_one_or_none()
+    if membership is None:
+        try:
+            async with session.begin_nested():
+                session.add(
+                    TeamMembership(
+                        team_id=team.id,
+                        account_id=account.id,
+                        organisation_id=org.id,
+                        role=role,
+                    )
+                )
+                await session.flush()
+        except IntegrityError:
+            _log.info("demo_seed.team_membership_recovered_after_conflict", extra={"team_id": str(team.id)})
+    elif membership.role != role:
+        membership.role = role
+
+
 async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Account) -> list[Team]:
     """Idempotently seed the three demo teams and memberships."""
     teams: list[Team] = []
     for name, description, role in _DEMO_TEAM_SPECS:
-        result = await session.execute(select(Team).where(Team.organisation_id == org.id, Team.name == name))
-        team = result.scalar_one_or_none()
-        if team is None:
-            team = Team(
-                organisation_id=org.id,
-                name=name,
-                description=description,
-                account_id=account.id,
-                notification_endpoints=[],
-                settings={},
-            )
-            try:
-                async with session.begin_nested():
-                    session.add(team)
-                    await session.flush()
-            except IntegrityError:
-                result = await session.execute(select(Team).where(Team.organisation_id == org.id, Team.name == name))
-                team = result.scalar_one_or_none()
-                if team is None:
-                    raise
-            else:
-                _log.info("demo_seed.team_created", extra={"team_id": str(team.id)})
+        team = await _get_or_create_demo_team(session, org, account, name, description)
         if team.description != description:
             team.description = description
-        member_result = await session.execute(
-            select(TeamMembership).where(TeamMembership.team_id == team.id, TeamMembership.account_id == account.id)
-        )
-        membership = member_result.scalar_one_or_none()
-        if membership is None:
-            try:
-                async with session.begin_nested():
-                    session.add(
-                        TeamMembership(
-                            team_id=team.id,
-                            account_id=account.id,
-                            organisation_id=org.id,
-                            role=role,
-                        )
-                    )
-                    await session.flush()
-            except IntegrityError:
-                _log.info("demo_seed.team_membership_recovered_after_conflict", extra={"team_id": str(team.id)})
-        elif membership.role != role:
-            membership.role = role
+        await _ensure_demo_team_membership(session, org, account, team, role)
         teams.append(team)
     return teams
 
