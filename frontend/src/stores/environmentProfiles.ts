@@ -7,7 +7,9 @@ import type { components } from '../lib/api/schema'
 // Wire shapes for environment-profile writes, taken from the generated OpenAPI
 // schema so vue-tsc can verify the full payload against the contract
 // (TYPE-1: no hand-maintained shapes, no `as any` at the call sites).
-export type ProfileCreatePayload = components['schemas']['ProfileCreate']
+export type ProfileCreatePayload = Omit<components['schemas']['ProfileCreate'], 'max_node_seconds'> & {
+  max_node_seconds?: number
+}
 export type ProfileUpdatePayload = components['schemas']['ProfileUpdate']
 
 export interface EnvironmentProfile {
