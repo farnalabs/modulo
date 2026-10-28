@@ -59,13 +59,13 @@ _SERVICE_FUNCS = [
 ]
 
 
-def _make_settings() -> Settings:
+def _make_settings(*, dev_mode: bool = True) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key="a" * 32,
         fernet_key="a" * 32,
         modulo_admin_password="testpass",
-        modulo_dev_mode=True,
+        modulo_dev_mode=dev_mode,
     )
 
 
@@ -160,11 +160,11 @@ class _Harness:
         setattr(route, name, value)
 
 
-def _install_overrides(harness: _Harness, *, org_role: str = "admin") -> None:
+def _install_overrides(harness: _Harness, *, org_role: str = "admin", dev_mode: bool = True) -> None:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield harness.session
 
-    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_settings] = lambda: _make_settings(dev_mode=dev_mode)
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="testuser",
@@ -1109,11 +1109,12 @@ def _gate_client(
     session: AsyncMock,
     *,
     org_role: str = "operator",
+    dev_mode: bool = True,
 ) -> Generator[tuple[TestClient, _Harness], None, None]:
     """TestClient with the real dependency stack and this team-gate session."""
     harness = _Harness()
     harness.session = session
-    _install_overrides(harness, org_role=org_role)
+    _install_overrides(harness, org_role=org_role, dev_mode=dev_mode)
     with harness:
         yield TestClient(app), harness
     app.dependency_overrides.clear()
@@ -1129,6 +1130,33 @@ def test_ordinary_user_cannot_discover_lifecycle_maps() -> None:
         resp = http.get(_BASE)
 
     assert resp.status_code == 403, resp.text
+
+
+def test_operator_is_denied_when_developer_mode_is_off() -> None:
+    """FAR-2200: the router-wide dev-mode gate fires before any handler.
+
+    The retained lifecycle-map API is reachable only on the internal path: the
+    router dependency (``_require_internal_lifecycle_map_access``) demands
+    ``MODULO_DEV_MODE`` *and* the ``library.search.in_dev`` operator grant. Every
+    other route test runs with developer mode ON, so the dev-mode refusal branch
+    was implemented but never reached. An operator on an Alpha deployment must
+    get 403 and the service layer must never run — for a read and a mutation.
+    """
+    session = _team_gate_session(is_member_of={_TEAM_ID})
+    with _gate_client(session, org_role="operator", dev_mode=False) as (http, harness):
+        lister = AsyncMock()
+        deleter = AsyncMock(return_value=True)
+        harness.stub("list_lifecycle_maps", lister)
+        harness.stub("delete_lifecycle_map", deleter)
+
+        list_resp = http.get(_BASE)
+        delete_resp = http.delete(f"{_BASE}/{_MAP_ID}")
+
+    for resp in (list_resp, delete_resp):
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"] == "This internal feature requires developer mode"
+    lister.assert_not_awaited()
+    deleter.assert_not_awaited()
 
 
 def test_restore_non_admin_member_restores_a_soft_deleted_team_map() -> None:
