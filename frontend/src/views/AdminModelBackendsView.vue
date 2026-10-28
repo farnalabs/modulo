@@ -46,7 +46,7 @@
               </button>
             </div>
             <div class="mt-3 flex items-center gap-2">
-              <span class="text-xs text-muted-foreground">—</span>
+              <span class="text-xs text-muted-foreground" aria-hidden="true">—</span>
               <button
                 type="button"
                 class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
@@ -221,7 +221,7 @@
         </div>
 
         <EmptyState
-          v-if="nativeBackends.length === 0"
+          v-if="nativeBackends.length === 0 && previewBackends.length === 0"
           :title="$t('views.AdminModelBackendsView.no_model_backends_configured')"
           :description="$t('views.AdminModelBackendsView.no_backends_description')"
         />
@@ -267,7 +267,7 @@
                     </span>
                   </td>
                   <td class="table-cell text-xs text-muted-foreground">
-                    {{ backend.visibility }}
+                    {{ visibilityLabel(backend.visibility) }}
                   </td>
                   <td class="table-cell-numeric">
                     <TableActions :actions="backendActions(backend)" />
@@ -279,7 +279,7 @@
                       :data-testid="`admin-model-backends-refs-expand-${backend.id}`"
                       @toggle="toggleRefsExpand(backend.id, $event)"
                     >
-                      <summary class="cursor-pointer px-4 py-2 text-xs text-muted-foreground hover:text-foreground">
+                      <summary class="cursor-pointer px-4 py-2 text-xs text-muted-foreground hover:text-foreground" :data-testid="`admin-model-backends-refs-summary-${backend.id}`">
                         {{ $t('views.AdminModelBackendsView.pipeline_references') }}
                       </summary>
                       <div class="border-t px-4 py-3" :data-testid="`admin-model-backends-refs-${backend.id}`">
@@ -353,7 +353,7 @@
         </div>
 
         <details v-if="previewBackends.length > 0" class="rounded-lg border bg-card" data-testid="model-backends-preview-section">
-          <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+          <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground" data-testid="model-backends-preview-summary">
             {{ $t('views.AdminModelBackendsView.preview_model_backends_count', { count: previewBackends.length }, previewBackends.length) }}
           </summary>
           <div class="overflow-x-auto border-t">
@@ -712,6 +712,15 @@ const selectedPreset = computed(() => {
 
 const nativeBackends = computed(() => (backendsResp.value?.items ?? []).filter(b => (b.tier ?? 'native') !== 'preview' && (b.tier ?? 'native') !== 'in_dev'))
 const previewBackends = computed(() => (backendsResp.value?.items ?? []).filter(b => b.tier === 'preview'))
+
+// The API serialises visibility as an enum; render its translated label and
+// fall back to the raw value (or an em dash when empty) so an unknown future
+// scope never renders as a blank cell (STATE-6).
+function visibilityLabel(visibility: string): string {
+  if (visibility === 'org') return t('views.AdminModelBackendsView.visibility_org')
+  if (visibility === 'private') return t('views.AdminModelBackendsView.visibility_private')
+  return visibility || '\u2014'
+}
 
 const formMode = ref<'add' | 'edit' | null>(null)
 const formData = reactive<BackendFormState>(emptyForm())
