@@ -50,6 +50,7 @@ const profile = (overrides: Partial<EnvironmentProfile> = {}): EnvironmentProfil
   provider_type: 'e2b',
   image_ref: 'modulo/sandbox:latest',
   capabilities: ['code_exec', 'browser'],
+  max_node_seconds: 3300,
   network_policy: 'isolated',
   initialisation_strategy: 'lazy',
   persistence_policy: 'ephemeral',
@@ -163,6 +164,7 @@ describe('useEnvironmentProfilesStore', () => {
     expect(store.profiles).toHaveLength(1)
     expect(store.profiles[0].id).toBe('env-new')
     expect(store.profiles[0].name).toBe('New')
+    expect(store.profiles[0].max_node_seconds).toBe(3300)
     expect(store.isSaving).toBe(false)
   })
 
@@ -186,6 +188,7 @@ describe('useEnvironmentProfilesStore', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/environment-profiles/env-1', expect.objectContaining({ method: 'PUT' }))
     expect(store.profiles).toHaveLength(1)
     expect(store.profiles[0].name).toBe('Renamed')
+    expect(store.profiles[0].max_node_seconds).toBe(3300)
     expect(store.isSaving).toBe(false)
   })
 

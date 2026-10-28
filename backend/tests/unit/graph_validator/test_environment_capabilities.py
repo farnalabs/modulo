@@ -36,11 +36,13 @@ def _mock_profile(
     *,
     name: str = "test-profile",
     capabilities: list[str] | None = None,
+    max_node_seconds: int = 3300,
 ) -> MagicMock:
     profile = MagicMock()
     profile.id = profile_id or uuid.uuid4()
     profile.name = name
     profile.capabilities_json = capabilities or []
+    profile.max_node_seconds = max_node_seconds
     return profile
 
 
@@ -93,22 +95,71 @@ async def test_missing_profile_is_error():
     assert any(i.code == "ENV_PROFILE_NOT_FOUND" for i in result.issues)
 
 
-async def test_no_agent_ids_skips_agent_check():
-    """If graph has no agent_id references, no DB query for agents."""
+async def test_no_agent_ids_still_checks_profile_timeout_cap():
+    """A sandbox without an Agent row still uses the selected profile cap."""
     pid = uuid.uuid4()
-    profile = _mock_profile(pid, capabilities=["docker"])
+    profile = _mock_profile(pid, capabilities=["docker"], max_node_seconds=300)
 
     session = _mock_session()
     session.get = AsyncMock(return_value=profile)
 
     validator = GraphValidator()
     result = await validator.validate_definition(
-        {"nodes": [{"id": "n1"}], "edges": []},  # no agent_id
+        {
+            "nodes": [{"id": "n1", "node_type": "sandbox_agent", "timeout_seconds": 301}],
+            "edges": [],
+        },
         session,
         environment_profile_id=pid,
     )
-    assert result.is_valid
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP" for i in result.issues)
     session.execute.assert_not_called()  # no agent fetch
+
+
+async def test_lower_profile_cap_rejects_higher_node_timeout():
+    pid = uuid.uuid4()
+    profile = _mock_profile(pid, max_node_seconds=300)
+    session = _session_with_profile(profile, [])
+
+    result = await GraphValidator().validate_definition(
+        {"nodes": [{"id": "n1", "node_type": "sandbox_agent", "timeout_seconds": 301}], "edges": []},
+        session,
+        environment_profile_id=pid,
+    )
+
+    assert any(i.code == "SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP" for i in result.issues)
+
+
+async def test_higher_profile_cap_accepts_node_timeout_within_transport_ceiling(monkeypatch):
+    pid = uuid.uuid4()
+    profile = _mock_profile(pid, max_node_seconds=5000)
+    session = _session_with_profile(profile, [])
+    monkeypatch.setattr("modulo.core.graph_validator.settings.get_settings", lambda: MagicMock(saq_run_timeout=3300))
+
+    result = await GraphValidator().validate_definition(
+        {"nodes": [{"id": "n1", "node_type": "sandbox_agent", "timeout_seconds": 3300}], "edges": []},
+        session,
+        environment_profile_id=pid,
+    )
+
+    assert not any(i.code == "SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP" for i in result.issues)
+
+
+async def test_profile_above_transport_ceiling_is_rejected(monkeypatch):
+    pid = uuid.uuid4()
+    profile = _mock_profile(pid, max_node_seconds=5000)
+    session = _session_with_profile(profile, [])
+    monkeypatch.setattr("modulo.core.graph_validator.settings.get_settings", lambda: MagicMock(saq_run_timeout=3300))
+
+    result = await GraphValidator().validate_definition(
+        {"nodes": [{"id": "n1", "node_type": "sandbox_agent", "timeout_seconds": 3301}], "edges": []},
+        session,
+        environment_profile_id=pid,
+    )
+
+    assert any(i.code == "ENV_PROFILE_WALL_CLOCK_EXCEEDS_RUN_CEILING" for i in result.issues)
+    assert any(i.code == "SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP" for i in result.issues)
 
 
 async def test_empty_required_capabilities_is_valid():

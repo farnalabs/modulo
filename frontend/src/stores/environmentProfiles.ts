@@ -94,6 +94,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
         provider_type: created.provider_type,
         image_ref: created.image_ref,
         capabilities: created.capabilities,
+        max_node_seconds: created.max_node_seconds,
         status: created.status,
         created_at: created.created_at,
       })
@@ -119,6 +120,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
           provider_type: updated.provider_type,
           image_ref: updated.image_ref,
           capabilities: updated.capabilities,
+          max_node_seconds: updated.max_node_seconds,
           status: updated.status,
           created_at: updated.created_at,
         }

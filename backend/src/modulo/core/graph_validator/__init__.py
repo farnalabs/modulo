@@ -1667,11 +1667,10 @@ class GraphValidator:
             unverified_registry_ok=True,
         )
         if environment_profile_id is None:
+            transport_cap = settings.get_settings().saq_run_timeout
             for node in graph_json.get("nodes", []):
                 if node.get("node_type") == "sandbox_agent":
-                    _check_sandbox_timeout_cap(
-                        node, _string_or_default(node.get("id")), result, settings.MAX_NODE_TIMEOUT_SECONDS
-                    )
+                    _check_sandbox_timeout_cap(node, _string_or_default(node.get("id")), result, transport_cap)
         self._check_node_idempotent(graph_json, result)
         self._check_failure_and_retry(graph_json, result)
         await self._check_node_send_budget_bindings(graph_json, connector_bindings or [], session, result)
@@ -3000,31 +2999,35 @@ class GraphValidator:
                 if parsed is not None:
                     agent_ids.add(parsed)
 
-        if not agent_ids:
-            return
-
-        rows = (await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars().all()
+        rows = (
+            (await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars().all() if agent_ids else []
+        )
 
         profile_caps: set[str] = set(profile.capabilities_json or [])
 
         max_node_seconds = int(profile.max_node_seconds)
-        if max_node_seconds > settings.get_settings().saq_run_timeout:
+        transport_cap = settings.get_settings().saq_run_timeout
+        if max_node_seconds > transport_cap:
             result.error(
                 "ENV_PROFILE_WALL_CLOCK_EXCEEDS_RUN_CEILING",
                 f"Environment profile {environment_profile_id} max_node_seconds={max_node_seconds} "
-                f"exceeds the run transport ceiling of {settings.get_settings().saq_run_timeout}s",
+                f"exceeds the run transport ceiling of {transport_cap}s",
             )
-        self._check_profile_wall_clock_capability(profile, graph_json, result)
+        self._check_profile_wall_clock_capability(profile, graph_json, result, transport_cap=transport_cap)
 
         for agent in rows:
             _check_agent_capabilities(agent, profile, profile_caps, result)
 
     @staticmethod
     def _check_profile_wall_clock_capability(
-        profile: EnvironmentProfile, graph_json: dict[str, Any], result: ValidationResult
+        profile: EnvironmentProfile,
+        graph_json: dict[str, Any],
+        result: ValidationResult,
+        *,
+        transport_cap: int,
     ) -> None:
         """Apply the selected profile's node wall-clock capability."""
-        max_node_seconds = int(profile.max_node_seconds)
+        max_node_seconds = min(int(profile.max_node_seconds), transport_cap)
         for node in graph_json.get("nodes", []):
             if node.get("node_type") != "sandbox_agent":
                 continue

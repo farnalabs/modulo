@@ -3457,6 +3457,7 @@ async def _validate_graph_save(
     validator_graph: dict[str, Any],
     connector_bindings: list[dict[str, Any]],
     model_backend_pins: list[dict[str, Any]],
+    environment_profile_id: uuid.UUID | None,
 ) -> list[GraphValidationIssue]:
     """Run save-time graph validation, returning the advisory issue list.
 
@@ -3476,6 +3477,7 @@ async def _validate_graph_save(
         connector_bindings=connector_bindings,
         model_backend_pins=model_backend_pins,
         guardrail_definitions=list(guardrail_rows),
+        environment_profile_id=environment_profile_id,
     )
     _reject_graph_validation_issues(validation.issues)
     return [
@@ -3881,6 +3883,7 @@ async def replace_pipeline_graph_endpoint(
                     validator_graph=validator_graph,
                     connector_bindings=connector_bindings,
                     model_backend_pins=model_backend_pins,
+                    environment_profile_id=pipeline.environment_profile_id,
                 )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
@@ -4370,6 +4373,7 @@ async def _apply_graph_update(
         validator_graph=validator_graph,
         connector_bindings=graph_bindings,
         model_backend_pins=model_backend_pins,
+        environment_profile_id=updates.get("environment_profile_id", getattr(existing, "environment_profile_id", None)),
     )
     saved_nodes, saved_edges = graph
     return saved_nodes, saved_edges, issues
@@ -6435,6 +6439,7 @@ async def _save_locked_graph(
     org_id: uuid.UUID,
     principal: TenantPrincipal,
     pipeline_owner_team_id: uuid.UUID | None,
+    environment_profile_id: uuid.UUID | None,
     nodes: list[dict[str, Any]],
     edges: list[Any],
 ) -> tuple[list[dict[str, Any]], list[Any], list[GraphValidationIssue]] | None:
@@ -6506,6 +6511,7 @@ async def _save_locked_graph(
         validator_graph={"nodes": saved_nodes, "edges": [_edge_row_to_validator(e) for e in saved_edges]},
         connector_bindings=connector_bindings,
         model_backend_pins=model_backend_pins,
+        environment_profile_id=environment_profile_id,
     )
     for issue in issues:
         logger.info(
@@ -6690,6 +6696,7 @@ async def convert_node_to_agent_endpoint(
                 org_id=principal.organisation_id,
                 principal=principal,
                 pipeline_owner_team_id=locked.owner_team_id,
+                environment_profile_id=getattr(locked, "environment_profile_id", None),
                 nodes=nodes,
                 edges=edges,
             )
@@ -6795,6 +6802,7 @@ async def revert_node_to_manual_endpoint(
                 org_id=principal.organisation_id,
                 principal=principal,
                 pipeline_owner_team_id=locked.owner_team_id,
+                environment_profile_id=getattr(locked, "environment_profile_id", None),
                 nodes=nodes,
                 edges=edges,
             )

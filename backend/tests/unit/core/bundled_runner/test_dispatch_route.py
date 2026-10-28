@@ -88,6 +88,7 @@ def _profile(provider_type: str, **kwargs: object) -> SimpleNamespace:
         "network_policy": "outbound",
         "capabilities_json": [],
         "config_json": {"timeout_seconds": 1800, "memory_mb": 1024, "workspace_network": "modulo-runner-workspace"},
+        "max_node_seconds": 3300,
     }
     base.update(kwargs)
     return SimpleNamespace(**base)
@@ -326,6 +327,12 @@ def test_e2b_timeout_at_graph_validator_bound_passes() -> None:
 def test_e2b_timeout_over_bound_raises_loudly() -> None:
     with pytest.raises(SandboxDispatchTimeoutValidationError, match="3301"):
         validate_e2b_dispatch_timeout(3301)
+
+
+def test_e2b_timeout_uses_selected_profile_cap() -> None:
+    assert validate_e2b_dispatch_timeout(300, max_timeout_seconds=300) is None
+    with pytest.raises(SandboxDispatchTimeoutValidationError, match="301"):
+        validate_e2b_dispatch_timeout(301, max_timeout_seconds=300)
 
 
 def test_e2b_timeout_none_and_unparsable_are_noops() -> None:

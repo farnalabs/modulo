@@ -10625,7 +10625,14 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 _route,
             )
         if _route.provider_type == "e2b":
-            validate_e2b_dispatch_timeout(sandbox_timeout)
+            profile_cap = (
+                int(_route.profile.max_node_seconds)
+                if _route.profile is not None and getattr(_route.profile, "max_node_seconds", None) is not None
+                else None
+            )
+            transport_cap = int(get_settings().saq_run_timeout)
+            effective_cap = transport_cap if profile_cap is None else min(profile_cap, transport_cap)
+            validate_e2b_dispatch_timeout(sandbox_timeout, max_timeout_seconds=effective_cap)
         if _route.profile is not None:
             # FAR-1051: the bound profile's declared provider type drives BOTH
             # the marker attribution and the create / isolation / file-IO
