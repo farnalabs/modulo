@@ -833,6 +833,38 @@ async def test_mcp_library_detail_resource_passes_non_list_nodes_through() -> No
     assert _GHP_SECRET not in result
 
 
+async def test_mcp_library_detail_resource_passes_non_dict_composite_content_through() -> None:
+    """A composite whose content is not a dict is not masked by the MCP summary.
+
+    The MCP mask site only rewrites a dict-shaped ``content_json``; any other
+    shape passes straight through (the serializer must not crash on it).
+    """
+    import modulo.api.mcp_server as ms
+
+    ms._ctx_org_id.set(_ORG_ID)
+    mock_session: Any = AsyncMock()
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    prim = _make_composite_primitive()
+    prim.content_json = ["plain-list-marker"]
+    try:
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=session_cm),
+            patch(
+                "modulo.api.mcp_server.get_primitive_by_slug",
+                new_callable=AsyncMock,
+                return_value=prim,
+            ),
+        ):
+            result = await ms.resource_library_detail("composite", "sub-flow")
+    finally:
+        ms._ctx_org_id.set(None)
+
+    assert "plain-list-marker" in result
+
+
 async def test_mcp_library_detail_resource_leaves_non_composite_content_raw() -> None:
     """A non-composite primitive resource keeps its content byte-identical."""
     import modulo.api.mcp_server as ms

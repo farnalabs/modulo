@@ -13300,6 +13300,25 @@ async def resource_library() -> str:
         return "error: Failed to browse library"
 
 
+def _mask_library_content_for_summary(content: Any, primitive_type: str) -> Any:
+    """Mask credential-bearing node fields in a composite primitive's content.
+
+    FAR-1380: a composite primitive's ``content_json`` carries the SAME
+    credential-bearing node fields a pipeline graph stores (env_vars /
+    context_files / composite_parameter_values / parameter_overrides) — mask
+    them with the shipped per-node masker exactly like the pipeline graph
+    reads; non-composite content passes through untouched.
+    """
+    if primitive_type != "composite" or not isinstance(content, dict):
+        return content
+    nodes = content.get("nodes")
+    if not isinstance(nodes, list):
+        return content
+    masked = dict(content)
+    masked["nodes"] = [mask_pipeline_graph_node(node) if isinstance(node, dict) else node for node in nodes]
+    return masked
+
+
 @mcp.resource("modulo://library/{primitive_type}/{slug}")
 async def resource_library_detail(primitive_type: str, slug: str) -> str:
     """Get details of a single library primitive by type and slug."""
@@ -13324,20 +13343,10 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
         rating_str = f"{p.average_rating:.2f}" if p.average_rating is not None else "N/A"
         downloads_str = str(p.download_count) if p.download_count is not None else "0"
         desc = p.description or "(no description)"
-        # FAR-1380: a composite primitive's content_json carries the SAME
-        # credential-bearing node fields a pipeline graph stores (env_vars /
-        # context_files / composite_parameter_values / parameter_overrides) —
-        # mask them with the shipped per-node masker exactly like the pipeline
-        # graph reads; non-composite content passes through untouched.
-        content_for_summary: Any = p.content_json
-        if p.primitive_type == "composite" and isinstance(content_for_summary, dict):
-            nodes = content_for_summary.get("nodes")
-            if isinstance(nodes, list):
-                content_for_summary = dict(content_for_summary)
-                content_for_summary["nodes"] = [
-                    mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes
-                ]
-        content_summary_str = json.dumps(content_for_summary, indent=2)
+        content_summary_str = json.dumps(
+            _mask_library_content_for_summary(p.content_json, p.primitive_type),
+            indent=2,
+        )
 
         parts = [
             f"Name: {p.name}",

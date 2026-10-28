@@ -138,6 +138,7 @@ from modulo.settings import Settings, get_settings
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_LIBRARY_SEARCH = "library.search"
+_GRANT_LIBRARY_SEARCH_IN_DEV = "library.search.in_dev"
 _VISIBILITY_PATTERN = "^(org|team)$"
 _CODE_LIBRARY_WRITE = "library.write"
 
@@ -174,7 +175,7 @@ def _can_access_lifecycle_map_primitives(principal: TenantPrincipal, *, dev_mode
         return False
     if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["operator"]:
         return False
-    return grants_permit(principal.key_grants, "library.search.in_dev")
+    return grants_permit(principal.key_grants, _GRANT_LIBRARY_SEARCH_IN_DEV)
 
 
 def _reject_lifecycle_map_primitive_access(
@@ -199,7 +200,7 @@ def _require_lifecycle_map_internal_access(principal: TenantPrincipal) -> None:
     """Require the existing operator/grant/developer-mode gate for lifecycle maps."""
     require_in_dev_operator(
         principal,
-        "library.search.in_dev",
+        _GRANT_LIBRARY_SEARCH_IN_DEV,
         require_dev_mode=True,
         settings=get_settings(),
     )
@@ -803,7 +804,7 @@ async def list_library_primitives_endpoint(
     principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
 ) -> LibraryPrimitiveListResponse:
     if include_in_dev:
-        require_in_dev_operator(principal, "library.search.in_dev")
+        require_in_dev_operator(principal, _GRANT_LIBRARY_SEARCH_IN_DEV)
     dev_mode = getattr(get_settings(), "modulo_dev_mode", True)
     requested_types = _split_primitive_types(primitive_types)
     if primitive_types and requested_types is None:
@@ -2314,7 +2315,7 @@ async def create_lifecycle_map_from_primitive_endpoint(
     """
     require_in_dev_operator(
         principal,
-        "library.search.in_dev",
+        _GRANT_LIBRARY_SEARCH_IN_DEV,
         require_dev_mode=True,
         settings=settings,
     )

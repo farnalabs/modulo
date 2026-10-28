@@ -41,6 +41,7 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 _MSG_COMMUNITY_LIBRARY_DISABLED = "Community library is disabled by the organisation administrator."
+_MSG_COMMUNITY_ENTRY_NOT_FOUND = "Community entry not found"
 
 router = APIRouter(prefix="/api/v1/libraries/community", tags=["community-library"])
 
@@ -167,7 +168,7 @@ async def get_entry(
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Community entry not found",
+            detail=_MSG_COMMUNITY_ENTRY_NOT_FOUND,
         )
     content: Any = None
     content_sha256 = entry.get("content_sha256")
@@ -205,7 +206,7 @@ async def install(
             if entry is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Community entry not found",
+                    detail=_MSG_COMMUNITY_ENTRY_NOT_FOUND,
                 )
             if entry.get("type") == LIFECYCLE_MAP_PRIMITIVE_TYPE:
                 _require_lifecycle_map_internal_access(principal)
@@ -223,7 +224,7 @@ async def install(
         if message == "entry not found":
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Community entry not found",
+                detail=_MSG_COMMUNITY_ENTRY_NOT_FOUND,
             ) from None
         if message == "already installed":
             raise HTTPException(
