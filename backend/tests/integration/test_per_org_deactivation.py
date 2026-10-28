@@ -141,6 +141,21 @@ async def _account_active(engine: AsyncEngine, account_id: uuid.UUID) -> bool:
         )
 
 
+async def _membership_state(engine: AsyncEngine, account_id: uuid.UUID, org_id: uuid.UUID) -> tuple[str, bool]:
+    """Read role and tombstone state through a fresh database connection."""
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT role, deactivated_at IS NOT NULL AS deactivated "
+                    "FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid"
+                ),
+                {"aid": str(account_id), "oid": str(org_id)},
+            )
+        ).one()
+    return str(row.role), bool(row.deactivated)
+
+
 # ---------------------------------------------------------------------------
 # HTTP client fixture — FastAPI app wired to the testcontainer database
 # ---------------------------------------------------------------------------
@@ -162,7 +177,7 @@ async def client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerator[AsyncCl
     )
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
-        factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
         async with factory() as session:
             yield session
 
@@ -199,6 +214,52 @@ def _login_org_of(access_token: str) -> uuid.UUID:
 # ---------------------------------------------------------------------------
 # Per-org deactivation semantics
 # ---------------------------------------------------------------------------
+
+
+async def test_put_role_change_is_committed_and_visible_in_a_fresh_session(
+    db_engine: AsyncEngine, client: AsyncClient
+) -> None:
+    org_id = await _create_org(db_engine, "RoleDurability")
+    admin_id = await _create_account(db_engine, email=f"role-admin-{uuid.uuid4().hex[:12]}@example.com")
+    target_id = await _create_account(db_engine, email=f"role-target-{uuid.uuid4().hex[:12]}@example.com")
+    await _create_membership(db_engine, org_id=org_id, account_id=admin_id, role="admin")
+    await _create_membership(db_engine, org_id=org_id, account_id=target_id, role="runner")
+
+    response = await client.put(
+        f"/api/v1/admin/users/{target_id}",
+        headers={"Authorization": f"Bearer {_admin_token(org_id, admin_id)}"},
+        json={"org_role": "viewer"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["org_role"] == "viewer"
+    assert await _membership_state(db_engine, target_id, org_id) == ("viewer", False)
+
+
+async def test_put_activation_mutations_are_committed_and_visible_in_a_fresh_session(
+    db_engine: AsyncEngine, client: AsyncClient
+) -> None:
+    org_id = await _create_org(db_engine, "ActivationDurability")
+    admin_id = await _create_account(db_engine, email=f"active-admin-{uuid.uuid4().hex[:12]}@example.com")
+    target_id = await _create_account(db_engine, email=f"active-target-{uuid.uuid4().hex[:12]}@example.com")
+    await _create_membership(db_engine, org_id=org_id, account_id=admin_id, role="admin")
+    await _create_membership(db_engine, org_id=org_id, account_id=target_id, role="runner")
+
+    deactivate = await client.put(
+        f"/api/v1/admin/users/{target_id}",
+        headers={"Authorization": f"Bearer {_admin_token(org_id, admin_id)}"},
+        json={"is_active": False},
+    )
+    assert deactivate.status_code == 200, deactivate.text
+    assert await _membership_state(db_engine, target_id, org_id) == ("runner", True)
+
+    reactivate = await client.put(
+        f"/api/v1/admin/users/{target_id}",
+        headers={"Authorization": f"Bearer {_admin_token(org_id, admin_id)}"},
+        json={"is_active": True},
+    )
+    assert reactivate.status_code == 200, reactivate.text
+    assert await _membership_state(db_engine, target_id, org_id) == ("runner", False)
 
 
 async def test_org_a_deactivation_leaves_org_b_and_account_active(

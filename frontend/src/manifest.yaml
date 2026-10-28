@@ -2671,6 +2671,9 @@ elements:
       - testid: admin-users-copy-password
         type: button
         dynamic_testid: false
+      - testid: admin-users-reveal-password
+        type: button
+        dynamic_testid: false
       - testid: admin-users-reset-done
         type: button
         dynamic_testid: false

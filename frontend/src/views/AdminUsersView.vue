@@ -63,7 +63,8 @@
   :model-value="u.org_role"
   @update:model-value="updateRole(u, $event)"
   :placeholder="$t('views.AdminUsersView.select_role')"
-  :data-testid="`admin-users-role-${u.id}`"
+   :data-testid="`admin-users-role-${u.id}`"
+   append-to="body"
   :options="[{ value: 'admin', label: $t('views.AdminUsersView.admin') }, { value: 'operator', label: $t('views.AdminUsersView.operator') }, { value: 'runner', label: $t('views.AdminUsersView.runner') }, { value: 'viewer', label: $t('views.AdminUsersView.viewer') }]"
   option-label="label"
   option-value="value"
@@ -195,8 +196,8 @@
       :confirm-disabled="createLoading"
       @confirm="submitCreate"
     >
-      <form @submit.prevent="submitCreate">
-        <div class="mb-3 flex gap-2" role="tablist" :aria-label="$t('views.AdminUsersView.add_user_mode')">
+        <form class="space-y-4" @submit.prevent="submitCreate">
+          <div class="flex gap-2" role="tablist" :aria-label="$t('views.AdminUsersView.add_user_mode')">
           <button
             type="button"
             role="tab"
@@ -241,19 +242,20 @@
         <div>
           <label for="adminusersview-field-1" class="block text-sm font-medium mb-1">{{ $t('views.AdminUsersView.role') }}</label>
           <Select
-  :aria-label="$t('views.AdminUsersView.role')"
-  v-model="newUser.org_role"
-  :placeholder="$t('views.AdminUsersView.select_role')"
-  data-testid="admin-users-create-role"
-  class="w-full"
-  :options="[{ value: 'runner', label: $t('views.AdminUsersView.runner') }, { value: 'operator', label: $t('views.AdminUsersView.operator') }, { value: 'admin', label: $t('views.AdminUsersView.admin') }, { value: 'viewer', label: $t('views.AdminUsersView.viewer') }]"
-  option-label="label"
-  option-value="value"
->
-  <template #option="{ option }">
-    <span :data-value="option.value">{{ option.label }}</span>
-  </template>
-</Select>
+            :aria-label="$t('views.AdminUsersView.role')"
+            v-model="newUser.org_role"
+            :placeholder="$t('views.AdminUsersView.select_role')"
+            data-testid="admin-users-create-role"
+            class="w-full"
+           append-to="body"
+            :options="[{ value: 'runner', label: $t('views.AdminUsersView.runner') }, { value: 'operator', label: $t('views.AdminUsersView.operator') }, { value: 'admin', label: $t('views.AdminUsersView.admin') }, { value: 'viewer', label: $t('views.AdminUsersView.viewer') }]"
+            option-label="label"
+            option-value="value"
+          >
+            <template #option="{ option }">
+              <span :data-value="option.value">{{ option.label }}</span>
+            </template>
+          </Select>
         </div>
         <p v-if="createError" class="text-sm text-destructive">{{ createError }}</p>
         <button type="submit" hidden>{{ $t('common.create') }}</button>
@@ -298,7 +300,18 @@
 
       <p class="mb-1 mt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ $t('views.AdminUsersView.credentials') }}</p>
       <div class="flex items-center gap-2 bg-muted rounded-lg px-4 py-3">
-        <code class="flex-1 text-sm font-mono break-all select-all" data-testid="admin-users-credential-value">{{ credentialValue }}</code>
+        <code class="flex-1 text-sm font-mono break-all select-all" data-testid="admin-users-credential-value">{{ credentialKind === 'password' && !credentialRevealed ? maskedCredential : credentialValue }}</code>
+        <Button
+          v-if="credentialKind === 'password'"
+          severity="secondary"
+          outlined
+          class="shrink-0"
+          data-testid="admin-users-reveal-password"
+          :aria-label="credentialRevealed ? $t('views.AdminUsersView.hide_password') : $t('views.AdminUsersView.reveal_password')"
+          @click="credentialRevealed = !credentialRevealed"
+        >
+          {{ credentialRevealed ? $t('views.AdminUsersView.hide_password') : $t('views.AdminUsersView.reveal_password') }}
+        </Button>
         <Button
           class="shrink-0"
           :data-testid="credentialKind === 'invite' ? 'admin-users-invite-copy-url' : 'admin-users-copy-password'"
@@ -467,6 +480,8 @@ const credentialTitle = computed(() => {
     : t('views.AdminUsersView.password_reset')
 })
 const copied = ref(false)
+const credentialRevealed = ref(false)
+const maskedCredential = computed(() => '•'.repeat(Math.max(credentialValue.value.length, 8)))
 // Clipboard failure must be visible: for a show-once secret a silent (or
 // lying "Copied!") failure can lock the admin out of the credential.
 const copyError = ref('')
@@ -479,6 +494,7 @@ async function showCredential(kind: CredentialKind, value: string, email: string
   credentialEmail.value = email
   credentialExpiresAt.value = expiresAt
   copied.value = false
+  credentialRevealed.value = kind !== 'password'
   inviteQrDataUrl.value = ''
   showCredentialDialog.value = true
   if (kind === 'invite') {
@@ -496,6 +512,7 @@ function dismissCredentialState() {
   credentialExpiresAt.value = ''
   inviteQrDataUrl.value = ''
   copied.value = false
+  credentialRevealed.value = false
   copyError.value = ''
 }
 
