@@ -91,6 +91,20 @@ describe('useAssistantStore', () => {
     expect(store.messages[0].content).toBe('Hello World')
   })
 
+  it('appendToken treats a null assistant message body as empty', () => {
+    const store = useAssistantStore()
+    store.messages.push({
+      id: 'assistant-1', session_id: 'session-1', role: 'assistant', content: null,
+      tool_calls_json: null, tool_results_json: null, token_count: null,
+      parent_id: null, created_at: new Date().toISOString(),
+    })
+
+    store.appendToken('first token')
+
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0].content).toBe('first token')
+  })
+
   it('removeLastUserMessage removes last user message', () => {
     const store = useAssistantStore()
     store.messages.push({
@@ -229,6 +243,25 @@ describe('useAssistantStore API methods', () => {
     expect(store.sessionsLoading).toBe(false)
   })
 
+  it('fetchSessions treats a response without items as an empty list', async () => {
+    const store = useAssistantStore()
+    apiGet.mockResolvedValue({ data: undefined })
+
+    await store.fetchSessions()
+
+    expect(store.sessions).toEqual([])
+    expect(store.error).toBeNull()
+  })
+
+  it('fetchSessions formats non-Error thrown values', async () => {
+    const store = useAssistantStore()
+    apiGet.mockRejectedValue('network down')
+
+    await store.fetchSessions()
+
+    expect(store.error).toBe('network down')
+  })
+
   it('createSession prepends the new session, selects it, and clears messages', async () => {
     const store = useAssistantStore()
     store.sessions = [makeSession('s-old', '2026-09-01T00:00:00Z')]
@@ -313,6 +346,25 @@ describe('useAssistantStore API methods', () => {
     expect(store.loading).toBe(false)
   })
 
+  it('loadSession treats a response without items as an empty message list', async () => {
+    const store = useAssistantStore()
+    apiGet.mockResolvedValue({ data: undefined })
+
+    await store.loadSession('s-1')
+
+    expect(store.messages).toEqual([])
+    expect(store.activeSessionId).toBe('s-1')
+  })
+
+  it('loadSession formats non-Error thrown values', async () => {
+    const store = useAssistantStore()
+    apiGet.mockRejectedValue('disconnected')
+
+    await store.loadSession('s-1')
+
+    expect(store.error).toBe('disconnected')
+  })
+
   it('renameSession updates the session in place', async () => {
     const store = useAssistantStore()
     store.sessions = [makeSession('s-1', '2026-09-01T00:00:00Z')]
@@ -334,6 +386,23 @@ describe('useAssistantStore API methods', () => {
     await expect(store.renameSession('s-unknown', 'Renamed')).resolves.toBe(true)
   })
 
+  it('createSession accepts an explicit name in the API payload', async () => {
+    const store = useAssistantStore()
+    const created = makeSession('s-named', '2026-09-02T00:00:00Z')
+    apiPost.mockResolvedValue({ data: created })
+
+    await expect(store.createSession({ name: 'Important work' })).resolves.toEqual(created)
+
+    expect(apiPost).toHaveBeenCalledWith('/api/v1/assistant/sessions', {
+      body: {
+        name: 'Important work',
+        provider: null,
+        model: null,
+        context_window_tokens: 200000,
+      },
+    })
+  })
+
   it('renameSession returns false on API errors', async () => {
     const store = useAssistantStore()
     apiPatch.mockResolvedValue({ error: { detail: 'name taken' } })
@@ -347,6 +416,14 @@ describe('useAssistantStore API methods', () => {
   it('renameSession surfaces thrown errors', async () => {
     const store = useAssistantStore()
     apiPatch.mockRejectedValue(new Error('rename unavailable'))
+
+    await expect(store.renameSession('s-1', 'X')).resolves.toBe(false)
+    expect(store.error).toBe('rename unavailable')
+  })
+
+  it('renameSession formats non-Error thrown values', async () => {
+    const store = useAssistantStore()
+    apiPatch.mockRejectedValue('rename unavailable')
 
     await expect(store.renameSession('s-1', 'X')).resolves.toBe(false)
     expect(store.error).toBe('rename unavailable')
@@ -398,6 +475,15 @@ describe('useAssistantStore API methods', () => {
   it('deleteSession surfaces thrown errors', async () => {
     const store = useAssistantStore()
     apiDelete.mockRejectedValue(new Error('gone'))
+
+    await store.deleteSession('s-1')
+
+    expect(store.error).toBe('gone')
+  })
+
+  it('deleteSession formats non-Error thrown values', async () => {
+    const store = useAssistantStore()
+    apiDelete.mockRejectedValue('gone')
 
     await store.deleteSession('s-1')
 
@@ -469,6 +555,18 @@ describe('useAssistantStore API methods', () => {
     expect(store.pendingPermission).toBeNull()
   })
 
+  it('approvePermission formats non-Error thrown values', async () => {
+    const store = useAssistantStore()
+    store.activeSessionId = 's-1'
+    store.pendingPermission = { request_id: 'req-1', tools: [] }
+    apiPost.mockRejectedValue('socket hang-up')
+
+    await store.approvePermission('req-1', 'approve')
+
+    expect(store.error).toBe('socket hang-up')
+    expect(store.pendingPermission).toBeNull()
+  })
+
   it('resetSessionPermissions posts to the reset endpoint', async () => {
     const store = useAssistantStore()
     store.activeSessionId = 's-1'
@@ -502,6 +600,16 @@ describe('useAssistantStore API methods', () => {
     expect(store.error).toBe('reset blew up')
   })
 
+  it('resetSessionPermissions formats non-Error thrown values', async () => {
+    const store = useAssistantStore()
+    store.activeSessionId = 's-1'
+    apiPost.mockRejectedValue('reset blew up')
+
+    await store.resetSessionPermissions()
+
+    expect(store.error).toBe('reset blew up')
+  })
+
   it('pauseAssistant and resumeAssistant toggle the paused flag', () => {
     const store = useAssistantStore()
     store.pauseAssistant()
@@ -519,6 +627,16 @@ describe('useAssistantStore API methods', () => {
     expect(store.messages).toHaveLength(2)
     expect(store.messages[0]).toMatchObject({ role: 'summary', content: 'Action cancelled by user.', session_id: 's-1' })
     expect(store.messages[1]).toMatchObject({ role: 'summary', content: '--- turn boundary ---' })
+  })
+
+  it('appends summary messages without an active session', () => {
+    const store = useAssistantStore()
+    store.appendSystemMessage('No session')
+    store.appendTurnSeparator('---')
+
+    expect(store.messages).toHaveLength(2)
+    expect(store.messages[0].session_id).toBe('')
+    expect(store.messages[1].session_id).toBe('')
   })
 
   it('setPendingPermission and setPageContext store their payloads', () => {
@@ -578,6 +696,16 @@ describe('useAssistantStore API methods', () => {
     store.reclampPosition()
     expect(store.panelPosition.x).toBe(8)
     expect(store.panelPosition.y).toBeLessThanOrEqual(window.innerHeight - 100)
+  })
+
+  it('keeps panel position and size within the viewport without clamping', () => {
+    const store = useAssistantStore()
+    store.updatePosition({ x: 120, y: 140 })
+    store.updateSize({ width: 320, height: 280 })
+    store.reclampPosition()
+
+    expect(store.panelPosition).toEqual({ x: 120, y: 140 })
+    expect(store.panelSize).toEqual({ width: 320, height: 280 })
   })
 
   it('disposeResponsive removes the resize listener', () => {
