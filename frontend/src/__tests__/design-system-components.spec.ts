@@ -142,12 +142,19 @@ describe('CardHeader and DataCard', () => {
     expect(wrapper.find('p').classes()).toContain('description-custom')
   })
 
-   it('does not render an empty header for a title-less, action-less DataCard', () => {
-     const wrapper = mount(DataCard, { slots: { default: '<p>Body</p>' } })
+     it('does not render an empty header for a title-less, action-less DataCard', () => {
+      const wrapper = mount(DataCard, { slots: { default: '<p>Body</p>' } })
 
-     expect(wrapper.find('.card-header').exists()).toBe(false)
-     expect(wrapper.find('.card-content').text()).toBe('Body')
-   })
+      expect(wrapper.find('.card-header').exists()).toBe(false)
+      expect(wrapper.find('.card-content').text()).toBe('Body')
+    })
+
+    it('does not render an empty CardHeader without title, description, or actions', () => {
+      const wrapper = mount(CardHeader)
+
+      expect(wrapper.find('.card-header').exists()).toBe(false)
+    })
+
 
    it('keeps SectionCard headings at h2', () => {
     const wrapper = mount(SectionCard, { props: { title: 'Settings' } })
@@ -231,25 +238,37 @@ describe('MetricCard', () => {
       expect(wrapper.find('.bg-destructive').exists()).toBe(true)
     })
 
-    it('falls back to zero progress for non-finite values', () => {
-      const invalidMax = mount(MetricCard, {
-        props: { label: 'Capacity', value: 'Unknown', progress: { value: 50, max: Number.NaN } },
-      })
-      const invalidValue = mount(MetricCard, {
-        props: { label: 'Capacity', value: 'Unknown', progress: { value: Number.NaN, max: 100 } },
-      })
+     it('falls back to zero progress for non-finite values', () => {
+       const invalidMax = mount(MetricCard, {
+         props: { label: 'Capacity', value: 'Unknown', progress: { value: 50, max: Number.NaN } },
+       })
+       const invalidValue = mount(MetricCard, {
+         props: { label: 'Capacity', value: 'Unknown', progress: { value: Number.NaN, max: 100 } },
+       })
 
-      expect(invalidMax.find('[style]').attributes('style')).toContain('width: 0%')
-      expect(invalidValue.find('[style]').attributes('style')).toContain('width: 0%')
-    })
+       expect(invalidMax.find('[style]').attributes('style')).toContain('width: 0%')
+       expect(invalidValue.find('[style]').attributes('style')).toContain('width: 0%')
+     })
+
+     it('covers absent progress and invalid delta computed fallbacks', () => {
+       const wrapper = mount(MetricCard, { props: { label: 'Capacity', value: 'Unknown' } })
+       const vm = wrapper.vm as unknown as { progressBarClass: string; deltaArrow: string; deltaClass: string }
+
+       expect(vm.progressBarClass).toBe('bg-primary')
+       expect(vm.deltaArrow).toBe('')
+       expect(vm.deltaClass).toBe('')
+     })
+
 
     it.each([
       [{ value: 50, max: 100, color: 'success' }, 'bg-success'],
       [{ value: 50, max: 100, color: 'warning' }, 'bg-warning'],
       [{ value: 50, max: 100, color: 'destructive' }, 'bg-destructive'],
       [{ value: 50, max: 100, color: 'primary' }, 'bg-primary'],
-      [{ value: 95, max: 100 }, 'bg-warning'],
-      [{ value: 95, max: 100, color: 'primary' }, 'bg-warning'],
+       [{ value: 50, max: 100 }, 'bg-primary'],
+       [{ value: 95, max: 100 }, 'bg-warning'],
+       [{ value: 95, max: 100, color: 'primary' }, 'bg-warning'],
+
       [{ value: 80, max: 100, color: 'primary' }, 'bg-amber-500'],
     ] as const)('maps progress %o to %s', (progress, expectedClass) => {
       const wrapper = mount(MetricCard, { props: { label: 'Capacity', value: 'Half', progress } })
@@ -302,13 +321,33 @@ describe('StatCard', () => {
     expect(invalid.find('.text-xs').exists()).toBe(false)
   })
 
-  it('renders percentage-only deltas and omits a delta when no valid values remain', () => {
-    const percentageOnly = mount(StatCard, { props: { label: 'Runs', value: 12, delta: { delta_pct: -12.5 } } })
-    const absent = mount(StatCard, { props: { label: 'Runs', value: 12, delta: null } })
+     it('renders percentage-only deltas and omits a delta when no valid values remain', () => {
+     const percentageOnly = mount(StatCard, { props: { label: 'Runs', value: 12, delta: { delta_pct: -12.5 } } })
+     const absent = mount(StatCard, { props: { label: 'Runs', value: 12, delta: null } })
 
-    expect(percentageOnly.find('.text-xs').text()).toContain('▼ (12.5%)')
-    expect(absent.find('.text-xs').exists()).toBe(false)
-  })
+     expect(percentageOnly.find('.text-xs').text()).toContain('▼ (12.5%)')
+     expect(absent.find('.text-xs').exists()).toBe(false)
+   })
+
+   it('covers neutral styling for an absolute delta without a percentage', () => {
+     const wrapper = mount(StatCard, {
+       props: {
+         label: 'Runs',
+         value: 12,
+         neutralTrend: true,
+         noBaselineLabel: 'No baseline',
+         delta: { current: 12.5, previous: 10 },
+       },
+     })
+
+     expect(wrapper.find('[data-testid="stat-no-baseline"]').text()).toContain('+2.5')
+     expect(wrapper.find('[data-testid="stat-no-baseline"]').classes()).toContain('text-muted-foreground')
+     expect((wrapper.vm as unknown as { deltaArrow: string }).deltaArrow).toBe('')
+     expect((wrapper.vm as unknown as { deltaClass: string }).deltaClass).toBe('')
+     expect((wrapper.vm as unknown as { deltaAbsArrow: string }).deltaAbsArrow).toBe('▲')
+     expect((wrapper.vm as unknown as { deltaAbsClass: string }).deltaAbsClass).toBe('text-muted-foreground')
+   })
+
 
   it('formats fractional absolute deltas and inverted positive trends', () => {
     const fractional = mount(StatCard, {
@@ -336,8 +375,23 @@ describe('StatCard', () => {
     expect(inverted.find('.text-xs').classes()).toContain('text-success-text')
     expect(neutral.find('.text-xs').classes()).toContain('text-muted-foreground')
     expect(noBaseline.find('[data-testid="stat-no-baseline"]').text()).toContain('+2')
-    expect(noBaseline.find('[data-testid="stat-no-baseline"]').attributes('title')).toBe('No baseline')
-  })
+     expect(noBaseline.find('[data-testid="stat-no-baseline"]').attributes('title')).toBe('No baseline')
+   })
+
+   it('covers zero and negative absolute-only delta branches', () => {
+     const zero = mount(StatCard, {
+       props: { label: 'Runs', value: 10, noBaselineLabel: 'No baseline', delta: { current: 10, previous: 10 } },
+     })
+     const negative = mount(StatCard, {
+       props: { label: 'Runs', value: 8, noBaselineLabel: 'No baseline', delta: { current: 8, previous: 10 } },
+     })
+
+     expect(zero.find('[data-testid="stat-no-baseline"]').text()).toContain('→0')
+     expect(zero.find('[data-testid="stat-no-baseline"]').classes()).toContain('text-muted-foreground')
+     expect(negative.find('[data-testid="stat-no-baseline"]').text()).toContain('▼-2')
+     expect(negative.find('[data-testid="stat-no-baseline"]').classes()).toContain('text-destructive')
+   })
+
 
   it('renders as a router link when a destination is provided', () => {
     const wrapper = mount(StatCard, { props: { label: 'Runs', value: 12, to: '/runs' } })
