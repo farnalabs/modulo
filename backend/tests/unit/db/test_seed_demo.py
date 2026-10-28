@@ -304,6 +304,65 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
     assert counts_second["runs"] == 20
 
 
+async def test_seed_fixture_ids_are_deterministic_and_org_scoped(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Demo integration rows use stable ids derived from their org and fixture key."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    org = (await session.execute(select(Organisation))).scalar_one()
+
+    backends = list((await session.execute(select(ModelBackend).order_by(ModelBackend.name))).scalars())
+    connectors = list((await session.execute(select(ConnectorInstance).order_by(ConnectorInstance.name))).scalars())
+    notifications = list((await session.execute(select(Notification).order_by(Notification.category))).scalars())
+
+    assert [row.id for row in backends] == [
+        seed_demo_module.demo_fixture_id(org.id, f"model-backend:{row.name}") for row in backends
+    ]
+    assert [row.id for row in connectors] == [
+        seed_demo_module.demo_fixture_id(org.id, f"connector:{row.name}") for row in connectors
+    ]
+    assert [row.id for row in notifications] == [
+        seed_demo_module.demo_fixture_id(org.id, f"notification:{row.category}") for row in notifications
+    ]
+    assert seed_demo_module.demo_fixture_id(org.id, "model-backend:Demo Stub Fast") != seed_demo_module.demo_fixture_id(
+        uuid.uuid4(), "model-backend:Demo Stub Fast"
+    )
+
+
+@pytest.mark.parametrize(
+    ("entity", "recovery_message"),
+    [
+        pytest.param(ModelBackend, "demo_seed.model_backend_recovered_after_conflict", id="model-backend"),
+        pytest.param(ConnectorInstance, "demo_seed.connector_recovered_after_conflict", id="connector"),
+        pytest.param(Notification, "demo_seed.notification_recovered_after_conflict", id="notification"),
+    ],
+)
+async def test_seed_fixture_primary_key_conflict_adopts_existing_row(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    entity: type,
+    recovery_message: str,
+) -> None:
+    """A deterministic-id collision takes the nested savepoint recovery path."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    counts_before = await _count(session, entity)
+    hide = _HideCheckOnce(session, entity)
+    flaky = _FlakyFlush(session, entity)
+    hide.install()
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+        hide.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, entity) == counts_before
+    assert any(record.getMessage() == recovery_message for record in caplog.records)
+
+
 async def test_seed_restamps_password_on_rotation(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     await _run_seed(session, monkeypatch, _demo_settings())
     rotated = "rotated-demo-passphrase"

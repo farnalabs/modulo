@@ -156,6 +156,17 @@ def demo_trigger_event_id(organisation_id: uuid.UUID, trigger_id: uuid.UUID) -> 
     return uuid.uuid5(_DEMO_ID_NAMESPACE, f"trigger-event:{organisation_id}:{trigger_id}")
 
 
+def demo_fixture_id(organisation_id: uuid.UUID, fixture_key: str) -> uuid.UUID:
+    """Deterministic primary key for a demo-org fixture row.
+
+    The organisation is part of the key so the same stable fixture key can be
+    safely reused by separate demo organisations.  These ids make the primary
+    key, rather than a select-then-insert natural-key lookup, the concurrent
+    refresh convergence point.
+    """
+    return uuid.uuid5(_DEMO_ID_NAMESPACE, f"fixture:{organisation_id}:{fixture_key}")
+
+
 @dataclass(frozen=True)
 class _NodeSpec:
     """One seeded graph node. ``agent`` names a ``_DEMO_AGENT_SPECS`` entry."""
@@ -1677,7 +1688,12 @@ async def _seed_demo_governance_surfaces(
             "account_id": account.id,
         }
         if backend_row is None:
-            backend = ModelBackend(organisation_id=org.id, name=name, **values)
+            backend = ModelBackend(
+                id=demo_fixture_id(org.id, f"model-backend:{name}"),
+                organisation_id=org.id,
+                name=name,
+                **values,
+            )
             try:
                 async with session.begin_nested():
                     session.add(backend)
@@ -1729,7 +1745,12 @@ async def _seed_demo_governance_surfaces(
             "account_id": account.id,
         }
         if connector_row is None:
-            connector = ConnectorInstance(organisation_id=org.id, name=name, **values)
+            connector = ConnectorInstance(
+                id=demo_fixture_id(org.id, f"connector:{name}"),
+                organisation_id=org.id,
+                name=name,
+                **values,
+            )
             try:
                 async with session.begin_nested():
                     session.add(connector)
@@ -1786,7 +1807,12 @@ async def _seed_demo_governance_surfaces(
             "expires_at": now + timedelta(days=3),
         }
         if notification_row is None:
-            notification = Notification(organisation_id=org.id, category=category, **values)
+            notification = Notification(
+                id=demo_fixture_id(org.id, f"notification:{category}"),
+                organisation_id=org.id,
+                category=category,
+                **values,
+            )
             try:
                 async with session.begin_nested():
                     session.add(notification)
