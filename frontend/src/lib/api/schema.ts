@@ -19114,10 +19114,13 @@ export interface components {
             image_ref?: string | null;
             /** Capabilities */
             capabilities?: string[];
-            /** Max Node Seconds */
-            max_node_seconds?: number;
+            /**
+             * Max Node Seconds
+             * @description Provider wall-clock capability; read-only for operators
+             * @default 3300
+             */
+            max_node_seconds: number;
             /** Config Json */
-
             config_json?: {
                 [key: string]: unknown;
             };
@@ -19238,7 +19241,6 @@ export interface components {
             /** Max Node Seconds */
             max_node_seconds: number;
             /** Config Json */
-
             config_json: {
                 [key: string]: unknown;
             };
@@ -19281,11 +19283,10 @@ export interface components {
             /** Image Ref */
             image_ref?: string | null;
             /** Capabilities */
-            capabilities?: string[];
+            capabilities?: string[] | null;
             /** Max Node Seconds */
-            max_node_seconds?: number;
+            max_node_seconds?: number | null;
             /** Config Json */
-
             config_json?: {
                 [key: string]: unknown;
             } | null;
