@@ -73,6 +73,10 @@ class EnvironmentProfile(SoftDeleteMixin, OrgScoped):
     provider_type: Mapped[str] = mapped_column(String(50), nullable=False)
     image_ref: Mapped[str | None] = mapped_column(String(500))
     capabilities_json: Mapped[list[str]] = mapped_column(JSONB_COL, nullable=False, default=list)
+    # Provider capability: maximum wall-clock budget for one sandbox node.
+    # The shipped default preserves the historical E2B provisioning headroom;
+    # other providers may advertise a larger value explicitly.
+    max_node_seconds: Mapped[int] = mapped_column(nullable=False, server_default="3300")
     config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     network_policy: Mapped[str] = mapped_column(String(20), nullable=False, server_default="outbound")
     initialisation_strategy: Mapped[str] = mapped_column(String(30), nullable=False, server_default="git_clone")

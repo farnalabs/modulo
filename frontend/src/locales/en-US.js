@@ -758,8 +758,10 @@ export default {
       "image_placeholder_unresolvable": "Release placeholder image \u2014 this is the shipped placeholder and cannot be pulled. Set your own agent image to use this profile.",
       "image_invalid_reference": "This is not a valid image reference \u2014 check the registry host, repository name and digest.",
       "image_mutable_tag_warning": "Mutable tag \u2014 pin the image by digest (name{'@'}algorithm:digest, e.g. sha256:\u2026, sha384:\u2026 or sha512:\u2026) so the registry cannot swap it under you. Warning only; you can still save.",
-      "capabilities": "Capabilities",
-      "network_policy": "Network Policy",
+       "capabilities": "Capabilities",
+       "max_node_seconds": "Maximum node wall-clock seconds (read-only capability)",
+       "network_policy": "Network Policy",
+
       "select_network_policy": "Select network policy",
       "outbound_full_egress": "Outbound (full egress)",
       "none_isolated": "None (isolated)",

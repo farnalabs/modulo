@@ -134,7 +134,22 @@
       </div>
 
       <div>
+        <label for="environmentprofileform-max-node-seconds" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.max_node_seconds') }}</label>
+         <input
+           id="environmentprofileform-max-node-seconds"
+           :value="form.max_node_seconds"
+           type="number"
+           min="60"
+           max="604800"
+           readonly
+           class="w-full rounded-lg border border-input bg-muted px-3 py-2 text-sm"
+           data-testid="envprofile-form-max-node-seconds"
+         />
+      </div>
+
+      <div>
         <span class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.capabilities') }}</span>
+
         <div class="flex flex-wrap gap-2">
           <label
             v-for="cap in availableCapabilities"
@@ -272,6 +287,7 @@ const form = reactive({
   provider_type: '',
   image_ref: '',
   capabilities: [] as string[],
+  max_node_seconds: 3300,
   network_policy: 'outbound',
   initialisation_strategy: 'git_clone',
   persistence_policy: 'ephemeral',
@@ -502,6 +518,7 @@ async function handleSubmit() {
     provider_type: form.provider_type,
     image_ref: form.image_ref.trim() || null,
     capabilities: [...form.capabilities],
+    max_node_seconds: form.max_node_seconds,
     network_policy: form.network_policy,
     initialisation_strategy: form.initialisation_strategy,
     persistence_policy: form.persistence_policy,
@@ -531,6 +548,7 @@ onMounted(async () => {
       form.provider_type = p.provider_type
       form.image_ref = p.image_ref ?? ''
       form.capabilities = [...p.capabilities]
+      form.max_node_seconds = p.max_node_seconds ?? 3300
       form.network_policy = p.network_policy
       form.initialisation_strategy = p.initialisation_strategy
       form.persistence_policy = p.persistence_policy

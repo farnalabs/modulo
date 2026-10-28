@@ -109,6 +109,12 @@ class ProfileCreate(BaseModel):
     )
     image_ref: str | None = Field(None, min_length=1, max_length=500)
     capabilities: list[str] = Field(default_factory=list)
+    max_node_seconds: int = Field(
+        default=3300,
+        ge=60,
+        le=604800,
+        description="Provider wall-clock capability; read-only for operators",
+    )
     config_json: dict[str, Any] = Field(default_factory=dict)
     network_policy: str = Field(default="outbound")
     initialisation_strategy: str = Field(default="git_clone")
@@ -128,6 +134,7 @@ class ProfileUpdate(BaseModel):
     )
     image_ref: str | None = Field(None, min_length=1, max_length=500)
     capabilities: list[str] | None = None
+    max_node_seconds: int | None = Field(default=None, ge=60, le=604800)
     config_json: dict[str, Any] | None = None
     network_policy: str | None = None
     initialisation_strategy: str | None = None
@@ -145,6 +152,7 @@ class ProfileResponse(BaseModel):
     provider_type: str
     image_ref: str | None = None
     capabilities: list[str]
+    max_node_seconds: int
     config_json: dict[str, Any]
     network_policy: str
     initialisation_strategy: str
@@ -175,6 +183,7 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
         provider_type=p.provider_type,
         image_ref=p.image_ref,
         capabilities=p.capabilities_json,
+        max_node_seconds=p.max_node_seconds,
         config_json=p.config_json,
         network_policy=p.network_policy,
         initialisation_strategy=p.initialisation_strategy,
@@ -256,6 +265,7 @@ async def create_profile(
                 provider_type=req.provider_type,
                 image_ref=req.image_ref,
                 capabilities=req.capabilities,
+                max_node_seconds=req.max_node_seconds,
                 config_json=req.config_json,
                 network_policy=req.network_policy,
                 initialisation_strategy=req.initialisation_strategy,

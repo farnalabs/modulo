@@ -10603,6 +10603,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     _route_image_ref: str | None = None
     if session_factory is not None:
         from modulo.core.bundled_runner.runner_dispatch import validate_e2b_dispatch_timeout
+        from modulo.settings import get_settings
 
         # FAR-1598: the ctx -> route seam (profile id AND pipeline id both
         # read from the executor-frozen conformance ctx) — the backstop inside
@@ -10611,6 +10612,19 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
         _route = await _resolve_sandbox_dispatch_route_for_run(state, session_factory)
         if _route.profile is not None:
             _profile_net_policy = getattr(_route.profile, "network_policy", None)
+
+        profile_cap = (
+            int(_route.profile.max_node_seconds)
+            if _route.profile is not None and getattr(_route.profile, "max_node_seconds", None) is not None
+            else None
+        )
+        transport_cap = int(get_settings().saq_run_timeout)
+        effective_cap = min(profile_cap, transport_cap) if profile_cap is not None else transport_cap
+        validate_e2b_dispatch_timeout(
+            sandbox_timeout,
+            max_timeout_seconds=effective_cap if _route.profile is not None else None,
+        )
+
         if _route.provider_type == "runner_docker":
             from modulo.core.bundled_runner.runner_dispatch import run_bundled_runner_node
 
@@ -10622,8 +10636,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                 _dc_replace(config, schema_validator_mode=schema_validator_mode),
                 _route,
             )
-        if _route.provider_type == "e2b":
-            validate_e2b_dispatch_timeout(sandbox_timeout)
         if _route.profile is not None:
             # FAR-1051: the bound profile's declared provider type drives BOTH
             # the marker attribution and the create / isolation / file-IO
