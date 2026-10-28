@@ -213,6 +213,13 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert "failed" in statuses
     assert "awaiting_human" in statuses
 
+    # Demo showcase: every run is owned by one of the three teams, rotating
+    # deterministically so the dashboard per-team breakdown carries real data.
+    # Dropping the owner_team_id assignment in seed_demo.py must fail this.
+    teams = list((await session.execute(select(Team))).scalars())
+    assert all(run.owner_team_id is not None for run in runs), "every seeded run must be team-owned"
+    assert {run.owner_team_id for run in runs} == {team.id for team in teams}
+
     # FAR-977: awaiting_human daily-fact parity — non-terminal runs must NOT
     # fabricate completed_at / duration_ms.  Deleting the is_terminal gating in
     # seed_demo.py must cause these assertions to fail.
@@ -701,6 +708,8 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
         pytest.param(Trigger, Trigger, id="trigger"),
         pytest.param(Team, Team, id="team"),
         pytest.param(TeamMembership, TeamMembership, id="team-membership"),
+        pytest.param(Eval, Eval, id="eval"),
+        pytest.param(EvalResult, EvalResult, id="eval-result"),
     ],
 )
 async def test_seed_sample_data_inserts_recover_after_conflict(
@@ -734,7 +743,9 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
     assert await _count(session, count_model) == counts_before
 
 
-@pytest.mark.parametrize("entity", [Schema, SchemaVersion, Pipeline, PipelineSnapshot, Run, Agent, Team])
+@pytest.mark.parametrize(
+    "entity", [Schema, SchemaVersion, Pipeline, PipelineSnapshot, Run, Agent, Team, Eval, EvalResult]
+)
 async def test_seed_reraises_when_recovery_finds_no_winner(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch, entity: type
 ) -> None:

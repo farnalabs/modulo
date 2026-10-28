@@ -573,6 +573,11 @@ _DEMO_RUN_SPECS: list[tuple[int, str, str, str, int, float, int, int]] = [
 
 _DEMO_FAILURE_DETAIL = "Demo sample failure — no real work was performed."
 
+# How many of each pipeline's most-recent runs receive a synthetic demo eval
+# result.  Named so the seed and the test arithmetic move together when
+# ``_DEMO_RUN_SPECS`` changes.
+_DEMO_EVAL_RESULT_RUN_LIMIT = 6
+
 
 @dataclass(frozen=True)
 class _GovernanceRunPath:
@@ -1475,6 +1480,27 @@ async def _seed_demo_agents(session: AsyncSession, org: Organisation, account: A
     return agent_ids
 
 
+async def _find_demo_eval(
+    session: AsyncSession,
+    org: Organisation,
+    pipeline: Pipeline,
+    label: str,
+) -> Eval | None:
+    """The existing demo eval for ``(pipeline, name)``, or None.
+
+    ``evals`` carries no unique key on the ``(organisation_id, pipeline_id,
+    name)`` natural tuple, so a concurrent boot can leave more than one match;
+    take a deterministic first row instead of raising ``MultipleResultsFound``.
+    """
+    result = await session.execute(
+        select(Eval)
+        .where(Eval.organisation_id == org.id, Eval.pipeline_id == pipeline.id, Eval.name == label)
+        .order_by(Eval.id)
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
 async def _get_or_create_demo_eval(
     session: AsyncSession,
     org: Organisation,
@@ -1482,29 +1508,67 @@ async def _get_or_create_demo_eval(
     pipeline: Pipeline,
     label: str,
 ) -> Eval:
-    """Return the demo eval definition for *pipeline*, creating it once if absent."""
-    result = await session.execute(
-        select(Eval).where(Eval.organisation_id == org.id, Eval.pipeline_id == pipeline.id, Eval.name == label)
+    """Return the demo eval definition for *pipeline*, creating it once if absent.
+
+    Race-safe: the insert runs in a savepoint with ``IntegrityError`` recovery,
+    matching every other seed write in this file, so a concurrent boot that
+    committed the matching row only rolls back this insert.
+    """
+    evaluation = await _find_demo_eval(session, org, pipeline, label)
+    if evaluation is not None:
+        return evaluation
+    evaluation = Eval(
+        organisation_id=org.id,
+        pipeline_id=pipeline.id,
+        account_id=account.id,
+        name=label,
+        eval_type="model_judge",
+        config_json={"description": "Demo evaluation result; no live provider was called."},
+        pass_threshold=Decimal("0.75"),
     )
-    evaluation = result.scalar_one_or_none()
-    if evaluation is None:
-        evaluation = Eval(
-            organisation_id=org.id,
-            pipeline_id=pipeline.id,
-            account_id=account.id,
-            name=label,
-            eval_type="model_judge",
-            config_json={"description": "Demo evaluation result; no live provider was called."},
-            pass_threshold=Decimal("0.75"),
-        )
-        session.add(evaluation)
-        await session.flush()
+    try:
+        async with session.begin_nested():
+            session.add(evaluation)
+            await session.flush()
+    except IntegrityError:
+        adopted = await _find_demo_eval(session, org, pipeline, label)
+        if adopted is None:
+            raise
+        _log.info("demo_seed.eval_recovered_after_conflict", extra={"eval_name": label})
+        return adopted
+    _log.info("demo_seed.eval_created", extra={"eval_name": label})
     return evaluation
 
 
 def _demo_eval_passed(run: Run) -> bool:
     """Deterministic synthetic verdict for one demo run."""
     return run.status == "complete" and run.run_number % 3 != 0  # nosemgrep: raw-status-complete
+
+
+async def _find_demo_eval_result(
+    session: AsyncSession,
+    org: Organisation,
+    evaluation: Eval,
+    run: Run,
+) -> EvalResult | None:
+    """The existing demo eval result for ``(eval, run)``, or None.
+
+    ``eval_results`` carries no unique key on the ``(organisation_id,
+    eval_id, run_id)`` tuple, so a concurrent boot can leave more than one
+    match; take a deterministic first row instead of raising
+    ``MultipleResultsFound``.
+    """
+    result = await session.execute(
+        select(EvalResult)
+        .where(
+            EvalResult.organisation_id == org.id,
+            EvalResult.eval_id == evaluation.id,
+            EvalResult.run_id == run.id,
+        )
+        .order_by(EvalResult.id)
+        .limit(1)
+    )
+    return result.scalars().first()
 
 
 async def _ensure_demo_eval_result(
@@ -1514,36 +1578,40 @@ async def _ensure_demo_eval_result(
     run: Run,
     index: int,
 ) -> None:
-    """Create the demo eval result for *run* unless it already exists."""
-    existing = (
-        await session.execute(
-            select(EvalResult).where(
-                EvalResult.organisation_id == org.id,
-                EvalResult.eval_id == evaluation.id,
-                EvalResult.run_id == run.id,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
+    """Create the demo eval result for *run* unless it already exists.
+
+    Race-safe: savepoint + ``IntegrityError`` recovery, matching every other
+    seed write in this file.
+    """
+    if await _find_demo_eval_result(session, org, evaluation, run) is not None:
         return
     passed = _demo_eval_passed(run)
-    session.add(
-        EvalResult(
-            organisation_id=org.id,
-            eval_id=evaluation.id,
-            run_id=run.id,
-            node_id=None,
-            eval_definition_version=evaluation.version,
-            passed=passed,
-            outcome="pass" if passed else "fail",
-            score=0.91 if passed else 0.62,
-            judge_result_json={"source": "demo_seed", "sample": True, "eval_index": index},
-            detail="Synthetic read-only demo evaluation result.",
-            observed=True,
-            evaluated_at=run.completed_at or run.started_at or datetime.now(UTC),
-            resolution="accepted" if passed else "pending",
-        )
+    eval_result = EvalResult(
+        organisation_id=org.id,
+        eval_id=evaluation.id,
+        run_id=run.id,
+        node_id=None,
+        eval_definition_version=evaluation.version,
+        passed=passed,
+        outcome="pass" if passed else "fail",
+        score=0.91 if passed else 0.62,
+        judge_result_json={"source": "demo_seed", "sample": True, "eval_index": index},
+        detail="Synthetic read-only demo evaluation result.",
+        observed=True,
+        evaluated_at=run.completed_at or run.started_at or datetime.now(UTC),
+        resolution="accepted" if passed else "pending",
     )
+    try:
+        async with session.begin_nested():
+            session.add(eval_result)
+            await session.flush()
+    except IntegrityError:
+        if await _find_demo_eval_result(session, org, evaluation, run) is None:
+            raise
+        _log.info(
+            "demo_seed.eval_result_recovered_after_conflict",
+            extra={"eval_name": evaluation.name, "run_number": run.run_number},
+        )
 
 
 async def _seed_demo_evals(
@@ -1552,7 +1620,13 @@ async def _seed_demo_evals(
     account: Account,
     pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
 ) -> None:
-    """Seed durable eval definitions and recent results for dashboard consumers."""
+    """Seed durable eval definitions and recent results for dashboard consumers.
+
+    The most-recent ``_DEMO_EVAL_RESULT_RUN_LIMIT`` runs of each pipeline get a
+    synthetic result: the dashboard eval rate is a rolling window on
+    ``evaluated_at``, so anchoring results to the oldest runs would age them
+    out of the cards immediately.
+    """
     for index, (pipeline_name, label) in enumerate(
         ((DEMO_PIPELINE_NAME, "PR risk quality"), (PR_REVIEW_PIPELINE_NAME, "Review completeness")),
         start=1,
@@ -1564,11 +1638,12 @@ async def _seed_demo_evals(
                 await session.execute(
                     select(Run)
                     .where(Run.organisation_id == org.id, Run.pipeline_id == pipeline.id)
-                    .order_by(Run.run_number)
+                    .order_by(Run.run_number.desc())
+                    .limit(_DEMO_EVAL_RESULT_RUN_LIMIT)
                 )
             ).scalars()
         )
-        for run in runs[:6]:
+        for run in runs:
             await _ensure_demo_eval_result(session, org, evaluation, run, index)
     await session.flush()
 
@@ -2117,6 +2192,7 @@ async def _get_or_create_demo_team(
             team = result.scalar_one_or_none()
             if team is None:
                 raise
+            _log.info("demo_seed.team_recovered_after_conflict", extra={"team_name": name})
         else:
             _log.info("demo_seed.team_created", extra={"team_id": str(team.id)})
     return team
