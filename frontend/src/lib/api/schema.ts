@@ -19242,7 +19242,6 @@ export interface components {
             max_node_seconds: number;
             /** Config Json */
             config_json: {
-
                 [key: string]: unknown;
             };
             /** Network Policy */
