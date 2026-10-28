@@ -300,8 +300,8 @@ describe('Sparkline', () => {
     expect(wrapper.find('[data-testid="sparkline-tooltip"]').exists()).toBe(false)
   })
 
-  it('zero mode (default) maps null values to 0 at the chart floor', () => {
-    const wrapper = mount(Sparkline, { props: { data: [null, 50, null] } })
+  it('zero mode maps null values to 0 at the chart floor', () => {
+    const wrapper = mount(Sparkline, { props: { data: [null, 50, null], missingData: 'zero' } })
     const ys = wrapper
       .find('polyline')
       .attributes('points')!
