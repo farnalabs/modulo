@@ -240,6 +240,25 @@ async def insert_eval(conn: AsyncConnection, fixture: EvalFixture) -> None:
 # TC_MAX_TRIES=300) for LOCAL integration runs, and give the local pytest
 # invocation a wide per-test budget (--timeout=1800). CI runners are not
 # contended and need neither.
+@pytest_asyncio.fixture(scope="package", autouse=True)
+async def _isolate_integration_process_engines() -> AsyncGenerator[None, None]:
+    """Keep integration's Postgres engines isolated from neighbouring suites.
+
+    Unit and BDD tests may exercise audited routes against a process-shared
+    SQLite engine.  If those suites run before integration in one pytest
+    process, the cached engine survives the suite boundary and the integration
+    tests can accidentally use SQLite (whose lightweight fixture schema does
+    not include ``audit_chain_heads``) instead of the migrated testcontainer.
+    Reset on both sides of the session so suite order cannot determine which
+    database a later suite observes.
+    """
+    await dispose_process_global_engines()
+    try:
+        yield
+    finally:
+        await dispose_process_global_engines()
+
+
 @pytest.fixture(scope="session")
 def postgres_container() -> Generator[PostgresContainer, None, None]:
     with PostgresContainer("postgres:16-alpine") as pg:
