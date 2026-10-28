@@ -98,23 +98,25 @@ describe('useDashboardStore', () => {
     expect(store.loading).toBe(false)
   })
 
-  it('fetchSummary reports API errors and ignores overlapping requests', async () => {
-    let resolveRequest: ((value: unknown) => void) | undefined
-    mockGet.mockImplementation(() => new Promise((resolve) => { resolveRequest = resolve }))
+  it('keeps the newest summary window when requests resolve out of order', async () => {
+    const requests = new Map<number | 'all', { resolve: (value: unknown) => void }>()
+    mockGet.mockImplementation((_url: string, options: { params: { query: { days?: number } } }) => {
+      const key = options.params.query.days ?? 'all'
+      return new Promise((resolve) => requests.set(key, { resolve }))
+    })
     const { Host, getStore } = createStoreHost()
     mount(Host)
     const store = getStore()
 
-    const first = store.fetchSummary(7)
-    await Promise.resolve()
-    const second = store.fetchSummary(14)
-    resolveRequest?.({ data: undefined, error: { detail: 'summary unavailable' } })
+    const finite = store.fetchSummary(7)
+    const allTime = store.fetchSummary()
+    requests.get('all')?.resolve({ data: baseSummary, error: undefined })
+    await allTime
+    requests.get(7)?.resolve({ data: { ...baseSummary, period }, error: undefined })
+    await finite
 
-    await first
-    await second
-
-    expect(mockGet).toHaveBeenCalledTimes(1)
-    expect(store.summaryError).toBe('summary unavailable')
+    expect(mockGet).toHaveBeenCalledTimes(2)
+    expect(store.summary?.period).toBeUndefined()
     expect(store.loading).toBe(false)
   })
 
@@ -132,6 +134,29 @@ describe('useDashboardStore', () => {
     expect(store.summary?.period).toEqual(period)
     expect(store.summary?.total_runs).toBe(142)
     expect(store.summary?.trend).toEqual([])
+  })
+
+  it('discards stale period responses when a newer window request completes first', async () => {
+    const requests = new Map<number, { resolve: (value: unknown) => void }>()
+    mockGet.mockImplementation((url: string, options: { params: { query: { days: number } } }) => {
+      if (url !== '/api/v1/dashboard/summary') return Promise.resolve({ data: null, error: undefined })
+      const days = options.params.query.days
+      return new Promise((resolve) => requests.set(days, { resolve }))
+    })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+    store.summary = { ...baseSummary }
+
+    const first = store.fetchPeriodMetrics(7)
+    const second = store.fetchPeriodMetrics(30)
+    requests.get(30)?.resolve({ data: { ...baseSummary, period: { ...period, days: 30 } }, error: undefined })
+    await second
+    requests.get(7)?.resolve({ data: { ...baseSummary, period }, error: undefined })
+    await first
+
+    expect(store.summary?.period?.days).toBe(30)
+    expect(store.periodRefreshing).toBe(false)
   })
 
   it('fetchPeriodMetrics does NOT set the global loading flag (no full-page flash)', async () => {
@@ -253,7 +278,7 @@ describe('useDashboardStore', () => {
     for (const handler of pipelineHandlers) handler({ ...event, type: 'pipeline', id: 'pipeline-1' })
     await vi.waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterThan(callsBefore))
     await vi.waitFor(() => expect(store.loading).toBe(false))
-    expect(mockGet.mock.calls.length).toBe(callsBefore + 1)
+    expect(mockGet.mock.calls.length).toBe(callsBefore + 2)
     expect(mockGet).toHaveBeenLastCalledWith('/api/v1/dashboard/summary', { params: { query: { days: 7 } } })
 
     store.disposeHandlers()
@@ -294,6 +319,53 @@ describe('useDashboardStore', () => {
     expect(store.trends?.rejection_trend[0].rolling_rejection_rate).toBe(25)
   })
 
+  it('discards stale trend responses when a newer window request completes first', async () => {
+    const requests = new Map<number, { resolve: (value: unknown) => void }>()
+    mockGet.mockImplementation((url: string, options: { params: { query: { days: number } } }) => {
+      if (url !== '/api/v1/dashboard/trends') return Promise.resolve({ data: null, error: undefined })
+      const days = options.params.query.days
+      return new Promise((resolve) => requests.set(days, { resolve }))
+    })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    const first = store.fetchTrends(7)
+    const second = store.fetchTrends(30)
+    requests.get(30)?.resolve({
+      data: {
+        days: 30,
+        run_counts: [{ date: '2026-09-30', run_count: 30 }],
+        eval_pass_rates: [],
+        token_spend: [],
+        hitl_volume: [],
+        rejection_trend: [],
+        correlation: [],
+        feedback_volume: [],
+      },
+      error: undefined,
+    })
+    await second
+    requests.get(7)?.resolve({
+      data: {
+        days: 7,
+        run_counts: [{ date: '2026-09-07', run_count: 7 }],
+        eval_pass_rates: [],
+        token_spend: [],
+        hitl_volume: [],
+        rejection_trend: [],
+        correlation: [],
+        feedback_volume: [],
+      },
+      error: undefined,
+    })
+    await first
+
+    expect(store.trends?.days).toBe(30)
+    expect(store.trends?.run_counts[0].run_count).toBe(30)
+    expect(store.trendsLoading).toBe(false)
+  })
+
   it('fetchTrends rejects responses missing hitl_volume or rejection_trend', async () => {
     const incompleteResponse = {
       days: 7,
@@ -311,5 +383,91 @@ describe('useDashboardStore', () => {
     await store.fetchTrends(7)
     expect(store.trends).toBeNull()
     expect(store.trendsError).toBeTruthy()
+  })
+
+  it('ignores a thrown error from a superseded summary request', async () => {
+    const pending: Array<{ resolve: (value: unknown) => void; reject: (e: unknown) => void }> = []
+    mockGet.mockImplementation(() => new Promise((resolve, reject) => {
+      pending.push({ resolve, reject })
+    }))
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    const first = store.fetchSummary(7)
+    const second = store.fetchSummary(30)
+    pending[0]!.reject(new Error('stale summary boom'))
+    await first
+    // The superseded request must not overwrite the error state of the live one.
+    expect(store.summaryError).toBeNull()
+
+    pending[1]!.resolve({ data: baseSummary, error: undefined })
+    await second
+    expect(store.summaryError).toBeNull()
+    expect(store.summary?.total_runs).toBe(142)
+  })
+
+  it('ignores a thrown error from a superseded period request', async () => {
+    const pending: Array<{ resolve: (value: unknown) => void; reject: (e: unknown) => void }> = []
+    mockGet.mockImplementation(() => new Promise((resolve, reject) => {
+      pending.push({ resolve, reject })
+    }))
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+    store.summary = { ...baseSummary }
+
+    const first = store.fetchPeriodMetrics(7)
+    const second = store.fetchPeriodMetrics(30)
+    pending[0]!.reject(new Error('stale period boom'))
+    await first
+    expect(store.summaryError).toBeNull()
+
+    pending[1]!.resolve({ data: { ...baseSummary, period: { ...period, days: 30 } }, error: undefined })
+    await second
+    expect(store.summaryError).toBeNull()
+    expect(store.summary?.period?.days).toBe(30)
+  })
+
+  it('ignores a thrown error from a superseded trends request', async () => {
+    const validTrends = {
+      days: 7,
+      run_counts: [{ date: '2026-09-01', run_count: 10 }],
+      eval_pass_rates: [],
+      token_spend: [],
+      hitl_volume: [],
+      rejection_trend: [],
+      correlation: [],
+      feedback_volume: [],
+    }
+    const pending: Array<{ resolve: (value: unknown) => void; reject: (e: unknown) => void }> = []
+    mockGet.mockImplementation(() => new Promise((resolve, reject) => {
+      pending.push({ resolve, reject })
+    }))
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    const first = store.fetchTrends(7)
+    const second = store.fetchTrends(30)
+    pending[0]!.reject(new Error('stale trends boom'))
+    await first
+    expect(store.trendsError).toBeNull()
+
+    pending[1]!.resolve({ data: { ...validTrends, days: 30 }, error: undefined })
+    await second
+    expect(store.trendsError).toBeNull()
+    expect(store.trends?.days).toBe(30)
+  })
+
+  it('clearPeriodMetrics is safe before any summary is loaded', () => {
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    store.clearPeriodMetrics()
+
+    expect(store.summary).toBeNull()
+    expect(store.periodRefreshing).toBe(false)
   })
 })

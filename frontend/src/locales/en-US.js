@@ -1882,7 +1882,13 @@ export default {
       "eval_pass_rate_label": "Eval pass rate",
       "no_eval_data_yet": "No eval data yet",
       "overview_of_your_organisations_pipelines_and_runs": "Overview of your organisation's pipelines and runs",
+      "token_spend_24h": "Token Spend (24h)",
+      "token_spend_3d": "Token Spend (3d)",
       "token_spend_7d": "Token Spend (7d)",
+      "token_spend_30d": "Token Spend (30d)",
+      "token_spend_90d": "Token Spend (90d)",
+      "token_spend_all_time": "Token Spend (all time)",
+      "total_evals_all_time": "total evals (all time)",
       "total_evals": "total evals",
       "days_tracked": "days tracked",
       "team_breakdown": "Team Breakdown",
@@ -5279,6 +5285,7 @@ export default {
     }
   },
   "common": {
+    "na": "n/a",
     "email": "Email",
     "password": "Password",
     "sign_in": "Sign in",
