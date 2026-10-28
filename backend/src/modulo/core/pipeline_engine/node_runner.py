@@ -44,7 +44,6 @@ Eval-before-interrupt ((Section 8.17):
 import asyncio
 import base64
 import difflib
-import hashlib
 import json
 import logging
 import math
@@ -878,17 +877,16 @@ _NODE_OUTPUT_DISPLAY_CLAMP = 1e6
 
 
 def _claim_token_attempt_suffix(claim_lease: str | None) -> str:
-    """Fallback attempt-key discriminator when no DB claim_count is available.
+    """Return the shared fail-open attempt-key discriminator.
 
     The DB-atomic dispatch path derives the attempt key from ``runs.claim_count``;
-    the fail-open path (no session factory / no claim lease) has no run row to
-    read, so it derives the discriminator from the claim token instead. The token
-    is a fence credential, so only a truncated SHA-256 is surfaced — never the
-    token itself — and it still rotates per claim, so attempts are distinguishable.
+    the fail-open path derives the discriminator from the claim token instead.
+    Keep this compatibility wrapper in the core layer while the canonical
+    derivation lives with the run-node-output persistence code.
     """
-    if not claim_lease:
-        return "claim-unknown"
-    return hashlib.sha256(claim_lease.encode("utf-8")).hexdigest()[:16]
+    from modulo.db.crud.run_node_outputs import claim_token_attempt_suffix
+
+    return claim_token_attempt_suffix(claim_lease)
 
 
 def _effective_self_reported_cap() -> float:
