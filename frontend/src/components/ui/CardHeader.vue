@@ -5,13 +5,14 @@
     :data-testid="dataTestId"
   >
     <div class="min-w-0 flex-1">
-      <h3
+      <component
+        :is="headingLevel"
         v-if="title"
         class="text-base font-semibold"
         :class="titleClass"
       >
         {{ title }}
-      </h3>
+      </component>
       <p
         v-if="description"
         class="mt-1 text-sm text-muted-foreground"
@@ -32,12 +33,14 @@ import { computed, useSlots } from 'vue'
 const props = defineProps<{
   title?: string
   description?: string
+  headingLevel?: 'h2' | 'h3' | 'h4'
   titleClass?: string
   descriptionClass?: string
   dataTestId?: string
 }>()
 
 const slots = useSlots()
+const headingLevel = computed(() => props.headingLevel ?? 'h3')
 const hasHeaderContent = computed(() =>
   !!props.title || !!props.description || !!slots.actions
 )

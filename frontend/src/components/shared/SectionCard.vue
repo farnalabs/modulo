@@ -2,6 +2,7 @@
   <DataCard
     :title="title"
     :description="description"
+    heading-level="h2"
     :title-class="titleClass"
     :description-class="descriptionClass"
     :data-testid="dataTestId"

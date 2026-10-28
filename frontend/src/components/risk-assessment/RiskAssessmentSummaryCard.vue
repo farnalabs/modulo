@@ -22,7 +22,7 @@
 </template>
 
 <script setup lang="ts">
-import SummaryCard from './ui/SummaryCard.vue'
+import SummaryCard from '../ui/SummaryCard.vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 

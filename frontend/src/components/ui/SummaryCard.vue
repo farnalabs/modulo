@@ -11,15 +11,20 @@
 
     <div
       class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5"
-      data-testid="risk-assessment-summary-grid"
+      :data-testid="gridTestId"
     >
       <div
         v-for="(item, index) in items"
         :key="item.testId ?? index"
         class="rounded-lg border bg-card p-4"
-        :data-testid="item.testId"
       >
-        <div class="text-3xl font-bold" :class="colorClass(item)">{{ item.value }}</div>
+        <div
+          class="text-3xl font-bold"
+          :class="colorClass(item)"
+          :data-testid="item.testId"
+        >
+          {{ item.value }}
+        </div>
         <div class="text-sm text-muted-foreground">{{ item.label }}</div>
       </div>
     </div>

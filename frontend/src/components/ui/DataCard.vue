@@ -10,6 +10,7 @@
       v-if="hasHeader"
       :title="title"
       :description="description"
+      :heading-level="headingLevel"
       :title-class="titleClass"
       :description-class="descriptionClass"
       :data-testid="dataTestId ? `${dataTestId}-header` : undefined"
@@ -45,6 +46,7 @@ import { computed, useSlots } from 'vue'
 const props = defineProps<{
   title?: string
   description?: string
+  headingLevel?: 'h2' | 'h3' | 'h4'
   variant?: 'default' | 'bordered' | 'elevated' | 'muted'
   padding?: 'none' | 'sm' | 'md' | 'lg'
   elevation?: 'none' | 'sm' | 'md' | 'lg'
