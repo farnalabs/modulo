@@ -744,7 +744,18 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
 
 
 @pytest.mark.parametrize(
-    "entity", [Schema, SchemaVersion, Pipeline, PipelineSnapshot, Run, Agent, Team, Eval, EvalResult]
+    "entity",
+    [
+        pytest.param(Schema, id="schema"),
+        pytest.param(SchemaVersion, id="schema-version"),
+        pytest.param(Pipeline, id="pipeline"),
+        pytest.param(PipelineSnapshot, id="snapshot"),
+        pytest.param(Run, id="run"),
+        pytest.param(Agent, id="agent"),
+        pytest.param(Team, id="team"),
+        pytest.param(Eval, id="eval"),
+        pytest.param(EvalResult, id="eval-result"),
+    ],
 )
 async def test_seed_reraises_when_recovery_finds_no_winner(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch, entity: type
