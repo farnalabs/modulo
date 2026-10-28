@@ -1032,6 +1032,7 @@ async def dispose_process_global_engines() -> None:
     # SQLite binding.
     api_dependencies._session_factory = None
     api_dependencies._SYSTEM_SESSION_FACTORY = None
+    api_dependencies._SYSTEM_ENGINE_IS_FALLBACK = False
     break_glass._bg_engine_url = None
     break_glass._bg_factory = None
     break_glass._bg_factory_url = None

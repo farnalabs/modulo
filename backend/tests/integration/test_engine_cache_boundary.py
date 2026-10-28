@@ -48,6 +48,7 @@ async def test_integration_boundary_clears_polluted_sqlite_engine_caches() -> No
 
     api_dependencies._session_factory = object()
     api_dependencies._SYSTEM_SESSION_FACTORY = object()
+    api_dependencies._SYSTEM_ENGINE_IS_FALLBACK = True
     break_glass._bg_engine_url = "sqlite+aiosqlite:///:memory:"
     break_glass._bg_factory = object()
     break_glass._bg_factory_url = "sqlite+aiosqlite:///:memory:"
@@ -60,6 +61,7 @@ async def test_integration_boundary_clears_polluted_sqlite_engine_caches() -> No
     assert not pipeline_snapshot._SNAPSHOT_LOCK_ENGINES
     assert api_dependencies._session_factory is None
     assert api_dependencies._SYSTEM_SESSION_FACTORY is None
+    assert api_dependencies._SYSTEM_ENGINE_IS_FALLBACK is False
     assert break_glass._bg_engine_url is None
     assert break_glass._bg_factory is None
     assert break_glass._bg_factory_url is None
