@@ -1,6 +1,7 @@
 <template>
   <div
     :class="[
+      'card',
       'card-base',
       variantClass,
       paddingClass,

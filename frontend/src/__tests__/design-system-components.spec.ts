@@ -27,7 +27,7 @@ describe('BaseCard', () => {
     })
 
     expect(wrapper.attributes('data-testid')).toBe('base-card')
-    expect(wrapper.classes()).toEqual(expect.arrayContaining(['bg-card', 'border', 'p-6', 'shadow-sm', 'custom-card']))
+    expect(wrapper.classes()).toEqual(expect.arrayContaining(['card', 'card-base', 'bg-card', 'border', 'p-6', 'shadow-sm', 'custom-card']))
     expect(wrapper.find('[data-testid="base-header"]').text()).toBe('Header')
     expect(wrapper.find('[data-testid="base-content"]').text()).toBe('Content')
     expect(wrapper.find('[data-testid="base-footer"]').text()).toBe('Footer')
