@@ -1,7 +1,7 @@
 """Per-node completion record: add completed_at to run_node_outputs (FAR-2050).
 
-Revision ID: 0336_per_node_completion
-Revises: 0335_eval_verdict_contract_stage2
+Revision ID: 0337_per_node_completion
+Revises: 0336_drop_analytics_kill_switch_row
 Create Date: 2026-10-24
 
 Adds a durable per-node-completion record so the node-deadline watchdog can
@@ -38,8 +38,8 @@ import os
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0336_per_node_completion"
-down_revision: str | None = "0335_eval_verdict_contract_stage2"
+revision: str = "0337_per_node_completion"
+down_revision: str | None = "0336_drop_analytics_kill_switch_row"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
@@ -115,7 +115,7 @@ def upgrade() -> None:
         return
 
     _execute_on_side_or_migration_connection()
-    logger.info("0336_per_node_completion: added completed_at column to run_node_outputs")
+    logger.info("0337_per_node_completion: added completed_at column to run_node_outputs")
 
 
 def downgrade() -> None:
@@ -130,4 +130,4 @@ def downgrade() -> None:
                 op.execute(sa.text(_DROP_COMPLETED_AT))
             else:
                 conn.execute(sa.text(_DROP_COMPLETED_AT))
-    logger.info("0336_per_node_completion: dropped completed_at column from run_node_outputs")
+    logger.info("0337_per_node_completion: dropped completed_at column from run_node_outputs")

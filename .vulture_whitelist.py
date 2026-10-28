@@ -427,8 +427,11 @@ __all__ = [
     # annotations (``tuple[ReconcileTerminalizer, ...]``, ``tuning:
     # ReconcileTuning``), which vulture does not credit as uses.
     "ReconcileTerminalizer",
-    "ReconcileTuning",
-    # --- FAR-1050 R6: RuntimeProvider.destroy_workspace_by_ref is now wired
+     "ReconcileTuning",
+     # FAR-2090 connector failure exception is a public pipeline error contract;
+     # its production boundary is represented through structured failure envelopes.
+     "ConnectorNodeFailedError",
+     # --- FAR-1050 R6: RuntimeProvider.destroy_workspace_by_ref is now wired
     #     into the production dispatch teardown (node_runner finally block), so
     #     the previous "no production call site yet" note no longer holds; the
     #     ABC default + E2B override remain test-exercised ---

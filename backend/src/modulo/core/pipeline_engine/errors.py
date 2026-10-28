@@ -48,3 +48,16 @@ class NodeMissingModelBackendError(Exception):
             f"Assign a model backend to the agent, or use a "
             f"connector/manual node type if no model call is intended."
         )
+
+
+class ConnectorNodeFailedError(Exception):  # vulture: ignore - public pipeline failure contract
+    """Raised when a connector node's action fails.
+
+    The executor converts this connector failure into the structured
+    ``connector.side_effect_unknown`` error code so the run retains the
+    connector's uncertain side-effect state (FAR-2090).
+    """
+
+    def __init__(self, node_id: str, message: str) -> None:
+        self.node_id = node_id
+        super().__init__(f"Connector node {node_id!r} failed: {message}")

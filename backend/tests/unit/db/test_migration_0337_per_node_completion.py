@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-_MIGRATION = importlib.import_module("modulo.db.migrations.versions.0336_per_node_completion")
+_MIGRATION = importlib.import_module("modulo.db.migrations.versions.0337_per_node_completion")
 
 
 class _FakeResult:
@@ -46,8 +46,8 @@ class _ConnectionContext:
 
 
 def test_migration_metadata_and_column_contract() -> None:
-    assert _MIGRATION.revision == "0336_per_node_completion"
-    assert _MIGRATION.down_revision == "0335_eval_verdict_contract_stage2"
+    assert _MIGRATION.revision == "0337_per_node_completion"
+    assert _MIGRATION.down_revision == "0336_drop_analytics_kill_switch_row"
     assert "ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE" in _MIGRATION._ADD_COMPLETED_AT
 
 
