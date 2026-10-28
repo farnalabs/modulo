@@ -13,16 +13,28 @@ describe('StagePalette', () => {
     })
   })
 
-  it('emits a stage type via the dragstart dataTransfer payload', async () => {
+  it('sets the copy effect and stage type for every palette item', async () => {
     const wrapper = mount(StagePalette)
-    const dataTransfer = {
-      setData: vi.fn(),
-      effectAllowed: '',
-    } as unknown as DataTransfer
-    await wrapper.findAll('button')[0].trigger('dragstart', { dataTransfer })
-    expect(dataTransfer.setData).toHaveBeenCalledWith(
-      'application/lifecycle-stage',
-      'modulo',
-    )
+    const buttons = wrapper.findAll('button')
+    const types = ['modulo', 'external', 'manual', 'placeholder']
+
+    for (const [index, type] of types.entries()) {
+      const dataTransfer = {
+        setData: vi.fn(),
+        effectAllowed: '',
+      } as unknown as DataTransfer
+      await buttons[index].trigger('dragstart', { dataTransfer })
+      expect(dataTransfer.setData).toHaveBeenCalledWith(
+        'application/lifecycle-stage',
+        type,
+      )
+      expect(dataTransfer.effectAllowed).toBe('copy')
+    }
+  })
+
+  it('leaves a drag without dataTransfer untouched', async () => {
+    const wrapper = mount(StagePalette)
+    await wrapper.find('button').trigger('dragstart', { dataTransfer: null })
+    expect(wrapper.exists()).toBe(true)
   })
 })

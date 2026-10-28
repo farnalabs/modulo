@@ -1,7 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { nextTick, reactive } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
+
+const nodeData = reactive<Record<string, unknown>>({
+  label: 'Test Composite',
+  compositeRef: 'comp-1',
+  compositeParameterValues: { model: 'gpt-4' },
+  portCount: 5,
+  totalPorts: 5,
+})
+
+const nodeState = {
+  id: 'test-node',
+  node: { data: nodeData },
+}
 
 vi.mock('../../lib/api/client', () => ({
   api: {
@@ -25,22 +38,12 @@ vi.mock('../../composables/useApi', () => ({
 }))
 
 vi.mock('@vue-flow/core', () => ({
-  useNode: vi.fn(() => ({
-    id: 'test-node',
-    node: {
-      data: {
-        label: 'Test Composite',
-        compositeRef: 'comp-1',
-        compositeParameterValues: { model: 'gpt-4' },
-        portCount: 5,
-        totalPorts: 5,
-      },
-    },
-  })),
+  useNode: vi.fn(() => nodeState),
 }))
 
 import CompositeNode from '../../components/pipeline/nodes/CompositeNode.vue'
 import ParameterPortForm from '../../components/pipeline/composite/ParameterPortForm.vue'
+import { useCompositeStore } from '../../stores/compositeStore'
 import type { ParameterPort } from '../../types/pipeline'
 
 describe('CompositeNode', () => {
@@ -48,15 +51,71 @@ describe('CompositeNode', () => {
     setActivePinia(createPinia())
   })
 
-  it('renders without crashing', async () => {
+  it('renders the resolved composite name and port count', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
     const wrapper = mount(CompositeNode, {
-      global: {
-        plugins: [createPinia()],
-      },
+      global: { plugins: [pinia] },
+    })
+    const compositeStore = useCompositeStore()
+    compositeStore.composites = [{
+      id: 'comp-1',
+      name: 'Reusable review',
+      description: '',
+      version: '1',
+      sub_pipeline_graph_json: {},
+      parameter_ports_json: [],
+      input_schema_id: null,
+      output_schema_id: null,
+      organisation_id: 'org-1',
+      created_by: 'user-1',
+      created_at: '',
+      updated_at: '',
+    }]
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Reusable review')
+    expect(wrapper.text()).toContain('1/5 ports set')
+  })
+
+  it('falls back to the reference, label, and portCount when data is incomplete', async () => {
+    Object.assign(nodeData, {
+      label: 'Fallback label',
+      compositeRef: 'missing-composite',
+      compositeParameterValues: {},
+      portCount: 3,
+      totalPorts: undefined,
+    })
+    const pinia = createPinia()
+    const wrapper = mount(CompositeNode, {
+      global: { plugins: [pinia] },
     })
     await nextTick()
-    expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('Composite')
+
+    expect(wrapper.text()).toContain('missing-composite')
+    expect(wrapper.text()).toContain('0/3 ports set')
+
+    Object.assign(nodeData, {
+      label: 'Label only',
+      compositeRef: undefined,
+      compositeParameterValues: undefined,
+      portCount: undefined,
+      totalPorts: undefined,
+    })
+    await nextTick()
+    expect(wrapper.text()).toContain('Label only')
+    expect(wrapper.text()).toContain('0/0 ports set')
+  })
+
+  it('emits the node id when expand is clicked', async () => {
+    nodeState.node.data = { label: 'Expandable' }
+    const wrapper = mount(CompositeNode, {
+      global: { plugins: [createPinia()] },
+    })
+
+    await wrapper.get('button').trigger('click')
+
+    expect(wrapper.emitted('expand')).toEqual([['test-node']])
   })
 })
 
