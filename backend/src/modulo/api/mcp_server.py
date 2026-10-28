@@ -7439,6 +7439,16 @@ async def _build_trigger_event_query(
     q = select(TriggerEvent).where(TriggerEvent.organisation_id == org_id)
     joined = False
 
+    def _ensure_pipeline_join() -> None:
+        # TriggerEvent -> Trigger -> Pipeline is only needed by the
+        # owner_team_id scopes below; join at most once across them.
+        nonlocal q, joined
+        if joined:
+            return
+        q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
+        q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
+        joined = True
+
     q, trigger_filter_err = await _apply_trigger_event_trigger_filter(s, q, key_team_id, trigger_id)
     if trigger_filter_err:
         return None, trigger_filter_err
@@ -7456,10 +7466,7 @@ async def _build_trigger_event_query(
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return None, _team_scope_error("pipeline", str(pid))
-        if not joined:
-            q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
-            q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
-            joined = True
+        _ensure_pipeline_join()
         q = q.where(
             Trigger.pipeline_id == pid,
             _Pipeline.deleted_at.is_(None),
@@ -7468,10 +7475,7 @@ async def _build_trigger_event_query(
     if viewer and account_id is not None:
         from modulo.db.crud.team_scope import account_team_scope_clause
 
-        if not joined:
-            q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
-            q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
-            joined = True
+        _ensure_pipeline_join()
         q = q.where(account_team_scope_clause(_Pipeline.owner_team_id, account_id))
 
     if key_team_id is not None:
@@ -7480,10 +7484,7 @@ async def _build_trigger_event_query(
         # ``list_triggers`` applies.
         from modulo.db.crud.team_scope import team_scope_clause
 
-        if not joined:
-            q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
-            q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
-            joined = True
+        _ensure_pipeline_join()
         q = q.where(team_scope_clause(_Pipeline.owner_team_id, key_team_id))
 
     return q, None
