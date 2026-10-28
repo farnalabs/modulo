@@ -252,11 +252,9 @@ describe('AnalyticsFilterBar filter select handlers', () => {
     expect(last.dimension).toBeNull()
   })
 
-  it('emits update:filters when folder select changes via handler', async () => {
+  it('emits update:filters when folder select changes', async () => {
     const wrapper = mountBar({}, { folders: [{ id: 'f1', name: 'Folder 1' }] })
-    ;(wrapper.vm as unknown as { onFolderChange: (e: Event) => void }).onFolderChange({
-      target: { value: 'f1' },
-    } as unknown as Event)
+    await wrapper.find('[data-testid="analytics-filter-folder"]').setValue('f1')
 
     const emitted = wrapper.emitted('update:filters')
     expect(emitted).toBeTruthy()
@@ -264,11 +262,9 @@ describe('AnalyticsFilterBar filter select handlers', () => {
     expect(last.folderId).toBe('f1')
   })
 
-  it('emits update:filters with null when folder is cleared via handler', async () => {
-    const wrapper = mountBar({ folderId: 'f1' })
-    ;(wrapper.vm as unknown as { onFolderChange: (e: Event) => void }).onFolderChange({
-      target: { value: '' },
-    } as unknown as Event)
+  it('emits update:filters with null when folder is cleared', async () => {
+    const wrapper = mountBar({ folderId: 'f1' }, { folders: [{ id: 'f1', name: 'Folder 1' }] })
+    await wrapper.find('[data-testid="analytics-filter-folder"]').setValue('')
 
     const emitted = wrapper.emitted('update:filters')
     expect(emitted).toBeTruthy()
@@ -276,11 +272,9 @@ describe('AnalyticsFilterBar filter select handlers', () => {
     expect(last.folderId).toBeNull()
   })
 
-  it('emits update:filters when pipeline select changes via handler', async () => {
+  it('emits update:filters when pipeline select changes', async () => {
     const wrapper = mountBar({}, { pipelines: [{ id: 'p1', name: 'Pipeline 1' }] })
-    ;(wrapper.vm as unknown as { onPipelineChange: (e: Event) => void }).onPipelineChange({
-      target: { value: 'p1' },
-    } as unknown as Event)
+    await wrapper.find('[data-testid="analytics-filter-pipeline"]').setValue('p1')
 
     const emitted = wrapper.emitted('update:filters')
     expect(emitted).toBeTruthy()

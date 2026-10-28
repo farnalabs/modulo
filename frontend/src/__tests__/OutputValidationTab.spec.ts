@@ -340,7 +340,7 @@ describe('OutputValidationTab', () => {
   })
 
   it('emits update:evalDefinitions when type select changes', async () => {
-    const evals = [makeEval({ id: 'e1', type: 'regex' })]
+    const evals = [makeEval({ id: 'e1', type: 'regex', config: { field: 'input', pattern: '^foo$' } })]
     const wrapper = mount(OutputValidationTab, {
       props: { evalDefinitions: evals, maxValidationRetries: 0 },
       global: { plugins: [i18n] },
@@ -351,8 +351,8 @@ describe('OutputValidationTab', () => {
     expect(emitted).toBeTruthy()
     const updated = emitted[0][0] as EvalConfig[]
     expect(updated[0].type).toBe('json_schema')
-    // Config should be reset for new type
-    expect(updated[0].config).toEqual({ field: '', pattern: '' })
+    // updateEval merges the patch over the existing eval - config is preserved, never reset
+    expect(updated[0].config).toEqual({ field: 'input', pattern: '^foo$' })
   })
 
   it('preserves config when type changes from regex to model_judge', async () => {
@@ -502,14 +502,14 @@ describe('OutputValidationTab', () => {
     expect(remaining[1].id).toBe('e3')
   })
 
-  it('localRetries is initialized from prop but does not react to prop changes', () => {
+  it('localRetries is initialized from prop but does not react to prop changes', async () => {
     const wrapper = mount(OutputValidationTab, {
       props: { evalDefinitions: [], maxValidationRetries: 1 },
       global: { plugins: [i18n] },
     })
     expect(wrapper.text()).toContain('Max Validation Retries: 1')
 
-    wrapper.setProps({ maxValidationRetries: 3 })
+    await wrapper.setProps({ maxValidationRetries: 3 })
     // localRetries is a local ref initialized from prop, not a computed that watches prop
     // So it won't update when prop changes
     expect(wrapper.text()).toContain('Max Validation Retries: 1')

@@ -29,15 +29,21 @@ const i18n = createI18n({
   },
 })
 
-const fetchConsentMock = vi.fn()
-const updateLevelMock = vi.fn()
+const storeHarness = vi.hoisted(() => ({
+  state: { isOptedIn: false, loading: false },
+  fetchConsent: vi.fn(),
+  updateLevel: vi.fn(),
+}))
+
+const fetchConsentMock = storeHarness.fetchConsent
+const updateLevelMock = storeHarness.updateLevel
 
 vi.mock('../stores/productAnalyticsStore', () => ({
   useProductAnalyticsStore: () => ({
-    isOptedIn: false,
-    loading: false,
-    fetchConsent: fetchConsentMock,
-    updateLevel: updateLevelMock,
+    isOptedIn: storeHarness.state.isOptedIn,
+    loading: storeHarness.state.loading,
+    fetchConsent: storeHarness.fetchConsent,
+    updateLevel: storeHarness.updateLevel,
   }),
 }))
 
@@ -59,6 +65,8 @@ describe('ProductAnalyticsSettings', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    storeHarness.state.isOptedIn = false
+    storeHarness.state.loading = false
     fetchConsentMock.mockResolvedValue(undefined)
     updateLevelMock.mockResolvedValue(undefined)
   })
@@ -91,14 +99,7 @@ describe('ProductAnalyticsSettings', () => {
   })
 
   it('renders ToggleSwitch with checked=true when opted in', async () => {
-    vi.mock('../stores/productAnalyticsStore', () => ({
-      useProductAnalyticsStore: () => ({
-        isOptedIn: true,
-        loading: false,
-        fetchConsent: fetchConsentMock,
-        updateLevel: updateLevelMock,
-      }),
-    }))
+    storeHarness.state.isOptedIn = true
 
     const wrapper = mountSettings()
     const toggle = wrapper.findComponent(ToggleSwitch)
@@ -113,30 +114,24 @@ describe('ProductAnalyticsSettings', () => {
   it('shows stat items with current level and last successful dump', () => {
     const wrapper = mountSettings()
     expect(wrapper.text()).toContain('Current Level')
-    expect(wrapper.text()).toContain('All')
+    expect(wrapper.text()).toContain('Off')
     expect(wrapper.text()).toContain('Last Successful Dump')
     expect(wrapper.text()).toContain('Coming soon')
   })
 
   it('shows level_all badge when opted in', async () => {
-    vi.mock('../stores/productAnalyticsStore', () => ({
-      useProductAnalyticsStore: () => ({
-        isOptedIn: true,
-        loading: false,
-        fetchConsent: fetchConsentMock,
-        updateLevel: updateLevelMock,
-      }),
-    }))
+    storeHarness.state.isOptedIn = true
 
     const wrapper = mountSettings()
     expect(wrapper.text()).toContain('All')
     expect(wrapper.find('.badge-status-success').exists()).toBe(true)
   })
 
-  it('shows level badge when rendered', () => {
+  it('shows level_off badge when not opted in', () => {
     const wrapper = mountSettings()
-    expect(wrapper.text()).toContain('All')
-    expect(wrapper.find('.badge-status-success').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Off')
+    expect(wrapper.find('.badge-status-muted').exists()).toBe(true)
+    expect(wrapper.find('.badge-status-success').exists()).toBe(false)
   })
 
   it('calls fetchConsent on mount', () => {
@@ -154,14 +149,7 @@ describe('ProductAnalyticsSettings', () => {
   })
 
   it('calls updateLevel with off when toggle changes to false', async () => {
-    vi.mock('../stores/productAnalyticsStore', () => ({
-      useProductAnalyticsStore: () => ({
-        isOptedIn: true,
-        loading: false,
-        fetchConsent: fetchConsentMock,
-        updateLevel: updateLevelMock,
-      }),
-    }))
+    storeHarness.state.isOptedIn = true
 
     const wrapper = mountSettings()
     const toggle = wrapper.findComponent(ToggleSwitch)
@@ -180,6 +168,8 @@ describe('ProductAnalyticsSettings', () => {
   })
 
   it('renders correct badge classes for opt-in state', () => {
+    storeHarness.state.isOptedIn = true
+
     const wrapper = mountSettings()
     const badges = wrapper.findAll('.badge')
     expect(badges.length).toBeGreaterThanOrEqual(1)
