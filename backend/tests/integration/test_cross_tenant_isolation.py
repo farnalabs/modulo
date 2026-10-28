@@ -927,6 +927,22 @@ class TestCrossTenantMembershipGuards:
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
 
+    async def test_admin_update_user_activation_without_role_succeeds_for_own_org(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.put(
+            f"/api/v1/admin/users/{user_a}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"is_active": True},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["org_role"] == "admin"
+        assert resp.json()["is_active"] is True
+
 
 # ===================================================================
 # Test 5d: FAR-537 — PUT is_active=False revokes org-scoped token

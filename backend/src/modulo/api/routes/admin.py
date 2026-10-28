@@ -1294,6 +1294,9 @@ async def admin_update_user(
                     )
                     .values(deactivated_at=func.now())
                 )
+                # Keep the response object usable after commit without a
+                # post-commit lazy load under autobegin=False.
+                target_membership.deactivated_at = datetime.now(UTC)
                 # FAR-537: mirror the POST deactivate path's per-org revocation
                 # (the caller-bound deactivate_break_glass SECURITY DEFINER):
                 # blacklist the target's refresh-token families minted under the
@@ -1332,6 +1335,7 @@ async def admin_update_user(
                     )
                     .values(deactivated_at=None)
                 )
+                target_membership.deactivated_at = None
             if req.org_role is not None:
                 from sqlalchemy import update as sa_update
 
@@ -1344,11 +1348,11 @@ async def admin_update_user(
                     .values(role=req.org_role)
                 )
 
-            # Refresh before the owning transaction commits.  The DI session
-            # uses autobegin=False, so a post-commit refresh would attempt an
-            # implicit transaction and fail after the durable write succeeded.
-            await session.refresh(target_membership)
-            org_role = target_membership.role
+            # The membership was loaded before the mutation transaction.  Use
+            # the requested role when present; otherwise its loaded role is
+            # unchanged.  Avoid a post-commit refresh or lookup: the DI session
+            # uses autobegin=False and cannot implicitly begin that read.
+            org_role = req.org_role if req.org_role is not None else target_membership.role
 
     except LastAdminLockoutError as exc:
         raise HTTPException(
