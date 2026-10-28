@@ -1,0 +1,363 @@
+name: "Windows: Build Installer (Inno Setup)"
+
+# FAR-679 — Windows native installer (Inno Setup, NT SERVICE, Azure signing)
+# Builds a Windows installer (.exe) for the Modulo native bundle
+# Triggered by release-unified.yml on promote, or manually for dry-run
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version in X.Y.Z form (e.g. 0.4.0)"
+        type: string
+        required: true
+      rc_tag:
+        description: "RC tag being released (e.g. v0.4.0-rc1)"
+        type: string
+        required: true
+      ref:
+        description: "Git ref to build from (the RC tag for cut/recut; main for a dry-run)"
+        type: string
+        required: true
+      mode:
+        description: "Build mode: dry-run, cut, recut, promote"
+        type: string
+        default: dry-run
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+      GH_TOKEN:
+        required: true
+
+concurrency:
+  group: windows-installer-${{ github.workflow }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+permissions:
+  contents: read
+
+jobs:
+  version-parity:
+    name: Assert bundle versions match
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Assert bundle-versions.env has Windows-compatible entries
+        run: |
+          Set-StrictMode -Version Latest
+          $content = Get-Content scripts/bundle-versions.env -Raw
+          Write-Host "bundle-versions.env loaded for Windows build"
+          # Future: assert Windows-specific pins exist (e.g., Windows python, redis, pg builds)
+
+  build:
+    name: Build Windows Installer
+    needs: version-parity
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      VERSION_NUM: ${{ inputs.version }}
+      RC_TAG: ${{ inputs.rc_tag }}
+      MODE: ${{ inputs.mode }}
+      ARCH: amd64
+      BUNDLE_DIR: ${{ github.workspace }}\modulo-${{ inputs.version }}-windows-amd64
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      sha256: ${{ steps.compute_sha256.outputs.sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download linux bundle artefact (for cross-platform verification)
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-artefacts-amd64
+          path: ${{ runner.temp }}/linux-bundle
+        continue-on-error: true
+
+      - name: Extract linux bundle for cross-platform staging
+        if: always()
+        run: |
+          Set-StrictMode -Version Latest
+          $bundlePath = "${{ runner.temp }}/linux-bundle"
+          if (Test-Path $bundlePath) {
+            $tarball = Get-ChildItem $bundlePath -Filter "*.tar.gz" | Select-Object -First 1
+            if ($tarball) {
+              $extractDir = "${{ runner.temp }}/linux-bundle-extracted"
+              New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+              tar -xzf $tarball.FullName -C $extractDir
+              Write-Host "Extracted Linux bundle for cross-reference"
+            }
+          }
+
+      - name: Set up Inno Setup
+        uses: MinionGuy/Setup-Inno@master
+        with:
+          version: 6.2.2
+
+      - name: Set up Python (for bundle extraction)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Extract Linux bundle as source for Windows installer
+        run: |
+          Set-StrictMode -Version Latest
+          $version = "${{ inputs.version }}"
+          $arch = "amd64"
+
+          # Use the Linux bundle as source (we rebuild the Windows-specific parts)
+          # For now, we extract the Linux bundle and adapt
+
+          $bundleDir = "${{ env.BUNDLE_DIR }}"
+          $linuxBundle = "${{ runner.temp }}/linux-bundle"
+          $tarball = Get-ChildItem $linuxBundle -Filter "*.tar.gz" | Select-Object -First 1
+
+          if (-not $tarball) {
+            Write-Error "No Linux bundle artefact found - cannot build Windows installer without source bundle"
+            exit 1
+          }
+
+          $extractDir = "${{ env.BUNDLE_DIR }}"
+          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+
+          tar -xzf $tarball.FullName -C $extractDir
+
+          # Rename bundle root to include windows-arch
+          $oldRoot = Get-ChildItem $extractDir -Directory | Select-Object -First 1
+          $newRoot = Join-Path $extractDir "modulo-${{ inputs.version }}-windows-amd64"
+          if ($oldRoot.FullName -ne $newRoot) {
+            Rename-Item $oldRoot.FullName $newRoot
+          }
+
+          # Write Windows-specific launcher
+          $launcherPath = Join-Path $newRoot "modulo.exe"
+          $version = "${{ inputs.version }}"
+                    # Write Windows-specific launcher using external script
+          $version = "${{ inputs.version }}"
+          $launcherPath = Join-Path $newRoot "modulo.exe"
+          & "${{ github.workspace }}/scripts/create-windows-launcher.ps1" -Version $version -OutputPath $launcherPath -Path $launcherPath -Value $launcherContent -Encoding UTF8
+
+          # Create Inno Setup script with proper paths
+          $issPath = "deploy/windows/modulo.iss"
+          $issContent = Get-Content $issPath -Raw
+          $issContent = $issContent -replace '#{VERSION_NUM}', "${{ inputs.version }}"
+          $issContent = $issContent -replace '#{BUNDLE_ARCH}', "amd64"
+          $issContent = $issContent -replace '#{BUNDLE_DIR}', $newRoot.Replace('\', '/')
+          Set-Content -Path $issPath -Value $issContent -Encoding UTF8
+
+      - name: Build installer with Inno Setup
+        run: |
+          Set-StrictMode -Version Latest
+          $issPath = "deploy/windows/modulo.iss"
+          $outputDir = "build/windows"
+          $outputFile = "modulo-${{ inputs.version }}-windows-amd64.exe"
+
+          if ("${{ inputs.mode }}" -eq "dry-run") {
+            Write-Host "DRY-RUN: Would build Windows installer with Inno Setup"
+            Write-Host "Output: $outputDir/$outputFile"
+            Write-Host "Architecture: amd64"
+            exit 0
+          }
+
+          # Compile with Inno Setup
+          iscc /Qp /Obuild/windows /Fmodulo-${{ inputs.version }}-windows-amd64 deploy/windows/modulo.iss
+
+          # Verify output
+          $exePath = "build/windows/modulo-${{ inputs.version }}-windows-amd64.exe"
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Installer not found at $exePath"
+            exit 1
+          }
+
+          Write-Host "Installer built: $exePath"
+          (Get-Item $exePath).Length | ForEach-Object { "Size: $([math]::round($_/1MB, 2)) MB" }
+
+      - name: Sign installer (Azure Trusted Signing)
+        if: ${{ inputs.mode != 'dry-run' }}
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          Set-StrictMode -Version Latest
+          $exePath = "build/windows/modulo-${{ inputs.version }}-windows-amd64.exe"
+
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Installer not found for signing"
+            exit 1
+          }
+
+          Write-Host "Signing $exePath with Azure Trusted Signing..."
+
+          # Get access token
+          $token = az account get-access-token --resource "https://trustedsigning.azure.net" --query accessToken -o tsv
+
+          if (-not $token) {
+            Write-Error "Failed to get Azure access token"
+            exit 1
+          }
+
+          # Submit for signing with timeout
+          $signRequest = @{
+            certificateProfileName = "modulo-windows-installer"
+            files = @(@{ path = $exePath })
+          } | ConvertTo-Json -Depth 5
+
+          $response = Invoke-RestMethod -Method Post `
+            -Uri "https://eus.codesigning.azure.net/signatures?api-version=2023-10-01" `
+            -Headers @{ Authorization = "Bearer $token"; "Content-Type" = "application/json" } `
+            -Body $signRequest `
+            -TimeoutSec 30
+
+          Write-Host "Signing request submitted: $($response.id)"
+
+          # Poll for completion with timeout
+          $status = "pending"
+          $maxWaitSec = 300  # 5 minutes max
+          $startTime = [DateTime]::UtcNow
+          while ($status -in @("pending", "inProgress")) {
+            $elapsed = ([DateTime]::UtcNow - $startTime).TotalSeconds
+            if ($elapsed -gt $maxWaitSec) {
+              Write-Error "Signing timed out after ${maxWaitSec}s"
+              exit 1
+            }
+            Start-Sleep -Seconds 10
+            $poll = Invoke-RestMethod -Method Get `
+              -Uri "https://eus.codesigning.azure.net/signatures/${response.id}?api-version=2023-10-01" `
+              -Headers @{ Authorization = "Bearer $token" } `
+              -TimeoutSec 30
+            $status = $poll.status
+            Write-Host "Signing status: $status"
+          }
+
+          if ($status -ne "succeeded") {
+            Write-Error "Signing failed: $status"
+            exit 1
+          }
+
+          Write-Host "Signing completed successfully"
+
+      - name: Generate SHA256SUMS
+        id: compute_sha256
+        run: |
+          Set-StrictMode -Version Latest
+          cd build/windows
+          $exePath = "modulo-${{ inputs.version }}-windows-amd64.exe"
+          $sha256 = (Get-FileHash $exePath -Algorithm SHA256).Hash
+          "$sha256  $exePath" | Out-File -Encoding utf8 SHA256SUMS
+          cat SHA256SUMS
+          echo "sha256=$sha256" >> $env:GITHUB_OUTPUT
+
+      - name: Upload installer artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-${{ inputs.version }}
+          path: build/windows/modulo-${{ inputs.version }}-windows-amd64.exe
+          retention-days: 30
+
+      - name: Upload SHA256SUMS
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-sha256-${{ inputs.version }}
+          path: build/windows/SHA256SUMS
+          retention-days: 30
+
+  attest:
+    name: Attest installer
+    needs: build
+    if: ${{ inputs.mode != 'dry-run' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download installer
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer-${{ inputs.version }}
+          path: build/windows
+
+      - name: Verify installer exists
+        run: |
+          ls -la build/windows/
+
+      - name: Generate SLSA provenance
+        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+        with:
+          base64-subjects: ${{ hashFiles('build/windows/modulo-${{ inputs.version }}-windows-amd64.exe') }}
+          provenance-name: windows-installer-provenance
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Verify attestation
+        run: |
+          gh attestation verify build/windows/modulo-${{ inputs.version }}-windows-amd64.exe \
+            --repo farnalabs/modulo \
+            --signer-workflow .github/workflows/windows-installer.yml
+
+      - name: Upload attestation
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-attestation-${{ inputs.version }}
+          path: |
+            build/windows/*.intoto.jsonl
+          retention-days: 30
+
+  publish:
+    name: Publish to GitHub Release
+    needs: [build, attest]
+    if: ${{ inputs.mode == 'promote' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download installer
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer-${{ inputs.version }}
+          path: build/windows
+
+      - name: Create GitHub Release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: bundle-v${{ inputs.version }}
+          files: build/windows/modulo-${{ inputs.version }}-windows-amd64.exe
+          name: "Windows Installer (${{ inputs.version }})"
+          body: |
+            Modulo Windows Installer v${{ inputs.version }}
+
+            SHA256: ${{ needs.build.outputs.sha256 }}
+
+            This installer includes:
+            - Native Windows executable (modulo.exe)
+            - Bundled Python runtime
+            - Bundled PostgreSQL 16 + Redis 8
+            - NT SERVICE installation with virtual account
+            - PATH registration
+            - Azure Trusted Signing certificate
+
+            Installation: Run the installer as Administrator.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}

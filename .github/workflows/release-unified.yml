@@ -825,6 +825,47 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
   # ---------------------------------------------------------------------------
+  # Build Windows installer (cut and recut)
+  # ---------------------------------------------------------------------------
+  windows-installer:
+    name: Build Windows installer
+    needs: release
+    if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    uses: ./.github/workflows/windows-installer.yml
+    with:
+      version: ${{ inputs.version }}
+      rc_tag: ${{ needs.release.outputs.rc_tag }}
+      ref: ${{ needs.release.outputs.rc_tag }}
+      mode: ${{ inputs.mode }}
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      GH_TOKEN: ${{ github.token }}
+
+  # ---------------------------------------------------------------------------
+  # Build macOS installer (cut and recut)
+  # ---------------------------------------------------------------------------
+  macos-installer:
+    name: Build macOS installer
+    needs: release
+    if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    uses: ./.github/workflows/macos-installer.yml
+    with:
+      version: ${{ inputs.version }}
+      rc_tag: ${{ needs.release.outputs.rc_tag }}
+      ref: ${{ needs.release.outputs.rc_tag }}
+      mode: ${{ inputs.mode }}
+    secrets:
+      APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+      APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+      APPLE_NOTARY_API_KEY_P8: ${{ secrets.APPLE_NOTARY_API_KEY_P8 }}
+      GH_TOKEN: ${{ github.token }}
+  # ---------------------------------------------------------------------------
   # Create the GitHub Release from the bundle artefacts (cut and recut)
   # ---------------------------------------------------------------------------
   publish-release:
@@ -847,6 +888,18 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: bundle-artefacts-amd64
+          path: release-artefacts
+
+      - name: Download Windows installer artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-installer-${{ inputs.version }}
+          path: release-artefacts
+
+      - name: Download macOS installer artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-${{ inputs.version }}
           path: release-artefacts
 
       - name: Set up Python 3.12 for OpenAPI dump
@@ -906,6 +959,8 @@ jobs:
 
           ASSETS=(
             "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz"
+            "release-artefacts/modulo-${VERSION}-windows-amd64.exe"
+            "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
             "release-artefacts/SHA256SUMS"
             "release-artefacts/RELEASE_MANIFEST.json"
             "release-artefacts/RELEASE_MANIFEST.json.sig"
