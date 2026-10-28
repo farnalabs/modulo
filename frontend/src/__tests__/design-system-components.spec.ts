@@ -86,14 +86,35 @@ describe('MetricCard', () => {
     })
 
     expect(wrapper.attributes('data-testid')).toBe('metric-card')
-    expect(wrapper.text()).toContain('+2 (16.3%)')
+    expect(wrapper.text()).toContain('+2 (+16.3%)')
     expect(wrapper.text()).toContain('▲')
    expect(wrapper.find('.text-success-text').exists()).toBe(true)
    })
 
-   it('preserves the absent test id when no custom id is provided', () => {
-     expect(mount(MetricCard, { props: { label: 'Runs', value: 1 } }).attributes('data-testid')).toBeUndefined()
-   })
+    it.each([
+      [{ delta: 2 }, '+2'],
+      [{ deltaPct: 16.25 }, '+16.3%'],
+      [{ delta: Number.NaN, deltaPct: Number.POSITIVE_INFINITY }, ''],
+      [{ delta: 0, deltaPct: 0 }, '0 (0.0%)'],
+      [{ delta: 2, deltaPct: -16.25 }, '+2 (-16.3%)'],
+    ])('renders valid delta combinations safely: %o', (deltaProps, expected) => {
+      const wrapper = mount(MetricCard, {
+        props: { label: 'Runs', value: 12, ...deltaProps },
+      })
+
+      if (expected) {
+        expect(wrapper.text()).toContain(expected)
+      } else {
+        expect(wrapper.text()).not.toContain('NaN')
+        expect(wrapper.text()).not.toContain('Infinity')
+        expect(wrapper.find('.text-xs.font-medium').exists()).toBe(false)
+      }
+    })
+
+    it('preserves the absent test id when no custom id is provided', () => {
+      expect(mount(MetricCard, { props: { label: 'Runs', value: 1 } }).attributes('data-testid')).toBeUndefined()
+    })
+
 
    it.each([
      [{ value: 120, max: 100 }, '100%'],
@@ -139,6 +160,19 @@ describe('SummaryCard', () => {
 
     expect(wrapper.find('[data-testid="custom-summary-grid"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="risk-assessment-summary-grid"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="passed-item"]').text()).toContain('4')
-  })
-})
+     expect(wrapper.find('[data-testid="passed-item"]').text()).toContain('4')
+   })
+
+   it('passes an explicit heading level through to CardHeader', () => {
+     const wrapper = mount(SummaryCard, {
+       props: {
+         title: 'Summary',
+         headingLevel: 'h2',
+         items: [],
+       },
+     })
+
+     expect(wrapper.find('h2').text()).toBe('Summary')
+     expect(wrapper.find('h3').exists()).toBe(false)
+   })
+ })

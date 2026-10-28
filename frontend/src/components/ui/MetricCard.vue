@@ -16,13 +16,15 @@
         {{ value }}
       </p>
       <slot />
-      <div v-if="delta != null" class="flex items-center gap-1.5">
+      <div v-if="hasValidDelta" class="flex items-center gap-1.5">
         <span
           class="inline-flex items-center gap-0.5 text-xs font-medium"
           :class="deltaClass"
         >
           <span aria-hidden="true">{{ deltaArrow }}</span>
-          {{ deltaAbsText }} ({{ deltaPctText }})
+          <template v-if="deltaAbsText && deltaPctText">{{ deltaAbsText }} ({{ deltaPctText }})</template>
+          <template v-else-if="deltaAbsText">{{ deltaAbsText }}</template>
+          <template v-else>{{ deltaPctText }}</template>
         </span>
       </div>
       <div v-else-if="progress" class="mt-1">
@@ -116,8 +118,11 @@ const deltaClass = computed(() => {
 const deltaPctText = computed(() => {
   const d = deltaPct.value
   if (d == null) return ''
-  return `${Math.abs(d).toFixed(1)}%`
+  const sign = d > 0 ? '+' : d < 0 ? '-' : ''
+  return `${sign}${Math.abs(d).toFixed(1)}%`
 })
+
+const hasValidDelta = computed(() => deltaAbs.value != null || deltaPct.value != null)
 
 const progressPercent = computed(() => {
   const progress = props.progress

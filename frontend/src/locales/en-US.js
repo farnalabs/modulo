@@ -2768,6 +2768,12 @@ export default {
       "no_limit": "No limit",
       "saving": "Saving...",
       "save": "Save",
+      "no_teams_found": "No teams found.",
+      "inherit_org_limit": "Inherit org limit",
+      "form_control": "Form control",
+      "no_value": "—",
+      "failed_to_load": "Failed to load: {detail}",
+      "failed_to_save": "Failed to save: {detail}",
       "ceiling_updated": "Ceilings updated."
     },
     "CostComponentsView": {

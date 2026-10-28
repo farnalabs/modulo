@@ -1,6 +1,7 @@
 <template>
   <SummaryCard
     :title="$t('views.RiskAssessmentView.summary_title')"
+    heading-level="h2"
     :items="summaryItems"
     :footnote="timeWindow
       ? $t('views.RiskAssessmentView.time_window_note', { days: timeWindow })

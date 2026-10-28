@@ -308,8 +308,10 @@ describe('RiskAssessmentSummaryCard', () => {
     expect(wrapper.find('[data-testid="risk-assessment-continue-count"]').text()).toBe('3')
     expect(wrapper.find('[data-testid="risk-assessment-escalate-count"]').text()).toBe('4')
     expect(wrapper.find('[data-testid="risk-assessment-facet-degraded"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="risk-assessment-time-window"]').text()).toContain('30')
-  })
+      expect(wrapper.find('[data-testid="risk-assessment-time-window"]').text()).toContain('30')
+      expect(wrapper.find('h2').text()).toBe('Summary')
+      expect(wrapper.find('h3').exists()).toBe(false)
+   })
 
   it('defaults missing counts to zero and hides chrome when healthy', () => {
     const wrapper = mountWithI18n(RiskAssessmentSummaryCard, {

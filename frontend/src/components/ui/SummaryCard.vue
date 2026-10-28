@@ -4,6 +4,7 @@
       v-if="hasHeader"
       :title="title"
       :description="description"
+      :heading-level="headingLevel"
       :data-testid="dataTestId ? `${dataTestId}-header` : undefined"
     >
       <template #actions><slot name="headerActions" /></template>
@@ -51,6 +52,7 @@ interface SummaryItem {
 const props = withDefaults(defineProps<{
   title?: string
   description?: string
+  headingLevel?: 'h2' | 'h3' | 'h4'
   items: SummaryItem[]
   facetDegraded?: boolean
   footnote?: string
