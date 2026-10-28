@@ -131,6 +131,22 @@ async def test_lower_profile_cap_rejects_higher_node_timeout():
     assert any(i.code == "SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP" for i in result.issues)
 
 
+async def test_non_integer_node_timeout_skips_profile_cap_check():
+    """A non-integer timeout_seconds is reported as invalid, not compared to the profile cap."""
+    pid = uuid.uuid4()
+    profile = _mock_profile(pid, max_node_seconds=300)
+    session = _session_with_profile(profile, [])
+
+    result = await GraphValidator().validate_definition(
+        {"nodes": [{"id": "n1", "node_type": "sandbox_agent", "timeout_seconds": "abc"}], "edges": []},
+        session,
+        environment_profile_id=pid,
+    )
+
+    assert any(i.code == "SANDBOX_TIMEOUT_INVALID" for i in result.issues)
+    assert not any(i.code == "SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP" for i in result.issues)
+
+
 async def test_higher_profile_cap_accepts_node_timeout_within_transport_ceiling(monkeypatch):
     pid = uuid.uuid4()
     profile = _mock_profile(pid, max_node_seconds=5000)
