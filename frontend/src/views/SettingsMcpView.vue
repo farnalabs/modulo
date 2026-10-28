@@ -4,12 +4,6 @@
     <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.SettingsMcpView.mcp_configuration')" :subtitle="$t('views.SettingsMcpView.configure_mcp_server_settings_and_api_keys')" />
 
-    <!-- The INITIAL load owns the page-level states: the spinner while it
-         runs, and the ErrorAlert with retry if it FAILS (nothing was ever
-         rendered then, so there is no last-good content to keep on screen).
-         After the first successful load, `loading` never flips again
-         (silentRefetch) and a later failure is non-fatal - see `refetchError`
-         at the top of the branch below. -->
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="initialLoadError" :message="initialLoadError" :on-retry="loadAll" />
 
@@ -93,27 +87,58 @@
           <p class="mb-3 text-xs text-muted-foreground" data-testid="settings-mcp-machine-credential-note">
             {{ $t('views.SettingsMcpView.api_keys_machine_credential_note') }}
           </p>
-          <div v-if="apiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
-            {{ $t('views.SettingsMcpView.no_api_keys_created_yet') }}
+          <div class="mb-3 flex items-center gap-2">
+            <label for="settings-mcp-account-filter" class="text-sm font-medium">{{ $t('views.SettingsMcpView.filter_by_account') }}</label>
+            <Select
+              id="settings-mcp-account-filter"
+              v-model="accountFilter"
+              :placeholder="$t('views.SettingsMcpView.all_accounts')"
+              class="w-48"
+              :options="accountFilterOptions"
+              option-label="label"
+              option-value="value"
+              data-testid="settings-mcp-account-filter"
+            >
+              <template #option="{ option }">
+                <span :data-value="option.value">{{ option.label }}</span>
+              </template>
+            </Select>
           </div>
+           <div v-if="apiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
+             {{ $t('views.SettingsMcpView.no_api_keys_created_yet') }}
+           </div>
+           <div v-else-if="filteredApiKeys.length === 0" class="py-8 text-center text-sm text-muted-foreground">
+             {{ $t('views.SettingsMcpView.no_api_keys_match_filter') }}
+           </div>
 
-          <div v-else class="overflow-x-auto">
+           <div v-else class="overflow-x-auto">
             <table class="w-full text-sm">
             <thead>
               <tr class="border-b text-left text-muted-foreground">
                 <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.name') }}</th>
                 <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.key_prefix') }}</th>
                 <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.role') }}</th>
+                <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.account') }}</th>
                 <th class="pb-2 font-medium capitalize">{{ $t('views.SettingsMcpView.status') }}</th>
                 <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.last_used') }}</th>
                 <th class="pb-2 font-medium" />
               </tr>
             </thead>
             <tbody class="divide-y divide-border">
-              <tr v-for="key in apiKeys" :key="key.id" class="transition-colors hover:bg-muted/20">
+              <tr v-for="key in filteredApiKeys" :key="key.id" class="transition-colors hover:bg-muted/20">
                 <td class="py-2.5 font-medium">{{ key.name }}</td>
                 <td class="py-2.5 font-mono text-muted-foreground">{{ key.lookup_prefix }}</td>
                 <td class="py-2.5 capitalize">{{ key.role }}</td>
+                <td class="py-2.5">
+                  <div class="flex items-center gap-2">
+                    <Badge
+                      :severity="key.account_kind === 'human' ? 'success' : 'info'"
+                      class="text-xs"
+                    >{{ key.account_kind === 'human' ? $t('views.SettingsMcpView.human') : $t('views.SettingsMcpView.service') }}</Badge>
+                    <span class="font-medium">{{ key.account_display_name }}</span>
+                    <span v-if="key.account_email" class="text-xs text-muted-foreground">({{ key.account_email }})</span>
+                  </div>
+                </td>
                 <td class="py-2.5" data-testid="settings-mcp-key-status">
                   <Badge :severity="apiKeyStatusMeta(key).severity">{{ apiKeyStatusMeta(key).label }}</Badge>
                 </td>
@@ -330,22 +355,8 @@ const planStore = usePlanStore()
 const { orgRole } = useCurrentUser()
 const { t } = useI18n()
 
-interface ApiKeyItem {
-  id: string
-  name: string
-  role: string
-  lookup_prefix: string
-  is_active: boolean
-  // Serialized by _serialize_key (backend/src/modulo/auth/api_key.py) alongside
-  // is_active - always present on the wire, null when the key never expires.
-  expires_at: string | null
-  // FAR-1299: the revocation FACT, emitted like expires_at. null until an
-  // operator revokes the key; it is NOT derivable from is_active ALONE, which
-  // is computed and says only that the key stopped working, never why.
-  revoked_at: string | null
-  last_used_at: string | null
-  created_at: string
-}
+type ApiKeyItem = components['schemas']['ApiKeyListResponse']
+type OAuthClientItem = components['schemas']['OAuthClientItem']
 
 interface McpPageData {
   mcpUrl: string
@@ -355,8 +366,6 @@ interface McpPageData {
   apiKeysForbidden: boolean
   oauthListError: string | null
 }
-
-type OAuthClientItem = components['schemas']['OAuthClientItem']
 
 /**
  * A request that REJECTS (network failure, abort, parse error) never reaches
@@ -420,12 +429,9 @@ const {
         return { error: keysResp.error }
       }
     } else if (Array.isArray(keysResp.data)) {
-      // The generated OpenAPI type for GET /api/v1/api-keys is a bare
-      // `{ [key: string]: unknown }[]` (FastAPI serialises the rows without a
-      // response model), so the row shape is asserted at this one boundary
-      // where the data enters the page - it stays null-safe behind the
-      // Array.isArray guard above, and everything downstream is ApiKeyItem.
-      apiKeys = keysResp.data as unknown as ApiKeyItem[]
+      apiKeys = keysResp.data
+    } else {
+      return { error: { detail: t('views.SettingsMcpView.api_keys_unexpected_response') } }
     }
 
     // The OAuth client list is deliberately NON-fatal: a 403 (viewer role) or
@@ -478,6 +484,18 @@ const mcpUrl = computed(() => mcpData.value?.mcpUrl ?? '')
 const apiKeys = computed(() => mcpData.value?.apiKeys ?? [])
 const oauthClients = computed(() => mcpData.value?.oauthClients ?? [])
 const oauthListError = computed(() => mcpData.value?.oauthListError ?? null)
+
+const accountFilter = ref<'all' | 'human' | 'service'>('all')
+const accountFilterOptions = computed(() => [
+  { value: 'all', label: t('views.SettingsMcpView.all_accounts') },
+  { value: 'human', label: t('views.SettingsMcpView.human_accounts') },
+  { value: 'service', label: t('views.SettingsMcpView.service_accounts') },
+])
+
+const filteredApiKeys = computed(() => {
+  if (accountFilter.value === 'all') return apiKeys.value
+  return apiKeys.value.filter((k) => k.account_kind === accountFilter.value)
+})
 
 /**
  * The page's ONE concept of "MODULO_PUBLIC_URL is configured" (FAR-1282).

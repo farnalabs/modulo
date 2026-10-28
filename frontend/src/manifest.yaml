@@ -6011,6 +6011,9 @@ elements:
       - testid: settings-mcp-oauth-revoke-error
         type: element
         dynamic_testid: false
+      - testid: settings-mcp-account-filter
+        type: select
+        dynamic_testid: false
     /settings/observability:
       - testid: feature-gate
         type: element

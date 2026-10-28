@@ -69,7 +69,7 @@ def _make_create_session(key: MagicMock, *, is_break_glass: bool = False) -> Asy
 def _make_list_session(keys: list[MagicMock]) -> AsyncMock:
     session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
     result = MagicMock()
-    result.scalars.return_value = keys
+    result.all.return_value = [(key, "human", "Duncan Tait", "duncan@example.com") for key in keys]
     session.execute.return_value = result
     session.get = AsyncMock(return_value=_make_account())
     return session
@@ -421,12 +421,83 @@ class TestCreateApiKeyGrants(AuthContext):
 
 
 class TestListApiKeys(AuthContext):
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("operator")
+
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
         from modulo.api.mcp_server import list_api_keys
 
         result = await list_api_keys()
         assert result["error"] == "auth_expired"
+
+    async def test_runner_cannot_receive_account_pii(self) -> None:
+        from modulo.api.mcp_server import _ctx_role, list_api_keys
+
+        _ctx_role.set("runner")
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+        ):
+            mock_session.return_value = make_session_context(_make_list_session([_make_key()]))
+            result = await list_api_keys()
+
+        assert result["error"] == "insufficient_scope"
+        assert "account_email" not in result
+
+    async def test_runner_with_tool_scope_still_cannot_list_org_keys(self) -> None:
+        """The operator floor is enforced after the tool-scope check."""
+        from modulo.api.mcp_server import _ctx_role, list_api_keys
+
+        _ctx_role.set("runner")
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server.check_tool_scope"),
+            patch("modulo.api.mcp_server._session") as mock_session,
+        ):
+            mock_session.return_value = make_session_context(_make_list_session([_make_key()]))
+            result = await list_api_keys()
+
+        assert result["error"] == "insufficient_scope"
+        assert result["detail"] == "Only admin or operator users can list API keys"
+
+    async def test_operator_list_returns_account_metadata_without_secrets(self) -> None:
+        from modulo.api.mcp_server import list_api_keys
+
+        key = _make_key()
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+        ):
+            mock_session.return_value = make_session_context(_make_list_session([key]))
+            result = await list_api_keys()
+
+        assert result["total"] == 1
+        entry = result["api_keys"][0]
+        assert entry["account_kind"] == "human"
+        assert entry["account_display_name"] == "Duncan Tait"
+        assert entry["account_email"] == "duncan@example.com"
+        assert "key_value" not in entry
+        assert "hashed_secret" not in entry
+
+    async def test_runner_is_denied_and_operator_is_allowed(self) -> None:
+        from modulo.api.mcp_server import _ctx_role, list_api_keys
+
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+        ):
+            mock_session.return_value = make_session_context(_make_list_session([_make_key()]))
+            _ctx_role.set("runner")
+            denied = await list_api_keys()
+            _ctx_role.set("operator")
+            allowed = await list_api_keys()
+
+        assert denied["error"] == "insufficient_scope"
+        assert allowed["total"] == 1
 
     async def test_list_never_returns_full_key_values(self) -> None:
         from modulo.api.mcp_server import list_api_keys

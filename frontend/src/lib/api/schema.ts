@@ -11957,6 +11957,45 @@ export interface components {
             /** Grants */
             grants?: string[] | null;
         };
+        /** ApiKeyListResponse */
+        ApiKeyListResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Role */
+            role: string;
+            /** Scope */
+            scope: string;
+            /** Team Id */
+            team_id?: string | null;
+            /** Lookup Prefix */
+            lookup_prefix: string;
+            /** Last Used At */
+            last_used_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Revoked At */
+            revoked_at?: string | null;
+            /** Is Active */
+            is_active: boolean;
+            /** Account Kind */
+            account_kind: string;
+            /** Account Display Name */
+            account_display_name: string;
+            /** Account Email */
+            account_email: string | null;
+            /** Grants */
+            grants?: string[] | null;
+        };
         /** ApiKeyRevokeResponse */
         ApiKeyRevokeResponse: {
             /**
@@ -35855,9 +35894,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["ApiKeyListResponse"][];
                 };
             };
             /** @description Validation Error */

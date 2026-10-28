@@ -712,7 +712,7 @@ The posture for injected values (distinguish from the FAR-296 per-run minted key
 
 ### API keys
 
-Format: `mk_<lookup_prefix>_<random_secret>`. Stored as SHA-256 hash. Role set: `operator` (trigger runs, approve HITL) and `runner` (trigger runs, read-only). Admin actions require human session. Keys shown once at creation.
+Format: `mk_<lookup_prefix>_<random_secret>`. Stored as SHA-256 hash. Role set: `operator` (trigger runs, approve HITL) and `runner` (trigger runs, read-only). Admin actions require human session. Keys shown once at creation. Listing API keys requires an operator or admin role because the response includes account attribution (`account_kind` and `account_display_name`) and the account email for human owners only; service-account email is always `null`. List and MCP responses never include the raw key value, hashed secret, or any other secret material.
 
 Every key carries a **caller scope** (`scope` column, immutable post-mint):
 `org` (org-level machine identity, the historical default; includes

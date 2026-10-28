@@ -14,6 +14,7 @@ from modulo.auth.api_key import (
     ApiKeyInvalidError,
     _hash_key,
     _serialize_key,
+    _serialize_key_with_account,
     _validate_team_key_role,
     create_api_key,
     generate_api_key,
@@ -338,23 +339,65 @@ def test_serialize_key_with_team_and_last_used() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_list_session(rows: list[object]) -> AsyncMock:
+def _make_list_session(rows: list[tuple]) -> AsyncMock:
     scalar_result = MagicMock()
-    scalar_result.scalars.return_value = rows
+    scalar_result.all.return_value = rows
     session = AsyncMock()
     session.execute = AsyncMock(return_value=scalar_result)
     return session
 
 
+def _make_serializable_key_with_account(**overrides: object) -> tuple:
+    """Create a tuple of (OrgApiKey, kind, display_name, email) for list_api_keys tests."""
+    key = _make_serializable_key()
+    kind = "human"
+    display_name = "Test User"
+    email = "test@example.com"
+    for attr, value in overrides.items():
+        if attr in ("kind", "display_name", "email"):
+            if attr == "kind":
+                kind = value
+            elif attr == "display_name":
+                display_name = value
+            elif attr == "email":
+                email = value
+        else:
+            setattr(key, attr, value)
+    return (key, kind, display_name, email)
+
+
 @pytest.mark.asyncio
 async def test_list_api_keys_serializes_keys() -> None:
     org_id = uuid.uuid4()
-    key = _make_serializable_key()
-    session = _make_list_session([key])
+    key_tuple = _make_serializable_key_with_account()
+    session = _make_list_session([key_tuple])
 
     keys = await list_api_keys(session, org_id)
 
-    assert keys == [_serialize_key(key)]
+    key, kind, display_name, email = key_tuple
+    expected = _serialize_key_with_account(key, kind, display_name, email)
+    assert keys == [expected]
+    assert keys[0]["account_kind"] == "human"
+    assert keys[0]["account_display_name"] == "Test User"
+    assert keys[0]["account_email"] == "test@example.com"
+    assert "key_value" not in keys[0]
+    assert "hashed_secret" not in keys[0]
+
+
+def test_serialize_key_with_account_hides_service_email() -> None:
+    key, _kind, _display_name, _email = _make_serializable_key_with_account(
+        kind="service",
+        display_name="CI Service",
+        email="service@example.com",
+    )
+
+    serialized = _serialize_key_with_account(key, "service", "CI Service", "service@example.com")
+
+    assert serialized["account_kind"] == "service"
+    assert serialized["account_display_name"] == "CI Service"
+    assert serialized["account_email"] is None
+    assert "key_value" not in serialized
+    assert "hashed_secret" not in serialized
 
 
 @pytest.mark.asyncio
@@ -391,8 +434,8 @@ async def test_list_api_keys_include_revoked_carries_revoked_at() -> None:
     """
     org_id = uuid.uuid4()
     revoked_at = datetime.now(UTC) - timedelta(hours=3)
-    revoked_key = _make_serializable_key(revoked_at=revoked_at)
-    active_key = _make_serializable_key()
+    revoked_key = _make_serializable_key_with_account(revoked_at=revoked_at)
+    active_key = _make_serializable_key_with_account()
     session = _make_list_session([revoked_key, active_key])
 
     keys = await list_api_keys(session, org_id, include_revoked=True)
@@ -400,7 +443,10 @@ async def test_list_api_keys_include_revoked_carries_revoked_at() -> None:
     # Keyed by id, not position: the mock returns rows in insertion order while
     # the real query orders by created_at DESC.
     revoked_at_by_id = {k["id"]: k["revoked_at"] for k in keys}
-    assert revoked_at_by_id == {str(revoked_key.id): revoked_at.isoformat(), str(active_key.id): None}
+    assert revoked_at_by_id == {
+        str(revoked_key[0].id): revoked_at.isoformat(),
+        str(active_key[0].id): None,
+    }
 
 
 @pytest.mark.asyncio
