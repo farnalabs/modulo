@@ -7427,6 +7427,8 @@ async def _build_trigger_event_query(
     key_team_id: uuid.UUID | None,
     trigger_id: str | None,
     pipeline_id: str | None,
+    account_id: uuid.UUID | None = None,
+    viewer: bool = False,
 ) -> tuple[Any, dict[str, Any] | None]:
     from sqlalchemy import select
 
@@ -7462,6 +7464,15 @@ async def _build_trigger_event_query(
             Trigger.pipeline_id == pid,
             _Pipeline.deleted_at.is_(None),
         )
+
+    if viewer and account_id is not None:
+        from modulo.db.crud.team_scope import account_team_scope_clause
+
+        if not joined:
+            q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
+            q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
+            joined = True
+        q = q.where(account_team_scope_clause(_Pipeline.owner_team_id, account_id))
 
     if key_team_id is not None:
         # A team-scoped key only sees events whose trigger's pipeline
@@ -7542,7 +7553,15 @@ async def _list_trigger_events_impl(
 
     async with _session(org_id) as s:
         key_team_id = _ctx_team_id_val()
-        q, q_err = await _build_trigger_event_query(s, org_id, key_team_id, trigger_id, pipeline_id)
+        q, q_err = await _build_trigger_event_query(
+            s,
+            org_id,
+            key_team_id,
+            trigger_id,
+            pipeline_id,
+            account_id=_ctx_user_id.get(None),
+            viewer=_ctx_role_val() == "viewer",
+        )
         if q_err:
             return q_err
         total = int((await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0)
@@ -7612,14 +7631,15 @@ async def list_triggers(
                 owner_team_id = await _pipeline_owner_team_id(s, pid)
                 if _team_scoped_key_mismatch(owner_team_id):
                     return _team_scope_error("pipeline", str(pid))
-            result = await db_list_triggers(
-                s,
-                org_id,
-                pipeline_id=pid,
-                cursor=cursor,
-                limit=lim,
-                team_id=_ctx_team_id_val(),
-            )
+            trigger_list_kwargs: dict[str, Any] = {
+                "pipeline_id": pid,
+                "cursor": cursor,
+                "limit": lim,
+                "team_id": _ctx_team_id_val(),
+            }
+            if _ctx_role_val() == "viewer":
+                trigger_list_kwargs["account_id"] = _ctx_user_id.get(None)
+            result = await db_list_triggers(s, org_id, **trigger_list_kwargs)
             # FAR-251 — surface the SAME streak_status shape as the REST
             # trigger serializers (via the shared routes helper), computed
             # INSIDE the RLS transaction so a deactivated trigger's reason /

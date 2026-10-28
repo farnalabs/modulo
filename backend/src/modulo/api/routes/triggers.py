@@ -83,6 +83,7 @@ from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import create_run
+from modulo.db.crud.team_scope import account_team_scope_clause
 from modulo.db.crud.trigger import apply_trigger_event_cursor
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -674,9 +675,20 @@ async def list_triggers(
             await set_rls_org(session, principal.organisation_id)
             base_filter = Trigger.organisation_id == principal.organisation_id
             trigger_filter = _trigger_type_and_pipeline_filters(base_filter, pipeline_id, trigger_type)
+            if principal.org_role == "viewer":
+                trigger_filter.append(account_team_scope_clause(Pipeline.owner_team_id, principal.account_id))
 
-            q = select(Trigger).where(*trigger_filter, Trigger.deleted_at.is_(None))
-            count_q = select(func.count()).select_from(Trigger).where(*trigger_filter, Trigger.deleted_at.is_(None))
+            q = (
+                select(Trigger)
+                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+                .where(*trigger_filter, Trigger.deleted_at.is_(None), Pipeline.deleted_at.is_(None))
+            )
+            count_q = (
+                select(func.count())
+                .select_from(Trigger)
+                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+                .where(*trigger_filter, Trigger.deleted_at.is_(None), Pipeline.deleted_at.is_(None))
+            )
             total_raw = (await session.execute(count_q)).scalar_one()
             total = int(total_raw) if total_raw is not None else 0
             offset = (page - 1) * page_size
@@ -1922,19 +1934,39 @@ async def list_trigger_events(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             trigger_result = await session.execute(
-                select(Trigger).where(
+                select(Trigger)
+                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+                .where(
                     Trigger.id == trigger_id,
                     Trigger.organisation_id == principal.organisation_id,
                     Trigger.deleted_at.is_(None),
+                    Pipeline.deleted_at.is_(None),
+                    *(
+                        [account_team_scope_clause(Pipeline.owner_team_id, principal.account_id)]
+                        if principal.org_role == "viewer"
+                        else []
+                    ),
                 )
             )
             trigger = trigger_result.scalar_one_or_none()
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
 
-            q = select(TriggerEvent).where(
-                TriggerEvent.trigger_id == trigger_id,
-                TriggerEvent.organisation_id == principal.organisation_id,
+            q = (
+                select(TriggerEvent)
+                .join(Trigger, TriggerEvent.trigger_id == Trigger.id)
+                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+                .where(
+                    TriggerEvent.trigger_id == trigger_id,
+                    TriggerEvent.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
+                    Pipeline.deleted_at.is_(None),
+                    *(
+                        [account_team_scope_clause(Pipeline.owner_team_id, principal.account_id)]
+                        if principal.org_role == "viewer"
+                        else []
+                    ),
+                )
             )
             if event_status is not None:
                 q = q.where(TriggerEvent.validation_result == event_status)
