@@ -458,6 +458,7 @@ OWNED_PAGES = {
     ),
     "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
     "/oauth/authorize": "frontend/src/views/OAuthConsentView.vue",
+    "/evidence": "frontend/src/views/EvidenceView.vue",
     "/risk-assessment": (
         "frontend/src/views/RiskAssessmentView.vue",
         "frontend/src/components/risk-assessment/RiskAssessmentFacets.vue",

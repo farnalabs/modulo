@@ -2801,6 +2801,28 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+    /evidence:
+      - testid: evidence-run-id
+        type: input
+        dynamic_testid: false
+      - testid: evidence-node-id
+        type: input
+        dynamic_testid: false
+      - testid: evidence-key
+        type: input
+        dynamic_testid: false
+      - testid: evidence-load
+        type: button
+        dynamic_testid: false
+      - testid: evidence-loading
+        type: element
+        dynamic_testid: false
+      - testid: evidence-count
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
     /admin/evidence:
       - testid: evidence-index-page
         type: element
