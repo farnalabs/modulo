@@ -85,7 +85,7 @@
         </router-link>
         <!-- Token spend card -->
         <router-link to="/admin/costs" class="card card-hover p-4 block" data-testid="dashboard-token-spend">
-          <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.token_spend_7d') }}</p>
+          <p class="text-sm font-medium text-muted-foreground mb-2">{{ spendLabel }}</p>
           <div class="flex items-baseline gap-2">
             <p class="text-2xl font-semibold tabular-nums">{{ formatMoney(totalSpend, currencyCode, 2) }}</p>
             <span v-if="spendDeltaPct != null" :class="spendDeltaClass" class="text-xs font-medium">
@@ -365,9 +365,10 @@ function selectWindow(days: number | null) {
   selectedWindow.value = days
   persistTrendWindow(days)
   if (days == null) {
-    // All-time is the only window represented by summary.trend; it has no
-    // finite trends endpoint window, so clear finite trends before reloading.
+    // All-time has no finite trend source, so clear both finite chart data and
+    // any in-flight period metrics before reloading the all-time summary.
     dashboardStore.clearTrends()
+    dashboardStore.clearPeriodMetrics()
     void dashboardStore.fetchSummary()
   } else {
     // Period windows refresh the period block and the charts from the same
@@ -390,7 +391,7 @@ function cardValue(periodCurrent: number | null | undefined, allTime: number | u
 }
 
 // --- Period-scoped metrics (same-source/same-window value AND arrow) ---
-const periodMetrics = computed(() => summary.value?.period?.metrics ?? null)
+const periodMetrics = computed(() => selectedWindow.value == null ? null : summary.value?.period?.metrics ?? null)
 
 const evalPeriodDelta = computed(() => periodMetrics.value?.eval_pass_rate ?? null)
 const evalRateDisplay = computed(() => {
@@ -438,7 +439,14 @@ const spendDeltaPctText = computed(() => {
   const d = spendDeltaPct.value
   return d == null ? '' : `${Math.abs(d).toFixed(1)}%`
 })
-const spendTrackedDays = computed(() => summary.value?.period?.days ?? summary.value?.trend?.length ?? 0)
+const spendTrackedDays = computed(() => selectedWindow.value == null ? 0 : summary.value?.period?.days ?? 0)
+
+const spendLabel = computed(() => {
+  const key = selectedWindow.value == null
+    ? 'views.DashboardView.token_spend_all_time'
+    : `views.DashboardView.token_spend_${selectedWindow.value}d`
+  return t(key)
+})
 
 function deltaDirection(deltaPct: number | null): 'up' | 'down' | 'flat' | null {
   if (deltaPct == null) return null

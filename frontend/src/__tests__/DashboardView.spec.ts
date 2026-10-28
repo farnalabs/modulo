@@ -376,6 +376,18 @@ describe('DashboardView', () => {
     expect(allTimeSparkline.props('labels')).toEqual([])
   })
 
+  it('uses timeframe-aware spend labels for 30d and All time', async () => {
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-30"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="dashboard-token-spend"]').text()).toContain('Token Spend (30d)')
+
+    await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="dashboard-token-spend"]').text()).toContain('Token Spend (all time)')
+  })
+
   it('defaults to the 3d window when nothing is stored', async () => {
     localStorage.clear()
     const wrapper = mount(DashboardView)
@@ -549,6 +561,28 @@ describe('DashboardView', () => {
     // The run-activity trend section (whose empty state was 'No data yet') is
     // hidden when dashboard_charts is off; the eval card empty state remains.
     expect(wrapper.text()).toContain('No eval data yet')
+  })
+
+  it('shows the all-time value after a late finite period response', async () => {
+    let resolveFinite: ((value: unknown) => void) | undefined
+    mockGet.mockImplementation((url: string, options?: { params?: { query?: { days?: number } } }) => {
+      if (url === '/api/v1/dashboard/summary' && options?.params?.query?.days === 7) {
+        return new Promise((resolve) => { resolveFinite = resolve })
+      }
+      if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+      if (url === '/api/v1/dashboard/trends') return Promise.resolve({ data: null, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
+    await flushPromises()
+    resolveFinite?.({ data: { ...mockSummaryData, period: { days: 7, metrics: { eval_pass_rate: { current: 12, previous: 10, delta_pct: 20 } } } }, error: undefined })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="dashboard-eval-rate"]').text()).toContain('82.5%')
+    expect(wrapper.find('[data-testid="dashboard-eval-rate"]').text()).not.toContain('12%')
   })
 
   it('shows the eval trend indicator as stable when All time has no chart source, even if summary trend data exists', async () => {

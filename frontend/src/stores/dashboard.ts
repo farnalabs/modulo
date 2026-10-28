@@ -183,6 +183,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
   });
 
   const daysParam = ref<number | undefined>(undefined);
+  let periodRequestToken = 0;
 
   async function fetchSummary(days?: number) {
     if (loading.value) return;
@@ -211,7 +212,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
   }
 
   async function fetchPeriodMetrics(days: number) {
-    if (periodRefreshing.value) return;
+    const requestToken = ++periodRequestToken;
     periodRefreshing.value = true;
     try {
       const { data: result, error: err } = await withTimeout(
@@ -221,15 +222,12 @@ export const useDashboardStore = defineStore("dashboard", () => {
         15000,
         "Dashboard summary request",
       );
+      if (requestToken !== periodRequestToken) return;
       if (err) {
         summaryError.value = formatApiError(err);
       } else {
         const validated = validateDashboardSummary(result);
         if (validated) {
-          // Refresh ONLY the period-scoped block — never wipe the all-time
-          // summary (total_runs, teams, trend, recent_runs stay as-is) and
-          // never set the global loading flag, so the dashboard doesn't flash
-          // its full skeleton on every window click.
           if (summary.value) {
             summary.value = { ...summary.value, period: validated.period };
           } else {
@@ -241,10 +239,16 @@ export const useDashboardStore = defineStore("dashboard", () => {
         }
       }
     } catch (e: unknown) {
-      summaryError.value = formatApiError(e);
+      if (requestToken === periodRequestToken) summaryError.value = formatApiError(e);
     } finally {
-      periodRefreshing.value = false;
+      if (requestToken === periodRequestToken) periodRefreshing.value = false;
     }
+  }
+
+  function clearPeriodMetrics(): void {
+    periodRequestToken++;
+    if (summary.value) summary.value = { ...summary.value, period: undefined };
+    periodRefreshing.value = false;
   }
 
   const trends = ref<TrendsResponse | null>(null);
@@ -334,6 +338,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
     totalSpend,
     fetchSummary,
     fetchPeriodMetrics,
+    clearPeriodMetrics,
     fetchTrends,
     clearTrends,
     disposeHandlers,

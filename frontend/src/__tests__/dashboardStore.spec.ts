@@ -134,6 +134,29 @@ describe('useDashboardStore', () => {
     expect(store.summary?.trend).toEqual([])
   })
 
+  it('discards stale period responses when a newer window request completes first', async () => {
+    const requests = new Map<number, { resolve: (value: unknown) => void }>()
+    mockGet.mockImplementation((url: string, options: { params: { query: { days: number } } }) => {
+      if (url !== '/api/v1/dashboard/summary') return Promise.resolve({ data: null, error: undefined })
+      const days = options.params.query.days
+      return new Promise((resolve) => requests.set(days, { resolve }))
+    })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+    store.summary = { ...baseSummary }
+
+    const first = store.fetchPeriodMetrics(7)
+    const second = store.fetchPeriodMetrics(30)
+    requests.get(30)?.resolve({ data: { ...baseSummary, period: { ...period, days: 30 } }, error: undefined })
+    await second
+    requests.get(7)?.resolve({ data: { ...baseSummary, period }, error: undefined })
+    await first
+
+    expect(store.summary?.period?.days).toBe(30)
+    expect(store.periodRefreshing).toBe(false)
+  })
+
   it('fetchPeriodMetrics does NOT set the global loading flag (no full-page flash)', async () => {
     mockGet.mockResolvedValue({ data: { ...baseSummary, period }, error: undefined })
     const { Host, getStore } = createStoreHost()

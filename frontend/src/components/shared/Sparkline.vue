@@ -41,30 +41,30 @@
             <stop offset="100%" :stop-color="color" stop-opacity="0" />
           </linearGradient>
         </defs>
-          <template v-if="hasData">
-            <polygon
+        <template v-if="hasData">
+          <polygon
               v-for="(points, segmentIndex) in areaPointSegments"
               :key="`area-${segmentIndex}`"
               :fill="`url(#${gradientId})`"
               :points="points"
             />
-            <polyline
-              v-for="(points, segmentIndex) in linePointSegments"
+          <polyline
+            v-for="(points, segmentIndex) in linePointSegments"
               :key="`line-${segmentIndex}`"
               fill="none"
               :stroke="color"
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
-              :points="points"
-            />
+            :points="points"
+          />
           <!-- Endpoint marker: a <circle r="2.5"> would be stretched into a
                flat dash by the non-uniform preserveAspectRatio="none" scale.
                A zero-length path with a round linecap renders a uniform dot
                (diameter = stroke width), and vector-effect="non-scaling-stroke"
                keeps the stroke width in screen pixels so the dot stays round
                regardless of the chart's X/Y scale factors. -->
-            <path
+          <path
             v-if="lastPoint"
             data-testid="sparkline-endpoint"
             :d="`M ${xFor(lastPoint.index)} ${yFor(lastPoint.value)} l 0 0`"
@@ -180,8 +180,8 @@ const props = withDefaults(
     tickCount?: number;
     // How missing (null) values are rendered. "zero" plots them at the chart
     // floor (historical behaviour, used by absolute counts like run totals and
-    // spend). "carry-forward" is retained for compatibility but preserves null
-    // gaps rather than inventing observations.
+    // spend). Missing values in rate series remain gaps rather than invented
+    // observations.
     missingData?: "carry-forward" | "zero";
   }>(),
   {
@@ -203,35 +203,26 @@ const gradientId = computed(() => {
 });
 
 // --- Missing-data handling --------------------------------------------------
-// "zero" keeps the historical behaviour (null -> 0). "carry-forward" is
-// retained for compatibility but preserves null gaps rather than inventing
+// "zero" maps nulls to 0. Other modes preserve null gaps rather than inventing
 // observations. Number.isFinite excludes Infinity/-Infinity, which would
 // otherwise leak into max/range and produce NaN, out-of-viewBox geometry.
-const transformedSeries = computed<{ values: Array<number | null>; labelOffset: number }>(() => {
+const transformedSeries = computed<Array<number | null>>(() => {
   const raw = props.data;
-  if (props.missingData !== "carry-forward") {
-    return {
-      values: raw.map((v) => (v === null ? 0 : v)).filter(
-        (v): v is number => typeof v === "number" && Number.isFinite(v),
-      ),
-      labelOffset: 0,
-    };
+  if (props.missingData === "zero") {
+    return raw.map((v) => (v === null ? 0 : v)).filter(
+      (v): v is number => typeof v === "number" && Number.isFinite(v),
+    );
   }
-  return {
-    values: raw.map((v) => (typeof v === "number" && Number.isFinite(v) ? v : null)),
-    labelOffset: 0,
-  };
+  return raw.map((v) => (typeof v === "number" && Number.isFinite(v) ? v : null));
 });
 
-const chartData = computed(() => transformedSeries.value.values);
+const chartData = computed(() => transformedSeries.value);
 const realPoints = computed(() => chartData.value.flatMap((value, index) =>
   value === null ? [] : [{ index, value }],
 ));
 // A sparkline needs at least two real observations to draw a meaningful line.
 const hasData = computed(() => realPoints.value.length >= 2);
 const lastPoint = computed(() => realPoints.value.at(-1) ?? null);
-
-const labelOffset = computed(() => transformedSeries.value.labelOffset);
 
 const max = computed(() => Math.max(...realPoints.value.map(({ value }) => value)));
 const min = computed(() => Math.min(...realPoints.value.map(({ value }) => value)));
@@ -422,7 +413,7 @@ const tooltipText = computed(() => {
   const v = chartData.value[idx];
   if (idx < 0 || v === undefined) return "";
   const valueText = formatWithUnit(v);
-  const label = props.labels?.[idx + labelOffset.value];
+  const label = props.labels?.[idx];
   return label ? `${label}: ${valueText}` : valueText;
 });
 
