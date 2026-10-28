@@ -378,22 +378,52 @@ describe('StatCard', () => {
      expect(noBaseline.find('[data-testid="stat-no-baseline"]').attributes('title')).toBe('No baseline')
    })
 
-   it('covers zero and negative absolute-only delta branches', () => {
-     const zero = mount(StatCard, {
-       props: { label: 'Runs', value: 10, noBaselineLabel: 'No baseline', delta: { current: 10, previous: 10 } },
-     })
-     const negative = mount(StatCard, {
-       props: { label: 'Runs', value: 8, noBaselineLabel: 'No baseline', delta: { current: 8, previous: 10 } },
-     })
+    it('covers zero and negative absolute-only delta branches', () => {
+      const zero = mount(StatCard, {
+        props: { label: 'Runs', value: 10, noBaselineLabel: 'No baseline', delta: { current: 10, previous: 10 } },
+      })
+      const negative = mount(StatCard, {
+        props: { label: 'Runs', value: 8, noBaselineLabel: 'No baseline', delta: { current: 8, previous: 10 } },
+      })
 
-     expect(zero.find('[data-testid="stat-no-baseline"]').text()).toContain('→0')
-     expect(zero.find('[data-testid="stat-no-baseline"]').classes()).toContain('text-muted-foreground')
-     expect(negative.find('[data-testid="stat-no-baseline"]').text()).toContain('▼-2')
-     expect(negative.find('[data-testid="stat-no-baseline"]').classes()).toContain('text-destructive')
-   })
+      expect(zero.find('[data-testid="stat-no-baseline"]').text()).toContain('→0')
+      expect(zero.find('[data-testid="stat-no-baseline"]').classes()).toContain('text-muted-foreground')
+      expect(negative.find('[data-testid="stat-no-baseline"]').text()).toContain('▼-2')
+      expect(negative.find('[data-testid="stat-no-baseline"]').classes()).toContain('text-destructive')
+    })
+
+    it('evaluates absent absolute deltas and neutral absolute fallbacks', () => {
+      const absent = mount(StatCard, { props: { label: 'Runs', value: 1 } })
+      const neutral = mount(StatCard, {
+        props: {
+          label: 'Runs',
+          value: 1,
+          neutralTrend: true,
+          noBaselineLabel: 'No baseline',
+          delta: { current: 3, previous: 1 },
+        },
+      })
+      const nonNeutral = mount(StatCard, {
+        props: {
+          label: 'Runs',
+          value: 1,
+          noBaselineLabel: 'No baseline',
+          delta: { current: 3, previous: 1 },
+        },
+      })
+      const absentVm = absent.vm as unknown as { deltaAbsArrow: string; deltaAbsClass: string; deltaPctText: string }
+      const neutralVm = neutral.vm as unknown as { deltaAbsClass: string }
+      const nonNeutralVm = nonNeutral.vm as unknown as { deltaAbsClass: string }
+
+      expect(absentVm.deltaAbsArrow).toBe('')
+      expect(absentVm.deltaAbsClass).toBe('')
+      expect(absentVm.deltaPctText).toBe('')
+      expect(neutralVm.deltaAbsClass).toBe('text-muted-foreground')
+      expect(nonNeutralVm.deltaAbsClass).toBe('text-success-text')
+    })
 
 
-  it('renders as a router link when a destination is provided', () => {
+   it('renders as a router link when a destination is provided', () => {
     const wrapper = mount(StatCard, { props: { label: 'Runs', value: 12, to: '/runs' } })
 
     expect(wrapper.find('a').attributes('href')).toBe('/runs')
@@ -440,7 +470,23 @@ describe('SummaryCard', () => {
       expect(wrapper.find('.card-header').attributes('data-testid')).toBeUndefined()
     })
 
-    it('renders all supported item colors, fallback color, footnote, header action, and footer', () => {
+    it('adds the card id suffix to its header when provided', () => {
+      const wrapper = mount(SummaryCard, {
+        props: { title: 'Prefixed Summary', items: [], dataTestId: 'summary-card' },
+      })
+
+      expect(wrapper.find('[data-testid="summary-card-header"]').text()).toContain('Prefixed Summary')
+    })
+
+     it('omits the header test id when no card test id is provided', () => {
+       const wrapper = mount(SummaryCard, {
+         props: { title: 'Unprefixed Summary', items: [] },
+       })
+
+       expect(wrapper.find('.card-header').attributes('data-testid')).toBeUndefined()
+     })
+
+     it('renders all supported item colors, fallback color, footnote, header action, and footer', () => {
       const wrapper = mount(SummaryCard, {
         props: {
           items: [

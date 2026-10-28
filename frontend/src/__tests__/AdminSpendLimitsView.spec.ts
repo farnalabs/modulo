@@ -163,6 +163,20 @@ describe('AdminSpendLimitsView', () => {
     wrapper.unmount()
   })
 
+  it('renders the org limit input for both an existing limit and no limit', async () => {
+    const existing = await mountWithFeatures()
+    const existingInput = existing.findComponent({ name: 'InputText' })
+    expect(existingInput.props('modelValue')).toBe('100')
+    existing.unmount()
+
+    apiState.limitsOverride = { org_daily_limit_usd: null, teams: [] }
+    const absent = await mountWithFeatures()
+    const absentInput = absent.findComponent({ name: 'InputText' })
+    expect(absentInput.props('modelValue')).toBe('')
+    expect(absentInput.find('input').attributes('placeholder')).toBe('No limit')
+    absent.unmount()
+  })
+
   it('marks an org total above the daily limit as over budget', async () => {
     apiState.orgLimit = 10
     const wrapper = await mountWithFeatures()
