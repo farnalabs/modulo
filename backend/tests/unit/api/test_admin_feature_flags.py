@@ -476,6 +476,16 @@ class TestGetFeatureFlag:
         body = resp.json()
         assert "detail" in body
 
+    def test_returns_404_for_retired_internal_flag(self, client: TestClient) -> None:
+        """Retired internal flags are hidden even from the system-admin GET."""
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags/lifecycle_map_journeys")
+        assert resp.status_code == 404
+        assert "detail" in resp.json()
+
     def test_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get("/api/v1/admin/feature-flags/sso")
         assert resp.status_code in (401, 403)

@@ -301,6 +301,46 @@ def test_list_libraries_singular_lifecycle_map_filter_is_hidden_for_ordinary_use
     assert call_kwargs["primitive_types"] is None
 
 
+def test_list_libraries_dev_mode_viewer_still_excludes_lifecycle_maps(viewer_client: TestClient) -> None:
+    """Developer mode alone is not the grant: a viewer stays below the operator floor."""
+    with patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+        mock_list = _stub_list_call(client=viewer_client, primitive_type="lifecycle_map")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] == "__hidden_lifecycle_map__"
+    assert call_kwargs["primitive_types"] is None
+
+
+def test_list_libraries_multi_type_only_lifecycle_map_is_hidden(viewer_client: TestClient) -> None:
+    mock_list = _stub_list_call(client=viewer_client, primitive_types="lifecycle_map")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] == "__hidden_lifecycle_map__"
+    assert call_kwargs["primitive_types"] is None
+
+
+def test_list_libraries_internal_operator_keeps_requested_types(client: TestClient) -> None:
+    with patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+        mock_list = _stub_list_call(client=client, primitive_types="workflow,lifecycle_map")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_types"] == ["workflow", "lifecycle_map"]
+    assert call_kwargs["primitive_type"] is None
+
+
+def test_list_libraries_internal_operator_singular_type_passes_through(client: TestClient) -> None:
+    with patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+        mock_list = _stub_list_call(client=client, primitive_type="lifecycle_map")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] == "lifecycle_map"
+    assert call_kwargs["primitive_types"] is None
+
+
 def test_list_libraries_default_excludes_in_dev(client: TestClient) -> None:
     """The list endpoint defaults to the service in_dev exclusion (excluded_tiers=None)."""
     result = PageResult(items=[_make_listable_primitive()], total=1, page=1, page_size=20)

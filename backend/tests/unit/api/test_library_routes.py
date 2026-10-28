@@ -551,6 +551,19 @@ def test_restore_primitive_not_deleted_returns_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_restore_primitive_without_existing_row_skips_gate(client: TestClient) -> None:
+    """A row the lookup cannot see skips the lifecycle-map gate and restores normally."""
+    prim = _make_listable_primitive()
+    with (
+        patch.object(client.mock_session, "get", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post(f"/api/v1/libraries/{prim.id}/restore")
+    assert resp.status_code == 200, resp.text
+
+
 # ---------------------------------------------------------------------------
 # copy-to-adapt
 # ---------------------------------------------------------------------------
