@@ -98,23 +98,25 @@ describe('useDashboardStore', () => {
     expect(store.loading).toBe(false)
   })
 
-  it('fetchSummary reports API errors and ignores overlapping requests', async () => {
-    let resolveRequest: ((value: unknown) => void) | undefined
-    mockGet.mockImplementation(() => new Promise((resolve) => { resolveRequest = resolve }))
+  it('keeps the newest summary window when requests resolve out of order', async () => {
+    const requests = new Map<number | 'all', { resolve: (value: unknown) => void }>()
+    mockGet.mockImplementation((_url: string, options: { params: { query: { days?: number } } }) => {
+      const key = options.params.query.days ?? 'all'
+      return new Promise((resolve) => requests.set(key, { resolve }))
+    })
     const { Host, getStore } = createStoreHost()
     mount(Host)
     const store = getStore()
 
-    const first = store.fetchSummary(7)
-    await Promise.resolve()
-    const second = store.fetchSummary(14)
-    resolveRequest?.({ data: undefined, error: { detail: 'summary unavailable' } })
+    const finite = store.fetchSummary(7)
+    const allTime = store.fetchSummary()
+    requests.get('all')?.resolve({ data: baseSummary, error: undefined })
+    await allTime
+    requests.get(7)?.resolve({ data: { ...baseSummary, period }, error: undefined })
+    await finite
 
-    await first
-    await second
-
-    expect(mockGet).toHaveBeenCalledTimes(1)
-    expect(store.summaryError).toBe('summary unavailable')
+    expect(mockGet).toHaveBeenCalledTimes(2)
+    expect(store.summary?.period).toBeUndefined()
     expect(store.loading).toBe(false)
   })
 
@@ -276,7 +278,7 @@ describe('useDashboardStore', () => {
     for (const handler of pipelineHandlers) handler({ ...event, type: 'pipeline', id: 'pipeline-1' })
     await vi.waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterThan(callsBefore))
     await vi.waitFor(() => expect(store.loading).toBe(false))
-    expect(mockGet.mock.calls.length).toBe(callsBefore + 1)
+    expect(mockGet.mock.calls.length).toBe(callsBefore + 2)
     expect(mockGet).toHaveBeenLastCalledWith('/api/v1/dashboard/summary', { params: { query: { days: 7 } } })
 
     store.disposeHandlers()

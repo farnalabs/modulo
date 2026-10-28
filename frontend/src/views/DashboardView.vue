@@ -92,7 +92,7 @@
               <span aria-hidden="true">{{ spendDeltaArrow }}</span>{{ spendDeltaPctText }}
             </span>
           </div>
-          <p class="text-xs text-muted-foreground mt-1">{{ spendTrackedDays }} {{ $t('views.DashboardView.days_tracked') }}</p>
+          <p v-if="selectedWindow != null" class="text-xs text-muted-foreground mt-1">{{ spendTrackedDays }} {{ $t('views.DashboardView.days_tracked') }}</p>
           <Sparkline class="mt-2 h-12 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" missing-data="zero" unit="$" color="hsl(var(--warning-text))" :show-y-axis="true" />
         </router-link>
       </div>

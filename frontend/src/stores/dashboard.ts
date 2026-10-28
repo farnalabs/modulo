@@ -183,10 +183,11 @@ export const useDashboardStore = defineStore("dashboard", () => {
   });
 
   const daysParam = ref<number | undefined>(undefined);
+  let summaryRequestToken = 0;
   let periodRequestToken = 0;
 
   async function fetchSummary(days?: number) {
-    if (loading.value) return;
+    const requestToken = ++summaryRequestToken;
     loading.value = true;
     daysParam.value = days;
     summaryError.value = null;
@@ -198,6 +199,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
         15000,
         "Dashboard summary request",
       );
+      if (requestToken !== summaryRequestToken) return;
       if (err) {
         summaryError.value = formatApiError(err);
       } else {
@@ -205,9 +207,9 @@ export const useDashboardStore = defineStore("dashboard", () => {
         if (!summary.value) summaryError.value = t("views.DashboardView.invalid_dashboard_data");
       }
     } catch (e: unknown) {
-      summaryError.value = formatApiError(e);
+      if (requestToken === summaryRequestToken) summaryError.value = formatApiError(e);
     } finally {
-      loading.value = false;
+      if (requestToken === summaryRequestToken) loading.value = false;
     }
   }
 
