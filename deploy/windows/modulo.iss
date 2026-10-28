@@ -1,25 +1,37 @@
-; Modulo Windows Installer — Inno Setup script
+; Modulo Windows Installer - Inno Setup script
 ; Part of the single-install native distribution (ADR 031, FAR-679)
 ; Builds a Windows installer for the Modulo native bundle
 ;
-; Requires: Inno Setup 6.2+ (Unicode), Microsoft SignTool, Azure Trusted Signing
-; Build: Run on Windows runner (GitHub Actions windows-latest)
+; Requires: Inno Setup 6.2+ (Unicode)
+; Build (from the repo root, on a Windows runner):
+;   iscc /Qp /Obuild\windows modulo.iss
+;        /DVERSION_NUM=0.4.0 /DBUNDLE_ARCH=amd64 /DBUNDLE_DIR=<abs bundle root>
 ;
-; Usage: iscc /Qp /Obuild/windows /Fmodulo-${VERSION_NUM}-windows-${ARCH} modulo.iss
+; Required /D defines (a missing one is a hard compile error, never a silent
+; default - see the guards below):
+;   VERSION_NUM   - version string (e.g. 0.4.0)
+;   BUNDLE_ARCH   - amd64 or arm64
+;   BUNDLE_DIR    - absolute path to the extracted bundle root
 ;
-; Defines (passed via /D):
-;   VERSION_NUM     - version string (e.g. 0.4.0)
-;   BUNDLE_ARCH     - amd64 or arm64
-;   BUNDLE_DIR      - path to extracted bundle root (modulo-<version>-windows-<arch>)
-;   SIGNTOOL_PATH   - path to signtool.exe (optional, defaults to Windows SDK)
-;   AZURE_SIGNING   - 1 to enable Azure Trusted Signing, 0 to skip
-;   AZURE_TENANT_ID - Azure AD tenant ID
-;   AZURE_CLIENT_ID - Azure AD client ID (managed identity or app registration)
-;   AZURE_CERT_NAME - certificate name/profile in Azure Trusted Signing
+; Signing is NOT done by Inno. The installer is signed after compilation by
+; .github/workflows/windows-installer.yml (Azure Artifact Signing), so this
+; script has no SignTool configuration and no signing conditionals.
 
-#pragmaSection 1: Header and Metadata
+#ifndef VERSION_NUM
+#error VERSION_NUM is required: pass /DVERSION_NUM=<x.y.z>
+#endif
+#ifndef BUNDLE_ARCH
+#error BUNDLE_ARCH is required: pass /DBUNDLE_ARCH=<amd64|arm64>
+#endif
+#ifndef BUNDLE_DIR
+#error BUNDLE_DIR is required: pass /DBUNDLE_DIR=<absolute bundle root>
+#endif
 
+; ---------------------------------------------------------------------------
+; Header and metadata
+; ---------------------------------------------------------------------------
 [Setup]
+AppId={{5D0B2E77-0C1C-4F2E-9C0A-7B1D3A64E5F1}
 AppName=Modulo
 AppVersion={#VERSION_NUM}
 AppPublisher=Farna Labs Ltd
@@ -28,7 +40,8 @@ AppSupportURL=https://modulo.run/docs
 AppUpdatesURL=https://modulo.run/changelog
 DefaultDirName={autopf}\Modulo
 DefaultGroupName=Modulo
-OutputDir=build/windows
+; Relative to this script's directory (deploy\windows): the repo-root build dir.
+OutputDir=..\..\build\windows
 OutputBaseFilename=modulo-{#VERSION_NUM}-windows-{#BUNDLE_ARCH}
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -42,83 +55,83 @@ DisableReadyMemo=yes
 DisableReadyPage=yes
 DisableFinishedPage=yes
 WizardStyle=modern
-WizardImageFile=..\modulo\docs\assets\wizard-image.bmp
-WizardSmallImageFile=..\modulo\docs\assets\wizard-small.bmp
-LicenseFile=..\LICENSE
-InfoBeforeFile=..\docs\assets\install-info.txt
-AppId={{modulo-windows-installer}}
 AppMutex=ModuloInstallerMutex
 CreateAppDir=yes
 UninstallDisplayIcon={app}\modulo.exe
 UninstallDisplayName=Modulo {#VERSION_NUM}
-ChangesAssociations=yes
+ChangesEnvironment=yes
 UsePreviousAppDir=yes
 UsePreviousGroup=yes
 UsePreviousLanguage=yes
-CloseApplications=force
-RestartApplications=yes
-RestartIfNeededByRun=yes
 
-#pragmaSection 2: Languages
-
+; ---------------------------------------------------------------------------
+; Languages
+; ---------------------------------------------------------------------------
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
-#pragmaSection 3: Files
-
+; ---------------------------------------------------------------------------
+; Files
+; ---------------------------------------------------------------------------
 [Files]
 Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Native binaries (PostgreSQL, Redis, Python runtime)
-; These are already in the bundle under pg/, redis/, runtime/
-
-; Launcher executable
-Source: "{#BUNDLE_DIR}\modulo.exe"; DestDir: "{app}"; Flags: ignoreversion
-
-#pragmaSection 4: Icons
-
+; ---------------------------------------------------------------------------
+; Icons
+; ---------------------------------------------------------------------------
 [Icons]
 Name: "{group}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"
 Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
-#pragmaSection 5: Run
-
+; ---------------------------------------------------------------------------
+; Run
+; ---------------------------------------------------------------------------
 [Run]
-Filename: "{app}\modulo.exe"; Description: "Launch Modulo"; Flags: nowait postinstall shellexec
+Filename: "{app}\modulo.exe"; Description: "Launch Modulo"; Flags: nowait postinstall shellexec skipifsilent
+Filename: "{sys}\sc.exe"; Parameters: "start Modulo"; StatusMsg: "{cm:StartingService}"; Flags: runhidden waituntilterminated; Check: ServiceKeyExists
 
-#pragmaSection 6: Registry (PATH and service configuration)
-
+; ---------------------------------------------------------------------------
+; Registry (PATH and service configuration)
+; ---------------------------------------------------------------------------
 [Registry]
-; Add to system PATH for all users (requires admin)
-Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: NeedsPathEntry("{app}"); Flags: uninsdeletevalue
+; Add to the system PATH for all users (requires admin). The value is removed
+; on uninstall by RemoveFromPath in [Code] - never with uninsdeletevalue, which
+; would delete the ENTIRE system PATH.
+Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: NeedsPathEntry('{app}')
 
-; Service configuration for NT SERVICE
+; Service registration for the NT SERVICE account. DependOnService is
+; deliberately absent: it is a REG_MULTI_SZ value and Inno cannot write the
+; embedded NUL separators a multisz requires.
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Services\Modulo"; ValueType: string; ValueName: "ImagePath"; ValueData: "{app}\modulo.exe service"
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Services\Modulo"; ValueType: string; ValueName: "DisplayName"; ValueData: "Modulo Agentic SDLC Platform"
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Services\Modulo"; ValueType: string; ValueName: "Description"; ValueData: "Modulo Agentic SDLC Platform - native service"
-Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Services\Modulo"; ValueType: dword; ValueName: "Start"; ValueData: 2  ; Automatic
+Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Services\Modulo"; ValueType: dword; ValueName: "Start"; ValueData: 2
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Services\Modulo"; ValueType: string; ValueName: "ObjectName"; ValueData: "NT SERVICE\Modulo"
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Services\Modulo"; ValueType: string; ValueName: "ErrorControl"; ValueData: 1
-Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Services\Modulo"; ValueType: multisz; ValueName: "DependOnService"; ValueData: "PostgreSQL\0Redis\0"
 
-#pragmaSection 7: Tasks
-
+; ---------------------------------------------------------------------------
+; Tasks
+; ---------------------------------------------------------------------------
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
-#pragmaSection 8: Custom Messages
-
+; ---------------------------------------------------------------------------
+; Custom messages
+; ---------------------------------------------------------------------------
 [CustomMessages]
-english.InstallingService=Installing Modulo service...
 english.StartingService=Starting Modulo service...
-english.UninstallingService=Removing Modulo service...
+english.StoppingService=Stopping Modulo service...
+english.RemovingService=Removing Modulo service...
 
-#pragmaSection 8: Code
-
+; ---------------------------------------------------------------------------
+; Code
+;
+; Inno's PascalScript has NO service API: IsServiceInstalled / CreateService /
+; StartService / StopService / DeleteService do not exist. The service is
+; registered through the [Registry] section above and started with sc.exe in
+; [Run]; teardown uses sc.exe/net in [UninstallRun].
+; ---------------------------------------------------------------------------
 [Code]
-var
-  ServiceInstalled: Boolean;
-
 function NeedsPathEntry(const Path: String): Boolean;
 var
   CurrentPath: String;
@@ -129,73 +142,42 @@ begin
     Result := Pos(';' + Path + ';', ';' + CurrentPath + ';') = 0;
 end;
 
+function ServiceKeyExists: Boolean;
+begin
+  Result := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\Modulo');
+end;
+
+function IsWin10OrLater(): Boolean;
+var
+  Version: TWindowsVersion;
+begin
+  GetWindowsVersionEx(Version);
+  Result := (Version.Major > 10) or ((Version.Major = 10) and (Version.Minor >= 0));
+end;
+
 function InitializeSetup(): Boolean;
+var
+  UninstallKey: String;
 begin
   Result := True;
-  { Check if already installed and offer upgrade }
-  if RegKeyExists(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupSetting("AppId")}') then
+
+  if not IsWin10OrLater then
   begin
+    MsgBox('Modulo requires Windows 10 or later.', mbError, MB_OK);
+    Result := False;
+    exit;
+  end;
+
+  { Check if already installed and offer upgrade. Inno writes the uninstall key
+    as <AppId>_is1 with the ESCAPED AppId collapsed back to a single brace, so
+    '{#SetupSetting("AppId")}' (which yields the doubled '{{GUID}') has to be
+    un-doubled before it can match. }
+  UninstallKey := '{#SetupSetting("AppId")}_is1';
+  StringChangeEx(UninstallKey, '{{', '{', False);
+
+  if RegKeyExists(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\' + UninstallKey) then
     if MsgBox('Modulo is already installed. Do you want to upgrade?', mbConfirmation, MB_YESNO) = IDNO then
       Result := False;
-  end;
-end;
-
-function InitializeUninstall(): Boolean;
-begin
-  Result := True;
-  { Stop and remove service on uninstall }
-  if IsServiceInstalled('Modulo') then
-  begin
-    if not StopService('Modulo') then
-      MsgBox('Failed to stop Modulo service. Please stop it manually before uninstalling.', mbError, MB_OK);
-    DeleteService('Modulo');
-  end;
-end;
-
-procedure CurStepChanged(CurStep: TSetupStep);
-begin
-  if CurStep = ssPostInstall then
-  begin
-    { Install and start the Modulo service }
-    if not IsServiceInstalled('Modulo') then
-    begin
-      if not CreateService('Modulo', 'Modulo Agentic SDLC Platform', ExpandConstant('"{app}\modulo.exe" service'), 2, 'NT SERVICE\Modulo', '', '') then
-        MsgBox('Failed to install Modulo service. You may need to install it manually.', mbError, MB_OK)
-      else
-      begin
-        ServiceInstalled := True;
-        if not StartService('Modulo') then
-          MsgBox('Failed to start Modulo service. You can start it manually with: net start Modulo', mbError, MB_OK);
-      end;
-    end;
-  end;
-end;
-
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-begin
-  if CurUninstallStep = usPostUninstall then
-  begin
-    { Clean up PATH entry }
-    { The registry entry is removed by the [Registry] section with uninsdeletevalue }
-  end;
-end;
-
-function NextButtonClick(CurPageID: Integer): Boolean;
-begin
-  Result := True;
-  { Custom logic for page navigation if needed }
-end;
-
-function ShouldSkipPage(PageID: Integer): Boolean;
-begin
-  Result := False;
-  { Skip certain pages for silent install }
-  if WizardSilent then
-  begin
-    case PageID of
-      wpWelcome, wpLicense, wpInfoBefore, wpSelectDir, wpSelectComponents, wpSelectTasks, wpReady: Result := True;
-    end;
-  end;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -206,47 +188,73 @@ begin
     Result := 'Administrator privileges are required to install Modulo.';
 end;
 
-function NeedRestart(): Boolean;
+function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
-  { Check if restart is needed (e.g., if files in use) }
-end;
-
-{ Custom function to check if we're running on supported Windows version }
-function IsWin10OrLater(): Boolean;
-var
-  Version: TWindowsVersion;
-begin
-  GetWindowsVersionEx(Version);
-  Result := (Version.Major > 10) or ((Version.Major = 10) and (Version.Minor >= 0));
-end;
-
-function InitializeSetupEx(): Boolean;
-begin
-  if not IsWin10OrLater then
+  { Skip informational pages for silent install }
+  if WizardSilent then
   begin
-    MsgBox('Modulo requires Windows 10 or later.', mbError, MB_OK);
-    Result := False;
-  end
-  else
-    Result := True;
+    case PageID of
+      wpWelcome, wpLicense, wpInfoBefore, wpSelectDir, wpSelectComponents, wpSelectTasks, wpReady: Result := True;
+    end;
+  end;
 end;
 
-#pragmaSection 9: Uninstall
+procedure RemoveFromPath(const Dir: String);
+var
+  CurrentPath, Remaining, NewPath, Token: String;
+  P: Integer;
+  Changed: Boolean;
+begin
+  if not RegQueryStringValue(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', CurrentPath) then
+    exit;
 
+  { Rebuild PATH entry-by-entry so only a whole-segment match is removed. A
+    plain StringChangeEx would also strip 'C:\Program Files\Modulo' out of
+    'C:\Program Files\Modulo-extra'. }
+  Changed := False;
+  NewPath := '';
+  Remaining := CurrentPath;
+  while Remaining <> '' do
+  begin
+    P := Pos(';', Remaining);
+    if P = 0 then
+    begin
+      Token := Remaining;
+      Remaining := '';
+    end
+    else
+    begin
+      Token := Copy(Remaining, 1, P - 1);
+      Remaining := Copy(Remaining, P + 1, Length(Remaining));
+    end;
+
+    if (Token <> '') and (CompareText(Token, Dir) = 0) then
+      Changed := True
+    else
+    begin
+      if NewPath <> '' then
+        NewPath := NewPath + ';';
+      NewPath := NewPath + Token;
+    end;
+  end;
+
+  if Changed then
+    RegWriteExpandStringValue(HKLM, 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', NewPath);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RemoveFromPath(ExpandConstant('{app}'));
+end;
+
+; ---------------------------------------------------------------------------
+; Uninstall
+; ---------------------------------------------------------------------------
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 
-#pragmaSection 10: Uninstall Run
-
 [UninstallRun]
-Filename: "net"; Parameters: "stop Modulo"; StatusMsg: "Stopping Modulo service..."; Flags: runhidden waituntilterminated runascurrentuser
-Filename: "sc"; Parameters: "delete Modulo"; StatusMsg: "Removing Modulo service..."; Flags: runhidden waituntilterminated runascurrentuser
-
-#pragmaSection 11: Signing (Azure Trusted Signing)
-
-#if AZURE_SIGNING = "1"
-[Setup]
-SignTool=signtool
-SignToolParams=sign /fd sha256 /tr http://timestamp.acs.microsoft.com /td sha256 /a /d "Modulo" /du "https://modulo.run" /as /atc "http://timestamp.acs.microsoft.com" /kp "#AZURE_CERT_NAME" /id "#AZURE_TENANT_ID" /ic "#AZURE_CLIENT_ID" $f
-#endif
+Filename: "{sys}\net.exe"; Parameters: "stop Modulo"; StatusMsg: "{cm:StoppingService}"; Flags: runhidden waituntilterminated
+Filename: "{sys}\sc.exe"; Parameters: "delete Modulo"; StatusMsg: "{cm:RemovingService}"; Flags: runhidden waituntilterminated
