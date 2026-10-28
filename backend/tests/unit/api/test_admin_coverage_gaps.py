@@ -469,6 +469,10 @@ def test_update_user_role_uses_durable_top_level_transaction(
     monkeypatch.setattr(admin, "assert_not_last_admin", AsyncMock())
     monkeypatch.setattr(admin, "get_account_by_id", AsyncMock(return_value=_account()))
 
+    async def _refresh(updated_membership: MagicMock) -> None:
+        updated_membership.role = "viewer"
+
+    session.refresh.side_effect = _refresh
     resp = client.put(f"/api/v1/admin/users/{_TARGET_USER_ID}", json={"org_role": "viewer"})
 
     assert resp.status_code == 200
