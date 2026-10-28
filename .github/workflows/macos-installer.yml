@@ -94,7 +94,6 @@ jobs:
         with:
           name: bundle-artefacts-arm64
           path: ${{ runner.temp }}/linux-bundle
-        continue-on-error: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -106,10 +105,8 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ inputs.version }}"
-          arch="arm64"
 
           # Use the Linux bundle as source (we rebuild the macOS-specific parts)
-          bundleDir="${{ runner.temp }}/modulo-${version}-macos-arm64"
           linuxBundle="${{ runner.temp }}/linux-bundle"
           tarball=$(find "$linuxBundle" -name "*.tar.gz" | head -1)
 
@@ -133,18 +130,25 @@ jobs:
 
           # Write macOS-specific launcher
           launcherPath="$newRoot/modulo"
-          printf '#!/bin/sh\n# Modulo macOS launcher - placeholder\n# Real build would produce a native Mach-O executable\necho "Modulo macOS installer - placeholder executable"\necho "Version: $VERSION"\necho "Architecture: arm64"\n' > "$launcherPath"
+          {
+            echo '#!/bin/sh'
+            echo '# Modulo macOS launcher - placeholder'
+            echo '# Real build would produce a native Mach-O executable'
+            echo 'echo "Modulo macOS installer - placeholder executable"'
+            echo "echo \"Version: ${version}\""
+            echo 'echo "Architecture: arm64"'
+          } > "$launcherPath"
           chmod +x "$launcherPath"
 
           # Write macOS bundle structure info using external script
-          "${{ github.workspace }}/scripts/create-macos-info-plist.sh" "$VERSION" "$newRoot/INFO.plist"
+          "${{ github.workspace }}/scripts/create-macos-info-plist.sh" "$version" "$newRoot/INFO.plist"
 
       - name: Create .dmg installer
         if: ${{ inputs.mode != 'dry-run' }}
         run: |
           set -euo pipefail
           version="${{ inputs.version }}"
-          appName="Modulo-${{ inputs.version }}"
+          appName="Modulo.app"
           dmgName="Modulo-${{ inputs.version }}-macos-arm64.dmg"
 
           # Create a temporary directory for dmg contents
@@ -153,18 +157,18 @@ jobs:
           mkdir -p "$dmgRoot"
 
           # Copy the bundle to dmg root
-          bundleSource="${{ runner.temp }}/macos-bundle-extracted/modulo-${{ inputs.version }}-macos-arm64"
-          cp -R "$bundleSource" "$dmgRoot/Modulo.app"
+          bundleSource="${{ runner.temp }}/macos-bundle-extracted/modulo-${version}-macos-arm64"
+          cp -R "$bundleSource" "$dmgRoot/$appName"
 
           # Create .dmg
-          hdiutil create -volname "Modulo ${{ inputs.version }}" \
-            -srcfolder "${{ runner.temp }}/dmg-root" \
+          hdiutil create -volname "Modulo $version" \
+            -srcfolder "$dmgRoot" \
             -ov -format UDZO \
-            "build/macos/${{ inputs.version }}-macos-arm64.dmg"
+            "build/macos/$dmgName"
 
           # Verify
-          hdiutil verify "build/macos/${{ inputs.version }}-macos-arm64.dmg"
-          ls -lh "build/macos/${{ inputs.version }}-macos-arm64.dmg"
+          hdiutil verify "build/macos/$dmgName"
+          ls -lh "build/macos/$dmgName"
 
       - name: Sign and Notarize (Apple)
         if: ${{ inputs.mode != 'dry-run' }}

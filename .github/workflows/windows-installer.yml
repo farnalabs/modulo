@@ -89,7 +89,6 @@ jobs:
         with:
           name: bundle-artefacts-amd64
           path: ${{ runner.temp }}/linux-bundle
-        continue-on-error: true
 
       - name: Extract linux bundle for cross-platform staging
         if: always()
