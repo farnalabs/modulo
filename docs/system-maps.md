@@ -810,7 +810,7 @@ The **Discover my system** flow scans the organization's existing Modulo resourc
    - Each trigger targeting a pipeline creates a `flow` edge from a synthetic trigger source to the pipeline node.
    - Connector instances bound to pipeline nodes become `external_capability` nodes with `flow` edges from the pipeline.
    - Folders become `system_boundary` nodes with `contains` relationships to their member pipelines.
-   - Pipelines identified as improvement loops (by metadata or naming convention) become `improvement_loop` nodes with `feeds_back_to` edges to the capability they monitor.
+   - Pipelines identified as improvement loops (by metadata or naming convention) become `improvement_loop` nodes with `controls` edges from the improvement loop to the capability they monitor.
 
 3. **User Review & Correction:**
    - The generated draft opens in the visual editor with all inferred nodes and edges highlighted as *suggested*.
@@ -901,7 +901,7 @@ An organization can roll back to a prior published revision at any time. Rolling
 4. Leaves historical fact records and past run snapshots untouched.
 
 ### 8.5 Declarative GitOps Authoring (`modulo apply`)
-System Maps is planned as a Beta extension to the declarative `modulo apply` engine. The current engine accepts the `api_version: modulo.dev/v1` envelope with an `entities:` mapping, but it does not currently register a `system_maps` entity kind. The example below uses that current envelope to illustrate the planned Beta payload; it is syntactically valid YAML, but it is illustrative/future only until the `system_maps` schema kind and apply handlers are added. The current engine rejects this entity set, so do not present the example as a currently applicable configuration.
+System Maps is planned as a Beta 2 extension to the declarative `modulo apply` engine. The current engine accepts the `api_version: modulo.dev/v1` envelope with an `entities:` mapping, but it does not currently register a `system_maps` entity kind. The example below uses that current envelope to illustrate the planned Beta 2 payload; it is syntactically valid YAML, but it is illustrative/future only until the `system_maps` schema kind and apply handlers are added. The current engine rejects this entity set, so do not present the example as a currently applicable configuration.
 
 ```yaml
 api_version: modulo.dev/v1
@@ -966,6 +966,7 @@ When Beta adds `system_maps` support, `modulo apply` will resolve its authoring 
 
 | YAML authoring field | Resolved relational projection | Accepted reference | Resolution rule |
 |---|---|---|---|
+| `key` | `node_key` | String (1-128 characters) | Must be unique within the map; used as the stable node identifier for edges and loop configs. |
 | `owner_team_ref` | `owner_team_id` | Team UUID or exact team name | Resolve within the current organisation; the team must be active and permitted by the map's visibility. |
 | `pipeline_ref` | `pipeline_id` | Pipeline UUID or exact pipeline name | Resolve an active, non-deleted pipeline within the current organisation and permitted team scope. |
 | `connector_instance_ref` | `connector_instance_id` | Connector UUID or exact connector name | Resolve an existing, non-deleted connector instance within the current organisation and permitted team scope; zero or ambiguous matches fail. |
@@ -1008,18 +1009,18 @@ Several underlying technical components remain sound and will be retained.
 
 ### Beta 1: System Overview Read Model & Static Projection
 - **Scope:**
-  - Database migration creating `system_maps`, `system_map_revisions`, `system_map_nodes`, and `system_map_relationships`.
+  - Database migration creating `system_maps`, `system_map_revisions`, `system_map_nodes`, `system_map_relationships`, and `system_map_loop_configs`.
   - Snapshot attribution freezing in `create_run`.
   - Attribution column additions to `run_daily_facts`.
   - Read-only System Overview **tab within the Dashboard** displaying published system topography.
   - Node Inspector showing aggregated throughput, latency, and failure metrics derived from `run_daily_facts`.
   - **Empty-state onboarding with "Discover my system" flow** — scans pipelines, connectors, triggers, folders, and improvement-loop pipelines to generate a draft System Map for review and publication.
-- **Exit Criteria:** A predefined system map renders live operational metrics without modifying running pipelines; a new organization can discover, review, and publish their first System Map from the Dashboard.
+- **Exit Criteria:** A predefined system map renders live operational metrics without modifying running pipelines; a new organization can discover, review, and publish their first System Map (including improvement loops) from the Dashboard.
 
 ### Beta 2: Visual Authoring, Revision Lifecycle & Draft/Publish
 - **Scope:**
   - Interactive canvas editor supporting drag-and-drop node placement and edge connection.
-  - Node configuration dialogs for all seven node types.
+  - Node configuration dialogs for all seven node types (including `improvement_loop`).
   - Graph validation engine enforcing DAG delivery flow and control constraints.
   - Draft, publish, diff, and rollback revision workflow.
   - `modulo apply` declarative YAML support for System Maps.
@@ -1028,12 +1029,12 @@ Several underlying technical components remain sound and will be retained.
 
 ### Beta 3: Improvement Loop Sidecars and Autonomous Feedback Metrics
 - **Scope:**
-  - Implementation of `system_map_loop_configs` relational storage and validation.
   - Dedicated sidecar rendering channels for improvement loops on the canvas.
   - Signal monitoring service connecting target metrics to loop action triggers.
   - Cooldown and budget enforcement for improvement loops.
   - Loop outcome reporting (measuring signal before and after remediation runs).
-- **Exit Criteria:** Modulo's six improvement loops run with visible budget, cooldown, and outcome tracking on the map.
+  - Autonomous dispatch admission and reservation runtime for improvement loops.
+- **Exit Criteria:** Modulo's six improvement loops run with visible budget, cooldown, and outcome tracking on the map; admission, reservation, and cooldown enforcement operate at dispatch time.
 
 ### Beta 4: Operational Recommendations, Bottleneck Detection & Autonomy Attestation
 - **Scope:**
