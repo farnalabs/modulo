@@ -1166,11 +1166,7 @@ async def restore_library_primitive_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            existing = await session.get(
-                LibraryPrimitive,
-                primitive_id,
-                execution_options={"include_deleted": True},
-            )
+            existing = await get_library_primitive(session, primitive_id, include_deleted=True)
             if existing is not None:
                 _reject_lifecycle_map_primitive_access(
                     principal,

@@ -520,7 +520,7 @@ def test_restore_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: T
     prim = _make_listable_primitive(primitive_type="lifecycle_map")
     with (
         patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
-        patch.object(client.mock_session, "get", new_callable=AsyncMock, return_value=prim),
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock) as restore_mock,
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -530,9 +530,30 @@ def test_restore_lifecycle_map_primitive_returns_404_when_dev_mode_off(client: T
     restore_mock.assert_not_awaited()
 
 
+def test_restore_lifecycle_map_gate_reads_through_include_deleted(client: TestClient) -> None:
+    """The gate's row lookup must opt out of the soft-delete filter.
+
+    A restore restores a row that IS soft-deleted, so a filter-scoped read can
+    never see it and the lifecycle-map gate would be bypassed entirely.
+    """
+    prim = _make_listable_primitive(primitive_type="lifecycle_map")
+    with (
+        patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim) as get_mock,
+        patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        client.post(f"/api/v1/libraries/{prim.id}/restore")
+
+    get_mock.assert_awaited_once()
+    assert get_mock.await_args.kwargs["include_deleted"] is True
+
+
 def test_restore_primitive_returns_200(client: TestClient) -> None:
     prim = _make_listable_primitive()
     with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -543,6 +564,7 @@ def test_restore_primitive_returns_200(client: TestClient) -> None:
 
 def test_restore_primitive_not_deleted_returns_404(client: TestClient) -> None:
     with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -555,7 +577,7 @@ def test_restore_primitive_without_existing_row_skips_gate(client: TestClient) -
     """A row the lookup cannot see skips the lifecycle-map gate and restores normally."""
     prim = _make_listable_primitive()
     with (
-        patch.object(client.mock_session, "get", new_callable=AsyncMock, return_value=None),
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
         patch("modulo.api.routes.library.restore_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
@@ -1457,7 +1479,14 @@ def _request(method: str, path: str, *, json_body: Any = None, params: Any = Non
 def _assert_error_mapping(client: TestClient, patch_target: str, call: Any, cases: list[tuple[Exception, int]]) -> None:
     for exc, expected in cases:
         with ExitStack() as stack:
-            if patch_target.endswith(("update_library_primitive", "soft_delete_library_primitive", "copy_to_adapt")):
+            if patch_target.endswith(
+                (
+                    "update_library_primitive",
+                    "soft_delete_library_primitive",
+                    "restore_library_primitive",
+                    "copy_to_adapt",
+                )
+            ):
                 stack.enter_context(
                     patch(
                         "modulo.api.routes.library.get_library_primitive",

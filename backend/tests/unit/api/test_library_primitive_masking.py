@@ -352,10 +352,13 @@ def test_read_surface_delete_response_masks_composite(client: TestClient) -> Non
 
 def test_read_surface_restore_response_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
-    with patch(
-        "modulo.api.routes.library.restore_library_primitive",
-        new_callable=AsyncMock,
-        return_value=prim,
+    with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch(
+            "modulo.api.routes.library.restore_library_primitive",
+            new_callable=AsyncMock,
+            return_value=prim,
+        ),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/restore")
 
