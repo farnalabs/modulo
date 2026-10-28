@@ -63,10 +63,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
-      - name: Set up Inno Setup
-        uses: MinionGuy/Setup-Inno@master
-        with:
-          version: 6.2.2
+      - name: Install Inno Setup
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --version=6.2.2 --yes --no-progress
+          $isccDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'
+          if (-not (Test-Path -LiteralPath (Join-Path $isccDir 'ISCC.exe'))) {
+            throw "ISCC.exe was not installed under $isccDir"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $isccDir
       - name: Validate launcher helper contract
         run: |
           $ErrorActionPreference = 'Stop'

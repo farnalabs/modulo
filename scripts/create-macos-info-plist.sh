@@ -18,6 +18,7 @@ case "$VERSION" in
         printf 'invalid macOS bundle version: %s\n' "$VERSION" >&2
         exit 1
         ;;
+    *) ;;
 esac
 
 case "$OUTPUT_PATH" in
@@ -25,6 +26,7 @@ case "$OUTPUT_PATH" in
         printf 'unsafe macOS metadata output path: %s\n' "$OUTPUT_PATH" >&2
         exit 1
         ;;
+    *) ;;
 esac
 
 printf 'macOS metadata contract validated for version %s (native bundle unavailable; no file written)\n' "$VERSION"
