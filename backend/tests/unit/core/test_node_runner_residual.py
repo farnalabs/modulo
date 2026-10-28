@@ -2011,6 +2011,65 @@ async def test_connector_node_write_reported_failure_returns_failed_artifact(mon
     assert result["connector_failure"] is True
 
 
+async def test_connector_node_reported_failure_uses_secret_guard_reason(monkeypatch: pytest.MonkeyPatch):
+    from modulo.core.pipeline_engine.decorator import set_connector_hub
+
+    class _ReportedFailureConnector:
+        async def write(self, payload: Any) -> Any:
+            return {"secret": object()}
+
+        def write_reported_failure(self, result: Any) -> bool:
+            return True
+
+    guard_block = {"artifacts": [{"error": "scope.violation: secret-object"}]}
+    node_def = _connector_node_def()
+    node_def["connector_binding"]["operation"] = "write"
+    set_connector_hub(_StubHub(connector=_ReportedFailureConnector()))
+    monkeypatch.setattr(nr, "_resolve_connector_write_outcome", AsyncMock())
+    monkeypatch.setattr(nr, "_guard_connector_secret_output", lambda result, node_id: guard_block)
+    try:
+        fn = make_connector_fn(node_def)
+        result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+    finally:
+        set_connector_hub(None)
+
+    assert result["artifacts"][0]["error"] == "scope.violation: secret-object"
+    assert result["artifacts"][0]["output"] is None
+    assert result["artifacts"][0]["error_code"] == "connector.failed"
+    assert result["connector_failure"] is True
+
+
+async def test_connector_node_dispatch_raise_uses_side_effect_unknown(monkeypatch: pytest.MonkeyPatch):
+    from modulo.core.pipeline_engine.decorator import set_connector_hub
+
+    class _RaisingDispatchConnector(_DispatchStubConnector):
+        async def trigger_run(
+            self,
+            pipeline_id: str = "",
+            branch: str = "",
+            variables: dict[str, str] | None = None,
+        ) -> Any:
+            raise RuntimeError("dispatch exploded")
+
+    node_def = _dispatch_node_def()
+    node_def["connector_binding"]["dispatch_action"] = "trigger_run"
+    set_connector_hub(_StubHub(connector=_RaisingDispatchConnector()))
+    resolve = AsyncMock()
+    monkeypatch.setattr(nr, "_resolve_connector_write_outcome", resolve)
+    try:
+        fn = make_connector_fn(node_def)
+        result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+    finally:
+        set_connector_hub(None)
+
+    assert result["artifacts"][0]["status"] == "failed"
+    assert result["artifacts"][0]["error"] == "dispatch exploded"
+    assert result["artifacts"][0]["error_code"] == "connector.side_effect_unknown"
+    assert result["connector_failure"] is True
+    resolve.assert_awaited_once()
+    assert isinstance(resolve.await_args.kwargs["exception"], RuntimeError)
+
+
 async def test_connector_node_write_success_stamps_and_completes(monkeypatch: pytest.MonkeyPatch):
     from modulo.core.pipeline_engine.decorator import set_connector_hub
 

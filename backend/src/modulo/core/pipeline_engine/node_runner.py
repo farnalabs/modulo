@@ -123,6 +123,7 @@ from modulo.core.pipeline_engine.ancestor_refs import collect_injected_refs
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.error_codes import (
     _CODE_CONNECTOR_FAILED,
+    _CODE_CONNECTOR_UNKNOWN,
     _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
     sanitize_error_text,
 )
@@ -7484,7 +7485,7 @@ async def _connector_action_failure(
         intent_active=intent_active,
         exception=exc,
     )
-    error_code = "connector.side_effect_unknown" if op == "write" else _CODE_CONNECTOR_FAILED
+    error_code = _CODE_CONNECTOR_FAILED if op not in {"write", "dispatch"} else _CODE_CONNECTOR_UNKNOWN
     return {
         "artifacts": [
             {
@@ -7541,14 +7542,20 @@ async def _connector_success_phase(
             intent_active=intent_active,
         )
         if reported_failure:
+            guard_block = _guard_connector_secret_output(result, node_id)
+            failure_reason = "Connector reported operation failure"
+            guarded_output = result
+            if guard_block is not None:
+                failure_reason = str(guard_block["artifacts"][0]["error"])
+                guarded_output = None
             return {
                 "artifacts": [
                     {
                         "node_id": node_id,
                         "status": "failed",
-                        "error": "Connector reported operation failure",
+                        "error": failure_reason,
                         "error_code": _CODE_CONNECTOR_FAILED,
-                        "output": result,
+                        "output": guarded_output,
                     }
                 ],
                 "connector_failure": True,
