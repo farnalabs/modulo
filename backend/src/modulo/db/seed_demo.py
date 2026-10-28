@@ -82,6 +82,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from modulo.core.demo import DEMO_ORG_ROLE, DEMO_ORG_SLUG, demo_login_config
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
+from modulo.db.models.eval import Eval
+from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.org_membership import OrgMembership
@@ -1104,6 +1106,7 @@ async def _seed_demo_pipeline_and_runs(
     org: Organisation,
     account: Account,
     agent_ids: Mapping[str, uuid.UUID] | None = None,
+    teams: list[Team] | None = None,
 ) -> dict[str, tuple[Pipeline, PipelineSnapshot]]:
     """Seed all demo pipelines (graph + edges + snapshot) and their runs.
 
@@ -1125,7 +1128,8 @@ async def _seed_demo_pipeline_and_runs(
 
     specs_by_name = {spec.name: spec for spec in _DEMO_PIPELINES}
     for run_spec in _DEMO_RUN_SPECS:
-        await _seed_demo_run(session, org, account, run_spec, pipeline_lookup, specs_by_name)
+        await _seed_demo_run(session, org, account, run_spec, pipeline_lookup, specs_by_name, teams=teams)
+
     return pipeline_lookup
 
 
@@ -1246,6 +1250,8 @@ async def _seed_demo_run(
     run_spec: tuple[int, str, str, str, int, float, int, int],
     pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
     specs_by_name: Mapping[str, _PipelineSpec],
+    *,
+    teams: list[Team] | None = None,
 ) -> None:
     """Create or converge one deterministic demo run (fixed run_number).
 
@@ -1274,6 +1280,8 @@ async def _seed_demo_run(
         completed=completed,
         trace=trace,
     )
+    if teams:
+        desired["owner_team_id"] = teams[(run_number - 1) % len(teams)].id
 
     if run is not None:
         # Converge display fields on existing runs (never touch identity).
@@ -1466,6 +1474,75 @@ async def _seed_demo_agents(session: AsyncSession, org: Organisation, account: A
             _converge_demo_agent(agent, name, spec)
         agent_ids[name] = agent.id
     return agent_ids
+
+
+async def _seed_demo_evals(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+) -> None:
+    """Seed durable eval definitions and recent results for dashboard consumers."""
+    for index, (pipeline_name, label) in enumerate(
+        ((DEMO_PIPELINE_NAME, "PR risk quality"), (PR_REVIEW_PIPELINE_NAME, "Review completeness")),
+        start=1,
+    ):
+        pipeline, _ = pipeline_lookup[pipeline_name]
+        result = await session.execute(
+            select(Eval).where(Eval.organisation_id == org.id, Eval.pipeline_id == pipeline.id, Eval.name == label)
+        )
+        evaluation = result.scalar_one_or_none()
+        if evaluation is None:
+            evaluation = Eval(
+                organisation_id=org.id,
+                pipeline_id=pipeline.id,
+                account_id=account.id,
+                name=label,
+                eval_type="model_judge",
+                config_json={"description": "Demo evaluation result; no live provider was called."},
+                pass_threshold=Decimal("0.75"),
+            )
+            session.add(evaluation)
+            await session.flush()
+        runs = list(
+            (
+                await session.execute(
+                    select(Run)
+                    .where(Run.organisation_id == org.id, Run.pipeline_id == pipeline.id)
+                    .order_by(Run.run_number)
+                )
+            ).scalars()
+        )
+        for run in runs[:6]:
+            existing = (
+                await session.execute(
+                    select(EvalResult).where(
+                        EvalResult.organisation_id == org.id,
+                        EvalResult.eval_id == evaluation.id,
+                        EvalResult.run_id == run.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                passed = run.status == "complete" and run.run_number % 3 != 0  # nosemgrep: raw-status-complete
+                session.add(
+                    EvalResult(
+                        organisation_id=org.id,
+                        eval_id=evaluation.id,
+                        run_id=run.id,
+                        node_id=None,
+                        eval_definition_version=evaluation.version,
+                        passed=passed,
+                        outcome="pass" if passed else "fail",
+                        score=0.91 if passed else 0.62,
+                        judge_result_json={"source": "demo_seed", "sample": True, "eval_index": index},
+                        detail="Synthetic read-only demo evaluation result.",
+                        observed=True,
+                        evaluated_at=run.completed_at or run.started_at or datetime.now(UTC),
+                        resolution="accepted" if passed else "pending",
+                    )
+                )
+    await session.flush()
 
 
 async def _seed_demo_triggers(
@@ -1972,64 +2049,63 @@ async def _seed_demo_membership(session: AsyncSession, account: Account, org: Or
         )
 
 
-_DEMO_TEAM_NAME = "Demo Engineering"
+_DEMO_TEAM_SPECS = (
+    ("Demo Engineering", "Builds and reviews the demo delivery pipelines.", "operator"),
+    ("Demo Platform", "Owns the release and documentation automation.", "runner"),
+    ("Demo Governance", "Approves high-risk changes and monitors outcomes.", "viewer"),
+)
 
 
-async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Account) -> None:
-    """Idempotent Demo Engineering team + demo user as viewer member.
-
-    Race-safe: savepoint + IntegrityError recovery on the (org, name) unique
-    key, matching the existing seed pattern.
-    """
-    result = await session.execute(select(Team).where(Team.organisation_id == org.id, Team.name == _DEMO_TEAM_NAME))
-    team = result.scalar_one_or_none()
-    if team is None:
-        team = Team(
-            organisation_id=org.id,
-            name=_DEMO_TEAM_NAME,
-            description="Demo team for the /demo visitor experience.",
-            account_id=account.id,
-            notification_endpoints=[],
-            settings={},
-        )
-        try:
-            async with session.begin_nested():
-                session.add(team)
-                await session.flush()
-        except IntegrityError:
-            result = await session.execute(
-                select(Team).where(Team.organisation_id == org.id, Team.name == _DEMO_TEAM_NAME)
+async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Account) -> list[Team]:
+    """Idempotently seed the three demo teams and memberships."""
+    teams: list[Team] = []
+    for name, description, role in _DEMO_TEAM_SPECS:
+        result = await session.execute(select(Team).where(Team.organisation_id == org.id, Team.name == name))
+        team = result.scalar_one_or_none()
+        if team is None:
+            team = Team(
+                organisation_id=org.id,
+                name=name,
+                description=description,
+                account_id=account.id,
+                notification_endpoints=[],
+                settings={},
             )
-            team = result.scalar_one_or_none()
-            if team is None:
-                raise
-            _log.info("demo_seed.team_recovered_after_conflict", extra={"org_id": str(org.id)})
-        else:
-            _log.info("demo_seed.team_created", extra={"team_id": str(team.id)})
-
-    # Team membership for the demo user.
-    member_result = await session.execute(
-        select(TeamMembership).where(
-            TeamMembership.team_id == team.id,
-            TeamMembership.account_id == account.id,
+            try:
+                async with session.begin_nested():
+                    session.add(team)
+                    await session.flush()
+            except IntegrityError:
+                result = await session.execute(select(Team).where(Team.organisation_id == org.id, Team.name == name))
+                team = result.scalar_one_or_none()
+                if team is None:
+                    raise
+            else:
+                _log.info("demo_seed.team_created", extra={"team_id": str(team.id)})
+        if team.description != description:
+            team.description = description
+        member_result = await session.execute(
+            select(TeamMembership).where(TeamMembership.team_id == team.id, TeamMembership.account_id == account.id)
         )
-    )
-    if member_result.scalar_one_or_none() is None:
-        try:
-            async with session.begin_nested():
-                session.add(
-                    TeamMembership(
-                        team_id=team.id,
-                        account_id=account.id,
-                        organisation_id=org.id,
-                        role="viewer",
+        membership = member_result.scalar_one_or_none()
+        if membership is None:
+            try:
+                async with session.begin_nested():
+                    session.add(
+                        TeamMembership(
+                            team_id=team.id,
+                            account_id=account.id,
+                            organisation_id=org.id,
+                            role=role,
+                        )
                     )
-                )
-                await session.flush()
-        except IntegrityError:
-            _log.info("demo_seed.team_membership_recovered_after_conflict", extra={"team_id": str(team.id)})
-        else:
-            _log.info("demo_seed.team_membership_created", extra={"team_id": str(team.id)})
+                    await session.flush()
+            except IntegrityError:
+                _log.info("demo_seed.team_membership_recovered_after_conflict", extra={"team_id": str(team.id)})
+        elif membership.role != role:
+            membership.role = role
+        teams.append(team)
+    return teams
 
 
 async def _find_demo_schema(session: AsyncSession, org: Organisation, name: str) -> Schema | None:
@@ -2242,12 +2318,13 @@ async def seed_demo(session: AsyncSession) -> str | None:
     # Postgres RLS admits them (mirrors seed_cost_components_for_org).
     await set_rls_org(session, org.id)
     await set_rls_execution_context(session)
-    await _seed_demo_team(session, org, account)
+    teams = await _seed_demo_team(session, org, account)
     await _seed_demo_schemas(session, org, account)
     agent_ids = await _seed_demo_agents(session, org, account)
     # Pipelines (graph + edges + snapshot) + runs (with node-level traces) +
     # daily facts; returns the lookup used by the trigger seed.
-    pipeline_lookup = await _seed_demo_pipeline_and_runs(session, org, account, agent_ids)
+    pipeline_lookup = await _seed_demo_pipeline_and_runs(session, org, account, agent_ids, teams=teams)
+    await _seed_demo_evals(session, org, account, pipeline_lookup)
     await _seed_demo_triggers(session, org, account, pipeline_lookup)
 
     return f"org={DEMO_ORG_SLUG} user={email}"

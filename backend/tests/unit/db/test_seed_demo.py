@@ -41,6 +41,8 @@ from modulo.db.crud.run_node_outputs import read_run_node_outputs_raw, replace_r
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.base import Base
+from modulo.db.models.eval import Eval
+from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.org_membership import OrgMembership
@@ -79,6 +81,8 @@ _SEED_TABLES = {
     "agents",
     "triggers",
     "run_daily_facts",
+    "evals",
+    "eval_results",
     # FAR-1248: first-class graph edges, per-node run traces, lifecycle map.
     "pipeline_edges",
     "run_node_outputs",
@@ -172,9 +176,11 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, PipelineSnapshot) == 4
     # FAR-977: 20 runs spread over 14 days.
     assert await _count(session, Run) == 20
-    # FAR-977: team + membership.
-    assert await _count(session, Team) == 1
-    assert await _count(session, TeamMembership) == 1
+    # Demo showcase: three team-owned breakdown rows and memberships.
+    assert await _count(session, Team) == 3
+    assert await _count(session, TeamMembership) == 3
+    assert await _count(session, Eval) == 2
+    assert await _count(session, EvalResult) == 11
     # FAR-977: 2 agents; FAR-1248: + Implementer, PR Risk Scorer, PR Opener,
     # Docs Maintainer (every seeded agent node binds an agent).
     assert await _count(session, Agent) == 6
@@ -1578,7 +1584,10 @@ async def test_seed_team_membership_integrity_error_is_swallowed(
     try:
         with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
             # Delete the team membership so the seed tries to re-create it.
-            membership = (await session.execute(select(TeamMembership))).scalar_one()
+            membership = (
+                (await session.execute(select(TeamMembership).order_by(TeamMembership.team_id))).scalars().first()
+            )
+            assert membership is not None
             await session.delete(membership)
             await session.commit()
 

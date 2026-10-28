@@ -82,7 +82,7 @@
         </router-link>
         <!-- Token spend card -->
         <router-link to="/admin/costs" class="card card-hover p-4 block" data-testid="dashboard-token-spend">
-          <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.token_spend_7d') }}</p>
+          <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.token_spend') }} ({{ selectedTrendLabel }})</p>
           <div class="flex items-baseline gap-2">
             <p class="text-2xl font-semibold tabular-nums">{{ formatMoney(totalSpend, currencyCode, 2) }}</p>
             <span v-if="spendDeltaPct != null" :class="spendDeltaClass" class="text-xs font-medium">
@@ -358,12 +358,13 @@ function selectWindow(days: number | null) {
   selectedWindow.value = days
   persistTrendWindow(days)
   if (days == null) {
-    // All-time: full reload is fine here — the all-time scalars aren't part
-    // of the period block.
+    // All-time: refresh the legacy summary and restore the default trend series.
     void dashboardStore.fetchSummary()
+    void dashboardStore.fetchTrends(7)
   } else {
-    // Period windows refresh ONLY the period block — no full-page skeleton.
+    // Refresh both the period cards and every trend series using the same window.
     void dashboardStore.fetchPeriodMetrics(days)
+    void dashboardStore.fetchTrends(days)
   }
 }
 
@@ -429,6 +430,11 @@ const spendDeltaPctText = computed(() => {
   return d == null ? '' : `${Math.abs(d).toFixed(1)}%`
 })
 const spendTrackedDays = computed(() => summary.value?.period?.days ?? summary.value?.trend?.length ?? 0)
+const selectedTrendLabel = computed(() => {
+  if (selectedWindow.value == null) return t('views.DashboardView.trend_all_time')
+  if (selectedWindow.value === 1) return t('views.DashboardView.trend_24h')
+  return t(`views.DashboardView.trend_${selectedWindow.value}d`)
+})
 
 function deltaDirection(deltaPct: number | null): 'up' | 'down' | 'flat' | null {
   if (deltaPct == null) return null
@@ -473,7 +479,7 @@ onMounted(async () => {
   selectedWindow.value = loadTrendWindow();
   const promises: Promise<unknown>[] = [
     dashboardStore.fetchSummary(selectedWindow.value ?? undefined),
-    dashboardStore.fetchTrends(7),
+    dashboardStore.fetchTrends(selectedWindow.value ?? 7),
     loadCurrency(),
   ];
   if (!planStore.currentTier || planStore.currentTier === 'community') {
