@@ -253,12 +253,12 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('cron')
   })
 
-  it('shows the eval trend indicator as up when improving', async () => {
+  it('shows the eval trend indicator as stable when All time has no chart source', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('Improving')
+    expect(wrapper.text()).toContain('Stable')
   })
 
   it('shows loading skeleton while dashboard data is fetching', async () => {
@@ -362,15 +362,18 @@ describe('DashboardView', () => {
     expect(wrapper.findAll('.animate-pulse')).toHaveLength(0)
   })
 
-  it('All-time option calls fetchSummary with no days', async () => {
+  it('clears finite chart data when switching to All time', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
+    const finiteSparkline = wrapper.findAllComponents({ name: 'SparklineChart' })[0]
+    expect(finiteSparkline.props('data')).toEqual([88, 81, 84])
+
     await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
     await flushPromises()
-    expect(mockGet).toHaveBeenCalledWith(
-      '/api/v1/dashboard/summary',
-      expect.objectContaining({ params: { query: {} } }),
-    )
+
+    const allTimeSparkline = wrapper.findAllComponents({ name: 'SparklineChart' })[0]
+    expect(allTimeSparkline.props('data')).toEqual([])
+    expect(allTimeSparkline.props('labels')).toEqual([])
   })
 
   it('defaults to the 3d window when nothing is stored', async () => {
@@ -548,7 +551,7 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('No eval data yet')
   })
 
-  it('shows the eval trend indicator as declining when eval pass rates dip', async () => {
+  it('shows the eval trend indicator as stable when All time has no chart source, even if summary trend data exists', async () => {
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({
@@ -567,9 +570,7 @@ describe('DashboardView', () => {
     })
     const wrapper = mount(DashboardView)
     await flushPromises()
-    await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.text()).toContain('Declining')
+    expect(wrapper.text()).toContain('Stable')
     expect(wrapper.text()).not.toContain('Improving')
   })
 
@@ -668,7 +669,9 @@ describe('DashboardView', () => {
     expect(sparklines[0].attributes('missing-data')).toBeUndefined()
     expect(sparklines[1].props('missingData')).toBe('zero')
     // The selected 3d chart uses the same window as the period headline.
-    expect(sparklines[0].props('labels')).toEqual(mockSummaryData.trend.slice(0, 3).map(d => d.date))
+    expect(sparklines[0].props('labels')).toEqual(['2026-06-23', '2026-06-24', '2026-06-25'])
+    expect(sparklines[1].props('labels')).toEqual(sparklines[0].props('labels'))
+    expect(sparklines[1].props('data')).toEqual([12.5, 15.2, 10.1])
   })
 
   it('passes raw eval_pass_rate nulls (not flattened to 0) to the eval sparkline', async () => {
@@ -701,7 +704,7 @@ describe('DashboardView', () => {
     // The spend sparkline is untouched by the null-handling change.
     const spendSparkline = sparklines.find(s => s.props('unit') === '$')
     expect(spendSparkline).toBeDefined()
-    expect(spendSparkline!.props('data')).toEqual([2.0, 3.0, 4.0])
+    expect(spendSparkline!.props('data')).toEqual([])
   })
 
   it('renders the no-data placeholder inside sparklines when the trend is empty', async () => {

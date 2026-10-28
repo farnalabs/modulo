@@ -294,6 +294,53 @@ describe('useDashboardStore', () => {
     expect(store.trends?.rejection_trend[0].rolling_rejection_rate).toBe(25)
   })
 
+  it('discards stale trend responses when a newer window request completes first', async () => {
+    const requests = new Map<number, { resolve: (value: unknown) => void }>()
+    mockGet.mockImplementation((url: string, options: { params: { query: { days: number } } }) => {
+      if (url !== '/api/v1/dashboard/trends') return Promise.resolve({ data: null, error: undefined })
+      const days = options.params.query.days
+      return new Promise((resolve) => requests.set(days, { resolve }))
+    })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    const first = store.fetchTrends(7)
+    const second = store.fetchTrends(30)
+    requests.get(30)?.resolve({
+      data: {
+        days: 30,
+        run_counts: [{ date: '2026-09-30', run_count: 30 }],
+        eval_pass_rates: [],
+        token_spend: [],
+        hitl_volume: [],
+        rejection_trend: [],
+        correlation: [],
+        feedback_volume: [],
+      },
+      error: undefined,
+    })
+    await second
+    requests.get(7)?.resolve({
+      data: {
+        days: 7,
+        run_counts: [{ date: '2026-09-07', run_count: 7 }],
+        eval_pass_rates: [],
+        token_spend: [],
+        hitl_volume: [],
+        rejection_trend: [],
+        correlation: [],
+        feedback_volume: [],
+      },
+      error: undefined,
+    })
+    await first
+
+    expect(store.trends?.days).toBe(30)
+    expect(store.trends?.run_counts[0].run_count).toBe(30)
+    expect(store.trendsLoading).toBe(false)
+  })
+
   it('fetchTrends rejects responses missing hitl_volume or rejection_trend', async () => {
     const incompleteResponse = {
       days: 7,

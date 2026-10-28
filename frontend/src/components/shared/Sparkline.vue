@@ -388,7 +388,7 @@ function formatValue(v: number | null): string {
  * (formatValue) keeps full precision — only the axis is targeted.
  */
 function formatAxisValue(v: number, seriesMax: number, unit: string, decimals = 0): string {
-  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+  if (typeof v !== "number" || !Number.isFinite(v)) return t("common.na");
 
   if (unit === "%") {
     return v.toLocaleString(undefined, { maximumFractionDigits: decimals });
@@ -411,6 +411,7 @@ function formatAxisValue(v: number, seriesMax: number, unit: string, decimals = 
 
 function formatWithUnit(v: number | null): string {
   const valueText = formatValue(v);
+  if (props.unit === "$" && valueText === t("common.na")) return valueText;
   if (props.unit === "$") return `$${valueText}`;
   if (props.unit) return `${valueText} ${props.unit}`;
   return valueText;

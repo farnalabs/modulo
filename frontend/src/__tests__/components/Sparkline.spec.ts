@@ -165,6 +165,11 @@ describe('Sparkline', () => {
     texts.forEach(t => expect(t).not.toContain('.'))
   })
 
+  it('uses translated n/a for invalid axis values without a dollar prefix', () => {
+    const wrapper = mount(Sparkline, { props: { data: [1, 2], unit: '$', showYAxis: true } })
+    expect(wrapper.findAll('.sparkline-y-label').every(label => !label.text().includes('$n/a'))).toBe(true)
+  })
+
   it('formats dollar y-axis labels as integers for normal spend', () => {
     const wrapper = mount(Sparkline, {
       props: { data: [12.5, 15.2, 18.9, 22.1], unit: '$', showYAxis: true },

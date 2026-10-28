@@ -280,10 +280,9 @@ const expandedTeamData = computed(() => {
 
 const evalSparklineData = computed((): Array<number | null> => {
   if (!summary.value?.trend) return [];
-  // The summary trend is all-time only; selected-window charts use the same
-  // dashboard trends request as the period headline. All-time is the explicit
-  // null-window exception and intentionally uses the summary trend.
-  if (selectedWindow.value == null) return summary.value.trend.map(d => d.eval_pass_rate);
+  // The summary trend is a fixed backend trend, not an all-time series. Finite
+  // windows use the dashboard trends request; All time has no chart source.
+  if (selectedWindow.value == null) return [];
   const windowedRates = dashboardStore.trends?.eval_pass_rates ?? [];
   return trendData.value.map((entry) => windowedRates.find((rate) => rate.date === entry.date)?.pass_rate ?? null);
 })
@@ -315,14 +314,11 @@ const evalTrendLabel = computed(() => {
   return t('views.DashboardView.stable')
 })
 
-const spendSparklineData = computed(() => {
-  if (!summary.value?.trend) return []
-  return summary.value.trend.map(d => d.token_spend_usd)
-})
+const spendSparklineData = computed(() => trendData.value.map(d => d.token_spend_usd))
 
 const summaryTrendLabels = computed(() => {
-  if (selectedWindow.value != null) return trendLabels.value
-  return summary.value?.trend?.map(d => d.date) ?? []
+  if (selectedWindow.value == null) return []
+  return trendLabels.value
 })
 
 // --- Rolling-window toggle (FAR-92 / FAR-115) ---
@@ -370,7 +366,8 @@ function selectWindow(days: number | null) {
   persistTrendWindow(days)
   if (days == null) {
     // All-time is the only window represented by summary.trend; it has no
-    // finite trends endpoint window, so reload the all-time summary.
+    // finite trends endpoint window, so clear finite trends before reloading.
+    dashboardStore.clearTrends()
     void dashboardStore.fetchSummary()
   } else {
     // Period windows refresh the period block and the charts from the same

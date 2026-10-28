@@ -250,6 +250,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
   const trends = ref<TrendsResponse | null>(null);
   const trendsLoading = ref(false);
   const trendsError = ref<string | ProblemDetail | null>(null);
+  let trendsRequestToken = 0;
   const error = computed(() => summaryError.value || trendsError.value);
 
   const TRENDS_REQUIRED_KEYS = [
@@ -267,11 +268,11 @@ export const useDashboardStore = defineStore("dashboard", () => {
   }
 
   async function fetchTrends(days: number) {
-    if (trendsLoading.value) return;
     if (!Number.isInteger(days) || days <= 0) {
       trendsError.value = t("views.DashboardView.invalid_days_parameter");
       return;
     }
+    const requestToken = ++trendsRequestToken;
     trendsLoading.value = true;
     trendsError.value = null;
     try {
@@ -282,6 +283,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
         15000,
         "Dashboard trends request",
       );
+      if (requestToken !== trendsRequestToken) return;
       if (err) {
         trendsError.value = formatApiError(err);
       } else if (validateTrendsResponse(result)) {
@@ -290,10 +292,17 @@ export const useDashboardStore = defineStore("dashboard", () => {
         trendsError.value = t("views.DashboardView.invalid_trends_data");
       }
     } catch (e: unknown) {
-      trendsError.value = formatApiError(e);
+      if (requestToken === trendsRequestToken) trendsError.value = formatApiError(e);
     } finally {
-      trendsLoading.value = false;
+      if (requestToken === trendsRequestToken) trendsLoading.value = false;
     }
+  }
+
+  function clearTrends(): void {
+    trendsRequestToken++;
+    trends.value = null;
+    trendsError.value = null;
+    trendsLoading.value = false;
   }
 
   function handleSyncEvent(event: EventBusEvent): void {
@@ -326,6 +335,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
     fetchSummary,
     fetchPeriodMetrics,
     fetchTrends,
+    clearTrends,
     disposeHandlers,
   };
 });
