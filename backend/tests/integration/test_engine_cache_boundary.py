@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from tests.integration import conftest as integration_conftest
 
+pytestmark = pytest.mark.integration
+
 
 class _PollutedSQLiteEngine:
     def __init__(self, engine: AsyncEngine) -> None:
