@@ -12,6 +12,7 @@ import StatCard from '../components/StatCard.vue'
 describe('BaseCard', () => {
   it.each([
     ['default', undefined, 'bg-card'],
+    ['explicit default', 'default', 'bg-card'],
     ['bordered', 'bordered', 'border'],
     ['elevated', 'elevated', 'shadow'],
     ['muted', 'muted', 'bg-muted/50'],
@@ -96,6 +97,17 @@ describe('CardHeader and DataCard', () => {
     expect(wrapper.find('[data-testid="data-card-footer"] [data-testid="card-footer"]').text()).toBe('Footer')
   })
 
+  it('renders a footer slot without an explicit data-testid', () => {
+    const wrapper = mount(DataCard, {
+      slots: {
+        footer: '<p data-testid="bare-footer">Bare Footer</p>',
+      },
+    })
+
+    expect(wrapper.find('[data-testid="bare-footer"]').text()).toBe('Bare Footer')
+    expect(wrapper.find('.card-footer').attributes('data-testid')).toBeUndefined()
+  })
+
   it('supports an explicit heading level while retaining the reusable default', () => {
     const defaultHeader = mount(CardHeader, { props: { title: 'Default heading' } })
     const customHeader = mount(CardHeader, { props: { title: 'Custom heading', headingLevel: 'h4' } })
@@ -112,6 +124,22 @@ describe('CardHeader and DataCard', () => {
     expect(descriptionOnly.find('h2, h3, h4').exists()).toBe(false)
     expect(actionOnly.find('button').text()).toBe('Action')
     expect(actionOnly.find('.card-header').exists()).toBe(true)
+  })
+
+  it('passes header styling and test id through DataCard', () => {
+    const wrapper = mount(DataCard, {
+      props: {
+        title: 'Details',
+        description: 'Context',
+        titleClass: 'title-custom',
+        descriptionClass: 'description-custom',
+        dataTestId: 'styled-card',
+      },
+    })
+
+    expect(wrapper.find('[data-testid="styled-card-header"]').classes()).toContain('card-header')
+    expect(wrapper.find('h3').classes()).toContain('title-custom')
+    expect(wrapper.find('p').classes()).toContain('description-custom')
   })
 
    it('does not render an empty header for a title-less, action-less DataCard', () => {
@@ -143,9 +171,11 @@ describe('MetricCard', () => {
 
     it.each([
       [{ delta: -2 }, '-2'],
+      [{ delta: 2.5 }, '+2.5'],
       [{ delta: 2 }, '+2'],
       [{ deltaPct: 16.25 }, '+16.3%'],
       [{ delta: Number.NaN, deltaPct: Number.POSITIVE_INFINITY }, ''],
+      [{ delta: Number.NaN }, ''],
       [{ delta: 0, deltaPct: 0 }, '0 (0.0%)'],
       [{ delta: 2, deltaPct: -16.25 }, '+2 (-16.3%)'],
     ])('renders valid delta combinations safely: %o', (deltaProps, expected) => {
@@ -214,12 +244,13 @@ describe('MetricCard', () => {
     })
 
     it.each([
-      [{ value: 95, max: 100, color: 'primary' }, 'bg-warning'],
-      [{ value: 80, max: 100, color: 'primary' }, 'bg-amber-500'],
       [{ value: 50, max: 100, color: 'success' }, 'bg-success'],
       [{ value: 50, max: 100, color: 'warning' }, 'bg-warning'],
       [{ value: 50, max: 100, color: 'destructive' }, 'bg-destructive'],
       [{ value: 50, max: 100, color: 'primary' }, 'bg-primary'],
+      [{ value: 95, max: 100 }, 'bg-warning'],
+      [{ value: 95, max: 100, color: 'primary' }, 'bg-warning'],
+      [{ value: 80, max: 100, color: 'primary' }, 'bg-amber-500'],
     ] as const)('maps progress %o to %s', (progress, expectedClass) => {
       const wrapper = mount(MetricCard, { props: { label: 'Capacity', value: 'Half', progress } })
 
@@ -259,6 +290,36 @@ describe('StatCard', () => {
     expect(wrapper.text()).toContain(arrow)
     expect(wrapper.text()).toContain(text)
     expect(wrapper.find('.text-xs').classes()).toContain(className)
+  })
+
+  it('covers incomplete and invalid delta inputs', () => {
+    const incomplete = mount(StatCard, { props: { label: 'Runs', value: 12, delta: { current: 12 } } })
+    const invalid = mount(StatCard, {
+      props: { label: 'Runs', value: 12, delta: { current: Number.NaN, previous: 10, delta_pct: Number.POSITIVE_INFINITY } },
+    })
+
+    expect(incomplete.find('[data-testid="stat-no-baseline"]').exists()).toBe(false)
+    expect(invalid.find('.text-xs').exists()).toBe(false)
+  })
+
+  it('renders percentage-only deltas and omits a delta when no valid values remain', () => {
+    const percentageOnly = mount(StatCard, { props: { label: 'Runs', value: 12, delta: { delta_pct: -12.5 } } })
+    const absent = mount(StatCard, { props: { label: 'Runs', value: 12, delta: null } })
+
+    expect(percentageOnly.find('.text-xs').text()).toContain('▼ (12.5%)')
+    expect(absent.find('.text-xs').exists()).toBe(false)
+  })
+
+  it('formats fractional absolute deltas and inverted positive trends', () => {
+    const fractional = mount(StatCard, {
+      props: { label: 'Runs', value: 12, noBaselineLabel: 'No baseline', delta: { current: 12.5, previous: 10 } },
+    })
+    const inverted = mount(StatCard, {
+      props: { label: 'Failures', value: 12, inverted: true, delta: { current: 12, previous: 10, delta_pct: 20 } },
+    })
+
+    expect(fractional.find('[data-testid="stat-no-baseline"]').text()).toContain('+2.5')
+    expect(inverted.find('.text-xs').classes()).toContain('text-destructive')
   })
 
   it('supports inverted and neutral delta styling plus no-baseline absolute deltas', () => {
@@ -311,6 +372,18 @@ describe('SummaryCard', () => {
 
       expect(wrapper.find('h2').text()).toBe('Summary')
       expect(wrapper.find('h3').exists()).toBe(false)
+    })
+
+    it('renders a header without a custom dataTestId prefix', () => {
+      const wrapper = mount(SummaryCard, {
+        props: {
+          title: 'Unprefixed Summary',
+          items: [],
+        },
+      })
+
+      expect(wrapper.find('.card-header').exists()).toBe(true)
+      expect(wrapper.find('.card-header').attributes('data-testid')).toBeUndefined()
     })
 
     it('renders all supported item colors, fallback color, footnote, header action, and footer', () => {

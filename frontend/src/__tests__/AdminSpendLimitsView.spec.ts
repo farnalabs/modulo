@@ -10,6 +10,7 @@ const apiState = vi.hoisted(() => ({
   limitsOverride: undefined as Record<string, unknown> | null | undefined,
   costsOverride: undefined as Record<string, unknown> | null | undefined,
   ceilingError: undefined as Record<string, unknown> | undefined,
+  ceilingReject: undefined as Error | undefined,
 }))
 
 vi.mock('../lib/api/client', () => ({
@@ -47,6 +48,9 @@ vi.mock('../lib/api/client', () => ({
         })
       }
        if (path === '/api/v1/admin/costs/ceiling') {
+         if (apiState.ceilingReject) {
+           return Promise.reject(apiState.ceilingReject)
+         }
          return Promise.resolve({ data: apiState.ceiling, error: apiState.ceilingError })
        }
 
@@ -181,6 +185,11 @@ describe('AdminSpendLimitsView', () => {
 
     wrapper.unmount()
     apiState.ceilingError = undefined
+    apiState.ceilingReject = new Error('ceiling read crash')
+    const thrownWrapper = await mountWithFeatures()
+    expect(thrownWrapper.text()).toContain('Failed to load: ceiling read crash')
+    thrownWrapper.unmount()
+    apiState.ceilingReject = undefined
     apiState.ceiling = { max_run_cost: null, spend_ceiling: null, remaining_budget_usd: null }
     const successWrapper = await mountWithFeatures()
     const apiPut = (await import('../lib/api/client')).api.PUT as ReturnType<typeof vi.fn>
@@ -188,6 +197,16 @@ describe('AdminSpendLimitsView', () => {
     await successWrapper.find('[data-testid="admin-spend-limits-ceiling-save"]').trigger('click')
     await flushPromises()
     expect(successWrapper.text()).toContain('Ceilings updated.')
+
+    apiPut.mockResolvedValueOnce({ data: null, error: { detail: 'ceiling denied' } })
+    await successWrapper.find('[data-testid="admin-spend-limits-ceiling-save"]').trigger('click')
+    await flushPromises()
+    expect(successWrapper.text()).toContain('Failed to save: ceiling denied')
+
+    apiPut.mockRejectedValueOnce(new Error('ceiling network crash'))
+    await successWrapper.find('[data-testid="admin-spend-limits-ceiling-save"]').trigger('click')
+    await flushPromises()
+    expect(successWrapper.text()).toContain('Failed to save: ceiling network crash')
     successWrapper.unmount()
   })
 
