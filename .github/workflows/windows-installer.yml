@@ -1,0 +1,162 @@
+name: "Windows: Build Installer (Inno Setup)"
+
+# FAR-679: native Windows packaging is deliberately fail-closed until a real
+# Windows runtime exists. A Linux bundle is never relabeled as Windows, and
+# dry-run validates the launcher/Inno contracts without creating an installer.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version in X.Y.Z form"
+        type: string
+        required: true
+      rc_tag:
+        description: "RC tag being released"
+        type: string
+        required: true
+      ref:
+        description: "Git ref to validate"
+        type: string
+        required: true
+      mode:
+        description: "Build mode: dry-run, cut, recut, promote"
+        type: string
+        default: dry-run
+concurrency:
+  group: windows-installer-${{ github.workflow }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+permissions:
+  contents: read
+
+jobs:
+  version-parity:
+    name: Assert bundle versions match
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Validate shared bundle pins
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path -LiteralPath 'scripts/bundle-versions.env')) {
+            throw 'scripts/bundle-versions.env is missing'
+          }
+          Write-Host 'bundle-versions.env loaded; no native Windows pins are currently available.'
+
+  build:
+    name: Validate Windows installer prerequisite
+    needs: version-parity
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      VERSION_NUM: ${{ inputs.version }}
+      MODE: ${{ inputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install Inno Setup
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --version=6.2.2 --yes --no-progress
+          $isccDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'
+          if (-not (Test-Path -LiteralPath (Join-Path $isccDir 'ISCC.exe'))) {
+            throw "ISCC.exe was not installed under $isccDir"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $isccDir
+      - name: Validate launcher helper contract
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:GITHUB_WORKSPACE/scripts/create-windows-launcher.ps1" -Version $env:VERSION_NUM -OutputPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')
+          if (Test-Path -LiteralPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')) {
+            throw 'launcher helper created a fake executable'
+          }
+      - name: Validate Inno Setup script
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $outputDir = Join-Path $env:RUNNER_TEMP 'inno-contract'
+          New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+          & iscc "/Qp" "/DVERSION_NUM=$env:VERSION_NUM" '/DBUNDLE_ARCH=amd64' "/DBUNDLE_DIR=$env:RUNNER_TEMP/native-bundle" "/O$outputDir" '/Fcontract-check' 'deploy/windows/modulo.iss'
+      - name: Validate native Windows runtime prerequisite
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host 'Native Windows runtime/binaries are not yet available.'
+          Write-Host 'The current bundle artifact is Linux-only and must not be relabeled as Windows.'
+          if ($env:MODE -ne 'dry-run') {
+            throw 'Cannot publish Windows installer: no real Windows-native runtime/binaries exist.'
+          }
+      - name: Dry-run summary
+        if: ${{ inputs.mode == 'dry-run' }}
+        run: |
+          @'
+          ## Windows installer dry-run
+
+          Native Windows artifacts are not yet available. No placeholder Linux launcher or incomplete installer was created or published.
+          '@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
+  sign:
+    name: Sign Windows installer (Azure Trusted Signing)
+    needs: build
+    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Log in to Azure (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign with Azure Trusted Signing
+        uses: Azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: farnasigning
+          certificate-profile-name: farna-public-trust
+          files-folder: ${{ runner.temp }}\\native-installer
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+  attest:
+    name: Attest Windows installer
+    needs: [build, sign]
+    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' && needs.sign.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Refuse incomplete native artifact
+        run: |
+          set -euo pipefail
+          echo "::error::Native Windows artifact publication is disabled until a real Windows build exists."
+          exit 1
+
+  publish:
+    name: Publish Windows installer
+    needs: [build, attest]
+    if: ${{ inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Refuse incomplete native artifact
+        run: |
+          set -euo pipefail
+          echo "::error::Cannot publish Windows installer: native artifact is unavailable."
+          exit 1
