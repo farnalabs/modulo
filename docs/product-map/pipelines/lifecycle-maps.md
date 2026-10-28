@@ -25,7 +25,7 @@ bdd:
   - backend/tests/bdd/features/lifecycle_maps/journeys.feature
 depends-on:
   - feat-pipelines
-status: covered
+status: partial
 ---
 
 # Lifecycle Maps

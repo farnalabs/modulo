@@ -149,7 +149,6 @@ _CODE_LIBRARY_CREATE_PIPELINE_TEMPLATE = "library.create_pipeline_from_template_
 _CODE_LIBRARY_LIST_ABUSE_REPORTS = "library.list_abuse_reports_endpoint"
 _CODE_LIBRARY_REVIEW_ABUSE_REPORT = "library.review_abuse_report_endpoint"
 _MSG_ORGANISATION_ID_REQUIRED = "Organisation ID required"
-_LIFECYCLE_MAP_PRIMITIVE_TYPE = "lifecycle_map"
 
 
 _MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50 MB
@@ -187,7 +186,7 @@ def _reject_lifecycle_map_primitive_access(
     """Reject direct mutation/copy of lifecycle-map primitives outside dev mode."""
     if (
         primitive is not None
-        and primitive.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE
+        and primitive.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE
         and not _can_access_lifecycle_map_primitives(principal, dev_mode=dev_mode)
     ):
         raise HTTPException(
@@ -215,7 +214,7 @@ async def _require_lifecycle_map_primitive_access(
     primitive = await get_primitive(session, principal.organisation_id, primitive_id)
     if (
         primitive is not None
-        and primitive.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE
+        and primitive.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE
         and not _can_access_lifecycle_map_primitives(
             principal,
             dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
@@ -234,13 +233,13 @@ def _filter_lifecycle_map_types(
     """Hide lifecycle-map primitives from ordinary library callers at the query boundary."""
     if _can_access_lifecycle_map_primitives(principal, dev_mode=dev_mode):
         return primitive_type, ",".join(primitive_types) if primitive_types is not None else None
-    if primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
+    if primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE:
         return "__hidden_lifecycle_map__", None
     if primitive_types is None:
-        return None, ",".join(ptype for ptype in PRIMITIVE_TYPES if ptype != _LIFECYCLE_MAP_PRIMITIVE_TYPE)
+        return None, ",".join(ptype for ptype in PRIMITIVE_TYPES if ptype != LIFECYCLE_MAP_PRIMITIVE_TYPE)
     if primitive_types == []:
         return None, None
-    filtered_types = [ptype for ptype in primitive_types if ptype != _LIFECYCLE_MAP_PRIMITIVE_TYPE]
+    filtered_types = [ptype for ptype in primitive_types if ptype != LIFECYCLE_MAP_PRIMITIVE_TYPE]
     if filtered_types:
         return primitive_type, ",".join(filtered_types)
     return "__hidden_lifecycle_map__", None
@@ -808,7 +807,7 @@ async def list_library_primitives_endpoint(
     requested_types = _split_primitive_types(primitive_types)
     if primitive_types and requested_types is None:
         requested_types = []
-    if primitive_type is not None and requested_types is None and primitive_type != _LIFECYCLE_MAP_PRIMITIVE_TYPE:
+    if primitive_type is not None and requested_types is None and primitive_type != LIFECYCLE_MAP_PRIMITIVE_TYPE:
         filtered_primitive_type: str | None = primitive_type
         filtered_primitive_types: str | None = None
     else:
@@ -938,7 +937,7 @@ async def get_library_primitive_endpoint(
             await _set_rls_context(session, principal)
             primitive = await get_primitive(session, principal.organisation_id, primitive_id)
             if primitive is not None and (
-                primitive.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE
+                primitive.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE
                 and not _can_access_lifecycle_map_primitives(
                     principal,
                     dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
@@ -984,7 +983,7 @@ async def create_library_primitive_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             await validate_owner_team_for_create(session, principal, req.owner_team_id)
-            if req.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
+            if req.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE:
                 _require_lifecycle_map_internal_access(principal)
             existing = await get_primitive_by_slug(session, principal.organisation_id, req.primitive_type, req.slug)
             if existing is not None:
@@ -2398,7 +2397,7 @@ async def community_contribute_endpoint(
     """Submit a community library contribution."""
     try:
         org_id = _require_organisation_id(principal)
-        if req.primitive_type == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
+        if req.primitive_type == LIFECYCLE_MAP_PRIMITIVE_TYPE:
             _require_lifecycle_map_internal_access(principal)
         submitted_content = req.content_json
         if req.primitive_type == "composite" and isinstance(submitted_content.get("nodes"), list):
@@ -2472,7 +2471,7 @@ async def list_community_contributions_endpoint(
             principal,
             dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
         ):
-            result.items = [p for p in result.items if p.primitive_type != _LIFECYCLE_MAP_PRIMITIVE_TYPE]
+            result.items = [p for p in result.items if p.primitive_type != LIFECYCLE_MAP_PRIMITIVE_TYPE]
             result.total = len(result.items)
         items = [LibraryPrimitiveResponse.model_validate(p) for p in result.items]
     except HTTPException:

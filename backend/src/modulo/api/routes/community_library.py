@@ -35,6 +35,7 @@ from modulo.core.library_service.community import (
     list_community_entries,
 )
 from modulo.core.library_sync import LibraryClient, get_cached_manifest
+from modulo.core.lifecycle_map.import_export import PRIMITIVE_TYPE as LIFECYCLE_MAP_PRIMITIVE_TYPE
 from modulo.core.runtime_config import FLAG_COMMUNITY_OBJECTS_ENABLED, read_org_flag
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
@@ -46,7 +47,6 @@ router = APIRouter(prefix="/api/v1/libraries/community", tags=["community-librar
 _log = logging.getLogger(__name__)
 
 _CODE_COMMUNITY_LIBRARY_INSTALL = "community_library.install"
-_LIFECYCLE_MAP_PRIMITIVE_TYPE = "lifecycle_map"
 
 
 def _can_access_lifecycle_map_community(
@@ -100,7 +100,7 @@ async def list_community(
     try:
         items = await list_community_entries(session, principal.organisation_id)
         if not _can_access_lifecycle_map_community(principal):
-            items = [item for item in items if item.get("type") != _LIFECYCLE_MAP_PRIMITIVE_TYPE]
+            items = [item for item in items if item.get("type") != LIFECYCLE_MAP_PRIMITIVE_TYPE]
         manifest = await get_cached_manifest(session)
         if isinstance(manifest, dict):
             generated = manifest.get("generated_at")
@@ -163,7 +163,7 @@ async def get_entry(
         _log.exception("community_library.get_entry")
         entry = None
     if entry is None or (
-        entry.get("type") == _LIFECYCLE_MAP_PRIMITIVE_TYPE and not _can_access_lifecycle_map_community(_principal)
+        entry.get("type") == LIFECYCLE_MAP_PRIMITIVE_TYPE and not _can_access_lifecycle_map_community(_principal)
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -207,7 +207,7 @@ async def install(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Community entry not found",
                 )
-            if entry.get("type") == _LIFECYCLE_MAP_PRIMITIVE_TYPE:
+            if entry.get("type") == LIFECYCLE_MAP_PRIMITIVE_TYPE:
                 _require_lifecycle_map_internal_access(principal)
             primitive = await install_community_entry(
                 session,
