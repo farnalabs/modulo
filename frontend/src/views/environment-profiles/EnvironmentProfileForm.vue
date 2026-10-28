@@ -518,7 +518,7 @@ async function handleSubmit() {
     provider_type: form.provider_type,
     image_ref: form.image_ref.trim() || null,
     capabilities: [...form.capabilities],
-    max_node_seconds: isUpdate ? form.max_node_seconds : undefined,
+    max_node_seconds: form.max_node_seconds,
     network_policy: form.network_policy,
     initialisation_strategy: form.initialisation_strategy,
     persistence_policy: form.persistence_policy,
