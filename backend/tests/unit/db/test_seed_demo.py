@@ -1256,6 +1256,132 @@ async def test_seed_converges_ticket_ready_trigger(
     assert any(record.getMessage() == "demo_seed.ticket_ready_trigger_converged" for record in caplog.records)
 
 
+async def test_seed_preserves_hitl_claim_provenance_on_refresh(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refresh never rewrites the historical HITL decision or fire snapshot."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    claim = (
+        await session.execute(select(HitlClaim).join(Run, Run.id == HitlClaim.run_id).where(Run.run_number == 6))
+    ).scalar_one()
+    claim.expires_at = claim.expires_at - timedelta(hours=3)
+    claim.terminalize_at = claim.terminalize_at - timedelta(hours=3)
+    claim.context_json = {"description": "historical briefing"}
+    claim.gate_config_json = {"label": "Historical gate"}
+    await session.commit()
+    original = {
+        attr: getattr(claim, attr)
+        for attr in (
+            "decision",
+            "decided_by",
+            "decision_at",
+            "expires_at",
+            "terminalize_at",
+            "decision_payload",
+            "context_json",
+            "gate_config_json",
+        )
+    }
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    refreshed = (await session.execute(select(HitlClaim).where(HitlClaim.id == claim.id))).scalar_one()
+    assert {attr: getattr(refreshed, attr) for attr in original} == original
+
+
+async def test_seed_preserves_decided_hitl_claim_provenance_on_refresh(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Approved/rejected claims remain immutable evidence across daily refresh."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    claims_before = {
+        claim.run_id: {
+            attr: getattr(claim, attr)
+            for attr in (
+                "decision",
+                "decided_by",
+                "decision_at",
+                "expires_at",
+                "terminalize_at",
+                "decision_payload",
+                "context_json",
+                "gate_config_json",
+            )
+        }
+        for claim in (await session.execute(select(HitlClaim))).scalars()
+        if claim.decision is not None
+    }
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    claims_after = {
+        claim.run_id: {
+            attr: getattr(claim, attr)
+            for attr in (
+                "decision",
+                "decided_by",
+                "decision_at",
+                "expires_at",
+                "terminalize_at",
+                "decision_payload",
+                "context_json",
+                "gate_config_json",
+            )
+        }
+        for claim in (await session.execute(select(HitlClaim))).scalars()
+        if claim.decision is not None
+    }
+    assert claims_after == claims_before
+
+
+async def test_seed_trigger_event_identity_and_history_are_stable(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Trigger events use durable trigger identity and retain historical fields."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    org = (await session.execute(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG))).scalar_one()
+    events_before = {
+        event.trigger_id: {
+            "id": event.id,
+            "raw_payload_hash": event.raw_payload_hash,
+            "received_at": event.received_at,
+            "validation_result": event.validation_result,
+            "trigger_type": event.trigger_type,
+        }
+        for event in (await session.execute(select(TriggerEvent))).scalars()
+    }
+    first_event = next(iter(events_before.values()))
+    first_event_id = first_event["id"]
+    event = (await session.execute(select(TriggerEvent).where(TriggerEvent.id == first_event_id))).scalar_one()
+    event.validation_result = "test"
+    event.error_detail = "historical event"
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    events_after = {
+        event.trigger_id: {
+            "id": event.id,
+            "raw_payload_hash": event.raw_payload_hash,
+            "received_at": event.received_at,
+            "validation_result": event.validation_result,
+            "trigger_type": event.trigger_type,
+        }
+        for event in (await session.execute(select(TriggerEvent))).scalars()
+    }
+    assert events_after == {
+        trigger_id: {
+            **values,
+            "validation_result": "test" if values["id"] == first_event_id else values["validation_result"],
+        }
+        for trigger_id, values in events_before.items()
+    }
+    assert all(
+        values["id"] == seed_demo_module.demo_trigger_event_id(org.id, trigger_id)
+        for trigger_id, values in events_after.items()
+    )
+
+
 async def test_seed_converges_daily_fact(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

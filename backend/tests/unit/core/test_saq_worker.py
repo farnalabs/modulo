@@ -23,6 +23,11 @@ import pytest
 import modulo.core.saq_worker as sw
 
 
+def test_system_registration_includes_demo_daily_refresh() -> None:
+    assert sw.demo_daily_refresh in sw._system_functions()
+    assert any(job.function is sw.demo_daily_refresh for job in sw._system_cron_jobs())
+
+
 def _settings(system_url: str = "") -> SimpleNamespace:
     return SimpleNamespace(
         modulo_system_database_url=system_url,

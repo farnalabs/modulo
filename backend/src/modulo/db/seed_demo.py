@@ -146,6 +146,16 @@ def demo_edge_id(organisation_id: uuid.UUID, pipeline_name: str, edge_key: str) 
     return uuid.uuid5(_DEMO_ID_NAMESPACE, f"edge:{organisation_id}:{pipeline_name}:{edge_key}")
 
 
+def demo_trigger_event_id(organisation_id: uuid.UUID, trigger_id: uuid.UUID) -> uuid.UUID:
+    """Deterministic primary key for one demo event per durable trigger.
+
+    The trigger row, not a query position, is the event's identity. Supplying
+    this existing primary key makes concurrent refreshes converge through the
+    normal savepoint/IntegrityError path without inventing a new constraint.
+    """
+    return uuid.uuid5(_DEMO_ID_NAMESPACE, f"trigger-event:{organisation_id}:{trigger_id}")
+
+
 @dataclass(frozen=True)
 class _NodeSpec:
     """One seeded graph node. ``agent`` names a ``_DEMO_AGENT_SPECS`` entry."""
@@ -1625,10 +1635,26 @@ async def _seed_demo_governance_surfaces(
                 claim_token=None,
                 **desired,
             )
-            session.add(claim)
+            try:
+                async with session.begin_nested():
+                    session.add(claim)
+                    await session.flush()
+            except IntegrityError:
+                recovered = await session.execute(
+                    select(HitlClaim).where(HitlClaim.run_id == run.id, HitlClaim.review_id == current_review_id)
+                )
+                claim = recovered.scalar_one_or_none()
+                if claim is None:
+                    raise
+                _log.info("demo_seed.hitl_claim_recovered_after_conflict", extra={"run_number": run_number})
         else:
-            for attr, value in desired.items():
-                setattr(claim, attr, value)
+            # HITL claims are durable provenance, not disposable demo display
+            # rows.  A daily refresh must never rewrite a fired gate's decision,
+            # deadline, payload, context, or captured config (including an
+            # awaiting-human claim whose terminalization deadline is in flight).
+            # Existing claims are therefore intentionally left untouched; only a
+            # missing demo claim is created from the current fixture.
+            _log.debug("demo_seed.hitl_claim_preserved", extra={"run_number": run_number})
 
     model_specs = (
         ("Demo Stub Fast", "Demo Stub Fast", "custom", "demo-stub-fast"),
@@ -1708,16 +1734,26 @@ async def _seed_demo_governance_surfaces(
             for attr, value in values.items():
                 setattr(notification, attr, value)
 
-    triggers = list((await session.execute(select(Trigger).where(Trigger.organisation_id == org.id))).scalars())
-    for index, trigger in enumerate(triggers[:4]):
-        raw_hash = hashlib.sha256(f"demo-trigger-event-{trigger.id}-{index}".encode()).hexdigest()
-        result = await session.execute(
-            select(TriggerEvent).where(
-                TriggerEvent.organisation_id == org.id,
-                TriggerEvent.raw_payload_hash == raw_hash,
+    triggers = list(
+        (
+            await session.execute(
+                select(Trigger)
+                .where(Trigger.organisation_id == org.id)
+                .order_by(Trigger.pipeline_id, Trigger.name.asc().nulls_last(), Trigger.trigger_type, Trigger.id)
             )
+        ).scalars()
+    )
+    for index, trigger in enumerate(triggers[:4]):
+        # The event identity is derived from the durable trigger identity and
+        # its deterministic position, never from unspecified SELECT order.
+        raw_hash = hashlib.sha256(f"demo-trigger-event:{trigger.id}:{index}".encode()).hexdigest()
+        result = await session.execute(
+            select(TriggerEvent)
+            .where(TriggerEvent.organisation_id == org.id, TriggerEvent.trigger_id == trigger.id)
+            .order_by(TriggerEvent.received_at, TriggerEvent.id)
+            .limit(1)
         )
-        event = result.scalar_one_or_none()
+        event = result.scalars().first()
         values = {
             "trigger_id": trigger.id,
             "trigger_type": trigger.trigger_type,
@@ -1727,10 +1763,23 @@ async def _seed_demo_governance_surfaces(
             "error_detail": None,
         }
         if event is None:
-            session.add(TriggerEvent(organisation_id=org.id, raw_payload_hash=raw_hash, **values))
-        else:
-            for attr, value in values.items():
-                setattr(event, attr, value)
+            try:
+                async with session.begin_nested():
+                    session.add(
+                        TriggerEvent(
+                            id=demo_trigger_event_id(org.id, trigger.id),
+                            organisation_id=org.id,
+                            raw_payload_hash=raw_hash,
+                            **values,
+                        )
+                    )
+                    await session.flush()
+            except IntegrityError:
+                _log.info("demo_seed.trigger_event_recovered_after_conflict", extra={"trigger_id": str(trigger.id)})
+        # Existing event rows are historical demo evidence. Do not rewrite their
+        # trigger association, timestamp, payload identity, or validation result
+        # when trigger query ordering changes; only the missing-row path above is
+        # allowed to create a new deterministic event.
 
 
 async def _seed_ticket_ready_trigger(

@@ -1212,7 +1212,12 @@ async def _persist_suite_run_execution_failure(
 
 
 async def demo_daily_refresh(_ctx: dict[str, Any]) -> dict[str, Any]:
-    """System cron — refresh the configured demo org's rolling sample window."""
+    """System cron — refresh the configured demo org's rolling sample window.
+
+    This is a demo-fixture convergence job, not a production entity lifecycle
+    transition. The seed is gated by the demo configuration and preserves
+    durable provenance on existing HITL claims.
+    """
     settings = get_settings()
     if not getattr(settings, "modulo_demo_enabled", False):
         return {"status": "disabled"}
