@@ -53,6 +53,25 @@ from tests.unit.mcp.helpers import ORG_ID, USER_ID, AuthContext, make_session_co
 
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
 
+
+@pytest.fixture(autouse=True)
+def _enable_internal_lifecycle_map_access(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """Give lifecycle-map tests the retained internal dogfood context."""
+    if request.node.cls is not None and request.node.cls.__name__ in {
+        "TestLifecycleMaps",
+        "TestListLifecycleMapsEdgeCases",
+        "TestGetLifecycleMapErrorArms",
+    }:
+        from modulo.api.mcp_server import _ctx_key_grants
+
+        monkeypatch.setattr("modulo.api.mcp_server.get_settings", lambda: MagicMock(modulo_dev_mode=True))
+        _ctx_key_grants.set(frozenset({"library.search.in_dev", "lifecycle_map.list"}))
+        yield
+        _ctx_key_grants.set(None)
+        return
+    yield
+
+
 # FAR-1733: known test keypair — a signed payload verifies only while
 # set_public_key(_TEST_PUB) is in effect (the autouse fixture below manages
 # that per test), so the env-key verification paths run for real.
@@ -592,6 +611,16 @@ class TestListNotificationDeliveries(AuthContext):
 
 
 class TestLifecycleMaps(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_ordinary_mcp_caller_is_denied(self, mock_validate: AsyncMock) -> None:
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_role
+
+        _ctx_role.set("viewer")
+        _ctx_key_grants.set(None)
+        result = await list_lifecycle_maps()
+
+        assert result["error"] == "insufficient_scope"
+
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_list_returns_auth_error_on_revoked_token(self, mock_validate: AsyncMock) -> None:
         result = await list_lifecycle_maps()

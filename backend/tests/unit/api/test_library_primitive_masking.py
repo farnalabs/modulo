@@ -336,10 +336,13 @@ def test_read_surface_patch_response_masks_composite(client: TestClient) -> None
 
 def test_read_surface_delete_response_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
-    with patch(
-        "modulo.api.routes.library.soft_delete_library_primitive",
-        new_callable=AsyncMock,
-        return_value=prim,
+    with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
+        patch(
+            "modulo.api.routes.library.soft_delete_library_primitive",
+            new_callable=AsyncMock,
+            return_value=prim,
+        ),
     ):
         resp = client.delete(f"/api/v1/libraries/{prim.id}")
 
@@ -349,10 +352,13 @@ def test_read_surface_delete_response_masks_composite(client: TestClient) -> Non
 
 def test_read_surface_restore_response_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
-    with patch(
-        "modulo.api.routes.library.restore_library_primitive",
-        new_callable=AsyncMock,
-        return_value=prim,
+    with (
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=None),
+        patch(
+            "modulo.api.routes.library.restore_library_primitive",
+            new_callable=AsyncMock,
+            return_value=prim,
+        ),
     ):
         resp = client.post(f"/api/v1/libraries/{prim.id}/restore")
 
@@ -369,6 +375,7 @@ def test_read_surface_adapt_response_masks_composite(client: TestClient) -> None
             return_value=prim,
         ),
         patch("modulo.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.get_library_primitive", new_callable=AsyncMock, return_value=prim),
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
     ):
@@ -438,7 +445,17 @@ def test_read_surface_admin_publish_response_masks_composite(client: TestClient)
 def test_read_surface_community_install_response_masks_composite(client: TestClient) -> None:
     prim = _make_composite_primitive()
     prim.source = "registry"
+    entry_id = uuid.uuid4()
+    # The install route resolves the community entry before installing (FAR-2200
+    # lifecycle-map gate); a non-lifecycle-map entry keeps the composite-masking
+    # assertion on the end-to-end install path.
+    entry = {"id": str(entry_id), "type": "composite"}
     with (
+        patch(
+            "modulo.api.routes.community_library.get_community_entry",
+            new_callable=AsyncMock,
+            return_value=entry,
+        ),
         patch(
             "modulo.api.routes.community_library.install_community_entry",
             new_callable=AsyncMock,
@@ -448,7 +465,7 @@ def test_read_surface_community_install_response_masks_composite(client: TestCli
         patch("modulo.api.routes.community_library.set_rls_user_context", new_callable=AsyncMock),
     ):
         resp = client.post(
-            f"/api/v1/libraries/community/{uuid.uuid4()}/install",
+            f"/api/v1/libraries/community/{entry_id}/install",
             json={},
         )
 
@@ -814,6 +831,38 @@ async def test_mcp_library_detail_resource_passes_non_list_nodes_through() -> No
 
     assert "not-a-list" in result
     assert _GHP_SECRET not in result
+
+
+async def test_mcp_library_detail_resource_passes_non_dict_composite_content_through() -> None:
+    """A composite whose content is not a dict is not masked by the MCP summary.
+
+    The MCP mask site only rewrites a dict-shaped ``content_json``; any other
+    shape passes straight through (the serializer must not crash on it).
+    """
+    import modulo.api.mcp_server as ms
+
+    ms._ctx_org_id.set(_ORG_ID)
+    mock_session: Any = AsyncMock()
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    prim = _make_composite_primitive()
+    prim.content_json = ["plain-list-marker"]
+    try:
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=session_cm),
+            patch(
+                "modulo.api.mcp_server.get_primitive_by_slug",
+                new_callable=AsyncMock,
+                return_value=prim,
+            ),
+        ):
+            result = await ms.resource_library_detail("composite", "sub-flow")
+    finally:
+        ms._ctx_org_id.set(None)
+
+    assert "plain-list-marker" in result
 
 
 async def test_mcp_library_detail_resource_leaves_non_composite_content_raw() -> None:

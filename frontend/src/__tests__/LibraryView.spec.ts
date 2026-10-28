@@ -29,7 +29,7 @@ const router = createRouter({
     { path: '/library/:id/create-pipeline', name: 'library-pipeline-wizard', component: { template: '<div/>' } },
     { path: '/library/collections/new', name: 'library-collection-create', component: { template: '<div/>' } },
     { path: '/library/collections/:id', name: 'library-collection-detail', component: { template: '<div/>' } },
-    { path: '/lifecycle-maps/:id', name: 'lifecycle-map-detail', component: { template: '<div/>' } },
+
   ],
 })
 
@@ -225,7 +225,7 @@ describe('LibraryView', () => {
     wrapper.unmount()
   })
 
-  it('creates a lifecycle map from a primitive and navigates to it', async () => {
+  it('does not render lifecycle-map primitives in the native library surface', async () => {
     getMock.mockResolvedValue({
       items: [
         { id: 'lm-prim-1', organisation_id: 'org-1', source: 'modulo', primitive_type: 'lifecycle_map', name: 'SDLC Map', slug: 'sdlc-map', description: null, author: 'modulo', version: '1.0', tags: [], visibility: 'community', forked_from: null, auto_update: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
@@ -234,7 +234,6 @@ describe('LibraryView', () => {
       page: 1,
       page_size: 12,
     })
-    postMock.mockResolvedValue({ id: 'map-created-1', name: 'SDLC Map' })
 
     await router.push('/library')
     const wrapper = mount(LibraryView, {
@@ -243,16 +242,9 @@ describe('LibraryView', () => {
     await nextTick()
     await nextTick()
 
-    await wrapper.find('[data-testid="library-create-lifecycle-map"]').trigger('click')
-    await nextTick()
-    await nextTick()
-
-    expect(postMock).toHaveBeenCalledWith('/api/v1/libraries/{primitive_id}/create-lifecycle-map', {
-      params: { path: { primitive_id: 'lm-prim-1' } },
-    })
-    await vi.waitFor(() => {
-      expect(router.push).toHaveBeenCalledWith({ name: 'lifecycle-map-detail', params: { id: 'map-created-1' } })
-    })
+    expect(wrapper.text()).not.toContain('SDLC Map')
+    expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(false)
+    expect(postMock).not.toHaveBeenCalled()
   })
 
   it('calls toggleAutoUpdate which toggles the primitive', async () => {
@@ -303,23 +295,24 @@ describe('LibraryView', () => {
     wrapper.unmount()
   })
 
-  it('handles lifecycle-map creation errors and prevents duplicate adaptation', async () => {
-    const lifecycle = { ...NATIVE_ITEM, id: 'lm-1', primitive_type: 'lifecycle_map' }
-    getMock.mockResolvedValue({ items: [lifecycle], total: 1, page: 1, page_size: 12 })
-    postMock.mockRejectedValueOnce(new Error('adapt failed'))
-    router.push('/library')
-    await router.isReady()
+  it('handles a toggle response without data', async () => {
+    getMock.mockResolvedValue({ items: [NATIVE_ITEM], total: 1, page: 1, page_size: 12 })
+    await router.push('/library')
     const wrapper = mount(LibraryView, { global: { plugins: [router] } })
     await nextTick()
     await nextTick()
     const vm = wrapper.vm as any
-    vm.adapting['lm-1'] = true
-    await vm.createLifecycleMap(lifecycle)
-    expect(postMock).not.toHaveBeenCalled()
-    vm.adapting['lm-1'] = false
-    await vm.createLifecycleMap(lifecycle)
-    await flushPromises()
-    expect(wrapper.text()).toContain('adapt failed')
+
+    patchMock.mockResolvedValueOnce(undefined)
+    await vm.toggleAutoUpdate(NATIVE_ITEM)
+    expect(patchMock).toHaveBeenCalledWith('/api/v1/libraries/{primitive_id}', {
+      params: { path: { primitive_id: 'native-1' } },
+      body: { auto_update: false },
+    })
+    // An undefined response body must not replace the primitive, and the
+    // per-row spinner must still be cleared.
+    expect(vm.primitives.find((p: { id: string }) => p.id === 'native-1').auto_update).toBe(true)
+    expect(vm.toggleLoading['native-1']).toBe(false)
     wrapper.unmount()
   })
 
@@ -327,7 +320,8 @@ describe('LibraryView', () => {
     getMock.mockResolvedValue({ items: [], total: 24, page: 1, page_size: 12 })
     await router.push('/library')
     const wrapper = mount(LibraryView, { global: { plugins: [router] } })
-    await nextTick(); await nextTick()
+    await nextTick()
+    await nextTick()
 
     // The type-filter dropdown opens on click and closes on an outside mousedown.
     await wrapper.get('[data-testid="library-type-filter-button"]').trigger('click')
@@ -342,39 +336,14 @@ describe('LibraryView', () => {
         .filter((p): p is number => typeof p === 'number')
 
     await wrapper.get('[data-testid="library-next-page"]').trigger('click')
-    await nextTick(); await nextTick()
+    await nextTick()
+    await nextTick()
     expect(pagesRequested()).toContain(2)
 
     await wrapper.get('[data-testid="library-previous-page"]').trigger('click')
-    await nextTick(); await nextTick()
+    await nextTick()
+    await nextTick()
     expect(pagesRequested().slice(-1)).toEqual([1])
-    wrapper.unmount()
-  })
-
-  it('handles lifecycle-map API error and toggle response without data', async () => {
-    const lifecycle = { ...NATIVE_ITEM, id: 'lm-err', primitive_type: 'lifecycle_map' }
-    getMock.mockResolvedValue({ items: [lifecycle], total: 1, page: 1, page_size: 12 })
-    postMock.mockRejectedValueOnce(new Error('lifecycle denied'))
-    await router.push('/library')
-    const wrapper = mount(LibraryView, { global: { plugins: [router] } })
-    await nextTick(); await nextTick()
-    const vm = wrapper.vm as any
-
-    await vm.createLifecycleMap(lifecycle)
-    await flushPromises()
-    expect(wrapper.text()).toContain('lifecycle denied')
-    expect(vm.adapting['lm-err']).toBe(false)
-
-    patchMock.mockResolvedValueOnce(undefined)
-    await vm.toggleAutoUpdate(lifecycle)
-    expect(patchMock).toHaveBeenCalledWith('/api/v1/libraries/{primitive_id}', {
-      params: { path: { primitive_id: 'lm-err' } },
-      body: { auto_update: false },
-    })
-    // An undefined response body must not replace the primitive, and the
-    // per-row spinner must still be cleared.
-    expect(vm.primitives.find((p: { id: string }) => p.id === 'lm-err').auto_update).toBe(true)
-    expect(vm.toggleLoading['lm-err']).toBe(false)
     wrapper.unmount()
   })
 
@@ -394,6 +363,7 @@ describe('LibraryView', () => {
     wrapper.unmount()
   })
 })
+
 
 describe('LibraryView responsive layout (FAR-640)', () => {
   async function mountLibrary() {

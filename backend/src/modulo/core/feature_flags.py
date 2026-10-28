@@ -215,10 +215,12 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         ),
         tier="community",
     ),
-    # ── Community tier — lifecycle map journeys display (default OFF, FAR-654) ──
+    # Retained in the registry only so persisted/catalogued organisations can
+    # upgrade without losing compatibility; retired flags are filtered from all
+    # customer-facing catalogue and plan responses below.
     FeatureFlag(
         name="lifecycle_map_journeys",
-        description="Journey cards and journey detail on the Lifecycle Map view (attribution display)",
+        description="Retired internal Lifecycle Map journey display",
         tier="community",
     ),
     # ── Community tier — webhook notification delivery log (default OFF, FAR-656) ──
@@ -270,13 +272,18 @@ TIER_RANK: dict[str, int] = {"community": 0, "team": 1}
 # never activate it (the "two-mechanism" precedent started by
 # ``mobile_sidebar_rail``). Orgs enable them per-org via
 # ``feature_overrides``; a system-level ``set_override`` also wins.
+# Retained only in persisted data for backwards compatibility; it is not a
+# customer-configurable flag. Internal Lifecycle Map access is controlled by the
+# route's dev-mode visibility gate instead of an org feature override.
+RETIRED_INTERNAL_FLAGS: frozenset[str] = frozenset({"lifecycle_map_journeys"})
+
+
 DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
     {
         "mobile_sidebar_rail",
         "dashboard_charts",
         "saved_views",
         "user_scoped_mcp_keys",
-        "lifecycle_map_journeys",
         "webhook_notification_log",
         "library_collection",
         "sso_unrestricted_provisioning",
@@ -665,7 +672,7 @@ def effective_feature_flags(
     Returns copies (``dataclasses.replace``) for overlaid flags so the plan
     context's own registry state is never mutated.
     """
-    flags = plan_ctx.list_all_features()
+    flags = [flag for flag in plan_ctx.list_all_features() if flag.name not in RETIRED_INTERNAL_FLAGS]
     if not org_overrides:
         return flags
     return [

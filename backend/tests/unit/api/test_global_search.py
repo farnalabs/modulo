@@ -229,6 +229,171 @@ class TestGlobalSearchEndpoint:
         assert body["results"][0]["url"] == f"/pipelines/{pipe_id}"
         assert body["total_by_type"]["pipeline"] == 1
 
+    def test_ordinary_admin_search_excludes_lifecycle_maps(self, client: TestClient, mock_db: AsyncMock) -> None:
+        mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
+        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
+            resp = client.get("/api/v1/admin/search?q=map&type=library")
+        assert resp.status_code == 200
+        assert not resp.json()["results"]
+        query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
+        assert query_params[0]["include_lifecycle_maps"] is False
+
+    def test_internal_admin_search_includes_lifecycle_maps(self, client: TestClient, mock_db: AsyncMock) -> None:
+        mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
+        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+            resp = client.get("/api/v1/admin/search?q=map&type=library")
+        assert resp.status_code == 200
+        query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
+        assert query_params[0]["include_lifecycle_maps"] is True
+
+    def test_ordinary_admin_audit_search_excludes_lifecycle_map_events(
+        self, client: TestClient, mock_db: AsyncMock
+    ) -> None:
+        mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
+        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
+            resp = client.get("/api/v1/admin/search?q=lifecycle&type=audit")
+        assert resp.status_code == 200
+        assert not resp.json()["results"]
+        query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
+        assert query_params[0]["include_lifecycle_maps"] is False
+        assert query_params[1]["include_lifecycle_maps"] is False
+
+    def test_ordinary_admin_audit_search_excludes_lifecycle_map_version_events(
+        self, client: TestClient, mock_db: AsyncMock
+    ) -> None:
+        mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
+        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
+            resp = client.get("/api/v1/admin/search?q=lifecycle_map_version_updated&type=audit")
+        assert resp.status_code == 200
+        assert not resp.json()["results"]
+        query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
+        assert query_params[0]["include_lifecycle_maps"] is False
+        assert query_params[1]["include_lifecycle_maps"] is False
+
+    def test_internal_admin_audit_search_includes_lifecycle_map_events(
+        self, client: TestClient, mock_db: AsyncMock
+    ) -> None:
+        mock_db.execute.return_value = _make_result(all_rows=[], scalar_value=0)
+        with patch("modulo.api.routes.admin.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+            resp = client.get("/api/v1/admin/search?q=lifecycle_map_version_updated&type=audit")
+        assert resp.status_code == 200
+        query_params = [_data_query_params(call) for call in mock_db.execute.call_args_list]
+        assert query_params[0]["include_lifecycle_maps"] is True
+        assert query_params[1]["include_lifecycle_maps"] is True
+
+    @pytest.mark.asyncio
+    async def test_search_audit_sql_filtering_excludes_lifecycle_map_variants_on_real_sqlite(self) -> None:
+        from sqlalchemy import text as sa_text
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from modulo.api.routes.admin import _search_audit, _SearchParams
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async_session = async_sessionmaker(engine)
+        test_org = str(uuid.uuid4())
+
+        async with engine.begin() as conn:
+            await conn.execute(
+                sa_text("""
+                    CREATE TABLE audit_events (
+                        id TEXT PRIMARY KEY,
+                        organisation_id TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        resource_type TEXT,
+                        payload_json TEXT,
+                        created_at TEXT NOT NULL
+                    )
+                """)
+            )
+            rows = [
+                (
+                    str(uuid.uuid4()),
+                    test_org,
+                    "lifecycle_map_version_updated",
+                    "lifecycle_map_version",
+                    "{}",
+                    "2026-01-01T00:00:00Z",
+                ),
+                (
+                    str(uuid.uuid4()),
+                    test_org,
+                    "lifecycle_map.created",
+                    "lifecycle_map",
+                    "{}",
+                    "2026-01-01T00:00:00Z",
+                ),
+                (
+                    str(uuid.uuid4()),
+                    test_org,
+                    "lifecycle-map-exported",
+                    "lifecycle-map",
+                    "{}",
+                    "2026-01-01T00:00:00Z",
+                ),
+                (
+                    str(uuid.uuid4()),
+                    test_org,
+                    "pipeline_created",
+                    "pipeline",
+                    "{}",
+                    "2026-01-01T00:00:00Z",
+                ),
+                (
+                    str(uuid.uuid4()),
+                    test_org,
+                    "lifecycle_event",
+                    "non_lifecycle_resource",
+                    "{}",
+                    "2026-01-01T00:00:00Z",
+                ),
+            ]
+            for r in rows:
+                await conn.execute(
+                    sa_text(
+                        "INSERT INTO audit_events VALUES ("
+                        ":id, :org_id, :event_type, :resource_type, :payload_json, :created_at)"
+                    ),
+                    {
+                        "id": r[0],
+                        "org_id": r[1],
+                        "event_type": r[2],
+                        "resource_type": r[3],
+                        "payload_json": r[4],
+                        "created_at": r[5],
+                    },
+                )
+
+        search_params = _SearchParams(
+            org_id=test_org,  # type: ignore[arg-type]
+            like="%lifecycle%",
+            prefix="lifecycle%",
+            limit=20,
+            offset=0,
+        )
+
+        try:
+            async with async_session() as session:
+                # When include_lifecycle_maps is False (ordinary admin), lifecycle map events/resources
+                # are excluded but unrelated records matching "lifecycle" remain.
+                items, count = await _search_audit(session, search_params, include_lifecycle_maps=False)
+                assert count == 1
+                assert len(items) == 1
+                assert items[0][1].title == "lifecycle_event — non_lifecycle_resource"
+
+                # When include_lifecycle_maps is True (internal access), all matching records are returned
+                items_internal, count_internal = await _search_audit(
+                    session, search_params, include_lifecycle_maps=True
+                )
+                assert count_internal == 4
+                assert len(items_internal) == 4
+                titles = {item[1].title for item in items_internal}
+                assert "lifecycle_map_version_updated — lifecycle_map_version" in titles
+                assert "lifecycle_map.created — lifecycle_map" in titles
+                assert "lifecycle-map-exported — lifecycle-map" in titles
+                assert "lifecycle_event — non_lifecycle_resource" in titles
+        finally:
+            await engine.dispose()
+
     def test_all_types_search(self, client: TestClient, mock_db: AsyncMock) -> None:
         pipe_id = uuid.uuid4()
         run_id = uuid.uuid4()

@@ -121,9 +121,10 @@ const i18n = createI18n({
 let fetchMock: ReturnType<typeof vi.fn>
 let journeysResponse: { items: unknown[]; next_cursor?: string | null }
 
-function seedPlan(flags: Record<string, boolean> = {}) {
+function seedPlan(flags: Record<string, boolean> = {}, devMode = false) {
   const planStore = usePlanStore()
   planStore.features = flags
+  planStore.devMode = devMode
   planStore.loaded = true
 }
 
@@ -573,7 +574,7 @@ describe('LifecycleMapView branches — retryJourneyDetail', () => {
 // ── journey detail: runs empty ──────────────────────────────────────────
 describe('LifecycleMapView branches — journey detail empty runs', () => {
   it('shows no_runs message when journey detail has empty runs', async () => {
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     const wrapper = mountView()
     await flushPromises()
     await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
@@ -589,7 +590,7 @@ describe('LifecycleMapView branches — journey detail empty runs', () => {
   })
 
   it('shows loading spinner when journeyDetail is null', async () => {
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     const wrapper = mountView()
     await flushPromises()
     await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
@@ -630,7 +631,7 @@ describe('LifecycleMapView branches — mapData null', () => {
 // ── journeys pagination hasMore ─────────────────────────────────────────
 describe('LifecycleMapView branches — journeys pagination', () => {
   it('shows load more button when hasMoreJourneys is true', async () => {
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     journeysResponse = { items: [{ kind: 'run', ref: 'r1', unattributed: true, status: 'complete' }], next_cursor: 'cursor-2' }
 
     const wrapper = mountView()
@@ -646,7 +647,7 @@ describe('LifecycleMapView branches — journeys pagination', () => {
 // ── unattributedJourneys present ────────────────────────────────────────
 describe('LifecycleMapView branches — unattributedJourneys', () => {
   it('renders unattributed section when journeys are present', async () => {
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     journeysResponse = {
       items: [{ kind: 'run', ref: 'r1', unattributed: true, status: 'complete', provenance: 'execution' }],
       next_cursor: null,
@@ -665,7 +666,7 @@ describe('LifecycleMapView branches — unattributedJourneys', () => {
 // ── journeys error ──────────────────────────────────────────────────────
 describe('LifecycleMapView branches — journeys error', () => {
   it('shows error when journeys fetch fails', async () => {
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     fetchMock.mockImplementation((url: string) => {
       if (url.includes('/journeys')) {
         return Promise.resolve({ ok: false, status: 500, json: async () => ({ detail: 'journeys failed' }) })

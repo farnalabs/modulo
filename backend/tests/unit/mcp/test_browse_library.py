@@ -169,10 +169,15 @@ class TestSearchLibrary:
                 limit=10,
             )
 
+        from modulo.core.library_service.primitive_types import PRIMITIVE_TYPES
+
         mock_list.assert_called_once_with(
             mock_session.return_value.__aenter__.return_value,
             "00000000-0000-0000-0000-000000000001",
             primitive_type="agent",
+            # FAR-2200: a caller without the in-dev grant is restricted to the
+            # Alpha-visible primitive types; lifecycle_map never leaks through.
+            primitive_types=[ptype for ptype in PRIMITIVE_TYPES if ptype != "lifecycle_map"],
             search="test",
             page=1,
             page_size=10,
@@ -276,3 +281,42 @@ class TestSearchLibrary:
             "error": "server_error",
             "detail": "Failed to search library",
         }
+
+    async def test_lifecycle_map_type_filter_is_empty_for_ordinary_caller(self) -> None:
+        from modulo.api.mcp_server import search_library
+
+        self._auth_ctx(role="viewer")
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.list_primitives") as mock_list,
+        ):
+            mock_session.return_value.__aenter__.return_value = AsyncMock()
+            result = await search_library(primitive_type="lifecycle_map")
+
+        assert result == {"items": [], "total": 0, "next_cursor": None, "has_more": False}
+        mock_list.assert_not_called()
+
+    async def test_internal_operator_searches_every_primitive_type(self) -> None:
+        from modulo.api.mcp_server import _ctx_key_grants, search_library
+
+        self._auth_ctx(role="operator")
+        _ctx_key_grants.set(frozenset({"library.search.in_dev", "resource.read_only"}))
+        try:
+            with (
+                patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+                patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=True)),
+                patch("modulo.api.mcp_server._session") as mock_session,
+                patch(
+                    "modulo.api.mcp_server.list_primitives",
+                    return_value=PageResult(items=[], total=0, page=1, page_size=20),
+                ) as mock_list,
+            ):
+                mock_session.return_value.__aenter__.return_value = AsyncMock()
+                await search_library()
+        finally:
+            _ctx_key_grants.set(None)
+
+        assert mock_list.await_args is not None
+        assert mock_list.await_args.kwargs["primitive_types"] is None

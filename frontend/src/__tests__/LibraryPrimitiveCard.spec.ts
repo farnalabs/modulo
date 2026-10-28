@@ -107,18 +107,11 @@ describe('LibraryPrimitiveCard', () => {
     expect(wrapper.find('[data-testid="library-create-pipeline"]').exists()).toBe(false)
   })
 
-  it('renders a copy-to-adapt button for lifecycle_map primitives', () => {
+  it('does not render lifecycle-map creation controls in ordinary library views', () => {
     const wrapper = mountCard({ prim: { id: 'prim-1', source: 'modulo', primitive_type: 'lifecycle_map', name: 'SDLC Map', description: null, tags: [], forked_from: null, auto_update: false } })
-    expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="library-create-pipeline"]').exists()).toBe(false)
-  })
-
-  it('emits create-lifecycle-map when the copy-to-adapt button is clicked', async () => {
-    const prim = { id: 'prim-1', source: 'modulo', primitive_type: 'lifecycle_map', name: 'SDLC Map', description: null, tags: [], forked_from: null, auto_update: false }
-    const wrapper = mountCard({ prim })
-    await wrapper.find('[data-testid="library-create-lifecycle-map"]').trigger('click')
-    expect(wrapper.emitted('create-lifecycle-map')).toHaveLength(1)
-    expect(wrapper.emitted('create-lifecycle-map')![0]).toEqual([prim])
+    expect(wrapper.emitted('create-lifecycle-map')).toBeUndefined()
   })
 
   it('does not render the copy-to-adapt button for non-lifecycle-map primitives', () => {
@@ -126,12 +119,10 @@ describe('LibraryPrimitiveCard', () => {
     expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(false)
   })
 
-  it('disables and shows a loading label on the copy-to-adapt button while adapting', () => {
+  it('does not expose lifecycle-map adapting state in ordinary library views', () => {
     const prim = { id: 'prim-1', source: 'modulo', primitive_type: 'lifecycle_map', name: 'SDLC Map', description: null, tags: [], forked_from: null, auto_update: false }
     const wrapper = mountCard({ prim, adapting: { 'prim-1': true } })
-    const button = wrapper.find('[data-testid="library-create-lifecycle-map"]')
-    expect(button.attributes('disabled')).toBeDefined()
-    expect(button.attributes('aria-busy')).toBe('true')
-    expect(wrapper.text()).toContain('Copying...')
+    expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Copying...')
   })
 })

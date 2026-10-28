@@ -646,30 +646,16 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     wrapper.unmount()
   })
 
-  // -- loadLifecycleMaps: full list with linked maps --
-  it('loadLifecycleMaps filters maps linked to current pipeline', async () => {
-    useApiFns.get.mockImplementation((url: string) => {
-      if (url.includes('/lifecycle-maps') && !url.includes('/lm-')) {
-        return Promise.resolve({ items: [{ id: 'lm-1' }, { id: 'lm-2' }] })
-      }
-      if (url.includes('/lifecycle-maps/lm-1')) {
-        return Promise.resolve({ id: 'lm-1', name: 'Map One', stages: [{ pipeline_id: 'test-pipeline-id' }] })
-      }
-      if (url.includes('/lifecycle-maps/lm-2')) {
-        return Promise.resolve({ id: 'lm-2', name: 'Map Two', stages: [{ pipeline_id: 'other-pipeline' }] })
-      }
-      if (url.includes('/pipeline-folders')) return Promise.resolve([])
-      return Promise.resolve({ items: [] })
-    })
+  it('does not load lifecycle maps in Alpha', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
     await flushPromises()
     const vm = wrapper.vm as any
-    await vm.loadLifecycleMaps()
-    await flushPromises()
-    expect(vm.linkedLifecycleMaps.length).toBe(1)
-    expect(vm.linkedLifecycleMaps[0].id).toBe('lm-1')
+
+    expect(vm.loadLifecycleMaps).toBeUndefined()
+    expect(vm.linkedLifecycleMaps).toBeUndefined()
+    expect(useApiFns.get).not.toHaveBeenCalledWith(expect.stringContaining('/lifecycle-maps'))
     wrapper.unmount()
   })
 

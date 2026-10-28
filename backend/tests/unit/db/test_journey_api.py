@@ -47,6 +47,7 @@ from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
+from modulo.settings import get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -699,6 +700,21 @@ class TestJourneyRunHistory:
 # ---------------------------------------------------------------------------
 
 
+def _make_internal_principal(*, org_role: str) -> TenantPrincipal:
+    return TenantPrincipal(
+        username="testuser",
+        organisation_id=_ORG,
+        account_id=_ACCOUNT,
+        org_role="operator" if org_role == "runner" else org_role,
+        key_grants=frozenset(
+            {
+                "library.search.in_dev",
+                "run.trigger",
+            }
+        ),
+    )
+
+
 def _make_app(*, org_role: str = "admin") -> FastAPI:
     app = FastAPI()
     app.include_router(lifecycle_maps_router)
@@ -708,6 +724,8 @@ def _make_app(*, org_role: str = "admin") -> FastAPI:
         account_id=_ACCOUNT,
         org_role=org_role,
     )
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: _make_internal_principal(org_role=org_role)
+    app.dependency_overrides[get_settings] = lambda: MagicMock(modulo_dev_mode=True)
     return app
 
 
@@ -1237,8 +1255,10 @@ def _make_self_report_app(*, org_role: str = "runner") -> FastAPI:
         username="workflow",
         organisation_id=_ORG,
         account_id=_ACCOUNT,
-        org_role=org_role,
+        org_role="operator" if org_role == "runner" else org_role,
+        key_grants=None,
     )
+    app.dependency_overrides[get_settings] = lambda: MagicMock(modulo_dev_mode=True)
     return app
 
 
@@ -1381,8 +1401,10 @@ def _make_real_app(
         username="workflow",
         organisation_id=_ORG,
         account_id=_ACCOUNT,
-        org_role=org_role,
+        org_role="operator" if org_role == "runner" else org_role,
+        key_grants=None,
     )
+    app.dependency_overrides[get_settings] = lambda: MagicMock(modulo_dev_mode=True)
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
         maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)

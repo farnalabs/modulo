@@ -1058,17 +1058,14 @@ describe('PipelineEditorView — toolbar rendering', () => {
     wrapper.unmount()
   })
 
-  it('renders linked lifecycle maps in the toolbar', async () => {
+  it('does not render lifecycle-map links in the pipeline editor toolbar', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = await mountEditorLoaded()
-    const vm = wrapper.vm as any
-    vm.linkedLifecycleMaps = [{ id: 'lm-1', name: 'Checkout Flow' }]
     await nextTick()
 
-    expect(wrapper.text()).toContain('Checkout Flow')
-    const link = wrapper.findAll('a').find((a) => a.text() === 'Checkout Flow')
-    expect(link?.attributes('href')).toContain('/lifecycle-maps/lm-1')
+    expect(wrapper.text()).not.toContain('Lifecycle Maps')
+    expect(wrapper.find('a[href*="/lifecycle-maps/"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -2793,40 +2790,14 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     wrapper.unmount()
   })
 
-  it('loadLifecycleMaps filters to maps whose stages reference this pipeline', async () => {
-    useApiFns.get.mockImplementation((url: string) => {
-      if (url.includes('/lifecycle-maps/lm-1')) {
-        return Promise.resolve({
-          id: 'lm-1',
-          name: 'Checkout Flow',
-          stages: [{ pipeline_id: 'test-pipeline-id' }, { pipeline_id: 'other-pipeline' }],
-        })
-      }
-      if (url.includes('/lifecycle-maps/lm-2')) {
-        return Promise.resolve({
-          id: 'lm-2',
-          name: 'Unrelated Map',
-          stages: [{ pipeline_id: 'other-pipeline' }],
-        })
-      }
-      if (url.includes('/lifecycle-maps') && !url.includes('/lm-')) {
-        return Promise.resolve([{ id: 'lm-1' }, { id: 'lm-2' }])
-      }
-      if (url.includes('/pipeline-folders')) return Promise.resolve([])
-      return Promise.resolve({ items: [] })
-    })
+  it('does not load lifecycle maps in Alpha', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = await mountEditorLoaded()
-    const vm = wrapper.vm as any
-    // The mocked useDataFetch never calls the real loaders — invoke manually
-    await vm.loadLifecycleMaps()
-    await flushPromises()
-    await nextTick()
-    expect(vm.linkedLifecycleMaps).toEqual([
-      expect.objectContaining({ id: 'lm-1', name: 'Checkout Flow' }),
-    ])
-    expect(vm.linkedLifecycleMaps.find((m: any) => m.id === 'lm-2')).toBeUndefined()
+
+    expect('loadLifecycleMaps' in (wrapper.vm as any)).toBe(false)
+    expect('linkedLifecycleMaps' in (wrapper.vm as any)).toBe(false)
+    expect(useApiFns.get).not.toHaveBeenCalledWith(expect.stringContaining('/lifecycle-maps'))
     wrapper.unmount()
   })
 
@@ -3078,25 +3049,12 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     wrapper.unmount()
   })
 
-  it('loadLifecycleMaps handles a map with no stages gracefully', async () => {
-    useApiFns.get.mockImplementation((url: string) => {
-      if (url.includes('/lifecycle-maps/lm-1')) {
-        return Promise.resolve({ id: 'lm-1', name: 'Empty Map', stages: [] })
-      }
-      if (url.includes('/lifecycle-maps') && !url.includes('/lm-')) {
-        return Promise.resolve([{ id: 'lm-1' }])
-      }
-      if (url.includes('/pipeline-folders')) return Promise.resolve([])
-      return Promise.resolve({ items: [] })
-    })
+  it('does not expose lifecycle-map state for maps with no stages', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = await mountEditorLoaded()
-    const vm = wrapper.vm as any
-    await vm.loadLifecycleMaps()
-    await flushPromises()
-    // Empty stages means this pipeline is not linked
-    expect(vm.linkedLifecycleMaps).toEqual([])
+
+    expect((wrapper.vm as any).linkedLifecycleMaps).toBeUndefined()
     wrapper.unmount()
   })
 

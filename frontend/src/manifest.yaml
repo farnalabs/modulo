@@ -889,12 +889,16 @@ routes:
         breadcrumb: Lifecycle Maps
         parent: /
         product_map: [feat-lifecycle-maps]
-        sidebar_group: build
-        sidebar_order: 5
+        sidebar_group:
+        sidebar_order:
         type: list_page
-        <<: *community
-        deprecated: false
+        pattern: /lifecycle-maps
         exact: true
+        visibility: in_dev
+        <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [library.search.in_dev]
+        deprecated: false
 
     /lifecycle-maps/:id/editor:
         name: lifecycle-map-editor
@@ -907,7 +911,10 @@ routes:
         pattern: /lifecycle-maps/:id/editor
         dynamic_params:
           - id
+        visibility: in_dev
         <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [library.search.in_dev]
         deprecated: false
 
     /feedback/inbox:
@@ -933,7 +940,10 @@ routes:
         pattern: /lifecycle-maps/:id
         dynamic_params:
           - id
+        visibility: in_dev
         <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [library.search.in_dev]
         deprecated: false
 
     /admin/runners/profiles:
@@ -3646,9 +3656,7 @@ elements:
       - testid: library-community-badge
         type: element
         dynamic_testid: false
-      - testid: library-create-lifecycle-map
-        type: button
-        dynamic_testid: false
+
       - testid: library-create-pipeline
         type: button
         dynamic_testid: false
@@ -7074,16 +7082,16 @@ features:
         deferrals:
             - "Universal license gating of every registered feature is tracked under feat-license"
     feat-lifecycle-maps:
-        description: Lifecycle maps and stage workflows
-        status: covered
+        description: Internal lifecycle maps and stage workflows (dogfood only)
+        status: partial
         behaviours:
+            - "[ ] Lifecycle Maps are not exposed in the Alpha sidebar, library catalogue, pipeline editor, or ordinary feature-flag surfaces; the implementation remains reachable only through the internal/dev route when dev mode is enabled"
             - "[x] Detail page delete: DELETE /api/v1/lifecycle-maps/{id} soft-deletes the map (204) and frees its stage pipelines; the detail page offers a Delete button behind a confirmation dialog and navigates back to the list on success"
-            - "[x] Stage layout positions persist: editor drags save stage x/y into content_json (GET/PUT /versions round-trips them), the read-only renderer uses persisted x/y when present, and maps saved before position persistence fall back to a topology-aware auto-layout"
             - "[x] Auto-layout is layered: linear chains render left-to-right, split sources and their branches share a column, and rejoin targets cluster — computed from stage/transition topology, not array index"
+
             - "[x] Unattributed journeys list is keyset-paginated (GET /{id}/journeys?limit&cursor) with a load-more control, never dumps 200 rows at once; journey cards render the kind uppercased (PR 2391), are keyboard-accessible with an aria-label, and open the journeys detail endpoint"
-            # Journeys display double-gated: default-OFF lifecycle_map_journeys flag (FAR-654)
-            # plus a per-visit "Show work items" checkbox, also default OFF (FAR-742)
-            - "[x] All journey display on the detail view (journey cards on stage nodes, the Unattributed journeys section, load-more pagination, and the journey detail panel) is double-gated behind the default-OFF `lifecycle_map_journeys` feature flag AND a per-visit 'Show work items' checkbox (default unchecked): with either gate off the view makes no journeys API call, passes an empty journeys list to the renderer, and hides all journey UI while stages/edges render normally (frontend/src/__tests__/LifecycleMapView.spec.ts, FAR-654 + FAR-742 blocks)"
+            - "[x] Journey display remains implemented for internal dogfood maps and is hidden from Alpha users by the route's dev-mode gate"
+
             # FAR-742: server-side journeys filters + per-node card cap + tense fix
             - "[x] With both gates on, the map view exposes Period (Last 24h / Last 3 days / Last 7 days / Last 30 days / All time — default Last 7 days) and Status (All / Completed / Failed — default All) filters that hit the journeys endpoint server-side (`updated_since` ISO-8601 lower bound on journeys.updated_at — the last-move evidence timestamp — and `status` on latest_status, validated to complete|failed with 422 otherwise) and reset pagination on change; each page-1 fetch pins its window for the pagination session; the renderer caps journey cards at MAX_CARDS_PER_NODE=5 per stage node (newest-moved first) behind a non-interactive '+N more' chip; the complete status displays as 'Completed' (underlying value unchanged)"
             # FAR-794: work-item refs → journeys (provenance-tagged minting)

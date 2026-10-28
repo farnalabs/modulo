@@ -253,6 +253,43 @@ class TestListCommunityContributions:
         assert body["page"] == 1
         assert body["page_size"] == 20
 
+    def test_list_hides_lifecycle_map_contributions_for_ordinary_callers(self, client: TestClient) -> None:
+        lifecycle_map = _make_primitive(primitive_type="lifecycle_map", contribution_status="draft")
+        workflow = _make_primitive(primitive_type="workflow", contribution_status="draft")
+        mock_result = MagicMock()
+        mock_result.items = [lifecycle_map, workflow]
+        mock_result.total = 2
+        mock_result.page = 1
+        mock_result.page_size = 20
+
+        with (
+            patch("modulo.api.routes.library.list_org_contributions", new_callable=AsyncMock, return_value=mock_result),
+            patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+        ):
+            resp = client.get(self.LIST_PATH)
+
+        assert resp.status_code == 200
+        assert [item["primitive_type"] for item in resp.json()["items"]] == ["workflow"]
+        assert resp.json()["total"] == 1
+
+    def test_list_keeps_lifecycle_map_contributions_for_internal_callers(self, client: TestClient) -> None:
+        lifecycle_map = _make_primitive(primitive_type="lifecycle_map", contribution_status="draft")
+        mock_result = MagicMock()
+        mock_result.items = [lifecycle_map]
+        mock_result.total = 1
+        mock_result.page = 1
+        mock_result.page_size = 20
+
+        with (
+            patch("modulo.api.routes.library.list_org_contributions", new_callable=AsyncMock, return_value=mock_result),
+            patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)),
+        ):
+            resp = client.get(self.LIST_PATH)
+
+        assert resp.status_code == 200
+        assert [item["primitive_type"] for item in resp.json()["items"]] == ["lifecycle_map"]
+        assert resp.json()["total"] == 1
+
     def test_list_filters_by_status(self, client: TestClient) -> None:
         prim = _make_primitive(contribution_status="review_queue")
         mock_result = MagicMock()
