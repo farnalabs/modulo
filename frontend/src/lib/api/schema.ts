@@ -19239,10 +19239,10 @@ export interface components {
             /** Capabilities */
             capabilities: string[];
             /** Max Node Seconds */
-            max_node_seconds?: number;
+            max_node_seconds: number;
             /** Config Json */
-
             config_json: {
+
                 [key: string]: unknown;
             };
             /** Network Policy */

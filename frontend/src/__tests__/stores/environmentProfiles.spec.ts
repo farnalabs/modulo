@@ -156,7 +156,7 @@ describe('useEnvironmentProfilesStore', () => {
     fetchMock.mockResolvedValue(okJsonResponse(profile({ id: 'env-new', name: 'New' })))
     const store = useEnvironmentProfilesStore()
 
-    await store.createProfile({ name: 'New', provider_type: 'e2b', network_policy: 'outbound', initialisation_strategy: 'git_clone', persistence_policy: 'ephemeral', visibility: 'org' })
+    await store.createProfile({ name: 'New', provider_type: 'e2b', max_node_seconds: 3300, network_policy: 'outbound', initialisation_strategy: 'git_clone', persistence_policy: 'ephemeral', visibility: 'org' })
 
     const [, init] = fetchMock.mock.calls[0]
     expect(init).toMatchObject({ method: 'POST', body: JSON.stringify({ name: 'New', provider_type: 'e2b', network_policy: 'outbound', initialisation_strategy: 'git_clone', persistence_policy: 'ephemeral', visibility: 'org' }) })
