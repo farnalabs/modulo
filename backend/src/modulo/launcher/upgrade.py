@@ -35,6 +35,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess  # nosec B404 — the only exec is a fully argv-pinned pg_dump invocation below (never shell=True)
 import sys
 import tarfile
@@ -44,7 +45,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from modulo.launcher import manifest as manifest_module
@@ -72,6 +73,7 @@ _STATE_FILENAME = "state.json"
 _DUMP_TIMEOUT_SECONDS = 1800
 _PRIVATE_MODE = 0o600
 _DIR_PRIVATE_MODE = 0o700
+_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:")
 
 # The launcher-owned public surface (consumed by install.sh via the bundled
 # runtime; vulture's dead-code gate special-cases __all__).
@@ -159,7 +161,7 @@ def assert_not_held(data_dir: Path) -> None:
     if holder is None:
         return
     if sys.platform == "win32":
-        # TODO(P3): holder liveness must be verified with the Windows lock
+        # Deferred P3: holder liveness must be verified with the Windows lock
         # primitive before any destructive step can run unguarded.
         raise UpgradeError(
             f"The data-dir lock record exists (holder PID {holder.pid}, mode {holder.mode!r}) and "
@@ -288,7 +290,7 @@ def pre_upgrade_dump(
     (snapshot_dir / SNAPSHOT_MANIFEST_NAME).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     _write_restore_manifest(snapshot_dir, created_at=created_at)
     if os.name == "posix":
-        # TODO(P3): Windows ACL hardening (chmod is a silent no-op there).
+        # Deferred P3: Windows ACL hardening (chmod is a silent no-op there).
         # DIRECTORIES get 0700 — the e(xecute) bit is the DIRECTORY search
         # bit: at 0600 the snapshot dir is unsearchable and even the dump
         # (written moments earlier) can no longer be RESOLVED to read it.
@@ -810,16 +812,32 @@ def prune_versions(
     return pruned
 
 
+def _host_os() -> str:
+    """The bundle asset's OS token (linux or darwin)."""
+    return "darwin" if sys.platform == "darwin" else "linux"
+
+
 def _host_arch() -> str:
-    """The bundle asset's arch token (modulo-<v>-linux-<arch>.tar.gz)."""
+    """Return the supported bundle arch token for this host.
+
+    Unknown machine values must refuse rather than silently selecting amd64:
+    downloading an artifact for the wrong architecture can pass every checksum
+    gate and fail only when the native launcher is executed.
+    """
     import platform
 
-    return {
-        "x86_64": "amd64",
-        "AMD64": "amd64",
-        "aarch64": "arm64",
-        "arm64": "arm64",
-    }.get(platform.machine(), "amd64")
+    machine = platform.machine()
+    try:
+        return {
+            "x86_64": "amd64",
+            "AMD64": "amd64",
+            "aarch64": "arm64",
+            "arm64": "arm64",
+        }[machine]
+    except KeyError as exc:
+        raise UpgradeError(
+            f"unsupported host architecture '{machine}'; supported architectures are x86_64/amd64 and aarch64/arm64"
+        ) from exc
 
 
 def _urllib_fetch(url: str, target: Path) -> None:
@@ -856,7 +874,7 @@ def fetch_release_assets(
     target_version = _validate_version_segment(target_version)
     release_tag = f"bundle-v{target_version}"
     download_dir.mkdir(parents=True, exist_ok=True)
-    tarball_name = f"modulo-{target_version}-linux-{_host_arch()}.tar.gz"
+    tarball_name = f"modulo-{target_version}-{_host_os()}-{_host_arch()}.tar.gz"
     base = f"{_RELEASES_DOWNLOAD_BASE}/{release_tag}"
     tarball = download_dir / tarball_name
     if not tarball.resolve().is_relative_to(download_dir.resolve()):
@@ -870,6 +888,43 @@ def fetch_release_assets(
     return UpgradeDownloads(version=target_version, tarball=tarball, manifest=manifest_file, signature=signature_file)
 
 
+def _checksum_artifact(bundle_dir: Path, name: str) -> Path:
+    """Validate a SHA256SUMS name without following untrusted path components."""
+    path = Path(name)
+    raw_components = name.split("/")
+    if (
+        path.is_absolute()
+        or PureWindowsPath(name).is_absolute()
+        or _WINDOWS_DRIVE_PATH.match(name)
+        or "\\" in name
+        or any(component in {"", ".", ".."} for component in raw_components)
+    ):
+        raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}")
+
+    current = bundle_dir
+    for component in path.parts[:-1]:
+        current = current / component
+        try:
+            component_stat = current.lstat()
+        except OSError as exc:
+            raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}") from exc
+        if stat.S_ISLNK(component_stat.st_mode) or not stat.S_ISDIR(component_stat.st_mode):
+            raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}")
+
+    artifact = current / path.parts[-1]
+    try:
+        artifact_stat = artifact.lstat()
+    except OSError as exc:
+        raise UpgradeError(f"bundle integrity check FAILED: {name} (listed in SHA256SUMS) is missing") from exc
+    if stat.S_ISLNK(artifact_stat.st_mode) or not stat.S_ISREG(artifact_stat.st_mode):
+        raise UpgradeError(f"bundle integrity check FAILED: {name} (listed in SHA256SUMS) is not a regular file")
+    try:
+        artifact.resolve(strict=True).relative_to(bundle_dir.resolve(strict=True))
+    except (OSError, ValueError) as exc:  # pragma: no cover - lstat/resolve TOCTOU guard
+        raise UpgradeError(f"bundle integrity check FAILED: unsafe artifact path {name!r}") from exc
+    return artifact
+
+
 def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
     """Extract into *staging_dir*; assert ONE top-level dir; verify each
     file against the bundle's own SHA256SUMS (the second integrity layer)."""
@@ -879,13 +934,18 @@ def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
             archive.extractall(staging_dir, filter="data")
     except (tarfile.TarError, OSError) as exc:
         raise UpgradeError(f"could not extract {tarball.name}: {exc}") from exc
-    top_levels = [entry for entry in staging_dir.iterdir() if entry.is_dir()]
-    if len(top_levels) != 1:
+    top_levels = list(staging_dir.iterdir())
+    if len(top_levels) != 1 or not top_levels[0].is_dir() or top_levels[0].is_symlink():
         raise UpgradeError(
-            f"unexpected archive layout: expected exactly one top-level directory in "
+            f"unexpected archive layout: expected exactly one non-symlink top-level directory in "
             f"{tarball.name}, found {len(top_levels)}"
         )
     bundle_dir = top_levels[0]
+    expected_prefix = tarball.name.removesuffix(".tar.gz")
+    if bundle_dir.name != expected_prefix:
+        raise UpgradeError(
+            f"archive top-level directory '{bundle_dir.name}' does not match archive identity '{expected_prefix}'"
+        )
     sums_path = bundle_dir / "SHA256SUMS"
     if not sums_path.is_file():
         raise UpgradeError(f"malformed bundle: SHA256SUMS missing from {tarball.name}")
@@ -896,9 +956,7 @@ def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
         expected, _separator, name = line.partition("  ")
         if len(expected) != 64 or not name:
             raise UpgradeError(f"malformed SHA256SUMS line in {tarball.name}: {line!r}")
-        artifact = bundle_dir / name
-        if not artifact.is_file():
-            raise UpgradeError(f"bundle integrity check FAILED: {name} (listed in SHA256SUMS) is missing")
+        artifact = _checksum_artifact(bundle_dir, name)
         actual = _sha256_file(artifact)
         if actual != expected:
             raise UpgradeError(
@@ -932,22 +990,7 @@ def stop_running_stack(data_dir: Path, *, unit_file: Path | None = None) -> None
 
     unit_path = unit_file if unit_file is not None else service_module.default_unit_path()
     if unit_path.is_file():
-        try:
-            stop_result = subprocess.run(  # noqa: S603
-                ["systemctl", "--user", "stop", service_module.UNIT_FILENAME],  # noqa: S607
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30,
-            )
-            if stop_result.returncode != 0:
-                _log.warning(
-                    "upgrade.unit_stop_failed rc=%s stderr=%s",
-                    stop_result.returncode,
-                    stop_result.stderr[-300:],
-                )
-        except subprocess.TimeoutExpired:
-            _log.warning("upgrade.unit_stop_timed_out after 30s - falling through to the supervisor stop")
+        _stop_service(unit_path)
     request_stop(data_dir)
     holder = _read_lock_holder(data_dir.parent / (data_dir.name + ".lock"))
     if holder is not None and _pid_alive(holder.pid):
@@ -959,35 +1002,12 @@ def stop_running_stack(data_dir: Path, *, unit_file: Path | None = None) -> None
 
 
 def _restart_unit_best_effort(*, why: str) -> None:
-    """Best-effort `systemctl --user start` of the FAR-674 unit (+ loud log).
-
-    Post-stop aborts otherwise leave the bundled stack DARK: the unit was
-    stopped, the supervisor's stop already ran, and no path restarts it.
-    The stack is restarted whenever a unit exists so a refusal never has a
-    dark side-effect; without the unit there is nothing to restart (the
-    foreground launcher either lives or was never running).
-    """
+    """Best-effort restart through the host service manager."""
     try:
-        from modulo.launcher import service as service_module
-
-        if not service_module.default_unit_path().is_file():
+        unit_path = _service_unit_path()
+        if not unit_path.is_file():
             return
-        restart = subprocess.run(  # noqa: S603
-            ["systemctl", "--user", "start", service_module.UNIT_FILENAME],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        if restart.returncode == 0:
-            _log.warning("upgrade.unit_started_after_abort reason=%s", why)
-        else:
-            _log.error(
-                "upgrade.unit_restart_after_abort_FAILED rc=%s stderr=%s (%s)",
-                restart.returncode,
-                restart.stderr[-300:],
-                why,
-            )
+        _restart_service(unit_path, why=why)
     except Exception:  # best-effort path, never masks the primary error
         _log.exception("upgrade.unit_restart_best_effort_failed (%s)", why)
 
@@ -1319,15 +1339,53 @@ def _resolve_current_target(install_root: Path) -> Path:
 
 
 def assert_upgrade_platform() -> None:
-    import sys
-
+    if sys.platform == "darwin":
+        raise UpgradeError(
+            "macOS native artifact is not yet published; the macOS service/data/launcher seam exists, "
+            "but no complete signed and notarized Darwin bundle is available for upgrade"
+        )
     if sys.platform == "win32":
         raise UpgradeError(
             "the full modulo upgrade flow is not implemented on Windows yet (TODO(P3)): "
             "the versioned-dir/current-symlink swap is a POSIX symlink primitive today"
         )
+
+
+def _service_unit_path() -> Path:
+    from modulo.launcher import service as service_module
+
+    return service_module.default_unit_path()
+
+
+def _run_service_command(argv: list[str], *, why: str) -> None:
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=30)  # noqa: S603
+    except subprocess.TimeoutExpired:
+        _log.warning("upgrade.service_command_timed_out argv=%s (%s)", argv, why)
+        return
+    if result.returncode == 0:
+        _log.warning("upgrade.unit_started_after_abort argv=%s (%s)", argv, why)
+        return
+    detail = (result.stderr or result.stdout or "").strip()
+    _log.error("upgrade.unit_restart_after_abort_FAILED rc=%s stderr=%s (%s)", result.returncode, detail[-300:], why)
+
+
+def _stop_service(unit_path: Path) -> None:
     if sys.platform == "darwin":
-        raise UpgradeError("the full modulo upgrade flow is the TODO(P2) macOS launchd seam (FAR-678)")
+        _run_service_command(["launchctl", "unload", "-w", str(unit_path)], why="upgrade stop")
+    else:
+        from modulo.launcher import service as service_module
+
+        _run_service_command(["systemctl", "--user", "stop", service_module.UNIT_FILENAME], why="upgrade stop")
+
+
+def _restart_service(unit_path: Path, *, why: str) -> None:
+    if sys.platform == "darwin":
+        _run_service_command(["launchctl", "load", "-w", str(unit_path)], why=why)
+    else:
+        from modulo.launcher import service as service_module
+
+        _run_service_command(["systemctl", "--user", "start", service_module.UNIT_FILENAME], why=why)
 
 
 def _resolve_upgrade_assets(
@@ -1352,9 +1410,26 @@ def _resolve_upgrade_assets(
     tarball = Path(from_file)
     if not tarball.is_file():
         raise UpgradeError(f"--from-file: no such file: {from_file}")
-    version = _strip_bundle_prefix(
-        tarball.name.removeprefix("modulo-").removesuffix("-linux-amd64.tar.gz").removesuffix("-linux-arm64.tar.gz")
+    match = re.fullmatch(
+        r"modulo-(?P<version>[A-Za-z0-9][A-Za-z0-9._-]*)-(?P<os>linux|darwin)-(?P<arch>amd64|arm64)\.tar\.gz",
+        tarball.name,
     )
+    if match is None:
+        raise UpgradeError(
+            "--from-file archive name is malformed: expected exactly modulo-<version>-<os>-<arch>.tar.gz"
+        )
+    os_token = _host_os()
+    archive_os = match.group("os")
+    if archive_os != os_token:
+        raise UpgradeError(f"--from-file archive OS does not match the detected host ({os_token}): {tarball.name}")
+    host_arch = _host_arch()
+    archive_arch = match.group("arch")
+    if archive_arch != host_arch:
+        raise UpgradeError(
+            f"--from-file archive architecture '{archive_arch}' does not match the detected host architecture "
+            f"'{host_arch}': {tarball.name}"
+        )
+    version = _validate_version_segment(match.group("version"))
     manifest_file = tarball.parent / _RELEASE_MANIFEST_NAME
     signature_file = tarball.parent / f"{_RELEASE_MANIFEST_NAME}.sig"
     if not (manifest_file.is_file() and signature_file.is_file()):

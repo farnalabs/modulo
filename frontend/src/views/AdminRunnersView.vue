@@ -4,9 +4,8 @@
       <PageHeader
         :title="$t('views.AdminRunnersView.runners')"
         :subtitle="$t('views.AdminRunnersView.subtitle')"
+        :tabs="tabs"
       />
-
-      <PageTabs :tabs="tabs" />
 
       <ErrorAlert
         v-if="statusError"
@@ -29,7 +28,6 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
-import PageTabs from '../components/PageTabs.vue'
 import RunnerStatusStrip from '../components/runners/RunnerStatusStrip.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'

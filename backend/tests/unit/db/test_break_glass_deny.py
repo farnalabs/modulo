@@ -23,6 +23,7 @@ from modulo.db.crud.break_glass_deny import (
     render_sql,
 )
 from modulo.db.models.account import Account
+from tests.unit._source_scan import iter_source_text
 
 _BACKEND_ROOT = Path(__file__).parents[3]
 _SRC_ROOT = _BACKEND_ROOT / "src"
@@ -171,13 +172,13 @@ def _scan_import_sites() -> tuple[set[str], set[str]]:
     """
     role_sites: set[str] = set()
     lookup_sites: set[str] = set()
-    for path in sorted(_SRC_MODULO.rglob("*.py")):
+    for path, source in iter_source_text(_SRC_MODULO):
         rel = path.relative_to(_SRC_ROOT).as_posix()
         if rel == "modulo/db/crud/org_membership.py":
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError):
+            tree = ast.parse(source)
+        except SyntaxError:
             continue
         # Local names bound to the org_membership module (e.g. the
         # `from modulo.db.crud import org_membership as crud_org_membership`

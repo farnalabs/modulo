@@ -117,6 +117,7 @@ from modulo.core.pipeline_engine.executor import (
     _retry_after_policy,
     _retry_backoff_seconds,
 )
+from modulo.db.models.run_attempt import ATTEMPT_TERMINAL_REASON_RESET
 
 _log = logging.getLogger(__name__)
 
@@ -584,6 +585,18 @@ async def watchdog_retry_after_policy(
     # FAR-525 observability: count only CONFIRMED resets (same seam as the
     # in-execute path — same counter, same reason vocabulary).
     _record_retry_redispatch(reason=final_status, schedule_state=schedule_state, delay_seconds=effective_sleep)
+    # FAR-2078: the killed attempt ended in this CONFIRMED reset — close its
+    # durable row with the kill reason the reset just erased from
+    # ``runs.error_code``. FAIL-OPEN; the re-dispatch already committed.
+    from modulo.core.pipeline_execution import engine_session_factory, record_attempt_close
+
+    await record_attempt_close(
+        engine_session_factory(aeng),
+        run_id,
+        org_id,
+        terminal_reason=ATTEMPT_TERMINAL_REASON_RESET,
+        error_code=error_code,
+    )
     _log.warning(
         "pipeline.watchdog_retry_redispatch run=%s status=%s error_code=%s attempt=%s budget=%s "
         "sleep_seconds=%.3f schedule_state=%s",

@@ -88,7 +88,7 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-library** - Reusable pipeline templates, the community library, and library collections (collection authoring/publishing is flag-gated behind `library_collection`; see FAR-760) - routes: `/library/:id/create-pipeline`, `/library`, `/library/collections/new`, `/library/collections/:id`
 - **feat-library-collections** - Install, uninstall, and manage library collection installs into runnable org entities (flag-gated behind `library_collection`; see FAR-760 / FAR-762 / FAR-764) - routes: `/library/collections/new`, `/library/collections/:id`
 - **feat-runs** - Run execution, history, and detail (Output Diff deferred from the MVP nav – hidden via private_preview; see FAR-542) - routes: `/runs`, `/runs/:id`
-- **feat-lifecycle-maps** - Lifecycle maps and stage workflows - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
+- **feat-lifecycle-maps** - Internal lifecycle maps and stage workflows (dev-mode dogfood only; not Alpha-facing) - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
 - **feat-governance-stack** - Read-only governance-hierarchy taxonomy readout over existing list APIs - routes: `/governance`
 
 ### Monitor
@@ -97,7 +97,8 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-costs** - Cost tracking, spend limits, cost controls, and cost components - routes: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`, `/admin/costs/components`
 - **feat-hitl** - Human-in-the-loop approval gates and review - routes: `/settings/hitl-review`
 - **feat-analytics** - Reporting and analytics over runs, costs, and facts - routes: `/analytics`
-- **feat-evidence** - Evidence dashboard with a server-side field-level redaction boundary - routes: `/evidence`, `/admin/evidence-redaction`, `/admin/evidence`, `/admin/compliance/evidence-index`
+- **feat-evidence** - Evidence dashboard with a server-side field-level redaction boundary - routes: `/evidence`, `/admin/evidence-redaction`, `/admin/evidence`, `/admin/compliance/evidence-index`, `/risk-assessment`
+- **feat-risk-assessment** - Risk assessment dashboard for evidence-based risk analysis - routes: `/risk-assessment`
 
 ### Improve
 - **feat-evals** - Evaluation editor and proposal queue - routes: `/evals/editor`, `/evals/proposals`
@@ -151,7 +152,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `feat-schemas`, `feat-teams`, `feat-evals`, `feat-guardrails`, `feat-variants`,
 > `feat-product-analytics`, `feat-pipelines`, `feat-runs`, `feat-dashboard`,
 > `feat-costs`, `feat-notifications`, `feat-observability`, `feat-plugins`,
-> `feat-triggers`, `feat-analytics`, `feat-audit` gained their behaviour-tracker
+> `feat-triggers`, `feat-analytics`, `feat-audit`, `feat-risk-assessment` gained their behaviour-tracker
 > entries – see the graph index below. The 2026-09-10 walk added `feat-apply`
 > (registered in the manifest by FAR-681 but never tracked). A follow-up
 > 2026-09-10 walk reconciled this registry's `routes:` lists with the manifest
@@ -1277,6 +1278,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-costs](monitor/costs.md) => PRD 8.10, 9.3
 - [feat-observability](observability/observability.md) => PRD N/A
 - [feat-evidence](monitor/evidence.md) => PRD N/A
+- [feat-risk-assessment](monitor/risk-assessment.md) => PRD N/A
 
 ### Notifications
 - [feat-notifications](notifications/notifications.md) => PRD N/A

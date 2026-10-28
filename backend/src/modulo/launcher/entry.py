@@ -13,9 +13,11 @@ module import — BEFORE it imports ``modulo.cli.backup`` (psycopg, settings,
 apply) — so the backup/restore path is covered on the real entry point too
 (locked by the import-hygiene subprocess test).
 
-Platform: the bundled runtime is LINUX-FIRST. macOS is refused loudly at
-boot — the child-death shim depends on /proc STARTTIME, which only Linux
-provides (TODO(P2) macOS variant); Windows carries the TODO(P3) seam.
+Platform: the bundled runtime runs on Linux and macOS. The child-death shim
+needs a process start-time identity, which the supervisor's platform seam
+provides from /proc STARTTIME on Linux and from libproc's
+``proc_pidinfo(PROC_PIDTBSDINFO)`` on macOS. Windows carries the TODO(P3)
+seam and is refused loudly.
 
 Boot order (ADR 031 Decision 2):
 
@@ -115,11 +117,15 @@ class BootError(RuntimeError):
 
 
 def default_data_dir() -> Path:
-    """Per-OS data dir root (ADR 031 Decision 6; P1a = Linux)."""
+    """Per-OS data dir root (ADR 031 Decision 6; Linux and macOS)."""
     if sys.platform == "win32":
-        # TODO(P3): %PROGRAMDATA%\Modulo with icacls hardening lands at P3.
+        # Deferred P3: %PROGRAMDATA%\Modulo with icacls hardening.
         raise BootError("The native launcher data dir is not supported on Windows yet (TODO(P3))")
     xdg = os.environ.get("XDG_DATA_HOME")
+    if sys.platform == "darwin":
+        if xdg:
+            return Path(xdg).expanduser() / "modulo" / "data"
+        return Path.home() / "Library" / "Application Support" / "Modulo" / "data"
     root = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
     return root / "modulo" / "data"
 
@@ -147,7 +153,7 @@ class _RunState:
 
     def install_signal_handlers(self) -> None:
         if sys.platform == "win32":
-            # TODO(P3): CTRL_BREAK_EVENT handling lands with the Windows seam.
+            # Deferred P3: CTRL_BREAK_EVENT handling for the Windows seam.
             return
 
         def _handle(_signum: int, _frame: object) -> None:
@@ -189,13 +195,6 @@ def run_start(
     """
     # FIRST ACTION — before any other modulo import (ADR 031 Decision 2).
     env_safety.scrub_os_environment()
-    if sys.platform == "darwin":
-        raise BootError(
-            "The native launcher requires Linux: the child-death watchdog depends on "
-            "/proc STARTTIME, which macOS does not provide (a bundled service would be "
-            "killed moments after every spawn). macOS support is planned (P2) — use the "
-            "Docker Compose path meanwhile."
-        )
     effective_data_dir = data_dir if data_dir is not None else default_data_dir()
     if detach:
         return _start_detached(effective_data_dir, bin_dir, clear_degraded=clear_degraded)
@@ -213,7 +212,7 @@ def _start_detached(data_dir: Path, bin_dir: Path | None, *, clear_degraded: boo
     reflects reality.
     """
     if sys.platform == "win32":
-        # TODO(P3): Windows service/DETACHED_PROCESS seam.
+        # Deferred P3: Windows service/DETACHED_PROCESS seam.
         raise BootError("--detach is not supported on Windows yet (TODO(P3))")
     read_fd, write_fd = os.pipe()
     first_pid = os.fork()

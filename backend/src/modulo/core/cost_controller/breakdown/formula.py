@@ -47,20 +47,15 @@ class CostFormulaError(ValueError):
         super().__init__(message)
 
 
+# Whitespace is skipped explicitly in ``_tokenize`` so the token pattern stays
+# small and its ASCII-only identifier semantics remain obvious.
 _TOKEN_RE = re.compile(
-    r"""
-    [ \t\r\n\f\v]*                           # skip ASCII whitespace ONLY (NBSP is NOT
-                                             #   whitespace here — it surfaces as
-                                             #   unexpected_character, no silent juxtaposition)
-    (?:
-        (?P<number>\d+(?:\.\d+)?|\.\d+) |
-        (?P<ident>[A-Za-z_]\w*) |
-        (?P<op>[+\-*/]) |
-        (?P<paren>[()]) |
-        (?P<bad>.)
-    )
-    """,
-    re.VERBOSE | re.ASCII,
+    r"(?P<number>\d+\.\d+|\d+|\.\d+)|"
+    r"(?P<ident>[A-Za-z_]\w*)|"
+    r"(?P<op>[+\-*/])|"
+    r"(?P<paren>[()])|"
+    r"(?P<bad>.)",
+    re.ASCII,
 )
 
 
@@ -75,28 +70,36 @@ class _Token:
         return f"_Token({self.kind}, {self.value!r})"
 
 
+def _make_token(match: re.Match[str]) -> _Token:
+    """Create a _Token from a regex match."""
+    if match.lastgroup == "number":
+        return _Token("number", match.group("number"))
+    if match.lastgroup == "ident":
+        return _Token("ident", match.group("ident"))
+    if match.lastgroup == "op":
+        return _Token("op", match.group("op"))
+    if match.lastgroup == "paren":
+        ch = match.group("paren")
+        return _Token("lparen" if ch == "(" else "rparen", ch)
+    # 'bad' — a character the grammar cannot produce (incl. non-ASCII)
+    raise CostFormulaError(
+        "unexpected_character",
+        f"unexpected character {match.string[match.start()]!r} in formula",
+    )
+
+
 def _tokenize(formula: str) -> list[_Token]:
     tokens: list[_Token] = []
     pos = 0
     length = len(formula)
     while pos < length:
+        if formula[pos] in " \t\r\n\f\v" and pos + 1 < length:
+            pos += 1
+            continue
         match = _TOKEN_RE.match(formula, pos)
         if match is None:
             raise CostFormulaError("unexpected_character", "unexpected character in formula")
-        if match.lastgroup == "number":
-            tokens.append(_Token("number", match.group("number")))
-        elif match.lastgroup == "ident":
-            tokens.append(_Token("ident", match.group("ident")))
-        elif match.lastgroup == "op":
-            tokens.append(_Token("op", match.group("op")))
-        elif match.lastgroup == "paren":
-            ch = match.group("paren")
-            tokens.append(_Token("lparen" if ch == "(" else "rparen", ch))
-        else:  # 'bad' — a character the grammar cannot produce (incl. non-ASCII)
-            raise CostFormulaError(
-                "unexpected_character",
-                f"unexpected character {formula[pos]!r} in formula",
-            )
+        tokens.append(_make_token(match))
         pos = match.end()
     tokens.append(_Token("eof", ""))
     return tokens
@@ -165,24 +168,33 @@ class _Parser:
             return ("neg", self._factor(depth + 1))
         return self._primary(depth)
 
+    def _parse_number(self, tok: _Token) -> tuple[str, str]:
+        self._next()
+        return ("num", tok.value)
+
+    def _parse_ident(self, tok: _Token) -> tuple[str, str]:
+        self._next()
+        if tok.value not in self._allowed:
+            raise CostFormulaError(
+                "unknown_identifier",
+                f"unknown identifier {tok.value!r} (allowed: {sorted(self._allowed)})",
+            )
+        return ("ident", tok.value)
+
+    def _parse_group(self, depth: int) -> tuple[str, Any]:
+        self._next()
+        inner = self._expr(depth + 1)
+        self._expect("rparen")
+        return ("group", inner)
+
     def _primary(self, depth: int) -> Any:
         tok = self._peek()
         if tok.kind == "number":
-            self._next()
-            return ("num", tok.value)
+            return self._parse_number(tok)
         if tok.kind == "ident":
-            self._next()
-            if tok.value not in self._allowed:
-                raise CostFormulaError(
-                    "unknown_identifier",
-                    f"unknown identifier {tok.value!r} (allowed: {sorted(self._allowed)})",
-                )
-            return ("ident", tok.value)
+            return self._parse_ident(tok)
         if tok.kind == "lparen":
-            self._next()
-            inner = self._expr(depth + 1)
-            self._expect("rparen")
-            return ("group", inner)
+            return self._parse_group(depth)
         if tok.kind == "rparen":
             raise CostFormulaError("unbalanced_parentheses", "unbalanced parentheses in formula")
         if tok.kind == "eof":
@@ -217,16 +229,19 @@ def validate_formula(formula: str | None, allowed_idents: frozenset[str]) -> Non
     _compile(formula, allowed_idents)
 
 
-def _evaluate(node: Any, params: dict[str, Decimal]) -> Decimal:
+def _evaluate_unary(node: Any, params: dict[str, Decimal]) -> Decimal:
+    """Evaluate unary operations (neg, group)."""
     op = node[0]
-    if op == "num":
-        return Decimal(node[1])
-    if op == "ident":
-        return params[node[1]]
     if op == "neg":
         return -_evaluate(node[1], params)
     if op == "group":
         return _evaluate(node[1], params)
+    raise CostFormulaError("eval_error", f"unknown unary operator {op!r}")  # pragma: no cover
+
+
+def _evaluate_binary(node: Any, params: dict[str, Decimal]) -> Decimal:
+    """Evaluate binary operations (+, -, *, /)."""
+    op = node[0]
     left = _evaluate(node[1], params)
     right = _evaluate(node[2], params)
     if op == "+":
@@ -237,7 +252,18 @@ def _evaluate(node: Any, params: dict[str, Decimal]) -> Decimal:
         return left * right
     if op == "/":
         return left / right
-    raise CostFormulaError("eval_error", f"unknown operator {op!r}")  # pragma: no cover
+    raise CostFormulaError("eval_error", f"unknown binary operator {op!r}")  # pragma: no cover
+
+
+def _evaluate(node: Any, params: dict[str, Decimal]) -> Decimal:
+    op = node[0]
+    if op == "num":
+        return Decimal(node[1])
+    if op == "ident":
+        return params[node[1]]
+    if op in ("neg", "group"):
+        return _evaluate_unary(node, params)
+    return _evaluate_binary(node, params)
 
 
 def evaluate_formula(

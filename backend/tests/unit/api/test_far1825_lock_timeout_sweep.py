@@ -67,6 +67,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.unit._source_scan import iter_source_text
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -113,6 +114,7 @@ _ROW_LOCK_FILES: frozenset[str] = frozenset(
         "auth/oauth.py",
         "core/assistant/context_source_service.py",
         "core/audit_logger/__init__.py",
+        "core/eval/finding_resolver.py",
         "core/cost_controller/__init__.py",
         "core/cost_controller/finalize.py",
         "core/cron_helpers.py",
@@ -350,8 +352,8 @@ def _first_bound_line(node: ast.AST, aliases: set[str]) -> int | None:
 
 def _row_lock_file_set() -> set[str]:
     discovered: set[str] = set()
-    for path in _SRC.rglob("*.py"):
-        if _row_lock_calls(ast.parse(path.read_text(encoding="utf-8"))):
+    for path, source in iter_source_text(_SRC):
+        if _row_lock_calls(ast.parse(source, filename=str(path))):
             discovered.add(path.relative_to(_SRC).as_posix())
     return discovered
 
@@ -368,10 +370,10 @@ def _dotted_name(node: ast.expr) -> str | None:
 def _set_parent_node_call_sites() -> list[str]:
     """Production call sites of ``set_parent_node`` (import-alias aware)."""
     sites: list[str] = []
-    for path in _SRC.rglob("*.py"):
+    for path, source in iter_source_text(_SRC):
         if path.name == "node_composite.py":
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = ast.parse(source, filename=str(path))
         imported_symbols: set[str] = set()
         imported_modules: set[str] = set()
         for node in ast.walk(tree):

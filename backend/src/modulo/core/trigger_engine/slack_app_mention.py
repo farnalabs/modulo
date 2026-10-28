@@ -39,16 +39,14 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.secret_storage import SecretStorageError
-from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.exceptions import RateLimitConflictError
 from modulo.core.trigger_engine import (
     DuplicateWebhookError,
     PipelineRateLimitError,
-    TriggerBusyError,
     TriggerEngine,
     _apply_payload_mapping,
     _extract_work_item_refs,
@@ -116,7 +114,11 @@ def verify_slack_signature(
         return False
     base = f"{_SLACK_SIGNATURE_VERSION}:{ts}:".encode() + raw_body
     expected = f"{_SLACK_SIGNATURE_VERSION}=" + hmac.new(signing_secret.encode(), base, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature_header)
+    # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. The signature header is
+    # attacker-controlled and arrives latin-1-decoded, so a high byte must fail
+    # closed with False rather than escaping as an uncaught 500.
+    return hmac.compare_digest(expected.encode("utf-8"), signature_header.encode("utf-8"))
 
 
 def verify_slack_timestamp(timestamp_header: str | None) -> int:
@@ -443,13 +445,7 @@ async def handle_app_mention(
     """
     engine = TriggerEngine()
 
-    key1, key2 = _uuid_to_lock_keys(trigger_id)
-    lock_result = await session.execute(
-        text("SELECT pg_try_advisory_lock(:key1, :key2)"),
-        {"key1": key1, "key2": key2},
-    )
-    if not lock_result.scalar_one():
-        raise TriggerBusyError(trigger_id)
+    await engine._acquire_trigger_lock(session, trigger_id)
     try:
         trigger = await engine._load_trigger(session, trigger_id, org_id)
         cfg = trigger.config_json or {}
@@ -579,10 +575,7 @@ async def handle_app_mention(
 
         return run, trigger_event, input_payload
     finally:
-        await session.execute(
-            text("SELECT pg_advisory_unlock(:key1, :key2)"),
-            {"key1": key1, "key2": key2},
-        )
+        await engine._release_trigger_lock(session, trigger_id)
 
 
 async def _store_raw_payload(

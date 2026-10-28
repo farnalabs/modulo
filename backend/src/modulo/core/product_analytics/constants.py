@@ -37,7 +37,18 @@ DEFAULT_LEVEL_CHANGED_AT: None = None
 # SystemConfig keys
 # ---------------------------------------------------------------------------
 INSTANCE_SWITCH_KEY: str = "product_analytics_enabled"
-LICENSE_ENFORCEMENT_KILL_SWITCH_KEY: str = "product_analytics_license_enforcement_kill_switch"
+
+# ---------------------------------------------------------------------------
+# Where the effective instance switch came from
+# ---------------------------------------------------------------------------
+#: An operator explicitly set ``system_config[INSTANCE_SWITCH_KEY]``.
+SWITCH_SOURCE_OPERATOR: str = "operator"
+#: No stored value, but ``ENV_INSTANCE_SWITCH`` is set (deployment operator).
+SWITCH_SOURCE_ENV: str = "environment"
+#: Nothing explicit: the installed licence requires analytics, so the default is ON.
+SWITCH_SOURCE_LICENSE: str = "licence"
+#: Nothing explicit and no licence requirement: OFF.
+SWITCH_SOURCE_DEFAULT: str = "default"
 
 # Metrics-dump system_config keys. These live here (not in ``metrics_dump``) so
 # every reader can import them without dragging in the dump's heavy transitive

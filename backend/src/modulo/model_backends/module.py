@@ -142,7 +142,7 @@ class OpenAICompatibleBackend(ModelBackendBase):
             classified = self._classify_gateway_error(exc)
             if classified is exc:
                 raise
-            raise classified from exc
+            raise classified from exc  # NOSONAR python:S112 — preserves typed gateway classification
 
     def stream(
         self,
@@ -151,10 +151,12 @@ class OpenAICompatibleBackend(ModelBackendBase):
         output_schema: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[BaseMessage]:
+        del output_schema  # Contract parameter; streaming structured output is unsupported.
         # FIX 4 (FAR-898): streaming structured output is not yet supported —
         # with_structured_output in stream mode yields non-BaseMessage chunks
         # and conflicts with tool-calling.  output_schema is intentionally
         # ignored here; the non-streaming invoke() path handles structured output.
+
         async def _iter() -> AsyncIterator[BaseMessage]:
             try:
                 async for chunk in self._model.astream(messages, tools=tools, **kwargs):
@@ -163,6 +165,6 @@ class OpenAICompatibleBackend(ModelBackendBase):
                 classified = self._classify_gateway_error(exc)
                 if classified is exc:
                     raise
-                raise classified from exc
+                raise classified from exc  # NOSONAR python:S112 — preserves typed gateway classification
 
         return _iter()

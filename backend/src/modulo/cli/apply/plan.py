@@ -73,6 +73,45 @@ def _backend_current_view(current: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _effective_allow_insecure_http(base_url: Any) -> bool:
+    """Is the live endpoint plain ``http``? (the server-observable opt-in form)."""
+    return isinstance(base_url, str) and base_url.lower().startswith("http://")
+
+
+def _backend_managed_current_view(
+    current: dict[str, Any],
+    desired_view: dict[str, Any],
+) -> dict[str, Any]:
+    """Current view restricted to the DESIRED managed keys (FAR-2105).
+
+    The endpoint fields are managed ONLY when the config declares them, so a
+    UI/API-set ``base_url`` must not surface as drift against a config that
+    never mentions it — the current view is therefore restricted to the desired
+    key set (the ``env_profile_id`` / owner precedent, extended to a kind whose
+    baseline view was previously unconditional).
+
+    ``base_url`` compares verbatim (the API returns the trimmed stored value,
+    and the declared value is trimmed at load). ``allow_insecure_http`` has no
+    stored column and is not echoed by the API: it is a validation gate whose
+    persisted evidence is the endpoint's scheme, so the live side derives the
+    SAME observable value the desired side hashes
+    (``ModelBackendEntity.effective_allow_insecure_http``). A raw-flag
+    comparison would report permanent false drift for ``https`` +
+    ``allow_insecure_http``.
+    """
+    view: dict[str, Any] = {}
+    for key in desired_view:
+        if key == "base_url":
+            view[key] = current.get(key)
+        elif key == "allow_insecure_http":
+            view[key] = _effective_allow_insecure_http(current.get("base_url"))
+        elif key == "default_params":
+            view[key] = current.get(key) or {}
+        else:
+            view[key] = current.get(key)
+    return view
+
+
 def _pipeline_current_view(current: dict[str, Any], desired_view: dict[str, Any]) -> dict[str, Any]:
     """Current view restricted to the DESIRED managed keys.
 
@@ -101,16 +140,9 @@ def _pipeline_current_view(current: dict[str, Any], desired_view: dict[str, Any]
             # The API serialises the Numeric(14, 6) column as a float;
             # canonicalise both sides to 6dp so no false drift is reported.
             view[key] = quantize_circuit_breaker_threshold(current.get(key))
-        elif key in ("business_owner_id", "reliability_owner_id"):
-            # FAR-1161: accountability owners — both sides are UUID strings
-            # (or null); coerce so a UUID object and its string form hash alike.
-            value = current.get(key)
-            view[key] = None if value is None else str(value)
-        elif key == "environment_profile_id":
-            # FAR-1599: the binding hashes in the same UUID-string id-space as
-            # the owners — the desired side stringifies in managed_view, the
-            # current side arrives as the API's string (or null); the str()
-            # coercion defends against a UUID object in a test double.
+        elif key in ("environment_profile_id", "business_owner_id", "reliability_owner_id"):
+            # UUID-backed bindings use the same string representation on both
+            # sides, including when a test double supplies a UUID object.
             value = current.get(key)
             view[key] = None if value is None else str(value)
         else:
@@ -180,6 +212,17 @@ def _version_conflict(
     return None
 
 
+def _current_view(kind: str, current: dict[str, Any], desired_view: dict[str, Any]) -> dict[str, Any]:
+    """Build the current managed view for one entity kind."""
+    if kind == KIND_BACKEND:
+        return _backend_managed_current_view(current, desired_view)
+    if kind == KIND_PIPELINE:
+        return _pipeline_current_view(current, desired_view)
+    if kind == KIND_TRIGGER:
+        return _trigger_current_view(current, desired_view)
+    return _CURRENT_VIEWS[kind](current)
+
+
 def plan_entity(
     kind: str,
     name: str,
@@ -228,13 +271,7 @@ def plan_entity(
                 desired_hash=desired_hash,
                 current_hash=canonical_hash(_CURRENT_VIEWS[kind](current)),
             )
-    current_view: dict[str, Any]
-    if kind == KIND_PIPELINE:
-        current_view = _pipeline_current_view(current, desired_view)
-    elif kind == KIND_TRIGGER:
-        current_view = _trigger_current_view(current, desired_view)
-    else:
-        current_view = _CURRENT_VIEWS[kind](current)
+    current_view = _current_view(kind, current, desired_view)
     current_hash = canonical_hash(current_view)
     status = "unchanged" if current_hash == desired_hash else "updated"
     return Decision(

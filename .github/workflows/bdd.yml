@@ -9,8 +9,16 @@ on:
 
 env:
   DATABASE_URL: "postgresql+asyncpg://modulo:${{ secrets.POSTGRES_PASSWORD || 'modulo' }}@localhost:5432/modulo"
-  SECRET_KEY: ${{ secrets.SECRET_KEY }}
-  FERNET_KEY: ${{ secrets.FERNET_KEY }}
+  # Dependabot PR runs never receive repository secrets (GitHub withholds them
+  # for `dependabot[bot]`-authored pull_request events), so these two Settings
+  # fields would arrive empty and the backend would exit at boot with
+  # "SECRET_KEY must be at least 32 bytes; got 0", failing "Wait for backend
+  # healthz" before a single scenario runs. The fallbacks are fixed,
+  # non-production test values (same shape as the POSTGRES_PASSWORD fallback
+  # above). FERNET_KEY must stay a valid 32-byte url-safe base64 key because
+  # cryptography.Fernet parses it.
+  SECRET_KEY: ${{ secrets.SECRET_KEY || 'ci-only-placeholder-secret-key-not-for-production' }}
+  FERNET_KEY: ${{ secrets.FERNET_KEY || 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }}
   # Authenticate GitHub git fetches so `uv sync --frozen` can resolve git-pinned
   # dependencies (e.g. pytest-bdd @ refs/pull/827/head) without an anonymous
   # fetch-by-SHA, which GitHub rejects from CI runners.
@@ -120,7 +128,7 @@ jobs:
         if: steps.detect.outputs.bdd == 'true'
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.6
+          version: 11.28.8
 
       - name: Set up Node
         if: steps.detect.outputs.bdd == 'true'

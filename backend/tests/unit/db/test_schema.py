@@ -150,6 +150,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "teams",
         "tier_catalog",
         "token_families",
+        "trigger_event_findings",
         "trigger_events",
         "triggers",
         "variant_batch_state",

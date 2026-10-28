@@ -5,7 +5,12 @@
 // (HTTP client, safe-logging helper, auth header builder, env setup), which
 // tripped SonarCloud's copy-paste duplication gate. It now lives here once.
 
-const BASE_URL = (process.env.MODULO_URL || "http://localhost:8000").replace(/\/+$/, "");
+let BASE_URL = process.env.MODULO_URL || "http://localhost:8000";
+let baseUrlEnd = BASE_URL.length;
+while (baseUrlEnd > 0 && BASE_URL[baseUrlEnd - 1] === "/") {
+  baseUrlEnd -= 1;
+}
+BASE_URL = BASE_URL.slice(0, baseUrlEnd);
 const EMAIL = process.env.MODULO_EMAIL;
 const PASSWORD = process.env.MODULO_PASSWORD;
 
@@ -15,7 +20,7 @@ if (!EMAIL || !PASSWORD) {
 }
 
 async function api(path, options = {}) {
-  if (typeof path !== "string" || !path.startsWith("/") || /^[a-z][a-z0-9+.-]*:\/\//i.test(path)) {
+  if (typeof path !== "string" || !path.startsWith("/") || path.includes("://")) {
     throw new Error(`Invalid API path: ${logSafe(path)}`);
   }
   // Pin the resolved URL to the configured base origin so a (future) caller
@@ -38,7 +43,11 @@ async function api(path, options = {}) {
 }
 
 function logSafe(value, max = 200) {
-  return String(value ?? "").replace(/[\r\n]+/g, " ").slice(0, max);
+  return String(value ?? "")
+    .replaceAll("\r\n", " ")
+    .replaceAll("\r", " ")
+    .replaceAll("\n", " ")
+    .slice(0, max);
 }
 
 function auth(token) {

@@ -22,7 +22,7 @@ import json
 import threading
 import uuid
 from collections import OrderedDict, defaultdict
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from typing import Annotated, Any, cast
 
 import jmespath
@@ -184,7 +184,7 @@ def _make_review_id(source: str, target: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _make_router_pass_fn(node_id: str) -> Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]:
+def _make_router_pass_fn(node_id: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """A pass-through node function for Router nodes.
 
     A Router node makes no tool/agent call — it exists solely to host the
@@ -192,7 +192,7 @@ def _make_router_pass_fn(node_id: str) -> Callable[[dict[str, Any]], Coroutine[A
     returns an empty update so the merged state is unchanged.
     """
 
-    async def _pass(state: dict[str, Any]) -> dict[str, Any]:
+    def _pass(state: dict[str, Any]) -> dict[str, Any]:
         return {}
 
     _pass.__name__ = f"router_pass_{node_id}"
@@ -587,8 +587,9 @@ def _make_node_fn(
         # silently execute as an LLM node — no dispatch, no error. Fail LOUD at
         # graph build instead (the API model rejects the shape at save time;
         # this catches hand-written and legacy graphs).
-        #
+
         # FAR-2089: a ``connector`` node is the same shape — its whole job is the
+
         # binding, and the ownerless fall-through below is the general LLM
         # factory. A binding-less connector node therefore ran as an agent node
         # with no agent instead of failing; same guard, same message shape.

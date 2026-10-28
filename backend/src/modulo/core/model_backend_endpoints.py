@@ -38,10 +38,10 @@ BASE_URL_MAX_LENGTH = 2048
 # endpoint, and ::ffff:169.254.169.254 is the IPv4 address in mapped form (the
 # IPv6 network below is checked via ``ipv4_mapped`` too).
 METADATA_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("fe80::/10"),
-    ipaddress.ip_network("fd00:ec2::254/128"),
-    ipaddress.ip_network("100.100.100.200/32"),
+    ipaddress.ip_network("169.254.0.0/16"),  # NOSONAR - AWS/GCP/Azure metadata network
+    ipaddress.ip_network("fe80::/10"),  # NOSONAR - IPv6 link-local metadata network
+    ipaddress.ip_network("fd00:ec2::254/128"),  # NOSONAR - AWS IMDS IPv6 endpoint
+    ipaddress.ip_network("100.100.100.200/32"),  # NOSONAR - Aliyun metadata endpoint
 )
 METADATA_HOSTNAMES = frozenset(
     {
@@ -81,6 +81,42 @@ def reject_metadata_endpoint(host: str) -> None:
         raise BaseUrlValidationError("Base URL must not target a cloud metadata endpoint")
 
 
+def _validate_base_url_length(candidate: str) -> None:
+    """Validate base URL length."""
+    if not candidate:
+        raise BaseUrlValidationError("Base URL must not be empty")
+    if len(candidate) > BASE_URL_MAX_LENGTH:
+        raise BaseUrlValidationError(f"Base URL must be at most {BASE_URL_MAX_LENGTH} characters")
+
+
+def _validate_base_url_scheme_and_host(candidate: str) -> tuple[str, str]:
+    """Validate base URL scheme and extract host."""
+    try:
+        return validate_outbound_url_syntax(candidate)
+    except ValueError as exc:
+        raise BaseUrlValidationError(str(exc)) from None
+
+
+def _validate_base_url_no_query_fragment(parsed: Any) -> None:
+    """Ensure base URL has no query string or fragment."""
+    if parsed.query or parsed.fragment:
+        raise BaseUrlValidationError("Base URL must not contain a query string or fragment")
+
+
+def _validate_base_url_scheme(scheme: str, host: str, *, allow_insecure_http: bool) -> None:
+    """Validate base URL scheme (https required unless explicitly allowed)."""
+    if scheme == "http":
+        if not allow_insecure_http:
+            raise BaseUrlValidationError(
+                "Base URL must use https://; set allow_insecure_http to permit plain HTTP",
+                code=INSECURE_HTTP_NOT_ALLOWED,
+            )
+        logger.warning(
+            "model_backends.base_url_http_downgrade host=%s",
+            sanitise_log_value(host),
+        )
+
+
 def validate_base_url(value: str, *, allow_insecure_http: bool = False) -> str:
     """Validate and normalise an operator-supplied model-backend base URL.
 
@@ -99,28 +135,12 @@ def validate_base_url(value: str, *, allow_insecure_http: bool = False) -> str:
     violation.
     """
     candidate = value.strip()
-    if not candidate:
-        raise BaseUrlValidationError("Base URL must not be empty")
-    if len(candidate) > BASE_URL_MAX_LENGTH:
-        raise BaseUrlValidationError(f"Base URL must be at most {BASE_URL_MAX_LENGTH} characters")
-    try:
-        scheme, host = validate_outbound_url_syntax(candidate)
-    except ValueError as exc:
-        raise BaseUrlValidationError(str(exc)) from None
+    _validate_base_url_length(candidate)
+    scheme, host = _validate_base_url_scheme_and_host(candidate)
     parsed = urlparse(candidate)
-    if parsed.query or parsed.fragment:
-        raise BaseUrlValidationError("Base URL must not contain a query string or fragment")
+    _validate_base_url_no_query_fragment(parsed)
     reject_metadata_endpoint(host)
-    if scheme == "http":
-        if not allow_insecure_http:
-            raise BaseUrlValidationError(
-                "Base URL must use https://; set allow_insecure_http to permit plain HTTP",
-                code=INSECURE_HTTP_NOT_ALLOWED,
-            )
-        logger.warning(
-            "model_backends.base_url_http_downgrade host=%s",
-            sanitise_log_value(host),
-        )
+    _validate_base_url_scheme(scheme, host, allow_insecure_http=allow_insecure_http)
     return candidate
 
 

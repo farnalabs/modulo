@@ -990,7 +990,48 @@ export interface paths {
         put?: never;
         /** Upload License */
         post: operations["upload_license_api_v1_admin_license_post"];
-        delete?: never;
+        /**
+         * Remove License
+         * @description Remove the instance-wide (system-scope) licence (FAR-2110 / FAR-2153).
+         *
+         *     The counterpart of :func:`upload_license`: ``POST`` stores a verified key
+         *     in the process-wide in-memory licence store AND the instance-scope
+         *     ``system_config`` row, and this route removes both, so an operator who
+         *     installed a key by mistake (or wants to return the deployment to Community)
+         *     no longer has to restart the process.
+         *
+         *     Three mutations are required for the change to be complete and visible:
+         *
+         *     1. ``clear_persisted_system_license()`` deletes the durable row. This is
+         *        done FIRST: if the DB write fails the request fails rather than
+         *        reporting a removal that a restart would undo. It is also what makes the
+         *        removal reach the SAQ worker, which re-reads the row on its own cadence.
+         *     2. ``clear_license()`` empties the in-memory store — the rung
+         *        ``core.feature_flags.resolve_effective_license`` reads on every plan
+         *        resolution, so every subsequent resolution falls through to the env key
+         *        (the deployment floor) and then Community.
+         *     3. ``invalidate_license_status_cache`` deletes every cached
+         *        ``license:{org_id}`` status entry. The admin status cache holds the
+         *        RESOLVED effective licence for each org (60s TTL), and any org without
+         *        its own key was caching the system licence, so a removal without the
+         *        sweep would keep serving the removed licence for up to a minute.
+         *
+         *     The response is the post-removal instance-wide resolution rather than a
+         *     hard-coded "no licence": ``MODULO_LICENSE_KEY`` is deployment configuration
+         *     (rung 3 of the same ladder), so a deployment licensed by the env var still
+         *     resolves to Team after the installed key is cleared. Reporting Community
+         *     there would be false; the caller can tell the two apart from ``has_license``.
+         *
+         *     Audit: ``license_removed`` on resource ``license`` — the same coarse
+         *     vocabulary as the ``license_uploaded`` install event, recorded by the
+         *     ``audited()`` dependency for both success and failure outcomes. The
+         *     principal resolver is ``resolve_audit_principal``, not
+         *     ``get_current_tenant_user``: this is a ``require_system_permission`` route,
+         *     and a tenantless system admin must be admitted by the route's own gate —
+         *     the audit wrapper never becomes a stricter access gate ahead of it (an
+         *     absent tenant is attributed to the instance partition).
+         */
+        delete: operations["remove_license_api_v1_admin_license_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -8178,6 +8219,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evals/findings/{finding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Finding
+         * @description Read an eval result or runless trigger-event guardrail finding.
+         */
+        get: operations["get_finding_api_v1_evals_findings__finding_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evals/findings/{finding_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Finding
+         * @description Resolve an eval/guardrail finding.
+         *
+         *     Marks a finding as accepted, dismissed, superseded, or pending with an
+         *     optional reason. Triggers mute policy evaluation for the associated
+         *     eval/guardrail definition and records an explicit audit event.
+         */
+        post: operations["resolve_finding_api_v1_evals_findings__finding_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evals/{eval_id}/acceptance-rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Acceptance Rate
+         * @description Get the acceptance rate for an eval/guardrail definition.
+         *
+         *     Returns the percentage of findings resolved as 'accepted' out of all
+         *     findings with a non-pending resolution. Optional window_days parameter
+         *     limits the calculation to a recent time window.
+         */
+        get: operations["get_acceptance_rate_api_v1_evals__eval_id__acceptance_rate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evals/{eval_id}/mute-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Mute Policy
+         * @description Get the mute policy evaluation for an eval/guardrail definition.
+         *
+         *     Returns whether the definition should be muted based on its acceptance
+         *     rate and configured threshold, along with the current mute status.
+         */
+        get: operations["get_mute_policy_api_v1_evals__eval_id__mute_policy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Mute Policy
+         * @description Update the mute policy configuration for an eval/guardrail definition.
+         *
+         *     Sets the acceptance rate threshold and minimum outcomes required before
+         *     auto-mute is evaluated. Setting either to null disables auto-mute.
+         */
+        patch: operations["update_mute_policy_api_v1_evals__eval_id__mute_policy_patch"];
+        trace?: never;
+    };
+    "/api/v1/evals/{eval_id}/mute-policy/unmute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unmute Definition Endpoint
+         * @description Manually unmute an eval/guardrail definition.
+         *
+         *     Clears the mute status and recomputes the acceptance rate.
+         */
+        post: operations["unmute_definition_endpoint_api_v1_evals__eval_id__mute_policy_unmute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/evals/compare": {
         parameters: {
             query?: never;
@@ -10585,6 +10746,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/evidence/risk-assessment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Risk Assessment Endpoint
+         * @description Return a filtered, faceted projection of evidence rows for risk/assessment.
+         *
+         *     This is a read-only derived view over the evidence store (chunk 7) — no new
+         *     storage, no schema change, no data migration.
+         *
+         *     Filters:
+         *     - key_prefix: evidence keys starting with this prefix (e.g. "risk." or "assessment.")
+         *     - pipeline_id: filter to evidence from runs belonging to this pipeline
+         *     - days: rolling time window on evidence.created_at (default 7, max 365)
+         *     - action: gate action parsed from subject_id via policy_gate_decisions
+         *       (best-effort; requires policy_gate_decisions.run_id column; ignored if absent)
+         *
+         *     The action facet degrades to absent when the run_id column does not exist
+         *     on policy_gate_decisions — the response includes "facet_degraded": true
+         *     and the UI should hide the action facet control.
+         *
+         *     No outcome facet — the evidence table has no outcome column. Outcome facet
+         *     returns with the predicate unit.
+         */
+        get: operations["risk_assessment_endpoint_api_v1_evidence_risk_assessment_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/evidence/{evidence_id}": {
         parameters: {
             query?: never;
@@ -10993,6 +11191,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/product-analytics/instance-switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Instance Switch */
+        put: operations["update_instance_switch_api_v1_product_analytics_instance_switch_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -11118,6 +11333,20 @@ export interface components {
              * @default false
              */
             existing_account: boolean;
+        };
+        /** AcceptanceRateResponse */
+        AcceptanceRateResponse: {
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
+            /** Acceptance Rate */
+            acceptance_rate: number;
+            /** Total Resolved */
+            total_resolved: number;
+            /** Window Days */
+            window_days?: number | null;
         };
         /** AccessList */
         AccessList: {
@@ -14674,6 +14903,11 @@ export interface components {
         /**
          * EvidenceRowResponse
          * @description One evidence row with its ``value`` already redacted for the caller's role.
+         *
+         *     ``action`` is the gate action resolved from ``policy_gate_decisions`` for the
+         *     row's run (and node, for ``node_execution`` rows). It is only populated by
+         *     the risk/assessment projection; the plain evidence reads leave it ``None``
+         *     because they do not join the decision record.
          */
         EvidenceRowResponse: {
             /**
@@ -14713,6 +14947,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Action */
+            action?: string | null;
         };
         /** ExportPreviewResponse */
         ExportPreviewResponse: {
@@ -15606,6 +15842,11 @@ export interface components {
             /** Target Team Id */
             target_team_id?: string | null;
         };
+        /** InstanceSwitchUpdateRequest */
+        InstanceSwitchUpdateRequest: {
+            /** Enabled */
+            enabled?: boolean | null;
+        };
         /** InvitationItem */
         InvitationItem: {
             /** Id */
@@ -16115,6 +16356,9 @@ export interface components {
             licence_id?: string | null;
             /** Issued At */
             issued_at?: string | null;
+            /** Starts At */
+            starts_at?: string | null;
+            successor?: components["schemas"]["LicenseSuccessor"] | null;
             /** Days Until Expiry */
             days_until_expiry?: number | null;
             /** Grace Ends At */
@@ -16124,6 +16368,22 @@ export interface components {
              * @default none
              */
             licence_state: string;
+        };
+        /**
+         * LicenseSuccessor
+         * @description A verified licence parked until its signed ``starts_at`` (FAR-2146).
+         *
+         *     Reported SEPARATELY from the active licence so ``licence_state`` keeps its
+         *     existing five-value meaning: a parked successor does not make the instance
+         *     licensed yet, and it does not turn over the running licence early either.
+         */
+        LicenseSuccessor: {
+            /** Starts At */
+            starts_at: string;
+            /** Expires At */
+            expires_at: string;
+            /** Gap Days */
+            gap_days?: number | null;
         };
         /** LicenseUploadRequest */
         LicenseUploadRequest: {
@@ -16142,6 +16402,13 @@ export interface components {
             expires_at?: string | null;
             /** Org Id */
             org_id?: string | null;
+            /** Starts At */
+            starts_at?: string | null;
+            /**
+             * Parked
+             * @default false
+             */
+            parked: boolean;
         };
         /** LifecycleMapCreate */
         LifecycleMapCreate: {
@@ -16957,6 +17224,55 @@ export interface components {
             grafana_faro?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** MutePolicyConfigRequest */
+        MutePolicyConfigRequest: {
+            /** Mute Threshold */
+            mute_threshold?: number | null;
+            /** Mute Min Outcomes */
+            mute_min_outcomes?: number | null;
+        };
+        /** MutePolicyConfigResponse */
+        MutePolicyConfigResponse: {
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
+            /** Is Muted */
+            is_muted: boolean;
+            /** Mute Threshold */
+            mute_threshold?: number | null;
+            /** Mute Min Outcomes */
+            mute_min_outcomes?: number | null;
+            /** Acceptance Rate */
+            acceptance_rate?: number | null;
+            /** Muted At */
+            muted_at?: string | null;
+            /** Muted By */
+            muted_by?: string | null;
+        };
+        /** MutePolicyEvaluationResponse */
+        MutePolicyEvaluationResponse: {
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
+            /** Should Mute */
+            should_mute: boolean;
+            /** Acceptance Rate */
+            acceptance_rate: number;
+            /** Total Outcomes */
+            total_outcomes: number;
+            /** Threshold */
+            threshold?: number | null;
+            /** Min Outcomes */
+            min_outcomes?: number | null;
+            /** Reason */
+            reason: string;
+            /** Is Muted */
+            is_muted: boolean;
         };
         /** MyTeamResponse */
         MyTeamResponse: {
@@ -19611,6 +19927,43 @@ export interface components {
             /** Created At */
             created_at: string;
         };
+        /** ResolveFindingRequest */
+        ResolveFindingRequest: {
+            /** Resolution */
+            resolution: string;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** ResolveFindingResponse */
+        ResolveFindingResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Finding Id
+             * Format: uuid
+             */
+            finding_id: string;
+            /** Finding Source */
+            finding_source: string;
+            /** Trigger Event Id */
+            trigger_event_id?: string | null;
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
+            /** Resolution */
+            resolution: string;
+            /** Resolution Reason */
+            resolution_reason?: string | null;
+            /** Resolved At */
+            resolved_at?: string | null;
+            /** Resolved By */
+            resolved_by?: string | null;
+        };
         /** RetentionCandidate */
         RetentionCandidate: {
             /** Id */
@@ -19725,6 +20078,32 @@ export interface components {
              * @default false
              */
             claimed_by_me: boolean;
+        };
+        /**
+         * RiskAssessmentResponse
+         * @description Risk/assessment projection response.
+         */
+        RiskAssessmentResponse: {
+            summary: components["schemas"]["RiskAssessmentSummary"];
+            /** Rows */
+            rows: components["schemas"]["EvidenceRowResponse"][];
+        };
+        /**
+         * RiskAssessmentSummary
+         * @description Summary counts for the risk/assessment view.
+         */
+        RiskAssessmentSummary: {
+            /** Total Rows */
+            total_rows: number;
+            /** Action Counts */
+            action_counts: {
+                [key: string]: number;
+            };
+            /**
+             * Facet Degraded
+             * @default false
+             */
+            facet_degraded: boolean;
         };
         /** RotateKeyRequest */
         RotateKeyRequest: {
@@ -21706,10 +22085,15 @@ export interface components {
              */
             instance_enabled: boolean;
             /**
-             * Enforcement Enabled
+             * Instance Switch Source
+             * @default default
+             */
+            instance_switch_source: string;
+            /**
+             * Licence Requires Analytics
              * @default false
              */
-            enforcement_enabled: boolean;
+            licence_requires_analytics: boolean;
             /**
              * Egress Allowed
              * @default false
@@ -25217,6 +25601,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LicenseUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    remove_license_api_v1_admin_license_delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LicenseStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -40282,6 +40697,391 @@ export interface operations {
             };
         };
     };
+    get_finding_api_v1_evals_findings__finding_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Finding not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    resolve_finding_api_v1_evals_findings__finding_id__resolve_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveFindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveFindingResponse"];
+                };
+            };
+            /** @description Invalid resolution value */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Finding not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_acceptance_rate_api_v1_evals__eval_id__acceptance_rate_get: {
+        parameters: {
+            query?: {
+                window_days?: number | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptanceRateResponse"];
+                };
+            };
+            /** @description Eval definition not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_mute_policy_api_v1_evals__eval_id__mute_policy_get: {
+        parameters: {
+            query?: {
+                window_days?: number | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutePolicyEvaluationResponse"];
+                };
+            };
+            /** @description Eval definition not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_mute_policy_api_v1_evals__eval_id__mute_policy_patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MutePolicyConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutePolicyConfigResponse"];
+                };
+            };
+            /** @description Eval definition not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    unmute_definition_endpoint_api_v1_evals__eval_id__mute_policy_unmute_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                eval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutePolicyConfigResponse"];
+                };
+            };
+            /** @description Eval definition not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     compare_evals_api_v1_evals_compare_post: {
         parameters: {
             query?: {
@@ -46069,6 +46869,47 @@ export interface operations {
             };
         };
     };
+    risk_assessment_endpoint_api_v1_evidence_risk_assessment_get: {
+        parameters: {
+            query?: {
+                /** @description Optional evidence key prefix filter (e.g. 'risk.' or 'assessment.') */
+                key_prefix?: string | null;
+                /** @description Optional pipeline id filter */
+                pipeline_id?: string | null;
+                /** @description Rolling time window in days (default 7) */
+                days?: number;
+                /** @description Optional gate action filter (continue, warn, block, escalate) */
+                action?: string | null;
+                /** @description Maximum rows to return (default 100) */
+                limit?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskAssessmentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     get_evidence_endpoint_api_v1_evidence__evidence_id__get: {
         parameters: {
             query?: {
@@ -47174,6 +48015,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransparencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    update_instance_switch_api_v1_product_analytics_instance_switch_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstanceSwitchUpdateRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

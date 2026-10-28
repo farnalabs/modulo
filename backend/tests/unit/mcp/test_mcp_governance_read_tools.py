@@ -8,9 +8,12 @@ get_schema_versions, get_pipeline_diff.
 Authz: every tool maps to the same permission key as the corresponding REST
 route and is gated through ``_check_agent_tool_scope``; list_feature_flags
 additionally enforces the strict system-admin gate REST's
-``require_system_permission`` applies. list_teams also carries a REST-parity
-plan-feature gate (``team_rbac`` — the same feature ``require_feature``
-enforces on the REST route). The pipeline-diff tool must mask
+``require_system_permission`` applies. Plan-feature parity with the REST routes
+is enforced through ``_require_plan_feature``: ``list_teams`` carries
+``team_rbac``, ``get_audit_log`` carries ``audit_viewer`` (FAR-2119), and
+(FAR-2129) ``list_plugins`` carries ``plugin_management``,
+``list_sso_providers`` carries ``sso`` and ``get_schema_versions`` carries
+``schema_version_history``. The pipeline-diff tool must mask
 credential-bearing node fields (FAR-1181 parity with the REST route), and the
 SSO listing must never surface client secrets.
 """
@@ -50,6 +53,25 @@ from tests.unit.mcp.helpers import ORG_ID, USER_ID, AuthContext, make_session_co
 
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
 
+
+@pytest.fixture(autouse=True)
+def _enable_internal_lifecycle_map_access(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """Give lifecycle-map tests the retained internal dogfood context."""
+    if request.node.cls is not None and request.node.cls.__name__ in {
+        "TestLifecycleMaps",
+        "TestListLifecycleMapsEdgeCases",
+        "TestGetLifecycleMapErrorArms",
+    }:
+        from modulo.api.mcp_server import _ctx_key_grants
+
+        monkeypatch.setattr("modulo.api.mcp_server.get_settings", lambda: MagicMock(modulo_dev_mode=True))
+        _ctx_key_grants.set(frozenset({"library.search.in_dev", "lifecycle_map.list"}))
+        yield
+        _ctx_key_grants.set(None)
+        return
+    yield
+
+
 # FAR-1733: known test keypair — a signed payload verifies only while
 # set_public_key(_TEST_PUB) is in effect (the autouse fixture below manages
 # that per test), so the env-key verification paths run for real.
@@ -58,11 +80,11 @@ _TEST_PRIV = _TEST_KP["private_key"]
 _TEST_PUB = _TEST_KP["public_key"]
 
 
-def _valid_license_key(tier: str = "team") -> str:
+def _valid_license_key(tier: str = "team", expires_at: str | None = None) -> str:
     payload: dict[str, Any] = {
         "tier": tier,
         "features": ["sso", "team_rbac", "audit_viewer"],
-        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "expires_at": expires_at or (datetime.now(UTC) + timedelta(days=365)).isoformat(),
         "org_id": "test-org",
     }
     sig_hex = sign_primitive(payload, _TEST_PRIV)
@@ -435,13 +457,15 @@ class TestGetAuditLog(AuthContext):
         mock_session.return_value = make_session_context(make_session_scope())
 
         actor = str(uuid.uuid4())
-        result = await get_audit_log(
-            limit=50,
-            event_type="pipeline.created",
-            actor_user_id=actor,
-            from_date="2026-01-01T00:00:00+00:00",
-            to_date="2026-12-31T23:59:59+00:00",
-        )
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log(
+                limit=50,
+                event_type="pipeline.created",
+                actor_user_id=actor,
+                from_date="2026-01-01T00:00:00+00:00",
+                to_date="2026-12-31T23:59:59+00:00",
+            )
 
         assert result["total"] == 1
         assert mock_events.await_args.args[1] == ORG_ID
@@ -450,9 +474,63 @@ class TestGetAuditLog(AuthContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.audit_logger.list_audit_events", new_callable=AsyncMock)
+    async def test_feature_gate_off_returns_feature_required(
+        self,
+        mock_events: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """Community tier: no audit_viewer entitlement, so MCP refuses.
+
+        FAR-2119 — the MCP surface must produce the same ``feature_required``
+        shape as the other gated MCP tools, and must refuse BEFORE reading any
+        events.
+        """
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log()
+
+        assert result["error"] == "feature_required"
+        assert "audit_viewer" in result["detail"]
+        mock_events.assert_not_awaited()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.audit_logger.list_audit_events", new_callable=AsyncMock)
+    async def test_team_tier_returns_events(
+        self,
+        mock_events: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """Team tier: audit_viewer is licensed, so the events surface as before."""
+        event = {"id": str(uuid.uuid4()), "event_type": "run.completed"}
+        mock_events.return_value = {
+            "items": [event],
+            "total": 1,
+            "next_cursor": None,
+            "limit": 50,
+        }
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log()
+
+        assert result["total"] == 1
+        assert result["items"] == [event]
+        mock_events.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
     async def test_invalid_actor_uuid_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await get_audit_log(actor_user_id="not-a-uuid")
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log(actor_user_id="not-a-uuid")
         assert result["error"] == "invalid_id"
         assert result["field"] == "actor_user_id"
 
@@ -460,7 +538,9 @@ class TestGetAuditLog(AuthContext):
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_from_date_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await get_audit_log(from_date="yesterday")
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log(from_date="yesterday")
         assert result["error"] == "validation_failed"
         assert result["field"] == "from_date"
 
@@ -531,6 +611,16 @@ class TestListNotificationDeliveries(AuthContext):
 
 
 class TestLifecycleMaps(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_ordinary_mcp_caller_is_denied(self, mock_validate: AsyncMock) -> None:
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_role
+
+        _ctx_role.set("viewer")
+        _ctx_key_grants.set(None)
+        result = await list_lifecycle_maps()
+
+        assert result["error"] == "insufficient_scope"
+
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_list_returns_auth_error_on_revoked_token(self, mock_validate: AsyncMock) -> None:
         result = await list_lifecycle_maps()
@@ -644,7 +734,14 @@ class TestListPlugins(AuthContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.core.plugin_registry.get_plugin_registry")
-    async def test_returns_registry_metadata(self, mock_registry_factory: MagicMock, mock_validate: AsyncMock) -> None:
+    @patch("modulo.api.mcp_server._session")
+    async def test_returns_registry_metadata(
+        self,
+        mock_session: AsyncMock,
+        mock_registry_factory: MagicMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        mock_session.return_value = make_session_context(make_session_scope())
         manifest = MagicMock()
         manifest.PLUGIN_ID = "demo-plugin"
         manifest.display_name = "Demo"
@@ -660,13 +757,35 @@ class TestListPlugins(AuthContext):
         registry.health_check.return_value = {"demo-plugin": health}
         mock_registry_factory.return_value = registry
 
-        result = await list_plugins()
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await list_plugins()
 
         assert result["total"] == 1
         (item,) = result["data"]
         assert item["id"] == "demo-plugin"
         assert item["health_ok"] is True
         assert item["capabilities"] == ["connector", "pipeline"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.core.plugin_registry.get_plugin_registry")
+    @patch("modulo.api.mcp_server._session")
+    async def test_feature_gate_off_returns_feature_required(
+        self,
+        mock_session: AsyncMock,
+        mock_registry_factory: MagicMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-2129: Community plan is refused before the registry is read."""
+        mock_session.return_value = make_session_context(make_session_scope())
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
+        with org_patch, plan_patch, settings_patch:
+            result = await list_plugins()
+
+        assert result["error"] == "feature_required"
+        assert "plugin_management" in result["detail"]
+        # The gate must refuse BEFORE the registry is touched.
+        mock_registry_factory.assert_not_called()
 
 
 class TestListSsoProviders(AuthContext):
@@ -712,7 +831,9 @@ class TestListSsoProviders(AuthContext):
         mock_list.return_value = [provider]
         mock_session.return_value = make_session_context(make_session_scope())
 
-        result = await list_sso_providers()
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await list_sso_providers()
 
         assert result["total"] == 1
         (item,) = result["data"]
@@ -722,6 +843,26 @@ class TestListSsoProviders(AuthContext):
         assert "client_secret" not in item
         assert "metadata_xml" not in item
         mock_list.assert_awaited_once_with(mock_session.return_value.__aenter__.return_value, org_id=ORG_ID)
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.sso_provider.list_providers", new_callable=AsyncMock)
+    async def test_feature_gate_off_returns_feature_required(
+        self,
+        mock_list: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-2129: Community plan is refused before the provider table is read."""
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
+        with org_patch, plan_patch, settings_patch:
+            result = await list_sso_providers()
+
+        assert result["error"] == "feature_required"
+        assert "sso" in result["detail"]
+        mock_list.assert_not_awaited()
 
 
 class TestEvalSuites(AuthContext):
@@ -859,7 +1000,9 @@ class TestGetSchemaVersions(AuthContext):
 
         mock_session.return_value = make_session_context(make_session_scope())
 
-        result = await get_schema_versions(str(schema.id), page=1, page_size=20)
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_schema_versions(str(schema.id), page=1, page_size=20)
 
         assert result["total"] == 1
         (item,) = result["data"]
@@ -882,8 +1025,30 @@ class TestGetSchemaVersions(AuthContext):
         mock_get_schema.return_value = schema
         mock_session.return_value = make_session_context(make_session_scope())
 
-        result = await get_schema_versions(str(schema.id))
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_schema_versions(str(schema.id))
         assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.schema.get_schema", new_callable=AsyncMock)
+    async def test_feature_gate_off_returns_feature_required(
+        self,
+        mock_get_schema: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-2129: Community plan is refused before the schema/versions read."""
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_schema_versions(str(uuid.uuid4()))
+
+        assert result["error"] == "feature_required"
+        assert "schema_version_history" in result["detail"]
+        mock_get_schema.assert_not_awaited()
 
 
 class TestGetPipelineDiff(AuthContext):
@@ -1314,7 +1479,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
     @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
     @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
     @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
-    async def test_invalid_org_license_key_reports_invalid_but_counts_has_key(
+    async def test_invalid_org_license_key_is_not_counted_and_reports_invalid(
         self,
         mock_org: AsyncMock,
         mock_plan: AsyncMock,
@@ -1323,9 +1488,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         mock_session: AsyncMock,
         mock_validate: AsyncMock,
     ) -> None:
-        """An org-level key still counts for has_license_key (presence rung),
-        but is_valid requires it to VERIFY (FAR-1733).
-        """
+        """An org-level key counts for has_license_key only after verification."""
         from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
         mock_org.return_value = MagicMock(settings_json={"license_key": "not-a-valid-key"})
@@ -1334,6 +1497,49 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         mock_plan.return_value = plan_ctx
         registry = MagicMock()
         registry.current_tier = "community"
+        registry.has_license_key = False
+        registry.list_flags.return_value = []
+        registry.tier_gap_flags.return_value = []
+        mock_from_db.return_value = registry
+        mock_session.return_value = make_session_context(make_session_scope())
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+        try:
+            settings = MagicMock()
+            settings.modulo_license_key = ""
+            settings.modulo_dev_mode = False
+            with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+                result = await list_feature_flags()
+        finally:
+            _ctx_is_system_admin.set(False)
+
+        assert "error" not in result
+        assert mock_from_db.call_args.kwargs["has_license_key"] is False
+        assert result["license"]["is_valid"] is False
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.license.get_license", return_value=None)
+    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    async def test_org_license_key_count_requires_valid_signature_and_expiry(
+        self,
+        mock_org: AsyncMock,
+        mock_plan: AsyncMock,
+        mock_from_db: AsyncMock,
+        mock_license: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+
+        mock_org.return_value = MagicMock(id="test-org", settings_json={"license_key": _valid_license_key()})
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "team"
+        mock_plan.return_value = plan_ctx
+        registry = MagicMock()
+        registry.current_tier = plan_ctx.tier.return_value
         registry.has_license_key = True
         registry.list_flags.return_value = []
         registry.tier_gap_flags.return_value = []
@@ -1352,6 +1558,52 @@ class TestListFeatureFlagsErrorArms(AuthContext):
 
         assert "error" not in result
         assert mock_from_db.call_args.kwargs["has_license_key"] is True
+        assert result["license"]["is_valid"] is True
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.license.get_license", return_value=None)
+    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    async def test_expired_org_license_key_is_not_counted(
+        self,
+        mock_org: AsyncMock,
+        mock_plan: AsyncMock,
+        mock_from_db: AsyncMock,
+        mock_license: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+
+        mock_org.return_value = MagicMock(
+            id="test-org",
+            settings_json={"license_key": _valid_license_key(expires_at="2020-01-01T00:00:00+00:00")},
+        )
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        mock_plan.return_value = plan_ctx
+        registry = MagicMock()
+        registry.current_tier = "community"
+        registry.has_license_key = False
+        registry.list_flags.return_value = []
+        registry.tier_gap_flags.return_value = []
+        mock_from_db.return_value = registry
+        mock_session.return_value = make_session_context(make_session_scope())
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+        try:
+            settings = MagicMock()
+            settings.modulo_license_key = ""
+            settings.modulo_dev_mode = False
+            with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+                result = await list_feature_flags()
+        finally:
+            _ctx_is_system_admin.set(False)
+
+        assert "error" not in result
+        assert mock_from_db.call_args.kwargs["has_license_key"] is False
         assert result["license"]["is_valid"] is False
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -1474,7 +1726,9 @@ class TestGetAuditLogErrorArms(AuthContext):
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_to_date_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await get_audit_log(to_date="nope")
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log(to_date="nope")
         assert result["error"] == "validation_failed"
         assert result["field"] == "to_date"
 
@@ -1490,7 +1744,9 @@ class TestGetAuditLogErrorArms(AuthContext):
         # from_date=None / to_date=None exercise the False arms of both date guards.
         mock_events.return_value = {"items": [], "total": 0, "next_cursor": None, "limit": 50}
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await get_audit_log()
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_audit_log()
         assert result["total"] == 0
         assert mock_events.await_args.kwargs["from_date"] is None
         assert mock_events.await_args.kwargs["to_date"] is None
@@ -1516,7 +1772,13 @@ class TestGetAuditLogErrorArms(AuthContext):
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        with patch("modulo.core.audit_logger.list_audit_events", new=_boom(_programming_error())):
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch("modulo.core.audit_logger.list_audit_events", new=_boom(_programming_error())),
+        ):
             result = await get_audit_log()
         assert result["error"] == "migration_required"
 
@@ -1526,7 +1788,13 @@ class TestGetAuditLogErrorArms(AuthContext):
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        with patch("modulo.core.audit_logger.list_audit_events", new=_boom(RuntimeError("boom"))):
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch("modulo.core.audit_logger.list_audit_events", new=_boom(RuntimeError("boom"))),
+        ):
             result = await get_audit_log()
         assert result["error"] == "server_error"
 
@@ -1781,12 +2049,22 @@ class TestListPluginsErrorArms(AuthContext):
         assert result["error"] == "insufficient_scope"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_generic_exception_maps_to_server_error(self, mock_validate: AsyncMock) -> None:
+    @patch("modulo.api.mcp_server._session")
+    async def test_generic_exception_maps_to_server_error(
+        self, mock_session: AsyncMock, mock_validate: AsyncMock
+    ) -> None:
         # ``get_plugin_registry`` is synchronous — a MagicMock (not an
         # AsyncMock) so the stubbed failure does not leave a coroutine unawaited.
-        with patch(
-            "modulo.core.plugin_registry.get_plugin_registry",
-            new=MagicMock(side_effect=RuntimeError("boom")),
+        mock_session.return_value = make_session_context(make_session_scope())
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch(
+                "modulo.core.plugin_registry.get_plugin_registry",
+                new=MagicMock(side_effect=RuntimeError("boom")),
+            ),
         ):
             result = await list_plugins()
         assert result["error"] == "server_error"
@@ -1820,7 +2098,13 @@ class TestListSsoProvidersErrorArms(AuthContext):
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        with patch("modulo.db.crud.sso_provider.list_providers", new=_boom(_programming_error())):
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch("modulo.db.crud.sso_provider.list_providers", new=_boom(_programming_error())),
+        ):
             result = await list_sso_providers()
         assert result["error"] == "migration_required"
 
@@ -1830,7 +2114,13 @@ class TestListSsoProvidersErrorArms(AuthContext):
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        with patch("modulo.db.crud.sso_provider.list_providers", new=_boom(RuntimeError("boom"))):
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch("modulo.db.crud.sso_provider.list_providers", new=_boom(RuntimeError("boom"))),
+        ):
             result = await list_sso_providers()
         assert result["error"] == "server_error"
 
@@ -1961,7 +2251,9 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
     @patch("modulo.api.mcp_server._session")
     async def test_invalid_schema_id_rejected(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        result = await get_schema_versions("nope")
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_schema_versions("nope")
         assert result["error"] == "invalid_id"
         assert result["field"] == "schema_id"
 
@@ -1969,7 +2261,13 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
     @patch("modulo.api.mcp_server._session")
     async def test_none_parse_returns_invalid_id(self, mock_session: AsyncMock, mock_validate: AsyncMock) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        with patch("modulo.api.mcp_server._parse_uuid_param", new=_none_uuid_for("schema_id")):
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch("modulo.api.mcp_server._parse_uuid_param", new=_none_uuid_for("schema_id")),
+        ):
             result = await get_schema_versions(str(uuid.uuid4()))
         assert result["error"] == "invalid_id"
         assert result["field"] == "schema_id"
@@ -1995,7 +2293,13 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        with patch("modulo.db.crud.schema.get_schema", new=_boom(_programming_error())):
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch("modulo.db.crud.schema.get_schema", new=_boom(_programming_error())),
+        ):
             result = await get_schema_versions(str(uuid.uuid4()))
         assert result["error"] == "migration_required"
 
@@ -2005,7 +2309,13 @@ class TestGetSchemaVersionsErrorArms(AuthContext):
         self, mock_session: AsyncMock, mock_validate: AsyncMock
     ) -> None:
         mock_session.return_value = make_session_context(make_session_scope())
-        with patch("modulo.db.crud.schema.get_schema", new=_boom(RuntimeError("boom"))):
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch("modulo.db.crud.schema.get_schema", new=_boom(RuntimeError("boom"))),
+        ):
             result = await get_schema_versions(str(uuid.uuid4()))
         assert result["error"] == "server_error"
 

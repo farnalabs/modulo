@@ -45,6 +45,12 @@ class _AutobeginAwareSession:
     def begin(self) -> "_BeginCtx":
         return _BeginCtx(self)
 
+    def get_bind(self) -> MagicMock:
+        """Sync bind used by CRUD to pick its ON CONFLICT dialect."""
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+        return bind
+
     async def execute(self, stmt: object, *args: object) -> MagicMock:
         assert self._in_tx, "execute() ran outside session.begin() (autobegin=False)"
         result = MagicMock()

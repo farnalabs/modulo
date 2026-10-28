@@ -677,28 +677,30 @@ def check_eligibility(
 def _format_human(result: dict[str, Any]) -> str:
     lines: list[str] = []
     verdict = result["verdict"]
-    lines.append("=" * 60)
-    lines.append(f" OSS PARTNER ELIGIBILITY — {verdict}")
-    lines.append("=" * 60)
+    lines.extend(
+        [
+            "=" * 60,
+            f" OSS PARTNER ELIGIBILITY — {verdict}",
+            "=" * 60,
+        ]
+    )
     if result.get("full_name"):
-        lines.append(f" Repository : {result['full_name']}")
+        lines.extend([f" Repository : {result['full_name']}"])
     if result.get("repo_id") is not None:
-        lines.append(f" Repo ID    : {result['repo_id']} (rename-safe key)")
-    lines.append("")
-    lines.append(" Criteria:")
+        lines.extend([f" Repo ID    : {result['repo_id']} (rename-safe key)"])
+
+    lines.extend(["", " Criteria:"])
     for name, c in result.get("criteria", {}).items():
         reason = c.get("reason")
         reason_txt = f" ({reason})" if reason else ""
         lines.append(f"   - {name:<10} {c['status']}{reason_txt}")
     if result.get("evidence"):
-        lines.append("")
-        lines.append(" Evidence:")
+        lines.extend(["", " Evidence:"])
         for k, v in result["evidence"].items():
             lines.append(f"   - {k}: {v}")
     if verdict == VERDICT_INCONCLUSIVE and result.get("escalation"):
-        lines.append("")
-        lines.append(" ESCALATION: " + result["escalation"])
-    lines.append("")
+        lines.extend(["", " ESCALATION: " + result["escalation"]])
+    lines.extend([""])
     return "\n".join(lines)
 
 

@@ -37,6 +37,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -58,6 +59,7 @@ from modulo.api.dependencies import get_or_create_engine
 from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
 from modulo.core.cron_helpers import DISPATCHER_RECONCILE_TICK_SECONDS, read_dispatcher_reconcile_stats
 from modulo.core.health_alerts import report_event_loop_stall_attribution
+from modulo.core.ssrf import pinned_async_client
 from modulo.db.migration_guard import DivergenceCheckResult, check_migration_divergence
 from modulo.settings import Settings, break_glass_boot_findings, get_settings, resolve_instance_identity
 from modulo.version import get_version
@@ -202,6 +204,84 @@ _CRON_STALE_SECONDS = 2 * _FIRE_DUE_CRON_CADENCE_SECONDS
 # Break-glass watchdog state, published at boot by the lifespan and exposed on
 # /healthz as ADVISORY only — it never flips readiness.
 _break_glass_watchdog: dict[str, str] = {"status": "ok", "detail": "break-glass watchdog not run at boot"}
+
+# Cache for the latest deploy workflow run URL. A success is cached for 5
+# minutes to avoid hammering the GitHub API; a failure is cached briefly so a
+# broken token / API outage cannot add a failed request to every ready probe.
+# The value is ``None`` for a cached negative result.
+_DEPLOY_RUN_URL_CACHE: tuple[str | None, float] | None = None  # (url or None, cached_at)
+_DEPLOY_RUN_URL_CACHE_TTL_SECONDS = 300  # 5 minutes
+_DEPLOY_RUN_URL_FAILURE_TTL_SECONDS = 60  # 1 minute
+# Deliberately well under the migrations probe's 5s default budget: a slow
+# GitHub API must not turn the DIVERGENCE detail into a generic probe timeout.
+_DEPLOY_RUN_URL_FETCH_TIMEOUT_SECONDS = 2.0
+
+
+def _deploy_run_url_cache_ttl(url: str | None) -> float:
+    return _DEPLOY_RUN_URL_CACHE_TTL_SECONDS if url else _DEPLOY_RUN_URL_FAILURE_TTL_SECONDS
+
+
+async def _fetch_latest_deploy_run_url(settings: Settings | None = None) -> str | None:
+    """Fetch the latest run URL of the configured deploy workflow from GitHub.
+
+    Returns the HTML URL of the most recent run, or None if unavailable. Uses
+    the path-based ``/actions/workflows/{id}/runs`` endpoint: the
+    ``/actions/runs?workflow=<name>`` filter is silently ignored by GitHub, so
+    the latter returns an unrelated workflow's run.
+
+    The repo, workflow file and API base are operator-configurable
+    (``MODULO_DEPLOY_RUN_*``) so a self-hosted deployment resolves to its own
+    fork rather than Modulo's dogfood repo; an empty repo disables the lookup.
+    Successes are cached for 5 minutes, failures for 1 minute.
+    """
+    global _DEPLOY_RUN_URL_CACHE
+    now = time.time()
+
+    if _DEPLOY_RUN_URL_CACHE is not None:
+        cached_url, cached_at = _DEPLOY_RUN_URL_CACHE
+        if now - cached_at < _deploy_run_url_cache_ttl(cached_url):
+            return cached_url
+
+    settings = settings or get_settings()
+    repo = settings.modulo_deploy_run_repo.strip()
+    if not repo:
+        return None
+
+    github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_REVIEWBOT_PAT")
+    if not github_token:
+        _log.debug("No GITHUB_TOKEN or GITHUB_REVIEWBOT_PAT available for deploy run URL fetch")
+        return None
+
+    api_base = settings.modulo_deploy_run_api_base.rstrip("/")
+    path = f"/repos/{repo}/actions/workflows/{settings.modulo_deploy_run_workflow}/runs"
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    url: str | None = None
+    try:
+        client = await pinned_async_client(
+            api_base,
+            base_url=api_base,
+            timeout=_DEPLOY_RUN_URL_FETCH_TIMEOUT_SECONDS,
+        )
+        try:
+            response = await client.get(path, params={"per_page": 1}, headers=headers)
+            response.raise_for_status()
+            runs = response.json().get("workflow_runs", [])
+            if runs:
+                html_url = runs[0].get("html_url")
+                if isinstance(html_url, str) and html_url:
+                    url = html_url
+        finally:
+            await client.aclose()
+    except Exception as exc:
+        _log.warning("Failed to fetch latest deploy run URL: %s", exc)
+
+    _DEPLOY_RUN_URL_CACHE = (url, now)
+    return url
 
 
 def set_break_glass_watchdog(status: str, detail: str) -> None:
@@ -719,6 +799,53 @@ def _load_repo_heads(settings: Settings) -> set[str]:
     return set(_REPO_HEADS_CACHE)
 
 
+def _migration_image_lag_detail(applied: set[str], heads: set[str]) -> str | None:
+    """Degraded detail when the DB's head is AHEAD of this image's known heads.
+
+    The running image cannot serve a schema it does not know about, so a DB
+    migrated by a newer release reports degraded. Revision IDs are
+    zero-padded (e.g. ``0333``), so ``max`` orders them correctly.
+
+    Returns ``None`` when the DB is at or BEHIND the image head: a behind DB
+    keeps the pre-existing "pending migrations" path, never this one.
+    """
+    db_head = max(applied, default="none")
+    image_head = max(heads, default="none")
+    if db_head == "none" or image_head == "none" or db_head <= image_head:
+        return None
+    return f"migrations: degraded (image revision lag: DB at {db_head}, image knows up to {image_head})"
+
+
+async def _migration_detail_parts(
+    applied: set[str],
+    heads: set[str],
+    divergence: DivergenceCheckResult | None,
+    divergence_check_failed: bool,
+    settings: Settings | None = None,
+) -> list[str]:
+    """Detail fragments for pending and repo-vs-DB diverging migrations."""
+    parts: list[str] = []
+    pending = heads - applied
+    if pending:
+        parts.append(f"pending migrations: {', '.join(sorted(pending))}")
+    if divergence_check_failed:
+        # FAR-925: the divergence guard itself crashed — report degraded
+        # (not ok) so this state cannot be mistaken for "checked and clean".
+        # Fail-open: the check is advisory, so a crashed guard degrades
+        # the report without blocking readiness.
+        parts.append("divergence check could not run (exception raised, see logs)")
+    elif divergence is not None and divergence.diverged:
+        divergence_msg = (
+            f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}"
+        )
+        # Include the latest deploy run URL for correlation
+        deploy_run_url = await _fetch_latest_deploy_run_url(settings)
+        if deploy_run_url:
+            divergence_msg += f" | latest deploy: {deploy_run_url}"
+        parts.append(divergence_msg)
+    return parts
+
+
 async def _check_migrations() -> CheckResult:
     settings = get_settings()
     timeout = _per_check_timeout(settings, "modulo_health_migrations_timeout_seconds")
@@ -752,23 +879,25 @@ async def _check_migrations() -> CheckResult:
             _log.exception("health._check_migrations divergence check failed")
             divergence_check_failed = True
 
-        pending = heads - applied
-        parts: list[str] = []
-        if pending:
-            parts.append(f"pending migrations: {', '.join(sorted(pending))}")
-        if divergence_check_failed:
-            # FAR-925: the divergence guard itself crashed — report degraded
-            # (not ok) so this state cannot be mistaken for "checked and clean".
-            # Fail-open: the check is advisory, so a crashed guard degrades
-            # the report without blocking readiness.
-            parts.append("divergence check could not run (exception raised, see logs)")
-        elif divergence is not None and divergence.diverged:
-            parts.append(
-                f"DIVERGENCE: DB has revision(s) not in repo: {', '.join(sorted(divergence.orphaned_revisions))}"
-            )
-        if not parts:
-            return "ok", "migrations up to date"
-        return "degraded", "; ".join(parts)
+        # Divergence (DB holds revisions the repo does not ship) is the more
+        # specific failure and is reported first, with the latest deploy run
+        # for correlation. Pending migrations are reported alongside it.
+        parts = await _migration_detail_parts(applied, heads, divergence, divergence_check_failed, settings)
+        divergence_active = divergence_check_failed or (divergence is not None and divergence.diverged)
+        if divergence_active:
+            return "degraded", "; ".join(parts)
+
+        # Migration-compatibility check (FAR-2156): a DB ahead of the image is
+        # reported degraded before the pending-migration detail is assembled —
+        # an image cannot serve a schema it does not know, so that signal wins
+        # over the stale image's own "pending" view.
+        lag_detail = _migration_image_lag_detail(applied, heads)
+        if lag_detail is not None:
+            return "degraded", lag_detail
+
+        if parts:
+            return "degraded", "; ".join(parts)
+        return "ok", "migrations up to date"
 
     try:
         status, detail = await asyncio.wait_for(_probe(), timeout=timeout)

@@ -192,3 +192,33 @@ class TestResourceLibrarySuccess:
         result = await resource_library()
 
         assert "error:" in result.lower()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.list_primitives")
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_settings")
+    async def test_internal_operator_lists_every_primitive_type(
+        self,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_list_primitives: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_role
+
+        _ctx_role.set("operator")
+        mock_get_settings.return_value = MagicMock(modulo_dev_mode=True)
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+        mock_list_primitives.return_value = PageResult(items=[], total=0, page=1, page_size=50)
+        _ctx_key_grants.set(frozenset({"library.search.in_dev", "resource.read_only"}))
+        try:
+            result = await resource_library()
+        finally:
+            _ctx_key_grants.set(None)
+
+        assert result == "Library is empty."
+        assert mock_list_primitives.await_args is not None
+        assert mock_list_primitives.await_args.kwargs["primitive_types"] is None

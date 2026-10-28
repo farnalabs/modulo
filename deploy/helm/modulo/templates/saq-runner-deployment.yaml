@@ -46,7 +46,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: saq-runner
-          image: {{ include "modulo.image" (dict "image" .Values.saqRunner.image) | quote }}
+          image: {{ include "modulo.image" (dict "image" .Values.saqRunner.image "appVersion" .Chart.AppVersion) | quote }}
           imagePullPolicy: {{ .Values.saqRunner.image.pullPolicy }}
           command:
             {{- toYaml .Values.saqRunner.command | nindent 12 }}
@@ -96,7 +96,7 @@ spec:
               ephemeral-storage: {{ .Values.saqRunner.resources.requests.ephemeralStorage | quote }}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL

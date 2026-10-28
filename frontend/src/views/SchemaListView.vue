@@ -1,11 +1,14 @@
 <template>
   <div class="page-wide">
-    <PageTabs :tabs="[
-      { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
-      { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
-      { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
-    ]" />
-    <PageHeader :title="$t('views.SchemaListView.schemas')" :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')" />
+    <PageHeader
+      :title="$t('views.SchemaListView.schemas')"
+      :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')"
+      :tabs="[
+        { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+        { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+        { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
+      ]"
+    />
 
     <div class="flex flex-1 min-h-0">
       <!-- Folder sidebar -->
@@ -80,7 +83,7 @@
   :placeholder="$t('views.SchemaListView.folders')"
   data-testid="schema-list-mobile-folder-select"
   class="w-full"
-  :options="[{ value: '__all__', label: $t('views.SchemaListView.all_schemas') }, ...[...foldersList].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })).map(f => ({ value: f.id, label: f.name }))]"
+  :options="[{ value: '__all__', label: $t('views.SchemaListView.all_schemas') }, ...sortedFolders.map(f => ({ value: f.id, label: f.name }))]"
   option-label="label"
   option-value="value"
 >
@@ -134,7 +137,7 @@
                     @dragover.prevent
                   >
                     <td class="px-4 py-3 font-medium">{{ schema.name }}</td>
-                    <td class="px-4 py-3 text-muted-foreground">{{ schema.description || '—' }}</td>
+                    <td class="px-4 py-3 text-muted-foreground">{{ schema.description ?? '—' }}</td>
                     <td class="px-4 py-3">
                       <span
                         v-if="schema.deprecated"
@@ -207,7 +210,7 @@
       <div class="space-y-2">
         <button
           type="button"
-          v-for="f in [...foldersList].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }))"
+          v-for="f in sortedFolders"
           :key="f.id"
           class="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
           :class="moveToFolderId === f.id ? 'border-primary bg-accent' : 'border-border'"
@@ -269,7 +272,6 @@ import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import Menu from 'primevue/menu'
 import Select from '../components/shared/AppSelect.vue'
-import PageTabs from "../components/PageTabs.vue"
 
 type SchemaItem = components['schemas']['modulo__api__routes__schemas__SchemaResponse'] & {
   folder_id?: string | null
@@ -312,9 +314,11 @@ async function loadSchemaCounts() {
   try {
     const { data } = await api.GET('/api/v1/schemas/counts')
     if (!data) return
-    folderSchemaCounts.value = { ...(data.by_folder ?? {}), __all__: data.total }
-  } catch (e: unknown) {
-    console.warn('Failed to load schema counts', e)
+    folderSchemaCounts.value = data.by_folder
+      ? { ...data.by_folder, __all__: data.total }
+      : { __all__: data.total }
+  } catch {
+    console.warn('Failed to load schema counts')
   }
 }
 
@@ -328,8 +332,10 @@ const folderNameMap = computed(() => {
 
 const selectedFolderName = computed(() => {
   if (!selectedFolderId.value) return ''
-  return folderNameMap.value.get(selectedFolderId.value) || ''
+  return folderNameMap.value.get(selectedFolderId.value) ?? ''
 })
+
+const sortedFolders = computed(() => [...foldersList.value].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })))
 
 const mobileFolderSelectValue = computed<string>({
   get: () => selectedFolderId.value ?? '__all__',
@@ -369,7 +375,9 @@ function onFoldersChanged() {
 
 function onSchemaDragStart(schema: SchemaItem, event: DragEvent) {
   event.dataTransfer?.setData('text/plain', schema.id)
-  event.dataTransfer!.effectAllowed = 'move'
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+  }
 }
 
 const moving = ref(false)

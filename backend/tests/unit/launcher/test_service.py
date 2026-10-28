@@ -18,11 +18,16 @@ import pytest
 
 from modulo.launcher import policy as policy_module
 from modulo.launcher.service import (
+    LAUNCHD_LABEL,
+    LAUNCHD_PLIST_FILENAME,
     ServiceError,
     assert_linux,
     assert_not_elevated,
     assert_systemd_available,
+    default_launchd_plist_path,
+    default_unit_path,
     install,
+    render_launchd_plist,
     render_unit,
     resolve_executable,
     resolve_username,
@@ -102,15 +107,50 @@ def test_unit_restart_sec_comes_from_the_shared_policy(tmp_path: Path) -> None:
     assert f"RestartSec={int(policy_module.SERVICE_RESTART_SECONDS)}s" in unit
 
 
+def test_render_launchd_plist_escapes_special_path_characters_and_preserves_argv(tmp_path: Path) -> None:
+    import plistlib
+
+    executable = tmp_path / "dir with spaces" / "modulo<&>"
+    plist_str = render_launchd_plist(executable)
+    parsed = plistlib.loads(plist_str.encode("utf-8"))
+    assert parsed["ProgramArguments"] == [str(executable), "start"]
+    assert "&amp;" in plist_str
+    assert "&lt;" in plist_str
+    assert "&gt;" in plist_str
+
+
+def test_render_launchd_plist_pure_string_and_keys(tmp_path: Path) -> None:
+    import plistlib
+
+    executable = tmp_path / "bin" / "modulo"
+    plist_str = render_launchd_plist(executable)
+    assert isinstance(plist_str, str)
+    assert '<?xml version="1.0" encoding="UTF-8"?>' in plist_str
+    assert f"<string>{LAUNCHD_LABEL}</string>" in plist_str
+    assert str(executable) in plist_str
+    assert "<string>start</string>" in plist_str
+    assert "<key>RunAtLoad</key>" in plist_str
+    assert "<key>KeepAlive</key>" in plist_str
+    assert "<key>SuccessfulExit</key>" in plist_str
+    assert "<key>ProcessType</key>" in plist_str
+
+    parsed = plistlib.loads(plist_str.encode("utf-8"))
+    assert parsed["Label"] == LAUNCHD_LABEL
+    assert parsed["ProgramArguments"] == [str(executable), "start"]
+    assert parsed["RunAtLoad"] is True
+    assert parsed["KeepAlive"] == {"SuccessfulExit": False}
+    assert parsed["ProcessType"] == "Interactive"
+
+
 # ---------------------------------------------------------------------------
 # Platform + manager guards
 # ---------------------------------------------------------------------------
 
 
 def test_macos_is_refused_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS was formerly refused loudly, but is now accepted under FAR-678."""
     monkeypatch.setattr(sys, "platform", "darwin")
-    with pytest.raises(ServiceError, match="FAR-678"):
-        assert_linux()
+    assert_linux()
 
 
 def test_windows_is_refused_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -328,3 +368,182 @@ def test_install_against_a_fake_systemd_bin_dir(monkeypatch: pytest.MonkeyPatch,
     assert "--user enable --now modulo.service" in calls
     assert any(call == "loginctl enable-linger " + resolve_username() for call in calls)
     assert unit_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# macOS launchd (Darwin) round-trips
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def darwin_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Runner-seam tests exercising macOS launchd logic."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+
+def test_darwin_install_round_trip(darwin_only: None, tmp_path: Path) -> None:
+    executable = _executable(tmp_path)
+    unit_path = tmp_path / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+    runner = FakeRunner()
+
+    result = install(
+        runner=runner,
+        unit_path=unit_path,
+        executable=executable,
+    )
+    assert result.unit_path == unit_path
+    assert result.enabled is True
+    assert result.started is True
+    assert result.linger_enabled is True
+    assert not result.warnings
+    assert unit_path.exists()
+    content = unit_path.read_text(encoding="utf-8")
+    assert str(executable) in content
+    assert ["launchctl", "unload", str(unit_path)] in [list(argv) for argv in runner.calls]
+    assert ["launchctl", "load", "-w", str(unit_path)] in [list(argv) for argv in runner.calls]
+
+
+def test_darwin_install_load_failure(darwin_only: None, tmp_path: Path) -> None:
+    executable = _executable(tmp_path)
+    unit_path = tmp_path / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+    runner = FakeRunner({("launchctl", "load"): (1, "load failed")})
+
+    result = install(
+        runner=runner,
+        unit_path=unit_path,
+        executable=executable,
+    )
+    assert result.enabled is False
+    assert result.started is False
+    assert any("launchctl load -w" in warning for warning in result.warnings)
+
+
+def test_darwin_uninstall_round_trip(darwin_only: None, tmp_path: Path) -> None:
+    unit_path = tmp_path / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+    unit_path.parent.mkdir(parents=True)
+    unit_path.write_text("<plist></plist>", encoding="utf-8")
+    runner = FakeRunner()
+
+    result = uninstall(
+        runner=runner,
+        unit_path=unit_path,
+    )
+    assert result.stopped is True
+    assert result.disabled is True
+    assert result.unit_removed is True
+    assert result.linger_disabled is True
+    assert not unit_path.exists()
+    assert runner.calls[0] == ["launchctl", "unload", "-w", str(unit_path)]
+
+
+def test_darwin_uninstall_tolerates_missing_unit(darwin_only: None, tmp_path: Path) -> None:
+    unit_path = tmp_path / "missing" / LAUNCHD_PLIST_FILENAME
+    runner = FakeRunner({("launchctl", "unload"): (1, "not loaded")})
+
+    result = uninstall(
+        runner=runner,
+        unit_path=unit_path,
+    )
+    assert result.stopped is False
+    assert result.disabled is False
+    assert result.unit_removed is True
+    assert any("launchctl unload -w" in warning for warning in result.warnings)
+
+
+def test_darwin_status(darwin_only: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import modulo.launcher.supervisor as supervisor_module
+
+    fake_plist = tmp_path / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+    fake_plist.parent.mkdir(parents=True)
+    fake_plist.write_text("<plist></plist>", encoding="utf-8")
+    monkeypatch.setattr(
+        "modulo.launcher.service.default_unit_path",
+        lambda: fake_plist,
+    )
+
+    def fake_collect(data_dir: Path) -> dict[str, object]:
+        return {"data_dir": str(data_dir), "initialized": True}
+
+    monkeypatch.setattr(supervisor_module, "collect_status", fake_collect)
+    runner = FakeRunner({("launchctl", "list"): (0, f"123 0 {LAUNCHD_LABEL}")})
+    payload = status(runner=runner, data_dir=tmp_path / "data")
+
+    assert payload["unit"] == LAUNCHD_PLIST_FILENAME
+    assert payload["unit_path"] == str(fake_plist)
+    assert payload["active"] == "active"
+    assert payload["enabled"] == "enabled"
+    assert payload["linger"] == "not_applicable (macOS LaunchAgent starts on login)"
+    assert payload["launcher"] == {"data_dir": str(tmp_path / "data"), "initialized": True}
+
+
+def test_darwin_default_unit_path(darwin_only: None) -> None:
+    assert default_unit_path() == default_launchd_plist_path()
+    assert default_launchd_plist_path() == Path.home() / "Library" / "LaunchAgents" / LAUNCHD_PLIST_FILENAME
+
+
+def test_assert_linux_refuses_other_platforms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A platform that is neither Linux, macOS nor Windows is refused loudly."""
+    monkeypatch.setattr(sys, "platform", "freebsd14")
+    with pytest.raises(ServiceError, match="not implemented on freebsd14"):
+        assert_linux()
+
+
+def test_install_enable_failure_is_warned(linux_only: None, tmp_path: Path) -> None:
+    """A failing `enable --now` still returns a result, with the failure warned."""
+    executable = _executable(tmp_path)
+    runner = FakeRunner({("systemctl", "--user", "enable"): (1, "unit is masked")})
+    result = install(
+        runner=runner,
+        unit_path=tmp_path / "u" / "modulo.service",
+        executable=executable,
+    )
+    assert result.enabled is False
+    assert result.started is False
+    assert any("enable --now" in warning and "unit is masked" in warning for warning in result.warnings)
+
+
+def test_uninstall_linger_oserror_is_warned(linux_only: None, tmp_path: Path) -> None:
+    """A missing pkexec warns and documents the sudo fallback instead of raising."""
+    executable = tmp_path / "modulo"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if argv[:1] == ["pkexec"]:
+            raise OSError("pkexec not found")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    result = uninstall(runner=runner, unit_path=tmp_path / "u" / "modulo.service")
+    assert result.linger_disabled is False
+    assert any("sudo loginctl disable-linger" in warning for warning in result.warnings)
+
+
+def test_uninstall_warns_when_linger_disable_fails_without_other_warnings(linux_only: None, tmp_path: Path) -> None:
+    """A silent linger failure still earns the documented sudo fallback warning."""
+    runner = FakeRunner({("pkexec", "loginctl", "disable-linger"): (1, "Access denied")})
+    result = uninstall(runner=runner, unit_path=tmp_path / "u" / "modulo.service")
+    assert result.stopped is True
+    assert result.disabled is True
+    assert result.unit_removed is True
+    assert result.linger_disabled is False
+    assert any("could not disable linger non-interactively" in warning for warning in result.warnings)
+
+
+def test_uninstall_warns_when_the_unit_cannot_be_removed(linux_only: None, tmp_path: Path) -> None:
+    """A unit path that cannot be unlinked is warned and reported unremoved, never raised."""
+    unit_path = tmp_path / "u" / "modulo.service"
+    unit_path.mkdir(parents=True)
+    result = uninstall(runner=FakeRunner(), unit_path=unit_path)
+    assert result.unit_removed is False
+    assert any("could not remove" in warning for warning in result.warnings)
+
+
+def test_status_reports_error_when_no_default_data_dir(linux_only: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No usable default data dir surfaces the loud error block instead of raising."""
+    from modulo.launcher import entry as entry_module
+
+    def refuse() -> Path:
+        raise RuntimeError("no usable default data dir")
+
+    monkeypatch.setattr(entry_module, "default_data_dir", refuse)
+    payload = status(runner=FakeRunner())
+    assert payload["launcher"] == {"error": "no usable default data dir on this platform"}

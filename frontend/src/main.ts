@@ -5,8 +5,8 @@ import router from './router'
 import i18n from './i18n'
 import PrimeVue from 'primevue/config'
 import Tooltip from 'primevue/tooltip'
-import Aura from '@primeuix/themes/aura'
-import { applyPrimeVueTokenBridge } from './lib/primevue-theme'
+import Aura from '@primevue/themes/aura'
+import { applyPrimeVueTokenBridge, installPrimeVueV4BaseFontStyles } from './lib/primevue-theme'
 import { useLocaleStore } from './stores/localeStore'
 import { createErrorTracker } from './lib/error-tracking'
 import { loadMonitorConfig, loadBackends } from './monitor'
@@ -125,23 +125,24 @@ async function main() {
   // PrimeVue components consume `--p-*` design tokens; map our semantic CSS
   // variables onto them on the document root (ADR 024 Decision 4). Must run
   // once at bootstrap, after style.css has loaded (module-level import above).
+  // The v4 base-font rule is installed alongside it: PrimeVue 4 hardcodes
+  // `font-size: 1rem` on Button/InputText/Select, where v5 used a token.
   applyPrimeVueTokenBridge()
+  installPrimeVueV4BaseFontStyles()
 
   const app = createApp(App)
   const pinia = createPinia()
   app.use(pinia)
   app.use(i18n)
-  const primeuiLicense = import.meta.env.VITE_PRIMEUI_LICENSE as string | undefined
   app.use(PrimeVue, {
-    ...(primeuiLicense ? { license: primeuiLicense } : {}),
     theme: {
       preset: Aura,
       options: {
         // PrimeVue's darkModeSelector selects the DARK token set. Our app is
         // dark by default (`class="dark"` on <html>) and light is toggled by
         // removing `.dark`. Simple class selectors work correctly with the
-        // @primeuix/styled engine (complex selectors like `:root:not(.light)`
-        // get double-wrapped, producing invalid nested CSS).
+        // theme engine (complex selectors like `:root:not(.light)` get
+        // double-wrapped, producing invalid nested CSS).
         darkModeSelector: '.dark',
       },
     },

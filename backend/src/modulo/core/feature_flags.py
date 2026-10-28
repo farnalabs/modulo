@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from typing import Any, ClassVar, Protocol
 
-from modulo.core.license import LicenseData
+from modulo.core.license import LicenseData, is_parked
 
 logger = logging.getLogger(__name__)
 
@@ -215,10 +215,12 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         ),
         tier="community",
     ),
-    # ── Community tier — lifecycle map journeys display (default OFF, FAR-654) ──
+    # Retained in the registry only so persisted/catalogued organisations can
+    # upgrade without losing compatibility; retired flags are filtered from all
+    # customer-facing catalogue and plan responses below.
     FeatureFlag(
         name="lifecycle_map_journeys",
-        description="Journey cards and journey detail on the Lifecycle Map view (attribution display)",
+        description="Retired internal Lifecycle Map journey display",
         tier="community",
     ),
     # ── Community tier — webhook notification delivery log (default OFF, FAR-656) ──
@@ -270,13 +272,18 @@ TIER_RANK: dict[str, int] = {"community": 0, "team": 1}
 # never activate it (the "two-mechanism" precedent started by
 # ``mobile_sidebar_rail``). Orgs enable them per-org via
 # ``feature_overrides``; a system-level ``set_override`` also wins.
+# Retained only in persisted data for backwards compatibility; it is not a
+# customer-configurable flag. Internal Lifecycle Map access is controlled by the
+# route's dev-mode visibility gate instead of an org feature override.
+RETIRED_INTERNAL_FLAGS: frozenset[str] = frozenset({"lifecycle_map_journeys"})
+
+
 DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
     {
         "mobile_sidebar_rail",
         "dashboard_charts",
         "saved_views",
         "user_scoped_mcp_keys",
-        "lifecycle_map_journeys",
         "webhook_notification_log",
         "library_collection",
         "sso_unrestricted_provisioning",
@@ -416,6 +423,15 @@ def _verified_license_key(raw_key: str, error_log: str) -> LicenseData | None:
     both key rungs through ``_verified_license_key`` (this per-key verifier).
     Cancellation propagates (``CancelledError`` is a ``BaseException``, never
     swallowed by the ``except Exception``).
+
+    A key carrying a FUTURE ``starts_at`` (FAR-2146) verifies but is not yet
+    active: it resolves to ``None`` here, so the rung falls through and the
+    instance keeps running on whatever licence is in force today. Without this gate a
+    configured env-var or org-level successor would grant Team capability the
+    day it was written into configuration, before the window the customer
+    bought — the free-time defect the future-only rule exists to prevent. It
+    becomes effective automatically once ``starts_at`` arrives, because the
+    gate is evaluated on every resolution.
     """
     from modulo.core.license import parse_and_verify
 
@@ -427,6 +443,13 @@ def _verified_license_key(raw_key: str, error_log: str) -> LicenseData | None:
         logger.warning(error_log, exc_info=True)
         return None
     if validation.valid and validation.license_data is not None:
+        if is_parked(validation.license_data):
+            logger.info(
+                "license.key_parked_until_start org_id=%s starts_at=%s",
+                validation.license_data.org_id,
+                validation.license_data.starts_at,
+            )
+            return None
         return validation.license_data
     return None
 
@@ -456,8 +479,12 @@ def resolve_effective_license(settings: Any, org: Any | None) -> LicenseData | N
        its ``org_id`` claim is empty or names this org (FAR-2060). A mismatch is
        treated as absent at this rung: the key is real, but it licenses a
        different tenant.
-    2. System-level in-memory licence (``store_license()``)
-    3. System-level env-var key (``settings.modulo_license_key``)
+    2. System-level in-memory licence (``store_license()``) — the runtime install
+       persisted in ``system_config`` (FAR-2153) and restored at startup. This
+       rung OVERRIDES rung 3: an explicit operator install beats the deployment
+       env key, and removing it falls back to the env key.
+    3. System-level env-var key (``settings.modulo_license_key``) — the
+       deployment FLOOR.
 
     ONE walk, shared by ``_resolve_paid_plan`` (the plan context built here),
     ``admin_license._resolve_effective_license`` (the admin licence view) and
@@ -472,6 +499,11 @@ def resolve_effective_license(settings: Any, org: Any | None) -> LicenseData | N
     granting its tier. Past the grace every rung falls through to the
     unlicensed (Community) default — the lapse is never a lockout, because
     authentication does not depend on this ladder.
+
+    A key whose signed ``starts_at`` is still in the future (FAR-2146) also
+    falls through: it is valid but not yet active, so it must not grant
+    capability early. It starts resolving here automatically once its start
+    arrives — no operator action, because the gate is evaluated per call.
 
     Local imports keep ``modulo.core.license.{get_license,parse_and_verify}``
     patchable at call time (tests patch the source module, not this one).
@@ -512,13 +544,27 @@ async def _resolve_paid_plan(settings: Any, session: Any, org: Any | None) -> Pl
 
     License ladder (first valid source wins, absent/invalid falls through):
     1. Org-level license key (from ``org.settings_json["license_key"]``)
-    2. System-level in-memory license (``store_license()``)
+    2. System-level in-memory license (``store_license()``; the
+       ``system_config`` install restored/refreshed from persistence)
     3. System-level env-var license (``settings.modulo_license_key``)
+
+    Rung 2 OVERRIDES rung 3: the deployment's env key is the FLOOR and an
+    explicit operator install is the override, so removing an install falls back
+    to the env key (FAR-2153). The persisted system licence is re-read here (TTL
+    throttled) before the walk, so a licence installed by another process
+    becomes visible in this one without a restart.
 
     The rung WALK is the shared session-free ``resolve_effective_license`` —
     only the session-backed context build is local to this function — so this
     ladder cannot drift from the admin licence view or ``GET /api/v1/plan``.
     """
+    if session is not None:
+        # FAR-2153: cross-process visibility. TTL-throttled and fail-open, so
+        # this is at most one indexed read per window and a DB blip cannot turn
+        # a plan resolution into an error.
+        from modulo.core.license import refresh_persisted_system_license
+
+        await refresh_persisted_system_license(session)
     data = resolve_effective_license(settings, org)
     if data is None:
         return None
@@ -626,7 +672,7 @@ def effective_feature_flags(
     Returns copies (``dataclasses.replace``) for overlaid flags so the plan
     context's own registry state is never mutated.
     """
-    flags = plan_ctx.list_all_features()
+    flags = [flag for flag in plan_ctx.list_all_features() if flag.name not in RETIRED_INTERNAL_FLAGS]
     if not org_overrides:
         return flags
     return [

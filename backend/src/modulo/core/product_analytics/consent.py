@@ -1,14 +1,16 @@
-"""Consent logic, prompt validation, and partner carve-out check."""
+"""Consent logic, prompt validation, and instance-switch resolution."""
 
 from __future__ import annotations
 
 import logging
+import os
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.license import get_license
 from modulo.core.product_analytics.constants import (
     DEFAULT_LEVEL,
     DEFAULT_LEVEL_CHANGED_AT,
@@ -19,17 +21,21 @@ from modulo.core.product_analytics.constants import (
     INSTANCE_SWITCH_KEY,
     LEVEL_ALL,
     LEVEL_OFF,
-    LICENSE_ENFORCEMENT_KILL_SWITCH_KEY,
     PARTNER_LICENSE_CLAIM,
     PRODUCT_ANALYTICS_KEY,
     PROMPTED_DISMISSED,
     PROMPTED_NO,
     PROMPTED_YES,
+    SWITCH_SOURCE_DEFAULT,
+    SWITCH_SOURCE_ENV,
+    SWITCH_SOURCE_LICENSE,
+    SWITCH_SOURCE_OPERATOR,
     VALID_LEVELS,
 )
 from modulo.db.crud.system_config import get_config
 
 _log = logging.getLogger(__name__)
+_SWITCH_TRUTHY_VALUES = frozenset(("1", "true", "yes"))
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +89,29 @@ def is_org_consenting(settings_json: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _parse_prompted_at(prompted_at: Any) -> datetime | None:
+    """Parse prompted_at value to an aware datetime, or return None on failure."""
+    if prompted_at is None:
+        return None
+    if isinstance(prompted_at, str):
+        try:
+            parsed = datetime.fromisoformat(prompted_at)
+        except (ValueError, TypeError):
+            return None
+    else:
+        parsed = prompted_at
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _is_cooldown_expired(prompted_at: datetime | None) -> bool:
+    """Check if the dismiss cooldown has expired."""
+    if prompted_at is None:
+        return True
+    return datetime.now(UTC) - prompted_at >= DISMISS_COOLDOWN
+
+
 def is_prompt_eligible(consent: dict[str, Any]) -> bool:
     """Return True if the org is eligible for a consent prompt.
 
@@ -95,18 +124,8 @@ def is_prompt_eligible(consent: dict[str, Any]) -> bool:
         return True
     if prompted != PROMPTED_DISMISSED:
         return False
-    # Check cooldown
-    prompted_at = consent.get("prompted_at")
-    if prompted_at is None:
-        return True
-    if isinstance(prompted_at, str):
-        try:
-            prompted_at = datetime.fromisoformat(prompted_at)
-        except (ValueError, TypeError):
-            return True
-    if prompted_at.tzinfo is None:
-        prompted_at = prompted_at.replace(tzinfo=UTC)
-    return datetime.now(UTC) - prompted_at >= DISMISS_COOLDOWN
+    prompted_at = _parse_prompted_at(consent.get("prompted_at"))
+    return _is_cooldown_expired(prompted_at)
 
 
 # ---------------------------------------------------------------------------
@@ -171,23 +190,110 @@ def set_level(
 # ---------------------------------------------------------------------------
 
 
-async def is_instance_analytics_enabled(session: AsyncSession) -> bool:
-    """Return True if the instance-level master switch is ON.
+@dataclass(frozen=True)
+class AnalyticsSwitchState:
+    """The effective instance switch plus where its value came from.
 
-    Reads SystemConfig first; falls back to env var.
+    ``source`` is one of ``constants.SWITCH_SOURCE_*``:
+
+    * ``operator``    - an operator explicitly set ``system_config[INSTANCE_SWITCH_KEY]``
+    * ``environment`` - the operator set ``MODULO_PRODUCT_ANALYTICS_ENABLED``
+    * ``licence``     - nothing explicit, but the installed licence requires analytics
+    * ``default``     - nothing explicit and no licence requirement: OFF
+
+    ``operator_value`` is the explicit value an operator set (stored or env), or
+    ``None`` when the value is licence/default-derived.
     """
-    import os
+
+    enabled: bool
+    source: str
+    licence_requires_analytics: bool
+    operator_value: bool | None = None
+
+
+def coerce_switch_value(value: Any) -> bool:
+    """Interpret a stored/env instance-switch value (fail-closed).
+
+    Only an explicitly truthy value is ON: boolean ``True``, a non-zero number,
+    or one of the strings ``"1"``/``"true"``/``"yes"`` (case-insensitive).
+    Everything else - including the strings ``"false"``, ``"0"``, ``"no"`` and
+    any non-numeric container - is OFF. This is deliberately NOT ``bool(value)``:
+    a stored ``"false"`` (or an unexpected list/dict) must never run the dump.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in _SWITCH_TRUTHY_VALUES
+    return False
+
+
+async def resolve_instance_analytics_switch(session: AsyncSession) -> AnalyticsSwitchState:
+    """Resolve the effective instance-level analytics switch and its provenance.
+
+    PRECEDENCE - an operator always wins; a licence only supplies a DEFAULT:
+
+    1. ``system_config["product_analytics_enabled"]`` present -> the operator's
+       explicit value (ON *or* OFF). An explicit OFF vetoes even a licence that
+       requires analytics.
+    2. ``MODULO_PRODUCT_ANALYTICS_ENABLED`` set -> the deployment operator's
+       value (same veto).
+    3. Otherwise the installed licence decides: ``product_analytics_required``
+       present -> ON (source ``licence``); absent -> OFF (source ``default``).
+
+    A licence can therefore only turn the DEFAULT on - it can never override an
+    operator. Nothing here degrades an organisation's plan or tier for an
+    analytics reason: a partner that disables the dump is breaching a contract,
+    which is a conversation, not a software control.
+    """
+    licence_requires = partner_license_requires_analytics(get_license())
 
     config = await get_config(session, INSTANCE_SWITCH_KEY)
     if config is not None:
-        if isinstance(config.value, bool):
-            return config.value
-        if isinstance(config.value, str):
-            return config.value.lower() in ("1", "true", "yes")
-        return bool(config.value)
-    # Env var fallback
-    env_val = os.environ.get(ENV_INSTANCE_SWITCH, "")
-    return env_val.lower() in ("1", "true", "yes")
+        operator_value = coerce_switch_value(config.value)
+        return AnalyticsSwitchState(
+            enabled=operator_value,
+            source=SWITCH_SOURCE_OPERATOR,
+            licence_requires_analytics=licence_requires,
+            operator_value=operator_value,
+        )
+
+    env_raw = os.environ.get(ENV_INSTANCE_SWITCH)
+    if env_raw is not None:
+        # A SET-but-blank variable is an explicit operator value, not "unset":
+        # an exported-but-empty variable must read OFF (fail-closed) rather than
+        # silently falling through to a licence that would turn analytics ON.
+        env_value = coerce_switch_value(env_raw)
+        return AnalyticsSwitchState(
+            enabled=env_value,
+            source=SWITCH_SOURCE_ENV,
+            licence_requires_analytics=licence_requires,
+            operator_value=env_value,
+        )
+
+    if licence_requires:
+        return AnalyticsSwitchState(
+            enabled=True,
+            source=SWITCH_SOURCE_LICENSE,
+            licence_requires_analytics=True,
+        )
+
+    return AnalyticsSwitchState(
+        enabled=False,
+        source=SWITCH_SOURCE_DEFAULT,
+        licence_requires_analytics=False,
+    )
+
+
+async def is_instance_analytics_enabled(session: AsyncSession) -> bool:
+    """Return True when the effective instance-level analytics switch is ON.
+
+    Delegates to :func:`resolve_instance_analytics_switch` so every reader (the
+    dump gate, the consent routes and the transparency endpoint) applies the
+    same precedence and cannot disagree about whether egress is enabled.
+    """
+    return (await resolve_instance_analytics_switch(session)).enabled
 
 
 def is_egress_allowed(instance_enabled: bool, org_level: str) -> bool:
@@ -196,79 +302,34 @@ def is_egress_allowed(instance_enabled: bool, org_level: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Partner carve-out
+# Licence-required analytics (drives the DEFAULT, never enforcement)
 # ---------------------------------------------------------------------------
 
 
 def partner_license_requires_analytics(license_data: Any) -> bool:
-    """Return True if the license carries product_analytics_required: true.
+    """Return True when the licence carries ``product_analytics_required: true``.
 
-    Accepts a LicenseData object or any object with a claims dict.
-    Returns False for missing/malformed claims (fail-safe).
+    Accepts a :class:`modulo.core.license.LicenseData` (reads its signed
+    ``raw_payload``), an object exposing a ``claims`` mapping, or a mapping
+    itself. The claim must be exactly boolean ``True`` or the string
+    ``"true"``; everything else (including ``"false"``, a missing claim, or
+    missing/malformed input) is False - fail-safe, because this can only ever
+    turn the default ON.
     """
     try:
-        claims = getattr(license_data, "claims", None)
-        if claims is None and isinstance(license_data, dict):
-            claims = license_data
-        if not isinstance(claims, dict):
+        payload: Any
+        if isinstance(license_data, dict):
+            payload = license_data
+        else:
+            payload = getattr(license_data, "claims", None)
+            if not isinstance(payload, dict):
+                payload = getattr(license_data, "raw_payload", None)
+        if not isinstance(payload, dict):
             return False
-        return bool(claims.get(PARTNER_LICENSE_CLAIM, False))
+        claim = payload.get(PARTNER_LICENSE_CLAIM, False)
+        if claim is True:
+            return True
+        return isinstance(claim, str) and claim.strip().lower() == "true"
     except Exception:
         _log.warning("partner_license_requires_analytics: failed to read license claims", exc_info=True)
         return False
-
-
-def is_partner_carve_out_active(license_data: Any, org_level: str) -> bool:
-    """Return True if the partner carve-out is active.
-
-    Active when: license has product_analytics_required: true AND org level != 'all'.
-    """
-    return partner_license_requires_analytics(license_data) and org_level != LEVEL_ALL
-
-
-# ---------------------------------------------------------------------------
-# License enforcement kill switch
-# ---------------------------------------------------------------------------
-
-
-def kill_switch_disables_enforcement(value: Any) -> bool:
-    """Interpret a stored license-enforcement kill-switch value.
-
-    This is the ONE canonical semantics for the kill switch, shared by
-    ``consent.is_license_enforcement_enabled`` and
-    ``license_enforcement.is_enforcement_active``.
-
-    Only an *explicitly truthy* value turns the kill switch ON (which disables
-    enforcement): boolean ``True`` or one of the strings ``"1"``/``"true"``/
-    ``"yes"`` (case-insensitive).  Every other stored value — including the
-    strings ``"false"``, ``"0"`` and ``"no"``, and boolean ``False`` — leaves
-    enforcement ENABLED.  In particular a stored ``"false"`` means "the kill
-    switch is off", i.e. enforcement is on; it must never be read as a truthy
-    non-empty string and invert the switch.
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes")
-    return bool(value)
-
-
-async def is_license_enforcement_enabled(session: AsyncSession) -> bool:
-    """Return True if license enforcement is active (kill switch is OFF by default).
-
-    The kill switch is absent → enforced (matching authz_enforce convention).
-    See :func:`kill_switch_disables_enforcement` for the canonical stored-value
-    semantics.
-
-    A read failure also resolves to ``True`` (enforced): this mirrors
-    :func:`modulo.core.product_analytics.license_enforcement.is_enforcement_active`
-    so the two helpers agree on every input class, not only stored values.
-    """
-    try:
-        config = await get_config(session, LICENSE_ENFORCEMENT_KILL_SWITCH_KEY)
-    except SQLAlchemyError:
-        _log.warning("product_analytics.kill_switch_read_failed", exc_info=True)
-        return True  # read failure = fail safe = enforced
-    if config is None:
-        return True  # absent = enforced
-    return not kill_switch_disables_enforcement(config.value)

@@ -1375,6 +1375,14 @@ def test_sweep_recoverability_predicate_resolves_early_detect_window(
     rc._sweep_recoverability_predicate()
     assert captured["nodeless_window"] == 35
     assert captured["early_detect_minutes"] == 15
+    # FAR-1803's visibility-only leg must not count as "recoverable" here, or
+    # FAR-1808's bounded node-started reclaim is shadowed (rule b).
+    assert captured["include_node_started_executor_lost"] is False
+    # FAR-2122's dispatcherless resume leg is conditional on a resumable root
+    # checkpoint; the sweep must fold that precondition in, or a checkpointless
+    # row (which the reconciler refuses) keeps its marker for 25h instead of
+    # being reclaimed by FAR-1808's 2h bound.
+    assert captured["unowned_node_started_requires_checkpoint"] is True
 
 
 def test_sweep_recoverability_predicate_disables_early_detect_when_not_early(

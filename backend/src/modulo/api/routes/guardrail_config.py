@@ -302,7 +302,7 @@ async def _apply_guardrail_upserts(
     )
 
 
-async def _apply_guardrail_deletes(
+async def _apply_guardrail_deletes(  # NOSONAR S7503 - async seam
     rows_by_name: dict[str, Eval],
     proposed_by_id: dict[str, Any],
     account_id: uuid.UUID,

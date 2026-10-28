@@ -14,7 +14,15 @@ Production deployment readiness checklist for the Modulo Alpha public launch. Ea
   - `protected-mode yes` with `requirepass`
   - TLS enabled if Redis is configured with `tls-port`
 - [ ] **Docker images** are published to ghcr.io with anonymous pull enabled
-  - `ghcr.io/farnalabs/modulo:latest`
+  - `ghcr.io/farnalabs/modulo:<version>` (pin the version; see version pin table below)
+  - `ghcr.io/farnalabs/modulo:latest` is available but **must not be used in production**
+
+**Version pin reference (Docker Compose production):**
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `TAG` | Modulo image version (required, no default) | `v0.4.0` |
+
 - [ ] **`install.sh`** is reachable at the documented native-install URL - `https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh`
   - A short `modulo.run` URL for it does not exist yet (the old one 404s); do not advertise any short URL until it actually serves the script
 - [ ] **DNS** is configured for the target domain
@@ -76,7 +84,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for the full secur
   - Pipeline performance
   - HITL review activity
   - Cost tracking
-- [ ] **Audit log chain** integrity is verified (`GET /api/v1/admin/audit/verify`; requires `audit.manage`, no CLI wrapper)
+- [ ] **Audit log chain** integrity is verified (`GET /api/v1/admin/audit/verify`; requires the Team-tier `audit_viewer` feature plus `audit.manage`, no CLI wrapper). The chain is recorded on every tier; on Community the product offers no route to verify it
 - [ ] **Log retention** is configured:
   - Application logs: 30 days minimum
   - Audit logs: append-only table (`audit_events`); not purged automatically

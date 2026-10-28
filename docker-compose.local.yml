@@ -45,7 +45,15 @@ services:
       DATABASE_URL: postgresql+asyncpg://modulo:${POSTGRES_PASSWORD:-changeme}@db-local:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: local-dev-secret-key-not-for-production
-      FERNET_KEY: ${FERNET_KEY:-local-dev-only-change-me}
+      # FAR-2181: `local-dev-only-change-me` was 24 bytes - below `Settings`'
+      # 32-byte minimum, so BOTH workers exited 1 with
+      # `ValidationError: FERNET_KEY must be at least 32 bytes; got 24` and no
+      # pipeline run or cron ever executed. Required, never defaulted: a fixed
+      # placeholder cannot be a valid Fernet key (url-safe base64 of exactly 32
+      # bytes), so compose fails loudly at `up` instead of half-starting a stack.
+      # The SAME key must be given to every process that touches a stored
+      # credential - including a host-run backend using backend/.env.
+      FERNET_KEY: '${FERNET_KEY:?FERNET_KEY is required - generate one (openssl rand -base64 32) and put FERNET_KEY=<value> in .env at the repo root; see docs/quickstart.md step 1}'
       REDIS_URL: redis://redis-local:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin
@@ -77,7 +85,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://modulo:${POSTGRES_PASSWORD:-changeme}@db-local:5432/modulo
       MODULO_DB: postgres
       SECRET_KEY: local-dev-secret-key-not-for-production
-      FERNET_KEY: ${FERNET_KEY:-local-dev-only-change-me}
+      # FAR-2181: same required key as saq-runner above - see that comment.
+      FERNET_KEY: '${FERNET_KEY:?FERNET_KEY is required - generate one (openssl rand -base64 32) and put FERNET_KEY=<value> in .env at the repo root; see docs/quickstart.md step 1}'
       REDIS_URL: redis://redis-local:6379/0
       MODULO_PUBLIC_URL: http://localhost:8000
       MODULO_USERS: admin:admin

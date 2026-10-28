@@ -34,6 +34,11 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
    uv run alembic history
    uv run alembic upgrade heads --sql  # preview SQL without applying
    ```
+   Run these from `backend/` with `DATABASE_URL` (or the owner-role override
+   `DATABASE_ADMIN_URL`) set in the process environment or in the `.env` file
+   in `backend/`. `backend/alembic.ini` deliberately carries no default URL, so
+   Alembic refuses with an explicit error when neither is configured rather
+   than silently targeting a local database (FAR-2183).
 3. **Back up the database** – always take a backup before upgrading
    (from the repository root - `scripts/` lives at the repo root, not in
    `backend/`):
@@ -183,6 +188,11 @@ The manual playbook. Run it when either trigger fires:
    When you need an EXPLICIT re-point, run the rollback-verify target:
    `gh workflow run "Native: release smoke + canary (bundle-v*)" -f rollback_version=bundle-v<good>`.
    This verifies the target release exists with its artifact servable.
+   A manual dispatch MUST pass one of `rollback_version` or `canary_version`:
+   an argument-free dispatch would run only the tracking-housekeeping job and
+   verify nothing, so the workflow rejects it with an explicit error naming
+   both inputs (FAR-2161). To smoke a published release rather than verify a
+   rollback target, pass `-f canary_version=bundle-v<good>` instead.
 3. **Cut a patch.** Branch, fix, tag the next `bundle-v*` patch version; the release
    smoke runs against the exact artifact before Merge Queue can bless it.
 4. **Operator-side recovery.** Any operator already holding the bad
@@ -192,6 +202,12 @@ The manual playbook. Run it when either trigger fires:
 **Triggers rule:** if the canary is red and no customer report exists,
 treat 1-3 as REQUIRED, not optional - an endangered release stays listed
 only while it is being rolled forward.
+
+**Version pin reference (Docker Compose production):**
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `TAG` | Modulo image version (required, no default) | `v0.4.0` |
 
 ### Application Rollback
 
@@ -210,6 +226,12 @@ sudo systemctl restart modulo
 ### Database Rollback (Downgrade)
 
 **Warning:** Rolling back the application does NOT revert database migrations. If the previous code expects an older schema:
+
+#### Irreversible data-purge migrations
+
+A database restore alone is not a durable rollback for a migration that permanently deletes data. Stop the purge image and hold any release or startup path that could boot it. Restore the database from the pre-purge backup, then roll the application image back to an image built before the purge migration before starting the application again. Otherwise, startup or release migration logic can apply the purge again as soon as it sees the restored pre-purge revision.
+
+The order is mandatory: **stop or hold the purge image, restore the database, roll back the application image, then boot it**. Do not boot the purge image between the restore and the application rollback.
 
 ```bash
 # Check current Alembic version
@@ -253,7 +275,7 @@ When upgrading, check for changes to:
 - [ ] Existing pipeline runs appear in the UI
 - [ ] WebSocket connections establish successfully
 - [ ] Rate limiting is functional
-- [ ] Audit log chain is intact (verified via `GET /api/v1/admin/audit/verify`)
+- [ ] Audit log chain is intact (verified via `GET /api/v1/admin/audit/verify`; requires the Team-tier `audit_viewer` feature plus `audit.manage`. The chain is recorded on every tier, but on Community the product offers no route to verify it)
 - [ ] All env vars are set correctly (no deprecation warnings in logs)
 - [ ] Frontend loads without errors (check browser console)
 - [ ] Cross-origin requests work (CORS)

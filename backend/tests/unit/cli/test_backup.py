@@ -15,6 +15,7 @@ from click.testing import CliRunner
 from psycopg.types.json import Jsonb
 
 from modulo.cli.backup import (
+    _db_has_modulo_tables,
     _export_checkpoint_blobs_sync,
     _export_checkpoint_writes_sync,
     _export_checkpoints_sync,
@@ -61,6 +62,43 @@ class TestResolveUrl:
         mock_settings.return_value.database_url = "postgresql+asyncpg://fallback/db"
         result = _resolve_url(None)
         assert result == "postgresql://fallback/db"
+
+
+# ── _db_has_modulo_tables ─────────────────────────────────────────────────────
+
+
+class TestDbHasModuloTables:
+    @patch("psycopg.connect")
+    def test_reports_populated_database(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+        mock_cur.fetchone.return_value = (3,)
+
+        assert _db_has_modulo_tables("postgresql://localhost/db") is True
+
+        sql = mock_cur.execute.call_args[0][0]
+        assert "information_schema.tables" in sql
+
+    @patch("psycopg.connect")
+    def test_reports_empty_database(self, mock_connect: MagicMock) -> None:
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_connect.return_value.__enter__.return_value = mock_conn
+        mock_cur.fetchone.return_value = (0,)
+
+        assert _db_has_modulo_tables("postgresql://localhost/db") is False
+
+    @patch("psycopg.connect", side_effect=RuntimeError("connection refused"))
+    def test_treats_probe_failure_as_populated(self, mock_connect: MagicMock) -> None:
+        # Cannot verify the target ⇒ conservative True (require --replace-cluster).
+        assert _db_has_modulo_tables("postgresql://localhost/db") is True
+
+    @patch("modulo.cli.backup.psycopg", None)
+    def test_treats_missing_driver_as_populated(self) -> None:
+        assert _db_has_modulo_tables("postgresql://localhost/db") is True
 
 
 # ── _fernet_key_hash ──────────────────────────────────────────────────────────

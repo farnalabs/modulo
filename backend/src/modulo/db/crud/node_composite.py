@@ -9,7 +9,11 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.models.node import Node  # TODO: migrate away from Node model to PipelineEdge
+from modulo.db.models.node import Node
+
+# Node remains the compatibility model for legacy composite graphs. New graph
+# writes use PipelineEdge; removing this read/write seam requires a separate
+# data migration and callers migration.
 
 
 async def get_child_nodes(session: AsyncSession, parent_id: uuid.UUID) -> list[Node]:

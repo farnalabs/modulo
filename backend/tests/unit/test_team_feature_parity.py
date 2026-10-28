@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from modulo.core.feature_flags import _KNOWN_FLAGS
+from tests.unit._source_scan import iter_source_text
 
 # Repo root: this file lives at backend/tests/unit/test_team_feature_parity.py
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -28,13 +29,13 @@ _FRONTEND_SRC = _REPO_ROOT / "frontend" / "src"
 
 # Team-tier flags declared in the catalog but intentionally not yet enforced
 # anywhere (backend route gate, frontend FeatureGate, or service check).
-# ``scim`` (ctx.feature_enabled("scim") in auth/scim_auth.py),
-# ``external_secrets`` (registry.get_flag("external_secrets") in
-# core/secrets_backend/__init__.py) and ``pipeline_delete``
-# (planStore.featureEnabled('pipeline_delete') in the frontend pipeline
-# views) ARE enforced — scim/external_secrets at the SERVICE level,
+# ``scim`` (ctx.feature_enabled("scim") in auth/scim_auth.py) and
+# ``pipeline_delete`` (planStore.featureEnabled('pipeline_delete') in the
+# frontend pipeline views) ARE enforced — scim at the SERVICE level,
 # pipeline_delete in the FRONTEND — so the detector correctly classifies them
-# as enforced and they do NOT belong in this gap set.
+# as enforced and they do NOT belong in this gap set. ``external_secrets`` was
+# retired from the catalog: external secret backends are available on every
+# tier, so there is no flag to enforce and it is no longer a team-tier entry.
 KNOWN_UNENFORCED_TEAM_FLAGS: set[str] = set()
 
 
@@ -45,10 +46,7 @@ def _team_flag_names() -> set[str]:
 def _backend_files_text() -> str:
     if not _BACKEND_SRC.is_dir():
         return ""
-    parts: list[str] = []
-    for path in sorted(_BACKEND_SRC.rglob("*.py")):
-        parts.append(path.read_text(encoding="utf-8"))
-    return "\n".join(parts)
+    return "\n".join(source for _, source in iter_source_text(_BACKEND_SRC))
 
 
 def _frontend_files_text() -> str:

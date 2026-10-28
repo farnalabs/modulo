@@ -799,11 +799,10 @@ def _record_last_backup(data_dir: Path, timestamp: str) -> None:
     except (OSError, ValueError, KeyError, TypeError) as exc:
         # Launcher state is an enhancement, never a backup blocker.
         _log.warning("backup_timestamp_not_recorded data_dir=%s error=%s", data_dir, exc)
-    except Exception as exc:
+    except Exception:
         # Broad catch-all must never break the backup itself — but it is NOT
         # collapsed into the specific tuple above: an unknown failure here is
         # a bug and deserves the traceback in the log, at ERROR level.
-        _log.error("backup_timestamp_not_recorded data_dir=%s error=%s", data_dir, exc)
         _log.exception("backup_timestamp_unexpected_failure data_dir=%s", data_dir)
 
 
@@ -1093,8 +1092,8 @@ def _db_has_modulo_tables(raw_url: str) -> bool:
                 "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
             )
             row = cur.fetchone()
-    except Exception as exc:
-        _log.warning("restore_target_db_probe_failed error=%s", exc)
+    except Exception:
+        _log.exception("restore_target_db_probe_failed")
         return True
     return bool(row and row[0])
 
@@ -1280,8 +1279,8 @@ def _check_collation_versions_sync(raw_url: str) -> None:
         with psycopg.connect(raw_url, connect_timeout=10) as conn, conn.cursor() as cur:
             cur.execute(query)
             rows = cur.fetchall()
-    except Exception as exc:
-        _log.warning("collation_version_check_failed error=%s", exc)
+    except Exception:
+        _log.exception("collation_version_check_failed")
         return
     for row in rows:
         name, stored, detected, provider = row[0], str(row[1]), str(row[2]), row[3]

@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import uuid
+from typing import Required, TypedDict, Unpack
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,31 @@ _UPDATABLE_SSO_FIELDS = frozenset(
 
 _MAX_ALLOWED_DOMAINS = 50
 _INVALID_DOMAIN_CHARS = "@/*"
+
+
+class CreateProviderConfig(TypedDict, total=False):
+    """Keyword configuration accepted by :func:`create_provider`."""
+
+    provider_type: Required[str]
+    name: Required[str]
+    client_id: str | None
+    client_secret: str | None
+    discovery_url: str | None
+    metadata_url: str | None
+    metadata_xml: str | None
+    entity_id: str | None
+    scopes: list[str] | None
+    allowed_domains: list[str] | None
+    enabled: bool
+    auto_provision: bool
+    default_role: str
+    preset: str
+    tenant_domain: str | None
+    fernet_key: Required[str]
+    org_id: Required[uuid.UUID]
+    actor_user_id: uuid.UUID | None
+    provider_id: str | None
+    system_session: AsyncSession | None
 
 
 def validate_allowed_domains(domains: list[str] | None) -> list[str]:
@@ -171,30 +197,27 @@ async def list_enabled_saml_providers(session: AsyncSession) -> list[SsoProvider
     return list(result.scalars().all())
 
 
-async def create_provider(
-    session: AsyncSession,
-    *,
-    provider_type: str,
-    name: str,
-    client_id: str | None = None,
-    client_secret: str | None = None,
-    discovery_url: str | None = None,
-    metadata_url: str | None = None,
-    metadata_xml: str | None = None,
-    entity_id: str | None = None,
-    scopes: list[str] | None = None,
-    allowed_domains: list[str] | None = None,
-    enabled: bool = True,
-    auto_provision: bool = True,
-    default_role: str = "runner",
-    preset: str = "custom",
-    tenant_domain: str | None = None,
-    fernet_key: str,
-    org_id: uuid.UUID,
-    actor_user_id: uuid.UUID | None = None,
-    provider_id: str | None = None,
-    system_session: AsyncSession | None = None,
-) -> SsoProvider:
+async def create_provider(session: AsyncSession, **config: Unpack[CreateProviderConfig]) -> SsoProvider:
+    provider_type = config["provider_type"]
+    name = config["name"]
+    client_id = config.get("client_id")
+    client_secret = config.get("client_secret")
+    discovery_url = config.get("discovery_url")
+    metadata_url = config.get("metadata_url")
+    metadata_xml = config.get("metadata_xml")
+    entity_id = config.get("entity_id")
+    scopes = config.get("scopes")
+    allowed_domains = config.get("allowed_domains")
+    enabled = config.get("enabled", True)
+    auto_provision = config.get("auto_provision", True)
+    default_role = config.get("default_role", "runner")
+    preset = config.get("preset", "custom")
+    tenant_domain = config.get("tenant_domain")
+    fernet_key = config["fernet_key"]
+    org_id = config["org_id"]
+    actor_user_id = config.get("actor_user_id")
+    provider_id = config.get("provider_id")
+    system_session = config.get("system_session")
     # FAR-1825: the name-uniqueness lock is the request transaction's first row
     # lock. Bound it so a contended SSO-provider name raises 55P03 (a visible
     # 409) instead of parking a pooled connection indefinitely.

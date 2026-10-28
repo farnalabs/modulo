@@ -381,12 +381,11 @@ const store = useLifecycleMapsStore()
 const planStore = usePlanStore()
 const { t } = useI18n()
 
-// FAR-654: the journeys display (journey cards on stage nodes, the
-// Unattributed journeys section, load-more pagination, and the journey
-// detail panel) is gated behind the default-OFF `lifecycle_map_journeys`
-// feature flag. FAR-742 adds a second, per-visit gate: the "Show work items"
-// checkbox (default OFF). Both must be on for any journeys fetch or render.
-const journeysEnabled = computed(() => planStore.featureEnabled('lifecycle_map_journeys'))
+// Lifecycle Map journeys are retained for the internal dogfood route only. The
+// route itself is `in_dev`-gated, so use the server-resolved dev-mode signal
+// rather than the retired customer-configurable feature flag. FAR-742 adds a
+// second, per-visit gate: the "Show work items" checkbox (default OFF).
+const journeysEnabled = computed(() => planStore.devMode)
 const showWorkItems = ref(false)
 const journeysVisible = computed(() => journeysEnabled.value && showWorkItems.value)
 

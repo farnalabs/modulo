@@ -19,7 +19,12 @@ from typing import Any, NamedTuple, cast
 
 import httpx
 
-from modulo.cli.apply.models import ApplyConfig, ModelBackendEntity, SchemaEntity
+from modulo.cli.apply.models import (
+    SECRET_REF_SCHEME,
+    ApplyConfig,
+    ModelBackendEntity,
+    SchemaEntity,
+)
 from modulo.cli.apply.plan import (
     KIND_BACKEND,
     KIND_PIPELINE,
@@ -28,6 +33,7 @@ from modulo.cli.apply.plan import (
     build_plan,
     has_blockers,
 )
+from modulo.core.model_backend_endpoints import BaseUrlValidationError, validate_base_url
 
 _log = logging.getLogger(__name__)
 
@@ -38,6 +44,27 @@ AUTH_HEADER = "Authorization"
 PAGE_SIZE = 100
 _SECRETREF_BLOCK_REASON = "secretref resolution not supported yet (server-side resolution lands in a later slice)"
 _CONFLICT_HINT = "name already exists; rerun to apply as update"
+
+# FAR-2105: the FAR-2046 credential-binding rule, surfaced at PLAN time.
+# Changing a base_url must be paired with the LITERAL key itself: the server
+# re-authenticates a new destination with the credential (so the credential
+# owner, not an operator holding only a vault reference, authorises the move).
+# A ``credential_ref`` / ``secretref://`` token would only reach a 422 halfway
+# through an apply, leaving a partial run — so the entity is blocked up front.
+_ENDPOINT_CHANGE_CREDENTIAL_REASON = (
+    "changing base_url requires a literal api_key: the server re-authenticates a new "
+    "destination with the key itself, so a credential_ref / secretref:// vault "
+    "reference cannot change an endpoint (declare api_key: ${env:VAR} and put the key "
+    "in the environment)"
+)
+_ENDPOINT_CREATE_CREDENTIAL_REASON = (
+    "a custom base_url requires a literal api_key: a credential_ref / secretref:// "
+    "vault reference is not accepted for a new destination"
+)
+_ENDPOINT_UNSUPPORTED_REASON = (
+    "cannot manage base_url: the API did not report an endpoint for this backend - "
+    "is the server running a version that predates custom model-backend endpoints?"
+)
 
 # Repeated API paths (S1192).
 _PATH_MODEL_BACKENDS = "/model-backends"
@@ -63,6 +90,44 @@ class VaultListingError(RuntimeError):
     CLOSED with a clear reason rather than silently passing a key it could not
     confirm.
     """
+
+
+def _is_vault_credential(entity: ModelBackendEntity) -> bool:
+    """True when the declared credential is a server-resolved vault reference.
+
+    Both declarative spellings normalise to the same wire token
+    (``secretref://<key>``), so both are non-literal for the FAR-2046
+    endpoint-binding rule.
+    """
+    if entity.credential_ref is not None:
+        return True
+    return entity.api_key is not None and entity.api_key.startswith(SECRET_REF_SCHEME)
+
+
+def _declared_endpoint_change(entity: ModelBackendEntity, current: dict[str, Any]) -> bool:
+    """True when the config's declared endpoint differs from the live one.
+
+    Only a DECLARED ``base_url`` is managed; an omitted key leaves the live
+    endpoint untouched (never a change, never a write).
+    """
+    return entity.manages_base_url and entity.base_url != current.get("base_url")
+
+
+def _add_declared_endpoint(payload: dict[str, Any], entity: ModelBackendEntity) -> None:
+    """Copy the declared FAR-2046 endpoint fields onto a write payload.
+
+    Only called when ``base_url`` is managed (declared). An explicit null is
+    sent as null — the server's own "clear the stored endpoint" signal — while
+    ``allow_insecure_http`` is sent only for a non-null endpoint (it gates URL
+    validation and is meaningless alongside a clear). The raw declared flag is
+    sent, not the scheme-derived hash form: the server needs the operator's
+    actual opt-in to accept a plain-``http`` destination.
+    """
+    if not entity.manages_base_url:
+        return
+    payload["base_url"] = entity.base_url
+    if entity.base_url is not None and entity.allow_insecure_http is not None:
+        payload["allow_insecure_http"] = entity.allow_insecure_http
 
 
 def _entity_reports(config: ApplyConfig) -> dict[str, list[tuple[str, Any]]]:
@@ -274,6 +339,75 @@ class ApplyExecutor:
             for name, ref in declared
             if ref not in vault_keys
         ]
+
+    def _block_unmanageable_endpoints(
+        self,
+        config: ApplyConfig,
+        current_entities: dict[str, Any],
+        already_blocked: set[str],
+    ) -> list[tuple[str, str, str]]:
+        """Block endpoint declarations that cannot succeed, BEFORE any write.
+
+        Two plan-time guarantees for the FAR-2046 endpoint (FAR-2105):
+
+        1. **Shared validation.** A declared ``base_url`` is validated with
+           ``core.model_backend_endpoints.validate_base_url`` — the SAME rules
+           the REST route and the FAR-2067 backfill apply — so a metadata host,
+           a non-canonical IP literal or plain ``http`` without the opt-in
+           fails at plan with the validator's own message instead of a 422
+           halfway through an apply. The provider capability map is the
+           SERVER's authority (``core.model_backend_hub``): the CLI does not
+           restate it, so an endpoint on an incapable provider still fails at
+           the server with its typed error.
+        2. **Credential binding.** A custom destination must be paired with the
+           literal key (FAR-2046): on create a vault reference is refused, and
+           on update any CHANGE of destination requires the key itself. A
+           config that can only supply ``credential_ref`` / ``secretref://``
+           therefore cannot create or move an endpoint — blocked here with the
+           cause named.
+        """
+        blocked: list[tuple[str, str, str]] = []
+        current_backends = current_entities.get(KIND_BACKEND) or {}
+        for entity in config.entities.model_backends:
+            if entity.name in already_blocked or not entity.manages_base_url:
+                continue
+            reason = self._unmanageable_endpoint_reason(entity, current_backends.get(entity.name))
+            if reason is not None:
+                blocked.append((KIND_BACKEND, entity.name, reason))
+        return blocked
+
+    @staticmethod
+    def _unmanageable_endpoint_reason(
+        entity: ModelBackendEntity,
+        current: dict[str, Any] | None,
+    ) -> str | None:
+        """Return the plan-time blocker for one declared endpoint, or None.
+
+        Split from :meth:`_block_unmanageable_endpoints` so each FAR-2105
+        guarantee reads as its own linear check (Sonar S3776).
+        """
+        declared = entity.base_url
+        if declared is not None:
+            try:
+                validate_base_url(
+                    declared,
+                    allow_insecure_http=bool(entity.allow_insecure_http),
+                )
+            except BaseUrlValidationError as exc:
+                return f"invalid base_url: {exc}"
+        if current is None:
+            if declared is not None and _is_vault_credential(entity):
+                return _ENDPOINT_CREATE_CREDENTIAL_REASON
+            return None
+        if "base_url" not in current:
+            # The response shape predates the endpoint field (FAR-2046), so a
+            # declared endpoint would be PATCHed into a server that silently
+            # ignores it — a perpetual false-converged drift. Fail loudly
+            # instead of reporting a no-op.
+            return _ENDPOINT_UNSUPPORTED_REASON
+        if _declared_endpoint_change(entity, current) and _is_vault_credential(entity):
+            return _ENDPOINT_CHANGE_CREDENTIAL_REASON
+        return None
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -705,6 +839,11 @@ class ApplyExecutor:
             return f"model backend {name!r} failed health check: {detail}"
         return None
 
+    @staticmethod
+    def _report_entries(report: dict[str, list[dict[str, Any]]], status: str) -> tuple[dict[str, Any], ...]:
+        """Snapshot one report lane before applying entries that may fail."""
+        return tuple(report[status])
+
     def apply_schemas(
         self,
         entities: dict[str, list[tuple[str, Any]]],
@@ -718,7 +857,7 @@ class ApplyExecutor:
         to ``failed``; later entities still apply.
         """
         for status in ("created", "updated"):
-            for entry in list(report[status]):
+            for entry in self._report_entries(report, status):
                 if entry["kind"] != KIND_SCHEMA:
                     continue
                 self._apply_schema_entry(status, entry, entities, current_entities, report)
@@ -748,7 +887,7 @@ class ApplyExecutor:
             self._apply_schema_versions(entity, schema_id, existing_versions, report)
         except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
             message = _failure_message(exc)
-            _log.warning("apply schema failed: %s: %s", entity.name if entity else entry["name"], message)
+            _log.exception("apply schema failed: %s: %s", entity.name if entity else entry["name"], message)
             report[status].remove(entry)
             report["failed"].append({"kind": KIND_SCHEMA, "name": entry["name"], "error": message})
 
@@ -802,7 +941,7 @@ class ApplyExecutor:
                 # version failed. Keep the entity entry (truthful)
                 # and add a version-scoped failed entry.
                 message = _failure_message(exc)
-                _log.warning("apply schema version failed: %s/%s: %s", entity.name, spec.version, message)
+                _log.exception("apply schema version failed: %s/%s: %s", entity.name, spec.version, message)
                 report["failed"].append(
                     {
                         "kind": "schema_version",
@@ -825,7 +964,7 @@ class ApplyExecutor:
         stored-but-broken credential is never reported as plain success.
         """
         for status in ("created", "updated"):
-            for entry in list(report[status]):
+            for entry in self._report_entries(report, status):
                 if entry["kind"] != KIND_BACKEND:
                     continue
                 self._apply_backend_entry(status, entry, entities, current_entities, resolved_api_keys, report)
@@ -847,17 +986,21 @@ class ApplyExecutor:
             if status == "created":
                 backend_id = self._create_backend(entity, resolved_api_keys)
             else:
-                backend_id = self._update_backend(entity, current_entities[KIND_BACKEND][entity.name])
+                backend_id = self._update_backend(
+                    entity,
+                    current_entities[KIND_BACKEND][entity.name],
+                    resolved_api_keys,
+                )
             health_error = self._verify_backend_health(backend_id, entity.name)
         except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
             message = _failure_message(exc)
             displayed_name = entity.name if entity else entry["name"]
-            _log.warning("apply model backend failed: %s: %s", displayed_name, message)
+            _log.exception("apply model backend failed: %s: %s", displayed_name, message)
             report[status].remove(entry)
             report["failed"].append({"kind": KIND_BACKEND, "name": entry["name"], "error": message})
         else:
             if health_error:
-                _log.warning("apply model backend unhealthy: %s: %s", entity.name, health_error)
+                _log.error("apply model backend unhealthy: %s: %s", entity.name, health_error)
                 report[status].remove(entry)
                 report["failed"].append(
                     {
@@ -868,35 +1011,54 @@ class ApplyExecutor:
                 )
 
     def _create_backend(self, entity: ModelBackendEntity, resolved_api_keys: dict[str, str]) -> Any:
-        """POST a new model backend and return its server id."""
-        response = self._post(
-            _PATH_MODEL_BACKENDS,
-            {
-                "name": entity.name,
-                "display_name": entity.display_name,
-                "provider": entity.provider,
-                "model_id": entity.model_id,
-                "api_key": resolved_api_keys[entity.name],
-                "default_params": entity.default_params,
-                "visibility": entity.visibility,
-                "tier": entity.tier,
-            },
-        )
+        """POST a new model backend and return its server id.
+
+        A declared endpoint travels with the create (FAR-2105), in the FAR-2046
+        shape the REST ``ModelBackendCreate`` expects: ``base_url`` plus the
+        explicit ``allow_insecure_http`` opt-in. An omitted key is simply not
+        sent (nothing to manage on a brand-new row).
+        """
+        payload: dict[str, Any] = {
+            "name": entity.name,
+            "display_name": entity.display_name,
+            "provider": entity.provider,
+            "model_id": entity.model_id,
+            "api_key": resolved_api_keys[entity.name],
+            "default_params": entity.default_params,
+            "visibility": entity.visibility,
+            "tier": entity.tier,
+        }
+        _add_declared_endpoint(payload, entity)
+        response = self._post(_PATH_MODEL_BACKENDS, payload)
         return response["id"]
 
-    def _update_backend(self, entity: ModelBackendEntity, current: dict[str, Any]) -> Any:
-        """PATCH an existing model backend; return its id."""
+    def _update_backend(
+        self,
+        entity: ModelBackendEntity,
+        current: dict[str, Any],
+        resolved_api_keys: dict[str, str],
+    ) -> Any:
+        """PATCH an existing model backend; return its id.
+
+        The endpoint is sent ONLY when the declaration actually changes it
+        (FAR-2105): an omitted ``base_url`` is not managed, and a declaration
+        that already matches the live endpoint needs no write. A real endpoint
+        change also re-sends the literal key, because the FAR-2046 write path
+        refuses to move a destination without re-authenticating it (the
+        plan-time check has already blocked a vault-reference credential).
+        """
         backend_id = current["id"]
-        self._patch(
-            f"/model-backends/{backend_id}",
-            {
-                "display_name": entity.display_name,
-                "model_id": entity.model_id,
-                "default_params": entity.default_params,
-                "visibility": entity.visibility,
-                "tier": entity.tier,
-            },
-        )
+        payload: dict[str, Any] = {
+            "display_name": entity.display_name,
+            "model_id": entity.model_id,
+            "default_params": entity.default_params,
+            "visibility": entity.visibility,
+            "tier": entity.tier,
+        }
+        if _declared_endpoint_change(entity, current):
+            _add_declared_endpoint(payload, entity)
+            payload["api_key"] = resolved_api_keys[entity.name]
+        self._patch(f"/model-backends/{backend_id}", payload)
         return backend_id
 
     def run(
@@ -935,6 +1097,17 @@ class ApplyExecutor:
         blocked = [*blocked, *self._block_missing_credential_refs(config)]
         entities = _entity_reports(config)
         current_entities: dict[str, Any] = self.fetch_current(config) if any(entities.values()) else _empty_current()
+        # FAR-2105: validate declared endpoints and surface the FAR-2046
+        # credential-binding rule at PLAN time (before any write), so an
+        # unmanageable endpoint never becomes a 422 halfway through an apply.
+        blocked = [
+            *blocked,
+            *self._block_unmanageable_endpoints(
+                config,
+                current_entities,
+                {name for kind, name, _reason in blocked if kind == KIND_BACKEND},
+            ),
+        ]
         resolved_trigger_configs, trigger_blocked = trigger_apply.resolve_trigger_config_refs(entities)
         blocked = [*blocked, *trigger_blocked]
         # Current-state findings (duplicate live trigger names, unreadable

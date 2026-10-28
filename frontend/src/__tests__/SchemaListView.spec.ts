@@ -105,7 +105,13 @@ function mountView() {
 // action menu and return the teleported menu item matching the given label.
 function findMenuItem(label: string): HTMLElement | null {
   const items = Array.from(document.body.querySelectorAll('[data-pc-section="item"]'))
-  return (items.find((el) => el.textContent?.trim() === label) as HTMLElement) ?? null
+  const item = items.find((el) => el.textContent?.trim() === label) as HTMLElement | undefined
+  if (!item) return null
+  // The item's click handler is attached to the inner item-content wrapper in
+  // PrimeVue 4 (and to the item root in some versions), so returning the root
+  // <li> would make .click() a no-op. Prefer the innermost element that always
+  // owns the handler.
+  return (item.querySelector('[data-pc-section="itemcontent"]') as HTMLElement | null) ?? item
 }
 
 describe('SchemaListView', () => {
@@ -126,6 +132,8 @@ describe('SchemaListView', () => {
     await flushPromises()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Schemas')
+    expect(wrapper.find('header.page-header + .page-tabs-wrapper').exists()).toBe(true)
+    expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(3)
   })
 
   it('displays active and deprecated badges', async () => {
@@ -316,6 +324,35 @@ describe('SchemaListView', () => {
     await flushPromises()
     await nextTick()
     expect(patchMock).toHaveBeenCalledWith('/api/v1/schemas/2/folder', { folder_id: null })
+  })
+
+  it('sets the drag payload and move effect when a schema drag starts, and tolerates a missing dataTransfer', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const dataTransfer = { setData: vi.fn(), effectAllowed: 'none' }
+    await wrapper.find('[data-testid="schema-row-1"]').trigger('dragstart', { dataTransfer })
+    expect(dataTransfer.setData).toHaveBeenCalledWith('text/plain', '1')
+    expect(dataTransfer.effectAllowed).toBe('move')
+
+    // The drag guard must not throw when the event carries no dataTransfer.
+    await wrapper.find('[data-testid="schema-row-1"]').trigger('dragstart', { dataTransfer: null })
+  })
+
+  it('renders the selected-folder breadcrumb for a known folder and hides it for an unknown id', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const tree = wrapper.findComponent(FolderTree)
+    tree.vm.$emit('select-folder', 'folder-1')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="schema-list-all-schemas"]').exists()).toBe(true)
+
+    tree.vm.$emit('select-folder', 'folder-unknown')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="schema-list-all-schemas"]').exists()).toBe(false)
   })
 
   it('shows folders-specific error copy when folders fail to load', async () => {
@@ -597,6 +634,54 @@ describe('SchemaListView', () => {
     await row.trigger('keydown', { key: ' ', code: 'Space' })
     await flushPromises()
     expect(mockPush).toHaveBeenCalledWith({ name: 'schema-editor', params: { id: '1' } })
+  })
+
+  it('applies per-folder schema counts from the counts endpoint', async () => {
+    const { api } = await import('../lib/api/client')
+    const getMockApi = api.GET as ReturnType<typeof vi.fn>
+    const originalGet = getMockApi.getMockImplementation()
+    getMockApi.mockImplementation((url: string) => {
+      if (url === '/api/v1/schemas/counts') {
+        return Promise.resolve({
+          data: { by_folder: { 'folder-1': 2 }, total: 5 },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: { items: [], total: 0, page: 1, page_size: 100 }, error: undefined })
+    })
+    try {
+      const wrapper = mountView()
+      await flushPromises()
+      await nextTick()
+
+      expect(wrapper.findComponent(FolderTree).props('itemCounts')).toEqual({
+        'folder-1': 2,
+        __all__: 5,
+      })
+    } finally {
+      getMockApi.mockImplementation(originalGet as (...args: unknown[]) => unknown)
+    }
+  })
+
+  it('keeps rendering when the schema-counts request fails, warning instead of crashing', async () => {
+    const { api } = await import('../lib/api/client')
+    const getMockApi = api.GET as ReturnType<typeof vi.fn>
+    const originalGet = getMockApi.getMockImplementation()
+    getMockApi.mockImplementation((url: string) => {
+      if (url === '/api/v1/schemas/counts') return Promise.reject(new Error('counts down'))
+      return Promise.resolve({ data: { items: [], total: 0, page: 1, page_size: 100 }, error: undefined })
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const wrapper = mountView()
+      await flushPromises()
+
+      expect(warn).toHaveBeenCalledWith('Failed to load schema counts')
+      expect(wrapper.exists()).toBe(true)
+    } finally {
+      warn.mockRestore()
+      getMockApi.mockImplementation(originalGet as (...args: unknown[]) => unknown)
+    }
   })
 
   it('shows the folder load error and no folder list when the folder endpoint returns a non-array', async () => {

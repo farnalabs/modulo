@@ -106,8 +106,23 @@ The shortest local evaluation uses Docker Desktop and Docker Compose:
 ```bash
 git clone https://github.com/farnalabs/modulo.git
 cd modulo
+# Generate the credential-encryption key ONCE, before the first start.
+printf 'FERNET_KEY=%s\n' "$(openssl rand -base64 32)" > .env
 docker compose up -d
 ```
+
+`FERNET_KEY` encrypts every stored credential (model backends, connectors). It
+must be a real Fernet key — url-safe base64 of exactly 32 bytes — so it can
+never be a fixed value in the Compose file. Compose refuses to start without
+it and prints the generation command, rather than starting a stack that boots,
+lets you sign in, and then fails the first time you save a credential.
+
+On Windows PowerShell, generate the key with
+`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+and write it to `.env` as `FERNET_KEY=<value>`.
+
+Keep `.env`: it is gitignored, and a different key on a later start makes the
+credentials already stored in the database unreadable.
 
 The first run builds the backend and frontend images and may take a few
 minutes; after that, the demo itself takes about five minutes.
@@ -115,6 +130,14 @@ minutes; after that, the demo itself takes about five minutes.
 After the services become healthy, open <http://localhost:5173> and sign in
 with the local demo credentials `admin` / `admin`. These credentials and the
 Compose secrets are for local evaluation only.
+
+To prove the stack can actually store a credential and initialise the
+checkpointer — the two things a healthy-looking stack can still be broken at —
+run the smoke check:
+
+```bash
+./scripts/smoke-compose.sh
+```
 
 The Compose stack includes PostgreSQL and Redis. Redis is required for pipeline
 execution and scheduled triggers — it is started automatically by
@@ -146,6 +169,17 @@ curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/insta
 bash modulo-install.sh
 ```
 
+**Versioned install (recommended for production):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
+VERSION=bundle-v0.4.0 bash modulo-install.sh
+```
+
+Replace `bundle-v0.4.0` with the bundle tag you intend to run. The `VERSION`
+variable pins the exact bundle release tag (see the [release process](docs/release-process.md)
+for the version convention).
+
 The installer verifies every byte it downloads (SHA256SUMS plus a signed
 release manifest) before executing anything, lays the bundle out under
 `~/.local/opt/modulo/` (with a `current` symlink that later upgrades
@@ -168,6 +202,7 @@ the full command surface.
 - [Configuration reference](docs/configuration-reference.md)
 - [Agent configuration](docs/agent-config.md)
 - [Deployment guide](docs/deployment.md)
+- [Continuity and escrow](docs/continuity-and-escrow.md)
 - [System requirements](docs/system-requirements.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Upgrade process](docs/upgrade-process.md)
@@ -218,7 +253,10 @@ Do not report vulnerabilities in a public issue. Use GitHub's private **Report a
 
 ## License
 
-Modulo is licensed under the [Business Source License 1.1](LICENSE). Production
-and commercial use is permitted, except offering Modulo as a paid hosted or
-managed service to third parties. Each release converts to the Apache License
-2.0 on its stated Change Date, three years after release.
+Modulo is licensed under the [Business Source License 1.1](LICENSE).
+Production use of Modulo is permitted, including personal, internal and
+commercial use, for Modulo itself and for any modified version or derivative
+work you create, except offering Modulo or such a version to third parties as
+a paid hosted or managed service that provides substantially the same
+functionality as Modulo. Each release converts to the Apache License 2.0 on its
+stated Change Date, three years after release.

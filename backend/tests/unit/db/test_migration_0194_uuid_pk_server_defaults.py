@@ -54,6 +54,8 @@ _EXPECTED_METADATA_COUNT = _EXPECTED_COUNT - len(_NO_ORM_MODEL_UUID_PKS)
 # gen_random_uuid() inline on its id column, same as the tables above.
 # run_attempts (0329_run_attempts, FAR-2078) sets gen_random_uuid() inline on
 # its id column, same as the tables above.
+# trigger_event_findings (0333_trigger_event_findings, FAR-2028) sets
+# gen_random_uuid() inline on its id column, same as the tables above.
 _POST_0194_TABLES = frozenset(
     {
         "collection_install",
@@ -68,6 +70,7 @@ _POST_0194_TABLES = frozenset(
         "external_agents",
         "mcp_servers",
         "run_attempts",
+        "trigger_event_findings",
     }
 )
 

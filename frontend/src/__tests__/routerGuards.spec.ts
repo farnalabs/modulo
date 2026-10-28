@@ -26,8 +26,33 @@ vi.mock('../stores/planStore', () => ({ usePlanStore }))
 
 import router, {
   enforceRoleTierVisibility,
+  hydrateManifestMeta,
 } from '../router'
 import { clearAccessToken, setAccessToken } from '../lib/api/auth'
+
+it('registers the risk assessment route in the real router', () => {
+  expect(router.getRoutes().some((route) => route.name === 'risk-assessment' && route.path === '/risk-assessment')).toBe(true)
+})
+
+it('keeps organisation email settings reachable for a team org admin', async () => {
+  decodeJwtPayload.mockReturnValue({ org_role: 'admin' })
+  const resolved = router.resolve('/settings/email')
+  const route = {
+    name: resolved.name,
+    matched: resolved.matched,
+    path: resolved.path,
+    meta: {} as Record<string, unknown>,
+  }
+
+  hydrateManifestMeta(route as never)
+
+  expect(route.name).toBe('settings-email')
+  expect(route.path).toBe('/settings/email')
+  expect(route.meta.requiresSystemAdmin).toBeUndefined()
+  expect(route.meta.requiredRoles).toEqual(['admin'])
+  expect(route.meta.requiredTier).toBe('team')
+  await expect(enforceRoleTierVisibility(route as never, adminToken())).resolves.toBe(true)
+})
 
 function makeRoute(name: string | undefined, meta: Record<string, unknown> = {}): any {
   return { name, meta }
@@ -74,6 +99,32 @@ describe('router permission navigation guard', () => {
 
     expect(router.currentRoute.value.name).toBe('admin-compliance-evidence-index')
     expect(planStore.fetchPermissions).toHaveBeenCalled()
+  })
+
+  it('maps both evidence-index URLs to the same permission and view', () => {
+    const canonical = router.getRoutes().find((route) => route.name === 'admin-compliance-evidence-index')
+    const legacy = router.getRoutes().find((route) => route.name === 'admin-evidence-index')
+
+    expect(canonical?.path).toBe('/admin/compliance/evidence-index')
+    expect(legacy?.path).toBe('/admin/evidence')
+    expect(canonical?.components?.default).toBeTruthy()
+    expect(legacy?.components?.default).toBeTruthy()
+    expect(canonical?.meta).toBeDefined()
+    expect(legacy?.meta).toBeDefined()
+
+    const manifest = yaml.load(
+      readFileSync(resolve(__dirname, '../manifest.yaml'), 'utf-8'),
+    ) as {
+      routes: Record<string, { deprecated?: boolean }>
+      features: Record<string, { behaviours?: string[] }>
+    }
+    expect(manifest.routes['/admin/evidence'].deprecated).toBe(true)
+
+    const evidenceBehaviour = manifest.features['feat-evidence'].behaviours?.find(
+      (behaviour) => behaviour.includes('deprecated /admin/evidence route'),
+    )
+    expect(evidenceBehaviour).toContain('ComplianceEvidenceIndexView.vue')
+    expect(evidenceBehaviour).toContain('compatibility alias')
   })
 
   it('redirects the compliance evidence index route when its permission is missing', async () => {

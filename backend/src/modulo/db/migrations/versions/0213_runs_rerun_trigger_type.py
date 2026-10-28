@@ -47,7 +47,7 @@ _FACTS_TRIGGER_TYPE_OLD = (
 _FACTS_TRIGGER_TYPE_NEW = "trigger_type IN ('manual','webhook','cron','polling','agent_signal','ongoing','correction','slack_app_mention','rerun')"
 
 
-def _widen(table: str, name: str, old_expr: str, new_expr: str) -> None:
+def _widen(table: str, name: str, _old_expr: str, new_expr: str) -> None:
     """Drop + re-add a trigger-vocabulary CHECK with the widened vocabulary."""
     op.execute(text(f"ALTER TABLE {table} DROP CONSTRAINT {name}"))
     # NOT VALID: new writes are checked immediately, existing rows are not

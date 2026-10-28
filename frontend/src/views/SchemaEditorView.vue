@@ -1,10 +1,14 @@
 <template>
-  <div class="flex h-[calc(100vh-3.5rem)]">
-    <PageTabs :tabs="[
-      { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
-      { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
-      { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
-    ]" />
+  <div class="flex h-[calc(100vh-3.5rem)] flex-col">
+    <PageHeader
+      :title="$t('views.SchemaEditorView.schemas')"
+      :tabs="[
+        { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
+        { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
+        { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
+      ]"
+    />
+    <div class="flex min-h-0 flex-1">
     <SchemaEditorSidebar
       :schemas="filteredSchemas"
       :loading="loadingSchemas"
@@ -32,9 +36,8 @@
 
       <template v-else>
         <div class="space-y-6 p-6">
-          <header class="flex items-center justify-between">
-            <PageHeader :title="isNew ? $t('views.SchemaEditorView.new_schema_title') : $t('views.SchemaEditorView.edit_schema_title')" :subtitle="isNew ? $t('views.SchemaEditorView.define_new_schema') : schemaName" />
-            <div class="flex items-center gap-2">
+          <PageHeader :title="isNew ? $t('views.SchemaEditorView.new_schema_title') : $t('views.SchemaEditorView.edit_schema_title')" :subtitle="isNew ? $t('views.SchemaEditorView.define_new_schema') : schemaName">
+            <template #right>
               <Button data-testid="schema-editor-save" :disabled="saving || !isValid" @click="saveSchema">
                 {{ saving ? $t('views.SchemaEditorView.saving') : $t('views.SchemaEditorView.save') }}
               </Button>
@@ -45,8 +48,8 @@
               >
                 {{ $t('views.SchemaEditorView.cancel') }}
               </button>
-            </div>
-          </header>
+            </template>
+          </PageHeader>
 
           <div v-if="validationErrors.length > 0" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
             <p class="mb-2 text-sm font-medium text-destructive-text">{{ $t('views.SchemaEditorView.validation_errors') }}</p>
@@ -89,6 +92,7 @@
         </div>
       </template>
     </main>
+    </div>
   </div>
 </template>
 
@@ -105,7 +109,6 @@ import FeatureGate from '../components/FeatureGate.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
-import PageTabs from "../components/PageTabs.vue"
 import Button from 'primevue/button'
 import SchemaEditorSidebar, { type SchemaItem } from '../components/schema/SchemaEditorSidebar.vue'
 import SchemaEditorForm from '../components/schema/SchemaEditorForm.vue'

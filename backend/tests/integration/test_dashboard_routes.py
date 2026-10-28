@@ -253,8 +253,8 @@ async def _seed_eval_result(
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, score, evaluated_at) "
-                "VALUES (:id, :oid, :rid, :eid, :passed, :score, COALESCE(:at, now()))"
+                "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome, score, evaluated_at) "
+                "VALUES (:id, :oid, :rid, :eid, :passed, :outcome, :score, COALESCE(:at, now()))"
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -262,6 +262,7 @@ async def _seed_eval_result(
                 "rid": str(run_id),
                 "eid": str(eval_id),
                 "passed": passed,
+                "outcome": "pass" if passed else "fail",
                 "score": 1.0 if passed else 0.0,
                 "at": evaluated_at,
             },

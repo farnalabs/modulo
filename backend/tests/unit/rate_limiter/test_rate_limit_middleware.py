@@ -152,6 +152,25 @@ class TestDispatch:
         assert resp.status_code == 200
         registry.check.assert_not_awaited()
 
+    def test_non_ascii_bypass_header_rate_limited_without_raising(self):
+        """A non-ASCII bypass header must be a clean 429, not a 500.
+
+        Starlette decodes header bytes as latin-1, so a high byte reaches the
+        comparator as a non-ASCII str — and ``hmac.compare_digest`` raises
+        TypeError on those instead of returning False. The raw byte is sent so
+        the middleware sees exactly what a real client would produce.
+        """
+        registry = _registry(allowed=False)
+        settings = make_settings(modulo_ratelimit_bypass_token="bypass-secret")
+        app = _make_app(registry=registry, settings=settings)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/api/v1/runs",
+                headers=[(RATELIMIT_BYPASS_HEADER.encode(), b"bypass-s\xe9cret")],
+            )
+        assert resp.status_code == 429
+        registry.check.assert_awaited_once()
+
     async def test_fails_open_when_registry_check_raises(self):
         """A Redis/registry failure must fail open (200), never block traffic."""
         registry = _registry(allowed=False)

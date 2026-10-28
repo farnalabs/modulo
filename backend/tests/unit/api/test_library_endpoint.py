@@ -158,6 +158,19 @@ def _make_primitive(
     return p
 
 
+def test_viewer_library_list_excludes_lifecycle_maps(viewer_client: TestClient) -> None:
+    result = PageResult(items=[], total=0, page=1, page_size=20)
+    with patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as list_mock:
+        response = viewer_client.get("/api/v1/libraries")
+
+    assert response.status_code == 200, response.text
+    assert not response.json()["items"]
+    assert response.json()["total"] == 0
+    kwargs = list_mock.await_args.kwargs
+    assert kwargs["primitive_types"]
+    assert "lifecycle_map" not in kwargs["primitive_types"]
+
+
 def _make_listable_primitive(
     *,
     pid: uuid.UUID | None = None,
@@ -261,13 +274,29 @@ def test_list_libraries_multi_type_whitespace_normalized(client: TestClient) -> 
     assert call_kwargs["primitive_types"] == ["workflow", "agent", "schema"]
 
 
-def test_list_libraries_empty_primitive_types_keeps_no_filter_path(client: TestClient) -> None:
+def test_list_libraries_separator_only_primitive_types_narrow_to_visible_types(client: TestClient) -> None:
+    """A separator-only value must never clear the type filter (FAR-2200 review)."""
     mock_list = _stub_list_call(client=client, primitive_types=",  ,")
 
     assert mock_list.await_args is not None
     call_kwargs = mock_list.await_args.kwargs
-    assert call_kwargs["primitive_types"] is None
     assert call_kwargs["primitive_type"] is None
+    assert call_kwargs["primitive_types"]
+    assert "lifecycle_map" not in call_kwargs["primitive_types"]
+
+
+@pytest.mark.parametrize("raw", [",", ",,", ", ,", "  ,  "])
+def test_list_libraries_separator_only_types_hide_lifecycle_maps_from_viewer(
+    viewer_client: TestClient, raw: str
+) -> None:
+    """Regression: separator-only primitive_types leaked lifecycle_map primitives."""
+    mock_list = _stub_list_call(client=viewer_client, primitive_types=raw)
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] is None
+    assert call_kwargs["primitive_types"]
+    assert "lifecycle_map" not in call_kwargs["primitive_types"]
 
 
 def test_list_libraries_backwards_compatible_single_primitive_type(client: TestClient) -> None:
@@ -276,6 +305,55 @@ def test_list_libraries_backwards_compatible_single_primitive_type(client: TestC
     assert mock_list.await_args is not None
     call_kwargs = mock_list.await_args.kwargs
     assert call_kwargs["primitive_type"] == "workflow"
+    assert call_kwargs["primitive_types"] is None
+
+
+def test_list_libraries_singular_lifecycle_map_filter_is_hidden_for_ordinary_user(viewer_client: TestClient) -> None:
+    mock_list = _stub_list_call(client=viewer_client, primitive_type="lifecycle_map")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] == "__hidden_lifecycle_map__"
+    assert call_kwargs["primitive_types"] is None
+
+
+def test_list_libraries_dev_mode_viewer_still_excludes_lifecycle_maps(viewer_client: TestClient) -> None:
+    """Developer mode alone is not the grant: a viewer stays below the operator floor."""
+    with patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+        mock_list = _stub_list_call(client=viewer_client, primitive_type="lifecycle_map")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] == "__hidden_lifecycle_map__"
+    assert call_kwargs["primitive_types"] is None
+
+
+def test_list_libraries_multi_type_only_lifecycle_map_is_hidden(viewer_client: TestClient) -> None:
+    mock_list = _stub_list_call(client=viewer_client, primitive_types="lifecycle_map")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] == "__hidden_lifecycle_map__"
+    assert call_kwargs["primitive_types"] is None
+
+
+def test_list_libraries_internal_operator_keeps_requested_types(client: TestClient) -> None:
+    with patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+        mock_list = _stub_list_call(client=client, primitive_types="workflow,lifecycle_map")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_types"] == ["workflow", "lifecycle_map"]
+    assert call_kwargs["primitive_type"] is None
+
+
+def test_list_libraries_internal_operator_singular_type_passes_through(client: TestClient) -> None:
+    with patch("modulo.api.routes.library.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+        mock_list = _stub_list_call(client=client, primitive_type="lifecycle_map")
+
+    assert mock_list.await_args is not None
+    call_kwargs = mock_list.await_args.kwargs
+    assert call_kwargs["primitive_type"] == "lifecycle_map"
     assert call_kwargs["primitive_types"] is None
 
 

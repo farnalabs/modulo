@@ -15,8 +15,14 @@ from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import PERM_SYSTEM_CONFIG_MANAGE
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
-from modulo.api.dependencies import get_db_session, require_permission, require_system_permission
+from modulo.api.dependencies import (
+    get_db_session,
+    require_system_or_org_admin,
+    require_system_permission,
+    resolve_audit_principal,
+)
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -30,7 +36,13 @@ from modulo.core.license import (
     LicenseData,
     LicenseError,
     LicenseValidation,
+    clear_license,
+    clear_persisted_system_license,
+    get_parked_successor,
+    is_parked,
     parse_and_verify,
+    persist_installed_system_license,
+    refresh_persisted_system_license,
     store_license,
 )
 from modulo.core.license_signing import TEAM_FEATURES, generate_team_license
@@ -174,6 +186,25 @@ def _renewal_claims(data: LicenseData) -> dict[str, Any]:
     }
 
 
+class LicenseSuccessor(BaseModel):
+    """A verified licence parked until its signed ``starts_at`` (FAR-2146).
+
+    Reported SEPARATELY from the active licence so ``licence_state`` keeps its
+    existing five-value meaning: a parked successor does not make the instance
+    licensed yet, and it does not turn over the running licence early either.
+    """
+
+    #: ISO 8601 instant the successor becomes the active licence.
+    starts_at: str
+    #: ISO 8601 instant that successor's term ends.
+    expires_at: str
+    #: Whole days of COVERAGE GAP when the successor starts after the active
+    #: licence's ``expires_at`` (rounded up, so any positive gap is at least
+    #: 1); ``None`` when nothing is active or the windows meet/overlap. This is
+    #: how a chosen start later than the current expiry is reported.
+    gap_days: int | None = None
+
+
 class LicenseStatusResponse(BaseModel):
     has_license: bool
     tier: str = "community"
@@ -191,6 +222,14 @@ class LicenseStatusResponse(BaseModel):
     licence_id: str | None = None
     #: ISO 8601 issue timestamp; ``None`` before FAR-2075.
     issued_at: str | None = None
+    #: ISO 8601 instant the ACTIVE licence becomes active (FAR-2146). ``None``
+    #: when the key carries no claim — it is then valid from ``issued_at``,
+    #: exactly as before FAR-2146.
+    starts_at: str | None = None
+    #: A verified successor licence waiting for its start, if one is installed.
+    #: The UI reads THIS to say "your next licence starts on X"; ``licence_state``
+    #: continues to describe only the currently active licence.
+    successor: LicenseSuccessor | None = None
     #: Whole days to expiry (negative once past it); ``None`` with no expiry.
     days_until_expiry: int | None = None
     #: ISO timestamp at which the delivery grace ends (capability stops).
@@ -210,6 +249,14 @@ class LicenseUploadResponse(BaseModel):
     features: list[str]
     expires_at: str | None = None
     org_id: str | None = None
+    #: ISO 8601 instant this licence becomes active (FAR-2146); ``None`` when
+    #: the key carries no claim (valid from ``issued_at``).
+    starts_at: str | None = None
+    #: True when the installed key is VALID but not yet ACTIVE because its
+    #: ``starts_at`` is in the future — it was parked as a successor and the
+    #: currently active licence keeps running. Lets the installer tell "my key
+    #: is now active" from "my key is waiting for its start date".
+    parked: bool = False
 
 
 class LicenseIssueRequest(BaseModel):
@@ -248,7 +295,49 @@ def _license_failure_body(validation: LicenseValidation) -> dict[str, object]:
     return body
 
 
-def _license_status(data: LicenseData, *, has_license: bool = True) -> LicenseStatusResponse:
+def _as_aware(instant: datetime) -> datetime:
+    """Read a naive instant as LOCAL time — the convention this key already uses."""
+    return instant if instant.tzinfo is not None else instant.astimezone()
+
+
+def _successor_block(
+    successor: LicenseData | None,
+    active_expires_at: str | None,
+) -> LicenseSuccessor | None:
+    """Describe a parked successor, reporting a coverage gap when there is one.
+
+    A successor starting AFTER the active licence's expiry leaves a period in
+    which the instance is unlicensed (it runs on Community). That is a
+    legitimate customer choice, so it is not an error — but it must be visible,
+    not inferred: ``gap_days`` states it, and is ``None`` when nothing is
+    active or the windows meet/overlap. A positive gap is rounded UP so a
+    partial day is never reported as "no gap".
+    """
+    if successor is None or not successor.starts_at:
+        return None
+    gap_days: int | None = None
+    if active_expires_at:
+        try:
+            active_expiry = _as_aware(datetime.fromisoformat(active_expires_at))
+            starts = _as_aware(datetime.fromisoformat(successor.starts_at))
+        except ValueError:
+            gap_days = None
+        else:
+            if starts > active_expiry:
+                gap_days = math.ceil((starts - active_expiry).total_seconds() / 86_400)
+    return LicenseSuccessor(
+        starts_at=successor.starts_at,
+        expires_at=successor.expires_at,
+        gap_days=gap_days,
+    )
+
+
+def _license_status(
+    data: LicenseData,
+    *,
+    has_license: bool = True,
+    successor: LicenseData | None = None,
+) -> LicenseStatusResponse:
     """Build a ``LicenseStatusResponse`` from a signed-license payload."""
     days_until_expiry, licence_state = derive_licence_state(data.expires_at or None)
     return LicenseStatusResponse(
@@ -257,11 +346,43 @@ def _license_status(data: LicenseData, *, has_license: bool = True) -> LicenseSt
         features=data.features,
         expires_at=data.expires_at or None,
         org_id=data.org_id or None,
+        starts_at=data.starts_at,
+        successor=_successor_block(successor, data.expires_at or None),
         days_until_expiry=days_until_expiry,
         grace_ends_at=licence_grace_ends_at(data.expires_at or None),
         licence_state=licence_state,
         **_renewal_claims(data),
     )
+
+
+def _configured_license_keys(settings: Settings, org: Organisation | None) -> list[str]:
+    """Return configured organisation and deployment licence keys."""
+    keys: list[str] = []
+    org_settings = getattr(org, "settings_json", None)
+    if isinstance(org_settings, dict) and org_settings.get("license_key"):
+        keys.append(str(org_settings["license_key"]))
+    configured_key = getattr(settings, "modulo_license_key", "") or ""
+    if configured_key:
+        keys.append(configured_key)
+    return keys
+
+
+def _configured_parked_successor(settings: Settings, org: Organisation | None) -> LicenseData | None:
+    """A future-dated licence configured on the org or the env var, if any.
+
+    The in-memory park slot only holds keys INSTALLED through
+    ``POST /api/v1/admin/license``. A successor can also arrive as deployment
+    configuration (``MODULO_LICENSE_KEY``) or an org-level key; those are not
+    "installed" by an operator action at all, so the status surface looks for
+    them here to report their start date. This is REPORTING only: the ladder
+    itself already refuses to apply a parked key
+    (``feature_flags._verified_license_key``).
+    """
+    for key in _configured_license_keys(settings, org):
+        validation = parse_and_verify(key)
+        if validation.valid and validation.license_data is not None and is_parked(validation.license_data):
+            return validation.license_data
+    return None
 
 
 def _lapsed_licence_present(settings: Settings, org: Organisation | None) -> bool:
@@ -281,14 +402,7 @@ def _lapsed_licence_present(settings: Settings, org: Organisation | None) -> boo
     ``get_license`` and cannot be recovered here; the org and env keys are the
     durable statements of what was licensed.
     """
-    candidate_keys: list[str] = []
-    org_settings = getattr(org, "settings_json", None)
-    if isinstance(org_settings, dict) and org_settings.get("license_key"):
-        candidate_keys.append(str(org_settings["license_key"]))
-    configured_key = getattr(settings, "modulo_license_key", "") or ""
-    if configured_key:
-        candidate_keys.append(configured_key)
-    return any(parse_and_verify(key).reason == REASON_EXPIRED for key in candidate_keys)
+    return any(parse_and_verify(key).reason == REASON_EXPIRED for key in _configured_license_keys(settings, org))
 
 
 def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:
@@ -301,18 +415,30 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
     the app actually runs on for the same deployment state.
     """
     data = resolve_effective_license(settings, org)
+    # Read the parked slot AFTER the walk: the walk calls ``get_license``,
+    # which promotes a successor whose start has arrived, so a due successor is
+    # never reported as still parked. A key that arrives as configuration
+    # (env var / org-level) has no park slot, so it is discovered separately.
+    successor = get_parked_successor() or _configured_parked_successor(settings, org)
     if data is None:
         # No rung grants capability. Distinguish "never licensed" from "the
         # licence lapsed": the admin needs the second one explained, and the
         # only difference is whether a verified-but-expired key still exists.
+        # A parked successor is reported either way so the admin can say when
+        # the next licence begins even while nothing is active.
         if _lapsed_licence_present(settings, org):
             return LicenseStatusResponse(
                 has_license=False,
                 tier="community",
                 licence_state=LICENCE_STATE_LAPSED,
+                successor=_successor_block(successor, None),
             )
-        return LicenseStatusResponse(has_license=False, tier="community")
-    return _license_status(data)
+        return LicenseStatusResponse(
+            has_license=False,
+            tier="community",
+            successor=_successor_block(successor, None),
+        )
+    return _license_status(data, successor=successor)
 
 
 async def _read_license_cache(settings: Settings, org_id: str) -> LicenseStatusResponse | None:
@@ -393,7 +519,15 @@ async def invalidate_license_status_cache(settings: Settings, org_id: str | None
 async def get_license_status(
     settings: Annotated[Settings, Depends(get_settings)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    current_user: TenantPrincipal = require_permission(_CODE_ORG_LICENSE_MANAGE),
+    # FAR-2104: system OR org admin. The licence is an org-level object and an
+    # org admin manages it (PUT/DELETE /api/v1/admin/orgs/{org_id}/license),
+    # so the read must admit exactly the principals those writes admit — the
+    # org admin, plus a system admin (who bypasses the target-org role gate).
+    # A tenant-only ``require_permission`` here denied a system admin whose org
+    # role is below admin, contradicting ``GET /api/v1/auth/permissions``
+    # (which resolves a system admin at the admin floor) and making the
+    # frontend's permission-derived licence audience wrong for that principal.
+    current_user: Annotated[TenantPrincipal, require_system_or_org_admin(_CODE_ORG_LICENSE_MANAGE)],
 ) -> LicenseStatusResponse:
 
     org_id = current_user.organisation_id
@@ -403,6 +537,14 @@ async def get_license_status(
             return cached
 
     try:
+        # FAR-2153: the instance licence is durable, so the admin surface must
+        # be able to re-read it rather than trusting only this process's memory
+        # (after a deploy, or an install handled by a sibling machine). Bounded
+        # by the same short TTL as plan resolution: the first read in a fresh
+        # process always happens, and a change made elsewhere is picked up
+        # within the window (the install/removal also busts the Redis status
+        # cache, so the common same-process path is immediate).
+        await refresh_persisted_system_license(session)
         org = None
         if org_id is not None:
             async with session.begin():
@@ -446,7 +588,8 @@ async def get_license_status(
 async def upload_license(
     req: LicenseUploadRequest,
     settings: Annotated[Settings, Depends(get_settings)],
-    _: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[TenantPrincipal, require_system_permission(PERM_SYSTEM_CONFIG_MANAGE)],
 ) -> LicenseUploadResponse | JSONResponse:
     try:
         validation = parse_and_verify(req.license_key)
@@ -466,14 +609,23 @@ async def upload_license(
             content=_license_failure_body(validation),
         )
 
-    store_license(req.license_key, validation.license_data)
+    data = validation.license_data
+
+    # FAR-2153: persist BEFORE installing into memory. A process restart (every
+    # rolling deploy) discards memory, and the SAQ worker is a separate process,
+    # so an in-memory-only install silently drops a paying customer to Community
+    # on the next deploy and is invisible to the worker. Writing first means a
+    # failed write surfaces as an error and leaves this process on its old
+    # licence, rather than reporting success for an install that will vanish.
+    await persist_installed_system_license(
+        session, req.license_key, parked=is_parked(data), updated_by=principal.user_id
+    )
+    store_license(req.license_key, data)
     # A system-licence change can flip the effective resolution of EVERY org
     # that falls back to the system licence, so bust every cached entry. The
     # upload above already committed to in-memory state; a cache failure must
     # not turn it into a 500 (best-effort inside the helper, FAR-1719).
     await invalidate_license_status_cache(settings)
-
-    data = validation.license_data
 
     return LicenseUploadResponse(
         status="ok",
@@ -481,7 +633,70 @@ async def upload_license(
         features=data.features,
         expires_at=data.expires_at or None,
         org_id=data.org_id or None,
+        starts_at=data.starts_at,
+        parked=is_parked(data),
     )
+
+
+@router.delete(
+    "",
+    dependencies=[Depends(audited("license_removed", "license", principal_dep=resolve_audit_principal))],
+    status_code=status.HTTP_200_OK,
+)
+async def remove_license(
+    settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    _: Annotated[TenantPrincipal, require_system_permission(PERM_SYSTEM_CONFIG_MANAGE)],
+) -> LicenseStatusResponse:
+    """Remove the instance-wide (system-scope) licence (FAR-2110 / FAR-2153).
+
+    The counterpart of :func:`upload_license`: ``POST`` stores a verified key
+    in the process-wide in-memory licence store AND the instance-scope
+    ``system_config`` row, and this route removes both, so an operator who
+    installed a key by mistake (or wants to return the deployment to Community)
+    no longer has to restart the process.
+
+    Three mutations are required for the change to be complete and visible:
+
+    1. ``clear_persisted_system_license()`` deletes the durable row. This is
+       done FIRST: if the DB write fails the request fails rather than
+       reporting a removal that a restart would undo. It is also what makes the
+       removal reach the SAQ worker, which re-reads the row on its own cadence.
+    2. ``clear_license()`` empties the in-memory store — the rung
+       ``core.feature_flags.resolve_effective_license`` reads on every plan
+       resolution, so every subsequent resolution falls through to the env key
+       (the deployment floor) and then Community.
+    3. ``invalidate_license_status_cache`` deletes every cached
+       ``license:{org_id}`` status entry. The admin status cache holds the
+       RESOLVED effective licence for each org (60s TTL), and any org without
+       its own key was caching the system licence, so a removal without the
+       sweep would keep serving the removed licence for up to a minute.
+
+    The response is the post-removal instance-wide resolution rather than a
+    hard-coded "no licence": ``MODULO_LICENSE_KEY`` is deployment configuration
+    (rung 3 of the same ladder), so a deployment licensed by the env var still
+    resolves to Team after the installed key is cleared. Reporting Community
+    there would be false; the caller can tell the two apart from ``has_license``.
+
+    Audit: ``license_removed`` on resource ``license`` — the same coarse
+    vocabulary as the ``license_uploaded`` install event, recorded by the
+    ``audited()`` dependency for both success and failure outcomes. The
+    principal resolver is ``resolve_audit_principal``, not
+    ``get_current_tenant_user``: this is a ``require_system_permission`` route,
+    and a tenantless system admin must be admitted by the route's own gate —
+    the audit wrapper never becomes a stricter access gate ahead of it (an
+    absent tenant is attributed to the instance partition).
+    """
+    # Persist the removal FIRST (FAR-2153): a durable row that survives the
+    # response would resurrect the licence on the next restart / worker refresh.
+    await clear_persisted_system_license(session)
+    clear_license()
+    # A system-licence change can flip the effective resolution of EVERY org
+    # that falls back to the system licence, so bust every cached entry. The
+    # removal already took effect in memory; a cache failure must not turn it
+    # into a 500 (best-effort inside the helper, FAR-1719).
+    await invalidate_license_status_cache(settings)
+    return _resolve_effective_license(settings)
 
 
 @router.post(
@@ -497,7 +712,7 @@ async def issue_license(
     req: LicenseIssueRequest,
     background_tasks: BackgroundTasks,
     settings: Annotated[Settings, Depends(get_settings)],
-    _: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
+    _: Annotated[TenantPrincipal, require_system_permission(PERM_SYSTEM_CONFIG_MANAGE)],
 ) -> LicenseIssueResponse | JSONResponse:
     """Manually issue (sign) a team license key for a customer.
 

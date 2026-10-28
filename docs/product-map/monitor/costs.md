@@ -49,6 +49,14 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
       breakdown, refused/clamped annotations) plus Decimal-string reporting buckets
       (`org_total`, `legacy_total`, `org_unassigned_components`) and `has_more`
       (`test_costs.py::TestGetCostsReport`, `cost_controller/breakdown/*`)
+- [x] The `/admin/costs` "Per-Team Cost Breakdown" card is supported and reads the
+      `group_by=team&period=month` report: it renders the team-attributed ledger
+      rows, refused/clamped annotations and a client-computed average per run, and
+      discloses the response's `org_unassigned_components` (component spend from
+      runs with no team) – with an explicit unavailable state when that bucket is
+      absent or corrupt – so the bucket is not silently omitted from the card
+      (`AdminCostBreakdownView.vue`,
+      `frontend/src/__tests__/AdminCostBreakdownView.spec.ts`)
 - [x] `GET/PUT /limits/org` and `PUT /limits/teams/{id}` read and set daily spend
       limits (null clears, negative rejected 422, cross-org team 404s untouched)
 - [x] `GET/PUT /controls` read/update the full cost-controls payload: budget,
@@ -163,6 +171,25 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   implemented from `runs` (per-pipeline sums of `total_cost_usd`).
 
 ## QA History
+- 2026-10-26: **FAR-2175 Costs metric-heading typography review** – verified the
+  `/admin/costs` summary headings (`Total Spend (This Month)`, `Avg Cost per Run`,
+  `Cost per Successful Run`, `Total Runs`) are not a typography regression. Each
+  label uses the same shared metric-label contract as the Dashboard's `StatCard`
+  label (`text-sm font-medium text-muted-foreground`), deliberately smaller and
+  muted beneath the page and card titles, so the difference is intentional
+  hierarchy. The remaining visual difference from Dashboard is the page-level
+  `data-theme="agent"` monospace font family, which is the intentional agent-theme
+  typography (`frontend/src/style.css`, FAR-1938) - not an inconsistency. No visual
+  change was made; a focused regression test pins the metric-label classes to the
+  `StatCard` contract (`frontend/src/__tests__/AdminCostBreakdownView.spec.ts`).
+- 2026-10-26: **FAR-2170 costs-page investigation** – confirmed team-level cost
+  attribution remains supported (`get_cost_report(group_by="team")` over the
+  `OrgDailyRunCount` team rows, plus `group_by=team|org` on
+  `GET /api/v1/admin/costs`). The Costs page card was kept and its data contract
+  corrected: the team table now discloses the `org_unassigned_components` spend
+  it does not contain (runs with no team write only the org ledger row), with an
+  explicit unavailable state when that bucket is missing, and the copy says the
+  rows are team-attributed runs. Frontend regression coverage added.
 - 2026-10-07: **Improve Architecture product-map walk** – tracked the FAR-1530
   unified per-pipeline Paused execution state fold into the cost circuit breaker
   (`feat-costs`): a trip now sets the unified `run_enabled` state when the

@@ -244,11 +244,11 @@ const subTabButtonRefs = ref<Record<SubTabKey, HTMLButtonElement | null>>({
 })
 
 function setTabButtonRef(tabId: string, el: Element | ComponentPublicInstance | null) {
-  tabButtonRefs.value[tabId] = el as HTMLButtonElement | null
+  tabButtonRefs.value[tabId] = el instanceof HTMLButtonElement ? el : null
 }
 
 function setSubTabButtonRef(key: SubTabKey, el: Element | ComponentPublicInstance | null) {
-  subTabButtonRefs.value[key] = el as HTMLButtonElement | null
+  subTabButtonRefs.value[key] = el instanceof HTMLButtonElement ? el : null
 }
 
 const activeSessionTabId = computed(() => {
@@ -258,13 +258,14 @@ const activeSessionTabId = computed(() => {
 
 // The tabpanels (#assistant-only-panel-*) only render when there is at least one tab
 // AND an active session; omit aria-controls when the controlled panel is absent.
-const panelsVisible = computed(() => tabsStore.tabs.length > 0 && !!store.activeSessionId)
+const panelsVisible = computed(() => tabsStore.tabs.length > 0 && Boolean(store.activeSessionId))
 
 // The session tab buttons live outside the tablist container (so the per-tab
 // close buttons are not owned by it); the tablist claims them via aria-owns.
-const sessionTabOwns = computed(() =>
-  tabsStore.tabs.map(t => `assistant-only-tab-button-${t.tabId}`).join(' ') || undefined
-)
+const sessionTabOwns = computed(() => {
+  const ids = tabsStore.tabs.map(t => `assistant-only-tab-button-${t.tabId}`).join(' ')
+  return ids || undefined
+})
 
 function onSessionTablistKeydown(event: KeyboardEvent, tab: AssistantTab) {
   const tabs = tabsStore.tabs
@@ -365,7 +366,7 @@ watch(
   () => store.activeSessionId,
   (id) => {
     if (!id) return
-    const live = Array.isArray(store.sessions) ? store.sessions.some(s => s.id === id) : false
+    const live = store.sessions.some(s => s.id === id)
     if (live && !tabsStore.tabs.some(t => t.sessionId === id)) {
       tabsStore.resumeTab(id)
     }
@@ -413,6 +414,11 @@ onMounted(async () => {
   border-radius: 50%;
   background-color: hsl(var(--primary));
   animation: assistant-live-pulse 1.5s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-live-dot {
+    animation: none;
+  }
 }
 @keyframes assistant-live-pulse {
   0%,

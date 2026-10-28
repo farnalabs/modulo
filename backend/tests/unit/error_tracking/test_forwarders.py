@@ -25,6 +25,7 @@ from modulo.core.error_tracking.forwarders import (
     get_default_registry,
     get_forwarder,
 )
+from tests.unit.error_tracking._factories import make_event, make_group
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
@@ -38,32 +39,6 @@ def _patch_pinned(module: str, **kwargs: object) -> object:
     )
 
 
-def _make_error_group(**overrides):
-    group = MagicMock()
-    group.id = uuid.uuid4()
-    group.fingerprint = "abc123def456"
-    group.count = 5
-    group.status = "new"
-    group.level_peak = "error"
-    for k, v in overrides.items():
-        setattr(group, k, v)
-    return group
-
-
-def _make_error_event(**overrides):
-    event = MagicMock()
-    event.level = "error"
-    event.message = "Something went wrong"
-    event.source = "backend"
-    event.stacktrace = "Traceback ...\n  File main.py, line 42, in handler"
-    event.environment = "production"
-    event.version = "1.2.3"
-    event.context_json = {"request_id": "req-abc"}
-    for k, v in overrides.items():
-        setattr(event, k, v)
-    return event
-
-
 # =========================================================================
 # SentryErrorForwarder
 # =========================================================================
@@ -72,7 +47,7 @@ def _make_error_event(**overrides):
 class TestSentryErrorForwarder:
     async def test_no_dsn_returns_false(self) -> None:
         fwd = SentryErrorForwarder()
-        result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {})
+        result = await fwd.forward(_ORG_ID, make_group(), make_event(), {})
         assert result is False
 
     async def test_sdk_available_calls_sentry_sdk(self) -> None:
@@ -83,8 +58,8 @@ class TestSentryErrorForwarder:
         with patch.dict("sys.modules", {"sentry_sdk": sentry_sdk}):
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"dsn": "https://key@sentry.io/123"},
             )
         assert result is True
@@ -105,8 +80,8 @@ class TestSentryErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"dsn": "https://key@sentry.io/123", "org_slug": "test-org", "project_slug": "test-project"},
             )
         assert result is True
@@ -137,8 +112,8 @@ class TestSentryErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"dsn": dsn, "org_slug": "o", "project_slug": "p"},
             )
 
@@ -159,8 +134,8 @@ class TestSentryErrorForwarder:
         with patch.dict("sys.modules", {"sentry_sdk": sentry_sdk}):
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"dsn": "https://key@sentry.io/123"},
             )
         assert result is False
@@ -181,8 +156,8 @@ class TestSentryErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"dsn": "https://key@sentry.io/123", "org_slug": "test-org", "project_slug": "test-project"},
             )
         assert result is False
@@ -197,8 +172,8 @@ class TestSentryErrorForwarder:
             with patch.dict("sys.modules", {"sentry_sdk": sentry_sdk}):
                 result = await fwd.forward(
                     _ORG_ID,
-                    _make_error_group(),
-                    _make_error_event(level=level),
+                    make_group(),
+                    make_event(level=level),
                     {"dsn": "https://key@sentry.io/123"},
                 )
             assert result is True
@@ -218,7 +193,7 @@ class TestSentryErrorForwarder:
 class TestDatadogErrorForwarder:
     async def test_no_api_key_returns_false(self) -> None:
         fwd = DatadogErrorForwarder()
-        result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {})
+        result = await fwd.forward(_ORG_ID, make_group(), make_event(), {})
         assert result is False
 
     async def test_posts_to_datadog_api(self) -> None:
@@ -234,8 +209,8 @@ class TestDatadogErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"api_key": "dd-api-key-abc", "site": "datadoghq.eu"},
             )
         assert result is True
@@ -259,8 +234,8 @@ class TestDatadogErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"api_key": "dd-api-key-abc"},
             )
         assert result is False
@@ -272,7 +247,7 @@ class TestDatadogErrorForwarder:
             instance = AsyncMock()
             instance.post = AsyncMock(side_effect=Exception("timeout"))
             mock_client.return_value.__aenter__.return_value = instance
-            result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {"api_key": "key"})
+            result = await fwd.forward(_ORG_ID, make_group(), make_event(), {"api_key": "key"})
         assert result is False
 
     @pytest.mark.parametrize(
@@ -292,16 +267,16 @@ class TestDatadogErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(level=level),
+                make_group(),
+                make_event(level=level),
                 {"api_key": "k"},
             )
         assert result is True
         assert instance.post.call_args.kwargs["json"]["alert_type"] == expected
 
     def test_build_text_includes_group_count_env_version_and_stacktrace(self) -> None:
-        group = _make_error_group(fingerprint="fp123", count=7)
-        event = _make_error_event(environment="prod", version="9.9.9")
+        group = make_group(fingerprint="fp123", count=7)
+        event = make_event(environment="prod", version="9.9.9")
 
         text = DatadogErrorForwarder._build_text(_ORG_ID, group, event)
 
@@ -325,15 +300,15 @@ class TestDatadogErrorForwarder:
 class TestPagerDutyErrorForwarder:
     async def test_no_routing_key_returns_false(self) -> None:
         fwd = PagerDutyErrorForwarder()
-        result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {})
+        result = await fwd.forward(_ORG_ID, make_group(), make_event(), {})
         assert result is False
 
     async def test_skips_non_critical_by_default(self) -> None:
         fwd = PagerDutyErrorForwarder()
         result = await fwd.forward(
             _ORG_ID,
-            _make_error_group(),
-            _make_error_event(level="warning"),
+            make_group(),
+            make_event(level="warning"),
             {"routing_key": "pd-key"},
         )
         assert result is False
@@ -351,8 +326,8 @@ class TestPagerDutyErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(level="critical"),
+                make_group(),
+                make_event(level="critical"),
                 {"routing_key": "pd-key"},
             )
         assert result is True
@@ -374,8 +349,8 @@ class TestPagerDutyErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(level="warning"),
+                make_group(),
+                make_event(level="warning"),
                 {
                     "routing_key": "pd-key",
                     "forward_levels": ("warning", "critical"),
@@ -394,8 +369,8 @@ class TestPagerDutyErrorForwarder:
             mock_client.return_value.__aenter__.return_value = instance
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(level="critical"),
+                make_group(),
+                make_event(level="critical"),
                 {"routing_key": "pd-key"},
             )
         assert result is False
@@ -409,7 +384,7 @@ class TestPagerDutyErrorForwarder:
 class TestRollbarErrorForwarder:
     async def test_no_access_token_returns_false(self) -> None:
         fwd = RollbarErrorForwarder()
-        result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {})
+        result = await fwd.forward(_ORG_ID, make_group(), make_event(), {})
         assert result is False
 
     async def test_posts_to_rollbar_api(self) -> None:
@@ -425,8 +400,8 @@ class TestRollbarErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"access_token": "rb-token", "environment": "staging"},
             )
         assert result is True
@@ -448,8 +423,8 @@ class TestRollbarErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"access_token": "rb-token"},
             )
         assert result is False
@@ -463,7 +438,7 @@ class TestRollbarErrorForwarder:
 class TestOpsGenieErrorForwarder:
     async def test_no_api_key_returns_false(self) -> None:
         fwd = OpsGenieErrorForwarder()
-        result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {})
+        result = await fwd.forward(_ORG_ID, make_group(), make_event(), {})
         assert result is False
 
     async def test_posts_to_opsgenie_api(self) -> None:
@@ -479,8 +454,8 @@ class TestOpsGenieErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"api_key": "og-key", "team": "sre"},
             )
         assert result is True
@@ -502,8 +477,8 @@ class TestOpsGenieErrorForwarder:
 
                 await fwd.forward(
                     _ORG_ID,
-                    _make_error_group(),
-                    _make_error_event(level=level),
+                    make_group(),
+                    make_event(level=level),
                     {"api_key": "og-key"},
                 )
                 assert instance.post.call_args[1]["json"]["priority"] == expected_priority
@@ -517,7 +492,7 @@ class TestOpsGenieErrorForwarder:
 class TestLokiErrorForwarder:
     async def test_no_push_url_returns_false(self) -> None:
         fwd = LokiErrorForwarder()
-        result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {})
+        result = await fwd.forward(_ORG_ID, make_group(), make_event(), {})
         assert result is False
 
     async def test_posts_to_loki_push_api(self) -> None:
@@ -533,8 +508,8 @@ class TestLokiErrorForwarder:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"push_url": "https://loki.example.com/loki/api/v1/push", "tenant_id": "my-tenant"},
             )
         assert result is True
@@ -556,8 +531,8 @@ class TestLokiErrorForwarder:
 
             await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {
                     "push_url": "https://loki.example.com/push",
                     "labels": {"app": "modulo", "env": "prod"},
@@ -588,8 +563,8 @@ class TestForwarderSsrfFailClosed:
         with _patch_pinned("sentry", side_effect=self._BLOCKED):
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"dsn": "https://key@169.254.169.254/123", "org_slug": "o", "project_slug": "p"},
             )
         assert result is False
@@ -597,37 +572,31 @@ class TestForwarderSsrfFailClosed:
     async def test_datadog_refuses_blocked_url(self) -> None:
         fwd = DatadogErrorForwarder()
         with _patch_pinned("datadog", side_effect=self._BLOCKED):
-            result = await fwd.forward(
-                _ORG_ID, _make_error_group(), _make_error_event(), {"api_key": "k", "site": "localhost"}
-            )
+            result = await fwd.forward(_ORG_ID, make_group(), make_event(), {"api_key": "k", "site": "localhost"})
         assert result is False
 
     async def test_pagerduty_refuses_blocked_url(self) -> None:
         fwd = PagerDutyErrorForwarder()
         with _patch_pinned("pagerduty", side_effect=self._BLOCKED):
-            result = await fwd.forward(
-                _ORG_ID, _make_error_group(), _make_error_event(level="critical"), {"routing_key": "k"}
-            )
+            result = await fwd.forward(_ORG_ID, make_group(), make_event(level="critical"), {"routing_key": "k"})
         assert result is False
 
     async def test_rollbar_refuses_blocked_url(self) -> None:
         fwd = RollbarErrorForwarder()
         with _patch_pinned("rollbar", side_effect=self._BLOCKED):
-            result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {"access_token": "k"})
+            result = await fwd.forward(_ORG_ID, make_group(), make_event(), {"access_token": "k"})
         assert result is False
 
     async def test_opsgenie_refuses_blocked_url(self) -> None:
         fwd = OpsGenieErrorForwarder()
         with _patch_pinned("opsgenie", side_effect=self._BLOCKED):
-            result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {"api_key": "k"})
+            result = await fwd.forward(_ORG_ID, make_group(), make_event(), {"api_key": "k"})
         assert result is False
 
     async def test_loki_refuses_blocked_url(self) -> None:
         fwd = LokiErrorForwarder()
         with _patch_pinned("loki", side_effect=self._BLOCKED):
-            result = await fwd.forward(
-                _ORG_ID, _make_error_group(), _make_error_event(), {"push_url": "http://127.0.0.1:9090/push"}
-            )
+            result = await fwd.forward(_ORG_ID, make_group(), make_event(), {"push_url": "http://127.0.0.1:9090/push"})
         assert result is False
 
 
@@ -681,8 +650,8 @@ class TestForwarderFailureIsolation:
 
             result = await sentry.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(),
+                make_group(),
+                make_event(),
                 {"dsn": "https://key@sentry.io/123", "org_slug": "o", "project_slug": "p"},
             )
             assert result is False
@@ -705,8 +674,8 @@ class TestForwarderFailureIsolation:
 
                 result = await _dispatch_forwarders(
                     _ORG_ID,
-                    _make_error_group(),
-                    _make_error_event(),
+                    make_group(),
+                    make_event(),
                     {},
                 )
         finally:
@@ -745,8 +714,8 @@ class TestForwarderNonSuccessResponse:
 
             result = await fwd.forward(
                 _ORG_ID,
-                _make_error_group(),
-                _make_error_event(level="critical"),
+                make_group(),
+                make_event(level="critical"),
                 config,
             )
         assert result is False
@@ -764,7 +733,7 @@ class TestForwarderNonSuccessResponse:
 class TestForwarderDispatchConfig:
     async def test_dispatch_one_forwarder_unknown_type_is_noop(self, caplog: pytest.LogCaptureFixture) -> None:
         # An unregistered forwarder type must be skipped (logged), never raised.
-        await _dispatch_one_forwarder(_ORG_ID, _make_error_group(), _make_error_event(), "nope", {})
+        await _dispatch_one_forwarder(_ORG_ID, make_group(), make_event(), "nope", {})
         assert "dispatch_forwarders.unknown_type" in caplog.text
 
     async def test_load_per_org_configs_reads_enabled_org_rows(self) -> None:
@@ -802,7 +771,7 @@ class TestForwarderDispatchConfig:
             ),
             patch("modulo.core.error_tracking._dispatch_one_forwarder", new=AsyncMock()) as dispatch,
         ):
-            await _dispatch_forwarders(_ORG_ID, _make_error_group(), _make_error_event(), {}, session=object())
+            await _dispatch_forwarders(_ORG_ID, make_group(), make_event(), {}, session=object())
 
         dispatch.assert_awaited_once()
         # The ORG config won: the default sentinel was NOT dispatched.
@@ -815,7 +784,7 @@ class TestForwarderDispatchConfig:
             patch("modulo.core.error_tracking._DEFAULT_FORWARDER_CONFIGS", default_config),
             patch("modulo.core.error_tracking._dispatch_one_forwarder", new=AsyncMock()) as dispatch,
         ):
-            await _dispatch_forwarders(_ORG_ID, _make_error_group(), _make_error_event(), {})
+            await _dispatch_forwarders(_ORG_ID, make_group(), make_event(), {})
 
         dispatch.assert_awaited_once()
         assert dispatch.call_args.args[3] == "loki"

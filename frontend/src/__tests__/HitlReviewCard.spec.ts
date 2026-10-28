@@ -820,6 +820,40 @@ describe('HitlReviewCard', () => {
     })
   })
 
+  it('coerces numeric option ids and drops options missing an id or label (FAR-366)', async () => {
+    await mockClaimThenDecide()
+    wrapper = mount(HitlReviewCard, {
+      props: {
+        gate: gate({
+          context: {
+            response_contract: {
+              kind: 'choice',
+              options: [
+                { id: 7, label: 'Numeric id' },
+                { id: 'no-label' },
+                { label: 'No id' },
+                { id: 'ship', label: 'Ship it' },
+              ],
+            },
+          },
+        }),
+      },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+
+    // A numeric id survives the template-literal coercion and stays selectable.
+    expect(wrapper.find('[data-testid="hitl-gate-option-7"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Numeric id')
+    expect(wrapper.find('[data-testid="hitl-gate-option-ship"]').exists()).toBe(true)
+    // A missing id or label coerces to '' and is filtered out of the choices.
+    expect(wrapper.find('[data-testid="hitl-gate-option-no-label"]').exists()).toBe(false)
+    const options = wrapper.find('[data-testid="hitl-gate-choice-options"]')
+    expect(options.findAll('input[type="radio"]')).toHaveLength(2)
+  })
+
   it('submits the selected option as the answer on approve-with-modification (FAR-907)', async () => {
     await mockClaimThenDecide()
     wrapper = mount(HitlReviewCard, {

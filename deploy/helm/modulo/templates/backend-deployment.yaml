@@ -46,7 +46,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: backend
-          image: {{ include "modulo.image" (dict "image" .Values.backend.image) | quote }}
+          image: {{ include "modulo.image" (dict "image" .Values.backend.image "appVersion" .Chart.AppVersion) | quote }}
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
           ports:
             - name: http-backend
@@ -111,7 +111,7 @@ spec:
               ephemeral-storage: {{ .Values.backend.resources.requests.ephemeralStorage | quote }}
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL

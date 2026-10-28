@@ -1,0 +1,77 @@
+"""Runless guardrail findings attached to a trigger-event intake decision."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+    text,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+
+from modulo.db.models.base import OrgScoped
+
+
+class TriggerEventFinding(OrgScoped):
+    """One guardrail finding for a delivery that may have no pipeline run."""
+
+    __tablename__ = "trigger_event_findings"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["trigger_event_id", "organisation_id"],
+            ["trigger_events.id", "trigger_events.organisation_id"],
+            ondelete="CASCADE",
+            name="fk_trigger_event_findings_event_org",
+        ),
+        UniqueConstraint("id", "organisation_id", name="uq_trigger_event_findings_id_organisation_id"),
+        UniqueConstraint(
+            "organisation_id",
+            "trigger_event_id",
+            "eval_id",
+            name="uq_trigger_event_findings_org_event_eval",
+        ),
+        ForeignKeyConstraint(
+            ["eval_id", "organisation_id"],
+            ["evals.id", "evals.organisation_id"],
+            ondelete="CASCADE",
+            name="fk_trigger_event_findings_eval_org",
+        ),
+        CheckConstraint(
+            "resolution IN ('accepted', 'dismissed', 'superseded', 'pending')",
+            name="ck_trigger_event_findings_resolution",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
+    trigger_event_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
+    eval_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
+    passed: Mapped[bool] = mapped_column(nullable=False)
+    outcome: Mapped[str] = mapped_column(Text(), nullable=False)
+    score: Mapped[float | None] = mapped_column(nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    resolution: Mapped[str] = mapped_column(Text(), nullable=False, server_default="pending")
+    resolution_reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )

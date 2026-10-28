@@ -235,13 +235,19 @@ class TestGetAvailableFeaturesSuccess(AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_get_settings.return_value = MagicMock()
+        mock_get_settings.return_value = MagicMock(modulo_dev_mode=False)
         plan_ctx = MagicMock()
         plan_ctx.tier.return_value = "community"
         plan_ctx.list_enabled_features.return_value = [
             FeatureFlag(name="mcp_server", description="MCP", tier="community", currently_active=True),
             FeatureFlag(name="webhook_trigger", description="Webhook", tier="community", currently_active=True),
             FeatureFlag(name="sso", description="SSO", tier="team", currently_active=False),
+            FeatureFlag(
+                name="lifecycle_map_journeys",
+                description="Retired internal Lifecycle Map journey display",
+                tier="community",
+                currently_active=True,
+            ),
         ]
         mock_resolve.return_value = plan_ctx
         mock_session.return_value = make_session_context(make_session_scope())
@@ -253,6 +259,44 @@ class TestGetAvailableFeaturesSuccess(AuthContext):
         assert "| Feature | Required Tier | Available |" in result["results"]
         assert "| mcp_server | community | yes |" in result["results"]
         assert "| sso | team | no |" in result["results"]
+        assert "lifecycle_map_journeys" not in result["results"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_settings")
+    @patch("modulo.core.feature_flags.resolve_plan_context")
+    @patch("modulo.db.crud.organisation.get_organisation")
+    async def test_internal_caller_can_see_retired_flag(
+        self,
+        mock_get_org: AsyncMock,
+        mock_resolve: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_key_grants
+
+        mock_get_settings.return_value = MagicMock(modulo_dev_mode=True)
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        plan_ctx.list_enabled_features.return_value = [
+            FeatureFlag(
+                name="lifecycle_map_journeys",
+                description="Retired internal Lifecycle Map journey display",
+                tier="community",
+                currently_active=True,
+            ),
+        ]
+        mock_resolve.return_value = plan_ctx
+        mock_session.return_value = make_session_context(make_session_scope())
+        _ctx_key_grants.set(frozenset({"library.search.in_dev"}))
+        try:
+            result = await get_available_features()
+        finally:
+            _ctx_key_grants.set(None)
+
+        assert result["feature_count"] == 1
+        assert "| lifecycle_map_journeys | community | yes |" in result["results"]
 
 
 # ---------------------------------------------------------------------------

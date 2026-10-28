@@ -110,7 +110,9 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 _TOKEN_TYPE_BEARER = "bearer"
 
 
-async def _require_csrf_double_submit(request: Request, settings: Settings = Depends(get_settings)) -> None:
+async def _require_csrf_double_submit(  # NOSONAR S7503 - FastAPI dependency seam
+    request: Request, settings: Settings = Depends(get_settings)
+) -> None:
     """Double-submit CSRF gate for the cookie-only refresh/logout endpoints (FAR-1197).
 
     ``modulo_csrf_exempt_paths`` exempts the whole ``/api/v1/auth`` prefix by
@@ -125,7 +127,11 @@ async def _require_csrf_double_submit(request: Request, settings: Settings = Dep
         return
     cookie = request.cookies.get(CsrfMiddleware.CSRF_COOKIE)
     header = request.headers.get(CsrfMiddleware.CSRF_HEADER)
-    if not cookie or not header or not secrets.compare_digest(cookie, header):
+    # Compare as UTF-8 bytes: ``secrets.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. Both operands are attacker-controlled
+    # (a forged Cookie / X-CSRF-Token header), so a non-ASCII pair must fail closed
+    # with a 403 instead of escaping as an uncaught 500.
+    if not cookie or not header or not secrets.compare_digest(cookie.encode("utf-8"), header.encode("utf-8")):
         _log.warning("auth.csrf_double_submit_rejected path=%s", request.url.path)
         raise HTTPException(status_code=403, detail=MSG_CSRF_FAILED)
 

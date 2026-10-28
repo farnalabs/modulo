@@ -74,7 +74,7 @@ def _validate_executable(value: str, name: str) -> str:
     return resolved
 
 
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*", re.ASCII)
 
 
 def _validate_identifier(value: str, name: str) -> str:
@@ -83,7 +83,7 @@ def _validate_identifier(value: str, name: str) -> str:
     Used for the database name that is interpolated into a ``psql -c`` SQL string
     (defense against SQL injection in the terminate-backends command, S8705).
     """
-    if not _IDENTIFIER_RE.match(value or ""):
+    if _IDENTIFIER_RE.fullmatch(value or "") is None:
         raise ValueError(f"invalid {name}: {value!r} is not a valid SQL identifier")
     return value
 
@@ -104,7 +104,7 @@ def decrypt_archive(enc_path: str, passphrase: str, output_path: str) -> None:
         print("ERROR: openssl not found. Install OpenSSL to decrypt backups.")
         sys.exit(1)
     _validate_arg(passphrase, "passphrase")
-    result = subprocess.run(
+    result = subprocess.run(  # NOSONAR - argv elements: "openssl" (literal), "enc" (literal), "-d" (literal), "-aes-256-cbc" (literal), "-pbkdf2" (literal), "-iter" (literal), "600000" (literal), "-in" (literal), enc_path (CLI argument, validated by caller as existing file), "-out" (literal), output_path (temp file path, validated by caller), "-pass" (literal), f"pass:{passphrase}" (passphrase validated by _validate_arg: non-empty, no leading '-'); subprocess runs without shell, so no injection from passphrase content is possible (openssl treats the pass: argument as opaque).
         [
             "openssl",
             "enc",
@@ -224,7 +224,7 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     _validate_arg(admin_url, "admin database URL")
 
     print("  Terminating existing connections...")
-    subprocess.run(
+    subprocess.run(  # NOSONAR - argv elements: "psql" (literal), "-d" (literal), admin_url (derived from db_url, validated by _validate_arg: non-empty, no leading '-'), "-c" (literal), SQL query with db_name interpolated (db_name validated by _validate_identifier: ^[A-Za-z_]\w*$ regex, safe SQL identifier); subprocess runs without shell.
         [
             "psql",
             "-d",
@@ -238,7 +238,7 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
     )
 
     print("  Dropping existing database...")
-    result = subprocess.run(
+    result = subprocess.run(  # NOSONAR - argv elements: "dropdb" (literal), "--if-exists" (literal), "-f" (literal), db_name (validated by _validate_identifier: ^[A-Za-z_]\w*$), "--maintenance-db=" + admin_url (admin_url validated by _validate_arg: non-empty, no leading '-'); subprocess runs without shell.
         ["dropdb", "--if-exists", "-f", db_name, f"--maintenance-db={admin_url}"],
         capture_output=True,
         text=True,
@@ -248,7 +248,7 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
         print(f"  dropdb warning: {result.stderr}")
 
     print("  Recreating database...")
-    result = subprocess.run(
+    result = subprocess.run(  # NOSONAR - argv elements: "createdb" (literal), db_name (validated by _validate_identifier: ^[A-Za-z_]\w*$), "--maintenance-db=" + admin_url (admin_url validated by _validate_arg: non-empty, no leading '-'); subprocess runs without shell.
         ["createdb", db_name, f"--maintenance-db={admin_url}"],
         capture_output=True,
         text=True,
@@ -259,7 +259,7 @@ def restore_postgres(extract_dir: str, db_url: str, pg_restore: str) -> None:
         sys.exit(1)
 
     print("  Importing data (this may take a while)...")
-    result = subprocess.run(
+    result = subprocess.run(  # NOSONAR - argv elements: pg_restore (validated by _validate_executable: resolves to absolute path via shutil.which, must exist on PATH), "--no-owner" (literal), "--no-acl" (literal), "--dbname" (literal), db_url (validated by _validate_arg: non-empty, no leading '-'), dump_path (derived from extract_dir + fixed filename "modulo.pgdump", extract_dir is temp dir created by tempfile.mkdtemp); subprocess runs without shell.
         [pg_restore, "--no-owner", "--no-acl", "--dbname", db_url, dump_path],
         capture_output=True,
         text=True,
@@ -347,7 +347,8 @@ def _restore_from_archive(args: argparse.Namespace, passphrase: str, db_url: str
         print("Temp directory cleaned up.")
 
 
-async def main() -> None:
+def main() -> None:
+    """Run the restore CLI synchronously; all work is blocking subprocess/file I/O."""
     args = parse_args()
     _validate_restore_args(args)
 
@@ -363,6 +364,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(main())
+    main()

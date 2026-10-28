@@ -23,7 +23,7 @@ Every state-changing action produces an immutable, org-scoped AuditEvent (actor,
 **Benefit:** the history you inspect is exactly what happened; auditors and operators read the same truth.
 
 ## 4. Deterministic gates
-Automated quality checks (regex, JSON Schema, custom function, scored eval) run before HITL gates on the same edge, with pass thresholds and warn/block behavior. A gate either passes or it doesn't; the run history shows which gate caught what. The same deterministic-gate principle extends to the input side: guardrails check what enters a run at the ingestion edge, before the first node executes: guarding what enters the run rather than only what leaves it (see §4a below).
+Automated quality checks (regex, JSON Schema, custom function, scored eval) run before HITL gates on the same edge, with pass thresholds and warn/block behavior. A gate either passes or it doesn't; the run history shows which gate caught what. The `model_judge` eval is a soft signal only, not a correctness guarantee: it may share a model backend with the node under evaluation, so correctness-critical gates should use a `human_set` eval. The same deterministic-gate principle extends to the input side: guardrails check what enters a run at the ingestion edge, before the first node executes: guarding what enters the run rather than only what leaves it (see §4a below).
 **Why:** automation must be checked by rules, not vibes; evals make quality measurable per run.
 **Where:** `modulo/core/eval_engine/`, `docs/architecture.md` eval engine section.
 **Benefit:** failures surface at the gate with evidence, not after merge.

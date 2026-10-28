@@ -8,10 +8,10 @@ and the subscribable webhook subset in ``api/routes.admin_notifications.py``
                       claim_expired, hitl_approve_sweep_suspected
   - Runs / cost:      run_failed, run_stalled, budget_exceeded,
                       circuit_breaker_tripped, provider_failure (FAR-2006)
+  - Pipeline health:  pipeline_decay, pipeline_decay_recovered (FAR-2116)
   - Triggers:         trigger_deactivated, trigger_streak_alert,
                       org_triggers_auto_paused
   - Evals:            eval_regression, eval_blocked
-  - Feedback/system:  feedback_pending, system_announcement
   - Guardrails:       guardrail_enforcement_gap, guardrail_kill_switch,
                       guardrail_unexpected_skip
   - Capacity:         queue_pressure_notice, queue_pressure_warning,
@@ -50,6 +50,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from modulo.core.secret_patterns import mask_secret_values_in_text
 from modulo.core.ssrf import pinned_async_client
 from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
 from modulo.db.models.account import Account
@@ -67,7 +68,6 @@ __all__ = [
     "EVENT_CLAIM_EXPIRED",
     "EVENT_EVAL_BLOCKED",
     "EVENT_EVAL_REGRESSION",
-    "EVENT_FEEDBACK_PENDING",
     "EVENT_GUARDRAIL_ENFORCEMENT_GAP",
     "EVENT_GUARDRAIL_KILL_SWITCH",
     "EVENT_GUARDRAIL_UNEXPECTED_SKIP",
@@ -76,13 +76,14 @@ __all__ = [
     "EVENT_HITL_DEADLINE_WARNING",
     "EVENT_HITL_OVERDUE",
     "EVENT_ORG_TRIGGERS_AUTO_PAUSED",
+    "EVENT_PIPELINE_DECAY",
+    "EVENT_PIPELINE_DECAY_RECOVERED",
     "EVENT_PROVIDER_FAILURE",
     "EVENT_QUEUE_PRESSURE_CRITICAL",
     "EVENT_QUEUE_PRESSURE_NOTICE",
     "EVENT_QUEUE_PRESSURE_WARNING",
     "EVENT_RUN_FAILED",
     "EVENT_RUN_STALLED",
-    "EVENT_SYSTEM_ANNOUNCEMENT",
     "EVENT_TRIGGER_DEACTIVATED",
     "EVENT_TRIGGER_STREAK_ALERT",
     "MAX_ATTEMPTS",
@@ -236,8 +237,6 @@ EVENT_HITL_DEADLINE_WARNING = "hitl_deadline_warning"
 EVENT_HITL_APPROVE_SWEEP = "hitl_approve_sweep_suspected"
 EVENT_EVAL_REGRESSION = "eval_regression"
 EVENT_EVAL_BLOCKED = "eval_blocked"
-EVENT_FEEDBACK_PENDING = "feedback_pending"
-EVENT_SYSTEM_ANNOUNCEMENT = "system_announcement"
 # FAR-190 — a trigger auto-deactivated after N consecutive no-delivery runs
 # (an ongoing trigger, or a cron that opted in via
 # ``no_delivery_auto_deactivate``). Payload is sanitised (identifiers/titles +
@@ -300,6 +299,17 @@ EVENT_CAPACITY_RECOVERED = "capacity_recovered"
 # deployment change (raise ``REDIS_MAXMEMORY`` / the Redis tier), not a
 # pipeline fix.
 EVENT_CAPACITY_REDIS_PRESSURE = "capacity_redis_pressure"
+# FAR-2116 — pipeline-decay alerting. A readiness check answers "is the app
+# up"; neither of the two outages this closes (deploys red for ~30h, and the
+# Branch Fixer at a 35% success rate for ~5 days) made the app unhealthy. These
+# two events are the sustained-degradation pair: ``pipeline_decay`` opens one
+# alert per webhook pipeline whose rolling success rate collapses (or whose
+# node-deadline watchdog keeps firing) over a 2-hour window, and
+# ``pipeline_decay_recovered`` closes it once the pipeline is healthy again —
+# the same open/close shape as the capacity ladder, so an operator is never
+# left holding a stale "degraded".
+EVENT_PIPELINE_DECAY = "pipeline_decay"
+EVENT_PIPELINE_DECAY_RECOVERED = "pipeline_decay_recovered"
 
 
 @dataclass
@@ -321,16 +331,6 @@ class Notifier:
             self._fernet = Fernet(fernet_key.encode())
         except (ValueError, TypeError) as exc:
             raise ValueError(f"Invalid Fernet key: {exc}") from exc
-        self._http_client: httpx.AsyncClient | None = None
-        self._http_client_lock = asyncio.Lock()
-
-    async def _get_client(self) -> httpx.AsyncClient:
-        async with self._http_client_lock:
-            if self._http_client is None or self._http_client.is_closed:
-                self._http_client = httpx.AsyncClient(
-                    timeout=httpx.Timeout(connect=10.0, read=25.0, write=25.0, pool=30.0)
-                )
-        return self._http_client
 
     async def dispatch_event(
         self,
@@ -804,9 +804,9 @@ class Notifier:
                 if resp.is_success:
                     succeeded = True
                     break
-                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                last_error = f"HTTP {resp.status_code}: {mask_secret_values_in_text(resp.text[:200])}"
             except httpx.RequestError as exc:
-                last_error = f"RequestError: {exc}"
+                last_error = mask_secret_values_in_text(f"RequestError: {exc}")
                 response_code = None
 
             if attempt < MAX_ATTEMPTS:
@@ -1004,13 +1004,3 @@ class Notifier:
                 "notifier.reset_dead_letter_failed",
                 extra={"endpoint_id": str(endpoint.id)},
             )
-
-    async def close(self) -> None:
-        """Close the underlying HTTP client, if one was created."""
-        client: httpx.AsyncClient | None = None
-        async with self._http_client_lock:
-            if self._http_client is not None and not self._http_client.is_closed:
-                client = self._http_client
-                self._http_client = None
-        if client is not None:
-            await client.aclose()

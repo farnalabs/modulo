@@ -124,6 +124,39 @@ centralized authorization cleanup.
       port-signature deltas, downstream `impacted_nodes`, and `breaking_changes`
       (`block` vs `warning`)
       (`backend/tests/unit/db/crud/test_snapshot_versioning_far402.py::TestDiffSnapshotsSemantic`)
+- [x] A node that differs ONLY in behaviour-bearing config is reported as
+      modified, never as unchanged: the per-field comparison covers the
+      node-level `hitl_config` gate (a gate added, removed or retargeted changes
+      who must approve the run), `timeout_seconds`, `template_id`,
+      `model_class` and `single_pr_per_run` alongside the identity fields
+      (`agent_id` / `label` / `role` / `node_type` / schema / connector /
+      environment bindings) and the port signature – so the restore dialog's embedded
+      change summary cannot tell an operator a version pair is identical when
+      the two graphs behave differently
+      (`backend/src/modulo/db/crud/pipeline_snapshot_versioning.py::_compute_node_changes`,
+      `backend/tests/unit/pipelines/test_snapshot_versioning.py::TestComputeNodeChangesExecutionSemantics`)
+- [x] A conditional edge that differs only in its routing expression is reported
+      as modified: `condition_expression` (or the legacy `condition` spelling,
+      normalised before comparison so a re-spelled-but-identical expression is
+      NOT a change) plus `hitl_review_config` and `edge_type`; the frozen side
+      reported to the client carries `condition_expression` too, so the
+      reported change has a field to land on
+      (`_compute_edge_changes` / `_rebuild_graph`,
+      `backend/tests/unit/pipelines/test_snapshot_versioning.py::TestComputeEdgeChanges`)
+- [x] The snapshot read paths carry an explicit `organisation_id` scope on top
+      of RLS: `list_snapshots` (applied to BOTH the page query and its count, so
+      the pair can never disagree about what is in scope), `delete_snapshot`,
+      and `diff_snapshots` (which now resolves BOTH sides through the scoped
+      `get_snapshot_detail`, the same pattern `tag_snapshot` uses) – every REST
+      route and the MCP `get_pipeline_diff` tool pass the caller's organisation,
+      so an out-of-scope id resolves to `None` → 404 even on a layer where RLS
+      context is missing
+      (`backend/tests/unit/pipelines/test_snapshot_versioning.py::TestDiffSnapshotsOrgScoping`,
+      `::TestDeleteSnapshotScope`, `::TestListSnapshots`)
+- [x] A corrupt (id-less) node in a stored snapshot fails LOUDLY rather than
+      being collapsed under one `None` key: the diff indexer and the frozen-graph
+      rebuild read `n["id"]` strictly, per the recorded decision below
+      (`_rebuild_graph`, `::TestRebuildGraph::test_an_id_less_node_fails_loudly`)
 - [x] Non-existent snapshot or pipeline id → 404; invalid UUID → 422
 - [x] Delete snapshot (versioned) is supported
 - [x] Backward compatibility for pre-versioning snapshot records
@@ -150,6 +183,33 @@ centralized authorization cleanup.
 
 ## QA History
 
+- 2026-10-25: **Improve Architecture product-map walk (cross-cutting lenses:
+  behaviour completeness, error handling, tenancy, resilience, edge cases)** –
+  three findings fixed under an explicit allowlist.
+  (1) MAJOR, behaviour completeness: the per-field node comparison covered ONLY
+  the identity fields plus bindings/schema/ports, so a version pair differing
+  only in a node-level `hitl_config`, `timeout_seconds`, `template_id`,
+  `model_class` or `single_pr_per_run` was reported as MODIFIED-NOWHERE – the
+  compare view said "No structural changes" and the restore dialog's embedded
+  summary said there were no differences, for a graph that removes an approval
+  gate or changes what a node executes. `_compute_node_changes` now compares
+  those fields, and the edge comparison now covers `condition_expression`
+  (legacy `condition` normalised before comparison) – a routing-expression-only
+  edit was invisible for the same reason. `_rebuild_graph` carries
+  `condition_expression` so the frozen side shows the field the change names.
+  Labelled in the compare view (`field_hitl_config` / `field_hitl_review_config`
+  / `field_timeout_seconds` / `field_template_id` / `field_model_class` /
+  `field_single_pr_per_run` / `field_condition_expression`). 12 new tests fail
+  without the fix and pass with it (verified by reverting the source file).
+  (2) MINOR, tenancy/defence-in-depth: `list_snapshots` and `delete_snapshot`
+  took no `organisation_id`, and `diff_snapshots` resolved each side by primary
+  key before comparing `pipeline_id`; all three now take the same
+  org/pipeline scope `get_snapshot_detail` already carried, and the REST routes
+  plus MCP `get_pipeline_diff` pass the caller's organisation. The page query
+  and its count share one filter list, so they cannot disagree.
+  (3) MINOR, edge case: a corrupt id-less node now has TWO explicit tests
+  (rebuild raises; the known-gap decision below is thus pinned by a test rather
+  than prose only). No new files; `status` stays `covered`.
 - 2026-10-19: **FAR-1814 docs drift pass** – documented the shipped restore and
   gating surfaces that had no tracker line: rollback now names its
   `version_kind='edit'` / `created_kind='rollback'` provenance and the fact it

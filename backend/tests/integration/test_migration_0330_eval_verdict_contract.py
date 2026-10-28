@@ -40,6 +40,8 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
 MIGRATION_REV = "0330_eval_verdict_contract"
+STAGE2_REV = "0335_eval_verdict_contract_stage2"
+STAGE2_PREV_REV = "0333_trigger_event_findings"
 PREV_REV = "0327_runs_execution_attempt_count"
 
 _ORG = "d0c00000-0000-0000-0000-000000000001"
@@ -359,6 +361,95 @@ class TestMigration0330:
             assert stored["error_code"] == "judge.unavailable"
             assert stored["score"] is None
             assert row[1] == "judge.unavailable"
+        finally:
+            await engine.dispose()
+
+    async def test_stage2_upgrade_enforces_not_null_and_narrow_vocabulary(self, pre_upgrade_db_url: str) -> None:
+        _migrate(pre_upgrade_db_url, MIGRATION_REV)
+        engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text("SET session_replication_role = replica"))
+                await conn.execute(text("UPDATE eval_results SET outcome = NULL WHERE id = :id"), {"id": _PASS_RESULT})
+                await conn.execute(text("UPDATE evals SET eval_type = 'llm_judge' WHERE id = :id"), {"id": _EVAL})
+        finally:
+            await engine.dispose()
+
+        _migrate(pre_upgrade_db_url, STAGE2_REV)
+        engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                shapes = await conn.execute(
+                    text(
+                        "SELECT is_nullable, column_default FROM information_schema.columns "
+                        "WHERE table_schema='public' AND table_name='eval_results' AND column_name='outcome'"
+                    )
+                )
+                assert shapes.one() == ("NO", None)
+                null_count = (
+                    await conn.execute(text("SELECT count(*) FROM eval_results WHERE outcome IS NULL"))
+                ).scalar_one()
+                legacy_count = (
+                    await conn.execute(text("SELECT count(*) FROM evals WHERE eval_type='llm_judge'"))
+                ).scalar_one()
+                validated = (
+                    await conn.execute(
+                        text(
+                            "SELECT convalidated FROM pg_constraint WHERE conname='ck_evals_type' "
+                            "AND conrelid='public.evals'::regclass"
+                        )
+                    )
+                ).scalar_one()
+            assert null_count == 0
+            assert legacy_count == 0
+            assert validated is True
+            with pytest.raises(IntegrityError):
+                async with engine.begin() as conn:
+                    await conn.execute(
+                        text(
+                            "INSERT INTO eval_results "
+                            "(id, organisation_id, run_id, eval_id, passed, observed) "
+                            "VALUES (gen_random_uuid(), :org, :run, :eval, true, true)"
+                        ),
+                        {"org": _ORG, "run": _RUN, "eval": _EVAL},
+                    )
+            await _insert_eval(engine, "model_judge")
+            with pytest.raises(IntegrityError):
+                await _insert_eval(engine, "llm_judge")
+        finally:
+            await engine.dispose()
+
+    async def test_stage2_reruns_idempotently(self, pre_upgrade_db_url: str) -> None:
+        _migrate(pre_upgrade_db_url, MIGRATION_REV)
+        _migrate(pre_upgrade_db_url, STAGE2_REV)
+        _migrate(pre_upgrade_db_url, STAGE2_REV)
+        engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                assert (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar_one() == STAGE2_REV
+        finally:
+            await engine.dispose()
+
+    async def test_stage2_downgrade_restores_expand_contract(self, pre_upgrade_db_url: str) -> None:
+        _migrate(pre_upgrade_db_url, MIGRATION_REV)
+        _migrate(pre_upgrade_db_url, STAGE2_REV)
+        _migrate(pre_upgrade_db_url, STAGE2_PREV_REV, cmd="downgrade")
+        engine = create_async_engine(pre_upgrade_db_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                nullable = (
+                    await conn.execute(
+                        text(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            "WHERE table_schema='public' AND table_name='eval_results' AND column_name='outcome'"
+                        )
+                    )
+                ).scalar_one()
+                eval_type = (
+                    await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": _EVAL})
+                ).scalar_one()
+            assert nullable == "YES"
+            assert eval_type == "model_judge"
         finally:
             await engine.dispose()
 

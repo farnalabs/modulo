@@ -16,45 +16,7 @@ from opentelemetry.trace import StatusCode
 
 import modulo.core.error_tracking.metrics as metrics_mod
 
-
-@pytest.fixture(autouse=True)
-def _reset_metric_handles() -> None:
-    """Save/restore module-level metric handles so tests never leak state."""
-    saved = (
-        metrics_mod._errors_total,
-        metrics_mod._error_groups_active,
-        metrics_mod._error_alerts_total,
-        metrics_mod._runs_running_gauge,
-        metrics_mod._runs_oldest_running_gauge,
-        metrics_mod._runs_stall_reason_total,
-        metrics_mod._runs_claim_count_histogram,
-        metrics_mod._alerts_suppressed_total,
-        metrics_mod._alert_delivery_failed_total,
-        metrics_mod._connector_unknown_total,
-    )
-    metrics_mod._errors_total = None
-    metrics_mod._error_groups_active = None
-    metrics_mod._error_alerts_total = None
-    metrics_mod._runs_running_gauge = None
-    metrics_mod._runs_oldest_running_gauge = None
-    metrics_mod._runs_stall_reason_total = None
-    metrics_mod._runs_claim_count_histogram = None
-    metrics_mod._alerts_suppressed_total = None
-    metrics_mod._alert_delivery_failed_total = None
-    metrics_mod._connector_unknown_total = None
-    yield
-    (
-        metrics_mod._errors_total,
-        metrics_mod._error_groups_active,
-        metrics_mod._error_alerts_total,
-        metrics_mod._runs_running_gauge,
-        metrics_mod._runs_oldest_running_gauge,
-        metrics_mod._runs_stall_reason_total,
-        metrics_mod._runs_claim_count_histogram,
-        metrics_mod._alerts_suppressed_total,
-        metrics_mod._alert_delivery_failed_total,
-        metrics_mod._connector_unknown_total,
-    ) = saved
+pytestmark = pytest.mark.usefixtures("reset_metric_handles")
 
 
 def _make_meter() -> MagicMock:

@@ -6,8 +6,10 @@
 #     filter and boots the rig unconditionally).
 #
 # Boots the deploy/compose/runner-ci.yml rig (socket-proxy + dind +
-# workspace-network holder) and runs the docker-marked harness suite
-# (backend/tests/docker/test_bundled_runner_harness.py) against it.
+# workspace-network holder) and runs every docker-marked module in
+# backend/tests/docker/ against it (the whole tree is gated under the
+# PytestUnraisableExceptionWarning escalation - a docker test that no job
+# runs is a test the gate cannot protect).
 name: "Bundled Runner harness (reusable)"
 
 on:
@@ -36,10 +38,11 @@ jobs:
     name: Bundled Runner harness (compose + socket-proxy + dind)
     runs-on: ubicloud-standard-2
     # Wall-clock budget: measured local cold ~5 min (Docker Desktop, warm
-    # alpine; deploy/compose/README-runner-ci.md). 15 min = 3x the local
-    # cold path; the 2-vCPU hosted-runner multiplier is UNMEASURED until the
-    # first CI run - revisit the budget after it.
-    timeout-minutes: 15
+    # alpine; deploy/compose/README-runner-ci.md). The suite itself grew from
+    # ~58s (two files) to ~154-180s (all four, measured 2026-10-23); that lifts
+    # the local cold path to ~6.5-7 min, so 20 min keeps the original ~3x
+    # margin for the still-UNMEASURED 2-vCPU hosted-runner multiplier.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: backend
@@ -115,7 +118,7 @@ jobs:
             echo "Manual dispatch - running harness unconditionally."
             exit 0
           fi
-          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/executor.py backend/src/modulo/core/pipeline_engine/node_runner.py backend/src/modulo/core/cron_helpers.py backend/src/modulo/core/runner_capacity.py deploy/compose/ backend/tests/docker/test_bundled_runner_harness.py backend/tests/docker/test_runners_strip_e2e.py .github/workflows/runner-ci-harness.yml"
+          PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/executor.py backend/src/modulo/core/pipeline_engine/node_runner.py backend/src/modulo/core/cron_helpers.py backend/src/modulo/core/runner_capacity.py deploy/compose/ backend/tests/docker/test_bundled_runner_harness.py backend/tests/docker/test_runners_strip_e2e.py backend/tests/docker/test_runner_bundled.py backend/tests/docker/test_watchdog_container.py .github/workflows/runner-ci-harness.yml"
           # `rc=0; out=$(...)` survives Actions' `bash -e -o pipefail`: a bare
           # `out=$(...)` aborts the step before the failure can be inspected,
           # and swallowing the error into empty output silently SKIPS the
@@ -218,7 +221,7 @@ jobs:
         # silently re-introduce the cold-cache break).
         # NOSONAR: pytest-bdd is a pinned source-archive dep (pytest-dev/pytest-bdd@60f6625b) that requires a build; --frozen locks the exact revision so the build is deterministic and trusted (no untrusted setup scripts execute)
         run: uv sync --frozen  # NOSONAR
-      - name: Run the docker-marked harness suite
+      - name: Run every docker-marked suite module
         if: steps.changed.outputs.changed == 'true'
         shell: bash
         env:
@@ -226,7 +229,7 @@ jobs:
           MODULO_RUNNER_HARNESS_DIND_HOST: "tcp://127.0.0.1:${{ env.DIND_PORT }}"
           MODULO_RUNNER_HARNESS_NETWORK: "runner-ci-workspace"
         run: |
-          uv run --no-build --no-sync pytest tests/docker/test_bundled_runner_harness.py tests/docker/test_runners_strip_e2e.py -m docker --tb=short -q --timeout=600 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+          uv run --no-build --no-sync pytest tests/docker/test_bundled_runner_harness.py tests/docker/test_runners_strip_e2e.py tests/docker/test_runner_bundled.py tests/docker/test_watchdog_container.py -m docker --tb=short -q --timeout=600 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
       - name: Proxy log completeness dump (always)
         if: always() && steps.changed.outputs.changed == 'true'
         shell: bash

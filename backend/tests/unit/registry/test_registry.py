@@ -71,9 +71,8 @@ class TestCrypto:
         assert verify_manifest({"payload": object()}, "00" * 64, public) is False
 
     def test_verify_manifest_bad_signature_hex_returns_false(self):
-        private, public = generate_signing_key()
+        _private, public = generate_signing_key()
         payload = {"hello": "world"}
-        sign_manifest(payload, private)
         assert verify_manifest(payload, "zz-not-hex", public) is False
 
     def test_verify_manifest_tampered_signature_returns_false(self):
@@ -256,101 +255,41 @@ class TestPublish(_PreserveRegistry):
 
         assert verify_primitive_signature(entry, public_key=public)
 
-    def test_publish_rejects_empty_author(self, signing_key_hex):
-        with pytest.raises(ValueError, match="author must be a non-empty string"):
-            publish_primitive(
-                author="",
-                name="x",
-                primitive_type="schema",
-                description="d",
-                tags=[],
-                content_json={},
-                signing_key_hex=signing_key_hex,
-            )
-
-    def test_publish_rejects_empty_name(self, signing_key_hex):
-        with pytest.raises(ValueError, match="name must be a non-empty string"):
-            publish_primitive(
-                author="a",
-                name="  ",
-                primitive_type="schema",
-                description="d",
-                tags=[],
-                content_json={},
-                signing_key_hex=signing_key_hex,
-            )
-
-    def test_publish_rejects_empty_primitive_type(self, signing_key_hex):
-        with pytest.raises(ValueError, match="primitive_type must be a non-empty string"):
-            publish_primitive(
-                author="a",
-                name="x",
-                primitive_type="",
-                description="d",
-                tags=[],
-                content_json={},
-                signing_key_hex=signing_key_hex,
-            )
-
-    def test_publish_rejects_empty_description(self, signing_key_hex):
-        with pytest.raises(ValueError, match="description must be a non-empty string"):
-            publish_primitive(
-                author="a",
-                name="x",
-                primitive_type="schema",
-                description="",
-                tags=[],
-                content_json={},
-                signing_key_hex=signing_key_hex,
-            )
-
-    def test_publish_rejects_non_list_tags(self, signing_key_hex):
-        with pytest.raises(ValueError, match="tags must be a list of strings"):
-            publish_primitive(
-                author="a",
-                name="x",
-                primitive_type="schema",
-                description="d",
-                tags="t",
-                content_json={},
-                signing_key_hex=signing_key_hex,
-            )
-
-    def test_publish_rejects_non_string_tag(self, signing_key_hex):
-        with pytest.raises(ValueError, match="tags must be a list of strings"):
-            publish_primitive(
-                author="a",
-                name="x",
-                primitive_type="schema",
-                description="d",
-                tags=[1],
-                content_json={},
-                signing_key_hex=signing_key_hex,
-            )
-
-    def test_publish_rejects_non_dict_content_json(self, signing_key_hex):
-        with pytest.raises(ValueError, match="content_json must be a dict"):
-            publish_primitive(
-                author="a",
-                name="x",
-                primitive_type="schema",
-                description="d",
-                tags=[],
-                content_json=[],
-                signing_key_hex=signing_key_hex,
-            )
-
-    def test_publish_rejects_non_serializable_content_json(self, signing_key_hex):
-        with pytest.raises(ValueError, match="not JSON-serializable"):
-            publish_primitive(
-                author="a",
-                name="x",
-                primitive_type="schema",
-                description="d",
-                tags=[],
-                content_json={"x": object()},
-                signing_key_hex=signing_key_hex,
-            )
+    @pytest.mark.parametrize(
+        ("overrides", "match"),
+        [
+            ({"author": ""}, "author must be a non-empty string"),
+            ({"name": "  "}, "name must be a non-empty string"),
+            ({"primitive_type": ""}, "primitive_type must be a non-empty string"),
+            ({"description": ""}, "description must be a non-empty string"),
+            ({"tags": "t"}, "tags must be a list of strings"),
+            ({"tags": [1]}, "tags must be a list of strings"),
+            ({"content_json": []}, "content_json must be a dict"),
+            ({"content_json": {"x": object()}}, "not JSON-serializable"),
+        ],
+        ids=[
+            "empty-author",
+            "blank-name",
+            "empty-primitive-type",
+            "empty-description",
+            "non-list-tags",
+            "non-string-tag",
+            "non-dict-content-json",
+            "non-serializable-content-json",
+        ],
+    )
+    def test_publish_rejects_invalid_input(self, signing_key_hex, overrides, match):
+        params = {
+            "author": "a",
+            "name": "x",
+            "primitive_type": "schema",
+            "description": "d",
+            "tags": [],
+            "content_json": {},
+        }
+        params.update(overrides)
+        with pytest.raises(ValueError, match=match):
+            publish_primitive(**params, signing_key_hex=signing_key_hex)
 
     def test_publish_rejects_invalid_signing_key_hex(self):
         with pytest.raises(ValueError, match="invalid signing key hex"):

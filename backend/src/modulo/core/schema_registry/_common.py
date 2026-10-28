@@ -12,7 +12,7 @@ from modulo.model_backends.base import ModelBackendBase
 
 _log = logging.getLogger(__name__)
 
-_FENCE_RE = re.compile(r"```(?:\w+)?\s*\n(.*?)\n```", re.DOTALL)
+_FENCE_RE = re.compile(r"```[^\r\n`]*\r?\n(.*?)\r?\n```", re.DOTALL)
 
 
 def _safe_json_dumps(data: Any, indent: int = 2) -> str:
@@ -64,31 +64,86 @@ def _parse_content(content: str, *, context: str, error_cls: type[Exception]) ->
         raise error_cls(f"Failed to parse {context} schema from LLM response") from exc
 
 
+async def _invoke_backend_with_timeout(
+    backend: ModelBackendBase,
+    messages: list[BaseMessage],
+    *,
+    timeout_seconds: float,
+) -> BaseMessage:
+    """Invoke backend with timeout, propagating cancellation."""
+    async with asyncio.timeout(timeout_seconds):
+        return await backend.invoke(messages)
+
+
+def _handle_backend_timeout(
+    context: str,
+    *,
+    timeout_seconds: float,
+    attempt: int,
+    max_retries: int,
+    error_cls: type[Exception],
+) -> None:
+    """Handle backend timeout - raise on final attempt, otherwise return None to retry."""
+    _log.exception("Schema %s timed out after %ss (attempt %d/%d)", context, timeout_seconds, attempt, max_retries)
+    if attempt == max_retries:
+        raise error_cls(f"LLM call timed out after {timeout_seconds}s") from None
+
+
+async def _handle_backend_error(
+    context: str,
+    attempt: int,
+    max_retries: int,
+    error_cls: type[Exception],
+    exc: Exception,
+) -> None:
+    """Handle backend error - raise on final attempt, otherwise sleep and retry."""
+    _log.exception("LLM call failed during schema %s (attempt %d/%d)", context, attempt, max_retries)
+    if attempt == max_retries:
+        raise error_cls("LLM call failed") from exc
+    await asyncio.sleep(2**attempt)
+
+
+def _process_backend_response(
+    response: BaseMessage,
+    context: str,
+    error_cls: type[Exception],
+) -> dict[str, Any]:
+    """Extract and parse content from backend response."""
+    content = _extract_content(response, context=context, error_cls=error_cls)
+    return _parse_content(content, context=context, error_cls=error_cls)
+
+
 async def invoke_and_parse(
     backend: ModelBackendBase,
     messages: list[BaseMessage],
     *,
-    timeout: float,  # noqa: ASYNC109
+    timeout_seconds: float | None = None,
     error_cls: type[Exception],
     context: str,
+    **options: Any,
 ) -> dict[str, Any]:
+    # Keep accepting the historical ``timeout=`` keyword while avoiding a
+    # misleading timeout parameter in this retry loop's public signature.
+    if timeout_seconds is None:
+        timeout_seconds = options.pop("timeout", None)
+    if timeout_seconds is None or options:
+        raise TypeError("invoke_and_parse requires a timeout and accepts no other options")
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            async with asyncio.timeout(timeout):
-                response = await backend.invoke(messages)
+            response = await _invoke_backend_with_timeout(backend, messages, timeout_seconds=timeout_seconds)
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            _log.exception("Schema %s timed out after %ss (attempt %d/%d)", context, timeout, attempt, _MAX_RETRIES)
-            if attempt == _MAX_RETRIES:
-                raise error_cls(f"LLM call timed out after {timeout}s") from None
+            _handle_backend_timeout(
+                context,
+                timeout_seconds=timeout_seconds,
+                attempt=attempt,
+                max_retries=_MAX_RETRIES,
+                error_cls=error_cls,
+            )
         except Exception as exc:
-            _log.exception("LLM call failed during schema %s (attempt %d/%d)", context, attempt, _MAX_RETRIES)
-            if attempt == _MAX_RETRIES:
-                raise error_cls("LLM call failed") from exc
-            await asyncio.sleep(2**attempt)
+            await _handle_backend_error(context, attempt, _MAX_RETRIES, error_cls, exc)
         else:
-            content = _extract_content(response, context=context, error_cls=error_cls)
-            return _parse_content(content, context=context, error_cls=error_cls)
+            return _process_backend_response(response, context, error_cls)
 
     raise error_cls("LLM call failed after all retries (unreachable — safety net)")

@@ -5,7 +5,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from modulo.core import error_tracking as et
 from tests.unit.api.mock_session import make_session_scope
@@ -21,24 +24,25 @@ def _failure_records(caplog: object, key: str) -> list[object]:
     return [r for r in caplog.records if key in r.message]  # type: ignore[attr-defined]
 
 
-async def test_fire_once_allowed_redis_failure(caplog) -> None:
-    signal = "sig"
+@pytest.mark.parametrize(
+    ("call", "expected_log"),
+    [
+        (lambda client, *_: et._fire_once_allowed(client, "org", "rg", "sig"), "error_tracking.fire_once_redis_failed"),
+        (
+            lambda client, *_: et._missed_fire_cooldown_ok(client, "org", "trig"),
+            "error_tracking.missed_fire_cooldown_redis_failed",
+        ),
+    ],
+    ids=["fire_once_allowed", "missed_fire_cooldown_ok"],
+)
+async def test_redis_failure_fails_open_and_logs(
+    caplog: pytest.LogCaptureFixture, call: Callable[..., Awaitable[bool]], expected_log: str
+) -> None:
     client = _redis_mock("set")
     with caplog.at_level(logging.WARNING, logger="modulo.core.error_tracking"):
-        result = await et._fire_once_allowed(client, "org", "rg", signal)
+        result = await call(client)
     assert result is True
-    records = _failure_records(caplog, "error_tracking.fire_once_redis_failed")
-    assert len(records) == 1
-    assert records[0].exc_info is not None
-
-
-async def test_missed_fire_cooldown_ok_redis_failure(caplog) -> None:
-    trigger_id = "trig"
-    client = _redis_mock("set")
-    with caplog.at_level(logging.WARNING, logger="modulo.core.error_tracking"):
-        result = await et._missed_fire_cooldown_ok(client, "org", trigger_id)
-    assert result is True
-    records = _failure_records(caplog, "error_tracking.missed_fire_cooldown_redis_failed")
+    records = _failure_records(caplog, expected_log)
     assert len(records) == 1
     assert records[0].exc_info is not None
 

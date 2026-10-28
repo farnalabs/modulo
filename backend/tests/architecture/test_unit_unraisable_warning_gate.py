@@ -43,13 +43,14 @@ A gate that can be deleted silently is not a gate. These tests pin:
   tier1b-light, CI architecture and connector-contract steps, merge-queue unit
   run, schemathesis and Tier 1b nightly runs, both conformance-suite commands
   in the k8s-conformance workflow, and the runner-ci docker harness suite);
+- the runner-ci harness command runs EVERY module in ``tests/docker`` (a gated
+  test that no CI job runs is a test the gate cannot protect);
 - EVERY pytest invocation in ``.github/scripts/coverage-thresholds.sh`` still
-  carries the byte-identical escalation. The unit suite is run as shards, so
-  the script passes an enumerated file list rather than a literal
-  ``tests/unit/`` path - the guard therefore locates the invocation(s) by the
-  ``pytest`` command itself and checks the flag per invocation, so a future
-  split that drops the flag on one shard fails too - and the shard split is
-  lossless;
+  carries the byte-identical escalation. The unit suite is a single run over
+  ``tests/unit/``; the guard locates the invocation(s) by the ``pytest``
+  command itself and checks the flag per invocation, so a future split that
+  drops the flag on one shard fails too - and that single run covers the whole
+  suite from that root;
 - the ``backend-test`` job in ``.github/workflows/ci.yml`` still invokes that
   script.
 
@@ -117,6 +118,11 @@ _UNGATED_SAMPLES = {
 # A pytest COMMAND (not ``pytest-cov``, ``pytest.PytestUnraisableExceptionWarning``
 # or a prose mention): the word followed by whitespace.
 _PYTEST_COMMAND = re.compile(r"(?<![\w./-])pytest\s")
+
+# The ``tests/unit/`` root as a WHOLE path token: a later component (``api/``)
+# or a longer prefix must not satisfy it, because either would silently shrink
+# the suite the coverage report claims to describe.
+_UNIT_ROOT = re.compile(r"(?<![\w./-])tests/unit/(?=\s|$)")
 
 
 def _item_at(path: Path) -> SimpleNamespace:
@@ -294,6 +300,25 @@ def test_ci_command_for_a_gated_suite_carries_the_escalation(workflow: Path, nee
         assert "--disable-warnings" in command, f"{workflow.name} command lacks --disable-warnings: {command}"
 
 
+def test_runner_ci_command_runs_every_docker_test_module() -> None:
+    """The harness job runs EVERY docker module, not only the rig-backed one.
+
+    The `docker` tree is gated in-process, but a docker test that no CI job
+    runs is a test the gate cannot protect (the gap this closes: two of the
+    four modules were gated yet never executed in CI). Pinning the file list
+    against the tree itself means adding a module without wiring it into the
+    command fails here, and dropping one fails too.
+    """
+    commands = [command for command in _workflow_run_commands(RUNNER_CI_WORKFLOW) if "pytest tests/docker/" in command]
+    assert len(commands) == 1, f"expected exactly one docker pytest command, found {len(commands)}"
+    wired = set(re.findall(r"tests/docker/(\w+\.py)", commands[0]))
+    on_disk = {path.name for path in (TESTS / "docker").glob("test_*.py")}
+    assert wired == on_disk, (
+        "the runner-ci docker command does not run every tests/docker module: "
+        f"missing={sorted(on_disk - wired)} extra={sorted(wired - on_disk)}"
+    )
+
+
 def _without_shell_comments(command: str) -> str:
     """Drop ``#`` comment lines so a path mentioned in prose is not a command.
 
@@ -324,12 +349,6 @@ def test_every_workflow_command_naming_a_gated_suite_carries_the_escalation() ->
         assert "-p no:warnings" not in command, f"{workflow_name} command disables the warnings plugin: {command}"
 
 
-def _active_script_lines() -> list[str]:
-    """The coverage script's executable lines, comments excluded."""
-    script = COVERAGE_SCRIPT.read_text(encoding="utf-8")
-    return [line for line in script.splitlines() if not line.lstrip().startswith("#")]
-
-
 def _pytest_invocations(script: str) -> list[str]:
     """Every pytest command in ``script``, as one joined logical line each.
 
@@ -339,8 +358,8 @@ def _pytest_invocations(script: str) -> list[str]:
     excluded - the script's explanatory comments mention ``pytest``.
 
     The invocation is located by the ``pytest`` command itself, never by a
-    literal ``tests/unit/`` path: the unit suite is passed as an enumerated
-    file list, so that literal no longer appears.
+    literal ``tests/unit/`` path, so the guard keeps working if the unit suite
+    is ever split into shards or re-rooted again.
     """
     invocations = []
     for line in script.replace("\\\n", " ").splitlines():
@@ -354,48 +373,44 @@ def _pytest_invocations(script: str) -> list[str]:
 def test_ci_unit_command_carries_the_escalation() -> None:
     """Every CI unit pytest invocation carries the same escalation as the hook.
 
-    Since FAR-2081 the unit suite runs as sequential shards over an explicit
-    file list, so the pytest line no longer spells ``tests/unit`` itself. What
-    must still hold: the file list is enumerated from ``tests/unit`` (a
-    different root would silently shrink the suite), pytest is invoked over
-    that list, and EVERY such invocation carries the byte-identical escalation.
+    Since FAR-2112 the unit suite is a single run over ``tests/unit/`` (the
+    FAR-2081 shard split was reverted once ``backend-test`` moved to a 16 GB
+    runner). What must still hold: the invocation targets the ``tests/unit``
+    root - a different root would silently shrink the suite - and EVERY such
+    invocation carries the byte-identical escalation.
     """
-    active = _active_script_lines()
-    assert any("find tests/unit" in line for line in active), (
-        "the coverage script no longer enumerates unit test files under tests/unit"
-    )
-    shard_invocations = [line for line in active if "pytest" in line and "${files[@]}" in line]
-    assert shard_invocations, "no `pytest` invocation over the unit file list found in the coverage script"
     script = COVERAGE_SCRIPT.read_text(encoding="utf-8")
-    # The invocation is a backslash-continued command, so join the continuation
-    # lines before looking for the flag.
-    joined = script.replace("\\\n", " ")
-    assert _ESCALATION in joined
-    # ...but the whole-script check above only proves the flag appears SOMEWHERE.
-    # Check every invocation, so a future split that drops the flag from one
-    # shard fails here even though that check would still pass.
     invocations = _pytest_invocations(script)
     assert invocations, "no pytest invocation found in .github/scripts/coverage-thresholds.sh"
+    assert any(_UNIT_ROOT.search(line) for line in invocations), (
+        "the coverage script's unit pytest invocation no longer targets the tests/unit root"
+    )
+    # The invocation is a backslash-continued command, so _pytest_invocations
+    # joins the continuation lines before looking for the flag. Check every
+    # invocation, so a future split that drops the flag from one shard fails
+    # here even though a whole-script search would still pass.
     offenders = [line for line in invocations if _ESCALATION not in line]
     assert all(_ESCALATION in line for line in invocations), (
         f"every pytest invocation must carry {_ESCALATION!r}; missing on:\n" + "\n".join(offenders)
     )
 
 
-def test_ci_unit_shard_split_is_lossless() -> None:
-    """Both shards together run every collected unit test file.
+def test_ci_unit_run_covers_the_whole_suite() -> None:
+    """The single unit run covers the whole suite from the ``tests/unit`` root.
 
-    A split that drops files would also drop their coverage while the combined
-    report still claims to describe the whole suite.
+    A narrower root - or a dropped file set - would silently shrink the suite
+    and its coverage while the report still claims to describe the whole suite.
+    Pinning exactly one invocation rooted at ``tests/unit`` fails both on a
+    half-reverted script (shard machinery left behind, so two runs) and on one
+    that quietly narrows the root.
     """
-    active = "\n".join(_active_script_lines())
-    # pytest's default ``python_files`` patterns - pyproject.toml does not
-    # override them - so the enumeration must match BOTH or the split is lossy.
-    assert "test_*.py" in active, "the shard enumeration must match pytest's default python_files patterns"
-    assert "*_test.py" in active, "the shard enumeration must match pytest's default python_files patterns"
-    assert "SHARD1_FILES=(" in active, "the coverage script no longer builds two shard file lists"
-    assert "SHARD2_FILES=(" in active, "the coverage script no longer builds two shard file lists"
-    assert active.count("run_shard ") >= 2, "the coverage script no longer runs two shards"
+    invocations = _pytest_invocations(COVERAGE_SCRIPT.read_text(encoding="utf-8"))
+    assert len(invocations) == 1, (
+        f"expected exactly one unit pytest invocation, found {len(invocations)}:\n" + "\n".join(invocations)
+    )
+    assert _UNIT_ROOT.search(invocations[0]), (
+        f"the unit pytest invocation no longer covers the whole tests/unit suite: {invocations[0]}"
+    )
 
 
 def test_ci_backend_test_job_runs_the_unit_coverage_script() -> None:

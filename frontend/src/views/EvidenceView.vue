@@ -1,5 +1,5 @@
 <template>
-  <div class="page-narrow space-y-6">
+  <div class="page-wide space-y-6">
     <PageHeader
       :title="$t('views.EvidenceView.title')"
       :subtitle="$t('views.EvidenceView.subtitle')"

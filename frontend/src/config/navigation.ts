@@ -31,10 +31,10 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'governance-stack': { icon: 'LayoutTemplate', labelKey: 'components.SidebarNav.item_governance_stack' },
   analytics: { icon: 'BarChart', labelKey: 'components.SidebarNav.item_analytics' },
   evidence: { icon: 'FileText', labelKey: 'components.SidebarNav.item_evidence' },
+  'risk-assessment': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_risk_assessment' },
   'admin-compliance-evidence-index': { icon: 'FileText', labelKey: 'components.SidebarNav.item_compliance_evidence_index' },
   notifications: { icon: 'Bell', labelKey: 'components.SidebarNav.item_notifications' },
   library: { icon: 'BookOpen', labelKey: 'components.SidebarNav.item_library' },
-  'lifecycle-maps': { icon: 'Map', labelKey: 'components.SidebarNav.item_lifecycle_maps' },
   'pipeline-list': { icon: 'GitFork', labelKey: 'components.SidebarNav.item_my_pipelines' },
 
   'pipeline-copy': { icon: 'Copy', labelKey: 'components.SidebarNav.item_copy_pipeline' },
@@ -143,6 +143,14 @@ function isManifest(obj: unknown): obj is Manifest {
   )
 }
 
+function resolveSystemAdminOnly(
+  route: ManifestRoute,
+  group: ManifestSidebarGroup,
+): true | undefined {
+  if (route.system_admin_only || group.system_admin_only) return true
+  return undefined
+}
+
 function buildSidebarGroups(): NavGroup[] {
   if (!isManifest(manifest)) {
     console.error('[navigation] manifest is invalid — missing routes or sidebar_groups')
@@ -163,21 +171,27 @@ function buildSidebarGroups(): NavGroup[] {
       continue
     }
 
-    const groupItems = itemsByGroup[route.sidebar_group] ??= []
+    let groupItems = itemsByGroup[route.sidebar_group]
+    if (groupItems === undefined) {
+      groupItems = []
+      itemsByGroup[route.sidebar_group] = groupItems
+    }
     groupItems.push({
       to: path,
-      icon: routeConfigMap[route.name]?.icon || 'File',
-      label: route.breadcrumb || route.name,
-      labelKey: routeConfigMap[route.name]?.labelKey || `nav.${route.name}`,
-      exact: route.exact || undefined,
-      visibility: (route.visibility as 'public_preview' | 'private_preview' | 'in_dev') || undefined,
-      requiredRoles: route.required_roles || null,
-      requiredTier: route.required_tier || null,
-      requiredPermissions: route.required_permissions || null,
-      requiredFeatureFlag: route.feature_flag || null,
+      icon: routeConfigMap[route.name]?.icon ?? 'File',
+      label: route.breadcrumb ?? route.name,
+      labelKey: routeConfigMap[route.name]?.labelKey ?? `nav.${route.name}`,
+      exact: route.exact ?? undefined,
+      visibility: (route.visibility as 'public_preview' | 'private_preview' | 'in_dev') ?? undefined,
+      requiredRoles: route.required_roles ?? null,
+      requiredTier: route.required_tier ?? null,
+      requiredPermissions: route.required_permissions ?? null,
+      requiredFeatureFlag: route.feature_flag ?? null,
       // FAR-1796: the route entry ORs with its group's flag, mirroring the
-      // router's hydrateManifestMeta derivation.
-      systemAdminOnly: route.system_admin_only || group.system_admin_only || undefined,
+      // router's hydrateManifestMeta derivation. A true on either signal gates
+      // the item; a false route flag must not shadow a true group flag.
+      systemAdminOnly: resolveSystemAdminOnly(route, group),
+
     })
   }
 
@@ -194,10 +208,10 @@ function buildSidebarGroups(): NavGroup[] {
     .map(([id, sg]) => ({
       id,
       label: sg.label,
-      labelKey: sg.labelKey || groupLabelKeyMap[id] || `components.SidebarNav.group_${id}`,
-      items: itemsByGroup[id] || [],
+      labelKey: sg.labelKey ?? groupLabelKeyMap[id] ?? `components.SidebarNav.group_${id}`,
+      items: itemsByGroup[id] ?? [],
       defaultCollapsed: !sg.default_expanded,
-      systemAdminOnly: sg.system_admin_only || undefined,
+      systemAdminOnly: sg.system_admin_only ?? undefined,
     }))
     .filter((g) => g.items.length > 0)
 }
@@ -280,8 +294,6 @@ export function getVisibleNavGroups(ctx: NavVisibilityContext): NavGroup[] {
 let _cachedGroups: NavGroup[] | null = null
 
 export function getNavGroups(): NavGroup[] {
-  if (_cachedGroups === null) {
-    _cachedGroups = buildSidebarGroups()
-  }
+  _cachedGroups ??= buildSidebarGroups()
   return _cachedGroups.map((g) => ({ ...g, items: [...g.items] }))
 }

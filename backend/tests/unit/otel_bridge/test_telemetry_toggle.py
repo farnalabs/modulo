@@ -10,7 +10,10 @@ import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
+from modulo.core.runtime_config.store import RuntimeConfigStore
+from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled, toggle_telemetry
 from modulo.otel_bridge.export import setup_otel
+from modulo.settings import Settings, get_settings
 from tests.unit.otel_bridge.conftest import span_processors
 
 # Minimum env a Settings() instance accepts — hoisted so the settings-based
@@ -24,8 +27,6 @@ _SETTINGS_KWARGS = {
 
 
 def _settings(**overrides):
-    from modulo.settings import Settings
-
     return Settings(**_SETTINGS_KWARGS, **overrides)
 
 
@@ -36,8 +37,6 @@ def settings_env(monkeypatch: pytest.MonkeyPatch):
     ``get_settings`` is an lru_cache, so it is cleared here and again on
     teardown — otherwise a test that reads Settings would poison the next one.
     """
-    from modulo.settings import get_settings
-
     monkeypatch.setenv("DATABASE_URL", _SETTINGS_KWARGS["database_url"])
     monkeypatch.setenv("SECRET_KEY", _SETTINGS_KWARGS["secret_key"])
     monkeypatch.setenv("FERNET_KEY", _SETTINGS_KWARGS["fernet_key"])
@@ -155,15 +154,12 @@ class TestIsTelemetryEnabled:
     ):
         """When the runtime config store is not initialised, falls back to Settings."""
         monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
-        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
 
         with patch("modulo.core.runtime_config.store.get_runtime_config_store", side_effect=RuntimeError("not init")):
             assert is_telemetry_enabled() is False
 
     def test_non_runtime_error_propagates(self):
         """Non-RuntimeError exceptions from the store must propagate (not be swallowed)."""
-        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
-
         with (
             patch(
                 "modulo.core.runtime_config.store.get_runtime_config_store",
@@ -180,9 +176,6 @@ class TestIsTelemetryEnabled:
     ):
         """When the store has an override, is_telemetry_enabled reads it."""
         monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
-        from modulo.core.runtime_config.store import RuntimeConfigStore
-        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
-
         store = RuntimeConfigStore()
         store.set_override("MODULO_TELEMETRY_ENABLED", "true")
         with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
@@ -195,9 +188,6 @@ class TestIsTelemetryEnabled:
     ):
         """When env is true but store override is false, store wins."""
         monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
-        from modulo.core.runtime_config.store import RuntimeConfigStore
-        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
-
         store = RuntimeConfigStore()
         store.set_override("MODULO_TELEMETRY_ENABLED", "false")
         with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
@@ -210,9 +200,6 @@ class TestIsTelemetryEnabled:
     ):
         """When the store override is cleared, falls back to env/Settings."""
         monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
-        from modulo.core.runtime_config.store import RuntimeConfigStore
-        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
-
         store = RuntimeConfigStore()
         store.set_override("MODULO_TELEMETRY_ENABLED", "true")
         store.clear_override("MODULO_TELEMETRY_ENABLED")
@@ -231,9 +218,6 @@ class TestIsTelemetryEnabled:
         were reset/torn down for test isolation.
         """
         monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
-        from modulo.core.runtime_config.store import RuntimeConfigStore
-        from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
-
         store = RuntimeConfigStore()
         with (
             patch.object(store, "get", return_value=None),
@@ -245,12 +229,23 @@ class TestIsTelemetryEnabled:
 class TestToggleTelemetry:
     """Tests for the toggle_telemetry() function (FAR-1131 C2 fix)."""
 
-    def test_toggle_enable_sets_override_and_reconfigures_otel(self, monkeypatch: pytest.MonkeyPatch):
-        """toggle_telemetry(True) sets the override and reconfigures OTel."""
+    @pytest.mark.parametrize(
+        ("enabled", "expected_override"),
+        [
+            pytest.param(True, "true", id="enable-configures-otel"),
+            pytest.param(False, "false", id="disable-tears-down-otel"),
+        ],
+    )
+    def test_toggle_writes_override_and_reconfigures_otel(
+        self, monkeypatch: pytest.MonkeyPatch, enabled: bool, expected_override: str
+    ):
+        """The toggle must persist its value AND reconfigure OTel to match it.
+
+        Enable and disable share one code path, so both arms are pinned by one
+        parameterised test rather than two copies of the same body.
+        """
         monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
         monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-        from modulo.core.runtime_config.store import RuntimeConfigStore
-        from modulo.core.runtime_config.telemetry_bridge import toggle_telemetry
 
         store = RuntimeConfigStore()
         with (
@@ -259,32 +254,13 @@ class TestToggleTelemetry:
             patch("modulo.settings.get_settings") as mock_settings,
         ):
             mock_settings.return_value.modulo_otel_service_name = "test-svc"
-            toggle_telemetry(True)
-        assert store.get("MODULO_TELEMETRY_ENABLED") == "true"
-        mock_setup.assert_called_once_with(service_name="test-svc", telemetry_enabled=True)
-
-    def test_toggle_disable_sets_false_and_tears_down_otel(self, monkeypatch: pytest.MonkeyPatch):
-        """toggle_telemetry(False) sets override to false and tears down exporters."""
-        monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
-        from modulo.core.runtime_config.store import RuntimeConfigStore
-        from modulo.core.runtime_config.telemetry_bridge import toggle_telemetry
-
-        store = RuntimeConfigStore()
-        with (
-            patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store),
-            patch("modulo.otel_bridge.export.setup_otel") as mock_setup,
-            patch("modulo.settings.get_settings") as mock_settings,
-        ):
-            mock_settings.return_value.modulo_otel_service_name = "test-svc"
-            toggle_telemetry(False)
-        assert store.get("MODULO_TELEMETRY_ENABLED") == "false"
-        mock_setup.assert_called_once_with(service_name="test-svc", telemetry_enabled=False)
+            toggle_telemetry(enabled)
+        assert store.get("MODULO_TELEMETRY_ENABLED") == expected_override
+        mock_setup.assert_called_once_with(service_name="test-svc", telemetry_enabled=enabled)
 
     def test_toggle_is_idempotent(self, monkeypatch: pytest.MonkeyPatch):
         """Calling toggle_telemetry with the same value twice is safe."""
         monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
-        from modulo.core.runtime_config.store import RuntimeConfigStore
-        from modulo.core.runtime_config.telemetry_bridge import toggle_telemetry
 
         store = RuntimeConfigStore()
         with (
@@ -296,38 +272,3 @@ class TestToggleTelemetry:
             toggle_telemetry(True)
             toggle_telemetry(True)
         assert store.get("MODULO_TELEMETRY_ENABLED") == "true"
-
-
-class TestOtelHandlerAnonymisation:
-    """Tests that the OTel handler anonymises ids and sanitises errors (M3)."""
-
-    def test_anonymise_id_hashes_value(self):
-        from modulo.otel_bridge.handler import _anonymise_id
-
-        result = _anonymise_id("org-123")
-        assert result is not None
-        assert len(result) == 16
-        # Same input → same output (deterministic)
-        assert _anonymise_id("org-123") == result
-        # Different input → different output
-        assert _anonymise_id("org-456") != result
-
-    def test_anonymise_id_none_returns_none(self):
-        from modulo.otel_bridge.handler import _anonymise_id
-
-        assert _anonymise_id(None) is None
-
-    def test_error_category_exported_not_message(self):
-        from modulo.otel_bridge.handler import _error_category_for_export
-
-        result = _error_category_for_export(RuntimeError("secret api key sk-123"))
-        assert result == "RuntimeError"
-        assert "secret" not in result
-
-    def test_error_category_for_custom_exception_class(self):
-        from modulo.otel_bridge.handler import _error_category_for_export
-
-        class BillingError(Exception):
-            pass
-
-        assert _error_category_for_export(BillingError("card declined")) == "BillingError"

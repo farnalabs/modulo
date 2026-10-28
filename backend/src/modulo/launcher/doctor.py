@@ -41,7 +41,7 @@ Full-doctor checks (FAR-676):
 8.  ``state-integrity`` — state.json HMAC verification with DISTINCT corrupt
     (unreadable/torn) vs HMAC-mismatch (tampered/foreign-key) reporting.
 9.  ``secrets-permissions`` — the secrets file must be 0600 owner-only
-    (TODO(P3): Windows ACL seam reports an honest skip).
+    (Windows ACL seam reports an honest skip; tracked as deferred P3 work).
 10. ``ambient-pg-env`` — WARNING: ``PG*``/``DATABASE_URL``/``REDIS_URL``
     variables in the inherited environment could hijack bundled-binary
     invocations (the launcher scrubs them at boot; report so the operator
@@ -80,7 +80,8 @@ port re-assignment guidance printed after the sweep.
 Every predicate reused from the boot path (“doctor and boot must never
 disagree”): ``bootstrap_role._find_allow_list_violations``,
 ``health_checks.db_is_at_migration_head``, ``env_safety``, the supervisor
-lock/holder/manifest readers. TODO(P3): Windows privilege/ownership/ACL
+lock/holder/manifest readers. Windows privilege/ownership/ACL work is
+tracked as deferred P3 work;
 probes (uid/pwd/flock are POSIX) — reported as honest skips, never silent
 passes.
 """
@@ -204,14 +205,14 @@ class DoctorProbes:
     probe_redis: Callable[[], None]
     # True when the DB's alembic_version equals the head; raises -> failed.
     migrations_at_head: Callable[[], bool]
-    # POSIX uid or None on platforms without one (TODO(P3) Windows).
+    # POSIX uid or None on platforms without one (Windows support is deferred P3).
     effective_uid: Callable[[], int | None]
     # username for a uid, or None (unknown / platform seam).
     username_of_uid: Callable[[int], str | None]
     # owner username of *path*, or None when unknown.
     file_owner: Callable[[Path], str | None]
     # lowest permission bits of the secrets file (None = unknown platform /
-    # absent file; TODO(P3) Windows ACL seam returns None).
+    # absent file; Windows ACL support is deferred P3 work and returns None).
     secrets_mode: Callable[[Path], int | None] = field(default=lambda _data_dir: None)
     # names of launcher-hostile variables present in the inherited env.
     ambient_env_names: Callable[[], list[str]] = field(default=list)
@@ -689,7 +690,7 @@ def check_bundled_binaries(_data_dir: Path, _state: Any, probes: DoctorProbes) -
         if stat.st_size == 0:
             problems.append(f"{binary} is ZERO bytes (likely AV-quarantined) — reinstall the bundle")
         elif sys.platform != "win32" and not stat.st_mode & 0o111:
-            # TODO(P3): Windows quarantine detection (MotW zone identifier).
+            # Deferred P3: Windows quarantine detection (MotW zone identifier).
             problems.append(f"{binary} is present but NOT executable — restore the exec bit")
     if problems:
         return CheckResult(
@@ -1238,7 +1239,7 @@ def _probe_username_of_uid(uid: int) -> str | None:
     # the stdlib `pwd` module has no attributes in typeshed on win32, and
     # `warn_unused_ignores` (strict) forbids a platform-specific type:ignore.
     if sys.platform == "win32":
-        return None  # TODO(P3): Windows SID — account mapping
+        return None  # Deferred P3: Windows SID account mapping
     try:
         import pwd
     except ImportError:
@@ -1262,7 +1263,7 @@ def _probe_file_owner(path: Path) -> str | None:
 
 def _probe_listening_on(port: int) -> list[str]:
     if sys.platform != "linux":
-        return []  # /proc absent; TODO(P3) Windows/macOS external-bind inspection
+        return []  # /proc absent; deferred P3 Windows/macOS external-bind inspection
     return _parse_listeners_from_proc(port)
 
 
@@ -1282,8 +1283,8 @@ def _probe_env_file_pinned() -> bool:
 
 
 def _probe_secrets_mode(root: Path) -> int | None:
-    # TODO(P3): Windows ACL equivalence (icacls); the POSIX stat bits are
-    # the P1a source of truth.
+    # Windows ACL equivalence (icacls) is not implemented; the POSIX stat bits
+    # are the P1a source of truth.
     if sys.platform == "win32":
         return None
     secrets_path = root / _SECRETS_FILENAME

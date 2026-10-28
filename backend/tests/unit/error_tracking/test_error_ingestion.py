@@ -331,6 +331,22 @@ class TestSessionKeyStore:
         sig = hmac.new(b"anykey", body, hashlib.sha256).hexdigest()
         assert await store.verify_hmac(str(uuid.uuid4()), body, sig) is False
 
+    async def test_non_ascii_signature_fails_without_raising(self) -> None:
+        """A client-supplied non-ASCII signature must fail closed, never raise.
+
+        ``hmac.compare_digest`` raises TypeError on str operands containing
+        non-ASCII characters, so a high byte in the signature would otherwise
+        escape as an uncaught 500 instead of a rejection.
+        """
+        store = SessionKeyStore(redis_client=None)
+        account_id = str(uuid.uuid4())
+        key = await store.generate_key(account_id)
+        body = b'{"test":"data"}'
+        valid_sig = hmac.new(key.encode(), body, hashlib.sha256).hexdigest()
+
+        assert await store.verify_hmac(account_id, body, "é") is False
+        assert await store.verify_hmac(account_id, body, valid_sig + "é") is False
+
     async def test_multiple_accounts_independent(self) -> None:
         store = SessionKeyStore(redis_client=None)
         a1, a2 = str(uuid.uuid4()), str(uuid.uuid4())

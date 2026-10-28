@@ -7,8 +7,7 @@
  * module import / no component mount) and compares the feature-name sets.
  *
  * Known acceptable exceptions — backend-only features with no UI surface:
- *   - scim            : SCIM provisioning is API-only (no UI)
- *   - external_secrets: configured via connector/API, no dedicated UI page yet
+ *   - scim: SCIM provisioning is API-only (no UI)
  */
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -21,10 +20,13 @@ const BACKEND_FEATURE_FLAGS = join(REPO_ROOT, 'backend', 'src', 'modulo', 'core'
 
 /**
  * Known acceptable exceptions — backend-only features with no UI surface:
- *   - scim              : SCIM provisioning is API-only (no UI)
- *   - external_secrets  : configured via connector/API, no dedicated UI page yet
+ *   - scim: SCIM provisioning is API-only (no UI)
+ *
+ * ``external_secrets`` is NOT an exception: the flag was retired, so external
+ * secret backends are available on every tier and no gate (backend or
+ * frontend) references it any more.
  */
-const BACKEND_ONLY_EXCEPTIONS = new Set(['scim', 'external_secrets'])
+const BACKEND_ONLY_EXCEPTIONS = new Set(['scim'])
 
 /**
  * Known acceptable exceptions — frontend-gated team features with no backend

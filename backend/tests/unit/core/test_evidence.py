@@ -24,6 +24,7 @@ import pytest
 
 from modulo.core.eval_engine.evidence_layer import EvidenceFact, map_run_evidence_to_evidence
 from modulo.db.models.evidence import PRODUCER_TYPES, Evidence
+from tests.unit._source_scan import iter_source_text
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 _SRC_ROOT = _BACKEND_ROOT / "src" / "modulo"
@@ -72,8 +73,7 @@ def test_e1_no_production_call_site_builds_update_or_delete_against_evidence() -
     assert delete_pattern.search(sanctioned.read_text(encoding="utf-8"))
 
     offenders: list[str] = []
-    for py_file in _SRC_ROOT.rglob("*.py"):
-        source = py_file.read_text(encoding="utf-8")
+    for py_file, source in iter_source_text(_SRC_ROOT):
         # UPDATE is never sanctioned; DELETE only in the sanctioned module.
         forbidden_update = update_pattern.search(source) is not None
         forbidden_delete = py_file.resolve() != sanctioned and delete_pattern.search(source) is not None

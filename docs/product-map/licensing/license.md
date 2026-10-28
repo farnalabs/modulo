@@ -7,10 +7,10 @@ code:
   - backend/src/modulo/core/license_signing.py
   - backend/src/modulo/core/feature_flags.py
   - backend/src/modulo/core/stripe_fulfilment.py
-  - backend/src/modulo/core/product_analytics/license_enforcement.py
   - backend/src/modulo/api/routes/admin_license.py
   - backend/src/modulo/api/routes/admin_tiers.py
   - backend/src/modulo/api/routes/admin_feature_flags.py
+  - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/api/routes/admin_orgs.py
   - backend/src/modulo/api/routes/stripe_webhook.py
   - backend/src/modulo/api/routes/viewmodel.py
@@ -55,16 +55,22 @@ Licensing manages Ed25519-signed license keys and the Community / Team tier gate
 the feature set for its tier, gates Team-scoped surfaces (SSO, team RBAC, audit viewer,
 admin spend limits) with a 402 when absent or expired, and backs the admin license-status,
 tier-catalogue and feature-flag inspection endpoints. (The public, unauthenticated
-`/api/v1/license` surface resolves the deployment-level licence ladder - the in-memory
-licence, then a verified env-var key - and reports community / `is_valid: false` when
-neither is valid; see Behaviours.)
+`/api/v1/license` surface resolves the deployment-level licence ladder - the persisted
+system licence, then a verified env-var key - and reports community / `is_valid: false`
+when neither is valid; see Behaviours.)
+
+Both licence scopes are durable. An organisation key lives in
+`org.settings_json["license_key"]`; the instance-wide key is persisted in the RLS-free
+instance `system_config` row `system_license_key`, restored at startup, and refreshed
+into the API and the SAQ worker on a short TTL, so an install survives a restart or
+redeploy and both processes resolve the same tier.
 
 ## Trust anchor
 
 Licence keys are Ed25519-signed, and verification uses exactly ONE anchor: the
 built-in public key in `core/license.py` unless `MODULO_LICENSE_PUBLIC_KEY`
 overrides it. The built-in key is the real public half of the DEVELOPMENT
-keypair — it is **not** the anchor production licences are signed with, so a
+keypair – it is **not** the anchor production licences are signed with, so a
 Farnalabs-issued production licence CANNOT verify against it.
 
 | Deployment | Anchor | What happens |
@@ -80,6 +86,14 @@ private half of the same keypair as the configured anchor; a mismatch makes
 issuance fail closed with an anchor-mismatch error rather than emailing a key
 the deployment would reject.
 
+The anchor is operator-chosen, so a deployment can trust a keypair its operator
+generated rather than one Farnalabs issued. That is what makes the Team tier
+recoverable without Farnalabs: generate a keypair, configure its public half as
+`MODULO_LICENSE_PUBLIC_KEY`, and sign licences with the private half. The
+procedure and the continuity position (what a successor keeps, and the
+trust-anchor caveat) are documented in
+[Continuity and Escrow](../../continuity-and-escrow.md).
+
 ## Behaviours
 
 - [x] The licence trust anchor is explicit and fails closed (FAR-2091). The
@@ -87,9 +101,9 @@ the deployment would reject.
       the production one. Outside debug, an API configured with
       `MODULO_LICENSE_KEY` but no `MODULO_LICENSE_PUBLIC_KEY` refuses to boot
       with an actionable error, and a licence upload that cannot verify
-      returns HTTP 422 with a structured body — `detail` prose plus a
+      returns HTTP 422 with a structured body – `detail` prose plus a
       machine-readable `reason` (`anchor_mismatch` / `signature_mismatch` /
-      `dev_anchor_not_trusted` / `malformed` / `expired`) — instead of only
+      `dev_anchor_not_trusted` / `malformed` / `expired`) – instead of only
       logging the failure. The signature is verified BEFORE the
       development-anchor refusal, so a production key presented to an
       anchor-less deployment is classified `anchor_mismatch` (not a generic
@@ -109,10 +123,11 @@ the deployment would reject.
       `has_license: false`; after storage it reports tier / features / org / expires_at
       with `has_license: true` (`license_management.feature`)
 - [x] Non-admins are denied license management (403) (`license_management.feature`)
-- [x] Team gating: without a Team license, SSO providers, `/api/v1/teams`, audit export
-      and admin spend limits all return 402 naming the gated feature; they pass (200) with
-      a valid license; expiry degrades those surfaces back to community; community
-      features stay accessible without a license (`team_gates.feature`)
+- [x] Team gating: without a Team license, SSO providers, `/api/v1/teams`, the audit read
+      surfaces (browse, verify, export, scan and evidence-pack) and admin spend limits all
+      return 402 naming the gated feature; they pass (200) with a valid license; expiry
+      degrades those surfaces back to community; community features stay accessible without
+      a license (`team_gates.feature`)
 - [x] Feature-flag inspection returns the `license` object plus the active `flags` array,
       supports per-flag detail and override toggles, and 404s unknown flags
       (`test_admin_feature_flags.py` + `feature_flag_inspection.feature`)
@@ -134,7 +149,8 @@ the deployment would reject.
 - [x] The public, unauthenticated `/api/v1/license` surface resolves the REAL
       deployment-level licence through the canonical ladder (rungs 2-3 of
       `feature_flags._resolve_paid_plan`; the endpoint is org-less so the
-      org-level rung does not apply): an in-memory licence (`store_license`)
+      org-level rung does not apply): a system licence (installed through
+      `store_license`, persisted in `system_config` and restored at startup)
       reports its own tier/features with `is_valid: true`; otherwise a
       present env-var key is only trusted after `parse_and_verify`
       (Ed25519 signature + expiry) and an unverifiable key falls through;
@@ -197,8 +213,9 @@ the deployment would reject.
       (`test_viewmodel_resolve_tier.py`, `test_admin_feature_flags.py`
       `TestBuildRegistryEnvKeyVerification` / `TestLicenseIsValid`,
       `test_mcp_governance_read_tools.py`; FAR-1733). The two env-SAML
-      surfaces were licence-reading when FAR-1733 shipped; FAR-2059 removed
-      the licence condition from them (below).
+      surfaces were licence-reading when FAR-1733 shipped; FAR-2059 removed the
+      licence condition from them (below). Org-level keys are also counted only
+      after the same canonical signature and expiry verification.
 - [x] Licence state never gates authentication (FAR-2059/FAR-2060). A
       self-hosted key is an offline signed key delivered by email, so
       capability survives a FIXED 14-day grace past `expires_at`
@@ -218,12 +235,35 @@ the deployment would reject.
       `test_sso_licence_degradation.py`,
       `test_sso.py::TestSamlEnvLicenceIndependence`; FAR-2059/FAR-2060)
 
+- [x] Both licence scopes are durable and the precedence order is explicit
+      (FAR-2153). The organisation key is stored in
+      `org.settings_json["license_key"]`; the instance-wide key is persisted in
+      the RLS-free instance `system_config` row `system_license_key` (both
+      slots - active and a future-dated successor - are kept, so installing a
+      successor does not drop the licence the instance runs on today). The
+      persisted system licence is restored at startup and re-read
+      TTL-throttled (`SYSTEM_LICENSE_REFRESH_TTL_SECONDS`, 15s), so an install
+      made in one process is visible to the API and to the SAQ worker without a
+      restart, and a rolling deploy no longer discards it. Resolution is
+      first-valid-rung-wins: org key → persisted system install →
+      `MODULO_LICENSE_KEY` → Community, so an explicit operator install
+      overrides the deployment's env key and `MODULO_LICENSE_KEY` remains a
+      deployment-wide floor/alternative, not a requirement. `DELETE
+      /api/v1/admin/license` deletes the persisted row FIRST (a failed write
+      fails the request rather than returning a removal a restart would undo),
+      then clears the in-memory slot and busts every cached `license:{org_id}`
+      entry, so resolution falls back to the env key and then Community
+      (`backend/src/modulo/core/license.py`,
+      `backend/src/modulo/core/feature_flags.py`,
+      `backend/src/modulo/api/routes/admin_license.py`, FAR-2153)
+
 ## Known Gaps
 
 - **License-driven gating is not applied to EVERY registered `feat-*` surface**
   - `require_feature` / `get_plan_context` gate the licensed Team-tier surfaces
-  (SSO providers, `/api/v1/teams`, audit export, admin spend limits), not the
-  whole feature registry (tracked as the manifest `feat-license` unchecked
+  (SSO providers, `/api/v1/teams`, the audit read surfaces - browse, verify,
+  export, scan, evidence pack - and admin spend limits), not the whole feature
+  registry (tracked as the manifest `feat-license` unchecked
   deferral). The previously-tracked "`stripe_webhook.py` and `admin_tiers.py`
   are cited as adjacents but not behaviour-covered" gap was closed by the
   2026-09-23 product-map walk - the tier catalogue now has executing BDD
@@ -233,10 +273,14 @@ the deployment would reject.
 
 ## QA History
 
+- 2026-10-26: **FAR-2158** - synced this entry to the FAR-2153 persistence change. Both licence scopes are now durable (org key in `org.settings_json`, instance-wide key in the `system_config` row `system_license_key`), restored at startup and refreshed into the API and the SAQ worker within `SYSTEM_LICENSE_REFRESH_TTL_SECONDS` (15s). Corrected the stale statements that described the system licence as in-memory only, recorded the precedence order (org → persisted system install → `MODULO_LICENSE_KEY` → Community) and the durable `DELETE /api/v1/admin/license` behaviour. Status stays `partial` (the universal-gating deferral is unchanged).
+
+- 2026-10-25: **Improve Architecture product-map walk** - fixed the admin feature-flag registry's org-level licence rung to verify the signed key (including expiry) before setting `has_license_key`, matching the canonical licence ladder. Added regression coverage for valid, malformed and expired org keys; malformed and expired keys now report `has_license_key: false` instead of being trusted on presence. Status stays `partial` (the manifest's universal-gating deferral is unchanged).
+
 - 2026-10-23: **FAR-2091** - made the licence trust anchor honest and surfaced
   verification failure at install. The built-in public key in `core/license.py`
-  had the comment "This is the dev/test key — replace for production
-  deployments", which was ACCURATE: the vault holds two keypairs, and the
+  carried a comment marking it as the dev/test key to replace for production
+  deployments, which was ACCURATE: the vault holds two keypairs, and the
   built-in key's derived public half matches `license-signing-private-key-dev`,
   while production licences are signed by the separate
   `license-signing-private-key` whose public half is published as

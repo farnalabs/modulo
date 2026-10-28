@@ -11,20 +11,35 @@ Modulo is a self-hosted Agentic Delivery Governance platform for building govern
 | **Docker Desktop** | 24+ | PostgreSQL 16 + Redis 8 (local dev) |
 | **Python** | 3.12+ | Backend runtime |
 | **`uv`** | 0.11.13 | Python package manager ([install](https://docs.astral.sh/uv/getting-started/installation/)); this is the exact version the Docker images pin |
-| **Node.js** | 20+ | Frontend development (optional). CI pins Node 22; install `pnpm` (the repo pins `pnpm@11.28.6`) rather than npm |
+| **Node.js** | 20+ | Frontend development (optional). CI pins Node 22; install `pnpm` (the repo pins `pnpm@11.28.8`) rather than npm |
 
 ## 1. Start infrastructure
 
 ```bash
-# From the repository root. The backend .env below logs in with password
-# `modulo`, so start Postgres with the same password (the compose default
-# is `changeme`).
+# From the repository root.
+
+# Generate the Fernet key ONCE. Every process that reads or writes a stored
+# credential must hold the SAME key, so the value you export here is reused in
+# backend/.env in step 2. A Fernet key is url-safe base64 of exactly 32 bytes –
+# a fixed placeholder cannot work, so the compose file refuses to start without
+# one rather than half-starting a stack that cannot store credentials.
+# (Windows PowerShell: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+export FERNET_KEY=$(openssl rand -base64 32)
+
+# The backend .env below logs in with password `modulo`, so start Postgres with
+# the same password (the compose default is `changeme`).
 POSTGRES_PASSWORD=modulo docker compose -f docker-compose.local.yml up -d
 ```
 
 This starts:
 - **PostgreSQL 16** on port `5434`
 - **Redis 8** on port `6380`
+- **`saq-runner` + `saq-system`**, the two SAQ workers (they need the schema
+  step 2 creates; until then they retry and log connection errors)
+
+If `FERNET_KEY` is unset, `docker compose up` fails immediately with
+`required variable FERNET_KEY is missing a value` and the generation command –
+that is the intended behaviour, not a bug.
 
 ## 2. Set up the backend
 
@@ -32,13 +47,19 @@ This starts:
 cd backend
 uv sync
 
-# Create .env (these values work with the local Docker containers)
-cat > .env <<'EOF'
+# Create .env (these values work with the local Docker containers).
+# FERNET_KEY is the value exported in step 1 – a different key here cannot
+# decrypt the credentials the workers stored.
+cat > .env <<EOF
 DATABASE_URL=postgresql+asyncpg://modulo:modulo@localhost:5434/modulo
+# Cross-org system crons (dispatcher_reconcile gates /healthz/ready) connect as
+# the dedicated modulo_system role; the API boot creates that role with this
+# password. Without it the system worker refuses those crons and readiness
+# never reaches "ok".
+MODULO_SYSTEM_DATABASE_URL=postgresql+asyncpg://modulo_system:modulo@localhost:5434/modulo
 MODULO_DB=postgres
 SECRET_KEY=local-dev-secret-key-not-for-production
-FERNET_KEY=<generate-your-own-fernet-key>
-# Generate your own key, e.g.: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+FERNET_KEY=$FERNET_KEY
 REDIS_URL=redis://localhost:6380/0
 MODULO_PUBLIC_URL=http://localhost:8000
 MODULO_USERS=admin:admin
@@ -76,7 +97,63 @@ SAQ_AUTH_USERNAME=admin SAQ_AUTH_PASSWORD=admin uv run python -m modulo.core.saq
 Notes:
 - `python -m saq` takes the **settings module** as its only positional arg; there is no `worker` subcommand in SAQ 0.26.4.
 - A local Redis is required (`REDIS_URL`, e.g. `redis://localhost:6380/0` from the compose `redis-local` service).
+- `MODULO_SYSTEM_DATABASE_URL` (set in the step-2 `.env`) is what lets the system worker run its cross-org crons. Without it, `dispatcher_reconcile` never runs and `/healthz/ready` stays `503`.
 - The compose stack (`docker-compose.local.yml`) ships `saq-runner` + `saq-system` services that launch both workers; `saq-system` is **required** for local cron/triggers to fire.
+
+### Check readiness
+
+`/healthz/ready` reports `"status": "ok"` only once the system worker above has
+run `dispatcher_reconcile` at least once. Give it a few seconds after starting
+the workers, then:
+
+```bash
+curl -s http://localhost:8000/healthz/ready | python -m json.tool
+# look for: "status": "ok"
+```
+
+A permanent `503` with `dispatcher_reconcile has never run` means the system
+worker is not running (or is failing) - any health-gated orchestrator will
+refuse to route traffic to an API that otherwise works.
+
+## 3c. Smoke-check the stack
+
+A Modulo stack can answer `GET /healthz` and accept a login while still being
+unable to do the two things that matter: storing a credential and checkpointing
+a run. Both failures come from a `FERNET_KEY` that is not a real Fernet key, and
+neither is visible in `docker compose ps`. Run the smoke check once – it creates
+and deletes a throwaway model backend (a real encryption round-trip) and asserts
+the checkpointer tables exist:
+
+```bash
+# From the repository root (not backend/)
+./scripts/smoke-compose.sh --compose-file docker-compose.local.yml --db-service db-local
+```
+
+Expected output:
+
+```text
+Modulo compose smoke check -> http://localhost:8000
+  PASS login as admin (HTTP 200)
+  PASS readiness checkpointer ok
+  PASS checkpoint tables present (checkpoints, checkpoint_migrations)
+  PASS credential stored (model backend created, HTTP 201)
+  PASS smoke-check model backend removed
+Smoke check passed: login, checkpointer, checkpoint tables, credential round-trip.
+```
+
+A failure names its own fix. The two signatures it catches:
+
+| Failed step | What it means |
+|---|---|
+| `readiness checkpointer 'degraded'` | `startup.checkpointer_init_failed` – the checkpointer could not initialise, so `checkpoints` / `checkpoint_migrations` were never created |
+| `creating a model backend returned HTTP 500` | `ValueError: FernetSecretsBackend: invalid fernet_key` – the key only passed the `Settings` length check, not Fernet's shape check |
+
+Both mean no credential has ever been stored successfully, so the fix is to
+generate a key for real – `openssl rand -base64 32` – write it to `.env` at the
+repo root (and to the same `FERNET_KEY` in the backend's own `.env`, created in
+step 2), restart the backend, and recreate the compose services so they pick it
+up. On a stack that *has* stored credentials under some other key, reuse that
+key instead: a new key cannot decrypt them.
 
 ## 4. Start the frontend (optional)
 
@@ -150,7 +227,7 @@ The request returns immediately; the run executes in the background via the SAQ 
 1. Go to **Runs** (`/runs`) to see run history: filter by status or trigger type, or use the **Stop** button to cancel an in-flight run.
 2. Open the run (`/runs/:id`): you'll see the live status, per-node progress chips, and the **Execution Trace** table with per-node input/output (expand the **IO** cell), token counts, cost, logs, and prompt.
 3. If your edge has a HITL gate, the run pauses at `awaiting_human` and the page shows a **HITL Gate** section: **Claim Gate** to take it, then **Approve** or **Reject**.
-4. Every lifecycle event is written to the immutable audit log. Open **Audit Log** (`/admin/audit`) and filter by the `run.started`, `run.completed`, and `run.failed` event types.
+4. Every lifecycle event is written to the immutable audit log. Open **Audit Log** (`/admin/audit`) and filter by the `run.started`, `run.completed`, and `run.failed` event types. The events are recorded on every tier; opening the Audit Log itself needs the Team-tier `audit_viewer` feature plus the `audit.manage` permission.
 
 ## Next steps
 

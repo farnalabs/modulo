@@ -829,6 +829,15 @@ class Settings(BaseSettings):
     dispatcher_reconcile_max_rows_per_tick: int = Field(
         default=500, alias="DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK", ge=50, le=10000
     )
+    # FAR-2122: recency window in which a ``run_node_outputs`` write counts as
+    # live progress for the mid-graph age gate. A node output inside this window
+    # is durable evidence the executor is still advancing, so the age gate must
+    # not stamp the run ``no_progress``. Bound as a param into the age-gate SQL
+    # (never a literal), threaded through ``ReconcileTuning``. Default 15 min
+    # matches the historical hard-coded window.
+    dispatcher_reconcile_node_output_progress_seconds: int = Field(
+        default=900, alias="DISPATCHER_RECONCILE_NODE_OUTPUT_PROGRESS_SECONDS", ge=60, le=86400
+    )
     # FAR-1525: per-ORG TIME bound inside the tick. The row budget (FAR-904 /
     # FAR-1425) bounds ROWS, not time — a single org whose pass hangs on a
     # wedged await consumed the ENTIRE inner budget at stage
@@ -982,6 +991,14 @@ class Settings(BaseSettings):
     modulo_health_migrations_timeout_seconds: float = Field(
         default=0.0, alias="MODULO_HEALTH_MIGRATIONS_TIMEOUT_SECONDS", ge=0.0, le=60
     )
+    # Readiness alert correlation (FAR-2156): when the migrations check reports
+    # repo-vs-DB divergence, the detail links the most recent run of this deploy
+    # workflow so an operator can jump straight to it. The defaults point at
+    # Modulo's own dogfood repo/instance; a self-hosted deployment sets these to
+    # its own fork and API base. An empty repo disables the lookup entirely.
+    modulo_deploy_run_repo: str = Field(default="farnalabs/modulo", alias="MODULO_DEPLOY_RUN_REPO")
+    modulo_deploy_run_workflow: str = Field(default="deploy.yml", alias="MODULO_DEPLOY_RUN_WORKFLOW")
+    modulo_deploy_run_api_base: str = Field(default="https://api.github.com", alias="MODULO_DEPLOY_RUN_API_BASE")
     # database-hygiene sub-check (FAR-1445). Unlike its neighbours this
     # override defaults to a NON-zero 1s: the probe is a single read of the
     # in-memory statistics views, so anything above a second means the

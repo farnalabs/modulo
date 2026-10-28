@@ -40,10 +40,12 @@ touches Docker): constructor arg → `MODULO_DOCKER_HOST` → `DOCKER_HOST` →
 local socket. The raw socket is an operator override – prefer the proxy.
 
 **Registration matrix**: the Bundled Runner provider (`runner_docker`)
-registers when any `MODULO_RUNNER_*` variable OR a Docker endpoint
-(`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is set. With none set, it does not
-register – binding a profile to it then raises a typed dispatch error
-naming `MODULO_DOCKER_HOST` (remediation copy), never a silent fallback.
+registers when a Docker endpoint (`MODULO_DOCKER_HOST` or `DOCKER_HOST`) is
+set. An unrelated `MODULO_RUNNER_*` variable (for example
+`MODULO_RUNNER_MACHINE_ID`) does NOT register it (FAR-996). With no endpoint
+set, it does not register – binding a profile to it then raises a typed
+dispatch error naming `MODULO_DOCKER_HOST` (remediation copy), never a
+silent fallback.
 
 ## 3. The runner image + digest pinning
 
@@ -193,7 +195,7 @@ A system cron sweeps labelled workspace containers every 5 min:
 3. Kill the engine (or `docker kill` the workspace) mid-exec: the node fails
    RETRYABLE – never as a completed run with a fabricated zero exit.
 4. Docker-marked acceptance suite (requires a live engine):
-   `uv run pytest tests/docker -m docker` from `backend/`
+   `uv run pytest tests/docker -m docker -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings` from `backend/`
    (`MODULO_RUNNER_DIND_TESTS=1` adds the dind engine-kill strip, ~560 MB).
 
 ## 8. Remote engine

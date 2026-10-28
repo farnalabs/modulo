@@ -295,7 +295,7 @@ async def _run_bootstrap(settings: Settings) -> None:
             logger.warning("startup.role_bootstrap_failed", exc_info=True)
 
 
-async def _run_break_glass_watchdog(settings: Settings) -> None:
+async def _run_break_glass_watchdog(settings: Settings) -> None:  # NOSONAR S7503 - async lifespan seam
     """Boot-time break-glass watchdog (deliverable B).
 
     The allow-list / role-posture assertions from ``bootstrap_role.py`` run
@@ -847,6 +847,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     logger.info("startup.starting")
     await _run_boot_guards_and_seeds(settings)
+    # FAR-2153: restore the operator-installed (system-scope) licence from the
+    # instance store. Runs AFTER the schema is at head so the ``system_config``
+    # row is readable on a brand-new database; fail-open on a DB blip (the
+    # request-scoped refresh self-heals) and fail-closed on a trust-anchor miss.
+    from modulo.core.license_bootstrap import restore_persisted_license
+
+    await restore_persisted_license(settings)
     _register_shutdown_manager(settings)
 
     tasks = await _start_background_tasks(settings)
@@ -1031,7 +1038,7 @@ def _register_shutdown_manager(settings: Settings) -> None:
     try:
         di_engine = get_or_create_engine(settings)
 
-        async def shutdown_otel_async() -> None:
+        async def shutdown_otel_async() -> None:  # NOSONAR S7503 - async shutdown callback contract
             shutdown_otel()
 
         _shutdown_manager.register("otel", shutdown_otel_async)

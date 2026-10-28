@@ -196,6 +196,17 @@ routes:
         <<: *community
         deprecated: false
 
+    /risk-assessment:
+        name: risk-assessment
+        breadcrumb: Risk Assessment
+        parent: /
+        product_map: [feat-evidence, feat-risk-assessment]
+        sidebar_group: monitor
+        sidebar_order: 9
+        type: page
+        <<: *community
+        deprecated: false
+
     /runs/diff:
         name: runs-diff
         breadcrumb: Output Diff
@@ -392,10 +403,17 @@ routes:
         breadcrumb: License
         parent: /
         product_map: [feat-license]
-        sidebar_group: system
-        sidebar_order: 1
+        # FAR-2104: the licence is an org-level object, so an org admin must
+        # reach this screen — it cannot sit in the system-admin-only SYSTEM
+        # group. The gate is the permission the licence endpoints enforce
+        # (`org.license.manage`), not a separate role check, and the tier floor
+        # is community so a deployment whose licence has LAPSED can still reach
+        # the page to install a replacement key.
+        sidebar_group: admin
+        sidebar_order: 12
         type: form_page
-        <<: *team
+        <<: *community
+        required_permissions: [org.license.manage]
         deprecated: false
     /settings/mcp:
         name: settings-mcp
@@ -496,7 +514,7 @@ routes:
         parent: /
         product_map: [feat-notifications]
         sidebar_group: monitor
-        sidebar_order: 9
+        sidebar_order: 10
         type: form_page
         <<: *community
         # Per-user settings: visible to EVERY org role, so role gating stays
@@ -512,8 +530,12 @@ routes:
         breadcrumb: Email
         parent: /
         product_map: [feat-notifications]
-        sidebar_group: system
-        sidebar_order: 3
+        # Email delivery is organisation-scoped (the API is under
+        # /api/v1/admin/org/{org_id}), so org admins must reach it. The SYSTEM
+        # group is instance-wide and system-admin-only; placing this route there
+        # made the router reject ordinary organisation admins.
+        sidebar_group: admin
+        sidebar_order: 13
         type: form_page
         deprecated: false
 
@@ -745,8 +767,8 @@ routes:
          sidebar_order:
          type: page
          <<: *community
-         required_roles: [admin]
-         deprecated: false
+         required_permissions: [compliance.evidence_index.read]
+         deprecated: true
 
     /admin/compliance/evidence-index:
         name: admin-compliance-evidence-index
@@ -754,11 +776,12 @@ routes:
         parent: /
         product_map: [feat-evidence]
         sidebar_group: monitor
-        sidebar_order: 10
+        sidebar_order: 11
         type: page
         <<: *community
         required_permissions: [compliance.evidence_index.read]
         deprecated: false
+
 
 
     /admin/errors:
@@ -866,12 +889,16 @@ routes:
         breadcrumb: Lifecycle Maps
         parent: /
         product_map: [feat-lifecycle-maps]
-        sidebar_group: build
-        sidebar_order: 5
+        sidebar_group:
+        sidebar_order:
         type: list_page
-        <<: *community
-        deprecated: false
+        pattern: /lifecycle-maps
         exact: true
+        visibility: in_dev
+        <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [library.search.in_dev]
+        deprecated: false
 
     /lifecycle-maps/:id/editor:
         name: lifecycle-map-editor
@@ -884,7 +911,10 @@ routes:
         pattern: /lifecycle-maps/:id/editor
         dynamic_params:
           - id
+        visibility: in_dev
         <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [library.search.in_dev]
         deprecated: false
 
     /feedback/inbox:
@@ -910,7 +940,10 @@ routes:
         pattern: /lifecycle-maps/:id
         dynamic_params:
           - id
+        visibility: in_dev
         <<: *community
+        required_roles: [operator, admin]
+        required_permissions: [library.search.in_dev]
         deprecated: false
 
     /admin/runners/profiles:
@@ -1003,6 +1036,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: dashboard-run-activity
+        type: element
+        dynamic_testid: false
+      - testid: dashboard-recent-runs
         type: element
         dynamic_testid: false
       - testid: notifications-panel-toggle
@@ -1225,6 +1261,9 @@ elements:
       - testid: admin-connectors-type-select
         type: select
         dynamic_testid: false
+      - testid: admin-connectors-types-error
+        type: element
+        dynamic_testid: false
       - testid: admin-connectors-description-input
         type: input
         dynamic_testid: false
@@ -1271,6 +1310,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: connectors-preview-section
+        type: element
+        dynamic_testid: false
+      - testid: connectors-preview-summary
         type: element
         dynamic_testid: false
       - testid: feature-gate
@@ -1365,6 +1407,12 @@ elements:
         type: element
         dynamic_testid: false
       - testid: cost-team-table
+        type: element
+        dynamic_testid: false
+      - testid: cost-team-unattributed
+        type: element
+        dynamic_testid: false
+      - testid: cost-team-unattributed-unavailable
         type: element
         dynamic_testid: false
       - testid: cost-anomalies-error
@@ -1895,6 +1943,9 @@ elements:
       - testid: lock-icon
         type: element
         dynamic_testid: false
+      - testid: my-profile-profile-loading
+        type: element
+        dynamic_testid: false
       - testid: my-profile-my-teams-loading
         type: element
         dynamic_testid: false
@@ -2283,10 +2334,22 @@ elements:
       - testid: instance-enabled
         type: element
         dynamic_testid: false
-      - testid: enforcement-enabled
+      - testid: licence-requires-analytics
         type: element
         dynamic_testid: false
       - testid: egress-allowed
+        type: element
+        dynamic_testid: false
+      - testid: instance-switch-toggle
+        type: input
+        dynamic_testid: false
+      - testid: instance-switch-source
+        type: element
+        dynamic_testid: false
+      - testid: instance-switch-reset
+        type: button
+        dynamic_testid: false
+      - testid: instance-switch-error
         type: element
         dynamic_testid: false
       - testid: product-analytics-consent-prompt
@@ -2748,6 +2811,107 @@ elements:
       - testid: error-alert-retry
         type: button
         dynamic_testid: false
+    /risk-assessment:
+      - testid: risk-assessment-loading
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-error
+        type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: risk-assessment-facets
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-key-prefix
+        type: input
+        dynamic_testid: false
+      - testid: risk-assessment-pipeline
+        type: select
+        dynamic_testid: false
+      - testid: risk-assessment-days
+        type: select
+        dynamic_testid: false
+      - testid: risk-assessment-action
+        type: select
+        dynamic_testid: false
+      - testid: risk-assessment-facet-degraded-note
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-pipelines-error
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-pipelines-error-message
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-pipelines-retry
+        type: button
+        dynamic_testid: false
+      - testid: risk-assessment-facet-actions
+
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-apply
+        type: button
+        dynamic_testid: false
+      - testid: risk-assessment-reset
+        type: button
+        dynamic_testid: false
+      - testid: risk-assessment-summary-card
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-facet-degraded
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-summary-grid
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-total
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-block-count
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-warn-count
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-continue-count
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-escalate-count
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-time-window
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-table
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-sort-timestamp
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-sort-key
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-sort-action
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-sort-subject
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-row
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-action-badge
+        type: element
+        dynamic_testid: false
+      - testid: risk-assessment-empty
+        type: element
+        dynamic_testid: false
     /admin/evidence-redaction:
       - testid: admin-evidence-redaction-add
         type: button
@@ -2861,6 +3025,21 @@ elements:
         dynamic_testid: false
       - testid: compliance-evidence-index-artifact-count
         type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-identifier-label
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-snapshot-link
+        type: link
+        dynamic_testid: false
+      - testid: compliance-evidence-index-copy-identifier
+        type: button
+        dynamic_testid: false
+      - testid: compliance-evidence-index-identifier-details
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-copy-error
+        type: alert
         dynamic_testid: false
       - testid: compliance-evidence-index-customer-responsibility
         type: element
@@ -3123,6 +3302,129 @@ elements:
       - testid: eval-editor-config
         type: textarea
         dynamic_testid: false
+      - testid: eval-editor-judging
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-deterministic-type
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-backing-kind
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-backing-model
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-backing-vendor
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-backing-model-class
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-backing-preview
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-verdict-kind
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-derivation-warning
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-field
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-judge-whole-output
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-context-fields
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-add
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-question-remove
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-id
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-type
+        type: select
+        dynamic_testid: false
+      - testid: eval-editor-question-instructions
+        type: textarea
+        dynamic_testid: false
+      - testid: eval-editor-question-criteria
+        type: textarea
+        dynamic_testid: false
+      - testid: eval-editor-question-weight
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-min-confidence
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-required
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-add-option
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-option-key
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-option-description
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-option-passing
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-option-score
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-remove-option
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-add-level
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-level-score
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-level-description
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-question-remove-level
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-question-pass-from
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-pass-rule-threshold
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-timeout-question
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-timeout-definition
+        type: input
+        dynamic_testid: false
+      - testid: eval-editor-client-errors
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-server-error
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-legacy-notice
+        type: element
+        dynamic_testid: false
+      - testid: eval-editor-migrate-legacy
+        type: button
+        dynamic_testid: false
+      - testid: eval-editor-judge-display
+        type: element
+        dynamic_testid: false
       - testid: eval-editor-pass-threshold
         type: input
         dynamic_testid: false
@@ -3354,9 +3656,7 @@ elements:
       - testid: library-community-badge
         type: element
         dynamic_testid: false
-      - testid: library-create-lifecycle-map
-        type: button
-        dynamic_testid: false
+
       - testid: library-create-pipeline
         type: button
         dynamic_testid: false
@@ -4574,6 +4874,27 @@ elements:
       - testid: run-detail-worst-case-attempt
         type: element
         dynamic_testid: false
+      - testid: run-attempt-history
+        type: element
+        dynamic_testid: false
+      - testid: run-attempt-history-loading
+        type: element
+        dynamic_testid: false
+      - testid: run-attempt-history-unavailable
+        type: element
+        dynamic_testid: false
+      - testid: run-attempt-history-retry
+        type: button
+        dynamic_testid: false
+      - testid: run-attempt-history-empty
+        type: element
+        dynamic_testid: false
+      - testid: run-attempt-history-table
+        type: element
+        dynamic_testid: false
+      - testid: run-attempt-history-row
+        type: element
+        dynamic_testid: false
       - testid: hitl-gate-card
         type: element
         dynamic_testid: false
@@ -5479,14 +5800,32 @@ elements:
       - testid: license-title
         type: element
         dynamic_testid: false
+      - testid: licence-org-controls
+        type: element
+        dynamic_testid: false
       - testid: license-key-input
         type: textarea
         dynamic_testid: false
-      - testid: license-verify-btn
-        type: button
-        dynamic_testid: false
       - testid: license-apply-btn
         type: button
+        dynamic_testid: false
+      - testid: license-remove-btn
+        type: button
+        dynamic_testid: false
+      - testid: licence-system-controls
+        type: element
+        dynamic_testid: false
+      - testid: license-key-input-system
+        type: textarea
+        dynamic_testid: false
+      - testid: license-apply-btn-system
+        type: button
+        dynamic_testid: false
+      - testid: license-remove-btn-system
+        type: button
+        dynamic_testid: false
+      - testid: licence-key-preview
+        type: element
         dynamic_testid: false
       - testid: licence-renewal-banner
         type: element
@@ -6510,6 +6849,7 @@ features:
         behaviours:
             # Cost report + run-cost aggregation (GET /api/v1/admin/costs)
             - "[x] The cost report aggregates org spend for the selected period (day/week/month/year) and groups by team or org; each item carries total_spend_usd, total_runs, a summed per-component breakdown (cost components resolved per environment) and per-org annotations, and the response surfaces org_total / org_run_count / legacy_total / has_more plus org_unassigned_components"
+            - "[x] The /admin/costs Per-Team Cost Breakdown card reads group_by=team&period=month, renders the team-attributed ledger rows with refused/clamped annotations and a derived average per run, and discloses the response's org_unassigned_components (component spend from runs with no team) — showing an explicit unavailable state when that bucket is absent or corrupt — so the bucket is never silently omitted from the breakdown (frontend/src/views/AdminCostBreakdownView.vue, frontend/src/__tests__/AdminCostBreakdownView.spec.ts)"
             - "[x] An invalid group_by or period query param is rejected with 422 (pattern-constrained, no silent fallback)"
             - "[x] The cost endpoints are admin-only: operators/viewers are refused 403 and an unauthenticated caller 401 (require_permission cost.manage)"
 
@@ -6577,10 +6917,18 @@ features:
             - "[x] Migration 0320_evidence_redaction_rules creates evidence_redaction_rules (OrgScoped + soft-delete, UNIQUE (organisation_id, key_pattern, role), role CHECK in admin/operator/viewer), applies the four-step RLS pattern, and seeds the mandatory catch-all row key_pattern='*' / role='viewer' / redacted_fields='{sensitive_output, internal_metadata}' for every existing organisation"
             - "[x] The /evidence route renders under the MONITOR sidebar group; EvidenceView.vue fetches the already-redacted payload and renders it as-is with NO client-side redaction or conditional field hiding, with i18n-backed strings and role=status/aria-live status regions (frontend/src/views/EvidenceView.vue, frontend/src/manifest.yaml)"
             - "[x] The /admin/evidence-redaction route (ADMIN sidebar group) renders AdminEvidenceRedactionView.vue, which lists the org's rules and creates/edits them through the PUT /api/v1/evidence/redaction-rules upsert keyed on (key_pattern, role): creating needs an unused pair and at least one redacted class (both rejected inline before any request), editing keeps key_pattern/role immutable and changes only redacted_fields, and the page has no delete surface; redacted_fields is limited to the backend REDACTION_CLASS_FIELDS vocabulary (an unrecognised stored class stays visible so it can be removed, and an unrecognised stored role is shown read-only with Save disabled). The seeded '*' / viewer catch-all is shown as mandatory, and the page explains the per-role fail-closed default — it configures the SERVER boundary only and never redacts or hides evidence values client-side (frontend/src/views/AdminEvidenceRedactionView.vue, frontend/src/manifest.yaml)"
-            - "[x] The /admin/compliance/evidence-index route fetches GET /api/v1/compliance/evidence-index with the compliance.evidence_index.read permission, renders pack metadata, framework coverage counts, present/absent/customer-supplied artefacts, identifiers/locations/provenance/mapping row IDs, missing artefact warnings and the human-only lower-bound warning; customer-responsibility rows are explained as customer-owned records because the API intentionally omits them (frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
-            - "[x] The /admin/evidence route renders the operator/admin evidence index from GET /api/v1/compliance/evidence-index, showing pack metadata, completeness, missing artefact types, and each indexed artefact's status, provenance, record count, and location (frontend/src/views/EvidenceIndexView.vue, frontend/src/stores/evidence.ts)"
+            - "[x] The /admin/compliance/evidence-index route fetches GET /api/v1/compliance/evidence-index with the compliance.evidence_index.read permission, renders pack metadata, framework coverage counts, present/absent/customer-supplied artefacts, identifiers/locations/provenance/mapping row IDs, missing artefact warnings and the human-only lower-bound warning; a pipeline-snapshot identifier renders as a concise 'Pipeline snapshot v{n}' label with the app-wide short id, a link to that exact version and the raw identifier kept selectable behind a details disclosure plus a copy action, while every other identifier stays verbatim; customer-responsibility rows are explained as customer-owned records because the API intentionally omits them (frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
+            - "[x] The canonical /admin/compliance/evidence-index route renders ComplianceEvidenceIndexView.vue for the compliance evidence index, and the deprecated /admin/evidence route remains a compatibility alias to that same view; both routes use GET /api/v1/compliance/evidence-index to show pack metadata, completeness, missing artefact types, and each indexed artefact's status, provenance, record count, and location (frontend/src/router/index.ts, frontend/src/views/ComplianceEvidenceIndexView.vue, frontend/src/manifest.yaml)"
         deferrals:
             - "Risk/Assessment (sub-scope B, FAR-941) is a separate ticket and is not part of this entry; the decision-record NULL-duplicate grouping (acceptance criteria 12-14) belongs to the decision-record read path and is not implemented here"
+    feat-risk-assessment:
+        description: Risk assessment dashboard for evidence-based risk analysis
+        status: covered
+        behaviours:
+            - "[x] The /risk-assessment route renders under the MONITOR sidebar group; RiskAssessmentView.vue fetches risk assessment data via the evidence store and renders facets, summary cards, and a sortable table with i18n-backed strings and role=status/aria-live status regions (frontend/src/views/RiskAssessmentView.vue, frontend/src/components/risk-assessment/)"
+            - "[x] Facet filters (key prefix, pipeline, time window, action) drive server-side filtering through the risk assessment store and update URL query params for deep-linking (frontend/src/components/risk-assessment/RiskAssessmentFacets.vue)"
+            - "[x] Summary card displays total rows and per-action counts (block, warn, continue, escalate) with facet degradation indicator and time window note (frontend/src/components/risk-assessment/RiskAssessmentSummaryCard.vue)"
+            - "[x] Sortable table renders evidence rows with timestamp, key, action badge, subject, and formatted value columns; empty state handled (frontend/src/components/risk-assessment/RiskAssessmentTable.vue)"
     feat-governance-stack:
         description: Read-only governance-hierarchy taxonomy readout (/governance)
         status: covered
@@ -6620,6 +6968,7 @@ features:
         status: covered
         behaviours:
             - "[x] The eval editor creates, configures, and deletes evaluation definitions per pipeline node"
+            - "[x] The eval editor's free-form config textarea is a typed-question builder behind a two-axis Judging control (ADR 066 D4/D19): the mechanism axis offers only Typed questions or Deterministic (never a flat list mixing a deterministic eval_type with a backing); a typed judge declares a backing (a model backend, displayed as the model via its provider with 'LLM, self-reported confidence', or a decision model whose class label comes from the single locale 'System One model' value — no view composes that phrase), and each question is edited as noul (instructions, criteria, weight, required, min_pass_confidence), choice (2–255 unique option keys with descriptions, passing keys, optional 0–1 option_scores) or score (2–10 ordered levels, pass_from), with a per-question dotted field, top-level context_fields, pass_rule.threshold and timeouts; the emitted config_json is exactly the server's TypedJudgeConfig wire shape (snake_case, no extra keys, no pass_threshold), the editor mirrors the server's bounds client-side, the server's typed 422 codes (judge_config_invalid / judge_verdict_kind_unsupported / judge_backend_*) render inline, verdict_kind=derivation is blocked with an explanation because typed judges are weaker where the verdict must be derived, and a stored legacy prompt judge stays read-only until explicitly migrated (frontend/src/views/EvalEditorView.vue, frontend/src/components/eval/typedJudge.ts, frontend/src/__tests__/EvalEditorView.spec.ts, frontend/src/__tests__/EvalEditorViewTypedJudge.spec.ts, backend/src/modulo/core/eval_engine/typed_judge/config.py)"
             - "[x] The proposal queue surfaces eval proposals for review and supports publish / dismiss (the API publish endpoint creates a live eval definition; the /evals/proposals view's publish currently marks the proposal resolved)"
             - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
             - "[x] Eval policy-gate binding (POST/PUT /api/v1/evals/{eval_id}/policy-gate) runs the FAR-957 advisory author-warning checks for the eval's evidence_key and the PolicyGateResponse carries non-blocking warnings (no_producer / temporal_ordering / recent_undefined) — warning on the safe direction so a racy or indeterminate evidence key is surfaced without ever preventing binding (backend/src/modulo/core/eval_engine/author_warnings.py, backend/tests/unit/core/evidence/test_author_warnings.py, docs/product-map/core/evidence-store.md)"
@@ -6726,20 +7075,23 @@ features:
             - "[x] Caller-scoped plan bootstrap: GET /api/v1/plan returns 200 to ANY authenticated org member with license.tier / expires_at / org_id, dev_mode, and the FULL known flag set with the org feature_overrides overlay applied (inactive flags present as currently_active: false), so a non-admin reads their org's real tier, dev mode and effective flags instead of the bootstrap defaults left by the instance-admin-only /api/v1/admin/feature-flags + /api/v1/admin/license reads; the frontend planStore bootstraps from it alongside the viewer-readable /api/v1/admin/tiers catalogue, and the admin endpoints keep their system-admin gates for the inspection/toggle UI (backend/src/modulo/api/routes/viewmodel.py plan_bootstrap, backend/tests/unit/api/test_viewmodel_plan.py, frontend/src/stores/planStore.ts, docs/product-map/licensing/license.md; FAR-1806 + FAR-1809)"
             - "[x] Plan/license-based gating is wired at the composition root (require_feature / get_plan_context): the Team-tier licensed surfaces (SSO administration, /api/v1/teams, audit export, admin spend limits) return 402 naming the gated feature without a valid Team license and pass with one; SSO AUTHENTICATION entry points are exempt from that 402 when NO license resolves at all, so a lapse never locks an administrator out of the licence screen (env-var SAML availability/config are configuration-only; FAR-2059/FAR-2060); the license resolves from the org settings with a system-license fallback (team_gates.feature, test_sso_licence_admin_invariant.py, docs/product-map/licensing/license.md)"
             - "[x] The authenticated shell surfaces a backend-derived renewal state (FAR-2075): GET /api/v1/admin/license returns `licence_state` (none | active | renewal_due | grace | lapsed), `days_until_expiry` and `grace_ends_at`, derived once from `expires_at` + `LICENCE_GRACE_DAYS` in `derive_licence_state`; the shell reads that status once per session for org admins and renders the notice on EVERY authenticated route (not only the licence page) without comparing dates itself — `renewal_due` shows a countdown banner that offers a purchase path ONLY for a manual renewal (an auto-renewing licence is never invited to buy again), `grace` shows a dismissible dialog that returns on the next visit until the licence is renewed, with two equally-weighted actions (install a key the customer may never have received, or buy a new licence), and `lapsed` explains that Team capability is off and where to install a key; the licence page reuses the same query instead of issuing a second read (backend/src/modulo/api/routes/admin_license.py, frontend/src/components/AppLayout.vue, frontend/src/components/licence/LicenceRenewalNotice.vue, backend/tests/unit/api/test_admin_license.py, frontend/src/__tests__/LicenceRenewalNotice.spec.ts, frontend/src/__tests__/components/AppLayoutLicenceBanner.spec.ts)"
+            - "[x] The licence screen's audience is ONE permission, not a parallel role check (FAR-2104): /settings/license sits in the ADMIN group with `required_permissions: [org.license.manage]` and a community tier floor, so an org admin — and a deployment whose licence has lapsed — can reach the page and install a key; the authenticated shell derives the renewal notice's audience from the same permission (frontend/src/composables/useLicenceAccess.ts → the server-resolved GET /api/v1/auth/permissions list) instead of an `orgRole === admin` check; the page splits the scopes — an org admin installs/removes the organisation's key via PUT/DELETE /api/v1/admin/orgs/{org_id}/license, while the instance-wide POST /api/v1/admin/license controls render only for a system admin (system.config.manage); GET /api/v1/admin/license is require_system_or_org_admin so the read admits exactly the principals those writes admit, and backend/tests/unit/api/test_admin_license_permission_agreement.py pins the agreement so the surfaces cannot drift apart again"
+            - "[x] Both licence scopes are durable (FAR-2153): the org key is stored in `org.settings_json`, and the instance-wide key is stored in the RLS-free `system_config` row `system_license_key` (both slots — active and future-dated successor — are kept), so an install survives a restart/redeploy, is restored at startup, and is visible to the API and the SAQ worker within `SYSTEM_LICENSE_REFRESH_TTL_SECONDS` (15s); the precedence order is org key → persisted system install → `MODULO_LICENSE_KEY` → Community, and `DELETE /api/v1/admin/license` deletes the persisted row first so resolution falls back to the env key and then Community (backend/src/modulo/core/license.py, backend/src/modulo/core/feature_flags.py, backend/src/modulo/api/routes/admin_license.py, docs/product-map/licensing/license.md)"
+            - "[x] The INSTANCE-WIDE licence can be removed without a restart (FAR-2110): DELETE /api/v1/admin/license (guarded by the strict system-admin `system.config.manage`, so an org admin gets 403) deletes the persisted `system_config` licence row and clears the in-memory system licence, busting every cached `license:{org_id}` status entry, so GET /api/v1/admin/license immediately reports has_license false / licence_state none for an org falling back to the system key and Team-gated routes return 402 (or the deployment's env key, if one is configured); the system card renders a Remove control only for a caller holding system.config.manage (frontend/src/composables/useLicenceAccess.ts), and the removal is audited as license_removed on resource license (backend/tests/unit/api/test_admin_license.py, frontend/src/__tests__/SettingsLicenseView.spec.ts)"
             - "[ ] License-driven gating is not applied to EVERY registered feat-* surface — gating targets the licensed Team-tier surfaces, not the whole feature registry"
         deferrals:
             - "Universal license gating of every registered feature is tracked under feat-license"
     feat-lifecycle-maps:
-        description: Lifecycle maps and stage workflows
-        status: covered
+        description: Internal lifecycle maps and stage workflows (dogfood only)
+        status: partial
         behaviours:
+            - "[ ] Lifecycle Maps are not exposed in the Alpha sidebar, library catalogue, pipeline editor, or ordinary feature-flag surfaces; the implementation remains reachable only through the internal/dev route when dev mode is enabled"
             - "[x] Detail page delete: DELETE /api/v1/lifecycle-maps/{id} soft-deletes the map (204) and frees its stage pipelines; the detail page offers a Delete button behind a confirmation dialog and navigates back to the list on success"
-            - "[x] Stage layout positions persist: editor drags save stage x/y into content_json (GET/PUT /versions round-trips them), the read-only renderer uses persisted x/y when present, and maps saved before position persistence fall back to a topology-aware auto-layout"
             - "[x] Auto-layout is layered: linear chains render left-to-right, split sources and their branches share a column, and rejoin targets cluster — computed from stage/transition topology, not array index"
+
             - "[x] Unattributed journeys list is keyset-paginated (GET /{id}/journeys?limit&cursor) with a load-more control, never dumps 200 rows at once; journey cards render the kind uppercased (PR 2391), are keyboard-accessible with an aria-label, and open the journeys detail endpoint"
-            # Journeys display double-gated: default-OFF lifecycle_map_journeys flag (FAR-654)
-            # plus a per-visit "Show work items" checkbox, also default OFF (FAR-742)
-            - "[x] All journey display on the detail view (journey cards on stage nodes, the Unattributed journeys section, load-more pagination, and the journey detail panel) is double-gated behind the default-OFF `lifecycle_map_journeys` feature flag AND a per-visit 'Show work items' checkbox (default unchecked): with either gate off the view makes no journeys API call, passes an empty journeys list to the renderer, and hides all journey UI while stages/edges render normally (frontend/src/__tests__/LifecycleMapView.spec.ts, FAR-654 + FAR-742 blocks)"
+            - "[x] Journey display remains implemented for internal dogfood maps and is hidden from Alpha users by the route's dev-mode gate"
+
             # FAR-742: server-side journeys filters + per-node card cap + tense fix
             - "[x] With both gates on, the map view exposes Period (Last 24h / Last 3 days / Last 7 days / Last 30 days / All time — default Last 7 days) and Status (All / Completed / Failed — default All) filters that hit the journeys endpoint server-side (`updated_since` ISO-8601 lower bound on journeys.updated_at — the last-move evidence timestamp — and `status` on latest_status, validated to complete|failed with 422 otherwise) and reset pagination on change; each page-1 fetch pins its window for the pagination session; the renderer caps journey cards at MAX_CARDS_PER_NODE=5 per stage node (newest-moved first) behind a non-interactive '+N more' chip; the complete status displays as 'Completed' (underlying value unchanged)"
             # FAR-794: work-item refs → journeys (provenance-tagged minting)
@@ -6793,7 +7145,7 @@ features:
             - "[x] In-app notification creation runs ALONGSIDE webhook dispatch as an independent always-executed step: an org with zero webhook endpoints still receives its in-app notification, an in-app failure never aborts webhook delivery, and webhook dispatch never silently skips in-app creation (guards the historical early-return silent-loss bug)"
 
             # Event surface
-            - "[x] 27 named event types drive the pipeline: hitl_awaiting, run_failed, run_stalled, budget_exceeded, circuit_breaker_tripped, claim_expired, hitl_overdue, hitl_deadline_warning, hitl_approve_sweep_suspected, hitl_review_removed, hitl_review_removal_denied, eval_regression, eval_blocked, feedback_pending, system_announcement, trigger_deactivated, trigger_streak_alert, org_triggers_auto_paused, guardrail_enforcement_gap, guardrail_kill_switch, guardrail_unexpected_skip, queue_pressure_notice, queue_pressure_warning, queue_pressure_critical, capacity_backpressure, capacity_saturation and capacity_recovered (every AVAILABLE_EVENTS entry has a NotificationEventMapper config — enforced by tests/unit/notifier/test_event_registry_consistency.py)"
+            - "[x] 27 named event types drive the pipeline: budget_exceeded, capacity_backpressure, capacity_recovered, capacity_redis_pressure, capacity_saturation, circuit_breaker_tripped, claim_expired, eval_blocked, eval_regression, guardrail_enforcement_gap, guardrail_kill_switch, guardrail_unexpected_skip, hitl_approve_sweep_suspected, hitl_awaiting, hitl_deadline_warning, hitl_overdue, hitl_review_removal_denied, hitl_review_removed, org_triggers_auto_paused, provider_failure, queue_pressure_critical, queue_pressure_notice, queue_pressure_warning, run_failed, run_stalled, trigger_deactivated and trigger_streak_alert — every AVAILABLE_EVENTS entry has a NotificationEventMapper config (enforced by tests/unit/notifier/test_event_registry_consistency.py); FAR-2138 removed the five events that had no `dispatch_event(...)` call site: run_stalled, budget_exceeded and eval_blocked are now dispatched from the executor shared terminalization tail, while feedback_pending and system_announcement were retired (no product signal could produce them) from the constants, render config and preferences surface)"
             - "[x] The NotificationEventMapper turns each dispatched event into a typed in-app notification with per-event config (level, scope, category, dismiss strategy, TTL) rendered from sanitised payload fields, and GET /api/v1/admin/notifications/available-events drives the endpoint editor's event picker"
             - "[x] The approaching-deadline HITL sweep (hitl_deadline_warning cron) dispatches hitl_deadline_warning through the Notifier under the SAME once-only fire-once claim as its email leg: one Redis SET NX EX claim gates both channels so they can never double-fire, an org with email recipients and/or a subscribed endpoint is warned exactly once per gate, and an org with neither channel leaves the marker unset so a later opt-in or subscription can still warn while the band is open (tests/unit/hitl_manager/test_deadline_warning.py)"
 
@@ -6837,6 +7189,10 @@ features:
             - "[x] The error dashboard reads BOTH partitions with a hard tenancy boundary (FAR-1547): /admin/errors defaults to the caller's organisation (GET /api/v1/errors pinned to principal.organisation_id), while a system admin can switch to the instance scope and read the SYSTEM_ORG_ID sentinel partition (instance-level / unattributed errors from the public frontend ingest and org-less backend errors) through GET /api/v1/errors/instance, /instance/{error_id} and /instance/{error_id}/events, gated by the system permission errors.resolve_instance; a tenant principal is refused 403 before any query runs (the scope toggle is not even rendered without the is_system_admin claim), each instance read RLS-pins the transaction to the sentinel org so the org-only policies pass, and the instance detail is read-only (no instance-scope PATCH) — AdminErrorsView.vue / AdminErrorDetailView.vue scope switch, backend/src/modulo/api/routes/errors.py, backend/tests/unit/error_tracking/test_error_instance_scope.py"
             # Route-specific RFC 9457 problem types (FAR-1545)
             - "[x] HTTP errors carry SPECIFIC RFC 9457 problem types, not just status-derived generics (FAR-1545): the wire `type` becomes urn:problem:modulo:<code> for route error codes that name a genuinely distinct problem (invalid_token, token_mismatch, already_configured, encryption_config_error, encryption_error, update_failed) while the `code` extension member still carries the same value; the code→type map is deliberately sparse per RFC §4 — truly generic conditions stay status-derived (a plain resource 404, database_error→service_unavailable, and conflict/internal_error/migration_required whose status lookup resolves to the exact same type), the `status` of each type equals the HTTP status the raising route declares (§3.1.2, never disagreeing with the response) and a per-type title ships (§3.1.3); an unknown or deliberately-generic code falls back to the status-derived type — the client error formatter mirrors the per-type titles so a surfaced problem title matches the backend (backend/src/modulo/api/models/problem.py, backend/tests/unit/api/models/test_problem.py, frontend/src/lib/api/formatError.ts)"
+            # Scheduler-starvation detection (FAR-604)
+            - "[x] Scheduler-starvation detection (FAR-604): GET /api/v1/errors/scheduler-starvation reports the pipelines whose unstarted pending runs (status=pending, started_at IS NULL) carry a capacity-marker error_code older than the 10-minute threshold, so a pipeline wedged at its concurrency cap is visible even though pre-terminal runs never produce an error event; the age anchor is the run's earliest trigger-event receipt (MIN(trigger_events.received_at), falling back to created_at) so a coalescing re-delivery cannot reset a days-long wedge, the aggregate is one row per starved pipeline (pending count + oldest age) and is tenant-RLS-pinned, and the /admin/errors banner polls it every 60s, is suppressed in instance scope, and fails open (no banner) when the fetch fails (backend/src/modulo/api/routes/errors.py, backend/src/modulo/db/crud/error_tracking.py, backend/tests/unit/error_tracking/test_error_dashboard.py, frontend/src/views/AdminErrorsView.vue, frontend/src/__tests__/AdminErrorsView.spec.ts)"
+            # OTLP export preview endpoint
+            - "[x] The OTLP settings surface ships GET /api/v1/settings/observability/preview: it returns a sample span plus the effective config with sensitive headers masked, falling back to the last cache (or defaults) on a DB timeout / outage rather than failing, and is BDD-exercised alongside the read / update / test-connection legs (backend/tests/bdd/features/observability/metrics.feature, backend/src/modulo/api/routes/observability.py, backend/tests/unit/api/test_observability_routes.py)"
     feat-onboarding:
         description: First-run onboarding wizard for new users and organizations
         status: covered
@@ -6875,7 +7231,7 @@ features:
             # Governed CI-runner dispatch to pipeline nodes (FAR-1141 / ADR-042)
             - "[x] A pipeline graph can DISPATCH work to an external CI substrate and witness it (FAR-1141, ADR-042): the `dispatch` node type plus any node whose connector_binding routes the `dispatch` verb (the shared connector_binding_operation predicate reads the strict dispatch routing — an `agent` node carrying an agent_id or a sandbox_agent binding is inert and never dispatches, so a graph that fires nothing can never be stamped dispatched) fires a governed connector operation on a CI-runner-type connector — dispatch_action trigger_run (default) / get_run_status / get_run_logs / list_runs — with the run-id round-trip contract enforced per provider (trigger_run's CIRun.id is exactly what get_run_status/get_run_logs consume, else trigger_run raises); the CI-runner capability contract (Capability.TRIGGER_RUN/get_run_status/get_run_logs/list_runs) is enforced at graph save time by connector_type_supports_dispatch (fail-closed — an unknown or plugin type that cannot be proven to implement the four ops is rejected, never discovered as an AttributeError mid-run), AND at dispatch time the engine runs the ACL/guardrail/conformance checks on the write path with traced/ACL parity to the connector hub. A triggered external job is only OBSERVED, not driven: with await_completion=true the node node_runner.poll loop waits on a monotonic deadline (wait_timeout, default 300, hard-capped 3600) polling get_run_status until a terminal status, and the wait window expiring terminalizes the node with the typed never-retryable `dispatch.wait_timeout` code — dispatch terminal failures are NON-RETRYABLE structurally (a retry would fire a second external job); the node timeout budget folds in a poll-retry slack (the deadline reserves wait_timeout AND the poll budget) so a wait that times out is never misreported as an engine error. Dispatch connectors ship for the CI-runner type: github_actions_ci / gitlab_ci (hub-native), circleci, buildkite, jenkins, teamcity, azure_pipelines (ConnectorType-ci-runner capabilities), with per-provider id schemes (owner/repo/run_id, project_id/pipeline_id, job_name/build_number with the job_name/queue/queue_id terminalizing queue form, ...) and the PARITY hard rule that the produced id round-trips into the connector's own readers; Jenkins trigger_run POSTs build parameters in the request BODY (never the URL query string) so variable values cannot leak into access logs (backend/src/modulo/core/pipeline_engine/node_runner.py _run_connector_dispatch/_await_dispatch_terminal, backend/src/modulo/core/graph_validator/__init__.py _check_dispatch_binding_capabilities, backend/src/modulo/connectors/base.py connector_type_supports_dispatch/connector_binding_operation/node_fires_dispatch_job, backend/src/modulo/connectors/ci_runner/base.py, backend/src/modulo/connectors/{jenkins,circleci,buildkite,teamcity,azure_pipelines}/__init__.py, backend/src/modulo/connectors/{github,gitlab}/__init__.py (hub-native github_actions_ci / gitlab_ci arms), backend/src/modulo/api/mcp_server.py, backend/src/modulo/db/migrations/versions/0288_runs_execution_origin.py, backend/tests/unit/pipeline_engine/test_dispatch_guards.py + test_dispatch_composed_e2e.py, backend/tests/unit/connectors/{test_ci_runner,test_jenkins,test_buildkite}.py, backend/tests/unit/graph_validator/test_graph_validator.py)"
             - "[x] The pipeline editor opens a saved version READ-ONLY via ?snapshot=<uuid> (canonical deep link) or ?version=<n> (alias resolved against the server's version-descending snapshot list by a bounded client-side search — one request at page_size=100, then a capped page search for deeper versions, so a deep link into a long-lived pipeline's history resolves correctly instead of falsely reporting the version missing; snapshot wins when both are present) — FAR-1812. While viewing, the FROZEN snapshot graph renders on the canvas and the editable editor state keeps holding the LIVE graph (rawNodes/flowNodes are never hydrated from the snapshot), so a stray Save could only rewrite live with live; the write affordances are UNMOUNTED rather than disabled (Save, Save as template, Run, the pipeline-settings group, the node palette/Add node, rename, archive/pause/delete, snapshot-lock card and the empty-state action row are absent; the inspector's inputs render read-only and its action buttons are hidden; the sandbox inspector's runner-binding panel is unmounted outright (it writes the LIVE agent via PUT and shows live rows — state the snapshot does not freeze, so it must be absent, not read-only); node drag, edge connect/update and keyboard delete are off at the canvas level) and every write function additionally early-returns while viewing. Still interactive: pan/zoom, node/edge inspection of the frozen config, the version timeline (FAR-1817: primary rows are SUBSTANTIVE versions only — created_kind initial/edit/rollback; run snapshots are NOT rows but annotate the version they executed as an expandable \"ran Nx\" grouping (aria-expanded/aria-controls) listing the individual run snapshots on demand, while runs older than EVERY substantive version render in an explicit \"ran Nx on earlier versions\" bucket instead of being falsely attributed to the oldest row; history is windowed at page_size=100 with a truthful truncation notice (\"showing the most recent N of M versions\") and a Load more action, and a failed history load is a retryable error state, never a false \"no snapshots\"; a row click, or a run-snapshot click once expanded, opens that version READ-ONLY via the editor deep link; a per-version radio selects the snapshot the diff/restore actions operate on, and a selection plus its Restore this version action opens the shared restore dialog; a pipeline whose history predates edit boundaries renders an explicit \"no version in the loaded history\" state instead of fabricating an `initial` anchor from a run snapshot, and its runs are shown unattributed in their own bucket, never labelled \"earlier\" — a version-DESC all-run window holds the NEWEST runs, so an \"earlier\" claim would assert a provenance (and a direction) the rows do not have; a run streak merely LONGER than the loaded window is a different case and does NOT show that state: when a substantive version exists but sits below the window, the chip resolves it through the server-filtered substantive query and the timeline anchors on that same resolved `currentVersion`, rendering it as a real version row with the window's runs attributed to it (\"ran Nx\"), so the two surfaces agree — the explicit unattributed state is reached only when the loaded window has no substantive row AND no `currentVersion` was resolved (the chip's filtered query failed, or the pipeline has no substantive version at all)), diff, Copy link, Restore this version and View latest. A persistent amber banner (role=status) carries Restore this version / View latest / Copy link. FAR-1816: Restore this version (banner AND timeline) opens ONE shared FormDialog that embeds the old-vs-latest change summary (POST /snapshots/diff — nodes restored, nodes or connections modified, nodes dropped, connections added/removed, downstream impact, breaking port changes; \"no differences\" is asserted only when every change class the endpoint reports is empty, so a config-only edit is never mislabelled as no change; a comparison that cannot be computed — the target IS the current version, or the current version is unavailable — is stated explicitly rather than left blank, with a retry) and names the real consequences of restoring: it replaces the pipeline's current configuration, new runs use the restored version, edits made since stop being used, history is NOT deleted (restoring creates a NEW version, so you can always restore again), and runs already in progress are unaffected (they keep the version they started on). It is blocked if it would remove a HITL gate, strip a node-bound guardrail, or use another team's connector. There is NO typed confirmation — restore is reversible because history is preserved; typed confirmation stays reserved for irreversible destructive actions such as pipeline delete. A server-side guard refusal is surfaced as plain-language copy, never the raw error string. On success the editor navigates back to the latest version (the historic banner is gone), the new version appears in the timeline as a rollback entry, and a role=status notice names the outcome (Restored v{n}. Created v{m}.). A `v{n}` version chip (no content hash) sits in the toolbar beside the pipeline name and labels the pipeline's current SUBSTANTIVE version (created_kind initial/edit/rollback — run snapshots are not versions), resolved by a server-side FILTERED substantive query (exclude_created_kind of the non-version kinds plus exclude_drafts, backed by a supporting partial index) that no unbounded run streak can starve, with the shared predicate still re-validating the returned row; when that filtered query FAILS the loader clears the stale filtered list and the chip falls back to the newest substantive version in the already-loaded catalog page — the pre-FAR-1895 behaviour — so a rollback whose chip re-query fails can never keep showing the pre-rollback version, and the failure surfaces with a retry rather than silently degrading to \"no version yet\"; it opens a hover/focus popover with created date, created_kind, author, tag and notes plus Open in timeline. Entering a version while the live graph has unsaved changes prompts before navigating (never silently discards), and an unknown/deleted version — or a version alias that resolves to nothing — degrades to a 'This version is no longer available' state with a link back to the latest editor, never a raw error (an alias search that cannot COMPLETE — network/server failure — shows a retryable load error instead, never a false 'no longer available') (frontend/src/views/PipelineEditorView.vue, frontend/src/components/pipeline/PipelineVersionChip.vue, frontend/src/components/pipeline/PipelineSnapshotTimeline.vue view action; frontend/src/__tests__/PipelineEditorHistoricVersion.spec.ts, frontend/src/__tests__/components/PipelineSnapshotTimeline.spec.ts)"
-            - "[x] The pipeline editor opens a SEMANTIC-LED version compare mode (FAR-1818): the route query `?snapshot=<base>&compare=<other>` selects it (the compare KEY's presence selects the mode once a base snapshot is resolved — a compare id alone, with no `?snapshot=`, is inert until a version is viewed; an empty id, or the banner's one-click 'Compare with latest' entry point, resolves to the latest version, and snapshot wins when both are present) and it stays READ-ONLY (the FAR-1812 write-affordance guard holds because the historic view is still active). It binds to the EXISTING POST /api/v1/pipelines/{pipeline_id}/snapshots/diff response — no backend change — and presents, in this order: (1) the semantic layer first — breaking_changes (block/warning, each with the backend's reason) and the impacted downstream node list, under a one-line narrative summary ('N nodes added, M removed, port signature changed on K nodes · these J downstream nodes are impacted'); (2) structural changes grouped per node (added/removed/modified with per-field old→new and port deltas) with unchanged nodes collapsed into a details count; (3) the raw JSON diff LAST, behind a 'Show raw JSON' toggle that is OFF by default (its aria-controls target is an always-present region, populated only when expanded). The pair pickers keep the route query authoritative (deep-linkable), the banner's Copy link carries the compare id while comparing, offer the WHOLE version history (the component pages the snapshot list itself, bounded, rather than only the host catalog's first page) and render a meaningful fallback label for a deep-linked id the loaded history does not carry, so a Select is never blank/mismatched. Each diff request carries a monotonic token AND an AbortController (shared with the 15s deadline helper in frontend/src/lib/requestTimeout.ts), so a superseded pair change — or leaving compare mode — aborts the in-flight request and a stale response can never overwrite a newer one; a stalled request times out into the same assertive error region with a Retry rather than spinning forever. The narrative summary is fully pluralised ('1 node added' / 'K nodes added') and counts a 'port signature changed' node only for a `node_signature` entry naming a node present in BOTH versions (FAR-1894's `kind` discriminator separates a genuine signature delta from an `edge_port` binding; an added node is reported under `nodes_added` and never produces a signature change). Both this view and the version timeline read the diff through ONE shared interpretation module (`frontend/src/lib/pipelineSnapshotDiff.ts`, FAR-1893). Comparing a version against itself reports truthfully that the two selected versions are the same rather than presenting an all-zero diff, and the banner's one-click compare entry point is hidden while the latest version is being viewed. The unchanged-nodes collapse lists the unchanged nodes rather than revealing an empty body. A backend error (including a malformed id-less node the diff indexer cannot tolerate, or a 404/422 deep-linked id) surfaces in the shared ErrorAlert (compact variant) as an assertive region with a Retry — never a crash or a blank view (frontend/src/components/pipeline/PipelineSnapshotCompare.vue, frontend/src/views/PipelineEditorView.vue, frontend/src/lib/requestTimeout.ts, frontend/src/lib/pipelineSnapshotDiff.ts; frontend/src/__tests__/components/PipelineSnapshotCompare.spec.ts, frontend/src/__tests__/PipelineEditorCompare.spec.ts, frontend/src/__tests__/lib/pipelineSnapshotDiff.spec.ts)"
+            - "[x] The pipeline editor opens a SEMANTIC-LED version compare mode (FAR-1818): the route query `?snapshot=<base>&compare=<other>` selects it (the compare KEY's presence selects the mode once a base snapshot is resolved — a compare id alone, with no `?snapshot=`, is inert until a version is viewed; an empty id, or the banner's one-click 'Compare with latest' entry point, resolves to the latest version, and snapshot wins when both are present) and it stays READ-ONLY (the FAR-1812 write-affordance guard holds because the historic view is still active). It binds to the EXISTING POST /api/v1/pipelines/{pipeline_id}/snapshots/diff response, whose backend endpoint was extended for the compare contract, and presents, in this order: (1) the semantic layer first — breaking_changes (block/warning, each with the backend's reason) and the impacted downstream node list, under a one-line narrative summary ('N nodes added, M removed, port signature changed on K nodes · these J downstream nodes are impacted'); (2) structural changes grouped per node (added/removed/modified with per-field old→new and port deltas) with unchanged nodes collapsed into a details count — the compared field set covers behaviour-bearing config, not just identity: a node-level HITL gate, node timeout, template, model class, the one-PR-per-run isolation flag, and an edge's routing expression, so a version pair that only reconfigures a node is never presented as 'no changes' (labels: field_hitl_config / field_hitl_review_config / field_timeout_seconds / field_template_id / field_model_class / field_single_pr_per_run / field_condition_expression); (3) the raw JSON diff LAST, behind a 'Show raw JSON' toggle that is OFF by default (its aria-controls target is an always-present region, populated only when expanded). The pair pickers keep the route query authoritative (deep-linkable), the banner's Copy link carries the compare id while comparing, offer the WHOLE version history (the component pages the snapshot list itself, bounded, rather than only the host catalog's first page) and render a meaningful fallback label for a deep-linked id the loaded history does not carry, so a Select is never blank/mismatched. Each diff request carries a monotonic token AND an AbortController (shared with the 15s deadline helper in frontend/src/lib/requestTimeout.ts), so a superseded pair change — or leaving compare mode — aborts the in-flight request and a stale response can never overwrite a newer one; a stalled request times out into the same assertive error region with a Retry rather than spinning forever. The narrative summary is fully pluralised ('1 node added' / 'K nodes added') and counts a 'port signature changed' node only for a `node_signature` entry naming a node present in BOTH versions (FAR-1894's `kind` discriminator separates a genuine signature delta from an `edge_port` binding; an added node is reported under `nodes_added` and never produces a signature change). Both this view and the version timeline read the diff through ONE shared interpretation module (`frontend/src/lib/pipelineSnapshotDiff.ts`, FAR-1893). Comparing a version against itself reports truthfully that the two selected versions are the same rather than presenting an all-zero diff, and the banner's one-click compare entry point is hidden while the latest version is being viewed. The unchanged-nodes collapse lists the unchanged nodes rather than revealing an empty body. A backend error (including a malformed id-less node the diff indexer cannot tolerate, or a 404/422 deep-linked id) surfaces in the shared ErrorAlert (compact variant) as an assertive region with a Retry — never a crash or a blank view (frontend/src/components/pipeline/PipelineSnapshotCompare.vue, frontend/src/views/PipelineEditorView.vue, frontend/src/lib/requestTimeout.ts, frontend/src/lib/pipelineSnapshotDiff.ts; frontend/src/__tests__/components/PipelineSnapshotCompare.spec.ts, frontend/src/__tests__/PipelineEditorCompare.spec.ts, frontend/src/__tests__/lib/pipelineSnapshotDiff.spec.ts)"
         deferrals:
             - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
     feat-plugins:
@@ -6884,6 +7240,7 @@ features:
         behaviours:
             - "[x] The plugin registry lists installed plugins and their entry point groups"
             - "[x] Plugins support connector, model-backend, eval, and schema-type entry points"
+            - "[x] Plugin discovery fails soft when the metadata provider or an individual entry-point object raises: the error is logged, the broken plugin is represented as unhealthy, and healthy siblings remain discoverable (core/plugin_registry.py)"
             - "[ ] Plugin lifecycle management (install, enable, disable, uninstall) is not exposed through the registry API — the registry is read-only (importlib.metadata discovery at startup) and plugin installation/removal/upgrade is deliberately left to pip"
         deferrals:
             - "Plugin lifecycle management via the registry API is tracked under feat-plugins (install/enable/disable/uninstall stay pip-managed today); the /admin/plugins UI is a private_preview surface"
@@ -6891,15 +7248,15 @@ features:
         description: Product usage and adoption analytics for system administrators
         status: partial
         behaviours:
-            - "[ ] The product analytics page does not yet show in-product usage and adoption metrics for system administrators - it renders only the transparency endpoint's delivery/consent/enforcement fields (frontend/src/views/AdminProductAnalyticsView.vue), which now reflect real state"
-            - "[x] Consent and enforcement toggles are configurable per instance"
+            - "[ ] The product analytics page does not yet show in-product usage and adoption metrics for system administrators - it renders only the transparency endpoint's delivery/consent fields (frontend/src/views/AdminProductAnalyticsView.vue), which now reflect real state"
+            - "[x] The instance-level analytics switch is configurable by a system admin, per instance: PUT /api/v1/product-analytics/instance-switch writes or clears system_config.product_analytics_enabled, audits the change in the org-independent system ledger, and is driven by the switch control on /admin/product-analytics (an explicit operator value always wins; clearing an operator-set value restores the licence-derived default. An environment-sourced switch is owned by MODULO_PRODUCT_ANALYTICS_ENABLED and has no stored row, so no reset control is offered for it - changing the env var is the only way to override it)"
             - "[x] Metrics scheduling ships: a jittered daily metrics-dump SAQ system cron (core/product_analytics/metrics_dump.py) gates the per-instance dump window on the stored jitter offset and intersects it with the consented validity window, then delivers the batch to the vendor ingest endpoint with a stable persisted watermark"
             - "[x] The transparency endpoint (GET /api/v1/product-analytics/transparency) derives the instance's data-residency posture: egress_allowed is true ONLY when the instance-level switch AND an explicit 'all' consent are both on (core/product_analytics/consent.py), so telemetry egress is fail-closed by default (personas/marcus-ciso.feature)"
-            - "[x] The transparency endpoint reports the instance's real product-analytics state - instance_enabled/enforcement_enabled delegate to the shared consent helpers (is_instance_analytics_enabled / is_license_enforcement_enabled), last_successful_dump_at and dump_count_total read the keys the metrics dump writes (constants.DUMP_WATERMARK_KEY / DUMP_COUNT_KEY, the latter incremented once per successful non-skipped dump), and consent_level reads the caller's org settings_json - so /admin/product-analytics no longer renders static defaults"
+            - "[x] The transparency endpoint reports the instance's real product-analytics state - instance_enabled, instance_switch_source and licence_requires_analytics come from the shared resolver (consent.resolve_instance_analytics_switch); last_successful_dump_at and dump_count_total read the keys the metrics dump writes (constants.DUMP_WATERMARK_KEY / DUMP_COUNT_KEY, the latter incremented once per successful non-skipped dump); consent_level reads the caller's org settings_json - so /admin/product-analytics no longer renders static defaults"
             - "[x] The transparency endpoint's consent_level/egress_allowed are scoped per organisation (the caller's own org, the preferred source) with an instance-level fallback when the caller org cannot be resolved - all if any active org has opted in, else off (FAR-1635)"
             - "[x] Staged frontend events are consumed and purged end to end (FAR-1717) - the daily metrics_dump aggregates metrics_staging rows into the payload's event_counts section (_aggregate_staged_events) and every cron tick purges consumed rows (watermark past their date) plus rows older than the 30-day retention bound via _purge_staging, served by the plain index ix_metrics_staging_recorded_at (migration 0304); turning the org level off (admin PUT or prompt decline) purges its staged rows immediately"
             - "[x] The frontend event-capture composable is initialised in the app root (FAR-1718) - App.vue calls initProductAnalytics wired to productAnalyticsStore.isOptedIn as the live consent function, and curated track() call sites ship for pipeline create/run start, schema create, connector add, model-backend add, trigger create, eval create and HITL claim/approve/reject; no page_view event exists - per-route data is not captured client or server side; each event_id is a per-session prefix plus a monotonic counter, so a page reload (or a second tab) restarts the counter under a NEW prefix and its events cannot collide with the earlier session's IDs under the backend's (organisation_id, event_id) dedup (frontend/src/composables/useProductAnalytics.ts, useProductAnalytics.spec.ts)"
-            - "[ ] License/plan eligibility gating is not wired into request-time routes: the effective-plan resolution (core/feature_flags.py resolve_plan_context / require_feature) never consults should_degrade_to_community, so a degraded org keeps its paid tier on API routes. The daily DUMP half DOES apply the partner product_analytics_required carve-out - metrics_dump reads license_enforcement.is_enforcement_active once per run and _get_consenting_orgs excludes orgs where should_degrade_to_community fires - so only the route half remains (docs/product-map/admin/product-analytics.md)"
+            - "[x] Analytics never degrades an organisation's plan or tier. The partner product_analytics_required claim is CONTRACTUAL: it only supplies the DEFAULT for the instance switch when no operator value exists (consent.resolve_instance_analytics_switch), and metrics_dump collects consenting orgs with no licence/tier inspection. A partner that disables the dump is breaching a contract, which is a conversation, not a software control"
             - "[ ] An in-product analytics export/administration surface (self-serve downloadable org metrics, configurable reporting schedule, or an in-app analytics warehouse) is not shipped — telemetry export is vendor-bound"
         deferrals:
             - "In-product analytics export and scheduling administration is tracked under feat-product-analytics; a self-hosted analytics warehouse is feat-analytics scope"
@@ -6955,6 +7312,10 @@ features:
             # Run -> pipeline-version link (FAR-1813)
             - "[x] The runs list row and the run detail render the pipeline NAME as a real focusable link to the version that run executed (/pipelines/{pipeline_id}/editor?snapshot={snapshot_id}), built ONLY from that run's own snapshot_id so a rerun links to the source snapshot it re-executed and never to the pipeline head; a legacy run with snapshot_id NULL links to the live editor with a title stating the run has no recorded version, a deleted pipeline (pipeline_name NULL) renders plain text instead of a dead link, and the list row keeps a separate 'View run' link so run detail stays reachable now the name opens the version (frontend/src/components/runs/RunPipelineVersionLink.vue, RunsListView.vue, RunDetailView.vue, RunPipelineVersionLink.spec.ts)"
             - "[x] The same run surfaces show WHICH pipeline version the run executed as a compact `v{n}` chip beside the pipeline name (RunResponse.snapshot_version, forwarded by RunsListView/RunDetailView): the chip renders only for a positive integer version (a bool, numeric string, non-integer, NaN/Infinity or 0 renders no chip; a legacy run with snapshot_version NULL renders NO chip at all — absence, never `v0`/`vnull`/placeholder), and it sits INSIDE the pipeline link when a link target exists so the pipeline-name control (name + chip, not the whole row) stays ONE tab stop with ONE accessible name ('my-pipeline v3'), while a deleted pipeline (no link target) still shows the chip as plain non-interactive content because the version describes the RUN — never a second focusable element and never a dead link; label/tooltip are locale keys under components.RunPipelineVersionLink (frontend/src/components/runs/RunPipelineVersionLink.vue, RunsListView.vue, RunDetailView.vue, locales/en-US.js, RunPipelineVersionLink.spec.ts, RunsListView.spec.ts, RunDetailView.spec.ts)"
+            # Durable per-attempt execution history (FAR-2078)
+            - "[x] Every execution ATTEMPT of a run is recorded durably, not only the final one (FAR-2078): run_attempts (migration 0329, org-scoped with the rls_org_isolation policy, run_id + organisation_id FKs ON DELETE CASCADE so retention inherits the parent run — no separate sweep) carries a 0-based, per-run contiguous and monotonic attempt_index (unique with run_id; the COALESCE(MAX, -1) + 1 allocator is serialised on Postgres by a transaction-scoped per-run advisory lock so concurrent starters cannot collide), started_at, nullable ended_at, model_used, error_code and a CLOSED terminal_reason vocabulary (deadline / stall / guard_cap / worker_lost / provider_error / completed / reset — NULL means the attempt is OPEN, enforced by ck_run_attempts_terminal_reason and rejected pre-write by the closer); the executor opens a row on admission (a demoted claim or a fence-rejected budget bump opens none, and an attempt-row write failure never fails admission) and closes the latest open row on a terminal outcome — an awaiting-human attempt stays OPEN, a retry/watchdog re-dispatch and a handed-back worker loss close as reset, and a fenced-out terminal write closes nothing — so the intermediate attempts that previously left no durable record are diagnosable (backend/src/modulo/db/models/run_attempt.py, backend/src/modulo/db/crud/run_attempts.py, backend/src/modulo/db/migrations/versions/0329_run_attempts.py, backend/src/modulo/core/pipeline_execution.py, backend/src/modulo/core/pipeline_engine/executor.py, test_run_attempts.py, test_migration_0329_run_attempts.py, test_far2078_attempt_instrumentation.py)"
+            - "[x] GET /api/v1/runs/{run_id}/attempts returns the run's attempt history ordered by attempt_index ascending, gated on the SAME viewer-level run.status permission as run detail (require_permission_any_credential, so JWT and org API-key callers both work, deliberately not a new permission key): the run is loaded org-scoped behind set_rls_org, so a missing run AND another organisation's run both answer 404 — never an empty list, which would leak existence semantics; items is capped at 100 while total carries the run's true attempt count so a truncated page is visible rather than silently reported as complete, and the route follows the shared database-error convention (backend/src/modulo/api/routes/runs.py, test_run_attempts_endpoint.py)"
+            - "[x] The run detail page renders the attempt history (RunAttemptHistory.vue) as a STATIC record, deliberately NOT an aria-live region: 1-based attempt numbers over the 0-based wire index, started time, duration (an OPEN attempt reads as running and an unparseable interval as a dash, never a fabricated duration), terminal reason translated from the closed vocabulary (an unrecognised value reads as a translated Unknown, never the raw enum), model and error code; loading, empty (older runs with no recorded attempts) and an inline unavailable + Retry state are all handled without breaking the rest of the page (a 404 or generic fetch failure degrades to unavailable), a monotonic request id discards a stale response when the run id changes mid-flight, and a truncation note appears when total exceeds the returned items (frontend/src/components/runs/RunAttemptHistory.vue, frontend/src/views/RunDetailView.vue, frontend/src/__tests__/RunAttemptHistory.spec.ts)"
     feat-runtime:
         description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
         status: covered

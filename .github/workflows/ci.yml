@@ -12,8 +12,16 @@ on:
   # runner-ci-harness.yml with force=true).
 
 env:
-  SECRET_KEY: ${{ secrets.SECRET_KEY }}
-  FERNET_KEY: ${{ secrets.FERNET_KEY }}
+  # Dependabot PR runs never receive repository secrets (GitHub withholds them
+  # for `dependabot[bot]`-authored pull_request events), so these two Settings
+  # fields would arrive empty and fail validation at import
+  # ("SECRET_KEY must be at least 32 bytes; got 0"), erroring every test module
+  # that constructs the app. The fallbacks are fixed, non-production test
+  # values - the same shape as the POSTGRES_PASSWORD fallback below - and are
+  # only ever used when the real secret is unavailable. FERNET_KEY must stay a
+  # valid 32-byte url-safe base64 key because cryptography.Fernet parses it.
+  SECRET_KEY: ${{ secrets.SECRET_KEY || 'ci-only-placeholder-secret-key-not-for-production' }}
+  FERNET_KEY: ${{ secrets.FERNET_KEY || 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }}
   # Authenticate GitHub git fetches so `uv sync --frozen` can resolve git-pinned
   # dependencies (e.g. pytest-bdd @ refs/pull/827/head) without an anonymous
   # fetch-by-SHA, which GitHub rejects from CI runners.
@@ -745,7 +753,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         if: needs.changes.outputs.frontend == 'true'
         with:
-          version: 11.28.6
+          version: 11.28.8
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: needs.changes.outputs.frontend == 'true'
         with:
@@ -778,10 +786,46 @@ jobs:
       - name: Run mobile nav specs (flash + usable)
         if: needs.changes.outputs.frontend == 'true'
         run: pnpm exec playwright test mobile-nav-flash mobile-nav-usable
+      # FAR-2017: the visual/token/layout slice runs on every frontend PR.
+      # These specs previously ran ONLY in the post-deploy staging @regression
+      # gate, so a token/CSS regression passed every PR check, landed on main
+      # and broke the deploy train (FAR-2016 json-viewer light-mode token
+      # probe; FAR-1913/FAR-2028 mobile-layout axe contrast). The whole suite is
+      # not affordable per PR (~313 tests, ~11 min against a deployed target,
+      # plus provisioning); this slice is ~19 tests / ~2 min locally.
+      #
+      # The selection is deliberately UNCONDITIONAL (not changed-path gated).
+      # A path filter can miss a spec whose subject changed without a matching
+      # path (a token defined in JS, a class rename in a .vue script block), and
+      # a selector that under-selects reads as coverage. `--check` turns that
+      # into a hard failure instead: a new @regression spec asserting rendered
+      # CSS/tokens/layout must be classified in SLICE or STAGING_ONLY (with a
+      # reason) or the PR fails.
+      #
+      # Serial (--workers=1): the slice shares one cold Vite dev server, and
+      # parallel workers competing with its on-demand compile produced
+      # full-element-timeout flakes in combined local runs.
+      - name: Check the e2e visual slice classification
+        if: needs.changes.outputs.frontend == 'true'
+        run: node scripts/e2e-visual-slice.mjs --check
+      - name: Run the visual/token e2e slice
+        if: needs.changes.outputs.frontend == 'true'
+        env:
+          E2E_TARGET: local
+        run: |
+          read -r -a FILES <<< "$(node scripts/e2e-visual-slice.mjs --list)"
+          echo "visual/token e2e slice: ${FILES[*]}"
+          pnpm exec playwright test "${FILES[@]}" --grep "@regression" --workers=1 --reporter=line
       - name: Run unit tests (vitest)
         if: needs.changes.outputs.frontend == 'true'
+        # The suite includes src/__tests__/stylesheets-parse.spec.ts (FAR-1995),
+        # the explicit PostCSS/@vue/compiler-sfc gate for standalone CSS and Vue
+        # SFC <style> blocks. ESLint and vue-tsc do not validate CSS contents.
+        # Keep this test in the existing frontend unit gate rather than adding a
+        # second CSS-specific tool or dependency.
         # FAR-101: ubicloud-standard-2 is 2 vCPU. package.json's `test:unit`
         # script hardcodes --maxWorkers=4, which saturates both cores with 4
+
         # concurrently-loading jsdom environments (Vue SFC + ECharts/reka-ui/
         # vue-query) and starves setImmediate (flushPromises) by 10+s. Cap the
         # runner at 2 workers — matches actual CPU capacity, not a race-hiding
@@ -931,7 +975,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         if: needs.changes.outputs.frontend == 'true'
         with:
-          version: 11.28.6
+          version: 11.28.8
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: needs.changes.outputs.frontend == 'true'
         with:
@@ -1089,8 +1133,8 @@ jobs:
           "$SCANNER" --version
       - name: SonarCloud scan
         if: needs.changes.outputs.sonar == 'true'
-        # Two known environment-only, intermittent scanner failures are retried;
-        # any other error is genuine and fails the check immediately.
+        # Three known environment-only, intermittent failures are retried; any
+        # other error is genuine and fails the check immediately.
         #
         #   1. Transient race in SonarCloud's Python sensor: PackageRootResolver's
         #      unconditional Files.walk(baseDir) in FileProvider descends into
@@ -1109,8 +1153,23 @@ jobs:
         #      38021176294): the SAME commit 2b06bc01c scanned green 28 min
         #      earlier (run 38019518160) and the scanner ships no code change, so
         #      it is environment-only, never a code or quality-gate failure.
+        #   3. SonarCloud's compute engine (CE) rejecting an uploaded report
+        #      server-side: the scanner prints `CE Task finished abnormally with
+        #      status: FAILED` and exits 3. Observed on main 2026-10-26 (runs
+        #      40292373035 for 5a0f0cb5d and 40292390281 for 3217ae8e3, both
+        #      red) while IDENTICAL analyses of the same project finished green
+        #      minutes apart: run 40292507790 analysed the SAME revision
+        #      3217ae8e3 at 09:07:52 and run 40292352735 analysed its parent
+        #      621e163 at 09:02:40. The failing scans produced the same report
+        #      (same warnings, same coverage, same file set, ~41 MB), so the
+        #      rejection is server-side and transient -- never a code or
+        #      quality-gate failure. Because the CE message itself is generic,
+        #      the server's own `errorMessage` is fetched from `/api/ce/task`
+        #      and logged before any retry, so a DETERMINISTIC CE failure
+        #      (quota, licence, malformed report) stays visible and still fails
+        #      the check after that single retry.
         #
-        # Both are matched by an exact log signature, never a quality-gate
+        # All three are matched by an exact log signature, never a quality-gate
         # failure or any other error, so a genuine red check is never masked.
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -1122,6 +1181,10 @@ jobs:
           # every exit path (success, non-transient failure, exhaustion).
           LOG="$(mktemp)"
           trap 'rm -f "$LOG"' EXIT
+          # A CE-task rejection gets exactly one retry (the class is server-side
+          # and intermittent); counted separately from the loop index so a
+          # retry of one class never silently buys another class extra attempts.
+          CE_FAILURES=0
           for attempt in 1 2 3; do
             : > "$LOG"
             set +e
@@ -1141,7 +1204,25 @@ jobs:
               fi
               continue
             fi
-            echo "::error::SonarCloud scan failed with a non-transient error (neither the .git/.probe-* race nor the security-engine duplicate-class LinkageError); not retrying."
+            if grep -qF "CE Task finished abnormally with status: FAILED" "$LOG"; then
+              CE_FAILURES=$((CE_FAILURES + 1))
+              # The scanner only prints the CE task URL. Fetch the server's own
+              # reason so an opaque "CE Task FAILED" never reaches the log bare.
+              TASK_ID="$(grep -oE 'api/ce/task\?id=[A-Za-z0-9_-]+' "$LOG" | tail -n 1 | sed 's/.*id=//')"
+              CE_REASON=""
+              if [ -n "$TASK_ID" ]; then
+                CE_REASON="$(curl -sS --max-time 30 -H "Authorization: Bearer ${SONAR_TOKEN}" "${SONAR_HOST_URL}/api/ce/task?id=${TASK_ID}" 2>/dev/null | jq -r '.task.errorMessage // .errors[0].msg // empty' 2>/dev/null || true)"
+                echo "::notice::SonarCloud CE task ${TASK_ID} failed server-side: ${CE_REASON:-<no errorMessage returned>}"
+              fi
+              if [ "$CE_FAILURES" -lt 2 ] && [ "$attempt" -lt 3 ]; then
+                echo "::warning::SonarCloud CE task rejected the report server-side (CE attempt ${CE_FAILURES}/2); retrying once -- identical analyses of this project have completed green minutes apart."
+                sleep 20
+                continue
+              fi
+              echo "::error::SonarCloud CE task rejected the report server-side on ${CE_FAILURES}/2 attempt(s); not retrying further. Server reason: ${CE_REASON:-<no errorMessage returned>}"
+              exit "$RC"
+            fi
+            echo "::error::SonarCloud scan failed with a non-transient error (neither the .git/.probe-* race, the security-engine duplicate-class LinkageError, nor a server-side CE task rejection); not retrying."
             exit "$RC"
           done
           echo "::error::SonarCloud scan still hit a known transient scanner failure after 3 attempts; failing the required check (upstream SONARPY-2120 / security-engine plugin-classloader race)."
@@ -1404,7 +1485,7 @@ jobs:
           enable-cache: true
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.6
+          version: 11.28.8
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"

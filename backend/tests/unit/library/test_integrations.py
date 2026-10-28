@@ -9,12 +9,14 @@ required.  No DB — pure data checks.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from modulo.core.library.integrations import __all__ as integration_exports
 from modulo.core.library.integrations import definitions as integration_defs
+
+from .helpers import INTEGRATIONS, VALID_CONNECTOR_BINDING_TYPES
 
 REQUIRED_KEYS: set[str] = {
     "name",
@@ -32,14 +34,13 @@ VALID_FIELD_TYPES: set[str] = {"string", "boolean", "number", "integer"}
 
 
 def _integration(name: str) -> dict[str, Any]:
-    return getattr(integration_defs, name)
+    return cast(dict[str, Any], getattr(integration_defs, name))
 
 
 def test_all_integrations_exported() -> None:
-    """Every exported integration constant is a dict definition."""
-    assert len(integration_exports) == 24
-    for name in integration_exports:
-        assert isinstance(_integration(name), dict), name
+    """``__all__`` mirrors the integration definitions module exactly."""
+    assert INTEGRATIONS, "library catalog is empty"
+    assert set(integration_exports) == set(INTEGRATIONS), f"unexported: {set(INTEGRATIONS) - set(integration_exports)}"
 
 
 @pytest.mark.parametrize("name", integration_exports, ids=lambda n: n)
@@ -109,3 +110,10 @@ def test_connector_types_are_known() -> None:
     for name in integration_exports:
         connector_type = _integration(name)["connector_type"]
         assert connector_type in known, f"{name}: unknown connector_type {connector_type!r}"
+
+
+@pytest.mark.parametrize("name", integration_exports, ids=lambda n: n)
+def test_tool_group_matches_binding_vocabulary(name: str) -> None:
+    """Integration tool_groups use the same vocabulary as workflow bindings."""
+    tool_group = _integration(name)["tool_group"]
+    assert tool_group in VALID_CONNECTOR_BINDING_TYPES, f"{name}: unknown tool_group {tool_group!r}"

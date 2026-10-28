@@ -1969,12 +1969,35 @@ class TestCopyLibraryPrimitive(_AuthContext):
         assert result == {"error": "not_found", "primitive_id": primitive_id}
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_primitive")
+    @patch("modulo.api.mcp_server.library_copy_to_adapt")
+    @patch("modulo.api.mcp_server._session")
+    async def test_lifecycle_map_is_denied_when_dev_mode_off(
+        self,
+        mock_session: AsyncMock,
+        mock_library_copy: AsyncMock,
+        mock_get_primitive: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        primitive = MagicMock()
+        primitive.primitive_type = "lifecycle_map"
+        mock_sesh = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_get_primitive.return_value = primitive
+        with patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=False)):
+            result = await copy_library_primitive(primitive_id=str(uuid.uuid4()))
+        assert result["error"] == "insufficient_scope"
+        mock_library_copy.assert_not_awaited()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_primitive", return_value=None)
     @patch("modulo.api.mcp_server.library_copy_to_adapt")
     @patch("modulo.api.mcp_server._session")
     async def test_success_returns_copied_shape(
         self,
         mock_session: AsyncMock,
         mock_library_copy: AsyncMock,
+        mock_get_primitive: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
         copied = MagicMock()

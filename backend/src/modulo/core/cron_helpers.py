@@ -541,6 +541,23 @@ _ZERO_PROGRESS_SHAPE_SQL = (
 ).replace(_NON_SENTINEL_FINAL_NODE_ID_TOKEN, _NON_SENTINEL_FINAL_NODE_ID_SQL)
 _ZERO_PROGRESS_SHAPE_TOKEN = "__ZERO_PROGRESS_SHAPE__"
 
+# FAR-2122: a node output written inside the progress window is durable
+# evidence that the executor is still advancing.  The window is a BOUND param
+# (``:node_output_progress_cutoff``, materialised in Python from the tuned
+# ``node_output_progress_seconds``) rather than a literal — one knob, and the
+# clause is executable under the in-memory SQLite fixture (the same technique
+# ``_SWEEP_ORPHANED_RUNS_SQL``'s ``:orphan_cutoff`` uses).
+_NODE_OUTPUT_PROGRESS_ABSENT_SQL = (
+    "NOT EXISTS (SELECT 1 FROM run_node_outputs rno_progress "
+    "WHERE rno_progress.run_id = runs.id "
+    "AND rno_progress.updated_at >= :node_output_progress_cutoff)"
+)
+_NODE_OUTPUT_PROGRESS_ABSENT_TOKEN = "__NODE_OUTPUT_PROGRESS_ABSENT__"
+# Coded fallback for the recency window (Settings
+# ``dispatcher_reconcile_node_output_progress_seconds``). Also used when a
+# direct caller / stand-in settings object omits the knob.
+_NODE_OUTPUT_PROGRESS_DEFAULT_SECONDS = 900
+
 # The two FAR-1329 statements. Assembled from static templates + str.replace
 # (bandit/ruff S608 flag f-string/format SQL construction — trigger_streak's
 # ``__STATUSES__`` precedent): the ONLY thing substituted is the module
@@ -601,6 +618,15 @@ _MID_GRAPH_WEDGE_SQL = (
     "AND runs.sandbox_dispatch_state NOT LIKE :live_marker_tombstone "
     "AND heartbeat_at IS NOT NULL "
     "AND heartbeat_at >= now() - (:heartbeat_fresh * interval '1 second')) "
+    # A node output written recently is durable evidence that the executor is
+    # still making progress.  The age bound is deliberately not a progress
+    # test: a long-running graph can legitimately exceed it while a node is
+    # still advancing.  Keep this window short enough to collect genuinely
+    # abandoned rows, while allowing the next reconcile tick to observe the
+    # progress and leave the run alone.  The clause (with its BOUND cutoff) is
+    # the shared ``_NODE_OUTPUT_PROGRESS_ABSENT_SQL`` fragment so it is tested
+    # behaviourally on its own.
+    "  AND __NODE_OUTPUT_PROGRESS_ABSENT__ "
     "  AND NOT (__ZERO_PROGRESS_SHAPE__) "
     "  LIMIT :max_rows) "
     "RETURNING id"
@@ -1363,7 +1389,7 @@ async def _log_ongoing_event(
 
 
 async def _ingest_saq_error(
-    _session: Any,
+    session: Any,  # NOSONAR S1172 - retained caller-session seam; ingestion owns its transaction
     org_id: uuid.UUID,
     *,
     function: str,
@@ -1372,17 +1398,21 @@ async def _ingest_saq_error(
 ) -> None:
     """Ingest an error event with source='saq' (plan F3d/F1 enqueue-failure alert).
 
-    Runs in its own session/transaction (the caller's transaction stays intact
-    — ``_session`` is vestigial and kept only for caller symmetry, so its type
-    is ``Any``: reconcile callers pass their ORM ``AsyncSession``, the
-    stale_run_recovery zero-progress sweep passes its raw ``AsyncConnection``
-    — neither is ever executed on) and never raises — error ingestion must not
+    Runs in its own session/transaction (the caller's transaction stays intact;
+    *session* is retained for caller symmetry, so its type is ``Any``: reconcile
+    callers pass their ORM ``AsyncSession``, the stale_run_recovery zero-progress
+    sweep passes its raw ``AsyncConnection`` — neither is ever executed on) and
+    never raises — error ingestion must not
     crash the scheduler tick.
+
+    ``session`` is accepted for caller symmetry but deliberately unused because
+    ingestion opens its own transaction.
 
     If ``org_id`` is the nil UUID (system error without tenant context), the
     error is logged and skipped — the ``error_events`` FK constraint requires
     a real organisation row.
     """
+    del session
     if org_id == SYSTEM_ORG_ID:
         _log.error(
             "SAQ system error (no tenant context) — skipping DB ingest: function=%s message=%s",
@@ -1838,6 +1868,44 @@ async def fire_cron_trigger(
         )
 
 
+async def _validate_cron_trigger(
+    session: AsyncSession, trigger_id: uuid.UUID, org_id: uuid.UUID, pipeline_id: uuid.UUID
+) -> tuple[Any, dict[str, Any] | None]:
+    """Validate a cron trigger and return (trigger, skip_dict) or (None, skip_dict)."""
+    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from modulo.core.run_admission import evaluate_backpressure
+    from modulo.db.models.trigger import Trigger
+
+    key1, key2 = _uuid_to_lock_keys(trigger_id)
+    lock_result = await session.execute(text(_SQL_TRY_ADVISORY_LOCK), {"key1": key1, "key2": key2})
+    if not lock_result.scalar_one():
+        return None, {"status": "skipped", "reason": "trigger_busy"}
+
+    trigger = (
+        await session.execute(
+            select(Trigger).where(
+                Trigger.id == trigger_id,
+                Trigger.organisation_id == org_id,
+                Trigger.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if trigger is None or not trigger.active:
+        return None, {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+    if await _org_is_paused_degraded(session, org_id):
+        return None, {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+    active_count = await _count_active_runs(session, trigger_id)
+    if active_count >= trigger.max_concurrent_runs:
+        return trigger, await _concurrency_limit_skip(session, trigger, org_id, active_count)
+    backpressured, bp_reason = await evaluate_backpressure(session, pipeline_id=pipeline_id)
+    if backpressured:
+        return trigger, await _backpressure_skip(session, trigger, org_id, bp_reason)
+    skip = await _cron_spend_gate_skip(session, trigger, org_id)
+    if skip is not None:
+        return trigger, skip
+    return trigger, None
+
+
 async def _fire_cron_trigger_in_session(
     session: AsyncSession,
     *,
@@ -1850,38 +1918,16 @@ async def _fire_cron_trigger_in_session(
 ) -> dict[str, Any]:
     from sqlalchemy import update
 
-    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-    from modulo.core.run_admission import evaluate_backpressure
     from modulo.db.crud.run import create_run
     from modulo.db.models.trigger import Trigger
 
     await _set_rls_org(session, org_id)
-    key1, key2 = _uuid_to_lock_keys(trigger_id)
-    lock_result = await session.execute(text(_SQL_TRY_ADVISORY_LOCK), {"key1": key1, "key2": key2})
-    if not lock_result.scalar_one():
-        return {"status": "skipped", "reason": "trigger_busy"}
-    trigger = (
-        await session.execute(
-            select(Trigger).where(
-                Trigger.id == trigger_id,
-                Trigger.organisation_id == org_id,
-                Trigger.deleted_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
-    if trigger is None or not trigger.active:
-        return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-    if await _org_is_paused_degraded(session, org_id):
-        return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
-    active_count = await _count_active_runs(session, trigger_id)
-    if active_count >= trigger.max_concurrent_runs:
-        return await _concurrency_limit_skip(session, trigger, org_id, active_count)
-    backpressured, bp_reason = await evaluate_backpressure(session, pipeline_id=pipeline_id)
-    if backpressured:
-        return await _backpressure_skip(session, trigger, org_id, bp_reason)
-    skip = await _cron_spend_gate_skip(session, trigger, org_id)
+    trigger, skip = await _validate_cron_trigger(session, trigger_id, org_id, pipeline_id)
     if skip is not None:
         return skip
+    if trigger is None:
+        return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+
     try:
         async with session.begin_nested():
             if snapshot_id is None:
@@ -1908,6 +1954,7 @@ async def _fire_cron_trigger_in_session(
     except PipelineNotRunnableError as exc:
         _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
         return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
+
     event = await _log_event(session, trigger=trigger, org_id=org_id, result="accepted", run_id=run.id)
     values: dict[str, Any] = {"last_fired_at": datetime.now(UTC)}
     if advance_next_fire_at:
@@ -2713,22 +2760,23 @@ async def _resolve_ongoing_snapshot(
 
 
 async def _dispatch_ongoing_runs(
-    _q_or_none: Any,
+    q_or_none: Any,  # NOSONAR S1172 - retained queue seam for caller/test compatibility
     org_id: uuid.UUID,
     run_ids: list[uuid.UUID],
-    _redis_client: AsyncRedis | None = None,
+    redis_client: AsyncRedis | None = None,  # NOSONAR S1172 - retained Redis seam for caller/test compatibility
 ) -> list[dict[str, Any]]:
     """Queue phase of the ongoing top-up — dispatch each created run to SAQ.
 
-    Called ONLY after the top-up transaction committed (``_q_or_none`` is a
-    placeholder kept for seam parity; the queue name resolves from settings).
-    ``_redis_client`` is retained for caller symmetry but unused — per-run
-    try/except collects ``{'run_id', 'outcome', 'job_id'?}`` and NEVER raises
+    Called ONLY after the top-up transaction committed (the queue and Redis
+    arguments are retained for caller/test seam compatibility; the queue name
+    resolves from settings). Per-run try/except collects ``{'run_id',
+    'outcome', 'job_id'?}`` and NEVER raises
     after commit: a SAQ retry would re-count the committed pendings
     (idempotent), and committed-but-never-dispatched pendings are recovered by
     ``dispatcher_reconcile``'s existing ``pending + dispatched_at IS NULL``
     branch.
     """
+    del q_or_none, redis_client
     from modulo.core.dispatch import dispatch_run
 
     settings = get_settings()
@@ -3692,7 +3740,7 @@ async def _rollback_catchup_advance(
 
 
 @asynccontextmanager
-async def _bound_org(org_id: uuid.UUID) -> AsyncIterator[None]:
+async def _bound_org(org_id: uuid.UUID) -> AsyncIterator[None]:  # NOSONAR S7503 - async context-manager seam
     """Bind *org_id* into ``org_id_var`` for one per-org tick (FAR-1484).
 
     ``fire_due_triggers`` is an org-less SYSTEM cron at the job level — the
@@ -4387,49 +4435,66 @@ async def _enqueue_suite_run_fire(
     return True
 
 
-async def _process_one_due_polling_row(
+def _parse_connector_instance_id(config: dict[str, Any]) -> uuid.UUID | None:
+    """Parse connector_instance_id from config, returning None if invalid."""
+    ci_id_str = config.get("connector_instance_id")
+    try:
+        return uuid.UUID(str(ci_id_str)) if ci_id_str else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_poll_interval(config: dict[str, Any]) -> int:
+    """Parse poll_interval_seconds from config, defaulting to 60."""
+    try:
+        return max(int(config.get("poll_interval_seconds") or 60), 1)
+    except (ValueError, TypeError):
+        return 60
+
+
+def _is_suite_run(row: Any) -> bool:
+    """Check if the row is a suite_run."""
+    return getattr(row, "run_kind", "run") == "suite_run"
+
+
+async def _advance_and_check_polling(
+    session: AsyncSession,
+    row: Any,
+    interval: int,
+) -> bool:
+    """Advance polling next_fire_at and return True if successful."""
+    try:
+        return await _advance_polling_next_fire(session, row.id, interval)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: polling advance failed %s", row.id)
+        return False
+
+
+async def _handle_missing_connector_polling(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    row: Any,
+    interval: int,
+    summary: dict[str, Any],
+) -> None:
+    """Handle polling trigger with missing connector instance."""
+    await _polling_missing_connector(session, org_id, row, interval, summary)
+
+
+async def _process_polling_fire(
     session: AsyncSession,
     q: RedisQueue,
     now: datetime,
     org_id: uuid.UUID,
     org_paused: bool,
     row: Any,
+    config: dict[str, Any],
+    connector_instance_id: uuid.UUID | None,
     summary: dict[str, Any],
 ) -> None:
-    """Advance + enqueue ONE due polling row (one epoch each, atomic)."""
-    config = row.config_json or {}
-    ci_id_str = config.get("connector_instance_id")
-    try:
-        connector_instance_id = uuid.UUID(str(ci_id_str)) if ci_id_str else None
-    except (ValueError, TypeError):
-        connector_instance_id = None
-    try:
-        interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-    except (ValueError, TypeError):
-        _log.warning(
-            "fire_due_triggers: invalid poll_interval_seconds for trigger %s, using default",
-            row.id,
-        )
-        interval = 60
-    is_suite_run = getattr(row, "run_kind", "run") == "suite_run"
-    if connector_instance_id is None and not is_suite_run:
-        # Missing connector instance — log poll_error and advance
-        # (mirrors the legacy beat _fetch_due_triggers behaviour). A suite_run
-        # polling row is exempt: it resolves its own dataset/backend from the
-        # trigger config and needs no connector instance.
-        await _polling_missing_connector(session, org_id, row, interval, summary)
-        return
-
-    summary["polling_due"] += 1
-    try:
-        advanced = await _advance_polling_next_fire(session, row.id, interval)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception("fire_due_triggers: polling advance failed %s", row.id)
-        return
-    if not advanced:
-        return
+    """Enqueue polling fire job."""
     if org_paused:
         summary["polling_skipped_paused"] += 1
         return
@@ -4441,6 +4506,33 @@ async def _process_one_due_polling_row(
             message=f"fire_due_triggers: enqueue failed for polling trigger {row.id}",
             context={"trigger_id": str(row.id), "trigger_type": "polling"},
         )
+
+
+async def _process_one_due_polling_row(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    org_paused: bool,
+    row: Any,
+    summary: dict[str, Any],
+) -> None:
+    """Advance + enqueue ONE due polling row (one epoch each, atomic)."""
+    config = row.config_json or {}
+    connector_instance_id = _parse_connector_instance_id(config)
+    interval = _parse_poll_interval(config)
+    is_suite_run = _is_suite_run(row)
+
+    if connector_instance_id is None and not is_suite_run:
+        await _handle_missing_connector_polling(session, org_id, row, interval, summary)
+        return
+
+    summary["polling_due"] += 1
+
+    if not await _advance_and_check_polling(session, row, interval):
+        return
+
+    await _process_polling_fire(session, q, now, org_id, org_paused, row, config, connector_instance_id, summary)
 
 
 async def _process_due_polling_rows(
@@ -4568,44 +4660,52 @@ async def _process_one_due_report_row(
         )
 
 
-async def _process_one_ongoing_row(
+def _parse_ongoing_interval(config: dict[str, Any]) -> int:
+    """Parse scan_interval_seconds from config, defaulting to 60."""
+    return max(int(config.get("scan_interval_seconds") or 60), 60)
+
+
+def _is_suite_run_ongoing(row: Any) -> bool:
+    """Check if the ongoing row is a suite_run."""
+    return getattr(row, "run_kind", "run") == "suite_run"
+
+
+async def _advance_and_check_ongoing(
     session: AsyncSession,
-    q: RedisQueue,
-    now: datetime,
-    org_id: uuid.UUID,
-    org_paused: bool,
     row: Any,
-    ongoing_latest_snapshots: dict[uuid.UUID, uuid.UUID],
-    summary: dict[str, Any],
-    ongoing_enqueued: int,
-) -> int:
-    """Advance + enqueue ONE due ongoing row; returns 1 when a job was enqueued."""
-    config = row.config_json or {}
-    interval = max(int(config.get("scan_interval_seconds") or 60), 60)
-    summary["ongoing_due"] += 1
+    interval: int,
+) -> bool:
+    """Advance ongoing next_fire_at and return True if this machine owns the epoch."""
     try:
-        if not await _advance_ongoing_next_fire(session, row.id, interval):
-            return 0  # another machine advanced this epoch
+        return await _advance_ongoing_next_fire(session, row.id, interval)
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("fire_due_triggers: ongoing advance failed %s", row.id)
-        return 0
-    if org_paused:
-        # SKIP-not-defer: the epoch is consumed (advance above)
-        # but no fire job is enqueued.
-        summary["ongoing_skipped_paused"] += 1
-        return 0
-    if ongoing_enqueued >= ONGOING_MAX_ENQUEUE_PER_TICK:
-        # Per-tick enqueue cap — defer to the next tick. The
-        # advance already happened (no double-fire).
-        return 0
-    if getattr(row, "run_kind", "run") == "suite_run":
-        # FAR-377: a suite_run ongoing row routes to the SuiteRun fire job
-        # (mirroring the cron scan) — it builds a SuiteRun, never a pipeline
-        # ``Run``. The suite run resolves its own dataset/backend; no snapshot id.
-        return 1 if await _enqueue_suite_run_fire(q, now, org_id, row, summary, "ongoing_enqueued") else 0
-    snapshot_id = _resolve_snapshot_id(row, ongoing_latest_snapshots)
+        return False
+
+
+def _handle_paused_ongoing(summary: dict[str, Any]) -> int:
+    """Handle paused ongoing trigger - consume epoch but skip enqueue."""
+    summary["ongoing_skipped_paused"] += 1
+    return 0
+
+
+def _check_ongoing_enqueue_cap(ongoing_enqueued: int) -> bool:
+    """Check if ongoing enqueue per-tick cap is reached."""
+    return ongoing_enqueued >= ONGOING_MAX_ENQUEUE_PER_TICK
+
+
+async def _enqueue_ongoing_fire(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    row: Any,
+    snapshot_id: uuid.UUID | None,
+    summary: dict[str, Any],
+) -> int:
+    """Enqueue ongoing fire job, return 1 if successful."""
     try:
         job_id = await _enqueue_fire_job_async(
             q,
@@ -4633,6 +4733,38 @@ async def _process_one_ongoing_row(
             context={"trigger_id": str(row.id), "trigger_type": "ongoing"},
         )
         return 0
+
+
+async def _process_one_ongoing_row(
+    session: AsyncSession,
+    q: RedisQueue,
+    now: datetime,
+    org_id: uuid.UUID,
+    org_paused: bool,
+    row: Any,
+    ongoing_latest_snapshots: dict[uuid.UUID, uuid.UUID],
+    summary: dict[str, Any],
+    ongoing_enqueued: int,
+) -> int:
+    """Advance + enqueue ONE due ongoing row; returns 1 when a job was enqueued."""
+    config = row.config_json or {}
+    interval = _parse_ongoing_interval(config)
+    summary["ongoing_due"] += 1
+
+    if not await _advance_and_check_ongoing(session, row, interval):
+        return 0
+
+    if org_paused:
+        return _handle_paused_ongoing(summary)
+
+    if _check_ongoing_enqueue_cap(ongoing_enqueued):
+        return 0
+
+    if _is_suite_run_ongoing(row):
+        return 1 if await _enqueue_suite_run_fire(q, now, org_id, row, summary, "ongoing_enqueued") else 0
+
+    snapshot_id = _resolve_snapshot_id(row, ongoing_latest_snapshots)
+    return await _enqueue_ongoing_fire(session, q, now, org_id, row, snapshot_id, summary)
 
 
 # ---------------------------------------------------------------------------
@@ -4759,6 +4891,38 @@ def _checkpoint_absent_expr() -> Any:
         .where(
             text("c.organisation_id = runs.organisation_id"),
             text("c.thread_id = runs.langgraph_thread_id"),
+        )
+    )
+
+
+def _root_checkpoint_present_expr() -> Any:
+    """The correlated EXISTS for a RESUMABLE root checkpoint on the run's thread.
+
+    The exact SQL twin of ``pipeline_engine.recovery._HAS_ROOT_CHECKPOINT_SQL``
+    (``checkpoint_ns = ''`` — a resume reads the root namespace), which is the
+    per-row precondition ``_reconcile_one_row`` applies before recovering an
+    unowned node-started row through FAR-2122's ``resume_run`` leg. The marker
+    sweep composes it so its own "will the reconciler actually recover this?"
+    verdict matches that per-row guard: a dispatcherless node-started row with
+    NO root checkpoint is refused by the reconciler (left to the orphan sweep),
+    so its leaked marker must not be kept as "recoverable" — the FAR-1808
+    bounded reclaim owns it.
+
+    It is a SEPARATE expression from :func:`_checkpoint_absent_expr` (which
+    asks the broader "any checkpoint for the thread?"): the nodeless progress
+    question is satisfied by a non-root checkpoint, while a resume needs the
+    root one.
+    """
+    from sqlalchemy import exists as sa_exists
+    from sqlalchemy import select as sa_select
+
+    return sa_exists(
+        sa_select(1)
+        .select_from(text("checkpoints c"))
+        .where(
+            text("c.organisation_id = runs.organisation_id"),
+            text("c.thread_id = runs.langgraph_thread_id"),
+            text("c.checkpoint_ns = ''"),
         )
     )
 
@@ -5294,6 +5458,49 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     )
 
 
+def _check_basic_nodeless_conditions(row: Any) -> bool:
+    """Check basic conditions for nodeless zombie."""
+    if row.status != "running":
+        return False
+    if row.node_token_usage is not None or not row.outputs_absent:
+        return False
+    return row.started_at is not None
+
+
+def _check_dispatch_phase_excludes(row: Any) -> bool:
+    """Check if dispatch_phase excludes this row from nodeless (FAR-1649)."""
+    if not hasattr(row, "dispatch_phase"):
+        return False
+    if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:  # noqa: SIM103
+        return False
+    return True
+
+
+def _check_age_gate(row: Any, age_minutes: int) -> bool:
+    """Check if row passes the age gate."""
+    now = datetime.now(UTC)
+    started_at = getattr(row, "started_at", None)
+    if started_at is None:
+        return False
+    age_seconds = (now - started_at).total_seconds()
+    return bool(age_seconds > age_minutes * 60)
+
+
+def _check_in_flight_shield(row: Any, age_seconds: float) -> bool:
+    """Check in-flight shield (FAR-1088 F3/W-B)."""
+    attempt_age_seconds = age_seconds
+    dispatched_at = getattr(row, "dispatched_at", None)
+    if dispatched_at is not None:
+        now = datetime.now(UTC)
+        attempt_age_seconds = min(attempt_age_seconds, (now - dispatched_at).total_seconds())
+    return not (attempt_age_seconds <= _nodeless_in_flight_floor_seconds() and _has_live_dispatch_marker(row))
+
+
+def _check_checkpoints_absent(row: Any) -> bool:
+    """Check checkpoints_absent flag."""
+    return bool(getattr(row, "checkpoints_absent", False))
+
+
 def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     """Row-level re-check that a selected row matched the nodeless branch.
 
@@ -5334,7 +5541,7 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     the run-level ``started_at`` anchor (pre-FAR-1088 behaviour). Both
     ``_reconcile_nodeless_repair`` and the FAR-873 early-detect branch gate on
     this function, so the failure-coverage carve-out still only ever sees
-    genuinely zero-node, not-in-flight rows.
+    genuinely zero-node, not in-flight rows.
 
     FAR-1649: the durable ``first_node_dispatched`` phase (FAR-1422) proves a
     node STARTED even though no super-step completed — the re-dispatch
@@ -5348,39 +5555,19 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     pre-node state — stays repairable, mirroring the SQL
     ``dispatch_phase IS NULL`` arm.
     """
-    if row.status != "running":
+    if not _check_basic_nodeless_conditions(row):
         return False
-    if row.node_token_usage is not None or not row.outputs_absent:
+    if not _check_dispatch_phase_excludes(row):
         return False
-    if row.started_at is None:
+    if not _check_age_gate(row, age_minutes):
         return False
-    # FAR-1649: a durably-recorded first-node start is not zero-node. A row
-    # that does not expose the column at all fails CLOSED (exactly like the
-    # checkpoints_absent leg below) — a future row source that forgets the
-    # column can never re-dispatch a possibly-executed run.
-    if not hasattr(row, "dispatch_phase"):
-        return False
-    if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
-        return False
+
     now = datetime.now(UTC)
     age_seconds = (now - row.started_at).total_seconds()
-    if age_seconds <= age_minutes * 60:
+    if not _check_in_flight_shield(row, age_seconds):
         return False
-    # FAR-1088 F3: the SHIELD (not the age gate) is per-attempt. The anchor is
-    # max(started_at, dispatched_at); taking the MINIMUM of the two ages is the
-    # same comparison without a datetime-vs-datetime max() — dispatched_at is
-    # rewritten on every dispatch (dispatch._record_dispatched, before
-    # enqueue), so the fresher stamp wins and attempt-2's shield window runs
-    # from ITS dispatch rather than from attempt-1's started_at.
-    attempt_age_seconds = age_seconds
-    dispatched_at = getattr(row, "dispatched_at", None)
-    if dispatched_at is not None:
-        attempt_age_seconds = min(attempt_age_seconds, (now - dispatched_at).total_seconds())
-    if attempt_age_seconds <= _nodeless_in_flight_floor_seconds() and _has_live_dispatch_marker(row):
-        return False
-    # Checkpoint leg LAST so the specific legs above stay the rejecting reason
-    # for rows that carry them (keeps the per-leg tests discriminating).
-    return bool(getattr(row, "checkpoints_absent", False))
+
+    return _check_checkpoints_absent(row)
 
 
 async def _fresh_row_is_node_started_or_gone(session: AsyncSession, run_id: uuid.UUID) -> bool:
@@ -5570,42 +5757,54 @@ def _should_redispatch_nodeless(row: Any) -> bool:
     executor's ``_maybe_retry_after_policy`` (in-execute path) never passes
     it — nodes may have executed there.
     """
-    from modulo.core.pipeline_engine.executor import _retry_after_policy
-
     policy = getattr(row, "retry_policy", None)
     consumed = retry_executions_consumed(
         execution_attempt_count=getattr(row, "execution_attempt_count", 0),
     )
     if isinstance(policy, dict) and policy:
-        # ANY non-empty policy is a budget — its shared ``1 + max_retries``
-        # ceiling is the authority, never the configurable no-policy default.
-        # The shared matcher decides the event-specific budget first.
-        retry_budget = _retry_after_policy(policy, "stalled", "executor_stalled")
-        if retry_budget is not None:
-            return bool(consumed <= retry_budget)
-        on = policy.get("on")
-        if isinstance(on, list) and on:
-            # Non-empty `on` that does not cover "stall": the FAR-1088
-            # zero-node failure-coverage carve-out re-dispatches under the
-            # failure arm's own budget; any other uncovered trigger
-            # terminal-fails (never re-dispatch for a trigger it does not
-            # cover). Safe because this function only sees zero-node rows.
-            if "failure" in on:
-                failure_budget = _retry_after_policy(policy, "failed", "")
-                if failure_budget is not None:
-                    return bool(consumed <= failure_budget)
-            return False
-        # Non-empty policy with an absent / null / EMPTY `on` (e.g.
-        # ``{"max_retries": 0}`` and the GUI's no-op panel save
-        # ``{on: [], max_retries: 0, ...}``): the shared ceiling applies.
-        # ``max_retries: 0`` (and a malformed budget, normalised to 0) means
-        # exactly ONE execution — NOT the configurable four-retry default.
-        return not retry_budget_exhausted(policy, execution_attempt_count=consumed)
+        return _policy_allows_nodeless_redispatch(policy, consumed)
     # No policy object at all (``None`` / a non-dict / the empty ``{}`` column
     # default): re-dispatch while within the configurable budget
     # (SAQ_NODELESS_REDISPATCH_BUDGET, default 4 since FAR-812). The rate is
     # throttled in the repair branch (one re-dispatch per nodeless window).
     return bool(consumed <= int(get_settings().saq_nodeless_redispatch_budget))
+
+
+def _policy_on_allows_nodeless_redispatch(policy: dict[str, Any], on: list[Any], consumed: int) -> bool:
+    """Evaluate non-empty policy `on` list for zero-node nodeless redispatch (FAR-1088)."""
+    from modulo.core.pipeline_engine.executor import _retry_after_policy
+
+    # Non-empty `on` that does not cover "stall": the FAR-1088
+    # zero-node failure-coverage carve-out re-dispatches under the
+    # failure arm's own budget; any other uncovered trigger
+    # terminal-fails (never re-dispatch for a trigger it does not
+    # cover). Safe because this function only sees zero-node rows.
+    if "failure" in on:
+        failure_budget = _retry_after_policy(policy, "failed", "")
+        if failure_budget is not None:
+            return bool(consumed <= failure_budget)
+    return False
+
+
+def _policy_allows_nodeless_redispatch(policy: dict[str, Any], consumed: int) -> bool:
+    """Decide whether an explicit non-empty retry_policy dict allows nodeless redispatch."""
+    from modulo.core.pipeline_engine.executor import _retry_after_policy
+
+    # ANY non-empty policy is a budget — its shared ``1 + max_retries``
+    # ceiling is the authority, never the configurable no-policy default.
+    # The shared matcher decides the event-specific budget first.
+    retry_budget = _retry_after_policy(policy, "stalled", "executor_stalled")
+    if retry_budget is not None:
+        return bool(consumed <= retry_budget)
+    on = policy.get("on")
+    if isinstance(on, list) and on:
+        return _policy_on_allows_nodeless_redispatch(policy, on, consumed)
+    # Non-empty policy with an absent / null / EMPTY `on` (e.g.
+    # ``{"max_retries": 0}`` and the GUI's no-op panel save
+    # ``{on: [], max_retries: 0, ...}``): the shared ceiling applies.
+    # ``max_retries: 0`` (and a malformed budget, normalised to 0) means
+    # exactly ONE execution — NOT the configurable four-retry default.
+    return not retry_budget_exhausted(policy, execution_attempt_count=consumed)
 
 
 def _is_nodeless_redispatch_throttled(row: Any, nodeless_window: int) -> bool:
@@ -5624,6 +5823,148 @@ def _is_nodeless_redispatch_throttled(row: Any, nodeless_window: int) -> bool:
     if dispatched_at is None:
         return False
     return bool((datetime.now(UTC) - dispatched_at).total_seconds() <= nodeless_window * 60)
+
+
+def _compute_zombie_timing(run: Any) -> tuple[float | None, float | None, float | None, float | None]:
+    """Compute timing metrics for a zombie run."""
+    zombie_age_minutes: float | None = None
+    started_at = getattr(run, "started_at", None)
+    if started_at is not None:
+        zombie_age_minutes = max((datetime.now(UTC) - started_at).total_seconds() / 60, 0.0)
+
+    dispatched_at = getattr(run, "dispatched_at", None)
+    saq_queue_wait_seconds: float | None = None
+    if dispatched_at is not None and started_at is not None:
+        saq_queue_wait_seconds = max((started_at - dispatched_at).total_seconds(), 0.0)
+
+    claim_count = getattr(run, "claim_count", None)
+    phase_entered_at = getattr(run, "dispatch_phase_entered_at", None)
+    if phase_entered_at is not None and phase_entered_at.tzinfo is None:
+        phase_entered_at = phase_entered_at.replace(tzinfo=UTC)
+
+    completed_at = datetime.now(UTC)
+    dispatch_phase_elapsed: float | None = None
+    if phase_entered_at is not None:
+        dispatch_phase_elapsed = max((completed_at - phase_entered_at).total_seconds(), 0.0)
+
+    return zombie_age_minutes, saq_queue_wait_seconds, claim_count, dispatch_phase_elapsed
+
+
+def _build_zombie_error_detail(
+    detail_lead: str,
+    phase_text: str,
+    pipeline_id: uuid.UUID | None,
+    trigger_id: uuid.UUID | None,
+    claim_count: Any,
+) -> str:
+    """Build the error_detail string for a zombie run."""
+    return "{lead}; pipeline={pipeline}, trigger={trigger}, claim_count={claims}, {phase})".format(
+        lead=detail_lead,
+        pipeline=str(pipeline_id) if pipeline_id is not None else "unknown",
+        trigger=str(trigger_id) if trigger_id is not None else "unknown",
+        claims=claim_count if claim_count is not None else "unknown",
+        phase=phase_text,
+    )
+
+
+def _build_zombie_phase_text(dispatch_phase: str | None, dispatch_phase_elapsed: float | None) -> tuple[str, str]:
+    """Build phase text for error_detail and log."""
+    dispatch_phase_text = dispatch_phase if dispatch_phase is not None else "unknown"
+    phase_text = f"dispatch_phase={dispatch_phase_text}"
+    if dispatch_phase_elapsed is not None:
+        phase_text += f" dispatch_phase_elapsed={dispatch_phase_elapsed:.1f}s"
+    phase_log_text = f"{dispatch_phase_elapsed:.1f}s" if dispatch_phase_elapsed is not None else "unknown"
+    return phase_text, phase_log_text
+
+
+def _log_zombie_terminalization(
+    node_started: bool,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    claim_count: Any,
+    pipeline_id: uuid.UUID | None,
+    trigger_id: uuid.UUID | None,
+    dispatch_phase_text: str,
+    phase_log_text: str,
+    zombie_age_minutes: float | None,
+    saq_queue_wait_seconds: float | None,
+    dispatched_at: Any,
+    started_at: Any,
+) -> None:
+    """Emit alert-grade log for zombie terminalization."""
+    if node_started:
+        log_event = "dispatcher_reconcile.node_started_terminalized"
+        log_tail = (
+            "terminal-failed; first node STARTED but no super-step completed within the "
+            "nodeless window (node-started row — NOT a zero-node zombie)"
+        )
+    else:
+        log_event = "dispatcher_reconcile.claimed_but_never_dispatched"
+        log_tail = "terminal-failed; SAQ claimed this run but no node was ever dispatched"
+
+    _log.error(
+        "%s run=%s org=%s claim_count=%s "
+        "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
+        "zombie_age_minutes=%s saq_queue_wait_seconds=%s "
+        "dispatched_at=%s started_at=%s — %s",
+        log_event,
+        run_id,
+        org_id,
+        claim_count,
+        pipeline_id,
+        trigger_id,
+        dispatch_phase_text,
+        phase_log_text,
+        f"{zombie_age_minutes:.0f}" if zombie_age_minutes is not None else "unknown",
+        f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown",
+        dispatched_at.isoformat() if dispatched_at is not None else "None",
+        started_at.isoformat() if started_at is not None else "None",
+        log_tail,
+    )
+
+
+async def _ingest_zombie_error(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    node_started: bool,
+    run_id: uuid.UUID,
+    pipeline_id: uuid.UUID | None,
+    trigger_id: uuid.UUID | None,
+    claim_count: Any,
+    dispatch_phase: str | None,
+    dispatch_phase_elapsed: float | None,
+    zombie_age_minutes: float | None,
+    saq_queue_wait_seconds: float | None,
+    dispatched_at: Any,
+    started_at: Any,
+) -> None:
+    """Ingest SAQ error event for zombie terminalization."""
+    if node_started:
+        stable_message = (
+            "dispatcher_reconcile: node-started zombie terminal-failed "
+            "(first node STARTED but no super-step completed within the nodeless window)"
+        )
+    else:
+        stable_message = _NODELESS_ZOMBIE_STABLE_MESSAGE
+
+    await _ingest_saq_error(
+        session,
+        org_id,
+        function="dispatcher_reconcile",
+        message=stable_message,
+        context={
+            "run_id": str(run_id),
+            "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+            "trigger_id": str(trigger_id) if trigger_id is not None else None,
+            "claim_count": claim_count,
+            "dispatch_phase": dispatch_phase,
+            "dispatch_phase_elapsed": dispatch_phase_elapsed,
+            "zombie_age_minutes": zombie_age_minutes,
+            "saq_queue_wait_seconds": saq_queue_wait_seconds,
+            "dispatched_at": dispatched_at.isoformat() if dispatched_at is not None else None,
+            "started_at": started_at.isoformat() if started_at is not None else None,
+        },
+    )
 
 
 async def _fail_nodeless_run(
@@ -5668,52 +6009,16 @@ async def _fail_nodeless_run(
     run = await session.get(Run, run_id)
     if run is None or run.status != "running":
         return
-    zombie_age_minutes: float | None = None
+
+    zombie_age_minutes, saq_queue_wait_seconds, claim_count, dispatch_phase_elapsed = _compute_zombie_timing(run)
     started_at = getattr(run, "started_at", None)
-    if started_at is not None:
-        zombie_age_minutes = max((datetime.now(UTC) - started_at).total_seconds() / 60, 0.0)
-    # FAR-873: claim→dispatch gap observability. dispatched_at records when
-    # dispatch_run enqueued the SAQ job (BEFORE the claim); started_at records
-    # when the executor claimed the run (claim_run_async). The gap between
-    # dispatched_at and started_at is the SAQ queue wait; the gap between
-    # started_at and now is the wasted zombie age. Both make the stall
-    # attributable per-run in seconds instead of an hour of forensics.
     dispatched_at = getattr(run, "dispatched_at", None)
-    saq_queue_wait_seconds: float | None = None
-    if dispatched_at is not None and started_at is not None:
-        saq_queue_wait_seconds = max((started_at - dispatched_at).total_seconds(), 0.0)
-    claim_count = getattr(run, "claim_count", None)
     pipeline_id = getattr(run, "pipeline_id", None)
     trigger_id = getattr(run, "trigger_id", None)
-    # FAR-1088: the run's LAST recorded dispatch phase — read straight off the
-    # already-loaded row's columns (no cross-module string protocol) — says
-    # WHERE the claim stalled. A NULL phase renders as ``unknown`` so "no
-    # phase was ever recorded" is unmistakable, never silently omitted.
     dispatch_phase = getattr(run, "dispatch_phase", None)
-    dispatch_phase_text = dispatch_phase if dispatch_phase is not None else "unknown"
-    phase_entered_at = getattr(run, "dispatch_phase_entered_at", None)
-    if phase_entered_at is not None and phase_entered_at.tzinfo is None:
-        # Defensive: a naive timestamp must never raise inside the repair.
-        phase_entered_at = phase_entered_at.replace(tzinfo=UTC)
-    completed_at = datetime.now(UTC)
-    dispatch_phase_elapsed: float | None = None
-    if phase_entered_at is not None:
-        dispatch_phase_elapsed = max((completed_at - phase_entered_at).total_seconds(), 0.0)
-    phase_text = f"dispatch_phase={dispatch_phase_text}"
-    if dispatch_phase_elapsed is not None:
-        phase_text += f" dispatch_phase_elapsed={dispatch_phase_elapsed:.1f}s"
-    phase_log_text = f"{dispatch_phase_elapsed:.1f}s" if dispatch_phase_elapsed is not None else "unknown"
-    run.status = "failed"
-    run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
-    # FAR-1088: include pipeline_id, trigger_id, claim_count, and the dispatch
-    # phase in the error_detail so the terminal-failed run is diagnosable from
-    # the error alone — a future regression on a specific pipeline/trigger is
-    # attributable in seconds instead of requiring TriggerEvent forensics.
-    # FAR-1649: a durably-recorded first-node start contradicts "dispatched no
-    # node" — the selection legs now exclude such rows, but a phase that
-    # transitioned between the SELECT and this chokepoint re-read must never
-    # produce the self-contradicting label that caused the FAR-1649
-    # misdiagnosis; say what the row actually proves.
+
+    phase_text, phase_log_text = _build_zombie_phase_text(dispatch_phase, dispatch_phase_elapsed)
+
     node_started = dispatch_phase == PHASE_FIRST_NODE_DISPATCHED
     if node_started:
         detail_lead = (
@@ -5725,85 +6030,180 @@ async def _fail_nodeless_run(
         detail_lead = (
             "Claimed by SAQ but dispatched no node within the nodeless window (dispatcher_reconcile zombie repair"
         )
-    run.error_detail = "{lead}; pipeline={pipeline}, trigger={trigger}, claim_count={claims}, {phase})".format(
-        lead=detail_lead,
-        pipeline=str(pipeline_id) if pipeline_id is not None else "unknown",
-        trigger=str(trigger_id) if trigger_id is not None else "unknown",
-        claims=claim_count if claim_count is not None else "unknown",
-        phase=phase_text,
-    )
+
+    completed_at = datetime.now(UTC)
+    run.status = "failed"
+    run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
+    run.error_detail = _build_zombie_error_detail(detail_lead, phase_text, pipeline_id, trigger_id, claim_count)
     run.completed_at = completed_at
-    # FAR-1649 qa finding 4: all THREE observability legs (counter, alert-grade
-    # log, ingested stable error message) must describe the row that actually
-    # arrived. A node-started row is NOT "claimed but never dispatched" — a
-    # node DID start — so it gets its own counter, log event and error group
-    # instead of inflating/labeling the zero-node class.
+
     if node_started:
         summary["node_started_terminalized"] += 1
     else:
         summary["claimed_but_never_dispatched"] += 1
-    # Alert-grade: these runs burned their full retry budget without ever
-    # executing a node — the environment (worker or sandbox) that claimed them
-    # is degraded. ERROR level + the wasted age makes the burst visible.
-    age_text = f"{zombie_age_minutes:.0f}" if zombie_age_minutes is not None else "unknown"
-    queue_wait_text = f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown"
-    if node_started:
-        log_event = "dispatcher_reconcile.node_started_terminalized"
-        log_tail = (
-            "terminal-failed; first node STARTED but no super-step completed within the "
-            "nodeless window (node-started row — NOT a zero-node zombie)"
-        )
-    else:
-        log_event = "dispatcher_reconcile.claimed_but_never_dispatched"
-        log_tail = "terminal-failed; SAQ claimed this run but no node was ever dispatched"
-    _log.error(
-        "%s run=%s org=%s claim_count=%s "
-        "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
-        "zombie_age_minutes=%s saq_queue_wait_seconds=%s "
-        "dispatched_at=%s started_at=%s — %s",
-        log_event,
+
+    _log_zombie_terminalization(
+        node_started,
         run_id,
         org_id,
         claim_count,
         pipeline_id,
         trigger_id,
-        dispatch_phase_text,
+        dispatch_phase if dispatch_phase is not None else "unknown",
         phase_log_text,
-        age_text,
-        queue_wait_text,
-        dispatched_at.isoformat() if dispatched_at is not None else "None",
-        started_at.isoformat() if started_at is not None else "None",
-        log_tail,
+        zombie_age_minutes,
+        saq_queue_wait_seconds,
+        dispatched_at,
+        started_at,
     )
-    if node_started:
-        stable_message = (
-            "dispatcher_reconcile: node-started zombie terminal-failed "
-            "(first node STARTED but no super-step completed within the nodeless window)"
+
+    await _ingest_zombie_error(
+        session,
+        org_id,
+        node_started,
+        run_id,
+        pipeline_id,
+        trigger_id,
+        claim_count,
+        dispatch_phase,
+        dispatch_phase_elapsed,
+        zombie_age_minutes,
+        saq_queue_wait_seconds,
+        dispatched_at,
+        started_at,
+    )
+
+
+async def _check_node_deadline_zero_progress(run: Any, session: AsyncSession) -> bool:
+    """Check if a run meets the zero-progress premise for node deadline reaping."""
+    from sqlalchemy import select as sa_select
+
+    if getattr(run, "dispatch_phase", None) != PHASE_FIRST_NODE_DISPATCHED:
+        return False
+    if run.node_token_usage is not None:
+        return False
+    flags = (
+        await session.execute(
+            sa_select(
+                _final_row_absent_expr().label("outputs_absent"),
+                _checkpoint_absent_expr().label("checkpoints_absent"),
+            ).where(Run.id == run.id)
         )
-    else:
-        # FAR-1715: SHARED constant — the stale_run_recovery zero-progress
-        # sweep emits the same message so both writers land in ONE Error
-        # Dashboard group (see ``_NODELESS_ZOMBIE_STABLE_MESSAGE``).
-        stable_message = _NODELESS_ZOMBIE_STABLE_MESSAGE
+    ).one()
+    return bool(flags.outputs_absent and flags.checkpoints_absent)
+
+
+def _compute_node_deadline_timing(run: Any, now: datetime) -> tuple[float | None, float | None, str, str]:
+    """Compute timing metrics for node deadline reaping."""
+    started_at = _as_utc(getattr(run, "started_at", None))
+    age_minutes = max((now - started_at).total_seconds() / 60, 0.0) if started_at is not None else None
+    phase_entered = _as_utc(getattr(run, "dispatch_phase_entered_at", None))
+    phase_elapsed = max((now - phase_entered).total_seconds(), 0.0) if phase_entered is not None else None
+    age_text = f"{age_minutes:.0f}" if age_minutes is not None else "unknown"
+    phase_text = f"{phase_elapsed:.1f}s" if phase_elapsed is not None else "unknown"
+    return age_minutes, phase_elapsed, age_text, phase_text
+
+
+def _build_node_deadline_error_detail(
+    run: Any,
+    node_budget_seconds: int,
+    deadline: datetime,
+    phase_text: str,
+) -> str:
+    """Build the error_detail for node deadline reaping."""
+    return (
+        "Node started (dispatch_phase=first_node_dispatched) but produced no node envelope "
+        f"(no checkpoint, output or token usage) by its node deadline ({node_budget_seconds}s "
+        f"from {deadline.isoformat()}); reaped by dispatcher_reconcile's durable node-deadline "
+        f"bound (FAR-1999). pipeline={run.pipeline_id}, trigger={run.trigger_id}, "
+        f"claim_count={run.claim_count}, dispatch_phase_elapsed={phase_text}"
+    )
+
+
+async def _terminalize_node_deadline_run(
+    session: AsyncSession,
+    run: Any,
+    org_id: uuid.UUID,
+    summary: dict[str, Any],
+    now: datetime,
+    node_budget_seconds: int,
+    deadline: datetime,
+    phase_text: str,
+) -> None:
+    """Terminalize a run at its node deadline."""
+    run.status = "failed"
+    run.error_code = _NODE_DEADLINE_EXCEEDED_ERROR_CODE
+    run.node_deadline_watchdog_fired_count = int(run.node_deadline_watchdog_fired_count or 0) + 1
+    run.error_detail = _build_node_deadline_error_detail(run, node_budget_seconds, deadline, phase_text)
+    run.completed_at = now
+    await session.flush()
+
+    await persist_terminal_triage_marker(
+        session,
+        run_id=run.id,
+        organisation_id=org_id,
+        error_code=_NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+        reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
+    )
+    summary["node_deadline_reaped"] += 1
+
+
+def _log_node_deadline_reaped(
+    run: Any,
+    org_id: uuid.UUID,
+    claim_count: Any,
+    phase_text: str,
+    age_text: str,
+    node_budget_seconds: int,
+    deadline: datetime,
+) -> None:
+    """Log node deadline reaping."""
+    _log.error(
+        "dispatcher_reconcile.node_deadline_reaped run=%s org=%s pipeline=%s trigger=%s "
+        "claim_count=%s dispatch_phase_elapsed=%s run_age_minutes=%s node_budget_seconds=%d "
+        "deadline=%s — node started but no node envelope arrived; terminal-failed "
+        "(never re-dispatched: re-execution unsafe)",
+        run.id,
+        org_id,
+        run.pipeline_id,
+        run.trigger_id,
+        claim_count,
+        phase_text,
+        age_text,
+        node_budget_seconds,
+        deadline.isoformat(),
+    )
+
+
+async def _ingest_node_deadline_error(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    pipeline_id: uuid.UUID | None,
+    trigger_id: uuid.UUID | None,
+    claim_count: Any,
+    dispatch_phase: str | None,
+    dispatch_phase_elapsed: float | None,
+    run_age_minutes: float | None,
+    node_budget_seconds: int,
+    node_deadline: datetime,
+) -> None:
+    """Ingest SAQ error for node deadline reaping."""
     await _ingest_saq_error(
         session,
         org_id,
         function="dispatcher_reconcile",
-        # STABLE message (no run id): one error group whose occurrence count IS
-        # the alert signal for the class; the run id rides in context_json.
-        message=stable_message,
+        message=_NODE_DEADLINE_REAP_STABLE_MESSAGE,
         context={
             "run_id": str(run_id),
-            "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+            "pipeline_id": str(pipeline_id),
             "trigger_id": str(trigger_id) if trigger_id is not None else None,
             "claim_count": claim_count,
-            # FAR-1088: where the claim stalled, per the run row's own columns.
             "dispatch_phase": dispatch_phase,
             "dispatch_phase_elapsed": dispatch_phase_elapsed,
-            "zombie_age_minutes": zombie_age_minutes,
-            "saq_queue_wait_seconds": saq_queue_wait_seconds,
-            "dispatched_at": dispatched_at.isoformat() if dispatched_at is not None else None,
-            "started_at": started_at.isoformat() if started_at is not None else None,
+            "run_age_minutes": run_age_minutes,
+            "node_budget_seconds": node_budget_seconds,
+            "node_deadline": node_deadline.isoformat(),
         },
     )
 
@@ -5858,8 +6258,6 @@ async def _fail_node_deadline_run(
 
     Returns ``True`` when the run was terminalised by this call.
     """
-    from sqlalchemy import select as sa_select
-
     from modulo.db.models.run import Run
 
     run = await session.get(Run, run_id, with_for_update=True)
@@ -5867,90 +6265,49 @@ async def _fail_node_deadline_run(
         return False
     if not _is_node_started_executor_lost_row(run, stale_window):
         return False
-    # The ORM row carries the phase/status/token fields but NOT the reconcile
-    # flags (``outputs_absent`` / ``checkpoints_absent``), so the zero-progress
-    # premise is checked in two steps rather than through the scan-row helper.
-    if getattr(run, "dispatch_phase", None) != PHASE_FIRST_NODE_DISPATCHED:
+    if not await _check_node_deadline_zero_progress(run, session):
         return False
-    if run.node_token_usage is not None:
-        return False
-    flags = (
-        await session.execute(
-            sa_select(
-                _final_row_absent_expr().label("outputs_absent"),
-                _checkpoint_absent_expr().label("checkpoints_absent"),
-            ).where(Run.id == run_id)
-        )
-    ).one()
-    if not flags.outputs_absent or not flags.checkpoints_absent:
-        # A node reported after the scan snapshot: the zero-progress premise no
-        # longer holds. Leave the row to the normal progress/age machinery.
-        return False
+
     now = datetime.now(UTC)
     deadline = _node_started_deadline(run, node_budget_seconds=node_budget_seconds)
     if deadline is None or now < deadline:
         return False
-    started_at = _as_utc(getattr(run, "started_at", None))
-    age_minutes = max((now - started_at).total_seconds() / 60, 0.0) if started_at is not None else None
-    phase_entered = _as_utc(getattr(run, "dispatch_phase_entered_at", None))
-    phase_elapsed = max((now - phase_entered).total_seconds(), 0.0) if phase_entered is not None else None
-    age_text = f"{age_minutes:.0f}" if age_minutes is not None else "unknown"
-    phase_text = f"{phase_elapsed:.1f}s" if phase_elapsed is not None else "unknown"
-    run.status = "failed"
-    run.error_code = _NODE_DEADLINE_EXCEEDED_ERROR_CODE
-    run.node_deadline_watchdog_fired_count = int(run.node_deadline_watchdog_fired_count or 0) + 1
-    run.error_detail = (
-        "Node started (dispatch_phase=first_node_dispatched) but produced no node envelope "
-        f"(no checkpoint, output or token usage) by its node deadline ({node_budget_seconds}s "
-        f"from {deadline.isoformat()}); reaped by dispatcher_reconcile's durable node-deadline "
-        f"bound (FAR-1999). pipeline={run.pipeline_id}, trigger={run.trigger_id}, "
-        f"claim_count={run.claim_count}, dispatch_phase_elapsed={phase_text}"
-    )
-    run.completed_at = now
-    await session.flush()
-    # FAR-1886 B1: the reaper terminalises a run whose executor is gone, so
-    # there is no in-process attempt marker left to project. Persist the
-    # synthetic run-level entry (best-effort; the terminalisation above is
-    # already in this transaction).
-    await persist_terminal_triage_marker(
+
+    age_minutes, phase_elapsed, age_text, phase_text = _compute_node_deadline_timing(run, now)
+
+    await _terminalize_node_deadline_run(
         session,
-        run_id=run_id,
-        organisation_id=org_id,
-        error_code=_NODE_DEADLINE_EXCEEDED_ERROR_CODE,
-        reason=_TERMINAL_TRIAGE_REASON_NODE_DEADLINE,
-    )
-    summary["node_deadline_reaped"] += 1
-    _log.error(
-        "dispatcher_reconcile.node_deadline_reaped run=%s org=%s pipeline=%s trigger=%s "
-        "claim_count=%s dispatch_phase_elapsed=%s run_age_minutes=%s node_budget_seconds=%d "
-        "deadline=%s — node started but no node envelope arrived; terminal-failed "
-        "(never re-dispatched: re-execution unsafe)",
-        run_id,
+        run,
         org_id,
-        run.pipeline_id,
-        run.trigger_id,
+        summary,
+        now,
+        node_budget_seconds,
+        deadline,
+        phase_text,
+    )
+
+    _log_node_deadline_reaped(
+        run,
+        org_id,
         run.claim_count,
         phase_text,
         age_text,
         node_budget_seconds,
-        deadline.isoformat(),
+        deadline,
     )
-    await _ingest_saq_error(
+
+    await _ingest_node_deadline_error(
         session,
         org_id,
-        function="dispatcher_reconcile",
-        message=_NODE_DEADLINE_REAP_STABLE_MESSAGE,
-        context={
-            "run_id": str(run_id),
-            "pipeline_id": str(run.pipeline_id),
-            "trigger_id": str(run.trigger_id) if run.trigger_id is not None else None,
-            "claim_count": run.claim_count,
-            "dispatch_phase": run.dispatch_phase,
-            "dispatch_phase_elapsed": phase_elapsed,
-            "run_age_minutes": age_minutes,
-            "node_budget_seconds": node_budget_seconds,
-            "node_deadline": deadline.isoformat(),
-        },
+        run.id,
+        run.pipeline_id,
+        run.trigger_id,
+        run.claim_count,
+        run.dispatch_phase,
+        phase_elapsed,
+        age_minutes,
+        node_budget_seconds,
+        deadline,
     )
     return True
 
@@ -6239,6 +6596,8 @@ def _build_re_dispatch_predicate(
     stale_window: int,
     capacity_redispatch_seconds: int,
     enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
+    include_node_started_executor_lost: bool = True,
+    unowned_node_started_requires_checkpoint: bool = False,
 ) -> Any:
     """Build the dispatcher_reconcile re-dispatch predicate (F3c + F6a).
 
@@ -6301,6 +6660,27 @@ def _build_re_dispatch_predicate(
     ``_reconcile_one_row`` (same split as F6a's no-job + committed-decision
     guards), and the re-dispatch is always ``resume_run`` — checkpoint resume,
     never re-execution (FAR-1649).
+
+    ``include_node_started_executor_lost`` (default True) controls the
+    FAR-1803 visibility-only leg. That leg selects the node-started /
+    dead-executor class so ``dispatcher_reconcile`` can COUNT it
+    (``node_started_executor_lost``), but ``_reconcile_one_row`` returns
+    without re-dispatching it — terminalisation belongs to the age gate or the
+    FAR-1808 marker sweep. A caller that needs "will this row actually be
+    RECOVERED?" rather than "will the reconciler see it?" must pass False:
+    the marker sweep does exactly that, otherwise the visibility leg shadows
+    FAR-1808's bounded reclaim and such a row's marker is kept until the 25h
+    staleness cap instead of the 2h node-started bound.
+
+    ``unowned_node_started_requires_checkpoint`` (default False) makes
+    FAR-2122's dispatcherless node-started resume leg require a RESUMABLE ROOT
+    checkpoint (``_root_checkpoint_present_expr``). The scan keeps the default:
+    it selects the class so the row recheck can log a checkpointless row and
+    leave it to the orphan sweep. A caller asking "will this row ACTUALLY be
+    recovered?" — the D8 marker sweep — passes True, because
+    ``_reconcile_one_row`` refuses the checkpointless shape, so its marker must
+    not be kept as recoverable or FAR-1808's bounded reclaim is shadowed for
+    exactly the rows the reconciler will never touch.
     """
     from sqlalchemy import and_, not_, or_
 
@@ -6478,15 +6858,58 @@ def _build_re_dispatch_predicate(
         # — its own leg below owns the ``resume_run`` recovery (FAR-1728), so
         # this leg must never shadow it. A non-saq row is out of scope: the
         # stale_run_recovery sweep's ``worker_lost`` arm owns those.
+        # Visibility-only: omitted when ``include_node_started_executor_lost``
+        # is False (the D8 sweep asks "will it be recovered?", not "is it
+        # counted?" — see the docstring).
+        *(
+            [
+                and_(
+                    Run.status == "running",
+                    Run.dispatcher == "saq",
+                    Run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED,
+                    or_(
+                        Run.heartbeat_at.is_(None),
+                        Run.heartbeat_at < func_now_minus(stale_window),
+                    ),
+                    not_(Run.guardrail_override_resume_pending.is_(True)),
+                )
+            ]
+            if include_node_started_executor_lost
+            else []
+        ),
+        # FAR-2122 — a node-started run WITHOUT an SAQ dispatcher identity (the
+        # dispatcherless orphan class `_SWEEP_ORPHANED_RUNS_SQL` otherwise
+        # terminalises) is recovered by CHECKPOINT RESUME, never re-execution:
+        # the first node may already have had side effects, so `execute_run` is
+        # unsafe, but a run whose thread carries a resumable checkpoint can
+        # continue from that checkpoint.
+        #
+        # PRECEDENCE (the reconciliation with the sweep's "terminalise only"
+        # rationale): this leg and `pipeline_execution._SWEEP_ORPHANED_RUNS_SQL`
+        # are the two arms over the same row class. The sweep now defers its
+        # cutoff past THIS leg's stale window by one reconcile tick
+        # (`_ORPHAN_RECONCILE_GRACE_SECONDS`) precisely so the checkpoint-resume
+        # recovery gets its chance first; the per-row resumable-checkpoint guard
+        # in `_reconcile_one_row` decides whether resume is safe. A run with a
+        # checkpoint is resumed (dispatch_run stamps `dispatcher='saq'`, lifting
+        # it out of both the sweep and this leg); a run WITHOUT one fails the
+        # guard and is left to the sweep's terminaliser (never re-executed from
+        # the graph start, FAR-1649). Neither arm can double-act: both re-check
+        # `status='running'` and the sweep re-checks the phase/dispatcher shape.
+        # The per-row job + checkpoint guards are applied in `_reconcile_one_row`.
+        # A caller that needs "will it ACTUALLY be recovered?" (the D8 sweep)
+        # folds the resumable-root-checkpoint precondition into the predicate:
+        # the row recheck refuses a checkpointless row, so such a row must not
+        # be judged recoverable here (see the docstring).
         and_(
             Run.status == "running",
-            Run.dispatcher == "saq",
+            or_(Run.dispatcher.is_(None), Run.dispatcher != "saq"),
             Run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED,
             or_(
                 Run.heartbeat_at.is_(None),
                 Run.heartbeat_at < func_now_minus(stale_window),
             ),
-            not_(Run.guardrail_override_resume_pending.is_(True)),
+            *([_root_checkpoint_present_expr()] if unowned_node_started_requires_checkpoint else []),
         ),
         # F6a gated recovery: awaiting_human/claimed/hitl_parked +
         # dispatcher='saq' + stale heartbeat. The no-job gate is applied
@@ -6568,6 +6991,8 @@ def reconciler_recovery_predicate(
     nodeless_window: int,
     enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
     early_detect_minutes: int | None,
+    include_node_started_executor_lost: bool = True,
+    unowned_node_started_requires_checkpoint: bool = False,
 ) -> Any:
     """The reconciler's COMPOSED recovery predicate (single source, qa F3).
 
@@ -6576,11 +7001,25 @@ def reconciler_recovery_predicate(
     marker sweep composes the SAME object (imported from here — parity by
     construction), so a run the reconciler would re-dispatch can never have its
     dispatch marker swept: the composition lives in ONE place instead of being
-    re-assembled (and silently drifted) at both call sites. This also fixes
+    re-assembled (and silently drifted) at both call sites.
+
+    ``include_node_started_executor_lost`` defaults True (the reconciler scan
+    must see the FAR-1803 class to count it). The D8 sweep passes False: that
+    leg is visibility-only and never re-dispatches, so judged "recoverable" it
+    would keep a dead-executor node-started marker until the 25h cap and
+    shadow FAR-1808's bounded reclaim. This also fixes
     the sweep's recoverability evaluation: the previous sweep evaluated the
     branches AND-composed, so a fresh-heartbeat nodeless zombie (matched ONLY
     by the nodeless branch, excluded by the stale branch) was misjudged
     unrecoverable and its marker cleared.
+
+    ``unowned_node_started_requires_checkpoint`` defaults False (the scan
+    keeps FAR-2122's broad leg so its row recheck can log and defer a
+    checkpointless row). The D8 sweep passes True: FAR-2122's recovery is
+    conditional on a resumable root checkpoint, so the sweep must judge only
+    the checkpoint-bearing shape "recoverable" — otherwise a checkpointless
+    dispatcherless node-started marker is kept for 25h instead of being
+    reclaimed by FAR-1808's 2h bound (the reconciler never acts on it).
 
     FAR-873: ``early_detect_minutes`` adds a shorter-window branch that
     matches running + fresh heartbeat + zero progress.  This catches wedged-
@@ -6597,6 +7036,8 @@ def reconciler_recovery_predicate(
             stale_window=stale_window,
             capacity_redispatch_seconds=capacity_redispatch_seconds,
             enqueue_failed_redispatch_seconds=enqueue_failed_redispatch_seconds,
+            include_node_started_executor_lost=include_node_started_executor_lost,
+            unowned_node_started_requires_checkpoint=unowned_node_started_requires_checkpoint,
         ),
         _nodeless_zombie_predicate(nodeless_window),
     ]
@@ -7011,6 +7452,11 @@ class ReconcileTuning:
     stale_window: int
     capacity_redispatch_seconds: int
     hitl_review_cancel_grace_seconds: int
+    # FAR-2122: recency window in which a ``run_node_outputs`` write counts as
+    # live progress for the mid-graph age gate. Defaulted so existing direct
+    # constructors (tests) keep working; the production path always supplies it
+    # from Settings.
+    node_output_progress_seconds: int = _NODE_OUTPUT_PROGRESS_DEFAULT_SECONDS
 
 
 def _int_setting(value: Any, default: int) -> int:
@@ -7227,6 +7673,7 @@ async def _terminalize_mid_graph_wedges(
     *,
     max_age_minutes: int,
     stale_seconds: int | None = None,
+    node_output_progress_seconds: int | None = None,
     max_rows: int | None = None,
 ) -> list[uuid.UUID]:
     """Terminal-fail SAQ runs wedged past the age bound — with a truthful code.
@@ -7281,14 +7728,28 @@ async def _terminalize_mid_graph_wedges(
     drains gradually across 60s ticks instead of one unbounded UPDATE storm
     competing with the tick budget; the predicate re-selects the remaining
     rows next tick. ``None`` (or a non-int stand-in) means uncapped.
+
+    FAR-2122 — *node_output_progress_seconds* is the recency window in which a
+    ``run_node_outputs`` write is treated as live progress (the same knob
+    threaded from ``ReconcileTuning.node_output_progress_seconds`` on the
+    production path). The window is materialised as a bound cutoff datetime
+    (never a SQL literal), so the clause is dialect-testable.
     """
     from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
     if stale_seconds is None:
         stale_seconds = RECONCILE_STALE_HEARTBEAT_FACTOR * int(get_settings().saq_job_heartbeat)
+    if node_output_progress_seconds is None:
+        node_output_progress_seconds = _int_setting(
+            getattr(get_settings(), "dispatcher_reconcile_node_output_progress_seconds", None),
+            _NODE_OUTPUT_PROGRESS_DEFAULT_SECONDS,
+        )
     detail_prefix = _NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT.format(age=max_age_minutes)
+    assembled_sql = _MID_GRAPH_WEDGE_SQL.replace(_ZERO_PROGRESS_SHAPE_TOKEN, _ZERO_PROGRESS_SHAPE_SQL).replace(
+        _NODE_OUTPUT_PROGRESS_ABSENT_TOKEN, _NODE_OUTPUT_PROGRESS_ABSENT_SQL
+    )
     result = await session.execute(
-        text(_MID_GRAPH_WEDGE_SQL.replace(_ZERO_PROGRESS_SHAPE_TOKEN, _ZERO_PROGRESS_SHAPE_SQL)),
+        text(assembled_sql),
         {
             "oid": str(org_id),
             "code": _NO_PROGRESS_ERROR_CODE,
@@ -7304,6 +7765,8 @@ async def _terminalize_mid_graph_wedges(
             "live_marker_tombstone": _live_dispatch_marker_tombstone_pattern(),
             # FAR-1803: the shield's liveness bound (see the template comment).
             "heartbeat_fresh": stale_seconds,
+            # FAR-2122: a node output this recent is live progress.
+            "node_output_progress_cutoff": datetime.now(UTC) - timedelta(seconds=node_output_progress_seconds),
             "max_age_minutes": max_age_minutes,
             "max_rows": _terminalize_max_rows(max_rows),
         },
@@ -7927,7 +8390,13 @@ _TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
         # FAR-1803: ``stale_seconds`` is the live-marker shield's liveness
         # bound — threaded from the SAME ``stale_window`` the scan's
         # stale-heartbeat legs bind, so "stale" has one definition.
-        tuning_kwargs={"max_age_minutes": "max_age_minutes", "stale_seconds": "stale_window"},
+        # FAR-2122: ``node_output_progress_seconds`` is the recent-node-output
+        # progress window, threaded as a bound param (never a SQL literal).
+        tuning_kwargs={
+            "max_age_minutes": "max_age_minutes",
+            "stale_seconds": "stale_window",
+            "node_output_progress_seconds": "node_output_progress_seconds",
+        },
     ),
     ReconcileTerminalizer(
         key="dispatch_failed",
@@ -8591,6 +9060,12 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     max_age_minutes = _saq_zero_progress_max_age_minutes()
     claim_cap = _saq_run_claim_cap()
     hitl_review_cancel_grace = int(settings.hitl_review_cancel_grace_seconds)
+    # FAR-2122: the node-output recency window is a tuning knob (bound, never a
+    # SQL literal) — the same registry `stale_window` travels through.
+    node_output_progress_seconds = _int_setting(
+        getattr(settings, "dispatcher_reconcile_node_output_progress_seconds", None),
+        _NODE_OUTPUT_PROGRESS_DEFAULT_SECONDS,
+    )
     # FAR-720: the tick's tuning knobs travel as one frozen unit.
     tuning = ReconcileTuning(
         nodeless_window=nodeless_window,
@@ -8599,6 +9074,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         stale_window=stale_window,
         capacity_redispatch_seconds=capacity_redispatch_seconds,
         hitl_review_cancel_grace_seconds=hitl_review_cancel_grace,
+        node_output_progress_seconds=node_output_progress_seconds,
     )
     budget_seconds = _int_setting(
         getattr(settings, "dispatcher_reconcile_budget_seconds", None), _RECONCILE_BUDGET_DEFAULT_SECONDS
@@ -8780,6 +9256,9 @@ class _ReconcileOrgLimits:
     terminalize_max: int = _TERMINALIZE_UNLIMITED_ROWS
     early_detect_minutes: int | None = None
     row_budget: int | None = None
+    org_deadline_monotonic: float | None = None
+    row_defer_margin_seconds: float = _RECONCILE_ROW_DEFER_MARGIN_SECONDS
+    org_slice_seconds: float | None = None
 
 
 async def _dispatcher_reconcile_body(
@@ -9077,11 +9556,11 @@ async def _attempt_reconcile_org(
                     terminalize_max=ctx.terminalize_max,
                     early_detect_minutes=ctx.early_detect_minutes,
                     row_budget=row_budget,
+                    org_deadline_monotonic=org_deadline_monotonic,
+                    row_defer_margin_seconds=row_defer_margin_seconds,
+                    org_slice_seconds=org_slice_seconds,
                 ),
                 stage=stage,
-                org_deadline_monotonic=org_deadline_monotonic,
-                row_defer_margin_seconds=row_defer_margin_seconds,
-                org_slice_seconds=org_slice_seconds,
             )
     except TimeoutError:
         # FAR-1525: the org's pass raised a builtin TimeoutError. The
@@ -9480,6 +9959,172 @@ def _dispatcher_summary() -> dict[str, Any]:
     return summary
 
 
+async def _execute_reconcile_batch_terminalizers(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    tuning: ReconcileTuning,
+    terminalize_max: int,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    mark_stage: Callable[[str], None],
+) -> None:
+    """Run DB-only org-scoped batch terminalizers before row selection."""
+    for spec in _BATCH_TERMINALIZER_SPECS:
+        mark_stage(f"terminalizer:{spec.stats_key}")
+        coroutine = _resolve_terminalizer(spec)
+        kwargs: dict[str, Any] = {kwarg: getattr(tuning, attr) for kwarg, attr in spec.tuning_kwargs.items()}
+        if spec.passes_summary:
+            kwargs["summary"] = summary
+        terminalized = await coroutine(session, org_id, **kwargs, max_rows=terminalize_max)
+        summary[spec.stats_key] += len(terminalized)
+        if spec.alias_key:
+            summary[spec.alias_key] = summary[spec.stats_key]
+        if len(terminalized) >= terminalize_max:
+            summary["terminalize_capped"] += 1
+        terminalized_run_ids.extend((run_id, org_id) for run_id in terminalized)
+        if spec.key == "mid_graph":
+            age_gate_run_ids.extend((run_id, org_id) for run_id in terminalized)
+
+
+async def _fetch_reconcile_org_rows(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    re_dispatch_predicate: Any,
+    tuning: ReconcileTuning,
+    row_budget: int | None,
+    mark_stage: Callable[[str], None],
+) -> Sequence[Any]:
+    """Execute the SELECT query fetching reconcilable run rows for one org."""
+    from modulo.db.models.pipeline import Pipeline
+    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+    from modulo.db.models.run import Run
+    from modulo.db.soft_delete import include_soft_deleted
+
+    row_select = select(
+        Run.id,
+        Run.pipeline_id,
+        Run.status,
+        Run.dispatched_at,
+        Run.heartbeat_at,
+        Run.node_token_usage,
+        _final_row_absent_expr().label("outputs_absent"),
+        _checkpoint_absent_expr().label("checkpoints_absent"),
+        Run.started_at,
+        Run.claim_count,
+        Run.execution_attempt_count,
+        Run.node_attempt_count,
+        Run.dispatcher,
+        Run.dispatch_phase,
+        Run.dispatch_phase_entered_at,
+        Run.guardrail_override_resume_pending,
+        Run.langgraph_thread_id,
+        Run.sandbox_dispatch_state,
+        text("runs.enqueue_failed_at AS enqueue_failed_at"),
+        Pipeline.retry_policy,
+        Pipeline.id.label("pipeline_row_id"),
+        PipelineSnapshot.graph_json.label("snapshot_graph_json"),
+        Pipeline.graph_nodes_json.label("pipeline_graph_json"),
+        Pipeline.node_timeout_seconds.label("pipeline_node_timeout_seconds"),
+    )
+    row_select = row_select.join(Pipeline, Pipeline.id == Run.pipeline_id, isouter=True)
+    row_select = include_soft_deleted(row_select)
+    row_select = row_select.join(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id, isouter=True)
+    row_select = row_select.where(
+        Run.organisation_id == org_id,
+        Run.status.in_(("pending", "running", "awaiting_human", "claimed", "hitl_parked")),
+        re_dispatch_predicate,
+        _reconcile_capacity_marker_exclusion(tuning.capacity_redispatch_seconds),
+    )
+    if row_budget is not None:
+        row_select = row_select.limit(row_budget + 1)
+    mark_stage("row_select")
+    return (await session.execute(row_select)).all()
+
+
+async def _execute_reconcile_org_row_loop(
+    session: AsyncSession,
+    q: RedisQueue,
+    redis_client: AsyncRedis,
+    org_id: uuid.UUID,
+    rows: Sequence[Any],
+    tuning: ReconcileTuning,
+    enqueue_failed_redispatched: int,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    limits: _ReconcileOrgLimits,
+    mark_stage: Callable[[str], None],
+) -> int:
+    """Iterate through selected rows and reconcile each one."""
+    row_loop_started = time.monotonic()
+    rows_processed_this_pass = 0
+    slowest_row_seconds = 0.0
+    deferred_for_time = 0
+    row_budget = limits.row_budget
+    org_deadline_monotonic = limits.org_deadline_monotonic
+    row_defer_margin_seconds = limits.row_defer_margin_seconds
+    early_detect_minutes = limits.early_detect_minutes
+    org_slice_seconds = limits.org_slice_seconds
+
+    for row_index, row in enumerate(rows):
+        if row_budget is not None and row_index >= row_budget:
+            break
+        if org_deadline_monotonic is not None and time.monotonic() >= org_deadline_monotonic - row_defer_margin_seconds:
+            deferred_for_time = len(rows) - row_index
+            summary["row_loop_time_deferred"] = summary.get("row_loop_time_deferred", 0) + deferred_for_time
+            break
+        mark_stage(f"row_loop:{row_index}/{len(rows)}")
+        summary["scanned"] += 1
+        rows_processed_this_pass += 1
+        row_started = time.monotonic()
+        row_nodeless_window = pipeline_nodeless_window_minutes(
+            tuning.nodeless_window,
+            max_node_timeout_seconds=_row_pipeline_max_node_timeout_seconds(row),
+        )
+        row_early_detect_minutes = _row_early_detect_minutes(
+            early_detect_minutes,
+            floor_minutes=tuning.nodeless_window,
+            row_window_minutes=row_nodeless_window,
+        )
+        enqueue_failed_redispatched = await _reconcile_one_row(
+            session,
+            q,
+            redis_client,
+            org_id,
+            row,
+            row_nodeless_window,
+            enqueue_failed_redispatched,
+            summary,
+            terminalized_run_ids,
+            early_detect_minutes=row_early_detect_minutes,
+            floor_nodeless_window=tuning.nodeless_window,
+            stale_window=tuning.stale_window,
+        )
+        slowest_row_seconds = max(slowest_row_seconds, time.monotonic() - row_started)
+
+    summary["row_loop_slowest_row_ms"] = max(
+        float(summary.get("row_loop_slowest_row_ms", 0) or 0.0),
+        round(slowest_row_seconds * 1000, 1),
+    )
+    if deferred_for_time:
+        _log.warning(
+            "dispatcher_reconcile.row_loop_time_deferred org=%s deferred_rows=%d "
+            "rows_processed=%d elapsed_seconds=%.1f slowest_row_seconds=%.2f "
+            "org_slice_seconds=%s row_defer_margin_seconds=%.2f "
+            "(row loop stopped STARTING rows before the per-org slice could cut the "
+            "whole transaction; the processed prefix commits and the remainder drains "
+            "on the next 60s tick)",
+            org_id,
+            deferred_for_time,
+            rows_processed_this_pass,
+            time.monotonic() - row_loop_started,
+            slowest_row_seconds,
+            f"{org_slice_seconds:.2f}" if org_slice_seconds is not None else "n/a",
+            row_defer_margin_seconds,
+        )
+    return enqueue_failed_redispatched
+
+
 async def _reconcile_org(
     *,
     factory: async_sessionmaker[AsyncSession],
@@ -9494,9 +10139,7 @@ async def _reconcile_org(
     age_gate_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
     limits: _ReconcileOrgLimits = _ReconcileOrgLimits(),
     stage: dict[str, str] | None = None,
-    org_deadline_monotonic: float | None = None,
-    row_defer_margin_seconds: float = _RECONCILE_ROW_DEFER_MARGIN_SECONDS,
-    org_slice_seconds: float | None = None,
+    **kwargs: Any,
 ) -> int:
     """Run one org's reconcile pass (terminalizers + row select + per-row loop).
 
@@ -9615,265 +10258,65 @@ async def _reconcile_org(
     at the row select and per row — so a cut at ANY of those points names the
     exact blocking site instead of only the org.
     """
-    from modulo.db.models.pipeline import Pipeline
-    from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-    from modulo.db.models.run import Run
+    if kwargs:
+        limits = _ReconcileOrgLimits(
+            terminalize_max=kwargs.pop("terminalize_max", limits.terminalize_max),
+            early_detect_minutes=kwargs.pop("early_detect_minutes", limits.early_detect_minutes),
+            row_budget=kwargs.pop("row_budget", limits.row_budget),
+            org_deadline_monotonic=kwargs.pop("org_deadline_monotonic", limits.org_deadline_monotonic),
+            row_defer_margin_seconds=kwargs.pop("row_defer_margin_seconds", limits.row_defer_margin_seconds),
+            org_slice_seconds=kwargs.pop("org_slice_seconds", limits.org_slice_seconds),
+        )
+        if kwargs:
+            raise TypeError(f"Unexpected keyword argument(s) for _reconcile_org: {list(kwargs.keys())}")
 
     def _mark(detail: str) -> None:
-        """Refine the shared ``stage`` hint with this pass's current site (FAR-1621).
-
-        The org-level op (``reconcile_org:<org-id>``) is set by the reconcile
-        body before the call; each refinement below keeps that prefix, so the
-        org id is always present in the label even at the finest granularity.
-        No-op when the caller passed no stage hint (direct callers / tests).
-        """
+        """Refine the shared ``stage`` hint with this pass's current site (FAR-1621)."""
         if stage is not None:
             stage["op"] = f"reconcile_org:{org_id}/{detail}"
 
-    # Mark BEFORE the session is acquired so a block in the pool checkout
-    # (hypothesis 2 of the FAR-1621 investigation) is distinguishable from a
-    # block after it.
     _mark("session-acquire")
-    # FAR-1621 (qa F3, amended FAR-1644/M3): unwind anchors for THIS pass,
-    # captured before the first terminalizer runs. The read phase below can
-    # fail with a non-bounded error and return NORMALLY (its contract: log
-    # ``read failed``, roll the transaction back, skip the org)
-    # — but by then the batch terminalizers may already have bumped ``summary``
-    # and appended to ``terminalized_run_ids``. Restore both on that path so
-    # the tick's counters and its compensating-fact ids only ever describe
-    # COMMITTED work (a rolled-back org contributes neither).
     summary_before = dict(summary)
     terminalized_len_before = len(terminalized_run_ids)
     if age_gate_run_ids is None:
-        # FAR-1993: a direct caller that omits the accumulator gets a local one
-        # (only the reconcile body consumes it).
         age_gate_run_ids = []
     age_gate_len_before = len(age_gate_run_ids)
-    terminalize_max = limits.terminalize_max
-    early_detect_minutes = limits.early_detect_minutes
-    row_budget = limits.row_budget
+
     async with factory() as session, session.begin():
         _mark("session-acquired")
-        # FAR-1601: bound THIS org transaction's row-lock waits FIRST — the
-        # transaction's opening statement, before any lock. ``set_config``
-        # takes no lock itself, so it cannot disturb lock ordering. Every hot
-        # ``runs`` write below shares this ONE transaction, so one bound covers
-        # them all: the five batch terminalizers, the enqueue-failed TTL
-        # backstop, the previous-attempt marker clear and the capacity-defer
-        # stamp. An unbounded wait here is the FAR-1524 class: silent past the
-        # Fly HAProxy 30-minute session window, which got prod connections
-        # culled mid-operation.
         from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
         await set_mutation_row_lock_timeout(session)
         _mark("lock-bound-set")
-        # FAR-1621: the companion STATEMENT bound, second statement of the same
-        # transaction (see _set_org_statement_timeout and the docstring above).
         await _set_org_statement_timeout(session)
         _mark("statement-bound-set")
         await _set_rls_org(session, org_id)
         _mark("rls-set")
         try:
-            # DB-only org-scoped batch terminalizers (B4 age-bound mid-graph
-            # wedge, B5 claim-cap, FAR-648 expired-HITL-gate, FAR-721
-            # zero-claim awaitng_human orphan), run BEFORE the row select so
-            # terminalised rows are excluded from re-dispatch.  FAR-746 batch
-            # cap: terminalize_max bounds each UPDATE so a big backlog drains
-            # gradually across 60s ticks.  Driven by the registry (FAR-720): a
-            # new batch terminalizer registers once below — the FAR-721 sweep
-            # is a registry entry with no tuning kwargs, so it needs no edit
-            # here.
-            for spec in _BATCH_TERMINALIZER_SPECS:
-                _mark(f"terminalizer:{spec.stats_key}")
-                coroutine = _resolve_terminalizer(spec)
-                kwargs: dict[str, Any] = {kwarg: getattr(tuning, attr) for kwarg, attr in spec.tuning_kwargs.items()}
-                if spec.passes_summary:
-                    # FAR-1329: the nodeless router delegates to
-                    # ``_fail_nodeless_run``, which bumps counters on the live
-                    # tick summary (same contract as the row loop).
-                    kwargs["summary"] = summary
-                terminalized = await coroutine(session, org_id, **kwargs, max_rows=terminalize_max)
-                summary[spec.stats_key] += len(terminalized)
-                if spec.alias_key:
-                    summary[spec.alias_key] = summary[spec.stats_key]
-                if len(terminalized) >= terminalize_max:
-                    summary["terminalize_capped"] += 1
-                terminalized_run_ids.extend((run_id, org_id) for run_id in terminalized)
-                if spec.key == "mid_graph":
-                    # FAR-1993: only the mid-graph age gate's runs get a DERIVED
-                    # sandbox cost, attributed post-commit from their heartbeat
-                    # liveness window. Collected here (still inside the org
-                    # transaction) and consumed by ``_terminalize_run_facts``
-                    # AFTER the commit; unwound with the org's other ids if the
-                    # transaction rolls back.
-                    age_gate_run_ids.extend((run_id, org_id) for run_id in terminalized)
-            row_select = select(
-                Run.id,
-                Run.pipeline_id,
-                Run.status,
-                Run.dispatched_at,
-                Run.heartbeat_at,
-                Run.node_token_usage,
-                # FAR-583 B1: the legacy outputs_json column is gone
-                # from the scan — the row-level nodeless recheck
-                # discriminates on whether the run still has NO
-                # ``__final__`` row in the per-node store (the
-                # finalisation-represented marker). Computed as a
-                # correlated NOT EXISTS (see _nodeless_zombie_predicate;
-                # one shared expression — qa iteration 1 rider).
-                _final_row_absent_expr().label("outputs_absent"),
-                # FAR-1088 F4: the zero-node checkpoint leg as a row
-                # flag — the SAME shared expression the SQL predicate
-                # uses, so the row-level recheck
-                # (_is_nodeless_zombie_row) enforces the identical
-                # premise for rows matched via OTHER branches (e.g.
-                # stale heartbeat).
-                _checkpoint_absent_expr().label("checkpoints_absent"),
-                Run.started_at,
-                Run.claim_count,
-                # FAR-2076: the ONE executions-consumed measure the
-                # retry-budget gate compares against the policy ceiling
-                # (``retry_budget.retry_executions_consumed``). Deliberately
-                # NOT derived from ``claim_count`` (it grows on
-                # capacity-demoted and resume claims) or ``node_attempt_count``
-                # (a pre-node death records nothing).
-                Run.execution_attempt_count,
-                # Selected for the terminal error_detail / triage context only
-                # — never as a budget measure.
-                Run.node_attempt_count,
-                Run.dispatcher,
-                # FAR-1649: consumed by the row-level nodeless recheck
-                # (_is_nodeless_zombie_row) — a durably-recorded first-node
-                # start proves a node executed, so the row is never treated
-                # as a zero-node zombie (no safe re-dispatch, no
-                # "dispatched no node" mislabel).
-                Run.dispatch_phase,
-                # FAR-1999: the durable first-node-start timestamp — the anchor
-                # of the node-deadline reaper's deadline for a node-started,
-                # zero-progress run.
-                Run.dispatch_phase_entered_at,
-                # FAR-1728: the override-resume class discriminator — the
-                # flip's single-writer dedicated marker column
-                # (_is_override_resume_row) — plus the row's
-                # resumable-checkpoint probe key
-                # (_override_resume_checkpoint_present): the per-row half of
-                # the guardrail-override self-heal leg. (``is_replay`` is NOT
-                # selected: webhook/manual replay also set it, so it cannot
-                # identify the flip; ``error_detail`` is NOT selected either —
-                # pre-0307 it carried the sentinel string, but an observation
-                # column must not hold a control-flow marker.)
-                Run.guardrail_override_resume_pending,
-                Run.langgraph_thread_id,
-                # FAR-1088 W-B: consumed by the row-level nodeless
-                # recheck (_is_nodeless_zombie_row) — a live dispatch
-                # marker shields the row from the nodeless repair
-                # until the in-flight safety floor passes.
-                Run.sandbox_dispatch_state,
-                text("runs.enqueue_failed_at AS enqueue_failed_at"),
-                Pipeline.retry_policy,
-                # FAR-2076: distinguishes "the pipeline has NO retry policy"
-                # (this column NULL, the row present) from "the pipeline row
-                # could not be resolved at all" (this column NULL too, but
-                # because the LEFT JOIN matched nothing) — the latter logs
-                # loudly instead of silently skipping the budget gate.
-                Pipeline.id.label("pipeline_row_id"),
-                # FAR-1740: the per-pipeline max node timeout drives the
-                # claimed-but-nodeless window. The FROZEN snapshot graph is the
-                # graph the run actually executes; the live pipeline node list
-                # and the pipeline-level default are fallbacks. All three are
-                # NULL-safe (a row source without them keeps the global floor).
-                PipelineSnapshot.graph_json.label("snapshot_graph_json"),
-                Pipeline.graph_nodes_json.label("pipeline_graph_json"),
-                Pipeline.node_timeout_seconds.label("pipeline_node_timeout_seconds"),
+            await _execute_reconcile_batch_terminalizers(
+                session,
+                org_id,
+                tuning,
+                limits.terminalize_max,
+                summary,
+                terminalized_run_ids,
+                age_gate_run_ids,
+                _mark,
             )
-            row_select = row_select.join(Pipeline, Pipeline.id == Run.pipeline_id, isouter=True)
-            # FAR-2076: opt OUT of the global soft-delete filter. Without this a
-            # soft-deleted pipeline yields ``retry_policy = NULL`` from the LEFT
-            # JOIN and the retry-budget gate silently skipped — restoring the
-            # original defect for exactly the FAR-1025 in-flight population this
-            # backstop exists to recover (``_saq_retries_for_run`` already opts
-            # out for the same reason). Run / PipelineSnapshot are not
-            # soft-deleted models, so this only widens the Pipeline leg.
-            from modulo.db.soft_delete import include_soft_deleted
-
-            row_select = include_soft_deleted(row_select)
-            # FAR-1740: the run's frozen snapshot graph — joined (not a
-            # per-row query) so deriving the window is free per row. LEFT join:
-            # a run with no snapshot (or a pruned one) still reconciles.
-            row_select = row_select.join(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id, isouter=True)
-            row_select = row_select.where(
-                Run.organisation_id == org_id,
-                # The F6a statuses must be IN this scan tuple too (qa
-                # F1): the gated-recovery branch below can only ever
-                # match rows this outer WHERE let through.
-                Run.status.in_(("pending", "running", "awaiting_human", "claimed", "hitl_parked")),
+            rows = await _fetch_reconcile_org_rows(
+                session,
+                org_id,
                 re_dispatch_predicate,
-                _reconcile_capacity_marker_exclusion(tuning.capacity_redispatch_seconds),
+                tuning,
+                limits.row_budget,
+                _mark,
             )
-            if row_budget is not None:
-                # FAR-1425: bound the FETCH itself. The two correlated NOT
-                # EXISTS legs above are SELECT-list expressions, so Postgres
-                # evaluates them once per fetched row — an unbounded fetch is
-                # unbounded work inside this single statement, on top of the
-                # per-row loop below.
-                #
-                # Fetch ONE row beyond the budget so an exactly-full result
-                # set can be distinguished from a genuinely capped one (review
-                # follow-up): ``row_budget + 1`` returned rows prove overflow
-                # exists; exactly ``row_budget`` rows prove the backlog was
-                # drained this tick, so nothing is deferred.
-                row_select = row_select.limit(row_budget + 1)
-            _mark("row_select")
-            rows = (await session.execute(row_select)).all()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             if is_row_lock_timeout(exc) or is_statement_timeout(exc):
-                # FAR-1601: the bounded wait expired while a terminalizer (or
-                # the row select's locking read) held a contended ``runs`` row.
-                # Propagate OUT of the org transaction (which rolls back at the
-                # ``async with``) to the reconcile body's org-level 55P03 skip —
-                # WARNING + unwind + next-tick re-process — instead of
-                # mislabelling expected sweep contention as a read failure.
-                #
-                # FAR-1621: a statement bound expiry (SQLSTATE 57014) is routed
-                # the SAME way — it too is an expected, bounded per-org failure
-                # with a dedicated body-level skip, and mislabelling it
-                # ``read failed`` would swallow the stage attribution the bound
-                # exists to produce.
                 raise
             _log.exception("dispatcher_reconcile: read failed (org %s)", org_id)
-            # FAR-1644 (M3): DECIDE the transaction outcome before touching the
-            # counters. This is a NORMAL return from inside
-            # ``async with session.begin()``, so ``SessionTransaction.__exit__``
-            # would take its COMMIT branch — and on a client-side/Python failure
-            # over a still-healthy connection that commit SUCCEEDS. The FAR-1621
-            # qa F3 comment this replaced claimed "Postgres rolls this
-            # transaction back at the ``async with`` exit"; it does not, unless
-            # something made it abort. Unwinding first therefore committed
-            # terminalizer writes that the summary had just disowned: their
-            # counters were zeroed and their compensating-fact ids dropped, so
-            # the tick reported less work than it had actually persisted.
-            #
-            # Roll back EXPLICITLY and only then unwind, so server-side state
-            # and the in-memory accounting can never disagree in either
-            # direction. ``session.rollback()`` inside a ``session.begin()``
-            # block is safe: on exit the transaction is no longer active, and
-            # SQLAlchemy's ``TransactionalContext.__exit__`` only commits an
-            # ACTIVE transaction, so it skips the commit and just closes
-            # (verified against SQLAlchemy 2.1.3, the pin this repo ships).
-            # The rollback is deliberately NOT wrapped in its own try/except:
-            # if it cannot complete the connection is already broken and the
-            # outcome genuinely is unknown — swallowing here would reintroduce
-            # exactly the disagree-with-the-server bug this fixes. Failing the
-            # tick with a truthful failure heartbeat is the honest outcome
-            # (the "swallow + keep going" contract is unchanged for every read
-            # failure whose rollback succeeds, which is all of them while the
-            # connection is alive). The ``nosemgrep`` follows the house
-            # precedent (run_outputs_dualwrite, library_service.community):
-            # the rule guards against destroying a SHARED session's writes,
-            # while this session was checked out for THIS org's pass alone and
-            # rolling all of it back is the intended semantics.
             await session.rollback()  # nosemgrep: session-rollback-abuse
             _unwind_org_counts(
                 summary,
@@ -9885,109 +10328,20 @@ async def _reconcile_org(
             )
             return enqueue_failed_redispatched
 
-        row_loop_started = time.monotonic()
-        rows_processed_this_pass = 0
-        slowest_row_seconds = 0.0
-        deferred_for_time = 0
-        for row_index, row in enumerate(rows):
-            # FAR-1425: defence in depth — the LIMIT already caps the fetch,
-            # but the loop must never be able to exceed the budget the
-            # inner-deadline message advertises (``max_rows=...``).
-            if row_budget is not None and row_index >= row_budget:
-                break
-            # FAR-1643: stop STARTING rows with margin to spare, so the work
-            # already done commits instead of the caller's slice rolling the
-            # whole org transaction back (the prod row_loop:13/15 cut). The
-            # unprocessed rows are counted in a DISTINCT counter — never
-            # silently dropped, and never folded into ``rows_deferred`` (the
-            # FAR-1425 cap marker) so the readiness detail can tell a
-            # time-deferral from a row-budget cap. Checked AFTER the row budget
-            # so the FAR-1425 path above keeps its exact semantics, and BEFORE
-            # the stage mark so a deferral never looks like a row in flight.
-            if (
-                org_deadline_monotonic is not None
-                and time.monotonic() >= org_deadline_monotonic - row_defer_margin_seconds
-            ):
-                deferred_for_time = len(rows) - row_index
-                summary["row_loop_time_deferred"] = summary.get("row_loop_time_deferred", 0) + deferred_for_time
-                break
-            _mark(f"row_loop:{row_index}/{len(rows)}")
-            summary["scanned"] += 1
-            rows_processed_this_pass += 1
-            row_started = time.monotonic()
-            # FAR-1740: derive the claimed-but-nodeless window PER-PIPELINE from
-            # this row's longest node timeout (frozen snapshot graph preferred,
-            # then the live node list, then the pipeline default). A row whose
-            # pipeline graph is unavailable keeps the global floor, so the SQL
-            # scan's global window stays a valid SUPERSET and the row-level
-            # recheck enforces the (never shorter) per-pipeline window. The
-            # FAR-873 early-detect is disabled for a pipeline whose window had
-            # to be widened above the floor — a node may still be legitimately
-            # running inside the early window.
-            row_nodeless_window = pipeline_nodeless_window_minutes(
-                tuning.nodeless_window,
-                max_node_timeout_seconds=_row_pipeline_max_node_timeout_seconds(row),
-            )
-            row_early_detect_minutes = _row_early_detect_minutes(
-                early_detect_minutes,
-                floor_minutes=tuning.nodeless_window,
-                row_window_minutes=row_nodeless_window,
-            )
-            enqueue_failed_redispatched = await _reconcile_one_row(
-                session,
-                q,
-                redis_client,
-                org_id,
-                row,
-                row_nodeless_window,
-                enqueue_failed_redispatched,
-                summary,
-                terminalized_run_ids,
-                early_detect_minutes=row_early_detect_minutes,
-                floor_nodeless_window=tuning.nodeless_window,
-                stale_window=tuning.stale_window,
-            )
-            # FAR-1643 instrumentation: the per-row cost, so the NEXT deferral
-            # can tell a single pathological row from a uniformly slow loop
-            # instead of assuming a fixed per-row figure. Measured around the
-            # whole per-row body (window derivation + repair) because that is
-            # what actually consumes the slice.
-            slowest_row_seconds = max(slowest_row_seconds, time.monotonic() - row_started)
-        # FAR-1643: the tick-level slowest-row gauge (max across orgs — the
-        # summary is shared by every org pass), surfaced in the readiness
-        # detail as ``row_loop_slowest_row_ms``.
-        summary["row_loop_slowest_row_ms"] = max(
-            float(summary.get("row_loop_slowest_row_ms", 0) or 0.0),
-            round(slowest_row_seconds * 1000, 1),
+        enqueue_failed_redispatched = await _execute_reconcile_org_row_loop(
+            session,
+            q,
+            redis_client,
+            org_id,
+            rows,
+            tuning,
+            enqueue_failed_redispatched,
+            summary,
+            terminalized_run_ids,
+            limits,
+            _mark,
         )
-        if deferred_for_time:
-            # WARNING, not INFO: a sustained deferral is the durable signal an
-            # operator needs (the tick deliberately stays ``ok`` — a partial
-            # pass that drains next tick is not a failure). The distinct
-            # ``row_loop_time_deferred`` counter plus this line IS the
-            # visibility; there is no rollback and no ``status=timeout``.
-            _log.warning(
-                "dispatcher_reconcile.row_loop_time_deferred org=%s deferred_rows=%d "
-                "rows_processed=%d elapsed_seconds=%.1f slowest_row_seconds=%.2f "
-                "org_slice_seconds=%s row_defer_margin_seconds=%.2f "
-                "(row loop stopped STARTING rows before the per-org slice could cut the "
-                "whole transaction; the processed prefix commits and the remainder drains "
-                "on the next 60s tick)",
-                org_id,
-                deferred_for_time,
-                rows_processed_this_pass,
-                time.monotonic() - row_loop_started,
-                slowest_row_seconds,
-                f"{org_slice_seconds:.2f}" if org_slice_seconds is not None else "n/a",
-                row_defer_margin_seconds,
-            )
-        # FAR-1425: the fetch above returned one row beyond the budget when
-        # (and only when) matching rows remain. Count the org as deferred so
-        # the cap is visible instead of silently reported as a clean tick; the
-        # remainder drains next tick. A fetch of exactly ``row_budget`` rows
-        # means the backlog was drained this tick — deferring it every tick
-        # would misreport a clean org as permanently capped.
-        if row_budget is not None and len(rows) > row_budget:
+        if limits.row_budget is not None and len(rows) > limits.row_budget:
             summary["rows_deferred"] = summary.get("rows_deferred", 0) + 1
     return enqueue_failed_redispatched
 
@@ -10093,7 +10447,9 @@ async def _sweep_workspace_input_drift_flags(factory: Any) -> dict[str, Any]:
     return {"scanned": scanned, "corrected": corrected}
 
 
-async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any]) -> None:
+async def _run_reconcile_sweeps(  # NOSONAR S3776 - sweep orchestrator delegates each arm
+    redis_client: AsyncRedis, summary: dict[str, Any]
+) -> None:
     """FAR-189/FAR-190 compensating sweeps + the healthz stats write (best-effort)."""
     try:
         classification = await run_classification_reconcile()
@@ -10183,6 +10539,36 @@ async def _run_reconcile_sweeps(redis_client: AsyncRedis, summary: dict[str, Any
         raise
     except Exception:
         _log.warning("dispatcher_reconcile.capacity_alerts_failed", exc_info=True)
+    # FAR-2116 — pipeline-decay alerting: a webhook-triggered pipeline whose
+    # rolling 2h success rate collapses (or whose node-deadline watchdog keeps
+    # firing) is alerted through the same Notifier. This is the gap neither
+    # readiness nor capacity alerting covered: the Branch Fixer ran at a 35%
+    # success rate for ~5 days with the app perfectly healthy. Isolated — a
+    # failure here is a WARNING, never an abort of the reconcile tick.
+    try:
+        from modulo.core.pipeline_decay_alerts import evaluate_pipeline_decay_alerts
+
+        decay_alerts = await evaluate_pipeline_decay_alerts(
+            factory=_open_system_factory(),
+            redis_client=redis_client,
+        )
+        summary["pipeline_decay_alerts_measured"] = decay_alerts.get("pipelines_measured", 0)
+        summary["pipeline_decay_alerts_raised"] = decay_alerts.get("alerts", 0)
+        summary["pipeline_decay_alerts_recovered"] = decay_alerts.get("recoveries", 0)
+        summary["pipeline_decay_alerts_failed"] = decay_alerts.get("notify_failed", 0)
+        if decay_alerts.get("alerts") or decay_alerts.get("recoveries"):
+            _log.info(
+                "dispatcher_reconcile.pipeline_decay_alerts",
+                extra={
+                    "pipelines_measured": decay_alerts.get("pipelines_measured", 0),
+                    "alerts": decay_alerts.get("alerts", 0),
+                    "recoveries": decay_alerts.get("recoveries", 0),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("dispatcher_reconcile.pipeline_decay_alerts_failed", exc_info=True)
     try:
         from modulo.auth.api_key import revoke_run_api_key_sweep
 
@@ -10879,6 +11265,34 @@ async def _override_resume_checkpoint_present(
     return bool(await _run_has_resumable_checkpoint(session, org_id=org_id, thread_id=thread_id))
 
 
+def _is_unowned_node_started_resume_row(row: Any, stale_window: int) -> bool:
+    """FAR-2122: identify a stale node-started row with no SAQ owner.
+
+    A missing/foreign dispatcher means the SAQ job identity was lost, but the
+    durable phase proves that a node may already have run. Such rows must use
+    the checkpoint-resume claim rather than ``execute_run``.
+
+    Heartbeats are normalised with :func:`_as_utc` (the sibling rechecks' rule):
+    a naive datetime from a legacy row / a driver that drops tzinfo would
+    otherwise raise ``TypeError`` on subtraction from an aware ``now``. A NULL
+    heartbeat is stale evidence (no live writer); a non-datetime value fails
+    closed (no verifiable staleness evidence).
+    """
+    if getattr(row, "status", None) != "running":
+        return False
+    if getattr(row, "dispatcher", None) == "saq":
+        return False
+    if getattr(row, "dispatch_phase", None) != PHASE_FIRST_NODE_DISPATCHED:
+        return False
+    raw_heartbeat = getattr(row, "heartbeat_at", None)
+    if raw_heartbeat is None:
+        return True
+    heartbeat = _as_utc(raw_heartbeat)
+    if heartbeat is None:
+        return False
+    return (datetime.now(UTC) - heartbeat).total_seconds() > stale_window
+
+
 def _is_node_started_executor_lost_row(row: Any, stale_window: int) -> bool:
     """FAR-1803: is *row* the node-started / executor-lost class? (row recheck)
 
@@ -10923,7 +11337,54 @@ def _is_node_started_executor_lost_row(row: Any, stale_window: int) -> bool:
     return (datetime.now(UTC) - heartbeat).total_seconds() > stale_window
 
 
-async def _reconcile_one_row(
+async def _reconcile_node_started_executor_lost(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    row: Any,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    enqueue_failed_redispatched: int,
+    stale_window: int,
+) -> int | None:
+    """Handle a stale executor after its first node started, if applicable."""
+    if not _is_node_started_executor_lost_row(row, stale_window):
+        return None
+    deadline: datetime | None = None
+    if _is_node_started_no_progress_row(row):
+        node_budget = _row_node_budget_seconds(row)
+        deadline = _node_started_deadline(row, node_budget_seconds=node_budget)
+        if (
+            deadline is not None
+            and datetime.now(UTC) >= deadline
+            and await _fail_node_deadline_run(
+                session,
+                row.id,
+                org_id,
+                summary,
+                stale_window=stale_window,
+                node_budget_seconds=node_budget,
+            )
+        ):
+            terminalized_run_ids.append((row.id, org_id))
+            return enqueue_failed_redispatched
+    summary["node_started_executor_lost"] += 1
+    _log.warning(
+        "dispatcher_reconcile.node_started_executor_lost run=%s org=%s dispatch_phase=%s "
+        "claim_count=%s heartbeat_at=%s node_deadline=%s — node-started row whose executor "
+        "heartbeat is stale; held back from re-dispatch (re-execution unsafe). "
+        "Reaped at its node deadline when it has zero progress (FAR-1999), "
+        "otherwise terminalised by the age gate at the bound (FAR-1803)",
+        row.id,
+        org_id,
+        getattr(row, "dispatch_phase", None),
+        getattr(row, "claim_count", None),
+        getattr(row, "heartbeat_at", None),
+        deadline.isoformat() if deadline is not None else None,
+    )
+    return enqueue_failed_redispatched
+
+
+async def _reconcile_one_row(  # NOSONAR S3776 - ordered reconciliation state machine delegates each repair arm
     session: AsyncSession,
     q: RedisQueue,
     redis_client: AsyncRedis,
@@ -10972,40 +11433,17 @@ async def _reconcile_one_row(
     # progress) keeps the old hold-and-report path and is left to the age gate
     # — which remains the safety net if this reaper cannot act (e.g. no time
     # anchor).
-    if _is_node_started_executor_lost_row(row, stale_window):
-        deadline: datetime | None = None
-        if _is_node_started_no_progress_row(row):
-            node_budget = _row_node_budget_seconds(row)
-            deadline = _node_started_deadline(row, node_budget_seconds=node_budget)
-            if (
-                deadline is not None
-                and datetime.now(UTC) >= deadline
-                and await _fail_node_deadline_run(
-                    session,
-                    row.id,
-                    org_id,
-                    summary,
-                    stale_window=stale_window,
-                    node_budget_seconds=node_budget,
-                )
-            ):
-                terminalized_run_ids.append((row.id, org_id))
-                return enqueue_failed_redispatched
-        summary["node_started_executor_lost"] += 1
-        _log.warning(
-            "dispatcher_reconcile.node_started_executor_lost run=%s org=%s dispatch_phase=%s "
-            "claim_count=%s heartbeat_at=%s node_deadline=%s — node-started row whose executor "
-            "heartbeat is stale; held back from re-dispatch (re-execution unsafe). "
-            "Reaped at its node deadline when it has zero progress (FAR-1999), "
-            "otherwise terminalised by the age gate at the bound (FAR-1803)",
-            row.id,
-            org_id,
-            getattr(row, "dispatch_phase", None),
-            getattr(row, "claim_count", None),
-            getattr(row, "heartbeat_at", None),
-            deadline.isoformat() if deadline is not None else None,
-        )
-        return enqueue_failed_redispatched
+    node_started_result = await _reconcile_node_started_executor_lost(
+        session,
+        org_id,
+        row,
+        summary,
+        terminalized_run_ids,
+        enqueue_failed_redispatched,
+        stale_window,
+    )
+    if node_started_result is not None:
+        return node_started_result
     # FAR-873: early-detect for fresh-heartbeat nodeless zombies.  Fire BEFORE
     # the full nodeless repair so a wedged-worker zombie is re-dispatched ~20
     # min sooner.  The throttle uses the FULL nodeless_window (not the
@@ -11163,7 +11601,44 @@ async def _reconcile_one_row(
         summary["skipped"] += 1
         return enqueue_failed_redispatched
 
+    # FAR-2122 — recover a node-started row whose SAQ dispatcher identity was
+    # lost. The durable phase means execute_run is unsafe; require a root
+    # checkpoint before claiming a resume. A row WITHOUT one is left to
+    # ``pipeline_execution._SWEEP_ORPHANED_RUNS_SQL`` — the terminaliser for
+    # the checkpointless shape (see the precedence note on the scan leg) —
+    # rather than risking re-execution from the graph start (FAR-1649).
+    if _is_unowned_node_started_resume_row(row, stale_window):
+        if not await _override_resume_checkpoint_present(session, org_id, row):
+            summary["skipped"] += 1
+            _log.warning(
+                "dispatcher_reconcile: unowned node-started run %s has no root checkpoint; "
+                "not re-dispatched (resume would re-execute it) — left to the orphan sweep",
+                row.id,
+            )
+            return enqueue_failed_redispatched
+        _log.info(
+            "dispatcher_reconcile.unowned_node_started_redispatched run=%s org=%s "
+            "dispatcher=%s dispatch_phase=%s — lost worker identity recovered via resume_run",
+            row.id,
+            org_id,
+            getattr(row, "dispatcher", None),
+            getattr(row, "dispatch_phase", None),
+        )
+        return await _re_dispatch_reconciled_run(
+            session,
+            q,
+            org_id,
+            row,
+            "resume_run",
+            uuid.uuid4().hex,
+            None,
+            is_enqueue_failed,
+            enqueue_failed_redispatched,
+            summary,
+        )
+
     # FAR-1728 — guardrail-override resume self-heal (mirror of the F6a leg).
+
     # Reached ONLY for a row the SQL leg selected AND whose SAQ job is absent
     # (both ``q.job()`` reads above), before the node-started belt would hold
     # it back: a ``running`` + ``first_node_dispatched`` row carrying the

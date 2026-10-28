@@ -93,7 +93,7 @@
 
       <section class="space-y-3" aria-labelledby="evidence-index-coverage-heading" data-testid="compliance-evidence-index-coverage">
         <h2 id="evidence-index-coverage-heading" class="text-lg font-semibold">{{ $t('views.ComplianceEvidenceIndex.coverage_heading') }}</h2>
-        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm">
+        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-labelledby="evidence-index-coverage-heading" tabindex="0" data-testid="compliance-evidence-index-coverage-scroll"> <!-- NOSONAR: This named, focusable scroll region preserves keyboard access to the wide table. -->
           <table class="w-full text-left text-sm">
             <thead>
               <tr class="border-b bg-muted/50">
@@ -120,7 +120,7 @@
             {{ $t('views.ComplianceEvidenceIndex.artifact_count', { count: indexData.artifacts.length }) }}
           </p>
         </div>
-        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm">
+        <div class="overflow-x-auto rounded-lg border bg-card shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-labelledby="evidence-index-artifacts-heading" tabindex="0" data-testid="compliance-evidence-index-artifacts-scroll"> <!-- NOSONAR: This named, focusable scroll region preserves keyboard access to the wide table. -->
           <table class="w-full min-w-[1050px] text-left text-sm">
             <thead>
               <tr class="border-b bg-muted/50">
@@ -152,8 +152,39 @@
                 </td>
                 <td class="max-w-sm px-3 py-3">
                   <div class="break-words">{{ artifact.location }}</div>
-                  <ul v-if="artifact.identifiers.length > 0" class="mt-1 list-inside list-disc font-mono text-xs text-muted-foreground">
-                    <li v-for="identifier in artifact.identifiers" :key="identifier">{{ identifier }}</li>
+                  <ul v-if="artifact.identifiers.length > 0" class="mt-1 space-y-1 text-xs text-muted-foreground">
+                    <li v-for="identifier in identifierDisplays(artifact)" :key="identifier.raw">
+                      <template v-if="identifier.label">
+                        <span class="text-foreground" data-testid="compliance-evidence-index-identifier-label">{{ identifier.label }}</span>
+                        <span class="ml-1 font-mono">{{ identifier.reference }}</span>
+                        <router-link
+                          v-if="identifier.href"
+                          :to="identifier.href"
+                          :aria-label="$t('views.ComplianceEvidenceIndex.snapshot_open_label', { version: identifier.version, reference: identifier.reference })"
+                          class="ml-1 underline hover:text-foreground"
+                          data-testid="compliance-evidence-index-snapshot-link"
+                        >{{ $t('views.ComplianceEvidenceIndex.snapshot_open') }}</router-link>
+                        <button
+                          type="button"
+                          :aria-label="identifierCopyLabel(identifier)"
+                          class="ml-1 underline hover:text-foreground"
+                          data-testid="compliance-evidence-index-copy-identifier"
+                          @click="copyIdentifier(identifier.raw)"
+                        >{{ copiedIdentifier === identifier.raw ? $t('views.ComplianceEvidenceIndex.identifier_copied') : $t('views.ComplianceEvidenceIndex.identifier_copy') }}</button>
+                        <output v-if="copiedIdentifier === identifier.raw" aria-live="polite" class="sr-only">{{ $t('views.ComplianceEvidenceIndex.identifier_copied') }}</output>
+                        <details class="mt-1" data-testid="compliance-evidence-index-identifier-details">
+                          <summary class="cursor-pointer">{{ $t('views.ComplianceEvidenceIndex.identifier_details') }}</summary>
+                          <code class="mt-1 block select-all break-all font-mono">{{ identifier.raw }}</code>
+                        </details>
+                        <p
+                          v-if="copyFailedIdentifier === identifier.raw"
+                          class="mt-1 text-destructive-text"
+                          role="alert"
+                          data-testid="compliance-evidence-index-copy-error"
+                        >{{ $t('views.ComplianceEvidenceIndex.identifier_copy_failed') }}</p>
+                      </template>
+                      <span v-else class="font-mono">{{ identifier.raw }}</span>
+                    </li>
                   </ul>
                 </td>
                 <td class="px-3 py-3">{{ provenanceLabel(artifact.provenance) }}</td>
@@ -180,7 +211,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -189,10 +220,30 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/schema'
 import { useDataFetch } from '../composables/useDataFetch'
+import { shortId } from '../utils/format'
 
 type EvidenceIndex = components['schemas']['EvidenceIndex']
+type ArtifactEntry = components['schemas']['ArtifactEntry']
 
 type CoverageRow = { framework: string; category: string; count: number }
+
+type IdentifierDisplay = {
+  raw: string
+  label: string | null
+  reference: string | null
+  href: string | null
+  version: number | null
+}
+
+/**
+ * The run-snapshot artefact names each frozen snapshot as
+ * `pipeline-snapshot:<uuid>@v<version>` (backend/compliance/evidence_index.py).
+ * The UUID is unambiguous but unreadable, so the table renders a concise
+ * version label plus the app-wide short id, and keeps the RAW identifier
+ * reachable through the detail disclosure and the copy action. Anything that
+ * does not match this shape is rendered verbatim - never partially parsed.
+ */
+const PIPELINE_SNAPSHOT_IDENTIFIER = /^pipeline-snapshot:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})@v(\d+)$/i
 
 const { t: $t } = useI18n()
 
@@ -226,6 +277,73 @@ const lowerBoundArtifacts = computed(() =>
     .filter((artifact) => artifact.detail.human_only_counts_are_lower_bounds === true)
     .map((artifact) => artifact.artifact_type),
 )
+
+const copiedIdentifier = ref<string | null>(null)
+const copyFailedIdentifier = ref<string | null>(null)
+let copyTimeout: ReturnType<typeof setTimeout> | null = null
+
+onBeforeUnmount(() => {
+  clearTimeout(copyTimeout ?? undefined)
+})
+
+async function copyIdentifier(identifier: string): Promise<void> {
+  copyFailedIdentifier.value = null
+  try {
+    await navigator.clipboard.writeText(identifier)
+    copiedIdentifier.value = identifier
+    clearTimeout(copyTimeout ?? undefined)
+    copyTimeout = setTimeout(() => {
+      copiedIdentifier.value = null
+    }, 2000)
+  } catch (error) {
+    // `navigator.clipboard` is undefined outside a secure context (a plain
+    // HTTP self-hosted instance), so a failed copy must be visible: the raw
+    // identifier stays selectable in the detail disclosure.
+    console.warn('Failed to copy evidence identifier', error)
+    copiedIdentifier.value = null
+    copyFailedIdentifier.value = identifier
+  }
+}
+
+/**
+ * The backend builds `identifiers` and `detail.sample_pipeline_ids` from the
+ * SAME ordered rows, so index i in one names the pipeline of index i in the
+ * other. When the detail is missing (or a future payload drops it) the label
+ * still renders - only the navigation link is omitted rather than guessing.
+ */
+function samplePipelineIds(artifact: ArtifactEntry): (string | undefined)[] {
+  const value = artifact.detail.sample_pipeline_ids
+  // Map (not filter) so a non-string entry becomes undefined IN PLACE: the
+  // pairing is positional, and compacting the array would shift every later
+  // identifier onto the wrong pipeline (a misattribution, not a missing link).
+  return Array.isArray(value) ? value.map((item) => (typeof item === 'string' ? item : undefined)) : []
+}
+
+function identifierDisplays(artifact: ArtifactEntry): IdentifierDisplay[] {
+  const pipelineIds = samplePipelineIds(artifact)
+  return artifact.identifiers.map((raw, index) => {
+    const match = PIPELINE_SNAPSHOT_IDENTIFIER.exec(raw)
+    if (!match) return { raw, label: null, reference: null, href: null, version: null }
+    const snapshotId = match[1]
+    const version = Number(match[2])
+    const pipelineId = pipelineIds[index]
+    return {
+      raw,
+      label: $t('views.ComplianceEvidenceIndex.snapshot_label', { version }),
+      reference: shortId(snapshotId),
+      href: pipelineId
+        ? `/pipelines/${encodeURIComponent(pipelineId)}/editor?snapshot=${snapshotId}`
+        : null,
+      version,
+    }
+  })
+}
+
+function identifierCopyLabel(display: IdentifierDisplay): string {
+  return display.raw === copiedIdentifier.value
+    ? $t('views.ComplianceEvidenceIndex.identifier_copied_label', { reference: display.reference })
+    : $t('views.ComplianceEvidenceIndex.identifier_copy_label', { reference: display.reference })
+}
 
 function statusClass(status: string): string {
   if (status === 'present') return 'border-success/40 bg-success/10 text-success-text'

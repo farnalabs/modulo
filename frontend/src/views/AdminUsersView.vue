@@ -19,7 +19,9 @@
       data-testid="admin-users-loading"
     />
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadUsers" />
+    <div v-else-if="error" aria-live="assertive">
+      <ErrorAlert :message="error" :on-retry="loadUsers" />
+    </div>
 
     <EmptyState
       v-else-if="users.length === 0"
@@ -84,12 +86,12 @@
             <td class="table-cell text-xs text-muted-foreground">{{ u.auth_provider || '—' }}</td>
             <td class="table-cell">
               <span v-if="!u.last_login" class="text-xs text-muted-foreground italic">{{ $t('views.AdminUsersView.never_logged_in') }}</span>
-              <span v-else class="text-xs text-muted-foreground" :title="formatDateShortWithTime(new Date(u.last_login))">
+              <span v-else class="text-xs text-muted-foreground" :title="formatDateShortWithTime(u.last_login)">
                 {{ formatRelativeTime(u.last_login) }}
               </span>
             </td>
             <td class="table-cell-numeric text-xs text-muted-foreground">
-              {{ u.created_at ? formatDateShort(new Date(u.created_at)) : '—' }}
+              {{ u.created_at ? formatDateShort(u.created_at) : '—' }}
             </td>
             <td class="table-cell-numeric">
               <TableActions :actions="rowActions(u)" />
@@ -131,20 +133,15 @@
         :aria-label="$t('common.loading')"
         data-testid="admin-invitations-loading"
       />
-      <p
-        v-else-if="invitationsError"
-        class="text-sm text-destructive"
-        data-testid="admin-invitations-error"
-      >
-        {{ invitationsError }}
-      </p>
-      <p
+      <div v-else-if="invitationsError" aria-live="assertive" data-testid="admin-invitations-error">
+        <ErrorAlert :message="invitationsError" :on-retry="loadInvitations" />
+      </div>
+      <EmptyState
         v-else-if="pendingInvitations.length === 0"
-        class="text-sm text-muted-foreground"
+        :title="$t('views.AdminUsersView.no_pending_invitations')"
+        :description="$t('views.AdminUsersView.no_pending_invitations_description')"
         data-testid="admin-invitations-empty"
-      >
-        {{ $t('views.AdminUsersView.no_pending_invitations') }}
-      </p>
+      />
       <div v-else class="table-wrapper overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
@@ -169,10 +166,10 @@
               </td>
               <td class="table-cell capitalize">{{ inv.org_role }}</td>
               <td class="table-cell-numeric text-xs text-muted-foreground">
-                {{ formatDateShort(new Date(inv.created_at)) }}
+                {{ formatDateShort(inv.created_at) }}
               </td>
               <td class="table-cell-numeric text-xs text-muted-foreground">
-                {{ formatDateShort(new Date(inv.expires_at)) }}
+                {{ formatDateShort(inv.expires_at) }}
               </td>
               <td class="table-cell-numeric">
                 <Button severity="danger" outlined :disabled="actionLoading[inv.id]" data-testid="admin-invitations-revoke" @click="openRevoke(inv)">
@@ -423,6 +420,7 @@ const { data: invitationsResp, loading: invitationsLoading, error: invitationsEr
   () => get<InvitationListResponse>('/api/v1/admin/users/invitations?page=1&page_size=100').then(d => ({ data: d })),
   { initialValue: { items: [] as InvitationItem[], total: 0, page: 1, page_size: 100 } as InvitationListResponse }
 )
+
 const pendingInvitations = computed(() => invitationsResp.value?.items ?? [])
 
 // ── Create / invite dialog ───────────────────────────────────
@@ -529,7 +527,7 @@ const actionLoading = ref<Record<string, boolean>>({})
 let flashTimeout: ReturnType<typeof setTimeout> | null = null
 
 function initialOf(name: string): string {
-  return name ? name.charAt(0).toUpperCase() : '?'
+  return Array.from(name)[0]?.toLocaleUpperCase() ?? '?'
 }
 
 function showFlash(type: 'success' | 'error', text: string) {
@@ -641,13 +639,22 @@ function rowActions(u: UserItem) {
 
 function validateEmailAndName(): string {
   const { email, display_name } = newUser.value
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (!email || !isValidEmail(email)) {
     return t('views.AdminUsersView.please_enter_a_valid_email_address')
   }
   if (!display_name || !display_name.trim()) {
     return t('views.AdminUsersView.display_name_is_required')
   }
   return ''
+}
+
+function isValidEmail(email: string): boolean {
+  const atIndex = email.indexOf('@')
+  if (atIndex <= 0 || atIndex !== email.lastIndexOf('@') || atIndex === email.length - 1) return false
+  const domain = email.slice(atIndex + 1)
+  const dotIndex = domain.indexOf('.')
+  const hasWhitespace = Array.from(email).some(character => character.trim() !== character)
+  return dotIndex > 0 && dotIndex < domain.length - 1 && !hasWhitespace
 }
 
 function generatePassword() {
@@ -705,7 +712,7 @@ async function sendInvite() {
       'invite',
       data.invite_url,
       email,
-      data.expires_at ? formatDateShort(new Date(data.expires_at)) : '',
+      data.expires_at ? formatDateShort(data.expires_at) : '',
     )
     showFlash('success', t('views.AdminUsersView.invitation_sent', { email }))
   } catch (e: unknown) {

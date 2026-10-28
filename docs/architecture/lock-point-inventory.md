@@ -17,12 +17,12 @@
 ## 1. Method (reproducible enumeration)
 
 > **FAR-1825 re-derivation (this branch).** §1's commands were re-run against the
-> branch tip (`27d2a4fa`), not trusted from the previous snapshot: **59**
+> branch tip, not trusted from the previous snapshot: **59**
 > `.with_for_update(` + **4** `with_for_update=` = **63** SQLAlchemy call sites
 > (+2 raw SQL = **65** row-lock sites). The kwarg grep returns **5** lines, but one
 > (`cron_helpers.py:6884`) is the FAR-1914 docstring mention, not a call site, so 4
 > kwarg code sites are counted (`api_keys.py:308`, `account.py:137`,
-> `cron_helpers.py:5849`, `cron_helpers.py:7021`). The +4 since the FAR-1833
+> `cron_helpers.py:5849`, `cron_helpers.py:7021`). The +5 since the FAR-1833
 > cutover are **new sites landed by other work**, neither category C:
 >
 > - `api/mcp_server.py::_replace_pipeline_graph_txn` (A19; self-bounds with
@@ -36,6 +36,9 @@
 > - `core/cron_helpers.py::_terminalize_aged_nodeless_zombies` (D17; the FAR-1914
 >   `session.get(Run, with_for_update=True)` locked re-read at `7021`, same
 >   reconcile transaction bound).
+> - `core/eval/finding_resolver.py::apply_mute_policy` (D18; the
+>   `.with_for_update()` call at `244`, serialising concurrent mute-policy
+>   evaluations in the caller-owned transaction, FAR-2028).
 >
 > **FAR-1823 (this branch) removed D4's org-row lock** (`export_org_data`): the
 > export now uses a read-only REPEATABLE READ snapshot on a separate connection,
@@ -128,7 +131,7 @@ Each site is assigned **exactly one** category:
 
 ---
 
-## 3. SQLAlchemy `.with_for_update` inventory (62 lock sites; 63 rows incl. lockless D4)
+## 3. SQLAlchemy `.with_for_update` inventory (63 lock sites; 64 rows incl. lockless D4)
 
 `lock` = the effective PostgreSQL strength (`with_for_update()` → `FOR UPDATE`;
 `key_share=True` → `FOR NO KEY UPDATE`; `read=True` → `FOR SHARE`). `txn` = transaction the
@@ -216,7 +219,7 @@ unrelated writer or is held across non-lock work.
 | C22 | `core/assistant/context_source_service.py:138` | `_upsert_context_source` | FOR UPDATE | caller txn, **bounded** (FAR-1825, in the helper before the branch) | Org-scoped assistant-context-source upsert. | no. |
 | C23 | `core/assistant/context_source_service.py:148` | `_upsert_context_source` | FOR UPDATE | caller txn, **bounded** (same FAR-1825 bound as C22 – one statement precedes both branches) | User-scoped assistant-context-source upsert (per-user variant of C22). | no. |
 
-### D – operational / other (13 lock sites; D4 retained as a none-row)
+### D – operational / other (14 lock sites; D4 retained as a none-row)
 
 > **D7, D9 and D14 have been removed.** **FAR-1822** removed D7 (the `cron_helpers`
 > scheduled-report lock – PR #1842 merged 2026-10-15; the stamp-and-commit path now
@@ -242,6 +245,7 @@ unrelated writer or is held across non-lock work.
 | D15 | `core/cron_helpers.py:5849` | `_fail_node_deadline_run` | FOR UPDATE (`session.get`) | caller txn, **bounded** by the reconcile org transaction (`cron_helpers.py:9305`, FAR-1601) | FAR-1999 node-deadline reaper: locks the run row, re-checks every premise on the locked row, then terminal-fails it. Background reconciliation only (no request path). | no – single-run fence. |
 | D16 | `core/cron_helpers.py:6009` | `_write_terminal_triage_marker` | FOR UPDATE | own savepoint inside the caller's sweep txn, **bounded** by `_TERMINAL_TRIAGE_PERSIST_TIMEOUT` (`asyncio.wait_for`) and the reconcile org transaction's bound (`cron_helpers.py:9305`) | FAR-704-family terminal-triage marker: locked read-merge-write of the run's triage marker so the delete-absent half never drops a concurrent writer's key (same contract as `node_runner._write_raw_output_marker`). Best-effort observability only. | no – single-run marker fence. |
 | D17 | `core/cron_helpers.py:7021` | `_terminalize_aged_nodeless_zombies` | FOR UPDATE (`session.get`) | caller txn, **bounded** by the reconcile org transaction (same bound at `cron_helpers.py:9305`) | FAR-1329/FAR-1914 age-bound nodeless router: locks the run row so the premise re-check (`_locked_row_disproves_nodeless_premise`) and the terminal write share ONE lock; defers (fails closed) when the locked row is unreadable. Background reconciliation only. | no – single-run fence. |
+| D18 | `core/eval/finding_resolver.py:244` | `apply_mute_policy` | FOR UPDATE | caller txn | FAR-2028 serialises concurrent mute-policy evaluations for one Eval definition while the acceptance-rate read and muted-state transition execute in the same transaction. This is an eval/guardrail background and API service path; the caller owns the transaction. | no. |
 
 > **D9 is retired (FAR-1833).** The org spend-ceiling gate
 > (`core/cost_controller/finalize.py::_apply_spend_ceiling_gate`) no longer takes
@@ -275,17 +279,18 @@ unrelated writer or is held across non-lock work.
 | A – pipeline/trigger serialisation | 19 | 1 (R2) | **20** |
 | B – credential rotation | 10 | 0 | **10** |
 | C – entity CRUD | 20 | 0 | **20** |
-| D – operational/other | 13 | 1 (R1) | **14** |
-| **Total** | **62** | **2** | **64** |
+| D – operational/other | 14 | 1 (R1) | **15** |
+| **Total** | **63** | **2** | **65** |
 
 These are the §3 counts as they stand on this branch: the FAR-1801 authoring snapshot
 with D7 retired by FAR-1822, C1/C2/C3/D14 removed by FAR-1832, D9 retired by
 FAR-1833, **D4's row lock removed by FAR-1823**, and the four post-cutover sites added by other work (A19
 `_replace_pipeline_graph_txn`, D15 `_fail_node_deadline_run`, D16
-`_write_terminal_triage_marker`, D17 `_terminalize_aged_nodeless_zombies`).
-FAR-1825 re-ran §1's commands against the branch tip and reads the same **62**
-SQLAlchemy sites (58 `.with_for_update(` + 4 `with_for_update=`), so the inventory
-and the measurement agree when D4's removed lock is accounted for; see §9 and §10.
+`_write_terminal_triage_marker`, D17 `_terminalize_aged_nodeless_zombies`, and D18
+`core/eval/finding_resolver.py::apply_mute_policy` (FAR-2028).
+FAR-1825 re-ran §1's commands against the branch tip and reads the same **63**
+SQLAlchemy sites (59 `.with_for_update(` + 4 `with_for_update=`), so the inventory
+and the measurement agree when D4's removed lock and D18's new lock are accounted for; see §9 and §10.
 
 Distinct **locked tables** (by frequency): `runs` (heaviest – A5, A6, A7, A14, A15, A18, R2, D10, D15, D16, D17, R1), `organisations` (C5, C6-generic-fallback, **D1–D3**; D4 is now "none"), `pipelines` (A1–A4, A10–A13, A16, A17, A19), `accounts` (B9, C8), `token_families` (B4–B6), `ScheduledReport` (D8), plus
 single-use rows for credentials/entities.
@@ -362,7 +367,7 @@ serialising. What still locks the `organisations` row:
   (proven by `tests/integration/crud/test_org_settings_patch.py`:
   a config patch wait-bounds against an in-flight deletion; a child FK insert still queues).
   **FAR-1823 reordered D1 (`request_org_deletion`) to collect the export snapshot BEFORE
-  taking the FSM lock** — the lock is now held only for the short FSM transition
+  taking the FSM lock** – the lock is now held only for the short FSM transition
   (status/deleted_at/token/expiry + persist export_bundle_json), and premises are
   RE-VALIDATED under the lock because a concurrent confirm/cancel may have changed the org
   state between the snapshot and the lock acquisition.
@@ -370,7 +375,7 @@ serialising. What still locks the `organisations` row:
   dropped; live captures now use a read-only REPEATABLE READ snapshot on a SEPARATE
   connection. The stored `export_bundle_json` is returned directly without any lock.
   The org-row lock never gave cross-table consistency because child-row UPDATEs were
-  never blocked by it — the export reads multiple child tables the org lock does not protect.
+  never blocked by it – the export reads multiple child tables the org lock does not protect.
   **Accepted trade:** a write landing between the snapshot and the FSM transition (D1's lock)
   is not included in the export bundle. Deletion is soft-first with a 24 h cancel path, so
   the window is bounded and the user can cancel if the export missed a late change.
@@ -522,7 +527,7 @@ shipped behaviour. The corrections:
 3. **D4 (`export_org_data`) held the org-row `FOR UPDATE` lock for live captures.**
    The export reads multiple child tables (memberships, pipelines, runs, audit, library,
    connectors, backends, etc.) but the org-row lock only blocks concurrent writers to the
-   `organisations` row itself — child-row UPDATEs were never blocked, so the lock gave a
+   `organisations` row itself – child-row UPDATEs were never blocked, so the lock gave a
    false sense of cross-table consistency while still allowing concurrent mutations to the
    very data being exported. **FIXED – FAR-1823:** the `FOR UPDATE` was removed; live
    captures now use a read-only REPEATABLE READ snapshot on a SEPARATE connection. The
@@ -545,10 +550,10 @@ shipped behaviour. The corrections:
     measured on this branch – **58** SQLAlchemy call sites, **60** total row-lock sites.
     §3/§5/§7 carry the post-change shape; removed row IDs are left as gaps so cross-references
     stay stable.
-    *Post-cutover re-derivation (FAR-1825):* four more sites landed by other work after
-    that cutover (A19 and the D15–D17 trio in `cron_helpers`), so the branch tip now
-    measures **59** `.with_for_update(` sites, **63** SQLAlchemy call sites, **65** total
-    row-lock sites – see the re-derivation block in §1 and the FAR-1825 section below.
+*Post-cutover re-derivation (FAR-1825):* five more sites landed by other work after
+     that cutover (A19, D15–D17 in `cron_helpers`, and D18 in `core/eval/finding_resolver.py`), so the branch tip now
+     measures **59** `.with_for_update(` sites, **63** SQLAlchemy call sites, **65** total
+     row-lock sites – see the re-derivation block in §1 and the FAR-1825 section below.
 
     **Note on D4:** FAR-1823 removed D4's `FOR UPDATE` lock. The `.with_for_update(` count
     including D4 is 59; excluding D4 it is 58. The SQLAlchemy total including D4 is 63;
@@ -603,7 +608,7 @@ re-ran §1's two commands against the branch tip before changing anything:
 | raw locking `FOR UPDATE` | **2** | **2** |
 | **total** | **65** | **64** |
 
-The +4 since the FAR-1833 snapshot are sites added by unrelated work, all outside
+The +5 since the FAR-1833 snapshot are sites added by unrelated work, all outside
 category C: **A19** `api/mcp_server.py::_replace_pipeline_graph_txn` (already self-bounds
 with `set_mutation_row_lock_timeout`, FAR-1361); **D15**
 `core/cron_helpers.py::_fail_node_deadline_run` (bounded by the reconcile org transaction
@@ -611,12 +616,14 @@ at `cron_helpers.py:9305`, FAR-1601); **D16**
 `core/cron_helpers.py::_write_terminal_triage_marker` (the `.with_for_update()` at
 `6009`, a best-effort marker write inside the reconcile sweep's bounded transaction);
 and **D17** `core/cron_helpers.py::_terminalize_aged_nodeless_zombies` (the FAR-1914
-locked re-read at `7021`, same reconcile transaction bound). Category C remains exactly
+locked re-read at `7021`, same reconcile transaction bound); and **D18**
+`core/eval/finding_resolver.py::apply_mute_policy` (FAR-2028). Category C remains exactly
 **20** sites.
 
 **Post-FAR-1823 (D4 excluded):** the `.with_for_update(` count is 58, SQLAlchemy
 total is 62, and total row-lock sites is 64. D4 (`export_org_data`) is now "none"
-in §3, so it is not counted as a row-lock site.
+in §3, so it is not counted as a row-lock site. D18 is the additional FAR-2028 lock
+listed in §3, bringing the current branch-tip totals to 59, 63, and 65 respectively.
 
 **Disposition of every category-C site** (the `txn` column in §3 carries the per-row note):
 
@@ -624,7 +631,7 @@ in §3, so it is not counted as a row-lock site.
   C4 (create transaction helper), C7, C8, C9, C12, C13, C14, C15, C16, C17, C18, C19, C20, C22, C23.
   Each now issues `set_mutation_row_lock_timeout(session)` before its first
   `SELECT … FOR UPDATE`. The helper is transaction-scoped (`SET LOCAL lock_timeout`,
-  Postgres-only), so a contended row raises SQLSTATE 55P03 — never an unbounded wait.
+  Postgres-only), so a contended row raises SQLSTATE 55P03 – never an unbounded wait.
   **The mapping that turns that 55P03 into a visible answer differs per surface and is
   recorded in "Mapping truth" below.**
 - **Already bounded one frame up:** C5 and C6. Both are reached only through the shared
@@ -632,7 +639,7 @@ in §3, so it is not counted as a row-lock site.
   `_take_settings_patch_lock_wait` before dispatching to `_apply_json_column_patch_generic`;
   the Postgres path never takes a row lock at all. No second bound was added.
 - **Deliberately left unbounded, with reason:** C10/C11 (`set_parent_node`) have **no
-  production call site** — only `tests/unit/db/test_node_composite.py` — so no request
+  production call site** – only `tests/unit/db/test_node_composite.py` – so no request
   path can reach the lock. C21 (`_get_existing_names`) takes its lock only behind
   `for_update=True`, and neither public wrapper (`get_existing_pipeline_names`,
   `get_existing_agent_names`) passes it, so the lock is never taken today. Enabling either
@@ -654,7 +661,7 @@ The mapping half of that guard is now **mechanically derived, not just enumerate
 import-resolves every `api/routes/*.py` function that DIRECTLY calls a swept helper
 (including the lifecycle-map and assistant service wrappers that call C20/C22/C23) and
 requires `raise_lock_timeout_conflict_if` on any such function that has a local
-`except SQLAlchemyError` arm — or, where there is no local arm, the shared
+`except SQLAlchemyError` arm – or, where there is no local arm, the shared
 `@handle_db_errors` backstop (which maps 55P03 → 409). A new direct route caller that
 forgets the classifier therefore fails CI even though nobody added it to a list. The
 guard covers **direct** callers and every enumerated arm; it does **not** enumerate
@@ -667,9 +674,9 @@ if the 55P03 it produces reaches the client as a conflict rather than an outage:
 |---|---|
 | JSON/API REST route with a local `except SQLAlchemyError` arm | `raise_lock_timeout_conflict_if(exc, <route key>)`, immediately after the session-contract guard (which returns for every error except `InvalidRequestError`), → **409** with the canonical "another change is in progress" detail. Converted: `model_backends.create`, `parameter_schemas.update` (schema + set), `agents` (apply-optimized-prompt, rollback-prompt, replace-bindings), `admin_sso.create/update`, `lifecycle_maps` (import, update, save-version, update-version, graduate), `runs.observe_run_node`, `auth.accept_invite`, `in_app_notifications.update_preferences`, `admin_assistant.set_org_context_source`. |
 | REST route WITHOUT a local arm (falls through to `@handle_db_errors`) | The shared classifier maps 55P03 → **409** already, so no local conversion is needed. This is the shape for `me.set_user_context_source` (the user-scoped assistant context-source save, which reaches C22/C23) and for every route whose local arms do not catch `SQLAlchemyError`. |
-| MCP tool fronting a swept helper | `_tool_lock_timeout_error` → `{"error": "lock_timeout"}`. It is reachable from (a) the shared mapper `_tool_exception_error`, which every tool's generic `Exception` backstop calls (so e.g. `set_hitl_email_alerts` → C8 classifies via that arm), and (b) the explicit `except SQLAlchemyError` arm of the only two MCP tools whose CRUD helper a request path now bounds: `update_parameter_schema` (C14) and `update_parameter_set` (C7). Other MCP tools' paths take no newly-bounded lock, so they deliberately carry **no** arm — a blanket arm there would be dead code claiming a reachability it does not have. `cancel_run` and `update_pipeline_graph` keep their bespoke `lock_timeout` payloads. |
+| MCP tool fronting a swept helper | `_tool_lock_timeout_error` → `{"error": "lock_timeout"}`. It is reachable from (a) the shared mapper `_tool_exception_error`, which every tool's generic `Exception` backstop calls (so e.g. `set_hitl_email_alerts` → C8 classifies via that arm), and (b) the explicit `except SQLAlchemyError` arm of the only two MCP tools whose CRUD helper a request path now bounds: `update_parameter_schema` (C14) and `update_parameter_set` (C7). Other MCP tools' paths take no newly-bounded lock, so they deliberately carry **no** arm – a blanket arm there would be dead code claiming a reachability it does not have. `cancel_run` and `update_pipeline_graph` keep their bespoke `lock_timeout` payloads. |
 | Pre-auth accept-invite audit append | The fail-open `invite_consumed` append is already savepoint-contained: `append_audit_event` runs each attempt inside its own `begin_nested()`, so a 55P03 (now reachable via the audit-chain-head lock) rolls back only that attempt and never poisons the caller's transaction; the enrollment still commits and the route answers 200. The helper's OWN outer savepoint is explicit defence-in-depth, keeping that guarantee local rather than dependent on the logger's inner seam. |
-| SSO JIT audit append (browser-redirect callback) | Same shape in `auth/sso.py::_audit_invite_consumed_fail_open` (the twin of the accept-invite helper): the logger's per-attempt savepoint contains a 55P03 from the audit-chain-head lock, so the token-issue writes still commit, and the helper's outer savepoint is explicit defence-in-depth. **Documented exception:** the enclosing `api/routes/sso.py::_run_sso_callback_process` arm still maps any 55P03 to the generic `provider_unavailable` redirect — the IdP navigated the **browser** here, so a JSON 409 cannot be delivered and no SSO contention error code exists. Pinned by `test_sso_callback_redirect_surface_is_an_explicit_55p03_exception`. |
+| SSO JIT audit append (browser-redirect callback) | Same shape in `auth/sso.py::_audit_invite_consumed_fail_open` (the twin of the accept-invite helper): the logger's per-attempt savepoint contains a 55P03 from the audit-chain-head lock, so the token-issue writes still commit, and the helper's outer savepoint is explicit defence-in-depth. **Documented exception:** the enclosing `api/routes/sso.py::_run_sso_callback_process` arm still maps any 55P03 to the generic `provider_unavailable` redirect – the IdP navigated the **browser** here, so a JSON 409 cannot be delivered and no SSO contention error code exists. Pinned by `test_sso_callback_redirect_surface_is_an_explicit_55p03_exception`. |
 | Workflow-import binding replace | `_persist_bindings` wraps `replace_agent_bindings` in a SAVEPOINT, so a contended Agent row rolls back only the bindings and the import continues with its existing warning. |
 
 Known residual (accepted): the repo-wide scan covers SQLAlchemy row-lock shapes only;
@@ -682,11 +689,11 @@ its own test so it cannot drift:
 
 | Surface | Disposition | Reason |
 |---|---|---|
-| `api/routes/sso.py::_run_sso_callback_process` (C17 `get_live_for_email`, reached through `auth/sso.py`) | Generic mapping kept: 55P03 → `provider_unavailable` redirect | Browser-redirect surface — the IdP navigates the user here, so a JSON 409 cannot be delivered and no SSO contention error code exists. Pinned by `test_sso_callback_redirect_surface_is_an_explicit_55p03_exception`. |
+| `api/routes/sso.py::_run_sso_callback_process` (C17 `get_live_for_email`, reached through `auth/sso.py`) | Generic mapping kept: 55P03 → `provider_unavailable` redirect | Browser-redirect surface – the IdP navigates the user here, so a JSON 409 cannot be delivered and no SSO contention error code exists. Pinned by `test_sso_callback_redirect_surface_is_an_explicit_55p03_exception`. |
 | `api/routes/library.py::create_lifecycle_map_from_primitive_endpoint` (C20, transitive) | Local `except SQLAlchemyError` → 503 kept | **Transitive** service-level caller: it reaches C20 via `core/lifecycle_map/import_export.py::materialize_map_from_primitive` → `save_map_version` → `get_lifecycle_map_for_update`, so the direct-caller derivation does not see it. The lock is on a row INSERTED IN THE SAME TRANSACTION as the lock acquisition (the copy path creates the map, then saves its first version), so no other transaction can hold it and 55P03 is not practically reachable. Pinned by `test_library_materialise_arm_is_a_recorded_transitive_residual`; that same-transaction premise is itself pinned mechanically by `test_library_import_inserts_the_map_before_the_first_c20_lock` (version-1 insert + flush precedes every version replay lock, on the id the flush minted) and `test_lifecycle_map_create_flushes_inside_the_call_and_never_commits` (`create_lifecycle_map` flushes before returning and does not commit), so reworking the path to lock a pre-existing row or committing mid-materialise fails a test. Transitive service-level callers are an accepted residual of this guard, not a claim of coverage. |
 
 If either arm is converted to a 409 (or the library path becomes practically
-reachable), remove its exception entry and re-record it here in the same change — the
+reachable), remove its exception entry and re-record it here in the same change – the
 pinned tests fail otherwise.
 
 **Out-of-scope findings recorded, not fixed here** (both are category A/B, not C):

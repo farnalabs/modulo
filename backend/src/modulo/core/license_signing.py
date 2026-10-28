@@ -85,6 +85,47 @@ def _resolve_private_key(private_key_hex: str | None) -> str:
     )
 
 
+def _validate_term_inputs(
+    renewal_mode: str,
+    expires_from: datetime | None,
+    starts_at: datetime | None,
+) -> None:
+    """Reject the term inputs a payload must never be minted from."""
+    if not isinstance(renewal_mode, str) or renewal_mode not in RENEWAL_MODES:
+        raise LicenseSigningError(f"renewal_mode must be one of {sorted(RENEWAL_MODES)}, got {renewal_mode!r}")
+    if expires_from is not None and expires_from.tzinfo is None:
+        raise LicenseSigningError(
+            "expires_from must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an "
+            "offset); a naive datetime would be compared against an aware now"
+        )
+    if starts_at is not None and starts_at.tzinfo is None:
+        raise LicenseSigningError(
+            "starts_at must be timezone-aware (e.g. datetime.now(UTC) or a parsed ISO 8601 value with an "
+            "offset); the signed claim is read against an aware now"
+        )
+    if starts_at is not None and expires_from is not None:
+        raise LicenseSigningError(
+            "starts_at and expires_from are mutually exclusive: starts_at states the chosen licence window, "
+            "expires_from continues a previous licence's window — supplying both would make one silently win"
+        )
+
+
+def _resolve_term_base(
+    starts_at: datetime | None,
+    expires_from: datetime | None,
+    issued: datetime,
+) -> datetime:
+    """The instant the term runs from: chosen start, stack-on-previous, or issue."""
+    if starts_at is not None:
+        # The customer chose the window: the term runs from the chosen start.
+        return starts_at
+    if expires_from is None:
+        return issued
+    # Stacking: a renewal starts at the LATER of now and the previous expiry.
+    # See ``build_team_payload`` for why the floor is load-bearing.
+    return max(datetime.now(UTC), expires_from)
+
+
 def build_team_payload(
     org_name: str,
     term_months: int = 12,
@@ -94,6 +135,8 @@ def build_team_payload(
     renewal_mode: str = DEFAULT_RENEWAL_MODE,
     licence_id: str | None = None,
     issued_at: datetime | None = None,
+    expires_from: datetime | None = None,
+    starts_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Build the signed license payload for a team customer.
 
@@ -107,30 +150,74 @@ def build_team_payload(
       from, so a renewal can compute the next expiry.
     - ``licence_id`` — opaque stable identifier for THIS licence; defaults to
       a fresh UUID v4 so a renewal can be tied to the licence it replaces.
-    - ``issued_at`` — ISO 8601 mint timestamp.
+    - ``issued_at`` — ISO 8601 mint timestamp. Always the TRUE mint time: it is
+      never moved to express a renewal, so the claim cannot be falsified.
 
-    ``expires_at`` is derived from ``issued_at`` (default: now), so minting a
-    renewal with a later issue date shifts its expiry accordingly.
+    ``expires_from`` is the instant the new term STARTS. Omitting it keeps the
+    original behaviour — the term starts at ``issued_at`` (default: now), so a
+    fresh licence expires ``now + term``. Supplying it lets a caller express
+    "this key starts where the previous one ended": the effective base is
+    ``max(now, expires_from)`` and ``expires_at = base + term_months``.
+
+    The floor at ``now`` is the stacking rule, and it matters in both
+    directions:
+
+    - renewing EARLY — with days still left — adds the term to the previous
+      expiry, so an early renewal never costs the customer the days they have
+      already paid for;
+    - renewing AFTER expiry starts a full term from today, so a lapsed licence
+      does not inherit (and silently lose) the days that already elapsed.
+
+    ``expires_from`` must be timezone-aware. A naive value is rejected rather
+    than assumed to be UTC: this module compares it against an aware ``now``,
+    and ``core.license._check_expired`` compares the emitted ``expires_at``
+    against ``datetime.now(exp.tzinfo)`` — a naive value there would compare
+    UTC wall-clock against LOCAL wall-clock and shift the expiry by the host's
+    UTC offset.
 
     An explicit ``renewal_mode`` outside the vocabulary raises
     :class:`LicenseSigningError` rather than silently minting the default: a
     typo must not quietly downgrade an auto-renewal licence to manual.
+
+    ``starts_at`` is the customer-chosen start of the licence window
+    (FAR-2146): the signed ``starts_at`` claim is emitted and the term runs
+    from there, so ``expires_at = starts_at + term_months``. When it is
+    OMITTED no claim is emitted and the term starts at ``issued_at`` — the
+    behaviour of every key minted before FAR-2146.
+
+    It is mutually exclusive with ``expires_from``: that seam expresses
+    "continue where the previous licence ended" (``max(now, expires_from)``),
+    while ``starts_at`` states the window the customer chose. Combining them
+    would make one of the two silently win. ``starts_at`` must be
+    timezone-aware for the same reason as ``expires_from``.
+
+    The signer does NOT floor ``starts_at`` at ``now`` (unlike
+    ``expires_from``): flooring would silently move a legitimately chosen
+    same-day start into the future. Future-only is enforced where the date
+    enters the system — the Stripe fulfilment boundary
+    (``core.stripe_fulfilment.resolve_starts_at``) rejects a past date and one
+    more than 90 days ahead rather than clamping either.
     """
-    if not isinstance(renewal_mode, str) or renewal_mode not in RENEWAL_MODES:
-        raise LicenseSigningError(f"renewal_mode must be one of {sorted(RENEWAL_MODES)}, got {renewal_mode!r}")
+    _validate_term_inputs(renewal_mode, expires_from, starts_at)
     resolved_org_id = org_id or str(uuid.uuid5(uuid.NAMESPACE_DNS, f"modulo:{org_name}"))
     issued = issued_at or datetime.now(UTC)
-    expires_at = _add_months(issued, term_months).isoformat()
-    return {
+    base = _resolve_term_base(starts_at, expires_from, issued)
+    expiry = _add_months(base, term_months)
+    if expiry <= base:
+        raise LicenseSigningError(f"term_months must advance the expiry beyond starts_at, got {term_months}")
+    payload: dict[str, Any] = {
         "tier": LICENSE_TIER,
         "features": list(features if features is not None else TEAM_FEATURES),
-        "expires_at": expires_at,
+        "expires_at": expiry.isoformat(),
         "org_id": resolved_org_id,
         "renewal_mode": renewal_mode,
         "term": term_months,
         "licence_id": licence_id or str(uuid.uuid4()),
         "issued_at": issued.isoformat(),
     }
+    if starts_at is not None:
+        payload["starts_at"] = starts_at.isoformat()
+    return payload
 
 
 def generate_team_license(
@@ -143,6 +230,8 @@ def generate_team_license(
     renewal_mode: str = DEFAULT_RENEWAL_MODE,
     licence_id: str | None = None,
     issued_at: datetime | None = None,
+    expires_from: datetime | None = None,
+    starts_at: datetime | None = None,
 ) -> str:
     """Generate an Ed25519-signed team license key for *org_name*.
 
@@ -153,6 +242,15 @@ def generate_team_license(
     The FAR-2075 renewal claims are emitted on every key; existing call sites
     keep working because every new parameter has a safe default (see
     :func:`build_team_payload`).
+
+    ``expires_from`` is the STACKING seam for a renewal: pass the previous
+    licence's expiry and the new key starts there (never before now). It does
+    NOT touch ``issued_at``, which stays the true mint time — passing a forged
+    ``issued_at`` to shift the expiry would falsify that claim.
+
+    ``starts_at`` is the customer-chosen start of the licence window
+    (FAR-2146) and is likewise independent of ``issued_at``: the key is minted
+    now, carries the real ``issued_at``, and becomes active at ``starts_at``.
     """
     key = _resolve_private_key(private_key_hex)
     payload = build_team_payload(
@@ -163,5 +261,7 @@ def generate_team_license(
         renewal_mode=renewal_mode,
         licence_id=licence_id,
         issued_at=issued_at,
+        expires_from=expires_from,
+        starts_at=starts_at,
     )
     return encode_license_key(payload, key)

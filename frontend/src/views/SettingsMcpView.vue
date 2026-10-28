@@ -63,9 +63,9 @@
       </Card>
 
       <!-- API Key Management -->
-      <Card>
+      <Card class="settings-mcp-api-keys-card">
         <template #header>
-          <div class="flex flex-row items-center justify-between">
+          <div class="flex flex-wrap items-center justify-between gap-3 p-4 pb-0">
             <div>
               <div class="text-lg font-semibold">{{ $t('views.SettingsMcpView.api_keys') }}</div>
               <div class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.create_and_manage_api_keys_for_mcp_client_authentication') }}</div>
@@ -76,7 +76,7 @@
           </div>
         </template>
         <template #content>
-        <div>
+        <div class="p-4 pt-0">
           <div
             v-if="apiKeysRestricted"
             class="rounded-lg border border-muted bg-muted/30 p-4 text-sm text-muted-foreground"

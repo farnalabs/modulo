@@ -28,18 +28,20 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.unit._source_scan import iter_source_text
+
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = BACKEND_ROOT / "src" / "modulo"
 _DEF_PATTERN = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)")
 
 
 def _iter_source_py():
-    yield from sorted(SRC_ROOT.rglob("*.py"))
+    yield from iter_source_text(SRC_ROOT)
 
 
-def _function_bodies(path: Path) -> dict[str, str]:
-    """Map function name -> body text for *path* (top-level and module funcs)."""
-    lines = path.read_text(encoding="utf-8").splitlines()
+def _function_bodies(source: str) -> dict[str, str]:
+    """Map function name -> body text for *source* (top-level and module funcs)."""
+    lines = source.splitlines()
     bodies: dict[str, list[str]] = {}
     current: str | None = None
     for line in lines:
@@ -82,11 +84,10 @@ _LEGACY_WRITE_ALLOWED_PREFIXES = (
 def test_no_write_path_targets_eval_definitions() -> None:
     """Criterion 13 - grep for legacy-table writes except allowlisted zones."""
     offenders: list[str] = []
-    for path in _iter_source_py():
+    for path, text in _iter_source_py():
         rel = path.relative_to(SRC_ROOT).as_posix()
         if rel.startswith(_LEGACY_WRITE_ALLOWED_PREFIXES):
             continue
-        text = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), 1):
             if _LEGACY_WRITE_PATTERN.search(line):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
@@ -110,9 +111,8 @@ _DUPLICATE_USAGE_PATTERN = re.compile(
 def test_mcp_duplicate_guardrail_validator_gone() -> None:
     """Criterion 18 - zero code matches for the deleted MCP helper."""
     offenders: list[str] = []
-    for path in _iter_source_py():
+    for path, text in _iter_source_py():
         rel = path.relative_to(SRC_ROOT).as_posix()
-        text = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), 1):
             if _DUPLICATE_USAGE_PATTERN.search(line):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
@@ -190,11 +190,11 @@ def test_no_delete_path_leaves_orphaned_policy_gate() -> None:
     """
     api_root = SRC_ROOT / "api"
     offenders: list[str] = []
-    for path in sorted(api_root.rglob("*.py")):
+    for path, source in iter_source_text(api_root):
         rel = path.relative_to(SRC_ROOT).as_posix()
         if rel == "api/routes/guardrail_config.py":
             continue
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = source.splitlines()
         for lineno, line in enumerate(lines):
             sym_match = re.search(r"\bdelete\(\s*(eval\w*)\s*\)", line)
             if sym_match is None:
@@ -265,7 +265,7 @@ def test_read_paths_query_evals_not_eval_definitions() -> None:
     checked: list[str] = []
     for rel, func, rid in read_path_specs:
         path = SRC_ROOT / rel
-        body = _function_bodies(path).get(func)
+        body = _function_bodies(path.read_text(encoding="utf-8")).get(func)
         if body is None:
             offenders.append(f"{rel}: expected reader `{func}` ({rid}) not found")
             continue

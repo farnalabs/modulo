@@ -344,6 +344,14 @@ describe('useAssistantStore API methods', () => {
     expect(store.error).toBe('name taken')
   })
 
+  it('renameSession surfaces thrown errors', async () => {
+    const store = useAssistantStore()
+    apiPatch.mockRejectedValue(new Error('rename unavailable'))
+
+    await expect(store.renameSession('s-1', 'X')).resolves.toBe(false)
+    expect(store.error).toBe('rename unavailable')
+  })
+
   it('deleteSession removes the session and clears an active selection', async () => {
     const store = useAssistantStore()
     store.sessions = [makeSession('s-1', '2026-09-01T00:00:00Z'), makeSession('s-2', '2026-09-01T01:00:00Z')]

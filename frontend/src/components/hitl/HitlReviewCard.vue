@@ -280,7 +280,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount, toRaw } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
@@ -477,11 +477,7 @@ const responseContract = computed<ResponseContract | null>(() => {
   const options = Array.isArray(obj.options)
     ? obj.options
         .filter((o): o is Record<string, unknown> => o !== null && typeof o === 'object')
-        .map((o) => ({
-          id: String(o.id ?? ''),
-          label: String(o.label ?? ''),
-          description: typeof o.description === 'string' ? o.description : null,
-        }))
+        .map((o) => ({ id: `${o.id ?? ''}`, label: `${o.label ?? ''}`, description: typeof o.description === 'string' ? o.description : null }))
         .filter((o) => o.id !== '' && o.label !== '')
     : null
   return { kind, options }
@@ -783,9 +779,10 @@ async function modifyAndApprove() {
   actioning.value = 'modify-approve'
   message.value = null
   // Shape-preserving reconstruction: clone the parent, replace only the
-  // subject leaf.  JSON round-trip gives a deep plain-object copy — safe
-  // because the backend already serialised the parent to JSON at capture time.
-  const reconstructedOutput = { ...JSON.parse(JSON.stringify(parent)), [leafKey]: modifiedSubject.value }
+  // subject leaf.  structuredClone(toRaw(parent)) gives a deep plain-object
+  // copy — safe because the backend already serialised the parent to JSON at
+  // capture time.
+  const reconstructedOutput = { ...structuredClone(toRaw(parent)), [leafKey]: modifiedSubject.value }
   try {
     const { error: err } = await api.POST(
       '/api/v1/runs/{run_id}/hitl/{review_id}/approve-with-modification',

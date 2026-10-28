@@ -36,7 +36,7 @@ class CITestDoubleMixin(ABC):
     _status: CIRunStatus
 
     @abstractmethod
-    def _record_triggered_run(self, run: CIRun, variables: dict[str, str] | None) -> None:
+    def _record_triggered_run(self, _run: CIRun, _variables: dict[str, str] | None) -> None:
         """Append *run* to the double's own triggered-run record list."""
 
     def _double_trigger_id(self, pipeline_id: str) -> str:
@@ -58,7 +58,7 @@ class CITestDoubleMixin(ABC):
         """
         return f"{resolved}/{self._double_listed_suffix}"
 
-    async def trigger_run(
+    async def trigger_run(  # NOSONAR S7503 - async CI-runner capability contract
         self,
         pipeline_id: str,
         branch: str = "",
@@ -74,7 +74,7 @@ class CITestDoubleMixin(ABC):
         self._status = CIRunStatus.QUEUED
         return run
 
-    async def list_runs(
+    async def list_runs(  # NOSONAR S7503 - async CI-runner capability contract
         self,
         pipeline_id: str | None = None,
         status: CIRunStatus | None = None,

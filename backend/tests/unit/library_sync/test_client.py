@@ -7,6 +7,7 @@ method returns ``None`` on any failure and never raises.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 
 import httpx
@@ -27,13 +28,13 @@ def client(keys: tuple[str, str]) -> LibraryClient:
 
 
 @pytest.fixture(autouse=True)
-def _stub_ssrf(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Never hit real DNS in unit tests; the URL is treated as allowed."""
+def _stub_pinned_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unit tests on the shared-client seam without doing real DNS."""
 
-    async def _allow(_url: str) -> None:
-        return None
+    async def _build(_url: str, **kwargs: object) -> httpx.AsyncClient:
+        return httpx.AsyncClient(**kwargs)
 
-    monkeypatch.setattr("modulo.core.library_sync.client.validate_outbound_url_async", _allow)
+    monkeypatch.setattr("modulo.core.library_sync.client.pinned_async_client", _build)
 
 
 class TestFetchManifest:
@@ -103,10 +104,10 @@ class TestSsrfRejection:
     async def test_fetch_manifest_and_blob_return_none_and_skip_http(
         self, client: LibraryClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def _reject(_url: str) -> None:
+        async def _reject(_url: str, **_kwargs: object) -> httpx.AsyncClient:
             raise ValueError("blocked internal address")
 
-        monkeypatch.setattr("modulo.core.library_sync.client.validate_outbound_url_async", _reject)
+        monkeypatch.setattr("modulo.core.library_sync.client.pinned_async_client", _reject)
 
         manifest_route = respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, json={}))
         sha256 = hashlib.sha256(b"payload").hexdigest()
@@ -157,6 +158,31 @@ class TestClientLifecycle:
         assert first.is_closed is False
         assert second is first
         assert client._http_client is first
+
+    async def test_concurrent_get_client_builds_once(
+        self, client: LibraryClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ``asyncio.Lock`` guard: concurrent callers share a single build.
+
+        Without the lock both tasks observe ``_http_client is None`` across the
+        awaited build and each constructs its own client — the loser's client
+        is leaked (never closed) and connection pooling is lost.
+        """
+        builds = 0
+
+        async def _counting_build(_url: str, **kwargs: object) -> httpx.AsyncClient:
+            nonlocal builds
+            builds += 1
+            await asyncio.sleep(0)
+            return httpx.AsyncClient(**kwargs)
+
+        monkeypatch.setattr("modulo.core.library_sync.client.pinned_async_client", _counting_build)
+
+        first, second = await asyncio.gather(client._get_client(), client._get_client())
+
+        assert builds == 1
+        assert first is second
+        await client.close()
 
 
 class TestFetchBlob:

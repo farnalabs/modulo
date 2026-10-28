@@ -189,7 +189,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, TypedDict, Unpack, cast
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
@@ -546,10 +546,10 @@ def _stub_security_guard() -> SecurityGuard:
     inject a real ``SecurityGuard``.
     """
 
-    async def validate_url(_url: str) -> None:
+    async def validate_url(_url: str) -> None:  # NOSONAR python:S7503 — async security-guard capability seam
         return None
 
-    def filter_strings(_values: Sequence[str], resource: str) -> None:
+    def filter_strings(_values: Sequence[str], _resource: str) -> None:
         return None
 
     return SecurityGuard(validate_url=validate_url, filter_strings=filter_strings)
@@ -576,6 +576,50 @@ class RestRequest:
     rate_limit_key: str | None = None
 
 
+@dataclass(frozen=True)
+class _RetryLoop:
+    """Everything one idempotent-verb retry loop needs (python:S107 grouping).
+
+    Bundled so :meth:`RestConnector._send_retryable` takes ONE argument instead
+    of eight. Fields are the already-resolved per-call values (retry budget in
+    ATTEMPTS, the rate-wait deadline, and the operation's latency-metric start),
+    so the loop body itself is unchanged.
+    """
+
+    client: httpx.AsyncClient
+    request: RestRequest
+    kwargs: dict[str, Any]
+    rate_wait_timeout: float | None
+    request_timeout: float | None
+    attempts: int
+    host: str
+    start: float
+
+
+class RestConnectorOptions(TypedDict, total=False):
+    """Keyword-only options accepted by :class:`RestConnector` (python:S107).
+
+    Grouped behind ``**options: Unpack[RestConnectorOptions]`` so the
+    constructor stays inside the S107 parameter budget without changing a single
+    caller: every option keeps its exact name, type and default, and mypy still
+    type-checks each keyword at the call site. ``total=False`` models the
+    defaults; the body applies them via ``options.get(name, default)``.
+    """
+
+    transport: httpx.BaseTransport | None
+    ssrf_validator: SsrfValidator | None
+    security_guard: SecurityGuard | None
+    timeout: float
+    max_connections: int
+    max_keepalive_connections: int
+    clock: Callable[[], float] | None
+    sleep: Callable[[float], Awaitable[None]] | None
+    random_uniform: Callable[[float, float], float] | None
+    verify_tls: bool | None
+    redis_client: Any
+    tenant_id: str | None
+
+
 class RestConnector(ConnectorBase):
     """A declarative, verb-agnostic REST connector.
 
@@ -593,20 +637,20 @@ class RestConnector(ConnectorBase):
         self,
         config: dict[str, Any] | None,
         creds: dict[str, Any] | None,
-        *,
-        transport: httpx.BaseTransport | None = None,
-        ssrf_validator: SsrfValidator | None = None,
-        security_guard: SecurityGuard | None = None,
-        timeout: float = _DEFAULT_TIMEOUT,
-        max_connections: int = 10,
-        max_keepalive_connections: int = 5,
-        clock: Callable[[], float] | None = None,
-        sleep: Callable[[float], Awaitable[None]] | None = None,
-        random_uniform: Callable[[float, float], float] | None = None,
-        verify_tls: bool | None = None,
-        redis_client: Any = None,
-        tenant_id: str | None = None,
+        **options: Unpack[RestConnectorOptions],
     ) -> None:
+        transport = options.get("transport")
+        ssrf_validator = options.get("ssrf_validator")
+        security_guard = options.get("security_guard")
+        timeout = options.get("timeout", _DEFAULT_TIMEOUT)
+        max_connections = options.get("max_connections", 10)
+        max_keepalive_connections = options.get("max_keepalive_connections", 5)
+        clock = options.get("clock")
+        sleep = options.get("sleep")
+        random_uniform = options.get("random_uniform")
+        verify_tls = options.get("verify_tls")
+        redis_client = options.get("redis_client")
+        tenant_id = options.get("tenant_id")
         self._config = config or {}
         self._creds = creds or {}
         self._transport = transport
@@ -1091,7 +1135,7 @@ class RestConnector(ConnectorBase):
                     success_count=success_count,
                     failure_count=sum(1 for o in outcomes if o["status"] == "failure"),
                 ) from exc
-            except Exception as exc:
+            except Exception as exc:  # NOSONAR python:S112 — record every fan-out failure
                 outcome["status"] = "failure"
                 outcome["error"] = self._redact(str(exc))
                 outcomes.append(outcome)
@@ -1409,7 +1453,7 @@ class RestConnector(ConnectorBase):
         """
         try:
             text = repr(item)
-        except Exception:
+        except Exception:  # NOSONAR python:S112 — any repr failure must not abort outcome recording
             text = f"<{type(item).__name__}>"
         redacted = self._redact(text)
         return redacted if len(redacted) <= 80 else redacted[:77] + "..."
@@ -1659,7 +1703,16 @@ class RestConnector(ConnectorBase):
                 client, request, kwargs, host, start, request_timeout=request_timeout
             )
         return await self._send_retryable(
-            client, request, kwargs, rate_wait_timeout, request_timeout, retries + 1, host, start
+            _RetryLoop(
+                client=client,
+                request=request,
+                kwargs=kwargs,
+                rate_wait_timeout=rate_wait_timeout,
+                request_timeout=request_timeout,
+                attempts=retries + 1,
+                host=host,
+                start=start,
+            )
         )
 
     def _retry_status_or_raise(
@@ -1703,22 +1756,24 @@ class RestConnector(ConnectorBase):
 
     async def _send_retryable(
         self,
-        client: httpx.AsyncClient,
-        request: RestRequest,
-        kwargs: dict[str, Any],
-        rate_wait_timeout: float | None,
-        request_timeout: float | None,
-        attempts: int,
-        host: str,
-        start: float,
+        loop: _RetryLoop,
     ) -> tuple[httpx.Response, str]:
         """Retry loop for idempotent verbs — see :meth:`_send` for the contract.
 
         A token is acquired before every wire attempt so each retry is metered, a
         bounded backoff is applied between attempts, and one operation-scoped
         latency/outcome sample is recorded at the terminal outcome (retries
-        included; ``_perform_request`` records nothing).
+        included; ``_perform_request`` records nothing). *loop* groups the
+        per-call values (python:S107) rather than widening this signature.
         """
+        client = loop.client
+        request = loop.request
+        kwargs = loop.kwargs
+        rate_wait_timeout = loop.rate_wait_timeout
+        request_timeout = loop.request_timeout
+        attempts = loop.attempts
+        host = loop.host
+        start = loop.start
         last_delay = 0.0
         retry_reason = "http_429"
         for attempt in range(attempts):
@@ -1851,10 +1906,10 @@ class RestConnector(ConnectorBase):
     def _host(url: str) -> str:
         try:
             return urlparse(url).hostname or ""
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             return ""
 
-    async def _consume_body(self, resp: httpx.Response) -> str:
+    async def _consume_body(self, resp: httpx.Response) -> str:  # NOSONAR python:S7503 — async HTTP streaming seam
         """Read the body, aborting past ``max_response_size`` (never unbounded)."""
         cap = self._max_response_size
         content_length = resp.headers.get("content-length")
@@ -1912,9 +1967,20 @@ class RestConnector(ConnectorBase):
     def _dict_records(self, parsed: dict[str, Any], request: RestRequest) -> tuple[list[dict[str, Any]], str | None]:
         """Resolve ``records`` (via ``records_path`` JMESPath or the whole object) + cursor."""
         records_path = request.records_path
-        records = self._records_via_jmespath(parsed, records_path) if records_path else ([parsed] if parsed else [])
+        records = (
+            self._records_via_jmespath(parsed, records_path) if records_path else self._whole_object_records(parsed)
+        )
         next_cursor = self._extract_cursor(parsed, request.next_cursor_path)
         return records, next_cursor
+
+    @staticmethod
+    def _whole_object_records(parsed: dict[str, Any]) -> list[dict[str, Any]]:
+        """The whole JSON object as the single record; an empty object has none.
+
+        Extracted from the former nested conditional so neither the nested
+        ternary (python:S3358) nor the if/else-block form (SIM108) is needed.
+        """
+        return [parsed] if parsed else []
 
     def _records_via_jmespath(self, parsed: dict[str, Any], records_path: str) -> list[dict[str, Any]]:
         """Apply the ``records_path`` JMESPath expression to a JSON object response."""

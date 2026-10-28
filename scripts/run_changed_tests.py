@@ -67,7 +67,25 @@ def main() -> int:
     test_paths = [p[len("backend/") :] for p in changed]
     print(f"Running tests for changed files: {' '.join(test_paths)}", file=sys.stderr)
 
-    cmd = ["uv", "run", "--no-sync", "python", "-m", "pytest", "--tb=short", "-q", "--timeout=120", *test_paths]
+    # Defence in depth for the gated-suite warning gate installed by
+    # tests/conftest.py::pytest_runtest_setup (this hook only selects
+    # tests/unit, a gated tree). Byte-identical to every CI command; pinned by
+    # tests/architecture/test_ci_pytest_commands_carry_the_warning_gate.py.
+    cmd = [
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "-m",
+        "pytest",
+        "--tb=short",
+        "-q",
+        "--timeout=120",
+        "-W",
+        "error::pytest.PytestUnraisableExceptionWarning",
+        "--disable-warnings",
+        *test_paths,
+    ]
     env = strip_git_hook_context_vars(os.environ)
     # Only fall back to USERPROFILE when HOME is genuinely absent (Windows);
     # an empty HOME breaks uv/git resolution in the subprocess.

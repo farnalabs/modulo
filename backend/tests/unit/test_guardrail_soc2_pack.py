@@ -195,15 +195,15 @@ def test_soc2_pack_canary_actions_match_control_semantics():
 #   (1) MATCH its intended content (a real AWS key, a real <script> tag, ...),
 #   (2) NOT false-positive on benign content, and
 #   (3) be LINEAR — no nested quantifiers (ReDoS), which the engine's
-#       ``_RE_NESTED_QUANTIFIER`` guard must not reject.
+#       ``_has_nested_quantifier`` guard must not reject.
 #
 
 
 def _assert_linear(pattern: str) -> None:
     """A pack detection regex must be linear (no nested quantifiers / ReDoS)."""
-    from modulo.core.eval_engine import _RE_NESTED_QUANTIFIER
+    from modulo.core.eval_engine import _has_nested_quantifier
 
-    assert not _RE_NESTED_QUANTIFIER.search(pattern), f"{pattern!r} has a nested quantifier (ReDoS risk)"
+    assert not _has_nested_quantifier(pattern), f"{pattern!r} has a nested quantifier (ReDoS risk)"
     # Exercise the pattern on a long input to smoke out catastrophic backtracking.
     re.search(pattern, "x" * 50_000)  # must return promptly, never hang
 

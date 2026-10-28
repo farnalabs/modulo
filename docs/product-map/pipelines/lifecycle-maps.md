@@ -25,15 +25,17 @@ bdd:
   - backend/tests/bdd/features/lifecycle_maps/journeys.feature
 depends-on:
   - feat-pipelines
-status: covered
+status: partial
 ---
 
 # Lifecycle Maps
 
-Lifecycle maps and stage workflows: versioned, composable stage definitions with
-import/export, journey tracking, stage graduation, and visual editor support.
-Maps define the lifecycle stages a pipeline's work items flow through, with
-edges representing transitions between stages.
+Lifecycle maps and stage workflows are retained for internal Farnalabs dogfood
+and future product work. They are not an Alpha-facing feature: the route is
+available only in dev mode, and ordinary navigation, library catalogue and
+pipeline-editor surfaces do not expose it. Maps define the lifecycle stages a
+pipeline's work items flow through, with edges representing transitions between
+stages.
 
 ## Behaviours
 

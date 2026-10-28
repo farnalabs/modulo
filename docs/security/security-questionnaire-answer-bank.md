@@ -51,7 +51,9 @@ Evidence: `docs/operations/network-egress.md`; `docs/security/secret-management.
 **Q: How is Modulo licensed?**
 
 A: BUSL-1.1 (source-available, not OSI open source). The licence restricts
-offering Modulo to third parties as a hosted service.
+offering Modulo, or any modified version or derivative work you create, to
+third parties as a paid hosted or managed service providing substantially the
+same functionality as Modulo.
 
 Evidence: `backend/pyproject.toml` (project licence); repository `LICENSE`.
 
@@ -229,19 +231,28 @@ demotion is equally audited.
 Evidence: `POST /api/v1/pipelines/{pipeline_id}/autonomy/promote` and
 `POST /api/v1/pipelines/{pipeline_id}/autonomy/demote`; the
 `pipeline.autonomy_promotion_decided` / `pipeline.autonomy_demoted` audit
-events at `GET /api/v1/admin/audit`.
+events, recorded on every tier and read at `GET /api/v1/admin/audit` (Team-tier
+`audit_viewer` feature plus `audit.manage`).
 
 **Q: How do we know what actually happened in a run?**
 
 A: A hash-chained, append-only audit trail records every governance-relevant
-action with actor, resource, payload and outcome. The chain can be verified in
-place on every tier (`GET /api/v1/admin/audit/verify`, which checks up to 10,000
-events per call and reports `truncated` when it stops short). Exporting it as an
-offline-verifiable, Ed25519-signed evidence pack is conditional: it needs the
-Team-tier `audit_viewer` feature and a configured `MODULO_EVIDENCE_SIGNING_KEY`.
+action with actor, resource, payload and outcome. **Recording is not
+licence-gated**: the append-only triggers and hash chaining are always active,
+so a Community deployment records the trail too. **Reading it through the
+product is Team-tier**: browsing the trail, verifying the chain in place
+(`GET /api/v1/admin/audit/verify`, which checks up to 10,000 events per call and
+reports `truncated` when it stops short), exporting it, scanning it and taking
+the offline-verifiable, Ed25519-signed evidence pack all need the Team-tier
+`audit_viewer` feature plus the `audit.manage` permission. The signed evidence
+pack additionally needs a configured `MODULO_EVIDENCE_SIGNING_KEY`. On a
+Community install the events exist and are hash-chained in the customer's own
+database, but no admin route through the product can browse, verify or export
+them.
 
 Evidence: `docs/offline-verifiable-evidence.md`;
-`GET /api/v1/admin/audit/verify`; `GET /api/v1/admin/audit/evidence-pack`;
+`GET /api/v1/admin/audit`; `GET /api/v1/admin/audit/verify`;
+`GET /api/v1/admin/audit/evidence-pack`;
 `backend/src/modulo/api/routes/audit.py`.
 
 **Q: How does this map to our compliance framework?**
@@ -269,10 +280,14 @@ Evidence: `.github/workflows/ci.yml`; `.pre-commit-config.yaml`.
 A: A documented dependency policy defines severity service levels and the
 scanning gates. `pip-audit` (backend) and `pnpm audit` (frontend) run in CI; a
 CycloneDX SBOM is generated for every release from the pinned dependency set.
+The `Release: Unified Pipeline` workflow owns publication of the release
+artefact and SBOM; stable publication occurs in its `promote` mode after RC
+validation.
 
 Evidence: `docs/security/dependency-policy.md`;
-`backend/scripts/generate-sbom.py`; `.github/workflows/release.yml`
-(`produce-sbom`); the dependency-audit steps in `.github/workflows/ci.yml`.
+`backend/scripts/generate-sbom.py`; `.github/workflows/release-unified.yml`
+(`produce-sbom`, and the `promote`-only stable publication steps); the
+dependency-audit steps in `.github/workflows/ci.yml`.
 
 **Q: How do you scan your own code?**
 
@@ -348,7 +363,7 @@ Evidence: `docs/operations/network-egress.md`;
 A: Release builds run on GitHub Actions runners. That pipeline handles the
 product source, not customer data.
 
-Evidence: `.github/workflows/release.yml`; `.github/workflows/ci.yml`.
+Evidence: `.github/workflows/release-unified.yml`; `.github/workflows/ci.yml`.
 
 ## 9. Retention and deletion
 

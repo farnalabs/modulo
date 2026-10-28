@@ -261,6 +261,40 @@ describe('DashboardView', () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     expect(wrapper.text()).toContain('No runs yet')
+    expect(wrapper.find('[data-testid="dashboard-recent-runs"] tbody tr').exists()).toBe(true)
+  })
+
+  it('shows eval no-data state without rendering a synthetic 100% trend', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            eval_pass_rate: {
+              overall_pass_rate: 100,
+              total_evals: 0,
+              passed_evals: 0,
+              per_pipeline: {},
+              per_team_pipeline: {},
+            },
+            trend: [
+              { date: '2026-06-23', run_count: 0, eval_pass_rate: null, token_spend_usd: 0 },
+              { date: '2026-06-24', run_count: 0, eval_pass_rate: null, token_spend_usd: 0 },
+            ],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const evalCard = wrapper.find('[data-testid="dashboard-eval-rate"]')
+    expect(evalCard.text()).toContain('No eval data yet')
+    expect(evalCard.text()).not.toContain('100%')
+    expect(evalCard.find('polyline').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('shows the rolling-window toggle with 6 values including All time', async () => {

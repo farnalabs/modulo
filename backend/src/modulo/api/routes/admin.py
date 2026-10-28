@@ -39,6 +39,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.models.problem import ProblemException, ProblemType
 from modulo.api.routes._org_settings import apply_org_settings_patch_or_404
+from modulo.api.routes.library import _can_access_lifecycle_map_primitives
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
@@ -476,7 +477,12 @@ async def _search_runs(session: AsyncSession, params: _SearchParams) -> tuple[li
     return items, count
 
 
-async def _search_audit(session: AsyncSession, params: _SearchParams) -> tuple[list[tuple[int, SearchResultItem]], int]:
+async def _search_audit(
+    session: AsyncSession,
+    params: _SearchParams,
+    *,
+    include_lifecycle_maps: bool,
+) -> tuple[list[tuple[int, SearchResultItem]], int]:
     rows = (
         await session.execute(
             text("""
@@ -491,6 +497,13 @@ async def _search_audit(session: AsyncSession, params: _SearchParams) -> tuple[l
                 FROM audit_events
                 WHERE organisation_id = :org_id
                     AND (
+                        :include_lifecycle_maps
+                        OR NOT (
+                            LOWER(REPLACE(COALESCE(resource_type, ''), '-', '_')) LIKE 'lifecycle_map%'
+                            OR LOWER(REPLACE(COALESCE(event_type, ''), '-', '_')) LIKE 'lifecycle_map%'
+                        )
+                    )
+                    AND (
                         LOWER(event_type) LIKE LOWER(:like)
                         OR LOWER(resource_type) LIKE LOWER(:like)
                         OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
@@ -502,6 +515,7 @@ async def _search_audit(session: AsyncSession, params: _SearchParams) -> tuple[l
                 "org_id": params.org_id,
                 "like": params.like,
                 "prefix": params.prefix,
+                "include_lifecycle_maps": include_lifecycle_maps,
                 "lim": params.limit,
                 "off": params.offset,
             },
@@ -513,12 +527,23 @@ async def _search_audit(session: AsyncSession, params: _SearchParams) -> tuple[l
                 SELECT COUNT(*) FROM audit_events
                 WHERE organisation_id = :org_id
                     AND (
+                        :include_lifecycle_maps
+                        OR NOT (
+                            LOWER(REPLACE(COALESCE(resource_type, ''), '-', '_')) LIKE 'lifecycle_map%'
+                            OR LOWER(REPLACE(COALESCE(event_type, ''), '-', '_')) LIKE 'lifecycle_map%'
+                        )
+                    )
+                    AND (
                         LOWER(event_type) LIKE LOWER(:like)
                         OR LOWER(resource_type) LIKE LOWER(:like)
                         OR LOWER(CAST(payload_json AS TEXT)) LIKE LOWER(:like)
                     )
             """),
-            {"org_id": params.org_id, "like": params.like},
+            {
+                "org_id": params.org_id,
+                "like": params.like,
+                "include_lifecycle_maps": include_lifecycle_maps,
+            },
         )
     ).scalar() or 0
 
@@ -543,7 +568,10 @@ async def _search_audit(session: AsyncSession, params: _SearchParams) -> tuple[l
 
 
 async def _search_library(
-    session: AsyncSession, params: _SearchParams
+    session: AsyncSession,
+    params: _SearchParams,
+    *,
+    include_lifecycle_maps: bool,
 ) -> tuple[list[tuple[int, SearchResultItem]], int]:
     rows = (
         await session.execute(
@@ -552,6 +580,7 @@ async def _search_library(
                     CASE WHEN LOWER(name) LIKE LOWER(:prefix) THEN 2 ELSE 1 END AS relevance
                 FROM library_primitives
                 WHERE organisation_id = :org_id
+                    AND (:include_lifecycle_maps OR primitive_type <> 'lifecycle_map')
                     AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
                 ORDER BY relevance DESC, name ASC
                 LIMIT :lim OFFSET :off
@@ -562,6 +591,7 @@ async def _search_library(
                 "prefix": params.prefix,
                 "lim": params.limit,
                 "off": params.offset,
+                "include_lifecycle_maps": include_lifecycle_maps,
             },
         )
     ).all()
@@ -570,9 +600,10 @@ async def _search_library(
             text("""
                 SELECT COUNT(*) FROM library_primitives
                 WHERE organisation_id = :org_id
+                    AND (:include_lifecycle_maps OR primitive_type <> 'lifecycle_map')
                     AND (LOWER(name) LIKE LOWER(:like) OR LOWER(description) LIKE LOWER(:like))
             """),
-            {"org_id": params.org_id, "like": params.like},
+            {"org_id": params.org_id, "like": params.like, "include_lifecycle_maps": include_lifecycle_maps},
         )
     ).scalar() or 0
 
@@ -635,11 +666,25 @@ async def global_search(
                 all_items.extend(items)
                 total_by_type["run"] = count
             if "audit" in search_types:
-                items, count = await _search_audit(session, params)
+                items, count = await _search_audit(
+                    session,
+                    params,
+                    include_lifecycle_maps=_can_access_lifecycle_map_primitives(
+                        current_user,
+                        dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                    ),
+                )
                 all_items.extend(items)
                 total_by_type["audit"] = count
             if "library" in search_types:
-                items, count = await _search_library(session, params)
+                items, count = await _search_library(
+                    session,
+                    params,
+                    include_lifecycle_maps=_can_access_lifecycle_map_primitives(
+                        current_user,
+                        dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+                    ),
+                )
                 all_items.extend(items)
                 total_by_type["library"] = count
 
@@ -1738,7 +1783,7 @@ async def admin_reset_password(
 # with no whitespace. Deliberately permissive — it exists to reject obvious
 # garbage (and over-length input that would 503 on a Postgres DataError) with a
 # 422, not to be an RFC-5322 validator.
-_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_EMAIL_PATTERN = re.compile(r"\A[^@\s]++@[^@\s.]++(?:\.[^@\s.]++)++\Z")
 
 
 class InviteUserRequest(BaseModel):

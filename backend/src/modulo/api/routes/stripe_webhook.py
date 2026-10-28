@@ -20,6 +20,17 @@ Events handled (all idempotent, keyed on the Stripe event id):
 
 The heavy work (license generation + email) runs as a FastAPI BackgroundTask so
 the response returns 200 immediately; Stripe treats a 2xx as delivered.
+
+Chosen licence start (FAR-2146)
+-------------------------------
+A purchase may state when its licence should begin, as ``starts_at`` in the
+checkout/subscription metadata (an ISO 8601 date such as ``2027-03-12``). The
+value is validated HERE, before the background task is queued: a past date, one
+more than 90 days ahead, or an unparseable value is rejected with 422 and a
+machine-readable ``error`` code (``starts_at_in_past`` /
+``starts_at_too_far_ahead`` / ``starts_at_malformed``), never silently clamped.
+The job is left unclaimed, so the rejection is visible in Stripe's webhook log
+rather than becoming a licence that begins on the wrong day.
 """
 
 from __future__ import annotations
@@ -35,7 +46,12 @@ from pydantic import BaseModel
 
 from modulo.api.constants import MSG_NOT_FOUND
 from modulo.core.audit_coverage import audited_system, bind_audit_org
-from modulo.core.stripe_fulfilment import fulfil_team_purchase
+from modulo.core.license import DEFAULT_RENEWAL_MODE, RENEWAL_MODE_AUTO
+from modulo.core.stripe_fulfilment import (
+    StartsAtRejectedError,
+    fulfil_team_purchase,
+    resolve_starts_at,
+)
 from modulo.core.trigger_engine import TimestampExpiredError, verify_timestamp
 from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.settings import Settings, get_settings
@@ -88,13 +104,71 @@ def verify_stripe_signature(
         return False
     signed_payload = f"{timestamp}.".encode() + payload
     expected = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
+    # operands containing non-ASCII characters. ``signature`` is
+    # attacker-controlled and arrives latin-1-decoded from the header, so a high
+    # byte must fail closed with False instead of escaping as an uncaught 500.
+    return hmac.compare_digest(expected.encode("utf-8"), signature.encode("utf-8"))
 
 
 def _event_object(event: dict[str, Any]) -> dict[str, Any]:
     data = event.get("data")
     obj = data.get("object") if isinstance(data, dict) else None
     return obj if isinstance(obj, dict) else {}
+
+
+def _renewal_mode_for(event: dict[str, Any]) -> str:
+    """Return the ``renewal_mode`` the purchase's licence must carry (FAR-2136).
+
+    Stripe's Invoice object already answers this in the event: ``subscription``
+    holds the subscription id (or the expanded subscription object) for an
+    invoice raised by a subscription, and is ``null`` for a one-off invoice.
+    That single field is the whole signal — no Stripe API call and no
+    seller-side record of what a customer bought.
+
+    Staleness is accepted deliberately, not engineered around: a subscription
+    cancelled AFTER this purchase leaves the minted key claiming ``"auto"``,
+    and a self-hosted instance has no phone-home to learn otherwise. The
+    consequence is mild and already covered — the customer does not renew, the
+    licence lapses into the delivery grace window, and the grace dialog offers
+    BOTH the renew path and the buy-a-new-licence path. Tracking cancellation
+    would add seller-side state (and a callback the instance cannot receive)
+    for a case that flow already handles.
+    """
+    return RENEWAL_MODE_AUTO if _event_object(event).get("subscription") else DEFAULT_RENEWAL_MODE
+
+
+def _extract_starts_at(event: dict[str, Any]) -> str | None:
+    """Read the chosen licence start from the event's metadata (FAR-2146).
+
+    Stripe carries metadata on several objects and which one holds it depends
+    on how the purchase was created, so every location an invoice can carry it
+    is checked, in order:
+
+    1. the invoice's own ``metadata``;
+    2. ``subscription_details.metadata`` (the subscription's metadata, as
+       copied onto the invoice);
+    3. ``parent.subscription_details.metadata`` (the newer Invoice API shape).
+
+    Returns the first non-blank ``starts_at`` string, or ``None`` when no
+    object states one — which mints from now, exactly as before FAR-2146.
+    """
+    obj = _event_object(event)
+    candidates: list[Any] = [obj.get("metadata")]
+    subscription_details = obj.get("subscription_details")
+    if isinstance(subscription_details, dict):
+        candidates.append(subscription_details.get("metadata"))
+    parent = obj.get("parent")
+    if isinstance(parent, dict):
+        parent_subscription_details = parent.get("subscription_details")
+        if isinstance(parent_subscription_details, dict):
+            candidates.append(parent_subscription_details.get("metadata"))
+    for metadata in candidates:
+        if isinstance(metadata, dict):
+            raw = metadata.get("starts_at")
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+    return None
 
 
 def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
@@ -187,13 +261,43 @@ async def stripe_webhook(
     if event_type in _FULFILMENT_EVENTS:
         customer_email, org_name = _extract_customer(event)
         if customer_email:
-            _log.info("stripe.webhook.fulfilling event=%s event_id=%s", event_type, event["id"])
+            renewal_mode = _renewal_mode_for(event)
+            starts_at = _extract_starts_at(event)
+            # Validate the customer-chosen start AT THE BOUNDARY (FAR-2146), so
+            # a bad date is reported synchronously to the caller instead of
+            # disappearing into a background task. Nothing is minted and the
+            # event is not claimed: the rejection is explicit rather than a
+            # silent clamp to "now" or to the 90-day horizon.
+            try:
+                resolve_starts_at(starts_at)
+            except StartsAtRejectedError as exc:
+                _log.exception(
+                    "stripe.webhook.starts_at_rejected event=%s event_id=%s reason=%s value=%r detail=%s",
+                    event_type,
+                    event["id"],
+                    exc.reason,
+                    exc.value,
+                    exc.detail,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail={"error": exc.reason, "detail": exc.detail},
+                ) from exc
+            _log.info(
+                "stripe.webhook.fulfilling event=%s event_id=%s renewal_mode=%s starts_at=%s",
+                event_type,
+                event["id"],
+                renewal_mode,
+                starts_at,
+            )
             background_tasks.add_task(
                 fulfil_team_purchase,
                 settings,
                 event_id=event["id"],
                 customer_email=customer_email,
                 org_name=org_name,
+                renewal_mode=renewal_mode,
+                starts_at=starts_at,
             )
         else:
             _log.warning(

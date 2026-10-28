@@ -99,6 +99,7 @@ from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
 from modulo.db.models.token_family import TokenFamily
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.models.trigger_event_finding import TriggerEventFinding
 from modulo.db.models.variant_batch_state import VariantBatchState
 from modulo.db.models.variant_group import VariantGroup
 from modulo.db.models.view import SavedView
@@ -208,6 +209,7 @@ __all__ = [
     "TokenFamily",
     "Trigger",
     "TriggerEvent",
+    "TriggerEventFinding",
     "VariantBatchState",
     "VariantGroup",
     "WebVitalEvent",

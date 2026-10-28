@@ -166,7 +166,18 @@ class _EntrypointHarness:
         # too: falling through to the no-op branch would make it exit
         # immediately and re-register a new PID every second, leaving the
         # drain loop racing a churning (sometimes dead) PID file.
-        saq_command = "exec bash -c 'trap \"\" TERM; exec sleep 300'" if self.ignore_term else "exec sleep 300"
+        if self.ignore_term:
+            # The marker is written only AFTER the TERM-ignoring trap is in
+            # place. The wrapper writes the PID file before this stub even
+            # starts, so PID-file readiness alone delivers SIGTERM while the
+            # stub still has the default disposition: the worker dies with
+            # `code=143` and the entrypoint takes the `complete` branch instead
+            # of the deadline path under test (CI run 40075008826). Readiness
+            # waits for the marker for the same reason it waits for live PIDs —
+            # the bounded-drain assertion must not race stub startup.
+            saq_command = 'trap "" TERM; : > "$WORKER_STUB_READY_DIR/$2.ready"; exec sleep 300'
+        else:
+            saq_command = "exec sleep 300"
         python_stub = f"""#!/bin/bash
 if [ "$1" = "-m" ]; then
   case "$2" in
@@ -199,6 +210,7 @@ exit 0
             "FLY_PROCESS_GROUP": "worker",
             "WORKER_HEALTH_PORT": "18082",
             "WORKER_DRAIN_DEADLINE_S": str(self.deadline_s),
+            "WORKER_STUB_READY_DIR": str(self.run_dir),
         }
 
     def start(self) -> None:
@@ -212,24 +224,36 @@ exit 0
         )
 
     def wait_ready(self, timeout_s: float = 20.0) -> bool:
-        """Wait for the drain trap AND both workers' PID files to be live.
+        """Wait for the drain trap, live workers, and their TERM dispositions.
 
         ``WORKER_READY`` is printed as soon as the trap is installed, but the
         restart wrappers write the PID files asynchronously. Signalling before
         they exist makes the drain correctly find nothing to wait for (it takes
         the ``complete`` branch), so the deadline path under test never runs —
         the race that made this suite fail intermittently under parallel CI
-        load.
+        load. A live PID is not enough on its own for the TERM-ignoring case:
+        the stub installs its trap asynchronously too, and a SIGTERM delivered
+        in that window kills it with the default disposition.
         """
         assert self.proc is not None
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if "WORKER_READY" in self.log_path.read_text(encoding="utf-8") and self._workers_registered():
+            if (
+                "WORKER_READY" in self.log_path.read_text(encoding="utf-8")
+                and self._workers_registered()
+                and self._worker_traps_installed()
+            ):
                 return True
             if self.proc.poll() is not None:
                 return False
             time.sleep(0.02)
         return False
+
+    def _worker_traps_installed(self) -> bool:
+        """True once every TERM-ignoring stub has installed its trap."""
+        if not self.ignore_term:
+            return True
+        return all((self.run_dir / f"{name}.ready").exists() for name in ("saq", "modulo.core.saq_worker"))
 
     def _workers_registered(self) -> bool:
         for path in (self.run_pid_file, self.system_pid_file):
@@ -286,8 +310,11 @@ def test_entrypoint_forwards_sigterm_and_completes_a_bounded_drain(tmp_path: Pat
             "the SIGTERM handler ran more than once — the trap is re-signalling its own shell:\n" + log
         )
         assert "WORKER_DRAIN: complete" in log, log
-        assert "not restarting (worker shutdown requested)" in log, (
-            "the crash-guard wrapper restarted a worker during the drain:\n" + log
+        assert "SAQ runs worker drained — not restarting (worker shutdown requested)" in log, (
+            "the runs crash-guard wrapper restarted a worker during the drain:\n" + log
+        )
+        assert "SAQ system worker drained — not restarting (worker shutdown requested)" in log, (
+            "the system crash-guard wrapper restarted a worker during the drain:\n" + log
         )
     finally:
         harness.cleanup()

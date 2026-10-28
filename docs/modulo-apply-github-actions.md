@@ -243,6 +243,51 @@ server's typed `credential_reference_error` (422), naming only the key.
 Set the vault entry out-of-band (the org vault / `create_secret` surface) before
 merging the config; the key itself is never committed.
 
+## Custom endpoints (`base_url`)
+
+A self-hosted or OpenAI-compatible gateway is declared with `base_url`; a
+plain-`http` gateway additionally needs the explicit `allow_insecure_http`
+opt-in (an `https` endpoint does not):
+
+```yaml
+entities:
+  model_backends:
+    - name: local-vllm
+      display_name: Local vLLM
+      provider: openai
+      model_id: my-model
+      api_key: ${env:LOCAL_MODEL_KEY}
+      base_url: http://gateway.internal:8080/v1
+      allow_insecure_http: true
+```
+
+Declare-to-manage semantics:
+
+- **omit `base_url`** – apply does not manage the endpoint: a UI/API-set
+  endpoint is left untouched (no drift, no write). `allow_insecure_http` is
+  only read when `base_url` is declared.
+- **`base_url: null`** – clear the stored endpoint.
+- **`base_url: https://...`** – set/replace it. A changed endpoint shows as
+  drift in `--diff` and PATCHes on apply.
+- `allow_insecure_http` must accompany a non-null `base_url`; declaring it
+  alone is a config-load error.
+
+A declared `base_url` is validated at **plan** time with the same rules the
+REST API applies: cloud metadata hosts (`169.254.169.254`,
+`metadata.google.internal`, ...), non-canonical IP literals such as
+`0x7f000001`, embedded userinfo/query/fragment, and `http` without the opt-in
+are all `block` lines in the plan – never a 422 halfway through an apply. The
+provider capability map stays the server's authority, so an endpoint on a
+provider that cannot consume it still fails with the server's typed error.
+
+**Credential binding (FAR-2046).** The endpoint is credential-bound: creating a
+custom destination, or changing an existing one, requires the **literal key**
+itself, because the server re-authenticates the new destination with it. A
+`credential_ref` / `secretref://` vault reference therefore cannot create or
+move an endpoint; the plan blocks that entity with the reason named. For an
+endpoint change, declare `api_key: ${env:VAR}` and put the key in the
+environment: the CLI resolves it client-side into a literal key for the write.
+
 - The plan jobs post the CLI's plain-text report (`create` / `update` /
   `block` / `fail` / `unchanged` lines plus the summary). If you need the
   machine-readable report instead, add `--output json` (alias `--json`) and

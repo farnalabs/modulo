@@ -1,9 +1,10 @@
 import logging
 import os
 import time
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping, MutableMapping, Sequence
 from contextlib import contextmanager
 from logging.config import fileConfig
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -26,6 +27,23 @@ _CONFIG_KEY_SQLALCHEMY_URL = "sqlalchemy.url"
 
 #: Raised when a code path needs alembic's ``config`` before it is populated.
 _ERR_CONFIG_UNAVAILABLE = "Alembic env config unavailable"
+
+#: The env-file name the application itself reads (``Settings.model_config``).
+_ENV_FILE_NAME = ".env"
+_ENV_VAR_DATABASE_ADMIN_URL = "DATABASE_ADMIN_URL"
+_ENV_VAR_DATABASE_URL = "DATABASE_URL"
+
+#: Refusal when no migration target is configured anywhere. Alembic used to
+#: fall back to a hardcoded URL in ``alembic.ini``; that default made a bare
+#: ``alembic upgrade heads`` migrate an unasked-for database whenever the real
+#: ``DATABASE_URL`` lived only in ``backend/.env`` (FAR-2183 F5).
+_ERR_NO_MIGRATION_DATABASE_URL = (
+    "Refusing to run migrations: no migration database URL is configured. Set "
+    "DATABASE_URL (or DATABASE_ADMIN_URL) in the process environment or in the env "
+    "file (backend/.env) and run again. There is deliberately no default connection "
+    "string: an implicit target silently migrates a database nobody asked for, which "
+    "is unrecoverable."
+)
 
 _DRIVER_MAP: dict[str, str] = {
     "postgresql+asyncpg": _DRIVER_POSTGRES_SYNC,
@@ -116,6 +134,162 @@ def _migration_advisory_lock(engine: Engine, url: str) -> Iterator[None]:
             )
 
 
+def _redact_url(url: str) -> str:
+    """Return *url* with any password replaced by ``***`` (safe to log)."""
+    parsed = urlparse(url)
+    if parsed.password is None:
+        return url
+    userinfo = f"{parsed.username}:***@" if parsed.username else "***@"
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return urlunparse(parsed._replace(netloc=f"{userinfo}{host}"))
+
+
+def _env_file_candidates() -> list[Path]:
+    """Env files to load, in precedence order (first match per variable wins).
+
+    The pinned launcher config comes first (native install), then
+    ``backend/.env`` (the application's own ``Settings`` default; env.py lives
+    at ``backend/src/modulo/db/migrations/env.py``), then ``.env`` in the CWD
+    for callers that run alembic from elsewhere.
+    """
+    candidates: list[Path] = []
+    try:
+        from modulo.settings import pinned_env_file
+
+        pinned = pinned_env_file()
+    except Exception as exc:
+        # Best-effort: an unreadable launcher pin must not abort a migration,
+        # but it DOES change which env file is read, so say so.
+        _log.warning("alembic.env_file_pin_unavailable error=%s", exc)
+        pinned = None
+    if pinned:
+        candidates.append(Path(pinned))
+    candidates.append(Path(__file__).resolve().parents[4] / _ENV_FILE_NAME)
+    candidates.append(Path.cwd() / _ENV_FILE_NAME)
+
+    unique: list[Path] = []
+    for candidate in candidates:
+        if candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+def load_env_file(
+    paths: Sequence[Path] | None = None,
+    *,
+    environ: MutableMapping[str, str] | None = None,
+) -> Path | None:
+    """Merge env files into *environ* (``os.environ`` by default), never overriding.
+
+    Returns the last file that contributed at least one value (or ``None``).
+    Existing variables win, mirroring ``dotenv.load_dotenv(override=False)``:
+    an operator who exports ``DATABASE_URL`` for one command still targets that
+    database. The target mapping is injectable so the behaviour is testable
+    without touching the process environment.
+    """
+    target = os.environ if environ is None else environ
+    candidates = list(paths) if paths is not None else _env_file_candidates()
+    existing = [path for path in candidates if path.is_file()]
+    if not existing:
+        return None
+    try:
+        from dotenv import dotenv_values
+    except ModuleNotFoundError as exc:  # pragma: no cover - python-dotenv is a hard dep of pydantic-settings
+        raise RuntimeError(
+            f"Cannot read {existing[0]} for the migration database URL: python-dotenv is not installed. "
+            "Export DATABASE_URL instead, or reinstall the backend dependencies."
+        ) from exc
+
+    loaded: Path | None = None
+    for path in existing:
+        contributed = False
+        for key, value in dotenv_values(path).items():
+            if value is not None and key not in target:
+                target[key] = value
+                contributed = True
+        if contributed:
+            loaded = path
+    return loaded
+
+
+def resolve_migration_url(
+    config: Config,
+    *,
+    env_file_paths: Sequence[Path] | None = None,
+    environ: MutableMapping[str, str] | None = None,
+) -> str:
+    """Resolve, verify and install the URL migrations must run against.
+
+    Resolution order:
+
+    1. ``DATABASE_ADMIN_URL`` — the documented owner-role override. Migrations
+       connect as the owner (not the ``modulo_app`` runtime role) so DDL runs
+       without RLS interference. It wins over a caller-configured URL, and the
+       override is logged (redacted) so the target is never a surprise.
+    2. A URL the caller set on the ``Config`` — explicit programmatic intent
+       (the app lifespan's resolved ``Settings`` URL, test harnesses running an
+       isolated database, ops tooling). This intentionally beats the ambient
+       ``DATABASE_URL``: an integration test that pinned its own container URL
+       must not be diverted into a developer's ``.env`` database. The two
+       targets are logged when they differ, so the choice is never silent.
+    3. ``DATABASE_URL`` — the operator path, read exactly as the application
+       reads it (process environment, then the env file). This is the path a
+       bare ``alembic upgrade heads`` takes.
+    4. Otherwise raise: ``alembic.ini`` no longer carries a default URL, so
+       there is nothing to silently migrate.
+
+    The env file is loaded first, so ``alembic upgrade heads`` honours
+    ``backend/.env`` exactly as the application does (FAR-2183 F5).
+    ``environ`` is injectable for tests; production always uses ``os.environ``.
+    """
+    target_environ = os.environ if environ is None else environ
+    loaded_env_file = load_env_file(env_file_paths, environ=target_environ)
+
+    admin_url = (target_environ.get(_ENV_VAR_DATABASE_ADMIN_URL) or "").strip()
+    database_url = (target_environ.get(_ENV_VAR_DATABASE_URL) or "").strip()
+    configured_url = (config.get_main_option(_CONFIG_KEY_SQLALCHEMY_URL) or "").strip()
+
+    if admin_url:
+        resolved = _to_sync_url(admin_url)
+        if configured_url and _to_sync_url(configured_url) != resolved:
+            _log.info(
+                "alembic.migration_url_override owner_target=%s configured_target=%s",
+                _redact_url(resolved),
+                _redact_url(_to_sync_url(configured_url)),
+            )
+        config.set_main_option(_CONFIG_KEY_SQLALCHEMY_URL, resolved)
+        _log.info("alembic.migration_target %s", _redact_url(resolved))
+        return resolved
+
+    if configured_url:
+        resolved = _to_sync_url(configured_url)
+        if database_url and _to_sync_url(database_url) != resolved:
+            # Never silent: record both targets so a wrong-database run is
+            # diagnosable from the migration log alone.
+            _log.info(
+                "alembic.migration_url_caller_configured caller_target=%s ignored_database_url=%s",
+                _redact_url(resolved),
+                _redact_url(_to_sync_url(database_url)),
+            )
+        config.set_main_option(_CONFIG_KEY_SQLALCHEMY_URL, resolved)
+        _log.info("alembic.migration_target %s", _redact_url(resolved))
+        return resolved
+
+    if database_url:
+        resolved = _to_sync_url(database_url)
+        config.set_main_option(_CONFIG_KEY_SQLALCHEMY_URL, resolved)
+        _log.info(
+            "alembic.migration_target %s (env_file=%s)",
+            _redact_url(resolved),
+            loaded_env_file,
+        )
+        return resolved
+
+    raise RuntimeError(_ERR_NO_MIGRATION_DATABASE_URL)
+
+
 target_metadata = Base.metadata
 
 # Module-level Alembic setup — only safe when context is properly configured
@@ -128,12 +302,9 @@ if config is not None:
     if config.config_file_name is not None:
         fileConfig(config.config_file_name)
 
-    # Allow DATABASE_ADMIN_URL env var to override the alembic.ini connection string.
-    # Migrations connect with the owner role (not modulo_app runtime role) to
-    # run DDL without RLS interference. Falls back to DATABASE_URL for compat.
-    _db_url = os.environ.get("DATABASE_ADMIN_URL") or os.environ.get("DATABASE_URL")
-    if _db_url:
-        config.set_main_option(_CONFIG_KEY_SQLALCHEMY_URL, _to_sync_url(_db_url))
+    # Load backend/.env and pick the migration target. Raises rather than
+    # silently migrating a database that was not the configured one.
+    resolve_migration_url(config)
 
 
 def _detect_backend(url: str) -> str:

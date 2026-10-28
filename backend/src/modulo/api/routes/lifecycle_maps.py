@@ -19,6 +19,7 @@ from modulo.api.db_error_handling import (
 )
 from modulo.api.dependencies import (
     get_db_session,
+    require_in_dev_operator,
     require_permission,
     require_permission_any_credential,
     require_team_membership_or_admin,
@@ -67,6 +68,7 @@ from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.db.sqlstates import sqlstate_of
+from modulo.settings import Settings, get_settings
 
 _CODE_LIFECYCLE_MAPS_AUDIT_FAILED = "lifecycle_maps.audit_failed"
 _CODE_LIFECYCLE_MAP_LIST = "lifecycle_map.list"
@@ -110,9 +112,24 @@ _CODE_LIFECYCLE_MAPS_SELF_REPORT_JOURNEYS_ENDPOINT = "lifecycle_maps.self_report
 # DBAPI error is covered too.
 _RLS_WITH_CHECK_DENIED_SQLSTATE = "42501"
 _MSG_TEAM_POLICY_DENIED = "Not permitted to change this resource's team ownership or visibility."
+_INTERNAL_LIFECYCLE_MAP_PERMISSION = "library.search.in_dev"
 
 
 _log = logging.getLogger(__name__)
+
+
+def _require_internal_lifecycle_map_access(
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+    settings: Settings = Depends(get_settings),
+) -> TenantPrincipal:
+    """Keep the retained lifecycle-map API surface on the internal path only."""
+    require_in_dev_operator(
+        principal,
+        _INTERNAL_LIFECYCLE_MAP_PERMISSION,
+        require_dev_mode=True,
+        settings=settings,
+    )
+    return principal
 
 
 def _raise_if_rls_denied(exc: SQLAlchemyError) -> None:
@@ -133,7 +150,11 @@ def _raise_if_rls_denied(exc: SQLAlchemyError) -> None:
     ) from exc
 
 
-router = APIRouter(prefix="/api/v1/lifecycle-maps", tags=["lifecycle_maps"])
+router = APIRouter(
+    prefix="/api/v1/lifecycle-maps",
+    tags=["lifecycle_maps"],
+    dependencies=[Depends(_require_internal_lifecycle_map_access)],
+)
 
 
 class LifecycleMapCreate(TeamVisibilityMixin):

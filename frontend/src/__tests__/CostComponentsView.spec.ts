@@ -78,6 +78,9 @@ describe('CostComponentsView', () => {
     const wrapper = await mountView()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Cost Components')
+    expect(wrapper.find('header.page-header + .page-tabs-wrapper').exists()).toBe(true)
+    expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
+    expect(wrapper.find('header.page-header [data-testid="cost-components-add"]').exists()).toBe(true)
   })
 
   it('displays component rows with kind, rate and formula', async () => {

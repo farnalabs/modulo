@@ -40,6 +40,7 @@ def _def(
     config: dict[str, Any] | None = None,
     timeout: float | None = None,
     cap: int | None = None,
+    is_muted: bool = False,
 ) -> EvalDefinition:
     cfg: dict[str, Any] = {
         "action": action,
@@ -63,6 +64,7 @@ def _def(
         eval_type=EvalType.GUARDRAIL,
         config=cfg,
         failure_behaviour="warn",
+        is_muted=is_muted,
     )
 
 
@@ -391,6 +393,37 @@ async def test_over_budget_log_and_continue_for_observe_guardrail():
         EvalEngine(),
         [_def("big", "observe")],
         big_payload,
+        max_payload_bytes=100,
+    )
+    assert outcome.blocked is False
+    assert len(outcome.results) == 1
+    assert outcome.results[0].passed is False
+    assert "budget" in outcome.results[0].detail
+
+
+async def test_over_budget_active_block_preserves_muted_evidence():
+    """FAR-2028: an active block must not discard muted over-budget evidence."""
+    active = _def("active-big", "block")
+    muted = _def("muted-big", "redact", is_muted=True)
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [active, muted],
+        {"body": "x" * 5000},
+        max_payload_bytes=100,
+    )
+    assert outcome.blocked is True
+    assert [result.eval_id for result in outcome.results] == [muted.id]
+    assert outcome.results[0].passed is False
+    assert "budget" in outcome.results[0].detail
+
+
+@pytest.mark.parametrize("action", ["block", "redact"])
+async def test_over_budget_muted_guardrail_records_evidence_without_blocking(action: str):
+    """FAR-2028: muted enforcement actions never interrupt oversized payloads."""
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [_def("muted-big", action, config={"redaction": [{"path": "body"}]}, is_muted=True)],
+        {"body": "x" * 5000},
         max_payload_bytes=100,
     )
     assert outcome.blocked is False

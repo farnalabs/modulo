@@ -49,6 +49,10 @@ _MASK = "***"
 _MIN_SECRET_LEN = 4
 
 
+class CredentialRedactionError(RuntimeError):
+    """Fallback error when a credential-bearing exception cannot be rebuilt."""
+
+
 def _leaf_strings(value: Any) -> Iterator[str]:
     """Yield every leaf string reachable inside *value* (dicts, lists, scalars)."""
     if isinstance(value, str):
@@ -132,13 +136,13 @@ def _scrub_request(request: httpx.Request | None, secrets: Sequence[str]) -> htt
     kwargs: dict[str, Any] = {"method": request.method, "url": url, "headers": headers}
     try:
         content = request.content
-    except Exception:
+    except (RuntimeError, AttributeError):
         content = None
     if content is not None:
         kwargs["content"] = content
     try:
         return httpx.Request(**kwargs)
-    except Exception:  # pragma: no cover - defensive fallback
+    except (TypeError, ValueError, RuntimeError):  # pragma: no cover - defensive fallback
         return request
 
 
@@ -158,7 +162,7 @@ def _scrub_response(response: httpx.Response, secrets: Sequence[str]) -> httpx.R
         return response
     try:
         return httpx.Response(status_code=response.status_code, request=request, text=text, headers=headers)
-    except Exception:  # pragma: no cover - defensive fallback
+    except (TypeError, ValueError, RuntimeError):  # pragma: no cover - defensive fallback
         return response
 
 
@@ -213,8 +217,14 @@ def redact_exc(
             new = _rebuild_httpx_request_error(exc, message, secrets)
         else:
             new = _rebuild_generic_error(exc, message)
-    except Exception:  # pragma: no cover - defensive fallback
-        new = RuntimeError(message)
+    except Exception:  # NOSONAR python:S112 — fail closed for arbitrary vendor constructors
+        # Deliberately broad: ``_rebuild_generic_error`` calls an arbitrary
+        # vendor ``type(exc)(message)`` constructor, which can raise anything
+        # (e.g. ``KeyError`` from an exotic ``__init__``). Narrowing this to a
+        # fixed tuple lets such an exception propagate the ORIGINAL,
+        # credential-bearing message out of ``redact_exc``. Whatever the
+        # rebuild failure, it must be replaced with the sanitized fallback.
+        new = CredentialRedactionError(message)
     if chain_cause:
         new.__cause__ = exc.__cause__
     else:
@@ -270,7 +280,9 @@ def redacting(method: Callable[..., Any]) -> Callable[..., Any]:
     """
 
     @functools.wraps(method)
-    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+    async def wrapper(  # NOSONAR python:S7503 — preserves the async connector method seam
+        self: Any, *args: Any, **kwargs: Any
+    ) -> Any:
         redactor: CredentialRedactor = self._redactor
         with redactor.wrapping():
             return await method(self, *args, **kwargs)
@@ -337,7 +349,7 @@ class CredentialRedactor:
             yield
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # NOSONAR python:S112 — connector boundary must redact every ordinary exception
             repaired = redact_exc(
                 exc,
                 self._secrets,
@@ -347,5 +359,5 @@ class CredentialRedactor:
             if repaired is exc:
                 raise
             if self._chain_cause:
-                raise repaired from exc.__cause__
-            raise repaired from None
+                raise repaired from exc.__cause__  # NOSONAR python:S112 — repaired preserves original exception class
+            raise repaired from None  # NOSONAR python:S112 — repaired preserves original exception class

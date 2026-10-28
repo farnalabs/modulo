@@ -66,7 +66,11 @@ test.describe('Real-stack journeys: eval definition lifecycle', { tag: '@regress
       // (the default model_judge judge-config placeholder stays untouched).
       const evalName = uniqueName('E2E Journey EVAL_N')
       await page.getByTestId('eval-editor-name').fill(evalName)
+      // ADR 066 D19: mechanism first (Typed questions | Deterministic), then
+      // the deterministic check type on its own axis.
       await page.getByTestId('eval-editor-eval-type').click()
+      await page.locator('[data-value="deterministic"]').click()
+      await page.getByTestId('eval-editor-deterministic-type').click()
       await page.locator('[data-value="regex"]').click()
       await page.getByTestId('eval-editor-config').fill('{}')
       await page.getByTestId('eval-editor-save').click()

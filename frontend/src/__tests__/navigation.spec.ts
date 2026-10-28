@@ -11,11 +11,17 @@ const mockManifest = vi.hoisted(() => ({
   routes: {
     '/': { name: 'dashboard', breadcrumb: 'Dashboard', sidebar_group: 'core', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/notifications': { name: 'notifications', breadcrumb: 'Notifications', sidebar_group: 'monitor', sidebar_order: 0, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/risk-assessment': { name: 'risk-assessment', breadcrumb: 'Risk Assessment', sidebar_group: 'monitor', sidebar_order: 9, type: 'page', required_tier: null, required_roles: null, required_permissions: null, product_map: ['feat-risk-assessment'] },
+    // A route with no breadcrumb: the nav label must fall back to the route name.
+    '/no-breadcrumb': { name: 'no-breadcrumb', sidebar_group: 'monitor', sidebar_order: 98, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
+    '/missing-group': { name: 'missing-group', breadcrumb: 'Missing Group', sidebar_group: 'missing', sidebar_order: 99, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/pipelines': { name: 'pipeline-list', breadcrumb: 'Pipelines', sidebar_group: 'core', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/library': { name: 'library', breadcrumb: 'Library', sidebar_group: 'core', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
     '/runs': { name: 'runs-list', breadcrumb: 'Runs', sidebar_group: 'core', sidebar_order: 5, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/runs/:id': { name: 'run-detail', breadcrumb: 'Run Detail', sidebar_group: 'core', sidebar_order: 8, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null },
-    '/lifecycle-maps': { name: 'lifecycle-maps', breadcrumb: 'Lifecycle Maps', sidebar_group: 'core', sidebar_order: 9, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
+     '/lifecycle-maps': { name: 'lifecycle-maps', breadcrumb: 'Lifecycle Maps', sidebar_group: null, sidebar_order: null, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'in_dev', exact: true },
+     '/lifecycle-maps/:id': { name: 'lifecycle-map-detail', breadcrumb: 'Lifecycle Map', sidebar_group: null, sidebar_order: null, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'in_dev' },
+
     '/runs/diff': { name: 'runs-diff', breadcrumb: 'Output Diff', sidebar_group: 'monitor', sidebar_order: 2, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/evals/editor': { name: 'eval-editor', breadcrumb: 'Evals', sidebar_group: 'monitor', sidebar_order: 3, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
     '/evals/proposals': { name: 'eval-proposals-queue', breadcrumb: 'Eval Proposals', sidebar_group: 'monitor', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
@@ -42,12 +48,15 @@ const mockManifest = vi.hoisted(() => ({
     // FAR-1796: a route-ENTRY system_admin_only gate inside a NON-gated group.
     // The group is visible to everyone, so only the item-level flag can hide it.
     '/admin/secret-tool': { name: 'admin-secret-tool', breadcrumb: 'Secret Tool', sidebar_group: 'configure', sidebar_order: 99, system_admin_only: true, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
-    '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'system', sidebar_order: 1, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    // FAR-2104: the licence is an org-level object, so it lives in the ADMIN
+    // group and is gated by the permission the licence endpoints enforce —
+    // not by the system-admin-only SYSTEM group.
+    '/settings/license': { name: 'settings-license', breadcrumb: 'License', sidebar_group: 'admin', sidebar_order: 12, type: 'form_page', required_tier: 'community', required_roles: null, required_permissions: ['org.license.manage'] },
     '/settings/teams': { name: 'settings-teams', breadcrumb: 'Teams', sidebar_group: 'admin', sidebar_order: 2, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/sso': { name: 'settings-sso', breadcrumb: 'SSO', sidebar_group: 'admin', sidebar_order: 3, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/hitl-review': { name: 'settings-hitl-review', breadcrumb: 'HITL Review', sidebar_group: 'admin', sidebar_order: 4, type: 'page', required_tier: null, required_roles: null, required_permissions: null, visibility: 'private_preview' },
     '/settings/error-forwarders': { name: 'settings-error-forwarders', breadcrumb: 'Error Forwarders', sidebar_group: 'system', sidebar_order: 2, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
-    '/settings/email': { name: 'settings-email', breadcrumb: 'Email', sidebar_group: 'system', sidebar_order: 3, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
+    '/settings/email': { name: 'settings-email', breadcrumb: 'Email', sidebar_group: 'admin', sidebar_order: 13, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/admin/assistant': { name: 'admin-assistant', breadcrumb: 'Assistant config', sidebar_group: 'admin', sidebar_order: 7, type: 'form_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
     '/settings/assistant': { name: 'settings-assistant', breadcrumb: 'Assistant skills', sidebar_group: 'admin', sidebar_order: 8, type: 'form_page', required_tier: null, required_roles: null, required_permissions: null },
     '/admin/users': { name: 'admin-users', breadcrumb: 'Users', sidebar_group: 'admin', sidebar_order: 9, type: 'list_page', required_tier: 'team', required_roles: ['admin'], required_permissions: null },
@@ -116,12 +125,21 @@ describe('navigation.ts', () => {
     expect(navGroups[4].id).toBe('system')
   })
 
-  it('items within groups are sorted by sidebar_order', () => {
-    const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items).toHaveLength(5)
-    expect(core.items[0].to).toBe('/')
-    expect(core.items.map(i => i.to)).toEqual(['/', '/pipelines', '/library', '/runs', '/lifecycle-maps'])
+  it('keeps organisation email settings in the admin group, not the system-admin-only group', () => {
+    const admin = navGroups.find((group) => group.id === 'admin')!
+    const system = navGroups.find((group) => group.id === 'system')!
+
+    expect(admin.items.some((item) => item.to === '/settings/email')).toBe(true)
+    expect(system.items.some((item) => item.to === '/settings/email')).toBe(false)
   })
+
+   it('items within groups are sorted by sidebar_order', () => {
+     const core = navGroups.find((g) => g.id === 'core')!
+     expect(core.items).toHaveLength(4)
+     expect(core.items[0].to).toBe('/')
+     expect(core.items.map(i => i.to)).toEqual(['/', '/pipelines', '/library', '/runs'])
+   })
+
 
   it('excludes detail_page items from sidebar', () => {
     const core = navGroups.find((g) => g.id === 'core')!
@@ -135,13 +153,11 @@ describe('navigation.ts', () => {
     expect(myProfile).toBeUndefined()
   })
 
-  it('includes lifecycle-maps in the core group', () => {
-    const allItems = navGroups.flatMap((g) => g.items)
-    const lifecycle = allItems.find((item) => item.to === '/lifecycle-maps')
-    expect(lifecycle).toBeDefined()
-    const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items.find((item) => item.to === '/lifecycle-maps')).toBeDefined()
-  })
+   it('does not expose the internal lifecycle-map route in the sidebar', () => {
+     const allItems = navGroups.flatMap((g) => g.items)
+     expect(allItems.find((item) => item.to === '/lifecycle-maps')).toBeUndefined()
+   })
+
 
   it('sets requiredRoles and requiredTier on items', () => {
     const admin = navGroups.find((g) => g.id === 'admin')!
@@ -150,7 +166,20 @@ describe('navigation.ts', () => {
     expect(teams.requiredTier).toBe('team')
   })
 
-  it('canSeeItem returns true when no restrictions', () => {
+   it('hides in_dev navigation items when dev mode is off', () => {
+     const item: NavItem = {
+       to: '/lifecycle-maps',
+       icon: 'Map',
+       label: 'Lifecycle Maps',
+       labelKey: 'item_lifecycle_maps',
+       visibility: 'in_dev',
+     }
+     expect(isNavItemVisible(item, visibilityContext())).toBe(false)
+     expect(isNavItemVisible(item, visibilityContext({ devMode: true }))).toBe(true)
+   })
+
+   it('canSeeItem returns true when no restrictions', () => {
+
     const item: NavItem = {
       to: '/',
       icon: 'LayoutDashboard',
@@ -287,6 +316,13 @@ describe('navigation.ts', () => {
     expect(dash.labelKey).toBe('components.SidebarNav.item_dashboard')
   })
 
+  it('falls back to the route name when the manifest has no breadcrumb', () => {
+    const monitor = navGroups.find((g) => g.id === 'monitor')!
+    const item = monitor.items.find((i) => i.to === '/no-breadcrumb')
+    expect(item, 'the no-breadcrumb mock route must produce a nav item').toBeDefined()
+    expect(item!.label).toBe('no-breadcrumb')
+  })
+
   it('sets group labelKey from manifest labelKey', () => {
     const core = navGroups.find((g) => g.id === 'core')!
     expect(core.labelKey).toBe('components.SidebarNav.group_build')
@@ -305,9 +341,25 @@ describe('navigation.ts', () => {
     expect(admin.defaultCollapsed).toBe(true)
   })
 
-  it('core has exactly 5 items (lifecycle-maps restored, connectors moved, stages removed)', () => {
-    const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items).toHaveLength(5)
+   it('core has exactly 4 Alpha-facing items', () => {
+     const core = navGroups.find((g) => g.id === 'core')!
+     expect(core.items).toHaveLength(4)
+   })
+
+
+  it('warns and skips a route whose sidebar group is missing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const manifestModule = await import('@/manifest.yaml')
+    const manifest = manifestModule.default as { routes: Record<string, Record<string, unknown>> }
+    const original = manifest.routes['/risk-assessment']
+    manifest.routes['/risk-assessment'] = { ...original, sidebar_group: 'missing' }
+
+    vi.resetModules()
+    const { getNavGroups: getFreshNavGroups } = await import('../config/navigation')
+    expect(getFreshNavGroups().flatMap((group) => group.items).some((item) => item.to === '/risk-assessment')).toBe(false)
+    expect(warn).toHaveBeenCalled()
+    manifest.routes['/risk-assessment'] = original
+    warn.mockRestore()
   })
 
   it('monitor has evals, diff, observability, etc', () => {
@@ -372,11 +424,21 @@ describe('navigation.ts', () => {
     expect(configure.items.some(i => i.to === '/admin/costs')).toBe(true)
   })
 
-  it('admin group contains users, assistant etc (license moved to system)', () => {
+  it('admin group contains users, assistant, license etc (FAR-2104: license is org-manageable)', () => {
     const admin = navGroups.find((g) => g.id === 'admin')!
     expect(admin.items.length).toBeGreaterThanOrEqual(5)
     expect(admin.items.some(i => i.to === '/admin/users')).toBe(true)
     expect(admin.items.some(i => i.to === '/admin/assistant')).toBe(true)
+    expect(admin.items.some(i => i.to === '/settings/license')).toBe(true)
+  })
+
+  it('hides the license item from a principal without org.license.manage', () => {
+    const admin = navGroups.find((g) => g.id === 'admin')!
+    const license = admin.items.find(i => i.to === '/settings/license')!
+    expect(isNavItemVisible(license, visibilityContext({ userPermissions: [] }))).toBe(false)
+    expect(
+      isNavItemVisible(license, visibilityContext({ userPermissions: ['org.license.manage'] })),
+    ).toBe(true)
   })
 
   it('system group has systemAdminOnly set', () => {
@@ -384,9 +446,9 @@ describe('navigation.ts', () => {
     expect(system.systemAdminOnly).toBe(true)
   })
 
-  it('system group contains license, housekeeping, feature-flags, etc', () => {
+  it('system group contains housekeeping, feature-flags, etc (no longer the license)', () => {
     const system = navGroups.find((g) => g.id === 'system')!
-    expect(system.items.some(i => i.to === '/settings/license')).toBe(true)
+    expect(system.items.some(i => i.to === '/settings/license')).toBe(false)
     expect(system.items.some(i => i.to === '/admin/housekeeping')).toBe(true)
     expect(system.items.some(i => i.to === '/admin/feature-flags')).toBe(true)
     expect(system.items.some(i => i.to === '/admin/run-retention')).toBe(true)

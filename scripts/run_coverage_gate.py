@@ -283,16 +283,12 @@ _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 _OLD_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@")
 # ``diff --git a/<old> b/<new>`` — per-file header in a multi-file ``git diff``
 # output.  Group 2 (the b/ side) is the file's current path, which is the key
-# the rest of the gate uses for changed files.
-_DIFF_GIT_HEADER_RE = re.compile(r"^diff --git a/(.+) b/(.+)$")
+# the rest of the gate uses for changed files.  The parser uses rpartition()
+# rather than this pattern because git paths may contain spaces.
 # A git object id produced by ``git merge-base`` (fullmatch-bounded before it
 # is embedded in a ``git show <sha>:<path>`` argument).
-_MERGE_BASE_SHA_RE = re.compile(r"[0-9a-f]{7,64}")
+_MERGE_BASE_SHA_RE = re.compile(r"[\da-f]{7,64}", re.ASCII)
 
-# Matches a standalone Python string literal (triple-quoted or single/double
-# quoted) with no other code around it.  Used to exclude docstrings and bare
-# strings from the executable-line count (coverage.py does not instrument them).
-_PYTHON_STRING_LITERAL_RE = re.compile(r"""^\s*(?:('{3}|"{3})[\s\S]*\1|('{1}|"{1})[^\n]*\2)\s*$""")
 
 # ``git diff`` filter and language pathspecs for changed-file discovery.
 _DIFF_FILTER = "--diff-filter=ACM"
@@ -413,7 +409,12 @@ def _is_executable_python_line(line: str) -> bool:
     # instrumented by coverage.py.  Detect by checking if the entire
     # stripped line is a string literal (starts and ends with matching
     # quotes, no other code around it).
-    if _PYTHON_STRING_LITERAL_RE.fullmatch(stripped):
+    if (
+        (stripped.startswith("'''") and stripped.endswith("'''"))
+        or (stripped.startswith('"""') and stripped.endswith('"""'))
+        or (stripped.startswith("'") and stripped.endswith("'") and "\n" not in stripped[1:-1])
+        or (stripped.startswith('"') and stripped.endswith('"') and "\n" not in stripped[1:-1])
+    ):
         return False
     try:
         tree = ast.parse(stripped, mode="eval")
@@ -479,9 +480,10 @@ def _is_executable_js_line(line: str) -> bool:
 
 def _triple_quote_at(line: str, index: int) -> str | None:
     """Return the triple-quote delimiter starting at *index*, else ``None``."""
-    for quote in ('"""', "'''"):
-        if line.startswith(quote, index):
-            return quote
+    if line.startswith('"""', index):
+        return '"""'
+    if line.startswith("'''", index):
+        return "'''"
     return None
 
 
@@ -846,14 +848,19 @@ def _split_diff_by_file(diff_text: str) -> Iterator[tuple[str, list[str]]]:
     for modified files).  The yielded lines are everything after the header
     up to the next one: file metadata (``index``/``---``/``+++``) and hunks.
     """
+    prefix = "diff --git a/"
     current: str | None = None
     lines: list[str] = []
     for raw in diff_text.splitlines():
-        header = _DIFF_GIT_HEADER_RE.match(raw)
-        if header:
+        new_path: str | None = None
+        if raw.startswith(prefix):
+            old_path, separator, candidate = raw[len(prefix) :].rpartition(" b/")
+            if separator and old_path and candidate:
+                new_path = candidate
+        if new_path is not None:
             if current is not None:
                 yield current, lines
-            current = header.group(2)
+            current = new_path
             lines = []
         elif current is not None:
             lines.append(raw)
@@ -936,7 +943,7 @@ def _old_file_lines(compare_branch: str, filepath: str) -> list[str]:
     # first_line is fullmatch-bounded to hex by _MERGE_BASE_SHA_RE and
     # safe_path is regex-bounded by _safe_repo_path before reaching argv.
     try:
-        shown = subprocess.run(  # NOSONAR - sha is [0-9a-f]{7,64} fullmatch, path bounded, no shell
+        shown = subprocess.run(  # NOSONAR - sha is [\da-f]{7,64} fullmatch, path bounded, no shell
             ["git", "show", f"{first_line}:{safe_path}"],
             capture_output=True,
             text=True,
@@ -2693,20 +2700,32 @@ def _evaluate_changed_lines(
 
     results: list[GateResult] = []
     try:
-        for language, report in (("Python", python_report), ("JavaScript", effective_js_report)):
-            results.append(
-                evaluate(
-                    language,
-                    report,
-                    args.compare_branch,
-                    args.fail_under,
-                    allow_missing=args.allow_missing_reports
-                    or (language == "JavaScript" and args.allow_missing_js_report),
-                    branch_fail_under=args.branch_fail_under,
-                    js_src_root=js_src_root,
-                    allow_deletion_only=args.allow_deletion_only,
-                )
+        # Python evaluation
+        results.append(
+            evaluate(
+                "Python",
+                python_report,
+                args.compare_branch,
+                args.fail_under,
+                allow_missing=args.allow_missing_reports,
+                branch_fail_under=args.branch_fail_under,
+                js_src_root=js_src_root,
+                allow_deletion_only=args.allow_deletion_only,
             )
+        )
+        # JavaScript evaluation
+        results.append(
+            evaluate(
+                "JavaScript",
+                effective_js_report,
+                args.compare_branch,
+                args.fail_under,
+                allow_missing=args.allow_missing_reports or args.allow_missing_js_report,
+                branch_fail_under=args.branch_fail_under,
+                js_src_root=js_src_root,
+                allow_deletion_only=args.allow_deletion_only,
+            )
+        )
     finally:
         if normalised_js_report is not None:
             with contextlib.suppress(OSError):
@@ -2741,20 +2760,21 @@ def _check_project_floors(python_report: Path | None, js_report: Path | None) ->
     if js_report is not None and js_report.exists():
         js_numbers = _load_js_coverage(str(js_report))
 
-    present = [numbers for numbers in (python_numbers, js_numbers) if numbers is not None]
-    if not present:
+    if python_numbers is None and js_numbers is None:
         return False
 
     print("=== Project-wide Coverage Floor (ratchet) ===")
-    failure = False
-    for numbers in present:
-        failure |= _enforce(numbers) == 1
     print(
         f"  Floors: MIN_PROJECT_LINE_COVERAGE={MIN_PROJECT_LINE_COVERAGE}%, "
         f"MIN_PROJECT_BRANCH_COVERAGE={MIN_PROJECT_BRANCH_COVERAGE}%"
     )
     print("  Raise floors as coverage improves; never lower without justification.")
     print()
+    failure = False
+    if python_numbers is not None:
+        failure |= _enforce(python_numbers) == 1
+    if js_numbers is not None:
+        failure |= _enforce(js_numbers) == 1
     return failure
 
 

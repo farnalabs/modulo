@@ -18,6 +18,7 @@ name = "farnalabs-modulo"
 version = "0.3.323"
 description = "Agent governance for your agentic SDLC"
 license = "BUSL-1.1"
+license-files = ["LICENSE"]
 authors = [
     { name = "Duncan Tait", email = "admin@modulo.run" },
 ]
@@ -540,6 +541,7 @@ markers = [
     "real_ssrf_dns: opt out of the autouse SSRF DNS shim so the real fail-closed guard runs",
     "docker: marks tests that require a live Docker engine (excluded from default CI lanes; run explicitly via -m docker)",
     "posix_only: suite executes a shipped shell script under a real POSIX shell (executable-bit semantics, a POSIX PATH and jq) - skipped on Windows by the single platform gate in tests/conftest.py, runs for real on Linux CI (FAR-2070)",
+    "release_bundle_security: opt-in executable release supply-chain verification",
     "far-1487: FAR-1487 HITL reject-terminates behaviour - scenarios assert the intended behaviour, not yet shipped behaviour",
     "delivered: BDD scenario status tag",
     "goal-alice-connector-swap: BDD goal tag (persona journey)",
@@ -728,8 +730,16 @@ dev = [
 # PYSEC-2026-4322: brotli 1.2.0 vulnerable, fixed in 1.2.1. brotli is transitive
 # (locust -> geventhttpclient), so it is pinned via a constraint rather than a
 # direct dep so pip-audit (run in CI Lint (Backend)) passes.
+#
+# CVE-2026-115586: virtualenv 21.14.11 is vulnerable to arbitrary code
+# execution via an unescaped prompt in the bash activation script; fixed in
+# 21.14.13. virtualenv is transitive (pre-commit), so it is pinned via a
+# constraint rather than a direct dev dependency so the Trivy filesystem scan
+# (run in CI Lint (Backend)) passes on backend/uv.lock and a relock cannot
+# silently drop the fix.
 constraint-dependencies = [
     "pip>=26.2",
     "certifi>=2026.10.19",
     "brotli>=1.2.1",
+    "virtualenv>=21.14.13",
 ]

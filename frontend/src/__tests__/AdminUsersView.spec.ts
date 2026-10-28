@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query'
 
 vi.mock('../lib/api/client', () => ({
   getAccessToken: vi.fn().mockReturnValue('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbkBleGFtcGxlLmNvbSJ9.AAA'),
@@ -17,36 +18,6 @@ const { mockGet, mockPut, mockPost, mockDelete } = vi.hoisted(() => ({
 vi.mock('../composables/useApi', () => ({
   useApi: () => ({ get: mockGet, put: mockPut, post: mockPost, delete: mockDelete }),
 }))
-
-vi.mock('../composables/useDataFetch', async () => {
-  const { ref } = await import('vue')
-  return {
-    useDataFetch: (
-      fetcher: () => Promise<{ data: unknown }>,
-      options?: { initialValue?: unknown },
-    ) => {
-      const data = ref(options?.initialValue)
-      const loading = ref(false)
-      const error = ref('')
-      const load = async () => {
-        loading.value = true
-        try {
-          const result = await fetcher()
-          ;(data as { value: unknown }).value = result.data ?? options?.initialValue
-          // Mirror the real composable: a successful refetch clears a prior
-          // error so retry-recovery flows can be asserted.
-          error.value = ''
-        } catch {
-          error.value = 'Failed to load'
-        } finally {
-          loading.value = false
-        }
-      }
-      void load()
-      return { data, loading, error, load }
-    },
-  }
-})
 
 // The invite link dialog renders a QR code (convenience copy of the URL). jsdom
 // has no canvas, so stub the QR encoder to a stable data URL and exercise the
@@ -88,8 +59,10 @@ const USERS_RESPONSE = {
 }
 
 function mountView() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return mount(AdminUsersView, {
     global: {
+      plugins: [[VueQueryPlugin, { queryClient }]],
       stubs: {
         FeatureGate: { template: '<div><slot /></div>' },
         Select: { template: '<div />' },
@@ -111,8 +84,9 @@ async function mountViewWithPlan(planPatch: Record<string, unknown>) {
   setActivePinia(pinia)
   const store = usePlanStore()
   store.$patch(planPatch)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const wrapper = mount(AdminUsersView, {
-    global: { plugins: [pinia] },
+    global: { plugins: [pinia, [VueQueryPlugin, { queryClient }]] },
   })
   await flushPromises()
   for (let i = 0; i < 3; i++) {
@@ -163,6 +137,26 @@ describe('AdminUsersView', () => {
     expect(wrapper.text()).toContain('Users')
   })
 
+  it('falls back to a "?" avatar initial when a user has no display name or email', async () => {
+    const healthyGet = mockGet.getMockImplementation()!
+    mockGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/users?')) {
+        return Promise.resolve({
+          items: [{ ...USERS_RESPONSE.items[0], id: 'u-anon', email: '', display_name: '' }],
+          total: 1,
+          page: 1,
+          page_size: 50,
+        })
+      }
+      return healthyGet(path)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('.avatar-ring').text()).toBe('?')
+  })
+
   it('shows a shared ErrorAlert with retry when the users load fails, and recovers on retry', async () => {
     const healthyGet = mockGet.getMockImplementation()!
     mockGet.mockImplementation((path: string) => {
@@ -175,7 +169,7 @@ describe('AdminUsersView', () => {
     await flushPromises()
     await nextTick()
 
-    expect(wrapper.text()).toContain('Failed to load')
+    expect(wrapper.text()).toContain('boom')
     const retry = wrapper.find('[data-testid="error-alert-retry"]')
     expect(retry.exists()).toBe(true)
 
@@ -184,8 +178,72 @@ describe('AdminUsersView', () => {
     await flushPromises()
     await nextTick()
 
-    expect(wrapper.text()).not.toContain('Failed to load')
+    expect(wrapper.text()).not.toContain('boom')
     expect(wrapper.text()).toContain('alice@example.com')
+  })
+
+  it('shows a shared ErrorAlert with retry when pending invitations fail, and recovers on retry', async () => {
+    const healthyGet = mockGet.getMockImplementation()!
+    mockGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/users/invitations')) {
+        return Promise.reject(new Error('invitations unavailable'))
+      }
+      return healthyGet(path)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const errorWrapper = wrapper.find('[data-testid="admin-invitations-error"]')
+    expect(errorWrapper.exists()).toBe(true)
+    expect(errorWrapper.attributes('aria-live')).toBe('assertive')
+    expect(errorWrapper.text()).toContain('invitations unavailable')
+    const retry = errorWrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    mockGet.mockImplementation(healthyGet)
+    await retry.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-invitations-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-invitations-row"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('newbie@example.com')
+  })
+
+  it('keeps the error state visible and avoids unhandled rejections when retry fails', async () => {
+    let callCount = 0
+    const healthyGet = mockGet.getMockImplementation()!
+    mockGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/users/invitations')) {
+        callCount++
+        return Promise.reject(new Error(`invitations failed attempt ${callCount}`))
+      }
+      return healthyGet(path)
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const errorWrapper = wrapper.find('[data-testid="admin-invitations-error"]')
+    expect(errorWrapper.exists()).toBe(true)
+    expect(errorWrapper.text()).toContain('invitations failed attempt 1')
+
+    const retry = errorWrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    // Trigger retry while backend still rejects
+    await retry.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(callCount).toBe(2)
+    const afterRetryError = wrapper.find('[data-testid="admin-invitations-error"]')
+    expect(afterRetryError.exists()).toBe(true)
+    expect(afterRetryError.attributes('aria-live')).toBe('assertive')
+    expect(afterRetryError.text()).toContain('invitations failed attempt 2')
+    expect(wrapper.find('[data-testid="admin-invitations-row"]').exists()).toBe(false)
   })
 
   // STATE-3 (ux-conformance): list loading states render determinate table
@@ -277,6 +335,37 @@ describe('AdminUsersView', () => {
     // Success state (not the error state) after a resolved copy.
     await flushPromises()
     expect(wrapper.find('[data-testid="admin-users-copy-error"]').exists()).toBe(false)
+  })
+
+  // Far-366 replaced the inline email regex with a small validator. Exercise
+  // every rejection arm so each guard is covered: empty, missing/duplicate
+  // '@', a trailing '@', a domain without a dot, a leading/trailing dot, and
+  // embedded whitespace.
+  it.each([
+    ['', 'empty'],
+    ['not-an-email', 'missing at-sign'],
+    ['two@at@example.com', 'duplicate at-sign'],
+    ['trailing@', 'no domain'],
+    ['no-dot@example', 'domain without a dot'],
+    ['local@.com', 'dot at the start of the domain'],
+    ['trailing-dot@example.', 'dot at the end of the domain'],
+    ['white space@example.com', 'embedded whitespace'],
+  ])('rejects an invalid email (%#: %s) without creating a user', async (email) => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+
+    await wrapper.find('[data-testid="admin-users-create-email"]').setValue(email)
+    await wrapper.find('[data-testid="admin-users-create-display-name"]').setValue('Carol')
+    await wrapper.find('[data-testid="admin-users-create-password"]').setValue('Sup3rSecret!')
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Please enter a valid email address')
+    expect(mockPost).not.toHaveBeenCalled()
   })
 
   it('shows a visible error state when the clipboard write is rejected', async () => {
@@ -420,6 +509,29 @@ describe('AdminUsersView', () => {
       const cred = wrapper.find('[data-testid="admin-users-credential-value"]')
       expect(cred.exists()).toBe(true)
       expect(cred.text()).toContain('token=abc123')
+    })
+  })
+
+  it('submits an invite without an expiry and still surfaces the link', async () => {
+    mockPost.mockResolvedValue({
+      id: 'inv-3',
+      invite_url: 'https://app.test/accept-invite#token=noexp',
+    })
+    const wrapper = mountView()
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="admin-users-add-user"]').exists()).toBe(true)
+    })
+    await wrapper.find('[data-testid="admin-users-add-user"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-mode-invite"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="admin-users-create-email"]').setValue('invitee2@example.com')
+    await wrapper.find('[data-testid="admin-users-create-display-name"]').setValue('Invitee Two')
+    await wrapper.find('form').trigger('submit')
+    await vi.waitFor(() => {
+      const cred = wrapper.find('[data-testid="admin-users-credential-value"]')
+      expect(cred.exists()).toBe(true)
+      expect(cred.text()).toContain('token=noexp')
     })
   })
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Generator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from modulo.api.routes.health import (
     _check_stale_run_recovery,
 )
 from modulo.core import cron_helpers as ch
+from modulo.db.migration_guard import DivergenceCheckResult
 from modulo.settings import Settings
 
 
@@ -922,6 +924,94 @@ class TestCheckMigrationsDivergence:
         assert result.status == "degraded"
         assert result.detail is not None
         assert "could not run" in result.detail.lower()
+
+
+class TestCheckMigrationsImageRevisionLag:
+    """FAR-2156: a DB migrated by a NEWER release than the running image must
+    report degraded ("image revision lag") — the image cannot serve a schema it
+    does not know. A DB exactly at the image's head stays ok, and a DB BEHIND
+    the image stays on the pre-existing "pending migrations" path (the lag
+    branch must not mistake an older DB for a newer one)."""
+
+    @staticmethod
+    def _fake_connect(applied: tuple[str, ...]):
+        @asynccontextmanager
+        async def fake_connect():
+            class FakeConn:
+                async def execute(self, stmt):
+                    class FakeResult:
+                        def fetchall(self):
+                            return [(rev,) for rev in applied]
+
+                    return FakeResult()
+
+            yield FakeConn()
+
+        return fake_connect
+
+    async def _run(
+        self,
+        *,
+        applied: tuple[str, ...],
+        image_heads: set[str],
+    ):
+        clean_divergence = DivergenceCheckResult(
+            diverged=False,
+            db_revisions=set(applied),
+            repo_revisions=set(image_heads),
+            orphaned_revisions=set(),
+            detail="All applied revisions are present in the repo migration tree",
+        )
+
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health._resolve_alembic_ini", return_value=Path("/fake/alembic.ini")),
+            patch("modulo.api.routes.health.ScriptDirectory") as mock_sd,
+            patch("modulo.api.routes.health.get_or_create_engine") as mock_eng,
+            patch("modulo.api.routes.health.check_migration_divergence", return_value=clean_divergence),
+            patch.object(Path, "exists", return_value=True),
+        ):
+            mock_sd.from_config.return_value.get_heads.return_value = image_heads
+            mock_eng.return_value.connect = self._fake_connect(applied)
+            return await _check_migrations()
+
+    @pytest.mark.asyncio
+    async def test_db_ahead_of_image_degraded(self) -> None:
+        """DB applied a revision the image's tree does not ship — the running
+        image is stale, so readiness must degrade with the lag message."""
+        result = await self._run(
+            applied=("0334_runs_webhook_decay_sweep_index",),
+            image_heads={"0333_trigger_event_findings"},
+        )
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "image revision lag" in result.detail
+        assert "0334_runs_webhook_decay_sweep_index" in result.detail
+        assert "0333_trigger_event_findings" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_db_at_image_head_ok(self) -> None:
+        """DB revision == image head — nothing pending, nothing lagging."""
+        result = await self._run(
+            applied=("0333_trigger_event_findings",),
+            image_heads={"0333_trigger_event_findings"},
+        )
+        assert result.status == "ok"
+        assert result.detail == "migrations up to date"
+
+    @pytest.mark.asyncio
+    async def test_db_behind_image_reports_pending_not_lag(self) -> None:
+        """DB one revision behind is the IMAGE being ahead — it must report the
+        pending migration, never the lag branch (which is for a DB ahead)."""
+        result = await self._run(
+            applied=("0332_eval_mute_policy",),
+            image_heads={"0333_trigger_event_findings"},
+        )
+        assert result.status == "degraded"
+        assert result.detail is not None
+        assert "pending migrations" in result.detail
+        assert "0333_trigger_event_findings" in result.detail
+        assert "image revision lag" not in result.detail
 
 
 def _rwr_payload(**overrides: Any) -> str:

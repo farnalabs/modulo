@@ -339,7 +339,7 @@ function validateBaseUrl(baseUrl: string, t: TranslateFn): string {
 }
 
 function validateMethod(method: string, t: TranslateFn): string {
-  const normalisedMethod = String(method || '').toUpperCase()
+  const normalisedMethod = `${method || ''}`.toUpperCase()
   if (normalisedMethod && !METHOD_OPTIONS.includes(normalisedMethod)) {
     return t('connectors.rest.method_invalid', { method: normalisedMethod, options: METHOD_OPTIONS.join(', ') })
   }
@@ -418,7 +418,7 @@ function validateCredentials(input: ConnectorValidationInput): Record<string, st
 function validateConnectorConfig(input: ConnectorValidationInput): Record<string, string> {
   const { config, credentials, t } = input
   const errors: Record<string, string> = {
-    base_url: validateBaseUrl(String(config.base_url || '').trim(), t),
+    base_url: validateBaseUrl(`${config.base_url || ''}`.trim(), t),
     method: validateMethod(config.method, t),
     timeout_seconds: validateTimeout(config.timeout_seconds, t),
     on_unknown: validateChoice(config.on_unknown, ON_UNKNOWN_OPTIONS, 'connectors.rest.on_unknown_invalid', { options: ON_UNKNOWN_OPTIONS.join(', ') }, t),
@@ -458,10 +458,12 @@ function validate(): boolean {
     baselineAuthMode: baselineAuthMode.value,
     t,
   })
-  Object.keys(errors).forEach(k => { errors[k] = '' })
+  for (const key of Object.keys(errors)) {
+    errors[key] = ''
+  }
   Object.assign(errors, found)
 
-  return !Object.values(errors).some(v => v)
+  return !Object.values(errors).some(Boolean)
 }
 
 // CRITICAL (FAR-466): dirtiness is tracked in two independent channels so the

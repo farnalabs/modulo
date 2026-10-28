@@ -405,6 +405,81 @@ async def test_dispatch_network_failure_then_dead_letters(notifier: Notifier) ->
     assert result.response_code is None
 
 
+async def test_dispatch_masks_secrets_in_response_body(notifier: Notifier, caplog: pytest.LogCaptureFixture) -> None:
+    """SEC-004 regression: secrets in webhook response body must be masked in logs and last_error."""
+    ep = _fake_endpoint()
+    # Response body contains AWS key, GitHub PAT (36+ chars), and a generic token
+    secret_body = (
+        '{"error": "invalid_token", "access_key": "AKIAIOSFODNN7EXAMPLE", '
+        '"github_pat": "ghp_abcdefghijklmnopqrstuvwxyz123456789012", '
+        '"api_token": "sk-1234567890abcdef1234"}'
+    )
+
+    with (
+        patch.object(notifier, "_record_delivery", AsyncMock()) as mock_record,
+        patch.object(notifier, "_increment_dead_letter", AsyncMock()),
+        caplog.at_level(logging.WARNING, logger="modulo.core.notifier"),
+    ):
+        async with respx.mock:
+            respx.post(ep.url).mock(Response(401, text=secret_body))
+            result = await _do_dispatch(notifier, ep, "run_failed")
+
+    assert result.status == "dead_lettered"
+    # last_error should have secrets masked
+    assert result.last_error is not None
+    assert "AKIAIOSFODNN7EXAMPLE" not in result.last_error
+    assert "ghp_abcdefghijklmnopqrstuvwxyz123456789012" not in result.last_error
+    assert "sk-1234567890abcdef1234" not in result.last_error
+    assert "••••••" in result.last_error or "***" in result.last_error or "REDACTED" in result.last_error.upper()
+
+    # Log output should also have secrets masked
+    log_text = caplog.text
+    assert "AKIAIOSFODNN7EXAMPLE" not in log_text
+    assert "ghp_abcdefghijklmnopqrstuvwxyz123456789012" not in log_text
+    assert "sk-1234567890abcdef1234" not in log_text
+
+    # The delivery log call should receive masked last_error
+    record_call = mock_record.call_args
+    assert record_call is not None
+    logged_last_error = record_call.kwargs.get("last_error") or record_call.args[6]
+    assert logged_last_error is not None
+    assert "AKIAIOSFODNN7EXAMPLE" not in logged_last_error
+    assert "ghp_abcdefghijklmnopqrstuvwxyz123456789012" not in logged_last_error
+    assert "sk-1234567890abcdef1234" not in logged_last_error
+
+
+async def test_dispatch_masks_secrets_in_request_error(notifier: Notifier, caplog: pytest.LogCaptureFixture) -> None:
+    """SEC-004 regression: secrets in RequestError (e.g., URL with token) must be masked."""
+    ep = _fake_endpoint()
+    # RequestError with URL containing a token
+    error_with_token = httpx.ConnectError("Connection refused to https://api.example.com?token=sk-1234567890abcdef1234")
+
+    with (
+        patch.object(notifier, "_record_delivery", AsyncMock()) as mock_record,
+        patch.object(notifier, "_increment_dead_letter", AsyncMock()),
+        caplog.at_level(logging.WARNING, logger="modulo.core.notifier"),
+    ):
+        async with respx.mock:
+            respx.post(ep.url).mock(side_effect=error_with_token)
+            result = await _do_dispatch(notifier, ep, "run_failed")
+
+    assert result.status == "dead_lettered"
+    assert result.last_error is not None
+    assert "sk-1234567890abcdef1234" not in result.last_error
+    assert "••••••" in result.last_error or "***" in result.last_error or "REDACTED" in result.last_error.upper()
+
+    # Log output should also have secrets masked
+    log_text = caplog.text
+    assert "sk-1234567890abcdef1234" not in log_text
+
+    # The delivery log call should receive masked last_error
+    record_call = mock_record.call_args
+    assert record_call is not None
+    logged_last_error = record_call.kwargs.get("last_error") or record_call.args[6]
+    assert logged_last_error is not None
+    assert "sk-1234567890abcdef1234" not in logged_last_error
+
+
 async def test_dispatch_retains_payload_when_requested(notifier: Notifier) -> None:
     ep = _fake_endpoint()
     record_kwargs: dict[str, Any] = {}
@@ -856,7 +931,7 @@ async def test_dispatch_event_with_subscriber_sends_notification(notifier: Notif
 
     with (
         patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])) as mock_get,
-        patch.object(notifier, "_dispatch_to_endpoint") as mock_dispatch,
+        patch.object(notifier, "_dispatch_endpoint_pinned") as mock_dispatch,
     ):
         mock_dispatch.return_value = DispatchResult(
             endpoint_id=ep.id,
@@ -880,9 +955,8 @@ async def test_dispatch_event_in_app_failure_does_not_abort_webhooks(notifier: N
 
     with (
         patch.object(notifier, "_session_factory", factory),
-        patch.object(notifier, "_get_client", AsyncMock(return_value=AsyncMock())),
         patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])),
-        patch.object(notifier, "_dispatch_to_endpoint") as mock_dispatch,
+        patch.object(notifier, "_dispatch_endpoint_pinned") as mock_dispatch,
         patch.object(NotificationEventMapper, "create_from_event", AsyncMock(side_effect=RuntimeError("db down"))),
         patch("modulo.core.notifier._log.exception") as mock_log,
     ):
@@ -1133,42 +1207,10 @@ def test_init_raises_on_invalid_fernet_key() -> None:
         Notifier(MagicMock(), "not-a-valid-fernet-key-1234")
 
 
-async def test_get_client_creates_and_reuses(notifier: Notifier) -> None:
-    first_client = MagicMock()
-    first_client.is_closed = False
-    with patch("modulo.core.notifier.httpx.AsyncClient", return_value=first_client) as client_cls:
-        first = await notifier._get_client()
-        second = await notifier._get_client()
-    assert first is second is first_client
-    client_cls.assert_called_once()
-
-
-async def test_get_client_recreates_closed_client(notifier: Notifier) -> None:
-    closed = MagicMock()
-    closed.is_closed = True
-    notifier._http_client = closed
-    fresh = MagicMock()
-    fresh.is_closed = False
-
-    with patch("modulo.core.notifier.httpx.AsyncClient", return_value=fresh) as client_cls:
-        got = await notifier._get_client()
-
-    assert got is fresh
-    client_cls.assert_called_once()
-
-
-async def test_close_noop_when_client_never_created() -> None:
+def test_notifier_has_no_unpinned_client_lifecycle() -> None:
+    """Notifier must not expose a raw-client path alongside pinned dispatch."""
     notifier_instance = Notifier(MagicMock(), _KEY)
-    await notifier_instance.close()
-    # No client was ever created, so close must leave the client slot untouched.
-    assert notifier_instance._http_client is None
 
-
-async def test_close_acloses_http_client() -> None:
-    notifier_instance = Notifier(MagicMock(), _KEY)
-    client = AsyncMock()
-    client.is_closed = False
-    notifier_instance._http_client = client
-    await notifier_instance.close()
-    client.aclose.assert_awaited_once()
-    assert notifier_instance._http_client is None
+    assert not hasattr(notifier_instance, "_get_client")
+    assert not hasattr(notifier_instance, "_http_client")
+    assert not hasattr(notifier_instance, "close")

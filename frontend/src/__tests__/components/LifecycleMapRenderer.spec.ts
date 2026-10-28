@@ -343,6 +343,30 @@ describe('LifecycleMapRenderer', () => {
     expect(emitted[0][0]).toEqual({ 'stage-1': { x: 100 + NODE_NUDGE_STEP, y: 200 } })
   })
 
+  it('resolves no journeys when the stage id is not a string (FAR-366)', () => {
+    const wrapper = mountRenderer({ mapData: makeMap(), journeys: [makeJourney()] })
+    const setupState = (wrapper.vm as unknown as {
+      $: { setupState: { nodeAllJourneys: (stageId: unknown) => JourneySummary[] } }
+    }).$.setupState
+
+    expect(setupState.nodeAllJourneys(undefined)).toEqual([])
+    expect(setupState.nodeAllJourneys(42)).toEqual([])
+    expect(setupState.nodeAllJourneys('stage-1')).toHaveLength(1)
+  })
+
+  it('ignores a nudge targeting a node that is not on the map (FAR-366)', () => {
+    const wrapper = mountRenderer({ mapData: makeMap() })
+    const setupState = (wrapper.vm as unknown as {
+      $: { setupState: { nudgeNode: (nodeProps: { id: string; data: Record<string, unknown> }, dx: number, dy: number) => void } }
+    }).$.setupState
+
+    setupState.nudgeNode({ id: 'missing-stage', data: {} }, 1, 0)
+
+    expect(wrapper.emitted('positions-changed')).toBeFalsy()
+    const nodes = wrapper.findComponent({ name: 'VueFlowStub' }).props('nodes') as Array<{ id: string; position: { x: number; y: number } }>
+    expect(nodes.find((n) => n.id === 'stage-1')!.position).toEqual({ x: 100, y: 200 })
+  })
+
   it('uses savedPositions prop over stage x/y when available (FAR-829)', () => {
     const wrapper = mountRenderer({
       mapData: makeMap({ stages: [makeStage({ x: 100, y: 200 })] }),

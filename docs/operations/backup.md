@@ -249,6 +249,13 @@ dump**:
 - a dump taken by the **old** release before deploying can only be restored by
   the old release, so roll the code back first and restore afterwards.
 
+**Exception for an irreversible data-purge migration:** do not boot or release
+with an image that contains the purge after restoring its pre-purge database.
+Stop or hold that image, restore the database, roll the application image back
+to one built before the purge migration, and only then boot the application.
+The startup and release migration paths can see the restored pre-purge revision
+and apply the purge again if the purge image starts first.
+
 ### What `alembic downgrade -1` does, and what it does not
 
 `alembic downgrade -1` moves the schema back exactly one revision. The nightly

@@ -531,7 +531,7 @@ function toggleToolExpand(id: string) {
 function formatToolDetails(tc: { tool_call_id: string; tool_name: string; success: boolean; result?: unknown; error?: string }): string {
   const lines: string[] = [`Tool: ${tc.tool_name}`, `ID: ${tc.tool_call_id}`, `Status: ${tc.success ? 'Completed' : 'Failed'}`, '']
   if (tc.result !== undefined) {
-    const resultStr = typeof tc.result === 'object' ? JSON.stringify(tc.result, null, 2) : String(tc.result)
+    const resultStr = typeof tc.result === 'object' ? JSON.stringify(tc.result, null, 2) : `${tc.result}`
     lines.push('Result:', resultStr)
   }
   if (tc.error) {
@@ -788,6 +788,12 @@ function renderMarkdown(text: string): string {
 .assistant-messages {
   scroll-behavior: smooth;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-messages {
+    scroll-behavior: auto;
+  }
+}
 .assistant-msg {
   @apply flex gap-2 text-sm;
 }
@@ -831,7 +837,7 @@ function renderMarkdown(text: string): string {
   @apply flex justify-end pt-1;
 }
 .assistant-copy-btn {
-  @apply flex items-center justify-center rounded p-1 transition-colors;
+  @apply flex items-center justify-center rounded p-1 transition-colors motion-reduce:transition-none;
   color: hsl(var(--muted-foreground));
 }
 .assistant-copy-btn:hover {
@@ -846,7 +852,12 @@ function renderMarkdown(text: string): string {
   height: 6px;
   border-radius: 50%;
   background-color: hsl(var(--muted-foreground));
-  animation: stream-bounce 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .streaming-dot {
+    animation: stream-bounce 1.4s ease-in-out infinite;
+  }
 }
 .streaming-dot:nth-child(2) {
   animation-delay: 0.2s;
@@ -877,10 +888,7 @@ function renderMarkdown(text: string): string {
 
 .assistant-input-highlight {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   padding: 8px 12px;
   font-size: 0.875rem;
   line-height: 1.4;

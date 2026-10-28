@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
-const { sampleResponse, mockGet, mockPatch, mockPost } = vi.hoisted(() => {
+const { sampleResponse, mockGet, mockPatch, mockPost, loadingState } = vi.hoisted(() => {
   const makeItem = (id: string, feedback_status: string, producing_node_id: string) => ({
     id,
     run_id: 'run-1',
@@ -36,6 +36,7 @@ const { sampleResponse, mockGet, mockPatch, mockPost } = vi.hoisted(() => {
     mockGet: vi.fn(),
     mockPatch: vi.fn(),
     mockPost: vi.fn(),
+    loadingState: { value: false },
   }
 })
 
@@ -67,7 +68,7 @@ vi.mock('../composables/useDataFetch', async () => {
         ;(data as { value: unknown }).value = result.data ?? options?.initialValue
       }
       void load()
-      return { data, loading: ref(false), error: ref(''), load }
+      return { data, loading: ref(loadingState.value), error: ref(''), load }
     },
   }
 })
@@ -100,6 +101,7 @@ describe('EvalProposalsQueueView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    loadingState.value = false
     mockGet.mockResolvedValue({ data: sampleResponse, error: undefined })
     mockPatch.mockResolvedValue({ data: {}, error: undefined })
     mockPost.mockResolvedValue({ data: {}, error: undefined })
@@ -375,5 +377,54 @@ describe('EvalProposalsQueueView', () => {
     expect(after).not.toBe(before)
     expect(after.find((x) => x.id === 'rec-2')?.feedback_status).toBe('dismissed')
     expect(after.find((x) => x.id === 'rec-2')).not.toBe(before.find((x) => x.id === 'rec-2'))
+  })
+
+  it('renders an em-dash fallback for an empty rejection reason (STATE-6)', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    const card = wrapper.find('[data-testid="proposal-card-rec-1"]')
+    // The fixtures carry rejection_reason: '' — the field must stay mounted with
+    // its label and show a placeholder rather than vanishing or rendering blank.
+    expect(card.text()).toContain('views.EvalProposalsQueueView.gap_description')
+    expect(card.findAll('p')[1].text()).toBe('—')
+  })
+
+  it('renders the rejection reason when it is present (STATE-6)', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        ...sampleResponse,
+        items: sampleResponse.items.map((item) => ({ ...item, rejection_reason: 'Missing refusal check' })),
+      },
+      error: undefined,
+    })
+
+    const wrapper = mountView()
+    await flush()
+
+    expect(wrapper.find('[data-testid="proposal-card-rec-1"]').findAll('p')[1].text()).toBe('Missing refusal check')
+  })
+
+  it('marks the needs-human-review flag with the AA-safe warning token (A11Y-5)', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    const marker = wrapper
+      .find('[data-testid="proposal-card-rec-1"]')
+      .findAll('span')
+      .find((span) => span.text() === 'views.EvalProposalsQueueView.needs_human_review')
+
+    // text-amber-500 is a fill hue (~2.1:1 on white); only the -text token clears AA.
+    expect(marker?.classes()).toContain('text-warning-text')
+    expect(marker?.classes()).not.toContain('text-amber-500')
+  })
+
+  it('exposes the loading skeleton as busy for assistive tech (STATE-3)', async () => {
+    loadingState.value = true
+
+    const wrapper = mountView()
+    await nextTick()
+
+    expect(wrapper.find('[aria-busy="true"]').exists()).toBe(true)
   })
 })

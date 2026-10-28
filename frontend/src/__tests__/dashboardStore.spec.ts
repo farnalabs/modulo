@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
+import { clearAllRegistrations, getHandlers } from '../stores/syncRegistry'
 
 const mockGet = vi.hoisted(() => vi.fn())
 vi.mock('../lib/api/client', () => ({
@@ -63,8 +64,58 @@ describe('useDashboardStore', () => {
   }
 
   beforeEach(() => {
+    clearAllRegistrations()
     setActivePinia(createPinia())
     vi.clearAllMocks()
+  })
+
+  it('fetchSummary loads all-time data and computes trend spend', async () => {
+    mockGet.mockResolvedValue({ data: { ...baseSummary, trend: [{ date: '2026-09-01', run_count: 1, eval_pass_rate: null, token_spend_usd: 12.5, avg_time_to_approve_ms: null, rejection_rate: null }] }, error: undefined })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    await store.fetchSummary()
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/dashboard/summary', { params: { query: {} } })
+    expect(store.summary?.total_runs).toBe(142)
+    expect(store.totalSpend).toBe(12.5)
+    expect(store.loading).toBe(false)
+    expect(store.summaryError).toBeNull()
+  })
+
+  it('fetchSummary sends the selected period and reports invalid payloads', async () => {
+    mockGet.mockResolvedValue({ data: { total_runs: 1 }, error: undefined })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    await store.fetchSummary(30)
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/dashboard/summary', { params: { query: { days: 30 } } })
+    expect(store.summary).toBeNull()
+    expect(store.summaryError).toBe('Received invalid dashboard data from server.')
+    expect(store.loading).toBe(false)
+  })
+
+  it('fetchSummary reports API errors and ignores overlapping requests', async () => {
+    let resolveRequest: ((value: unknown) => void) | undefined
+    mockGet.mockImplementation(() => new Promise((resolve) => { resolveRequest = resolve }))
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    const first = store.fetchSummary(7)
+    await Promise.resolve()
+    const second = store.fetchSummary(14)
+    resolveRequest?.({ data: undefined, error: { detail: 'summary unavailable' } })
+
+    await first
+    await second
+
+    expect(mockGet).toHaveBeenCalledTimes(1)
+    expect(store.summaryError).toBe('summary unavailable')
+    expect(store.loading).toBe(false)
   })
 
   it('fetchPeriodMetrics merges only the period block without touching the rest of the summary', async () => {
@@ -116,6 +167,108 @@ describe('useDashboardStore', () => {
     expect(store.summary?.total_runs).toBe(142)
     expect(store.periodRefreshing).toBe(false)
     await flushPromises()
+  })
+
+  it('fetchSummary formats thrown request errors and clears loading state', async () => {
+    mockGet.mockRejectedValueOnce(new Error('summary network down'))
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    await store.fetchSummary(7)
+
+    expect(store.summaryError).toBe('summary network down')
+    expect(store.loading).toBe(false)
+  })
+
+  it('fetchPeriodMetrics reports thrown request errors without wiping the summary', async () => {
+    mockGet.mockRejectedValueOnce(new Error('period network down'))
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+    store.summary = { ...baseSummary }
+
+    await store.fetchPeriodMetrics(7)
+
+    expect(store.summary?.total_runs).toBe(142)
+    expect(store.summaryError).toBe('period network down')
+    expect(store.periodRefreshing).toBe(false)
+  })
+
+  it('fetchPeriodMetrics reports invalid data and preserves the selected summary', async () => {
+    mockGet.mockResolvedValue({ data: { ...baseSummary, recent_runs: 'invalid', period: { days: 7 } }, error: undefined })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+    store.summary = { ...baseSummary }
+
+    await store.fetchPeriodMetrics(7)
+
+    expect(store.summary?.period).toBeUndefined()
+    expect(store.summaryError).toBe('Received invalid dashboard data from server.')
+    expect(store.periodRefreshing).toBe(false)
+  })
+
+  it('fetchTrends validates days before making an API request', async () => {
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    await store.fetchTrends(0)
+
+    expect(mockGet).not.toHaveBeenCalled()
+    expect(store.trendsError).toBe('Invalid days parameter: must be a positive integer.')
+    expect(store.trendsLoading).toBe(false)
+  })
+
+  it('fetchTrends reports API and thrown errors and clears loading state', async () => {
+    mockGet.mockResolvedValueOnce({ data: undefined, error: { detail: 'trend unavailable' } })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+
+    await store.fetchTrends(7)
+    expect(store.trendsError).toBe('trend unavailable')
+    expect(store.trendsLoading).toBe(false)
+
+    mockGet.mockRejectedValueOnce(new Error('network down'))
+    await store.fetchTrends(7)
+    expect(store.trendsError).toBe('network down')
+    expect(store.trendsLoading).toBe(false)
+  })
+
+  it('refreshes once for run and pipeline sync events and disposes handlers', async () => {
+    mockGet.mockResolvedValue({ data: { ...baseSummary }, error: undefined })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+    await store.fetchSummary(7)
+    const callsBefore = mockGet.mock.calls.length
+
+    const event = { type: 'run' as const, id: 'run-1', action: 'updated' as const, version: 1, org_id: 'org-1' }
+    const runHandlers = getHandlers('run')
+    const pipelineHandlers = getHandlers('pipeline')
+    for (const handler of runHandlers) handler(event)
+    for (const handler of runHandlers) handler(event)
+    for (const handler of pipelineHandlers) handler({ ...event, type: 'pipeline', id: 'pipeline-1' })
+    await vi.waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterThan(callsBefore))
+    await vi.waitFor(() => expect(store.loading).toBe(false))
+    expect(mockGet.mock.calls.length).toBe(callsBefore + 1)
+    expect(mockGet).toHaveBeenLastCalledWith('/api/v1/dashboard/summary', { params: { query: { days: 7 } } })
+
+    store.disposeHandlers()
+    expect(getHandlers('run').size).toBe(0)
+    expect(getHandlers('pipeline').size).toBe(0)
+  })
+
+  it('uses period spend instead of summing the trend when available', async () => {
+    mockGet.mockResolvedValue({ data: { ...baseSummary, trend: [{ date: '2026-09-01', run_count: 1, eval_pass_rate: null, token_spend_usd: 12.5, avg_time_to_approve_ms: null, rejection_rate: null }], period }, error: undefined })
+    const { Host, getStore } = createStoreHost()
+    mount(Host)
+    const store = getStore()
+    await store.fetchSummary(7)
+
+    expect(store.totalSpend).toBe(100.25)
   })
 
   it('fetchTrends stores hitl_volume and rejection_trend from the response', async () => {

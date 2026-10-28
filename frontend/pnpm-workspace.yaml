@@ -23,8 +23,18 @@ overrides:
   "@redocly/openapi-core>js-yaml": "4.3.2"
   "postcss>nanoid": "^6.0.0"
   rollup: "4.65.0"
-  "@tanstack/query-core": "5.104.5"
-  "@tanstack/vue-query": "5.104.5"
+  "@tanstack/query-core": "5.105.0"
+  "@tanstack/vue-query": "5.105.0"
+  # GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404): zod <4.6.6 affected. Scoped to its
+  # only consumer (mutation-server-protocol, dev-only Stryker toolchain) and
+  # capped to the 4.x major. Remove once mutation-server-protocol ships zod
+  # >=4.6.6.
+  "mutation-server-protocol>zod": ">=4.6.6 <5"
+  # GHSA-333x-w4r6-6crp / GHSA-w74x-v6f9-j3xg / GHSA-wjr9-j795-jxcr /
+  # GHSA-xhq7-xmqj-769h: fast-uri <3.1.9 affected. Scoped to ajv (dev-only
+  # Stryker toolchain) and capped to the ^3 major ajv declares; the fix floor
+  # is 3.1.9. Remove once ajv ships a patched fast-uri.
+  "ajv>fast-uri": ">=3.1.9 <4"
 minimumReleaseAgeExclude:
   - '@rollup/rollup-android-arm-eabi@4.63.0'
   - '@rollup/rollup-android-arm64@4.63.0'
@@ -236,3 +246,14 @@ minimumReleaseAgeExclude:
   - '@stryker-mutator/instrumenter@10.1.1'
   - '@stryker-mutator/util@10.1.1'
   - '@stryker-mutator/vitest-runner@10.1.1'
+  - '@tanstack/query-core@5.105.0'
+  - '@tanstack/vue-query@5.105.0'
+  - 'eslint-plugin-vue@10.12.0'
+  - '@lucide/vue@1.62.0'
+  - '@sentry/browser@10.77.1'
+  - '@sentry/browser-utils@10.77.1'
+  - '@sentry/core@10.77.1'
+  - '@sentry/feedback@10.77.1'
+  - '@sentry/replay@10.77.1'
+  - '@sentry/replay-canvas@10.77.1'
+  - '@sentry/vue@10.77.1'

@@ -352,11 +352,20 @@ class TestSweepEmitsFar714ClassSignal:
 
     def test_the_reconcile_chokepoint_shares_the_same_constant(self) -> None:
         """The chokepoint's zero-node arm reads the SAME constant, so the two
-        writers cannot drift into separate groups."""
+        writers cannot drift into separate groups.
+
+        The chokepoint delegates its error ingestion to
+        ``_ingest_zombie_error``; the guard follows that call so the constant
+        is still asserted to be on the chokepoint's path rather than in the
+        (now extracted) function body.
+        """
         import inspect
 
-        source = inspect.getsource(ch._fail_nodeless_run)
-        assert "_NODELESS_ZOMBIE_STABLE_MESSAGE" in source
+        chokepoint = inspect.getsource(ch._fail_nodeless_run)
+        assert "_ingest_zombie_error(" in chokepoint
+
+        ingest = inspect.getsource(ch._ingest_zombie_error)
+        assert "_NODELESS_ZOMBIE_STABLE_MESSAGE" in ingest
 
 
 class TestStaleRunRecoverySweepWiring:

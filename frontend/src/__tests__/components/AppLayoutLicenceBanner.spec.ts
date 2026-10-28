@@ -77,8 +77,9 @@ function tokenFor(payload: Record<string, unknown>): string {
 
 const ADMIN_TOKEN = tokenFor({ sub: 'admin@modulo.run', org_role: 'admin', is_system_admin: false })
 const VIEWER_TOKEN = tokenFor({ sub: 'viewer@modulo.run', org_role: 'viewer', is_system_admin: false })
-// A system admin whose ORG role is below admin cannot read the licence status
-// (`org.license.manage` is an admin-role permission), so no notice for them.
+// A system admin whose ORG role is below admin still holds `org.license.manage`
+// (the permission list resolves a system admin at the admin floor) and the
+// licence read is system-OR-org admin, so they are in the notice's audience.
 const SYSTEM_ADMIN_OPERATOR_TOKEN = tokenFor({ sub: 'sys@modulo.run', org_role: 'operator', is_system_admin: true })
 
 const RENEWAL_DUE = {
@@ -119,12 +120,22 @@ function mockMatchMedia(matches: boolean) {
   }))
 }
 
-function resolveLicenceWith(status: Record<string, unknown>) {
-  ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((path: string) =>
-    path === '/api/v1/admin/license'
-      ? Promise.resolve({ data: status, error: undefined })
-      : Promise.resolve({ data: null, error: undefined }),
-  )
+// The shell's licence audience is derived from the caller's server-resolved
+// permission list (`GET /api/v1/auth/permissions`) — the same registry the
+// licence endpoints enforce — so every shell mount needs that read answered.
+function resolveLicenceWith(
+  status: Record<string, unknown>,
+  permissions: string[] = ['org.license.manage'],
+) {
+  ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((path: string) => {
+    if (path === '/api/v1/admin/license') {
+      return Promise.resolve({ data: status, error: undefined })
+    }
+    if (path === '/api/v1/auth/permissions') {
+      return Promise.resolve({ data: { permissions }, error: undefined })
+    }
+    return Promise.resolve({ data: null, error: undefined })
+  })
 }
 
 // The shell's chrome is not under test here; keep only the renewal notice
@@ -217,8 +228,9 @@ describe('AppLayout licence renewal notice', () => {
     expect(licenceGets()).toBe(1)
   })
 
-  it('does not read the licence status nor show the notice to a non-admin', async () => {
+  it('does not read the licence status nor show the notice to a principal without org.license.manage', async () => {
     vi.mocked(getAccessToken).mockReturnValue(VIEWER_TOKEN)
+    resolveLicenceWith(RENEWAL_DUE, [])
 
     const wrapper = await mountShell()
 
@@ -227,13 +239,18 @@ describe('AppLayout licence renewal notice', () => {
     expect(licenceGets()).toBe(0)
   })
 
-  it('treats a system admin without the org admin role as out of scope for licence copy', async () => {
+  it('shows the notice to a system admin whose org role is below admin, because they hold the permission', async () => {
+    // FAR-2104: the audience is the permission the endpoints enforce, not the
+    // org role. `GET /api/v1/auth/permissions` resolves a system admin at the
+    // admin floor, and `GET /api/v1/admin/license` is system-OR-org admin — so
+    // this principal can read the status and act on it (system install / org
+    // PUT), and therefore sees the warning.
     vi.mocked(getAccessToken).mockReturnValue(SYSTEM_ADMIN_OPERATOR_TOKEN)
 
     const wrapper = await mountShell()
 
-    expect(wrapper.find('[data-testid="licence-renewal-banner"]').exists()).toBe(false)
-    expect(licenceGets()).toBe(0)
+    expect(wrapper.find('[data-testid="licence-renewal-banner"]').exists()).toBe(true)
+    expect(licenceGets()).toBe(1)
   })
 
   it('takes an administrator from another route to the licence key input', async () => {
@@ -287,6 +304,30 @@ describe('AppLayout licence renewal notice', () => {
     })
     wrapper.unmount()
     input.remove()
+  })
+
+  it('stops polling after the bounded number of frames when the input never mounts', async () => {
+    const original = window.requestAnimationFrame
+    // Resolve frames immediately so the bounded poll can exhaust without
+    // waiting on jsdom's ~16ms rAF cadence.
+    const frame = vi.fn((callback: FrameRequestCallback) => {
+      callback(0)
+      return 0
+    })
+    ;(window as unknown as { requestAnimationFrame: unknown }).requestAnimationFrame = frame
+
+    try {
+      const wrapper = await mountShell()
+      await wrapper.get('[data-testid="licence-renewal-install-action"]').trigger('click')
+
+      await vi.waitFor(() => {
+        expect(frame).toHaveBeenCalledTimes(119)
+      })
+      expect(document.querySelector('[data-testid="license-key-input"]')).toBeNull()
+      wrapper.unmount()
+    } finally {
+      window.requestAnimationFrame = original
+    }
   })
 
   it('falls back to a timer when requestAnimationFrame is unavailable', async () => {

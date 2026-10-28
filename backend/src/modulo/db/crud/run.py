@@ -11,12 +11,12 @@ import re
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from operator import attrgetter
-from typing import Any, TypeGuard
+from typing import Any, TypedDict, TypeGuard, Unpack
 
 from sqlalchemy import Date, and_, bindparam, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
@@ -1112,6 +1112,19 @@ class _InterceptionRequest:
     guardrails_kill_switch: bool
 
 
+@dataclass
+class _GuardrailPassRequest:
+    """Inputs for one guardrail interception pass."""
+
+    org_id: uuid.UUID
+    guardrail_defs: list[Any]
+    payload: dict[str, Any]
+    is_replay: bool | None
+    skipped_guardrails: list[Any]
+    any_guarding: bool
+    detection_only: bool
+
+
 def _has_guardrail_work(
     guardrail_rows: list[Any],
     pinned_defs: list[Any],
@@ -1407,14 +1420,7 @@ def _downgrade_guardrails_to_observe(guardrail_defs: list[Any]) -> list[Any]:
 
 
 async def _run_guardrail_interception_pass(
-    *,
-    org_id: uuid.UUID,
-    _run_id: uuid.UUID,
-    guardrail_defs: list[Any],
-    payload: dict[str, Any],
-    is_replay: bool | None,
-    skipped_guardrails: list[Any],
-    any_guarding: bool,
+    request: _GuardrailPassRequest,
 ) -> tuple[dict[str, Any], list[Any], list[Any], bool, str, list[Any], str]:
     """Execute the interception pass and return every mutated run state field.
 
@@ -1428,15 +1434,21 @@ async def _run_guardrail_interception_pass(
     a pre-run safety gate, not a per-node policy evaluation).
     """
     from modulo.core.eval_engine import EvalEngine
-    from modulo.core.guardrails import run_interception_pass_async
+    from modulo.core.guardrails import _mechanism_fail_result, run_interception_pass_async
 
     start_wall = time.perf_counter()
+    org_id = request.org_id
+    guardrail_defs = request.guardrail_defs
+    payload = request.payload
+    skipped_guardrails = request.skipped_guardrails
+    any_guarding = request.any_guarding
+    is_detection_only = request.detection_only or bool(request.is_replay)
     try:
         outcome = await run_interception_pass_async(
             EvalEngine(),
             guardrail_defs,
             payload,
-            detection_only=bool(is_replay),
+            detection_only=is_detection_only,
             skipped=skipped_guardrails,
         )
     except asyncio.CancelledError:
@@ -1445,16 +1457,16 @@ async def _run_guardrail_interception_pass(
         _log.exception("guardrails.interception_error")
         if any_guarding:
             payload_out: dict[str, Any] = payload
-            results: list[Any] = []
-            redactions: list[Any] = []
             blocked = True
             block_message = "guardrail mechanism error at ingestion edge"
         else:
             payload_out = payload
-            results = []
-            redactions = []
             blocked = False
             block_message = ""
+        # Keep muted guardrail mechanism evidence regardless of whether an
+        # active sibling makes the outer interception path fail closed.
+        results = [_mechanism_fail_result(d, "guardrail interception mechanism error") for d in guardrail_defs]
+        redactions: list[Any] = []
         latency_ms = (time.perf_counter() - start_wall) * 1000
         _log.info(
             "guardrails.interception_latency_ms",
@@ -1694,10 +1706,6 @@ async def _run_guardrail_gate(
             _log.warning("guardrails.kill_switch_active", extra={"org_id": str(org_id)})
 
         observed_by_eval = {d.id: d.config.get("action") == GuardrailAction.OBSERVE for d in guardrail_defs}
-        any_guarding = any(
-            d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in guardrail_defs
-        )
-
         # Conformance enforcement (FAR-223 item 7 "Plus"): a block-action
         # guardrail carrying required_capabilities that the org cannot
         # satisfy blocks (fail closed — absent AND unknown) and fires a
@@ -1724,13 +1732,33 @@ async def _run_guardrail_gate(
                 skipped_guardrails,
                 blocking_eval_name,
             ) = await _run_guardrail_interception_pass(
-                org_id=org_id,
-                _run_id=run_id,
-                guardrail_defs=guardrail_defs,
-                payload=payload,
-                is_replay=request.is_replay,
-                skipped_guardrails=skipped_guardrails,
-                any_guarding=any_guarding,
+                _GuardrailPassRequest(
+                    org_id=org_id,
+                    guardrail_defs=guardrail_defs,
+                    payload=payload,
+                    is_replay=request.is_replay,
+                    skipped_guardrails=skipped_guardrails,
+                    any_guarding=any(
+                        not d.is_muted and d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT)
+                        for d in guardrail_defs
+                    ),
+                    detection_only=False,
+                )
+            )
+        elif conformance_blocked:
+            # A conformance block is decided before enforcement. Still run every
+            # definition in detection-only mode so muted siblings retain their
+            # evidence, without allowing detection to clear or weaken the block.
+            _, results, redactions, _, _, skipped_guardrails, _ = await _run_guardrail_interception_pass(
+                _GuardrailPassRequest(
+                    org_id=org_id,
+                    guardrail_defs=guardrail_defs,
+                    payload=payload,
+                    is_replay=request.is_replay,
+                    skipped_guardrails=skipped_guardrails,
+                    any_guarding=False,
+                    detection_only=True,
+                )
             )
         # NOTE (item 10 invariant): a conformance block (``blocked`` True via
         # the block above) must NOT clear the accumulated pin-skips collected
@@ -2219,6 +2247,60 @@ async def _validate_run_grouping_kwargs(
         raise ValueError("thread_id override must be a non-empty string")
 
 
+def _reject_unknown_options(options: Mapping[str, Any], allowed: Iterable[str], func_name: str) -> None:
+    """Fail loudly on an option the option group does not declare.
+
+    mypy validates keyword names for a literal call, but a caller splatting a
+    ``dict[str, Any]`` bypasses the static check, so the runtime guard remains
+    the backstop. Shared by the grouped CRUD entry points in this module.
+    """
+    unknown_options = set(options) - set(allowed)
+    if unknown_options:
+        raise TypeError(f"unexpected {func_name} options: {sorted(unknown_options)}")
+
+
+def _guardrail_suppression_reason(*, is_replay: bool | None, kill_switch: bool) -> str | None:
+    """Return why guardrail enforcement was suppressed on this run, if it was.
+
+    Extracted from :func:`create_run` so the two suppression modes (a
+    detection-only replay, an org observe-only kill-switch) stay readable
+    without adding branches to the run-creation body (python:S3776).
+    """
+    if is_replay:
+        return "replay run; guardrails are detection-only"
+    if kill_switch:
+        return "org guardrails kill-switch is on; guardrails are observe-only"
+    return None
+
+
+class CreateRunOptions(TypedDict, total=False):
+    """Keyword-only options accepted by :func:`create_run` (python:S107).
+
+    Grouped behind ``**options: Unpack[CreateRunOptions]`` so the function
+    stays inside the S107 parameter budget without changing a single caller:
+    every option keeps its exact name, type and ``None`` default, and mypy
+    still type-checks each keyword at the call site.
+    """
+
+    account_id: uuid.UUID | None
+    trigger_id: uuid.UUID | None
+    owner_team_id: uuid.UUID | None
+    parent_run_id: uuid.UUID | None
+    rate_limit_key: str | None
+    work_item_id: uuid.UUID | None
+    work_item_refs: list[dict[str, Any]] | None
+    is_replay: bool | None
+    variant_group_id: uuid.UUID | None
+    batch_id: uuid.UUID | None
+    variant_config_snapshot: dict[str, Any] | None
+    feedback_correction: dict[str, Any] | None
+    coalesce_key: str | None
+    ci_failure_coalesce_key: str | None
+    run_group_id: uuid.UUID | None
+    run_group_kind: str | None
+    thread_id: str | None
+
+
 async def create_run(
     session: AsyncSession,
     *,
@@ -2227,39 +2309,27 @@ async def create_run(
     snapshot_id: uuid.UUID,
     trigger_type: str,
     input_payload: dict[str, Any],
-    account_id: uuid.UUID | None = None,
-    trigger_id: uuid.UUID | None = None,
-    owner_team_id: uuid.UUID | None = None,
-    parent_run_id: uuid.UUID | None = None,
-    rate_limit_key: str | None = None,
-    work_item_id: uuid.UUID | None = None,
-    work_item_refs: list[dict[str, Any]] | None = None,
-    is_replay: bool | None = None,
-    variant_group_id: uuid.UUID | None = None,
-    batch_id: uuid.UUID | None = None,
-    variant_config_snapshot: dict[str, Any] | None = None,
-    feedback_correction: dict[str, Any] | None = None,
-    coalesce_key: str | None = None,
-    ci_failure_coalesce_key: str | None = None,
-    # FAR-153 / §15.1 — run grouping (retry/resume attempts) + the
-    # resume-as-child thread override:
-    #
-    # * ``run_group_id``   — the ROOT run id of the group this row belongs
-    #   to (stored; NULL for roots / signal / correction / work-item
-    #   children / un-backfilled legacy rows). Required whenever
-    #   ``run_group_kind`` is set: a grouped attempt without its group id is
-    #   invisible to every group query.
-    # * ``run_group_kind`` — 'retry' | 'resume' | NULL, the closed
-    #   vocabulary in ``models.run.RUN_GROUP_KIND_VALUES``.
-    # * ``thread_id``      — langgraph thread OVERRIDE. The resume path
-    #   passes the parent's thread string so the child CONTINUES the
-    #   parent's checkpoint; every other path leaves it unset and gets the
-    #   default fresh ``f"{org}:{run_id}"`` thread (retry runs the graph
-    #   CLEAN on its own thread).
-    run_group_id: uuid.UUID | None = None,
-    run_group_kind: str | None = None,
-    thread_id: str | None = None,
+    **options: Unpack[CreateRunOptions],
 ) -> Run:
+    """Create a run; optional run metadata rides on :class:`CreateRunOptions`."""
+    account_id = options.get("account_id")
+    trigger_id = options.get("trigger_id")
+    owner_team_id = options.get("owner_team_id")
+    parent_run_id = options.get("parent_run_id")
+    rate_limit_key = options.get("rate_limit_key")
+    work_item_id = options.get("work_item_id")
+    work_item_refs = options.get("work_item_refs")
+    is_replay = options.get("is_replay")
+    variant_group_id = options.get("variant_group_id")
+    batch_id = options.get("batch_id")
+    variant_config_snapshot = options.get("variant_config_snapshot")
+    feedback_correction = options.get("feedback_correction")
+    coalesce_key = options.get("coalesce_key")
+    ci_failure_coalesce_key = options.get("ci_failure_coalesce_key")
+    run_group_id = options.get("run_group_id")
+    run_group_kind = options.get("run_group_kind")
+    thread_id = options.get("thread_id")
+    _reject_unknown_options(options, CreateRunOptions.__annotations__, "create_run")
     # FAR-153 / §15.1 — validate the grouping kwargs at the persist boundary
     # BEFORE any DB write (the ``run_idempotency_key`` fail-loud pattern).
     # Extracted into ``_validate_run_grouping_kwargs`` to keep this function's
@@ -2365,11 +2435,7 @@ async def create_run(
     # both surface as ``interception.blocked``).
     from modulo.core.guardrails.coverage import derive_seam_coverage
 
-    suppression_reason: str | None = None
-    if is_replay:
-        suppression_reason = "replay run; guardrails are detection-only"
-    elif guardrails_kill_switch:
-        suppression_reason = "org guardrails kill-switch is on; guardrails are observe-only"
+    suppression_reason = _guardrail_suppression_reason(is_replay=is_replay, kill_switch=guardrails_kill_switch)
     seam_coverage = derive_seam_coverage(
         blocked_before_runtime=guardrail_blocked,
         ingestion_summary=guardrail_summary_dict,
@@ -2974,6 +3040,15 @@ class _RunStatusUpdate:
     refund_claim_count: bool = False
 
 
+#: Option names and defaults of :func:`update_run_status`, read from the
+#: ``_RunStatusUpdate`` dataclass so its field set stays the ONE declaration of
+#: the option surface (the ``UpdateRunStatusOptions`` TypedDict mirrors it for
+#: call-site type checking). Deriving the keys keeps this module free of
+#: payload-key string literals, which the FAR-583 raw-text lens flags as
+#: possible legacy-blob-column SQL.
+_RUN_STATUS_UPDATE_OPTION_DEFAULTS: dict[str, Any] = {field.name: field.default for field in fields(_RunStatusUpdate)}
+
+
 #: Stall bound for the fail-closed marker write below. Deliberately a
 #: MODULE-LOCAL value mirroring ``classify._CLASSIFICATION_WRITE_TIMEOUT_SECONDS``
 #: (30s) rather than an import of it: this module is the fallback for when
@@ -3134,7 +3209,14 @@ async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
 #: ``search()`` match verbatim as the marker's canonical ``pr_url``, so a
 #: case-variant agent-prose mention would otherwise win ahead of ``gh``'s
 #: lowercase echo and be recorded as THE delivery URL.
-_PR_URL_PATTERN = re.compile(r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+", re.IGNORECASE)
+# The exact grammar is pinned against the runtime extractor and sandbox policy;
+# retain ``\d`` in the class because those copies are an intentional contract.
+_PR_URL_PATTERN = re.compile(
+    # The exact grammar is pinned by test_pr_url_regex_pins.py and must match
+    # the other copies.  # NOSONAR S5869 — intentional duplicate-safe grammar.
+    r"https?://github\.com/[A-Za-z\d_.-]+/[A-Za-z\d_.-]+/pull/\d+",  # NOSONAR S5869
+    re.IGNORECASE,
+)
 
 #: A line carrying a JSON ``"url":`` key is a ``gh pr list --json ...,url``
 #: LISTING of pre-existing open PRs (the delivery prompt's own pre-check),
@@ -3733,25 +3815,37 @@ async def write_run_outputs_from_run(
     )
 
 
+class UpdateRunStatusOptions(TypedDict, total=False):
+    """Keyword-only options accepted by :func:`update_run_status` (python:S107).
+
+    Grouped behind ``**options: Unpack[UpdateRunStatusOptions]`` so the function
+    stays inside the S107 parameter budget without changing a single caller:
+    every option keeps its exact name, type and default, and mypy still
+    type-checks each keyword at the call site. ``total=False`` models the
+    defaults; the body applies them via ``options.get(name, default)``.
+    """
+
+    error_code: str | None
+    error_detail: str | None
+    total_tokens: int | None
+    total_cost_usd: Decimal | None
+    cost_breakdown: Any
+    node_token_usage: dict[str, Any] | None
+    outputs_json: dict[str, Any] | None
+    node_telemetry_json: dict[str, Any] | None
+    claimed_by: str | None
+    clear_error_code: bool
+    claim_token: str | None
+    from_status: str | None
+    not_status: str | None
+    refund_claim_count: bool
+
+
 async def update_run_status(
     session: AsyncSession,
     run_id: uuid.UUID,
     status: str,
-    *,
-    error_code: str | None = None,
-    error_detail: str | None = None,
-    total_tokens: int | None = None,
-    total_cost_usd: Decimal | None = None,
-    cost_breakdown: Any = _COST_BREAKDOWN_SENTINEL,
-    node_token_usage: dict[str, Any] | None = None,
-    outputs_json: dict[str, Any] | None = None,
-    node_telemetry_json: dict[str, Any] | None = None,
-    claimed_by: str | None = None,
-    clear_error_code: bool = False,
-    claim_token: str | None = None,
-    from_status: str | None = None,
-    not_status: str | None = None,
-    refund_claim_count: bool = False,
+    **options: Unpack[UpdateRunStatusOptions],
 ) -> Run | None:
     """Write a run's status (optionally + blobs) — the FAR-583 store-write
     chokepoint.
@@ -3802,30 +3896,19 @@ async def update_run_status(
     caller-side follow-up this note originally recorded under FAR-1601.
     Bounding here remains deliberately out of scope for this shared function.
     """
+    _reject_unknown_options(options, _RUN_STATUS_UPDATE_OPTION_DEFAULTS, "update_run_status")
+    resolved_options: dict[str, Any] = {
+        name: options.get(name, default) for name, default in _RUN_STATUS_UPDATE_OPTION_DEFAULTS.items()
+    }
+    update = _RunStatusUpdate(**resolved_options)
     if status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {status!r}")
-    if refund_claim_count and claim_token is None:
+    if update.refund_claim_count and update.claim_token is None:
         # A refund decrements the claim the caller is refunding, so it is only
         # meaningful fenced to that claim's token. Refusing here prevents a
         # silent no-op (the ORM path has no token to fence against) — the same
         # fail-loud contract as the fence helpers.
         raise ValueError("refund_claim_count requires claim_token (refund is fenced to the claim it refunds)")
-    update = _RunStatusUpdate(
-        error_code=error_code,
-        error_detail=error_detail,
-        total_tokens=total_tokens,
-        total_cost_usd=total_cost_usd,
-        cost_breakdown=cost_breakdown,
-        node_token_usage=node_token_usage,
-        outputs_json=outputs_json,
-        node_telemetry_json=node_telemetry_json,
-        claimed_by=claimed_by,
-        clear_error_code=clear_error_code,
-        claim_token=claim_token,
-        from_status=from_status,
-        not_status=not_status,
-        refund_claim_count=refund_claim_count,
-    )
     if update.claim_token is not None:
         return await _update_run_status_fenced(session, run_id, status, update=update)
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())

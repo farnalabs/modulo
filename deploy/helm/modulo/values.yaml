@@ -71,6 +71,14 @@ podSecurity:
 # Off by default. Requires a CNI that enforces NetworkPolicy (e.g. Calico,
 # Cilium) — kindnet does not. Modulo records this posture as `declared` (it
 # authors the policy; it never observes network traffic).
+#
+# Enforcement contract (FAR-2068): `enabled: true` also injects
+# MODULO_WORKSPACE_NETWORK_POLICY=enabled into the control-plane workloads.
+# The backend only resolves a Kubernetes egress `deny_all` profile to a
+# `declared` posture — and only accepts an egress 'none' workspace — when that
+# signal is present. With the default `false` the manifest does not exist, so
+# deny_all stays fail-closed (refused) instead of certifying an enforcement
+# nothing performs.
 workspaceNetworkPolicy:
   enabled: false
   # Permit cluster DNS (UDP/TCP 53) so deny-by-default does not break name
@@ -169,7 +177,9 @@ backend:
     # Digest takes precedence over tag when both are set.
     # Example: sha256:abc123...
     digest: ""
-    tag: "latest"
+    # Empty means "use the chart's appVersion" (the released image tag);
+    # set an explicit tag only to pin a different build.
+    tag: ""
     pullPolicy: IfNotPresent
 
   service:
@@ -233,7 +243,9 @@ saqRunner:
   image:
     repository: ghcr.io/farnalabs/modulo/backend
     digest: ""
-    tag: "latest"
+    # Empty means "use the chart's appVersion" (the released image tag);
+    # set an explicit tag only to pin a different build.
+    tag: ""
     pullPolicy: IfNotPresent
 
   # Command derived from docker-compose.yml: python -m saq modulo.core.saq_worker.runs_settings
@@ -264,7 +276,9 @@ saqSystem:
   image:
     repository: ghcr.io/farnalabs/modulo/backend
     digest: ""
-    tag: "latest"
+    # Empty means "use the chart's appVersion" (the released image tag);
+    # set an explicit tag only to pin a different build.
+    tag: ""
     pullPolicy: IfNotPresent
 
   # Command derived from docker-compose.yml: python -m modulo.core.saq_worker
@@ -297,7 +311,9 @@ frontend:
   image:
     repository: ghcr.io/farnalabs/modulo/frontend
     digest: ""
-    tag: "latest"
+    # Empty means "use the chart's appVersion" (the released image tag);
+    # set an explicit tag only to pin a different build.
+    tag: ""
     pullPolicy: IfNotPresent
 
   service:

@@ -162,6 +162,7 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # authenticated last, leaking cross-tenant data.
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import (
+    RETIRED_INTERNAL_FLAGS,
     get_registry,
     resolve_mcp_human_linked_hitl_authority,
     resolve_plan_context,
@@ -182,9 +183,11 @@ from modulo.core.library_service import (
     copy_to_adapt as library_copy_to_adapt,
 )
 from modulo.core.library_service import (
+    get_primitive,
     get_primitive_by_slug,
     list_primitives,
 )
+from modulo.core.library_service.primitive_types import PRIMITIVE_TYPES
 from modulo.core.logging_config import org_id_var
 from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
@@ -552,6 +555,21 @@ def _ctx_user_id_val() -> uuid.UUID:
 def _ctx_role_val() -> str | None:
     """Get role from the request context (None if unset — scope checks then fail closed)."""
     return _ctx_role.get(None)
+
+
+def _mcp_internal_lifecycle_map_access() -> bool:
+    """Return whether the MCP caller has the retained internal lifecycle-map grant."""
+    if not getattr(get_settings(), "modulo_dev_mode", True):
+        return False
+    role = _ctx_role_val()
+    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
+        _ctx_key_grants.get(None), "library.search.in_dev"
+    )
+
+
+def _require_mcp_internal_lifecycle_map_access() -> None:
+    if not _mcp_internal_lifecycle_map_access():
+        raise MCPAuthorizationError("Lifecycle map tools are restricted to internal operators")
 
 
 def _ctx_team_id_val() -> uuid.UUID | None:
@@ -2322,6 +2340,14 @@ def _db_shell_sqlalchemy_response(
     if cfg.db_errors_to_fallback:
         return _tool_error(cfg.fallback, code="database_unavailable")
     return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+
+
+# Semgrep's parser cannot parse the PEP 695 type-parameter syntax below
+# (``_run_db_shell[**TOOL_SHELL_P]``), so it reports a one-line
+# ``PartialParsing`` skip for this file. There is no inline directive that
+# clears a parse failure (``nosemgrep`` only suppresses rule findings), so the
+# skip is instead tolerated by the FAR-1933 carve-out in
+# ``scripts/run_semgrep.py``.
 
 
 async def _run_db_shell[**TOOL_SHELL_P](
@@ -4779,7 +4805,7 @@ def _apply_node_connector_binding(
 )
 @mcp_audited("pipeline_node_connector_bound", "pipeline", fail_closed=False)
 @_RETRY_DB
-async def bind_connector_to_node(
+async def bind_connector_to_node(  # NOSONAR S3776 - orchestration endpoint delegates validation/persistence helpers
     pipeline_id: str,
     node_id: str,
     connector_type: str,
@@ -7260,6 +7286,9 @@ async def copy_library_primitive(
 
     async with _session(org_id) as s:
         try:
+            primitive = await get_primitive(s, org_id, pid)
+            if primitive is not None and primitive.primitive_type == "lifecycle_map":
+                _require_mcp_internal_lifecycle_map_access()
             result = await library_copy_to_adapt(s, org_id, pid, via_mcp=False)
         except LookupError:
             return {"error": "not_found", "primitive_id": primitive_id}
@@ -7300,13 +7329,22 @@ async def search_library(
         org_id = _ctx_org_id_val()
         try:
             _check_agent_tool_scope("search_library")
+            lifecycle_maps_allowed = _mcp_internal_lifecycle_map_access()
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
+        if not lifecycle_maps_allowed and primitive_type == "lifecycle_map":
+            return {"items": [], "total": 0, "next_cursor": None, "has_more": False}
+        visible_primitive_types = None
+        if not lifecycle_maps_allowed:
+            visible_primitive_types = [
+                primitive_name for primitive_name in PRIMITIVE_TYPES if primitive_name != "lifecycle_map"
+            ]
         async with _session(org_id) as s:
             result = await list_primitives(
                 s,
                 org_id,
                 primitive_type=primitive_type,
+                primitive_types=visible_primitive_types,
                 search=search,
                 page=1,
                 page_size=limit,
@@ -10147,16 +10185,14 @@ async def list_feature_flags() -> dict[str, Any]:
             # verified rungs gives an identical answer in every case.
             license_valid = resolve_effective_license(settings, org) is not None
             # has_license_key is NOT the ladder and must not be unified with
-            # it: it mirrors the REST route's registry input
-            # (admin_feature_flags._build_registry) — a verified env key or
-            # the in-memory licence, plus an org key counted on PRESENCE
-            # alone. It answers "is a key configured", where is_valid answers
-            # "is it valid" (both pinned in test_mcp_governance_read_tools:
-            # an invalid org key counts for has_license_key but not is_valid).
+            # it: it mirrors the REST route's registry input — each configured
+            # key source counts only after canonical verification. It answers
+            # "is a valid key configured", where is_valid answers "did the
+            # effective ladder resolve one".
             has_key = (
                 verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None
                 or get_license() is not None
-                or bool(org_key)
+                or verify_license_key(str(org_key)) is not None
             )
             registry = await FeatureFlagRegistry.from_db(s, plan_ctx.tier(), has_license_key=has_key)
 
@@ -10229,6 +10265,15 @@ async def get_audit_log(
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("get_audit_log")
 
+        org_id = _ctx_org_id_val()
+        # Plan gate parity with the audit REST surface: reading the audit trail
+        # is the Team-tier ``audit_viewer`` entitlement, enforced there by
+        # ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2119).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "audit_viewer")
+        if feat_err:
+            return feat_err
+
         actor_uid: uuid.UUID | None = None
         if actor_user_id is not None:
             actor_uid, actor_err = _parse_uuid_param(actor_user_id, "actor_user_id")
@@ -10257,7 +10302,6 @@ async def get_audit_log(
 
         from modulo.core.audit_logger import list_audit_events
 
-        org_id = _ctx_org_id_val()
         lim = max(1, min(limit, 200))
 
         async with _session(org_id) as s:
@@ -10461,6 +10505,7 @@ async def list_lifecycle_maps(
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_lifecycle_maps")
+        _require_mcp_internal_lifecycle_map_access()
 
         owner_team: uuid.UUID | None = None
         if owner_team_id is not None:
@@ -10526,6 +10571,7 @@ async def get_lifecycle_map(lifecycle_map_id: str) -> dict[str, Any]:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("get_lifecycle_map")
+        _require_mcp_internal_lifecycle_map_access()
 
         org_id = _ctx_org_id_val()
         lmid, lmid_err = _parse_uuid_param(lifecycle_map_id, "lifecycle_map_id")
@@ -10583,9 +10629,16 @@ async def list_plugins() -> dict[str, Any]:
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_plugins")
 
-        from modulo.core.plugin_registry import get_plugin_registry
+        org_id = _ctx_org_id_val()  # fail closed when no authenticated org context
+        # Plan gate parity with GET /api/v1/plugins: the plugin registry is the
+        # ``plugin_management`` entitlement, enforced there by
+        # ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "plugin_management")
+        if feat_err:
+            return feat_err
 
-        _ctx_org_id_val()  # fail closed when no authenticated org context
+        from modulo.core.plugin_registry import get_plugin_registry
 
         registry = get_plugin_registry()
         health_results = registry.health_check()
@@ -10634,6 +10687,13 @@ async def list_sso_providers() -> dict[str, Any]:
         from modulo.db.crud.sso_provider import list_providers
 
         org_id = _ctx_org_id_val()
+        # Plan gate parity with GET /api/v1/admin/sso/providers: SSO
+        # configuration is the ``sso`` entitlement, enforced there by
+        # ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "sso")
+        if feat_err:
+            return feat_err
 
         async with _session(org_id) as s:
             providers = await list_providers(s, org_id=org_id)
@@ -10804,6 +10864,14 @@ async def get_schema_versions(
         from modulo.db.crud.schema import get_schema, list_schema_versions
 
         org_id = _ctx_org_id_val()
+        # Plan gate parity with GET /api/v1/schemas/{schema_id}/versions:
+        # version history is the ``schema_version_history`` entitlement, enforced
+        # there by ``require_feature``. MCP must enforce it too rather than stay
+        # an unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "schema_version_history")
+        if feat_err:
+            return feat_err
+
         schid, schid_err = _parse_uuid_param(schema_id, "schema_id")
         if schid_err:
             return schid_err
@@ -10919,7 +10987,7 @@ async def get_pipeline_diff(
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", pipeline_id)
-            result = await diff_snapshots(s, snap_a, snap_b, pipeline_id=pid)
+            result = await diff_snapshots(s, snap_a, snap_b, organisation_id=org_id, pipeline_id=pid)
 
         if result is None:
             return {"error": "not_found", "detail": "One or both snapshots not found"}
@@ -11236,7 +11304,11 @@ async def get_available_features() -> dict[str, Any]:
             plan_ctx = await resolve_plan_context(settings, s, org)
 
         current_tier = plan_ctx.tier()
-        all_flags = plan_ctx.list_enabled_features()
+        all_flags = [
+            flag
+            for flag in plan_ctx.list_enabled_features()
+            if flag.name not in RETIRED_INTERNAL_FLAGS or _mcp_internal_lifecycle_map_access()
+        ]
 
         lines = ["| Feature | Required Tier | Available |", "|---------|---------------|-----------|"]
         for flag in all_flags:
@@ -11388,6 +11460,14 @@ async def list_environment_profiles(
         from modulo.db.crud.environment_profile import list_environment_profiles as db_list_environment_profiles
 
         org_id = _ctx_org_id_val()
+        # Plan gate parity with GET /api/v1/environment-profiles: environment
+        # profiles are the ``environment_profiles`` entitlement, enforced there
+        # by ``require_feature``. MCP must enforce it too rather than stay an
+        # unentitled way in (FAR-2129).
+        feat_err = await _require_plan_feature(org_id, get_settings(), "environment_profiles")
+        if feat_err:
+            return feat_err
+
         lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
@@ -12712,7 +12792,7 @@ async def resource_pipeline_snapshots(pipeline_id: str) -> str:
     async with _session(org_id) as s:
         if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, pid)):
             return _team_scope_error_str("pipeline", pipeline_id)
-        snapshots, _ = await list_snapshots(s, pid, page=1, page_size=50)
+        snapshots, _ = await list_snapshots(s, pid, page=1, page_size=50, organisation_id=org_id)
 
     lines = [
         f"- snapshot {s.snapshot_version} (id={s.id}, tag={s.tag or ''}, created={s.created_at.isoformat()})"
@@ -13047,11 +13127,18 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     denied = _resource_node_scope_error("get_schema_versions")
     if denied is not None:
         return denied
+    # FAR-2129: same plan-feature parity as the tool and the REST route it
+    # mirrors (GET /api/v1/schemas/{schema_id}/versions/{version}, gated
+    # require_feature("schema_version_history")). Without it the resource would
+    # remain an unentitled way to read the same version payload.
+    org_id = _ctx_org_id_val()
+    feat_err = await _require_plan_feature(org_id, get_settings(), "schema_version_history")
+    if feat_err:
+        return f"error: {feat_err['error']}: {feat_err['detail']}"
     from sqlalchemy import select
 
     from modulo.db.models.schema import Schema, SchemaVersion
 
-    org_id = _ctx_org_id_val()
     sid, sid_err = _parse_uuid_param(schema_id, "schema_id")
     if sid_err:
         return f"error: Invalid UUID format: {schema_id}"
@@ -13180,10 +13267,17 @@ async def resource_library() -> str:
         return denied
     try:
         org_id = _ctx_org_id_val()
+        lifecycle_maps_allowed = _mcp_internal_lifecycle_map_access()
+        visible_primitive_types = None
+        if not lifecycle_maps_allowed:
+            visible_primitive_types = [
+                primitive_name for primitive_name in PRIMITIVE_TYPES if primitive_name != "lifecycle_map"
+            ]
         async with _session(org_id) as s:
             result = await list_primitives(
                 s,
                 org_id,
+                primitive_types=visible_primitive_types,
                 page=1,
                 page_size=50,
                 include_community=True,
@@ -13206,6 +13300,25 @@ async def resource_library() -> str:
         return "error: Failed to browse library"
 
 
+def _mask_library_content_for_summary(content: Any, primitive_type: str) -> Any:
+    """Mask credential-bearing node fields in a composite primitive's content.
+
+    FAR-1380: a composite primitive's ``content_json`` carries the SAME
+    credential-bearing node fields a pipeline graph stores (env_vars /
+    context_files / composite_parameter_values / parameter_overrides) — mask
+    them with the shipped per-node masker exactly like the pipeline graph
+    reads; non-composite content passes through untouched.
+    """
+    if primitive_type != "composite" or not isinstance(content, dict):
+        return content
+    nodes = content.get("nodes")
+    if not isinstance(nodes, list):
+        return content
+    masked = dict(content)
+    masked["nodes"] = [mask_pipeline_graph_node(node) if isinstance(node, dict) else node for node in nodes]
+    return masked
+
+
 @mcp.resource("modulo://library/{primitive_type}/{slug}")
 async def resource_library_detail(primitive_type: str, slug: str) -> str:
     """Get details of a single library primitive by type and slug."""
@@ -13217,9 +13330,12 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
     if denied is not None:
         return denied
     try:
+        if primitive_type == "lifecycle_map" and not _mcp_internal_lifecycle_map_access():
+            return f"Library primitive '{slug}' of type '{primitive_type}' not found."
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             p = await get_primitive_by_slug(s, org_id, primitive_type, slug)
+
         if p is None:
             return f"Library primitive '{slug}' of type '{primitive_type}' not found."
 
@@ -13227,20 +13343,10 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
         rating_str = f"{p.average_rating:.2f}" if p.average_rating is not None else "N/A"
         downloads_str = str(p.download_count) if p.download_count is not None else "0"
         desc = p.description or "(no description)"
-        # FAR-1380: a composite primitive's content_json carries the SAME
-        # credential-bearing node fields a pipeline graph stores (env_vars /
-        # context_files / composite_parameter_values / parameter_overrides) —
-        # mask them with the shipped per-node masker exactly like the pipeline
-        # graph reads; non-composite content passes through untouched.
-        content_for_summary: Any = p.content_json
-        if p.primitive_type == "composite" and isinstance(content_for_summary, dict):
-            nodes = content_for_summary.get("nodes")
-            if isinstance(nodes, list):
-                content_for_summary = dict(content_for_summary)
-                content_for_summary["nodes"] = [
-                    mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes
-                ]
-        content_summary_str = json.dumps(content_for_summary, indent=2)
+        content_summary_str = json.dumps(
+            _mask_library_content_for_summary(p.content_json, p.primitive_type),
+            indent=2,
+        )
 
         parts = [
             f"Name: {p.name}",

@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from modulo.db.crud.run import _UPDATE_STATUS_FENCED_SQL, update_run_status
+from modulo.db.crud.run import _UPDATE_STATUS_FENCED_SQL, create_run, update_run_status
 from modulo.db.models.base import Base, OrgScoped
 from modulo.db.models.run import Run
 
@@ -119,3 +120,36 @@ def test_org_scoped_base_import_alive():
     """Guard against accidental module-level breakage of the models import
     graph the fixture above depends on (OrgScoped declares organisation_id)."""
     assert issubclass(Run, OrgScoped)
+
+
+class TestUnexpectedOptionsGuard:
+    """The ``**options: Unpack[TypedDict]`` grouping must stay fail-loud.
+
+    mypy rejects unknown keywords statically, but a caller splatting a
+    ``dict[str, Any]`` bypasses that, so the runtime guard is the backstop
+    that keeps an unexpected keyword a ``TypeError`` rather than a silently
+    ignored write.
+    """
+
+    async def test_create_run_rejects_unknown_option(self) -> None:
+        kwargs: dict[str, Any] = {
+            "session": None,
+            "org_id": uuid.uuid4(),
+            "pipeline_id": uuid.uuid4(),
+            "snapshot_id": uuid.uuid4(),
+            "trigger_type": "manual",
+            "input_payload": {},
+            "unexpected_option": True,
+        }
+        with pytest.raises(TypeError, match="unexpected create_run options"):
+            await create_run(**kwargs)
+
+    async def test_update_run_status_rejects_unknown_option(self) -> None:
+        kwargs: dict[str, Any] = {
+            "session": None,
+            "run_id": uuid.uuid4(),
+            "status": "running",
+            "unexpected_option": True,
+        }
+        with pytest.raises(TypeError, match="unexpected update_run_status options"):
+            await update_run_status(**kwargs)

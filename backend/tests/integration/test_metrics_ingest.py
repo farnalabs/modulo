@@ -192,7 +192,11 @@ class TestRoundTripWrite:
         user_a: uuid.UUID,
     ) -> None:
         token = _token(org_a, user_a)
-        payload = {"name": "alpha", "count": 3}
+        payload = {
+            "pipeline_id": "00000000-0000-0000-0000-000000000003",
+            "name": "alpha",
+            "count": 3,
+        }
         resp = await _post(
             integration_client,
             token,
@@ -205,7 +209,7 @@ class TestRoundTripWrite:
         event_id, event_type, written_payload, recorded_at = rows[0]
         assert event_id == "rt-1"
         assert event_type == "pipeline_created"
-        assert written_payload == payload, "payload must be written verbatim"
+        assert written_payload == {"pipeline_id": payload["pipeline_id"]}, "payload must be privacy-filtered"
         assert isinstance(recorded_at, datetime)
         assert recorded_at.tzinfo is not None, "recorded_at must be timezone-aware"
 

@@ -241,6 +241,252 @@ def test_pr_review_dispatches_on_red_ci_too() -> None:
     )
 
 
+# --- FAR-2111: the review STARTS when the PR is ready, not when CI finishes --
+#
+# 2026-10-23/24: `Test (Backend)` inside "CI: Fast Validation" measured 48-53
+# min (PR #2153 52m36s, PR #2246 48m), and the reviewer was dispatched ONLY on
+# that workflow's completion. PR #2246 opened 18:55, CI completed ~19:53, the
+# review arrived 20:00 — 67 min in which nothing about the PR changed — and the
+# merge queue idled at APPROVED_COUNT=0. Review is a quality gate independent of
+# CI colour (the workflow header), so gating its START on CI completion is
+# stricter than the stated design.
+#
+# The early trigger is only half the change: every gate that the CI-completion
+# path applies must also hold on the early path. The tests below pin the trigger
+# AND those gates, because the naive "just add the trigger" edit bypasses the
+# manual-delivery gate (it lived inside the workflow_run branch only).
+
+#: The early trigger's event key. ``pull_request_target`` rather than
+#: ``pull_request`` on purpose: see the test that pins it.
+EARLY_EVENT = "pull_request_target"
+
+
+def _trigger_block() -> dict:
+    """The workflow's ``on:`` mapping (PyYAML parses the bare key ``on`` as True)."""
+    return _on_block(_load_yaml(PR_REVIEW_YML))
+
+
+def _job_steps(job_name: str) -> list[dict]:
+    job = _job_named(_load_yaml(PR_REVIEW_YML), job_name)
+    steps = job.get("steps") or []
+    assert isinstance(steps, list), f"pr-review.yml: job {job_name!r} steps are not a list"
+    return [step for step in steps if isinstance(step, dict)]
+
+
+def _step(job_name: str, step_name: str) -> dict:
+    matches = [step for step in _job_steps(job_name) if step.get("name") == step_name]
+    assert len(matches) == 1, (
+        f"pr-review.yml: expected exactly one {step_name!r} step in job {job_name!r}, "
+        f"found {len(matches)} — the gate moved; update this test deliberately"
+    )
+    return matches[0]
+
+
+def _unquoted(line: str) -> str:
+    """``line`` with the contents of every quoted string removed.
+
+    Shell keywords are matched only where the shell would see them, so a notice
+    message containing the word "if" cannot fake an extra nesting level.
+    """
+    out: list[str] = []
+    quote = ""
+    for char in line:
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in ("'", '"'):
+            quote = char
+            continue
+        out.append(char)
+    return "".join(out)
+
+
+def _top_level_block_end(lines: list[str], start: int) -> int:
+    """Index of the ``fi`` that closes the ``if`` opened at ``lines[start]``.
+
+    ``elif`` neither opens nor closes a level (it swaps arms of the same ``if``),
+    so only ``if`` and ``fi`` tokens move the counter. Quoted-string contents are
+    blanked first, so a notice message containing the word "if" cannot fake an
+    extra nesting level.
+    """
+    depth = 0
+    for index in range(start, len(lines)):
+        code = _unquoted(lines[index]).strip()
+        if not code or code.startswith("#"):
+            continue
+        for token in re.split(r"[\s;()]+", code):
+            if token == "if":
+                depth += 1
+            elif token == "fi":
+                depth -= 1
+                if depth == 0:
+                    return index
+    raise AssertionError(
+        "pr-review.yml: the event-dispatch `if` in 'Set PR details' is unterminated — cannot locate the block end"
+    )
+
+
+def test_pr_review_yml_dispatches_the_review_when_the_pr_is_ready() -> None:
+    """A PR that is ready must be reviewed without waiting ~50 min for CI.
+
+    ``opened`` covers a PR created ready (the common case — #2246 opened 18:55
+    and was not reviewed until 20:00). ``ready_for_review`` covers a draft being
+    marked ready.
+
+    ``synchronize`` is deliberately absent: a push to an existing PR is already
+    covered by the ``workflow_run`` completion path, which carries the
+    superseded-run guard and the head-SHA dedup. Every push is a NEW head SHA, so
+    head-SHA dedup cannot coalesce a burst of pushes into one review — adding
+    ``synchronize`` would fan a review storm onto the shared model capacity.
+    """
+    on = _trigger_block()
+    early = on.get(EARLY_EVENT)
+    assert isinstance(early, dict), (
+        f"pr-review.yml: no {EARLY_EVENT} trigger — a review still cannot start until the whole "
+        "~50-min product-CI run completes (Test (Backend) alone is 48-53 min), so every PR waits an "
+        "hour before it can be approved and the merge queue idles at APPROVED_COUNT=0"
+    )
+    types = early.get("types") or []
+    violations: list[str] = []
+    for required in ("opened", "ready_for_review"):
+        if required not in types:
+            violations.append(
+                f"  {EARLY_EVENT}.types must include {required!r} (got {types!r}) — "
+                "'opened' covers a PR created ready, 'ready_for_review' covers a draft marked ready"
+            )
+    if "synchronize" in types:
+        violations.append(
+            f"  {EARLY_EVENT}.types must NOT include 'synchronize' (got {types!r}) — a push is already "
+            "covered by the workflow_run completion path (superseded guard + head-SHA dedup); every push "
+            "is a new head SHA, so head-SHA dedup cannot coalesce a burst and a few quick pushes would "
+            "fan a review storm onto the shared model capacity"
+        )
+    assert not violations, "pr-review.yml no longer reviews a PR when it becomes ready (FAR-2111):\n" + "\n".join(
+        violations
+    )
+
+
+def test_pr_review_early_trigger_keeps_its_checks_off_the_pr_head() -> None:
+    """The early trigger must be ``pull_request_target``, never ``pull_request``.
+
+    A ``pull_request``-triggered workflow attaches its check run to the PR HEAD.
+    The app-leg merge queue requires EVERY check run on a PR's head SHA to be
+    ``completed``/``success`` (``dogfood/pipeline-scripts/merge-queue.py``
+    ``checks_pass``), so a failed review dispatch would then block that PR's
+    merge — the exact FAR-1843 regression the ``workflow_run`` trigger exists to
+    prevent ("a review-dispatch outage can never block merges").
+
+    ``pull_request_target`` check runs attach to the base branch SHA, exactly
+    like ``workflow_run``'s, so the PR's own checks stay untouched. It also
+    checks out the BASE branch, so the dedup and fork-gate scripts always run
+    trusted base-branch code — never the PR's own copy of them.
+    """
+    on = _trigger_block()
+    assert EARLY_EVENT in on, f"pr-review.yml: {EARLY_EVENT} trigger missing — see the early-trigger test"
+    assert "pull_request" not in on, (
+        "pr-review.yml: a plain `pull_request` trigger is present. Its check run lands on the PR HEAD, and "
+        "the app-leg merge queue requires every head check run to be success — a failed review dispatch "
+        "would block that PR's merge (FAR-1843). Use pull_request_target: its check runs attach to the base "
+        "branch SHA, like workflow_run's."
+    )
+
+
+def test_pr_review_manual_delivery_gate_is_not_bypassed_on_the_early_path() -> None:
+    """The ``manual-delivery`` gate must apply to the early path too.
+
+    This is the defect the naive "add the trigger" edit ships: the gate lived
+    inside the ``workflow_run`` branch of ``Set PR details``, so a PR a human is
+    driving manually would have been auto-reviewed the moment it opened. The gate
+    is now one shared block that runs for EVERY non-manual event; this test pins
+    that it is at the top level of the script (``if`` depth 0), not nested in one
+    event branch.
+    """
+    step = _step("Trigger Modulo PR Review", "Set PR details")
+    run = step.get("run") or ""
+    lines = run.splitlines()
+    arms = [index for index, line in enumerate(lines) if "*,manual-delivery,*" in line]
+    assert len(arms) == 1, (
+        "pr-review.yml: expected exactly ONE manual-delivery case arm in 'Set PR details', "
+        f"found {len(arms)} — a duplicated or missing gate means the two dispatch paths can diverge"
+    )
+    dispatch = [index for index, line in enumerate(lines) if 'if [ "$EVENT_NAME" = "pull_request" ]' in line]
+    assert len(dispatch) == 1, (
+        f"pr-review.yml: expected one per-event PR resolution block in 'Set PR details', found {len(dispatch)}"
+    )
+    block_end = _top_level_block_end(lines, dispatch[0])
+    assert arms[0] > block_end, (
+        "pr-review.yml: the manual-delivery gate runs INSIDE the per-event dispatch block (it ends at line "
+        f"{block_end + 1} of the script) — it is therefore restricted to one event, so a labelled PR is "
+        "auto-reviewed on the other path (the early trigger bypasses it). Move the gate after the block so "
+        "every path shares it."
+    )
+    assert 'if [ "$EVENT_NAME" != "workflow_dispatch" ]' in run, (
+        'pr-review.yml: the manual-delivery gate must be guarded by `!= "workflow_dispatch"` so it covers '
+        "the CI-completion AND early paths while a manual operator re-trigger still bypasses it"
+    )
+
+
+def test_pr_review_fork_gate_is_not_bypassed_on_the_early_path() -> None:
+    """The same-repo author gate must run on the early path as well.
+
+    A fork / external-author PR is never auto-reviewed (FAR-264): its review
+    needs a human path, and under the early trigger secrets are in scope before
+    the gate runs, so a bypass would dispatch a review for an untrusted PR. The
+    gate's ``if:`` must therefore stay event-agnostic (``ready`` only), and the
+    checkout that provides the versioned guard script must not be event-gated.
+    """
+    step = _step("Trigger Modulo PR Review", "Same-repo author gate (FAR-264)")
+    condition = str(step.get("if") or "")
+    assert "github.event_name" not in condition, (
+        "pr-review.yml: the same-repo author gate is restricted by event name — the early path would "
+        "dispatch a review for a fork / external-author PR (FAR-264)"
+    )
+    assert "same-repo-author-guard.py" in (step.get("run") or ""), (
+        "pr-review.yml: the same-repo author gate no longer calls the shared versioned guard script"
+    )
+    checkout = _step("Trigger Modulo PR Review", "Checkout repository (for the gate scripts)")
+    assert "github.event_name" not in str(checkout.get("if") or ""), (
+        "pr-review.yml: the gate-script checkout is event-gated — the dedup and fork gates cannot run on "
+        "the early path without it"
+    )
+
+
+def test_pr_review_early_path_is_deduplicated_per_head_sha() -> None:
+    """One review per head SHA: the early dispatch must be coalesced, not doubled.
+
+    The CI-completion dispatch for the same head SHA arrives ~50 min after the
+    early one. Two mechanical layers coalesce it (the app-side prior-review skip
+    is a third backstop, but it is timestamp-based by design — see the reviewer
+    prompt): (1) the ``workflow_run`` path's superseded-run guard, and (2) the
+    head-SHA dedup step. The dedup must therefore run on BOTH paths — a gate
+    expressed as ``== 'workflow_run'`` leaves the early path undeduplicated, so a
+    draft marked ready (or a second ``ready_for_review`` on an unchanged head)
+    would review the same SHA twice.
+    """
+    step = _step("Trigger Modulo PR Review", "Skip when head already reviewed (dedup)")
+    condition = str(step.get("if") or "")
+    violations: list[str] = []
+    if "workflow_dispatch" not in condition:
+        violations.append(
+            "  the dedup gate no longer names workflow_dispatch — a manual operator re-trigger must stay "
+            "explicit and bypass dedup, as it always has"
+        )
+    if "== 'workflow_run'" in condition:
+        violations.append(
+            "  the dedup gate is still restricted to workflow_run — the early dispatch is never coalesced, "
+            "so the same head SHA can be reviewed twice (e.g. a draft marked ready after its completion "
+            "review, or a repeated ready_for_review)"
+        )
+    if "steps.pr-details.outputs.ready == 'true'" not in condition:
+        violations.append("  the dedup gate no longer requires a resolved PR (ready == 'true')")
+    if "pr-review-dedup.py" not in (step.get("run") or ""):
+        violations.append("  the dedup step no longer calls the versioned .github/scripts/pr-review-dedup.py")
+    assert not violations, "pr-review.yml cannot guarantee one review per head SHA (FAR-2111):\n" + "\n".join(
+        violations
+    )
+
+
 def test_ci_yml_dispatches_no_reviewer_webhook() -> None:
     """``ci.yml`` must not merely rename the job — the reviewer webhook body
     (payload construction or HMAC signing against the review secret) must be
@@ -1306,3 +1552,422 @@ def test_sonar_new_issues_gate_non_blocking_smells_cannot_fail() -> None:
     # The blocking exit is explicit; the non-blocking else branch should just warn
     # and fall through to the final "No blocking" echo
     assert not violations, "sonar-new-issues-gate non-blocking path can fail the job:\n" + "\n".join(violations)
+
+
+# --- FAR-2139: the deploy escalation email edge is one shared implementation --
+
+
+DEPLOY_WATCHDOG_YML = WORKFLOWS / "deploy-watchdog.yml"
+DEPLOY_STALENESS_YML = WORKFLOWS / "deploy-staleness-check.yml"
+
+#: The step in each workflow whose conclusion IS the durable health state
+#: vector the next tick reads back. Renaming it without updating the notify
+#: step's ``VERDICT_STEP_NAME`` silently degrades the previous verdict to
+#: UNKNOWN - fail loud here instead.
+WATCHDOG_VERDICT_STEP = "Fail the run when the deploy watchdog is unhealthy"
+STALENESS_VERDICT_STEP = "Fail the run when deploy health is unhealthy"
+
+#: The single shared transition step both workflows call.
+SHARED_NOTIFY_SCRIPT = "bash .github/scripts/deploy-health-notify.sh"
+
+
+def _all_steps(path: Path) -> list[dict]:
+    steps: list[dict] = []
+    for job in (_load_yaml(path).get("jobs") or {}).values():
+        if isinstance(job, dict):
+            steps.extend(step for step in job.get("steps") or [] if isinstance(step, dict))
+    return steps
+
+
+def _step_named(path: Path, name: str) -> dict:
+    for step in _all_steps(path):
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"{path.name}: no step named {name!r}")
+
+
+def test_deploy_escalations_share_one_email_implementation() -> None:
+    """Both deploy escalation workflows email through ONE shared step.
+
+    FAR-2116 added the transition email to the staleness check; FAR-2139 gives
+    the watchdog the same edge. Two copies of a transition decision and a
+    message format WILL drift (the whole ticket is about an escalation channel
+    that looked present and reached nobody), so the SMTP send lives only in
+    ``.github/scripts/deploy-health-notify.sh`` and both workflows call it.
+    """
+    violations: list[str] = []
+    for path in (DEPLOY_WATCHDOG_YML, DEPLOY_STALENESS_YML):
+        raw = path.read_text(encoding="utf-8")
+        if SHARED_NOTIFY_SCRIPT not in raw:
+            msg = f"  {path.name}: does not invoke the shared transition step ({SHARED_NOTIFY_SCRIPT})"
+            violations.append(msg)
+        if "smtplib" in raw:
+            msg = f"  {path.name}: carries its own inline SMTP send - the shared step is the only one"
+            violations.append(msg)
+    assert not violations, "deploy escalation emails are not shared:\n" + "\n".join(violations)
+
+
+def test_deploy_watchdog_email_fires_on_the_transition_not_per_tick() -> None:
+    """The watchdog's email step must run on every outcome and name the verdict
+    step whose conclusion encodes the previous verdict.
+
+    ``if: always()`` matters: the recovery email is sent from the tick whose
+    own evaluation is healthy, and a step gated on ``success()`` would be
+    skipped by the very failure that opens the incident.
+    """
+    step = _step_named(DEPLOY_WATCHDOG_YML, "Email the operator on a deploy-health transition")
+    condition = str(step.get("if") or "")
+    env = step.get("env") or {}
+    violations: list[str] = []
+    if "always()" not in condition:
+        violations.append(f"  notify step condition must contain always(), got {condition!r}")
+    if str(env.get("VERDICT_STEP_NAME") or "") != WATCHDOG_VERDICT_STEP:
+        msg = f"  notify step VERDICT_STEP_NAME is {env.get('VERDICT_STEP_NAME')!r}"
+        violations.append(msg)
+    if "steps.watchdog.outputs.healthy" not in str(env.get("CURRENT_HEALTHY") or ""):
+        msg = "  notify step must read the watchdog's structured health verdict"
+        violations.append(msg)
+    # The step it names must actually exist, or the previous verdict is always UNKNOWN.
+    assert any(s.get("name") == WATCHDOG_VERDICT_STEP for s in _all_steps(DEPLOY_WATCHDOG_YML)), (
+        f"deploy-watchdog.yml: state-vector step {WATCHDOG_VERDICT_STEP!r} is missing"
+    )
+    assert not violations, "watchdog transition email is not wired:\n" + "\n".join(violations)
+
+
+def test_deploy_watchdog_ticket_leg_is_gated_on_the_health_verdict() -> None:
+    """The Linear ticket leg keys on the evaluated health, never on ``failure()``.
+
+    ``failure()`` cannot distinguish "deploy.yml is broken" from "the checkout
+    broke", and it can never fire for an UNKNOWN verdict. The ticket must gate
+    on the structured ``healthy == 'false'`` output so both escalation states
+    (exhausted self-heal, failed re-dispatch) raise a ticket and nothing else
+    does.
+    """
+    step = _step_named(DEPLOY_WATCHDOG_YML, "Create Linear ticket on watchdog escalation")
+    condition = str(step.get("if") or "")
+    violations: list[str] = []
+    if "failure()" in condition:
+        violations.append(f"  ticket leg still gates on failure(): {condition!r}")
+    if "steps.watchdog.outputs.healthy == 'false'" not in condition:
+        violations.append(f"  ticket leg must gate on healthy == 'false', got {condition!r}")
+    verdict = _step_named(DEPLOY_WATCHDOG_YML, WATCHDOG_VERDICT_STEP)
+    if "steps.watchdog.outputs.healthy == 'false'" not in str(verdict.get("if") or ""):
+        msg = "  state-vector step must FAIL only on healthy == 'false' (otherwise the run is never red)"
+        violations.append(msg)
+    assert not violations, "watchdog ticket leg is not gated on the health verdict:\n" + "\n".join(violations)
+
+
+# --- FAR-2152: a throttled deploy must never read as a deploy ---------------
+#
+# A throttled `deploy.yml` run concludes SUCCESS while shipping nothing and
+# skipping every pre-deploy gate. In `gh run list` it is indistinguishable from
+# a real deploy (2026-10-25: four "successful" runs between 12:03Z and 12:44Z
+# deployed nothing, so a four-hour regression stayed invisible). The workflow
+# now publishes a machine-readable `deployed` signal from the throttle and
+# gates every deploy-assuming job on it. These tests pin that wiring: the run
+# conclusion is never the gate, the throttled path keeps its NO DEPLOY marker,
+# and a future edit cannot re-open the production path for a throttled run.
+
+DEPLOY_YML = WORKFLOWS / "deploy.yml"
+
+#: The throttle's decision step - the ONLY place `deployed` may be emitted.
+THROTTLE_CHECK_STEP = "Check last deploy attempt time"
+
+#: The machine-readable "did this run deploy?" gate every downstream job uses.
+DEPLOYED_GATE = "needs.deploy-throttle.outputs.deployed == 'true'"
+
+#: The marker a throttled run's summary must lead with (FAR-954, kept).
+NO_DEPLOY_MARKER = "NO DEPLOY — throttled"
+
+#: The five atomic pre-deploy gates. Nothing may deploy while one is skipped.
+PRE_DEPLOY_GATE_JOBS = (
+    "backend-lint",
+    "backend-unit",
+    "frontend-checks",
+    "integration-tests",
+    "security-audit",
+)
+
+#: Every job that assumes a deploy happened must gate on DEPLOYED_GATE.
+DEPLOY_ASSUMING_JOBS = (
+    *PRE_DEPLOY_GATE_JOBS,
+    "pre-deploy-gate",
+    "deploy-staging",
+    "staging-e2e",
+    "deploy-production",
+    "prod-smoke",
+    "notify-deploy-failure",
+)
+
+
+def _deploy_jobs() -> dict:
+    jobs = _load_yaml(DEPLOY_YML).get("jobs") or {}
+    assert isinstance(jobs, dict), "deploy.yml: jobs is not a mapping"
+    return jobs
+
+
+def _throttle_script() -> str:
+    return str(_step_named(DEPLOY_YML, THROTTLE_CHECK_STEP).get("run") or "")
+
+
+def test_deploy_throttle_emits_deployed_in_lockstep_with_should_deploy() -> None:
+    """Every branch of the throttle must publish `deployed` alongside `should_deploy`.
+
+    The `deployed` output is the gate downstream jobs read; a branch that
+    writes only `should_deploy` leaves `deployed` empty, and an empty gate is
+    neither true nor false - the job silently stops running (or, worse, a
+    future `!= 'false'`-shaped gate starts). Emit both on every path.
+    """
+    script = _throttle_script()
+    violations: list[str] = []
+    for value in ("true", "false"):
+        should_writes = script.count(f'echo "should_deploy={value}"')
+        deployed_writes = script.count(f'echo "deployed={value}"')
+        if should_writes != deployed_writes:
+            msg = f"  should_deploy={value} written {should_writes}x but deployed={value} {deployed_writes}x"
+            violations.append(msg)
+    if 'echo "should_deploy=' not in script:
+        violations.append("  the throttle step no longer writes should_deploy at all")
+    # The job output must expose the step's `deployed` value.
+    outputs = (_deploy_jobs().get("deploy-throttle") or {}).get("outputs") or {}
+    if str(outputs.get("deployed") or "") != "${{ steps.check.outputs.deployed }}":
+        msg = f"  deploy-throttle.outputs.deployed is {outputs.get('deployed')!r}, expected the check step's output"
+        violations.append(msg)
+    assert not violations, "deploy.yml throttle does not emit deployed in lockstep:\n" + "\n".join(violations)
+
+
+def test_production_deploy_is_unreachable_with_deployed_false() -> None:
+    """`deploy-production` must be hard-gated on `deployed == 'true'`.
+
+    This is the exact hole FAR-2152 found: the job's `always()` condition plus
+    the documented `skip_staging_e2e` bypass made it reachable in a THROTTLED
+    run (`workflow_dispatch -f skip_staging_e2e=true` skips staging-e2e, whose
+    result then does not block the `always()` branch) - a throttle bypass that
+    deployed production while the throttle said "deploy nothing".
+    """
+    job = _deploy_jobs().get("deploy-production") or {}
+    condition = str(job.get("if") or "")
+    needs = job.get("needs") or []
+    violations: list[str] = []
+    if DEPLOYED_GATE not in condition:
+        violations.append(f"  deploy-production if does not require {DEPLOYED_GATE!r} (got {condition!r})")
+    if "deploy-throttle" not in needs:
+        violations.append(f"  deploy-production does not declare deploy-throttle in needs (got {needs!r})")
+    # The bypass must be ANDed with the gate, never able to stand alone.
+    if (
+        "skip_staging_e2e" in condition
+        and DEPLOYED_GATE in condition
+        and condition.index(DEPLOYED_GATE) > condition.index("skip_staging_e2e")
+    ):
+        violations.append("  the skip_staging_e2e bypass is evaluated before the deployed gate")
+    assert not violations, "a throttled run can reach the production deploy step:\n" + "\n".join(violations)
+
+
+def test_every_deploy_assuming_job_is_gated_on_deployed() -> None:
+    """Every deploy-assuming job reads the `deployed` signal, not the run result.
+
+    A job gated on `always()` + a sibling result (or on nothing at all, relying
+    on an implicit `success()`) is reachable whenever the sibling chain happens
+    to line up - which is how a throttled run skipped every pre-deploy gate
+    while still concluding success.
+    """
+    jobs = _deploy_jobs()
+    violations: list[str] = []
+    for job_id in DEPLOY_ASSUMING_JOBS:
+        job = jobs.get(job_id)
+        if not isinstance(job, dict):
+            violations.append(f"  deploy.yml: job {job_id!r} is missing - update this guard deliberately")
+            continue
+        condition = str(job.get("if") or "")
+        needs = job.get("needs") or []
+        if DEPLOYED_GATE not in condition:
+            violations.append(f"  {job_id}: if does not require {DEPLOYED_GATE!r} (got {condition!r})")
+        if "deploy-throttle" not in needs:
+            violations.append(f"  {job_id}: needs does not include deploy-throttle (got {needs!r})")
+    assert not violations, "deploy-assuming jobs are not gated on deployed:\n" + "\n".join(violations)
+
+
+def test_no_pre_deploy_gate_can_be_skipped_while_deploying() -> None:
+    """A run with `deployed == 'true'` must not be able to skip a pre-deploy gate.
+
+    The five atomic gates must carry NOTHING but the deployed gate in their
+    `if:` - any extra condition is another way to skip a gate while still
+    shipping. `staging-e2e` is the one documented exception (the
+    `skip_staging_e2e` dispatch input), and it must be ANDed with the gate.
+    """
+    jobs = _deploy_jobs()
+    allowed_extra = {"staging-e2e": "skip_staging_e2e"}
+    violations: list[str] = []
+    for job_id in PRE_DEPLOY_GATE_JOBS:
+        condition = str((jobs.get(job_id) or {}).get("if") or "")
+        if condition != DEPLOYED_GATE:
+            violations.append(f"  {job_id}: if must be exactly {DEPLOYED_GATE!r}, got {condition!r}")
+    for job_id, extra in allowed_extra.items():
+        condition = str((jobs.get(job_id) or {}).get("if") or "")
+        if extra not in condition:
+            violations.append(f"  {job_id}: documented bypass {extra!r} disappeared from its condition")
+        if DEPLOYED_GATE not in condition:
+            violations.append(f"  {job_id}: documented bypass is not ANDed with {DEPLOYED_GATE!r}")
+    assert not violations, "a pre-deploy gate can be skipped while deploying:\n" + "\n".join(violations)
+
+
+def test_throttled_path_keeps_the_no_deploy_marker() -> None:
+    """The throttled path must still say, in plain words, that nothing deployed.
+
+    FAR-954 made the run legible; FAR-2152 must not lose that while adding the
+    machine-readable gate. Both the job display name and the step summary have
+    to carry the marker, so a reader scanning the Actions UI cannot mistake a
+    green throttled run for a deploy.
+    """
+    throttle_status = _deploy_jobs().get("deploy-throttle-status") or {}
+    display_name = str(throttle_status.get("name") or "")
+    summary = str(_step_named(DEPLOY_YML, "Write throttle/deploy summary annotation").get("run") or "")
+    script = _throttle_script()
+    violations: list[str] = []
+    if "THROTTLED - NO DEPLOY" not in display_name:
+        violations.append(f"  deploy-throttle-status name lost 'THROTTLED - NO DEPLOY' (got {display_name!r})")
+    if NO_DEPLOY_MARKER not in summary:
+        violations.append(f"  the run summary no longer leads with {NO_DEPLOY_MARKER!r}")
+    if f'write_verdict "{NO_DEPLOY_MARKER}' not in script:
+        msg = f"  the throttle's own verdict summary no longer leads with {NO_DEPLOY_MARKER!r}"
+        violations.append(msg)
+    assert not violations, "the throttled path lost its NO DEPLOY marker:\n" + "\n".join(violations)
+
+
+def test_throttle_anchor_is_the_deploy_job_conclusion_not_the_run_conclusion() -> None:
+    """The throttle window anchors on a JOB conclusion, never a RUN conclusion.
+
+    FAR-2152's suspected livelock: if the throttle counted *successful runs*, a
+    throttled success would reset the window that throttled it and the pipeline
+    would never deploy again. It does not - it requires the
+    "Deploy to app.modulo.run" JOB to have concluded `success`, and a throttled
+    run skips that job (`skipped`), so a throttled run can never be the anchor.
+    Verified against the 2026-10-25 history: the throttle anchored on run
+    40183128848 (created 10:02:33Z, deploy job success), skipped the 11:24-12:44Z
+    re-dispatches, and passed at 13:02:14Z - anchor + 3h exactly.
+
+    Pin the input and the arithmetic so a future edit cannot reintroduce the
+    livelock by reading the run's own conclusion.
+    """
+    script = _throttle_script()
+    violations: list[str] = []
+    if 'select(.name == "Deploy to app.modulo.run") | .conclusion' not in script:
+        violations.append("  the anchor no longer selects the Deploy to app.modulo.run JOB conclusion")
+    if 'DEPLOY_JOB_CONCLUSION" = "success"' not in script:
+        violations.append("  the anchor no longer requires the deploy job to have concluded success")
+    if "--json databaseId,conclusion" in script:
+        msg = "  the run list now fetches a run-level conclusion - a throttled success could reset its own window"
+        violations.append(msg)
+    # The arithmetic the anchor feeds: strictly-less-than throttles, and the
+    # next-eligible time is derived from the SAME anchor.
+    if "DIFF_H=$(( (NOW_TS - LAST_TS) / 3600 ))" not in script:
+        violations.append("  the hours-since-deploy arithmetic changed shape")
+    if 'if [ "$DIFF_H" -lt "$INTERVAL_HOURS" ]' not in script:
+        violations.append("  the throttle no longer skips on a strict DIFF_H < INTERVAL_HOURS")
+    if "NEXT_TS=$((LAST_TS + INTERVAL_HOURS * 3600))" not in script:
+        violations.append("  next-deploy time is no longer derived from the same anchor")
+    if "--jq '.created_at'" not in script:
+        violations.append("  the anchor timestamp is no longer the run's created_at")
+    assert not violations, "the throttle anchor is not a real-deploy signal:\n" + "\n".join(violations)
+
+
+def test_production_deploy_still_verifies_the_shipped_sha() -> None:
+    """A deploying run must still prove production serves what it shipped.
+
+    The `deployed=true` gate must not weaken the existing artefact check: the
+    production job compares the live `/api/v1/deployment` git_sha against the
+    commit it deployed and FAILS on a mismatch.
+    """
+    # The staging job has a same-named step; scope to the production job.
+    production_steps = (_deploy_jobs().get("deploy-production") or {}).get("steps") or []
+    step = next(s for s in production_steps if isinstance(s, dict) and s.get("name") == "Check deployed SHA")
+    run = str(step.get("run") or "")
+    violations: list[str] = []
+    for needle in ("steps.git.outputs.git-sha", "SHA MISMATCH", '"deployed_sha=$deployedSha"'):
+        if needle not in run:
+            violations.append(f"  the deployed-SHA check lost {needle!r}")
+    if "exit 1" not in run:
+        violations.append("  a SHA mismatch no longer fails the step")
+    assert not violations, "the production SHA verification was weakened:\n" + "\n".join(violations)
+
+
+def test_deploy_consumers_classify_a_throttled_noop_by_the_deploy_job() -> None:
+    """Both escalation consumers read the deploy JOB, not the run's colour.
+
+    A throttled run's RUN conclusion is success. The consumers that count a
+    failure streak (the staleness check's evaluator and the deploy watchdog's
+    inline walk) must enrich the run records with the "Deploy to app.modulo.run"
+    job conclusion, or a throttled no-op between two real failures breaks the
+    streak and suppresses the alert (FAR-2152).
+    """
+    health_script = (REPO / ".github" / "scripts" / "deploy_health.py").read_text(encoding="utf-8")
+    violations: list[str] = []
+    if "deploy_job_conclusion" not in health_script:
+        violations.append("  deploy_health.py no longer reads deploy_job_conclusion")
+    # The staleness check hands the enriched records to deploy_health.py, so
+    # its load-bearing evidence is the enrichment call.
+    if "deploy_run_attempts.py enrich" not in _code(DEPLOY_STALENESS_YML.read_text(encoding="utf-8")):
+        violations.append("  deploy-staleness-check.yml: does not call the deploy-run enrichment")
+    # The watchdog classifies the streak inline, so it must read the field.
+    watchdog = _code(DEPLOY_WATCHDOG_YML.read_text(encoding="utf-8"))
+    if "deploy_run_attempts.py enrich" not in watchdog:
+        violations.append("  deploy-watchdog.yml: does not call the deploy-run enrichment")
+    if "deploy_job_conclusion" not in watchdog:
+        violations.append("  deploy-watchdog.yml: does not consume the deploy job conclusion")
+    assert not violations, "deploy consumers can misread a throttled no-op as a deploy:\n" + "\n".join(violations)
+
+
+# --- a workflow must not exceed GitHub's expression-length cap ----
+
+#: GitHub hard-caps an expression template at 21,000 characters. A ``run:``
+#: scalar that contains any ``${{ }}`` interpolation is parsed as such a
+#: template, so a long script with interpolations is rejected at workflow-load
+#: time: the push creates a run with ZERO jobs and only a "workflow file issue"
+#: annotation, so no CI check ever executes.
+GITHUB_MAX_EXPRESSION_LENGTH = 21_000
+
+
+def test_interpolated_run_scripts_stay_under_the_expression_length_cap() -> None:
+    """A ``${{ }}``-interpolated ``run:`` script must stay <= 21,000 chars.
+
+    ``deploy-watchdog.yml`` crossed the cap when the FAR-2139 escalation logic
+    grew its inline step past 22k characters. Because that scalar interpolated
+    ``github.repository``, GitHub treated the whole script as an expression and
+    refused to load the workflow - every push on ``main`` produced a red run
+    with no jobs while the YAML itself (and actionlint) looked valid.
+
+    The fix is to pass interpolated values via the step's ``env:`` block, which
+    keeps the script a plain literal. This test fails if any workflow lets a
+    ``${{ }}``-bearing ``run:`` scalar grow past the cap again.
+    """
+    violations: list[str] = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        workflow = _load_yaml(path)
+        for job_id, job in (workflow.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for index, step in enumerate(job.get("steps") or []):
+                if not isinstance(step, dict):
+                    continue
+                run = step.get("run")
+                if not isinstance(run, str) or "${{" not in run:
+                    continue
+                if len(run) > GITHUB_MAX_EXPRESSION_LENGTH:
+                    label = step.get("name") or "step " + str(index)
+                    violations.append(
+                        "  "
+                        + path.name
+                        + ": job '"
+                        + str(job_id)
+                        + "' step '"
+                        + str(label)
+                        + "' run: is "
+                        + str(len(run))
+                        + " chars with ${{ }} interpolation (max "
+                        + str(GITHUB_MAX_EXPRESSION_LENGTH)
+                        + "); move the interpolated value into the step's env:"
+                    )
+    assert not violations, (
+        "workflow run: scripts exceed GitHub's 21,000-char expression cap, so "
+        "the workflow will fail to load and no CI job will run:\n" + "\n".join(violations)
+    )

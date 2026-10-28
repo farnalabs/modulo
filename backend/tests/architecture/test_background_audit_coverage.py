@@ -61,6 +61,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tests.unit._source_scan import iter_source_text
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 SRC_DIR = BACKEND_DIR / "src" / "modulo"
 CORE_DIR = BACKEND_DIR / "src" / "modulo" / "core"
@@ -353,14 +355,14 @@ def _saq_cron_function_names() -> set[str]:
     raise AssertionError("_system_cron_jobs not found in saq_worker.py")
 
 
-def _public_function_calls(path: Path) -> dict[str, set[str]]:
-    """Public module-level functions in *path* -> the names their bodies call.
+def _public_function_calls(source: str, filename: str = "<unknown>") -> dict[str, set[str]]:
+    """Public module-level functions in *source* -> the names their bodies call.
 
     Nested/inner functions are ignored on purpose: the inventory classifies
     module-level entry points, and a private helper is covered by the public
     caller that reaches it.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = ast.parse(source, filename=filename)
     calls: dict[str, set[str]] = {}
     for node in tree.body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name.startswith("_"):
@@ -390,12 +392,15 @@ def _suite_run_entry_point_names(*, sources: list[Path] | None = None) -> set[st
     *sources* overrides the scanned files (test seam) — production callers
     pass nothing and get the whole ``src/modulo`` tree.
     """
-    paths = sorted(SRC_DIR.rglob("*.py")) if sources is None else sorted(sources)
+    if sources is None:
+        scanned = list(iter_source_text(SRC_DIR))
+    else:
+        scanned = [(path, path.read_text(encoding="utf-8")) for path in sorted(sources)]
     callers: dict[str, set[str]] = {}
-    for path in paths:
+    for path, source in scanned:
         if "migrations" in path.parts:
             continue
-        for name, called in _public_function_calls(path).items():
+        for name, called in _public_function_calls(source, str(path)).items():
             callers.setdefault(name, set()).update(called)
 
     frontier = {_SUITE_RUN_BUILDER}
@@ -431,11 +436,11 @@ def _reconciler_function_names() -> set[str]:
     """Module-level ``reconcile_`` / ``seed_`` / ``*_sweep|_reconcile|_cleanup``
     functions declared anywhere under ``src/modulo/core``."""
     names: set[str] = set()
-    for path in sorted(CORE_DIR.rglob("*.py")):
+    for path, source in iter_source_text(CORE_DIR):
         rel = path.relative_to(CORE_DIR).as_posix()
         if rel.startswith(_SKIP_DIR_PREFIX) or rel == _SKIP_FILE:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = ast.parse(source, filename=str(path))
         for node in tree.body:
             if (
                 isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))

@@ -16,6 +16,11 @@ code:
   - backend/src/modulo/db/models/run.py
   - backend/src/modulo/db/migrations/versions/0280_runs_node_deadline_watchdog_fired_count.py
   - backend/src/modulo/db/migrations/versions/0288_runs_execution_origin.py
+  - backend/src/modulo/db/models/run_attempt.py
+  - backend/src/modulo/db/crud/run_attempts.py
+  - backend/src/modulo/db/migrations/versions/0329_run_attempts.py
+  - backend/src/modulo/core/pipeline_engine/executor.py
+  - frontend/src/components/runs/RunAttemptHistory.vue
   - backend/src/modulo/core/line_diff.py
   - backend/src/modulo/core/cost_controller
   - frontend/src/utils/runUtils.ts
@@ -33,6 +38,11 @@ unit-tests:
   - backend/tests/unit/core/test_pipeline_execution_watchdog_retry.py
   - backend/tests/unit/core/cost_controller/test_run_warnings.py
   - backend/tests/unit/core/cost_controller/test_cost_aggregate.py
+  - backend/tests/unit/api/test_run_attempts_endpoint.py
+  - backend/tests/unit/db/crud/test_run_attempts.py
+  - backend/tests/unit/db/test_migration_0329_run_attempts.py
+  - backend/tests/unit/core/test_far2078_attempt_instrumentation.py
+  - frontend/src/__tests__/RunAttemptHistory.spec.ts
 bdd:
   - backend/tests/bdd/features/errors
   - backend/tests/bdd/features/pipelines/run_lifecycle.feature
@@ -279,6 +289,49 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       (`core/provenance.py`, `core/run_provenance.py`,
       `core/pipeline_engine/node_runner.py`, `core/node_output_split.py`,
       `api/routes/runs.py`, `tests/unit/core/test_provenance_taxonomy.py`)
+- [x] Durable per-attempt execution history (FAR-2078): every execution ATTEMPT
+      of a run is recorded, not only the final one. `run_attempts` (migration
+      `0329`, org-scoped with the `rls_org_isolation` policy, `run_id` /
+      `organisation_id` FKs `ON DELETE CASCADE` so retention inherits the parent
+      run with no separate sweep) carries a 0-based, per-run contiguous
+      `attempt_index` (unique with `run_id`; the `COALESCE(MAX, -1) + 1`
+      allocator is serialised on Postgres by a transaction-scoped per-run
+      advisory lock), `started_at`, nullable `ended_at`, `model_used`,
+      `error_code` and a CLOSED `terminal_reason` vocabulary (`deadline` /
+      `stall` / `guard_cap` / `worker_lost` / `provider_error` / `completed` /
+      `reset`; `NULL` means OPEN, enforced by
+      `ck_run_attempts_terminal_reason`). The executor opens a row on admission
+      (a demoted claim or fence-rejected budget bump opens none; an attempt-row
+      write failure never fails admission) and closes the latest open row on a
+      terminal outcome – an awaiting-human attempt stays OPEN, a retry/watchdog
+      re-dispatch and a handed-back worker loss close as `reset`, and a
+      fenced-out terminal write closes nothing – so the intermediate attempts
+      that previously left no durable record are diagnosable
+      (`db/models/run_attempt.py`, `db/crud/run_attempts.py`,
+      `core/pipeline_execution.py`, `test_run_attempts.py`,
+      `test_far2078_attempt_instrumentation.py`)
+- [x] `GET /api/v1/runs/{run_id}/attempts` returns the run's attempt history
+      ordered by `attempt_index` ascending, gated on the SAME viewer-level
+      `run.status` permission as run detail (`require_permission_any_credential`,
+      so JWT and org API-key callers both work, deliberately not a new
+      permission key). The run is loaded org-scoped behind `set_rls_org`, so a
+      missing run AND another organisation's run both answer 404 – never an
+      empty list, which would leak existence semantics. `items` is capped at
+      100 while `total` carries the run's true attempt count, so a truncated
+      page is visible rather than silently reported as complete
+      (`test_run_attempts_endpoint.py`)
+- [x] The run detail page renders the attempt history
+      (`RunAttemptHistory.vue`) as a STATIC record, deliberately NOT an
+      `aria-live` region: 1-based attempt numbers over the 0-based wire index,
+      started time, duration (an OPEN attempt reads as running, an unparseable
+      interval as a dash, never a fabricated duration), the translated closed
+      terminal-reason vocabulary (an unrecognised value reads as a translated
+      Unknown, never the raw enum), model and error code. Loading, empty (older
+      runs with no recorded attempts) and an inline unavailable + Retry state
+      are handled without breaking the rest of the page (a 404 or generic fetch
+      failure degrades to unavailable), a monotonic request id discards a stale
+      response when the run id changes mid-flight, and a truncation note appears
+      when `total` exceeds the returned items (`RunAttemptHistory.spec.ts`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
   MVP cut – restore from git history when re-enabling. See FAR-542._
@@ -293,6 +346,19 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 ## QA History
 
+- 2026-10-25: **Improve Architecture product-map walk** – closed the untracked
+  FAR-2078 per-attempt execution history surface. It shipped in three slices
+  (storage `#2238`, read API `#2265`, run-detail view `#2291`) with registered
+  `run-attempt-history*` testids but no home in either product-map layer, so the
+  whole diagnostic surface – the `run_attempts` table and its
+  `attempt_index`/`terminal_reason` contracts, the executor instrumentation
+  (open on admission, close-on-terminal, `reset` on re-dispatch, open while
+  awaiting a human) and the `GET /runs/{id}/attempts` read + run-detail table –
+  was invisible to the feature graph and to Assistant's
+  `search_documentation` indexer. Added three checked behaviour lines, the
+  `db/models/run_attempt.py` / `db/crud/run_attempts.py` / migration `0329` /
+  executor / `RunAttemptHistory.vue` code citations and the four backend suites
+  plus the frontend spec. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1141 run-provenance half: `runs.execution_origin` (ADR-042) and the
   `dispatched` stamp shipped in PR #1370 with only a testid in the product map,

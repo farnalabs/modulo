@@ -353,6 +353,29 @@ class TestRotateTriggers:
         assert "UPDATE" not in session.calls[0][0]
 
     @pytest.mark.asyncio
+    async def test_non_object_config_json_is_skipped_and_sweep_continues(self) -> None:
+        """A JSONB ``config_json`` can hold a non-object document (schema drift
+        or a manual edit). It carries no top-level secret key, so rotation must
+        skip that row with a warning — never AttributeError out of the whole
+        sweep, which would leave every later row's secret unrotated."""
+        new_key = _new_key()
+        new_fernet = Fernet(new_key)
+        secret_ct = new_fernet.encrypt(b"webhook-hmac").decode()
+        session = _make_session(
+            [
+                SimpleNamespace(id="t-list", config_json=[]),
+                SimpleNamespace(id="t-ok", config_json={"hmac_secret": secret_ct}),
+            ]
+        )
+
+        count = await _rotate_triggers(session, new_fernet, None, new_key=new_key)
+
+        assert count == 1
+        updates = [(sql, params) for sql, params in session.calls if "UPDATE triggers" in sql]
+        assert len(updates) == 1
+        assert updates[0][1]["id"] == "t-ok"
+
+    @pytest.mark.asyncio
     async def test_rows_without_secret_keys_are_not_written(self) -> None:
         config = {"url": "https://example.com", "accepted_events": ["push"]}
         session = _make_session([SimpleNamespace(id="t-5", config_json=config)])

@@ -4,7 +4,7 @@
     <div class="page-wide">
     <PageHeader :title="$t('views.EvalProposalsQueueView.title')" :subtitle="$t('views.EvalProposalsQueueView.subtitle')" />
 
-    <div v-if="loading" class="space-y-4">
+    <div v-if="loading" class="space-y-4" aria-busy="true">
       <div v-for="i in 3" :key="i" class="card p-5 animate-pulse">
         <div class="flex items-start justify-between gap-4">
           <div class="flex-1 space-y-3">
@@ -59,7 +59,7 @@
 
               <div>
                 <p class="text-sm font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.gap_description') }}</p>
-                <p class="mt-0.5 text-sm text-muted-foreground">{{ p.rejection_reason }}</p>
+                <p class="mt-0.5 text-sm text-muted-foreground">{{ p.rejection_reason || '—' }}</p>
               </div>
 
               <div class="grid grid-cols-2 gap-4 text-xs text-muted-foreground">
@@ -75,7 +75,7 @@
                   <span class="font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.detected') }}</span> {{ p.created_at ? formatDate(p.created_at) : '—' }}
                 </div>
                 <div v-if="p.needs_human_review">
-                  <span class="font-medium text-amber-500">{{ $t('views.EvalProposalsQueueView.needs_human_review') }}</span>
+                  <span class="font-medium text-warning-text">{{ $t('views.EvalProposalsQueueView.needs_human_review') }}</span>
                 </div>
               </div>
             </div>

@@ -187,7 +187,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 | Redis | 8+ | **Yes** (production) | SAQ task queue, rate limiting, event broker |
 | Python | 3.12+ | Yes | Application runtime |
 | `uv` | 0.11.13 | Yes | Python package manager (exact pin in `backend/Dockerfile` and `deploy/docker/Dockerfile.all-in-one`) |
-| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.6` via `packageManager`), not npm |
+| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.8` via `packageManager`), not npm |
 | Docker | 24+ | For Docker Compose | Container runtime |
 
 ### Redis Requirement Table
@@ -234,6 +234,16 @@ Firefox, Safari, and Edge are **not** covered by the automated E2E matrix; the
 Playwright config (`frontend/playwright.config.ts`) declares no `projects` block,
 so a single default Chromium browser runs. Treat the other three as untested
 here.
+
+---
+
+## Modulo Website Version Display (Scope-Out Decision)
+
+**Decision recorded per FAR-1872 (d):** A grep of `modulo-website/src/**` found ZERO version strings and ZERO ghcr tags.
+
+**Explicit scope-out:** The marketing website (modulo.run, served from `modulo-website` repo) does not display version badges, changelog mirrors, or a downloads page in this release. This is a deliberate deferral: the website surfaces product capabilities and documentation; version-specific download/install links live in the product docs (`docs/deployment.md`, `docs/upgrade-process.md`, `docs/release-process.md`) and the GHCR package page.
+
+If a version badge, changelog mirror, or downloads page is desired for the website, it should be tracked as a separate feature ticket in the `modulo-website` repo.
 
 ---
 

@@ -132,9 +132,12 @@ guarded against tampering at both the ORM and the database layer.
       + `verification_key_endpoint`, `cli/evidence.py`,
       `docs/offline-verifiable-evidence.md`,
       `test_evidence_pack.py`, `test_audit_evidence_pack_route.py`)
-- [x] The audit surface is admin-only and gated by the `audit_viewer` feature
-      key – 403 for non-admin, 401 unauthenticated (`test_audit_gating`,
-      audit_export.feature)
+- [x] Recording is not licence-gated: every tier appends to the hash-chained,
+      append-only trail. The READ surface (browse, verify, export, scan, evidence
+      pack and verification key) is admin-only and gated by the Team-tier
+      `audit_viewer` feature key plus `audit.manage` – 402 on an unlicensed
+      Community install, 403 for non-admin, 401 unauthenticated
+      (`test_audit_gating`, audit_export.feature)
 - [x] Cross-domain product events are recorded: HITL output delivery, HITL
       claim expiry, org deletion requests, fernet key rotation, and run
       lifecycle (event_recording.feature scenarios)

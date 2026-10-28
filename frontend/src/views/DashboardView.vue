@@ -63,7 +63,7 @@
         <!-- Eval pass rate card -->
         <router-link to="/eval-editor" class="card card-hover p-4 block" data-testid="dashboard-eval-rate">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.eval_pass_rate') }}</p>
-          <div v-if="summary.eval_pass_rate != null">
+          <div v-if="hasEvalData">
             <p class="text-2xl font-semibold tabular-nums">{{ evalRateDisplay }}</p>
             <div class="flex items-center gap-2 mt-1">
               <span v-if="evalPeriodDelta?.delta_pct != null" :class="evalDeltaClass" class="inline-flex items-center text-sm font-medium">
@@ -74,7 +74,7 @@
                 <ChevronDown v-else class="h-3.5 w-3.5" aria-hidden="true" />
                 {{ evalTrendLabel }}
               </span>
-              <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate.total_evals }} {{ $t('views.DashboardView.total_evals') }}</span>
+              <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate?.total_evals }} {{ $t('views.DashboardView.total_evals') }}</span>
             </div>
             <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--primary-text))" :show-y-axis="true" />
           </div>
@@ -181,37 +181,39 @@
         </div>
       </div>
       <!-- Recent runs list -->
-      <div class="card p-4">
+      <div class="card p-4" data-testid="dashboard-recent-runs">
         <h2 class="text-base font-semibold mb-4">{{ $t('views.DashboardView.recent_runs') }}</h2>
-        <div v-if="summary.recent_runs && summary.recent_runs.length > 0" class="divide-y">
-          <router-link v-for="run in summary.recent_runs" :key="run.id" :to="'/runs/' + run.id" class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0" :data-testid="'dashboard-recent-run-' + run.id">
-            <div class="min-w-0 flex-1">
-              <p class="text-sm font-medium truncate" v-tooltip.top="run.pipeline_name">{{ run.pipeline_name }}</p>
-              <p class="text-xs text-muted-foreground">{{ formatRunDate(run.created_at) }}</p>
-            </div>
-            <div class="flex items-center gap-2 ml-3">
-              <span :class="runStatusBadgeClass(run.status)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
-                {{ runStatusLabel(run.status) }}
+        <DataTable
+          :columns="recentRunColumns"
+          :rows="summary.recent_runs"
+          :row-clickable="false"
+        >
+          <template #empty>
+            {{ $t('views.DashboardView.no_runs_yet') }}
+          </template>
+          <template #cell-pipeline_name="{ row }">
+            <router-link :to="'/runs/' + String(row.id)" class="block min-w-0 font-medium hover:underline" :data-testid="'dashboard-recent-run-' + String(row.id)">
+              <span class="block truncate" v-tooltip.top="String(row.pipeline_name)">{{ row.pipeline_name }}</span>
+              <span class="block text-xs font-normal text-muted-foreground">{{ formatRunDate(String(row.created_at)) }}</span>
+            </router-link>
+          </template>
+          <template #cell-status="{ row }">
+            <div class="flex flex-wrap items-center gap-1">
+              <span :class="runStatusBadgeClass(String(row.status))" class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize">
+                {{ runStatusLabel(String(row.status)) }}
               </span>
-              <!-- FAR-1141: run provenance. A dispatched run must never read
-                   indistinguishably from one Modulo executed itself, so the
-                   badge renders whenever execution_origin is 'dispatched'.
-                   Static label (the visible text IS the accessible name - no
-                   role/aria-live needed); the hover title carries the full
-                   explanation. Same helper + key as RunsListView. -->
               <span
-                v-if="isDispatchedRun(run.execution_origin)"
-                :data-testid="'dashboard-dispatched-' + run.id"
+                v-if="isDispatchedRun(typeof row.execution_origin === 'string' ? row.execution_origin : null)"
+                :data-testid="'dashboard-dispatched-' + String(row.id)"
                 :title="$t('common.execution_origin.dispatched_hint')"
                 class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900 dark:text-cyan-300"
               >{{ $t('common.execution_origin.dispatched') }}</span>
-              <span class="text-xs text-muted-foreground hidden sm:inline">{{ run.trigger_type }}</span>
             </div>
-          </router-link>
-        </div>
-        <div v-else class="flex items-center justify-center py-6 text-sm text-muted-foreground">
-          {{ $t('views.DashboardView.no_runs_yet') }}
-        </div>
+          </template>
+          <template #cell-trigger_type="{ row }">
+            <span class="text-xs text-muted-foreground">{{ String(row.trigger_type ?? '') }}</span>
+          </template>
+        </DataTable>
       </div>
     </template>
   </div>
@@ -226,6 +228,7 @@ import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
 import StatCard from '../components/StatCard.vue'
+import { DataTable, type Column } from '../components/ui/data-table'
 import { ChevronUp, ChevronDown, GitBranch, BarChart2, Activity, Clock, XCircle, PauseCircle } from '@lucide/vue'
 import { RUN_STATUS } from '../constants/filters'
 import { formatMoney } from '../lib/money'
@@ -246,6 +249,14 @@ const totalSpend = computed(() => dashboardStore.totalSpend)
 const periodRefreshing = computed(() => dashboardStore.periodRefreshing)
 
 const isTeam = computed(() => planStore.isTeam)
+
+const recentRunColumns = computed<Column[]>(() => [
+  { key: 'pipeline_name', label: t('views.DashboardView.pipeline') },
+  { key: 'status', label: t('views.DashboardView.status') },
+  { key: 'trigger_type', label: t('views.DashboardView.trigger') },
+])
+
+const hasEvalData = computed(() => summary.value?.eval_pass_rate != null && summary.value.eval_pass_rate.total_evals > 0)
 
 const expandedTeam = ref<string | null>(null)
 
@@ -269,7 +280,7 @@ const lastEvalRates = computed(() => {
   if (!summary.value?.trend) return []
   return summary.value.trend
     .map(d => d.eval_pass_rate)
-    .filter((r): r is number => r !== null)
+    .filter((r): r is number => r !== null && Number.isFinite(r))
 })
 
 const evalTrend = computed(() => {

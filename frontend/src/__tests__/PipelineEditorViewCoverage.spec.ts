@@ -555,57 +555,16 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     wrapper.unmount()
   })
 
-  // -- loadLifecycleMaps: catch branch and items shape --
-  it('loadLifecycleMaps catches errors and handles items response shape', async () => {
-    useApiFns.get.mockImplementation((url: string) => {
-      if (url.includes('/lifecycle-maps') && !url.includes('/lm-')) {
-        return Promise.resolve({ items: [{ id: 'lm-1' }, { id: 'lm-2' }] })
-      }
-      if (url.includes('/lifecycle-maps/lm-1')) {
-        return Promise.resolve({ id: 'lm-1', name: 'Map One', stages: [{ pipeline_id: 'test-pipeline-id' }] })
-      }
-      if (url.includes('/lifecycle-maps/lm-2')) {
-        return Promise.reject(new Error('map_down'))
-      }
-      if (url.includes('/pipeline-folders')) return Promise.resolve([])
-      return Promise.resolve({ items: [] })
-    })
+  it('does not expose lifecycle-map loading or error state in Alpha', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
     await flushPromises()
     const vm = wrapper.vm as any
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    await vm.loadLifecycleMaps()
-    await flushPromises()
-    // lm-1 matched, lm-2 failed (caught)
-    expect(vm.linkedLifecycleMaps.length).toBe(1)
-    expect(vm.linkedLifecycleMaps[0].id).toBe('lm-1')
-    warnSpy.mockRestore()
-    wrapper.unmount()
-  })
-
-  // -- loadLifecycleMaps: full list not an array --
-  it('loadLifecycleMaps handles non-array response gracefully', async () => {
-    useApiFns.get.mockImplementation((url: string) => {
-      if (url.includes('/lifecycle-maps') && !url.includes('/lm-')) {
-        return Promise.resolve(null)
-      }
-      if (url.includes('/pipeline-folders')) return Promise.resolve([])
-      return Promise.resolve({ items: [] })
-    })
-    router.push('/pipelines/test-pipeline-id/editor')
-    await router.isReady()
-    const wrapper = mountEditor()
-    await flushPromises()
-    const vm = wrapper.vm as any
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    await vm.loadLifecycleMaps()
-    await flushPromises()
-    expect(vm.linkedLifecycleMaps).toEqual([])
-    warnSpy.mockRestore()
+    expect(vm.loadLifecycleMaps).toBeUndefined()
+    expect(vm.linkedLifecycleMaps).toBeUndefined()
+    expect(useApiFns.get).not.toHaveBeenCalledWith(expect.stringContaining('/lifecycle-maps'))
     wrapper.unmount()
   })
 

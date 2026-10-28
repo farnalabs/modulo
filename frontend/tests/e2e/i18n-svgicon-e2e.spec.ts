@@ -1,4 +1,4 @@
-import { test, expect, loginAsAdmin, loginForSystemRoute } from './setup/fixtures'
+import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('i18n Keys & SvgIcon Regression', () => {
   test('sidebar shows "Runners" not raw key', { tag: "@regression" }, async ({ page, env }) => {
@@ -25,22 +25,17 @@ test.describe('i18n Keys & SvgIcon Regression', () => {
       }
     })
 
-    // /settings/email lives in the SYSTEM sidebar group (FAR-938), which the
-    // router gates on is_system_admin. `loginAsAdmin` issues a plain org-admin
-    // identity, so the route redirected to the Dashboard and this test passed
-    // vacuously — it never rendered the page whose Mail/File icons it means to
-    // check (FAR-1919). Use the system-route identity and assert the surface
-    // was actually reached.
-    const systemAdmin = await loginForSystemRoute(page, env)
+    // /settings/email is organisation-scoped (the API lives under
+    // /api/v1/admin/org/{org_id}) and lives in the ADMIN sidebar group behind
+    // required_roles: [admin] (#2455 moved it out of the system-admin-only
+    // SYSTEM group), so the plain org-admin staging identity reaches the page.
+    // Assert the surface was actually reached rather than letting a redirect
+    // make this test pass without rendering the Mail/File icons it means to
+    // check (FAR-1919).
+    await loginAsAdmin(page, env)
     await page.goto('/settings/email')
-    if (systemAdmin) {
-      await expect(page.locator('h1')).toContainText('Email Settings')
-    } else {
-      // The staging/prod e2e identity is a regular org admin, so the SYSTEM
-      // route redirects — assert the documented redirect rather than letting
-      // the test pass without exercising anything.
-      await expect(page).toHaveURL(/\/$/)
-    }
+    await expect(page).toHaveURL(/\/settings\/email$/)
+    await expect(page.locator('h1')).toContainText('Email Settings')
 
     await page.goto('/dashboard')
 

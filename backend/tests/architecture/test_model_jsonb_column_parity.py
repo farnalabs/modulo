@@ -114,6 +114,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 import modulo.db.models  # noqa: F401  (registers every mapper on Base.metadata)
 from modulo.db.models.base import Base
+from tests.unit._source_scan import iter_source_text
 
 _BACKEND = Path(__file__).resolve().parent.parent.parent
 _SRC = _BACKEND / "src" / "modulo"
@@ -523,14 +524,14 @@ def test_dropped_0147_pairs_are_actually_dropped() -> None:
     )
 
 
-def _jsonb_construction_lines(path: Path) -> list[int]:
-    """Line numbers of every ``JSONB(...)`` Call in *path* (AST, not text).
+def _jsonb_construction_lines(source: str, filename: str = "<unknown>") -> list[int]:
+    """Line numbers of every ``JSONB(...)`` Call in *source* (AST, not text).
 
     AST rather than a regex: prose that merely mentions ``JSONB (`` must not
     register, while every call shape — bare ``JSONB()``,
     ``postgresql.JSONB()``, ``JSON().with_variant(JSONB(), ...)`` — must.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = ast.parse(source, filename=filename)
     lines: list[int] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -557,10 +558,10 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
     a JSONB dialect impl too).
     """
     offenders: dict[str, list[int]] = {}
-    for path in sorted(_SRC.rglob("*.py")):
+    for path, source in iter_source_text(_SRC):
         if _MIGRATIONS_DIR in path.parents:
             continue
-        lines = _jsonb_construction_lines(path)
+        lines = _jsonb_construction_lines(source, str(path))
         if lines:
             offenders[path.relative_to(_BACKEND).as_posix()] = lines
 

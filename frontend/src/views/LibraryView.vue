@@ -164,7 +164,7 @@
           :toggle-loading="toggleLoading"
           :adapting="adapting"
           @create-pipeline="createPipeline"
-          @create-lifecycle-map="createLifecycleMap"
+
           @view-details="viewPrimitive"
           @toggle-auto-update="toggleAutoUpdate"
         />
@@ -183,7 +183,6 @@
             :show-tags="false"
             :adapting="adapting"
             @create-pipeline="createPipeline"
-            @create-lifecycle-map="createLifecycleMap"
             @view-details="viewPrimitive"
             @toggle-auto-update="toggleAutoUpdate"
           />
@@ -198,7 +197,7 @@
           badge="community"
           :adapting="adapting"
           @create-pipeline="createPipeline"
-          @create-lifecycle-map="createLifecycleMap"
+
           @view-details="viewPrimitive"
           @toggle-auto-update="toggleAutoUpdate"
         />
@@ -301,7 +300,6 @@ const typeOptions = [
   { value: 'schema', labelKey: 'views.LibraryView.type_schemas' },
   { value: 'integration', labelKey: 'views.LibraryView.type_integrations' },
   { value: 'composite', labelKey: 'views.LibraryView.type_composites' },
-  { value: 'lifecycle_map', labelKey: 'views.LibraryView.type_lifecycle_maps' },
   { value: 'library_collection', labelKey: 'views.LibraryView.type_library_collections' },
 ]
 
@@ -361,9 +359,14 @@ const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<Li
 
 const primitives = ref<LibraryPrimitive[]>([])
 
+function isAlphaPrimitive(primitive: LibraryPrimitive): boolean {
+  return primitive.primitive_type !== 'lifecycle_map'
+}
+
 watch([loadResp, section], ([d]) => {
   if (d) {
-    primitives.value = section.value === 'native' ? d.items.filter(p => p.source !== 'community') : d.items
+    const visibleItems = d.items.filter(isAlphaPrimitive)
+    primitives.value = section.value === 'native' ? visibleItems.filter(p => p.source !== 'community') : visibleItems
     total.value = d.total
   }
 }, { immediate: true })
@@ -471,27 +474,6 @@ function createPipeline(prim: LibraryPrimitive) {
 }
 
 const adapting = ref<Record<string, boolean>>({})
-
-async function createLifecycleMap(prim: LibraryPrimitive): Promise<void> {
-  if (adapting.value[prim.id]) return
-  adapting.value[prim.id] = true
-  error.value = null
-  try {
-    const { data, error: err } = await api.POST('/api/v1/libraries/{primitive_id}/create-lifecycle-map', {
-      params: { path: { primitive_id: prim.id } },
-    })
-    if (err) {
-      error.value = formatApiError(err)
-      return
-    }
-    const created = data as unknown as { id: string }
-    router.push({ name: 'lifecycle-map-detail', params: { id: created.id } })
-  } catch (e) {
-    error.value = formatApiError(e)
-  } finally {
-    adapting.value[prim.id] = false
-  }
-}
 
 function viewPrimitive(prim: LibraryPrimitive) {
   router.push({ name: 'library-pipeline-wizard', params: { id: prim.id } })

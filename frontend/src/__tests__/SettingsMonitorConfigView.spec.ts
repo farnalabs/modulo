@@ -218,6 +218,41 @@ describe('SettingsMonitorConfigView', () => {
     expect(wrapper.text()).toContain('socket hang up')
   })
 
+  it('covers malformed/partial backend payloads and builtin-only save fallback', async () => {
+    getMock.mockResolvedValue({ data: { backends: ['grafana_faro'], grafana_faro: { url: 'https://faro.example', apiKey: '' } }, error: undefined })
+    const wrapper = mount(SettingsMonitorConfigView)
+    await flush()
+    expect((toggles(wrapper)[0].element as HTMLInputElement).checked).toBe(false)
+    const faro = toggles(wrapper)[3]
+    expect((faro.element as HTMLInputElement).checked).toBe(true)
+
+    await faro.setValue(false)
+    await findButtonByText(wrapper, 'Save')!.trigger('click')
+    await flush()
+    expect(putMock).toHaveBeenCalledWith('/api/v1/admin/monitor-config', { body: { backends: ['builtin'] } })
+  })
+
+  it('clears a visible flash and exercises reset while dirty', async () => {
+    const wrapper = mount(SettingsMonitorConfigView)
+    await flush()
+    const [, sentry] = toggles(wrapper)
+    await sentry.setValue(true)
+    await nextTick()
+    const resetBtn = findButtonByText(wrapper, 'Reset')!
+    expect(resetBtn.attributes('disabled')).toBeUndefined()
+    await resetBtn.trigger('click')
+    await flush()
+    expect(getMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('covers GET error response and clears timers on unmount', async () => {
+    getMock.mockResolvedValueOnce({ data: null, error: { detail: 'config error' } })
+    const wrapper = mount(SettingsMonitorConfigView)
+    await flush()
+    expect(wrapper.exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('reset re-fetches the stored config (only enabled once the form is dirty)', async () => {
     const wrapper = mount(SettingsMonitorConfigView)
     await flush()

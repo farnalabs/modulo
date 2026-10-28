@@ -1,6 +1,7 @@
 /**
- * Shared JWT payload decoder — the single source of truth for base64url
- * decoding of the access token's payload segment.
+ * Shared base64url decode primitive — the single source of truth for
+ * base64url decoding (the access token's payload segment, and any other
+ * base64url segment such as a licence key's payload).
  *
  * FIX 6: three inline copies (SettingsTriggersView, router, AppLayout)
  * disagreed on padding handling — two padded, one did not. This version
@@ -9,7 +10,7 @@
  * returns null on any decode/parse failure.
  */
 
-function decodeBase64Url(s: string): string {
+export function decodeBase64Url(s: string): string {
   s = s.replaceAll('-', '+').replaceAll('_', '/')
   const pad = s.length % 4
   if (pad) s += '='.repeat(4 - pad)

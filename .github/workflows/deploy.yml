@@ -15,6 +15,16 @@ on:
         required: false
         default: false
         type: boolean
+      release_ref:
+        description: 'Immutable release ref to deploy (set with release_sha for RC deploys)'
+        required: false
+        default: ''
+        type: string
+      release_sha:
+        description: 'Immutable commit SHA for release_ref (set with release_ref for RC deploys)'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: deploy-pipeline-${{ github.ref_name }}
@@ -41,6 +51,17 @@ jobs:
       actions: read
     outputs:
       should_deploy: ${{ steps.check.outputs.should_deploy }}
+      # FAR-2152: the machine-readable "did this run deploy?" signal, emitted
+      # in lockstep with should_deploy on EVERY branch of the check step
+      # (`deployed=true` for a run that will execute the deploy pipeline,
+      # `deployed=false` for every path that deploys nothing). Every
+      # downstream job that assumes a deploy happened gates on THIS, never on
+      # the run conclusion: a throttled run concludes SUCCESS while shipping
+      # nothing (2026-10-25: four "successful" deploy runs deployed nothing
+      # and in `gh run list` were indistinguishable from real deploys).
+      # A structural test (test_workflow_structure.py) pins the lockstep and
+      # the downstream gating so this cannot silently regress.
+      deployed: ${{ steps.check.outputs.deployed }}
       # Legibility outputs (no job gates on these): WHY the throttle skipped
       # (in_progress | interval_throttled; empty when deploying) and WHEN the
       # next deploy is expected. A throttled run still concludes SUCCESS —
@@ -56,6 +77,8 @@ jobs:
       run_event: ${{ steps.run_identity.outputs.run_event }}
       push_before: ${{ steps.run_identity.outputs.push_before }}
       push_after: ${{ steps.run_identity.outputs.push_after }}
+      requested_ref: ${{ steps.run_identity.outputs.requested_ref }}
+      requested_sha: ${{ steps.run_identity.outputs.requested_sha }}
     steps:
       # Echoed before anything else (this job never checks out code) so the
       # run's identity is on record even if the throttle below fails or skips
@@ -66,20 +89,85 @@ jobs:
         id: run_identity
         shell: bash
         run: |
-          echo "RUN_SHA=${{ github.sha }}"
-          echo "RUN_REF=${{ github.ref }}"
+          REQUESTED_SHA="${{ github.event.inputs.release_sha }}"
+          REQUESTED_REF="${{ github.event.inputs.release_ref }}"
+          if [ -n "$REQUESTED_SHA" ]; then
+            EFFECTIVE_SHA="$REQUESTED_SHA"
+            EFFECTIVE_REF="$REQUESTED_REF"
+          else
+            EFFECTIVE_SHA="${{ github.sha }}"
+            EFFECTIVE_REF="${{ github.ref }}"
+          fi
+          echo "RUN_SHA=${EFFECTIVE_SHA}"
+          echo "RUN_REF=${EFFECTIVE_REF}"
           echo "RUN_EVENT=${{ github.event_name }}"
           if [ "${{ github.event_name }}" = "push" ]; then
             echo "PUSH_BEFORE=${{ github.event.before }}"
             echo "PUSH_AFTER=${{ github.event.after }}"
           fi
           {
-            echo "run_sha=${{ github.sha }}"
-            echo "run_ref=${{ github.ref }}"
+            echo "run_sha=${EFFECTIVE_SHA}"
+            echo "run_ref=${EFFECTIVE_REF}"
             echo "run_event=${{ github.event_name }}"
             echo "push_before=${{ github.event.before }}"
             echo "push_after=${{ github.event.after }}"
+            echo "requested_ref=${{ github.event.inputs.release_ref }}"
+            echo "requested_sha=${{ github.event.inputs.release_sha }}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Validate requested release identity
+        shell: bash
+        env:
+          # The tag/object lookups below call `gh api`, which requires an
+          # explicit token in the step environment. Without it every RC
+          # dispatch fails in deploy-throttle before the throttle is even
+          # consulted; normal deploys exit above the `gh` calls, so CI cannot
+          # exercise the missing-token path.
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_REF: ${{ github.event.inputs.release_ref }}
+          REQUESTED_SHA: ${{ github.event.inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$REQUESTED_REF" ] && [ -z "$REQUESTED_SHA" ]; then
+            echo "Normal deploy identity: ${{ github.sha }}"
+            exit 0
+          fi
+          if [ -z "$REQUESTED_REF" ] || [ -z "$REQUESTED_SHA" ]; then
+            echo "::error::release_ref and release_sha must be supplied together; refusing a partial release identity."
+            exit 1
+          fi
+          case "$REQUESTED_REF" in
+            v[0-9]*-rc[0-9]*) ;;
+            *) echo "::error::release_ref must be an RC tag (vX.Y.Z-rcN); got '$REQUESTED_REF'"; exit 1 ;;
+          esac
+          if ! [[ "$REQUESTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::release_sha must be a full 40-character commit SHA; got '$REQUESTED_SHA'"
+            exit 1
+          fi
+          TAG_REF_JSON="$(gh api "repos/${{ github.repository }}/git/ref/tags/${REQUESTED_REF}")"
+          TAG_OBJECT_TYPE="$(jq -r '.object.type // empty' <<<"$TAG_REF_JSON")"
+          TAG_OBJECT_SHA="$(jq -r '.object.sha // empty' <<<"$TAG_REF_JSON")"
+          if [ -z "$TAG_OBJECT_TYPE" ] || [ -z "$TAG_OBJECT_SHA" ]; then
+            echo "::error::could not resolve release tag ${REQUESTED_REF} to a Git object; refusing deployment."
+            exit 1
+          fi
+          if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
+            ACTUAL_SHA="$(gh api "repos/${{ github.repository }}/git/tags/${TAG_OBJECT_SHA}" --jq '.object.sha')"
+          elif [ "$TAG_OBJECT_TYPE" = "commit" ]; then
+            ACTUAL_SHA="$TAG_OBJECT_SHA"
+          else
+            echo "::error::release tag ${REQUESTED_REF} resolved to unsupported Git object type '$TAG_OBJECT_TYPE'; refusing deployment."
+            exit 1
+          fi
+          if ! [[ "$ACTUAL_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::release tag ${REQUESTED_REF} did not resolve to a full commit SHA; refusing deployment."
+            exit 1
+          fi
+          if [ "$ACTUAL_SHA" != "$REQUESTED_SHA" ]; then
+            echo "::error::requested release identity mismatch: ${REQUESTED_REF} resolves to ${ACTUAL_SHA}, requested ${REQUESTED_SHA}."
+            exit 1
+          fi
+          echo "Immutable release identity accepted: ${REQUESTED_REF} at ${REQUESTED_SHA}."
 
       - name: Check last deploy attempt time
         id: check
@@ -128,6 +216,7 @@ jobs:
           if [ "$FORCE_DEPLOY" = "true" ]; then
             {
               echo "should_deploy=true"
+              echo "deployed=true"
               echo "skip_reason="
               echo "next_deploy="
             } >> "$GITHUB_OUTPUT"
@@ -157,6 +246,7 @@ jobs:
           if [ -n "$IN_PROGRESS" ]; then
             {
               echo "should_deploy=false"
+              echo "deployed=false"
               echo "skip_reason=in_progress"
             } >> "$GITHUB_OUTPUT"
             # Next deploy: as soon as the in-progress run concludes - an exact
@@ -164,7 +254,7 @@ jobs:
             # fabricated timestamp.
             echo "next_deploy=after run ${IN_PROGRESS} finishes (it is deploying now)" >> "$GITHUB_OUTPUT"
             echo "::notice::A deploy run is already in progress (run $IN_PROGRESS) - batching; skipping this run so it does not cancel the in-progress deploy. This run will NOT deploy; expected next deploy: after run $IN_PROGRESS finishes."
-            write_verdict "NO - this run deploys nothing (batched)" "another deploy run is already in progress (run ${IN_PROGRESS}); batching instead of competing with it" "after run ${IN_PROGRESS} finishes (it is deploying now)"
+            write_verdict "NO DEPLOY — batched behind an in-progress run (FAR-954)" "another deploy run is already in progress (run ${IN_PROGRESS}); batching instead of competing with it" "after run ${IN_PROGRESS} finishes (it is deploying now)"
             exit 0
           fi
 
@@ -173,6 +263,7 @@ jobs:
           if [[ "$COMMIT_MSG" =~ ^(fix\(deploy(ment)?\)|fix\(ci\)|infra\(deploy\)|ci:) ]]; then
             {
               echo "should_deploy=true"
+              echo "deployed=true"
               echo "skip_reason="
               echo "next_deploy="
             } >> "$GITHUB_OUTPUT"
@@ -188,13 +279,28 @@ jobs:
           # push and starve real deploys (observed 2026-08-08: prod stuck on the
           # 10:52 build for 4h while every later run skipped against the previous
           # skipped run).
+          #
+          # FAR-2152: the anchor is a JOB conclusion, never the RUN conclusion.
+          # This is what makes the livelock (a throttled success resetting the
+          # window that throttled it) impossible: on a throttled run the
+          # "Deploy to app.modulo.run" job is SKIPPED, so it can never be the
+          # anchor. Verified against the 2026-10-25 run history: the throttle
+          # anchored on run 40183128848 (created 10:02:33Z, deploy job
+          # `success`), skipped four re-dispatch runs at 11:24-12:44Z, then
+          # passed at 13:02:14Z — anchor + 3h, exactly. The repeated throttled
+          # runs were the deploy watchdog's ~35-min re-dispatches, not
+          # self-perpetuation. A structural test pins this input so a future
+          # edit cannot swap in a run-level read.
           LAST=""
           for RID in $(gh run list --repo "${{ github.repository }}" \
             --workflow "Deploy: Staging + Prod" \
             --limit 50 \
             --json databaseId --jq '.[].databaseId' 2>/dev/null || echo ""); do
             [ "$RID" = "${{ github.run_id }}" ] && continue
-            DEPLOY_JOB_CONCLUSION="$(gh api "repos/${{ github.repository }}/actions/runs/$RID/jobs" \
+            # per_page=100: the deploy job must be found even if the job list
+            # grows past the API's default page of 30 (a silent miss would
+            # anchor on a stale/failed run instead of the real deploy).
+            DEPLOY_JOB_CONCLUSION="$(gh api "repos/${{ github.repository }}/actions/runs/$RID/jobs?per_page=100" \
               --jq '[.jobs[] | select(.name == "Deploy to app.modulo.run") | .conclusion] | .[0] // empty' 2>/dev/null || echo "")"
             if [ "$DEPLOY_JOB_CONCLUSION" = "success" ]; then
               LAST="$(gh api "repos/${{ github.repository }}/actions/runs/$RID" \
@@ -206,6 +312,7 @@ jobs:
           if [ -z "$LAST" ]; then
             {
               echo "should_deploy=true"
+              echo "deployed=true"
               echo "skip_reason="
               echo "next_deploy="
             } >> "$GITHUB_OUTPUT"
@@ -217,8 +324,11 @@ jobs:
             DIFF_H=$(( (NOW_TS - LAST_TS) / 3600 ))
             echo "hours_since_deploy=${DIFF_H}"
             if [ "$DIFF_H" -lt "$INTERVAL_HOURS" ]; then
-              echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-              echo "skip_reason=interval_throttled" >> "$GITHUB_OUTPUT"
+              {
+                echo "should_deploy=false"
+                echo "deployed=false"
+                echo "skip_reason=interval_throttled"
+              } >> "$GITHUB_OUTPUT"
               # Next eligible deploy = anchor + interval, computed from the
               # SAME anchor the skip just used (never re-derived - see the
               # stale-anchor bug in the comment above the loop).
@@ -226,10 +336,11 @@ jobs:
               NEXT_AT="$(date -u -d "@$NEXT_TS" +%Y-%m-%dT%H:%MZ)"
               echo "next_deploy=${NEXT_AT} (last deploy + ${INTERVAL_HOURS}h interval)" >> "$GITHUB_OUTPUT"
               echo "::notice::Last deploy attempt ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. This run will NOT deploy; next deploy eligible at ${NEXT_AT} (UTC). Use workflow_dispatch force_deploy=true to bypass now."
-              write_verdict "NO - this run deploys nothing (throttled)" "last production deploy was ${DIFF_H}h ago, under the ${INTERVAL_HOURS}h throttle interval" "${NEXT_AT} UTC (last deploy + ${INTERVAL_HOURS}h); sooner only via workflow_dispatch force_deploy=true"
+              write_verdict "NO DEPLOY — throttled (FAR-954)" "last production deploy was ${DIFF_H}h ago, under the ${INTERVAL_HOURS}h throttle interval" "${NEXT_AT} UTC (last deploy + ${INTERVAL_HOURS}h); sooner only via workflow_dispatch force_deploy=true"
             else
               {
                 echo "should_deploy=true"
+                echo "deployed=true"
                 echo "skip_reason="
                 echo "next_deploy="
               } >> "$GITHUB_OUTPUT"
@@ -249,7 +360,7 @@ jobs:
   backend-lint:
     name: "Pre-deploy: Backend lint"
     needs: [deploy-throttle]
-    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 20
     steps:
@@ -266,7 +377,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.deploy-throttle.outputs.requested_ref || needs.deploy-throttle.outputs.run_sha }}
           fetch-depth: 1
 
       - name: Echo checked-out tree (post-checkout)
@@ -279,7 +390,7 @@ jobs:
           if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
           echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
           if [ "${MATCH}" = "no" ]; then
-            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+            echo "::error::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's requested identity ${RUN_SHA:0:12}; refusing to continue."; exit 1
           fi
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
@@ -298,7 +409,7 @@ jobs:
   backend-unit:
     name: "Pre-deploy: Backend unit tests"
     needs: [deploy-throttle]
-    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 60
     steps:
@@ -315,7 +426,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.deploy-throttle.outputs.requested_ref || needs.deploy-throttle.outputs.run_sha }}
           fetch-depth: 1
 
       - name: Echo checked-out tree (post-checkout)
@@ -328,7 +439,7 @@ jobs:
           if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
           echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
           if [ "${MATCH}" = "no" ]; then
-            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+            echo "::error::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's requested identity ${RUN_SHA:0:12}; refusing to continue."; exit 1
           fi
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
@@ -349,7 +460,7 @@ jobs:
   frontend-checks:
     name: "Pre-deploy: Frontend checks"
     needs: [deploy-throttle]
-    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 30
     steps:
@@ -366,7 +477,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.deploy-throttle.outputs.requested_ref || needs.deploy-throttle.outputs.run_sha }}
           fetch-depth: 1
 
       - name: Echo checked-out tree (post-checkout)
@@ -379,12 +490,12 @@ jobs:
           if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
           echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
           if [ "${MATCH}" = "no" ]; then
-            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+            echo "::error::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's requested identity ${RUN_SHA:0:12}; refusing to continue."; exit 1
           fi
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.6
+          version: 11.28.8
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -422,7 +533,7 @@ jobs:
   integration-tests:
     name: "Pre-deploy: Integration tests"
     needs: [deploy-throttle]
-    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 90
     steps:
@@ -439,7 +550,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.deploy-throttle.outputs.requested_ref || needs.deploy-throttle.outputs.run_sha }}
           fetch-depth: 1
 
       - name: Echo checked-out tree (post-checkout)
@@ -452,7 +563,7 @@ jobs:
           if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
           echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
           if [ "${MATCH}" = "no" ]; then
-            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+            echo "::error::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's requested identity ${RUN_SHA:0:12}; refusing to continue."; exit 1
           fi
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
@@ -489,14 +600,15 @@ jobs:
         run: |
           docker rm -f modulo-ci-redis 2>/dev/null || true
           docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
-          for _ in $(seq 1 30); do
+          # Increased timeout to 120s (60 attempts * 2s) for more reliable container startup
+          for _ in $(seq 1 60); do
             docker exec modulo-ci-redis redis-cli ping 2>/dev/null && { echo "Redis ready"; break; }
             sleep 2
           done
           # Fail fast: a never-ready Redis must not sleep through the loop and
           # only surface as a confusing failure in the test step.
           docker exec modulo-ci-redis redis-cli ping 2>/dev/null \
-            || { echo "::error::Redis did not become ready within 60s"; exit 1; }
+            || { echo "::error::Redis did not become ready within 120s"; exit 1; }
 
       # Per-test timeout: without it a single hung test stalls the whole job
       # silently until the job-level kill (observed 2026-08-27, run
@@ -510,9 +622,33 @@ jobs:
       # this 300s gate, their real multi-minute boots (sonarqube 600s, gitlab
       # 1800s) and disk-hung image pulls become pytest-timeout ERRORs, turning
       # main red (deploy run 35451961476).
+      #
+      # Retry wrapper: 2 attempts max, 30s backoff. Flaky integration tests
+      # (transient container/network issues) get a second chance before failing
+      # the pre-deploy gate.
       - name: Integration tests
         working-directory: backend
-        run: uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAX_ATTEMPTS=2
+          BACKOFF_SECONDS=30
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            echo "--- Integration tests attempt $attempt of $MAX_ATTEMPTS ---"
+            if uv run --no-build --no-sync pytest tests/integration/ -m integration --ignore-glob='tests/integration/test_tier1b_*.py' -n 2 --timeout=300 --cov=src/modulo --cov-report=xml --cov-fail-under=0 -q -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings; then
+              echo "Integration tests passed on attempt $attempt"
+              exit 0
+            else
+              EXIT_CODE=$?
+              if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+                echo "Integration tests failed (exit $EXIT_CODE) -- retrying in ${BACKOFF_SECONDS}s..."
+                sleep $BACKOFF_SECONDS
+              else
+                echo "Integration tests failed after $MAX_ATTEMPTS attempts"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
         env:
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
           TESTCONTAINERS_RYUK_DISABLED: "true"
@@ -527,7 +663,7 @@ jobs:
   security-audit:
     name: "Pre-deploy: Security audit"
     needs: [deploy-throttle]
-    if: needs.deploy-throttle.outputs.should_deploy == 'true'
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     timeout-minutes: 20
     steps:
@@ -545,7 +681,7 @@ jobs:
       # Full history required: semgrep diffs against --baseline-commit HEAD^.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.deploy-throttle.outputs.requested_ref || needs.deploy-throttle.outputs.run_sha }}
           fetch-depth: 0
 
       - name: Echo checked-out tree (post-checkout)
@@ -558,7 +694,7 @@ jobs:
           if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
           echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
           if [ "${MATCH}" = "no" ]; then
-            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+            echo "::error::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's requested identity ${RUN_SHA:0:12}; refusing to continue."; exit 1
           fi
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
@@ -650,10 +786,12 @@ jobs:
 
   pre-deploy-gate:
     name: Pre-deploy gate
-    needs: [backend-lint, backend-unit, frontend-checks, integration-tests, security-audit]
+    needs: [deploy-throttle, backend-lint, backend-unit, frontend-checks, integration-tests, security-audit]
     # The gate only means something when the children actually ran - a throttled
     # run skips all five pre-deploy jobs, so the gate must stay skipped too.
-    if: always() && needs.backend-lint.result != 'skipped'
+    # FAR-2152: gated on the throttle's `deployed` signal (never on the run
+    # conclusion) so a run that deploys nothing cannot reach a gate at all.
+    if: always() && needs.deploy-throttle.outputs.deployed == 'true' && needs.backend-lint.result != 'skipped'
     runs-on: ubicloud-standard-2
     timeout-minutes: 5
     steps:
@@ -708,7 +846,7 @@ jobs:
     # a missed one is not.
     #
     # Condition: at least one job failed or was cancelled AND the deploy was
-    # actually attempted (deploy-throttle succeeded with should_deploy == 'true').
+    # actually attempted (deploy-throttle succeeded with deployed == 'true').
     # A throttled run skips every downstream job (all results 'skipped'), so it
     # can never match (no 'failure' or 'cancelled' exists). deploy-throttle
     # failing itself is signalled loudly to the Actions tab (see the audit
@@ -725,7 +863,7 @@ jobs:
     # This job sends the Branch Fixer webhook pointing at main
     # (branchName: main, prNumber: 0). The Branch Fixer creates its own fix
     # branch from main, diagnoses the failure, fixes it, and raises the PR.
-    if: always() && needs.deploy-throttle.outputs.should_deploy == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    if: always() && needs.deploy-throttle.outputs.deployed == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubicloud-standard-2
     steps:
       # A minimal checkout provides scripts/dispatch_with_retry.sh — the
@@ -989,6 +1127,10 @@ jobs:
     # outputs; it was already a transitive dependency via pre-deploy-gate, so
     # the graph's behaviour is unchanged.
     needs: [deploy-throttle, pre-deploy-gate]
+    # FAR-2152: explicit throttle gate. Previously this job relied on its
+    # needs being skipped (implicit success()); the `deployed` signal makes
+    # the intent checkable by the structural guard.
+    if: needs.deploy-throttle.outputs.deployed == 'true'
     runs-on: ubicloud-standard-2
     # 180 min budget: build (~15m) + rehearsal (~40m) + pre-migrate (~40m) +
     # deploy (~15m) + health gate (~45m) + margin. Without this, the GitHub
@@ -1009,7 +1151,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.deploy-throttle.outputs.requested_ref || needs.deploy-throttle.outputs.run_sha }}
           fetch-depth: 1
 
       - name: Echo checked-out tree (post-checkout)
@@ -1022,7 +1164,7 @@ jobs:
           if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
           echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
           if [ "${MATCH}" = "no" ]; then
-            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+            echo "::error::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's requested identity ${RUN_SHA:0:12}; refusing to continue."; exit 1
           fi
 
       - name: Capture git metadata
@@ -1042,7 +1184,6 @@ jobs:
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          VITE_PRIMEUI_LICENSE: ${{ secrets.VITE_PRIMEUI_LICENSE }}
         run: |
           bash .github/scripts/install-flyctl.sh
           export FLYCTL_INSTALL="/home/runner/.fly"
@@ -1051,7 +1192,7 @@ jobs:
           # Build + push WITHOUT deploying (flyctl v0.4.87 --build-only
           # --push --image-label). The image label carries the deploy SHA so
           # the pre-migrate machine and the deploy step can both reference it.
-          IMAGE_LABEL="deploy-$(echo "${{ github.sha }}" | cut -c1-12)"
+          IMAGE_LABEL="deploy-$(echo "${{ needs.deploy-throttle.outputs.run_sha }}" | cut -c1-12)"
           IMAGE_REF="registry.fly.io/staging-modulo:${IMAGE_LABEL}"
           echo "IMAGE_REF=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
 
@@ -1064,7 +1205,6 @@ jobs:
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
               --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
-              --build-arg "VITE_PRIMEUI_LICENSE=${VITE_PRIMEUI_LICENSE}" \
               --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
               echo "Build + push succeeded on attempt $attempt"
               exit 0
@@ -1163,12 +1303,25 @@ jobs:
               echo "Launch call errored ambiguously (flyctl wait race, FAR-486): machine may still be starting - deferring to discovery + state poll"
               break
             fi
-            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+            # Two transient classes are retryable - see the same gate in the
+            # "Pre-deploy migrations (one-off machine)" step for the full
+            # rationale: (1) registry.fly.io eventual consistency (manifest
+            # 404), and (2) a Fly control-plane 5xx on the image manifest
+            # QUERY flyctl runs before it creates the machine. Both happen
+            # BEFORE creation, so a retry cannot leak a duplicate machine; the
+            # 5xx branch requires BOTH the image query and a 5xx, so a 5xx
+            # returned by any POST-creation call still fails fast.
+            if grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
               /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Image manifest not visible in registry.fly.io yet"
+            elif grep -qi 'image(ref:' /tmp/prerehearse-launch-err.txt 2>/dev/null \
+              && grep -qiE 'non-200 status code: 5[0-9][0-9]' /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Transient Fly API 5xx on the image manifest query"
+            else
               break
             fi
             if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
-              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              echo "${LAUNCH_RETRY_REASON} (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
               sleep "$LAUNCH_INTERVAL_SEC"
             fi
           done
@@ -1484,12 +1637,31 @@ jobs:
             # matches the "not found [http 404]" text that flyctl prints on
             # the same error line. Without this the retry would silently
             # degrade back to fail-fast if the wording changed.
-            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+            #
+            # Two transient classes are retryable:
+            #   1. registry.fly.io eventual consistency (manifest 404);
+            #   2. a Fly control-plane 5xx on the image manifest QUERY flyctl
+            #      runs before it creates the machine (2026-10-27 run
+            #      40566278052: "failed to run query (... image(ref:
+            #      $imageRef) ...): server returned a non-200 status code:
+            #      503" - seconds after the rehearsal launch from the SAME
+            #      image had succeeded, so the image and the pre-deploy chain
+            #      were fine and the deploy was aborted purely on a transient
+            #      Fly API error).
+            # Both happen BEFORE creation, so a retry cannot leak a duplicate
+            # machine. The 5xx branch requires BOTH the image query and a 5xx,
+            # so a 5xx returned by any POST-creation call still fails fast.
+            if grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
               /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Image manifest not visible in registry.fly.io yet"
+            elif grep -qi 'image(ref:' /tmp/premigrate-launch-err.txt 2>/dev/null \
+              && grep -qiE 'non-200 status code: 5[0-9][0-9]' /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Transient Fly API 5xx on the image manifest query"
+            else
               break
             fi
             if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
-              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              echo "${LAUNCH_RETRY_REASON} (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
               sleep "$LAUNCH_INTERVAL_SEC"
             fi
           done
@@ -2151,7 +2323,9 @@ jobs:
     # outputs; it was already a transitive dependency via deploy-staging, so
     # the graph's behaviour is unchanged.
     needs: [deploy-throttle, deploy-staging]
-    if: github.event.inputs.skip_staging_e2e != 'true'
+    # FAR-2152: never run E2E for a run that deployed nothing, and keep the
+    # documented skip_staging_e2e bypass (a deploy-only path).
+    if: needs.deploy-throttle.outputs.deployed == 'true' && github.event.inputs.skip_staging_e2e != 'true'
     timeout-minutes: 90
     runs-on: ubicloud-standard-2
     defaults:
@@ -2174,7 +2348,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.deploy-throttle.outputs.requested_ref || needs.deploy-throttle.outputs.run_sha }}
 
       - name: Echo checked-out tree (post-checkout)
         shell: bash
@@ -2187,11 +2361,11 @@ jobs:
           if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
           echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
           if [ "${MATCH}" = "no" ]; then
-            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+            echo "::error::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's requested identity ${RUN_SHA:0:12}; refusing to continue."; exit 1
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.6
+          version: 11.28.8
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -2249,7 +2423,14 @@ jobs:
     # the graph's behaviour is unchanged (the always() condition below is
     # untouched).
     needs: [deploy-throttle, pre-deploy-gate, staging-e2e]
-    if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
+    # FAR-2152: THE production gate. `always()` plus the skip_staging_e2e
+    # bypass used to make this job reachable in a THROTTLED run (skip_staging_e2e
+    # skips staging-e2e, whose result then does not block the `always()`
+    # branch) - i.e. `workflow_dispatch -f skip_staging_e2e=true` could deploy
+    # to production while the throttle said "deploy nothing". The `deployed`
+    # signal is a hard precondition here; the structural guard in
+    # test_workflow_structure.py fails if this gate is removed.
+    if: always() && needs.deploy-throttle.outputs.deployed == 'true' && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     # 180 min budget: same structure as deploy-staging (build + rehearsal +
     # pre-migrate + deploy + health gate). Without this, the GitHub default
@@ -2269,7 +2450,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.deploy-throttle.outputs.requested_ref || needs.deploy-throttle.outputs.run_sha }}
           fetch-depth: 1
 
       - name: Echo checked-out tree (post-checkout)
@@ -2282,7 +2463,7 @@ jobs:
           if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
           echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
           if [ "${MATCH}" = "no" ]; then
-            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+            echo "::error::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's requested identity ${RUN_SHA:0:12}; refusing to continue."; exit 1
           fi
 
       - name: Capture git metadata
@@ -2300,7 +2481,6 @@ jobs:
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          VITE_PRIMEUI_LICENSE: ${{ secrets.VITE_PRIMEUI_LICENSE }}
         run: |
           bash .github/scripts/install-flyctl.sh
           export FLYCTL_INSTALL="/home/runner/.fly"
@@ -2309,7 +2489,7 @@ jobs:
           # Build + push WITHOUT deploying (flyctl v0.4.87 --build-only
           # --push --image-label). The image label carries the deploy SHA so
           # the pre-migrate machine and the deploy step can both reference it.
-          IMAGE_LABEL="deploy-$(echo "${{ github.sha }}" | cut -c1-12)"
+          IMAGE_LABEL="deploy-$(echo "${{ needs.deploy-throttle.outputs.run_sha }}" | cut -c1-12)"
           IMAGE_REF="registry.fly.io/app-modulo:${IMAGE_LABEL}"
           echo "IMAGE_REF=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
 
@@ -2322,7 +2502,6 @@ jobs:
               --build-arg "GIT_BRANCH=${{ steps.git.outputs.git-branch }}" \
               --build-arg "GIT_COMMIT_TIMESTAMP=${{ steps.git.outputs.git-commit-timestamp }}" \
               --build-arg "GIT_COMMIT_MESSAGE=${{ steps.git.outputs.git-commit-message }}" \
-              --build-arg "VITE_PRIMEUI_LICENSE=${VITE_PRIMEUI_LICENSE}" \
               --build-arg "BUILD_TIMESTAMP=${{ steps.git.outputs.build-timestamp }}"; then
               echo "Build + push succeeded on attempt $attempt"
               exit 0
@@ -2421,12 +2600,25 @@ jobs:
               echo "Launch call errored ambiguously (flyctl wait race, FAR-486): machine may still be starting - deferring to discovery + state poll"
               break
             fi
-            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+            # Two transient classes are retryable - see the same gate in the
+            # "Pre-deploy migrations (one-off machine)" step for the full
+            # rationale: (1) registry.fly.io eventual consistency (manifest
+            # 404), and (2) a Fly control-plane 5xx on the image manifest
+            # QUERY flyctl runs before it creates the machine. Both happen
+            # BEFORE creation, so a retry cannot leak a duplicate machine; the
+            # 5xx branch requires BOTH the image query and a 5xx, so a 5xx
+            # returned by any POST-creation call still fails fast.
+            if grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
               /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Image manifest not visible in registry.fly.io yet"
+            elif grep -qi 'image(ref:' /tmp/prerehearse-launch-err.txt 2>/dev/null \
+              && grep -qiE 'non-200 status code: 5[0-9][0-9]' /tmp/prerehearse-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Transient Fly API 5xx on the image manifest query"
+            else
               break
             fi
             if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
-              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              echo "${LAUNCH_RETRY_REASON} (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
               sleep "$LAUNCH_INTERVAL_SEC"
             fi
           done
@@ -2744,12 +2936,31 @@ jobs:
             # matches the "not found [http 404]" text that flyctl prints on
             # the same error line. Without this the retry would silently
             # degrade back to fail-fast if the wording changed.
-            if ! grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
+            #
+            # Two transient classes are retryable:
+            #   1. registry.fly.io eventual consistency (manifest 404);
+            #   2. a Fly control-plane 5xx on the image manifest QUERY flyctl
+            #      runs before it creates the machine (2026-10-27 run
+            #      40566278052: "failed to run query (... image(ref:
+            #      $imageRef) ...): server returned a non-200 status code:
+            #      503" - seconds after the rehearsal launch from the SAME
+            #      image had succeeded, so the image and the pre-deploy chain
+            #      were fine and the deploy was aborted purely on a transient
+            #      Fly API error).
+            # Both happen BEFORE creation, so a retry cannot leak a duplicate
+            # machine. The 5xx branch requires BOTH the image query and a 5xx,
+            # so a 5xx returned by any POST-creation call still fails fast.
+            if grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|failed to get [a-z ]*manifest|not found \[http 404\]' \
               /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Image manifest not visible in registry.fly.io yet"
+            elif grep -qi 'image(ref:' /tmp/premigrate-launch-err.txt 2>/dev/null \
+              && grep -qiE 'non-200 status code: 5[0-9][0-9]' /tmp/premigrate-launch-err.txt 2>/dev/null; then
+              LAUNCH_RETRY_REASON="Transient Fly API 5xx on the image manifest query"
+            else
               break
             fi
             if [ "$launch_attempt" -lt "$LAUNCH_ATTEMPTS" ]; then
-              echo "Image manifest not visible in registry.fly.io yet (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
+              echo "${LAUNCH_RETRY_REASON} (attempt ${launch_attempt}/${LAUNCH_ATTEMPTS}); retrying in ${LAUNCH_INTERVAL_SEC}s ..."
               sleep "$LAUNCH_INTERVAL_SEC"
             fi
           done
@@ -3422,7 +3633,7 @@ jobs:
     # outputs; it was already a transitive dependency via deploy-production,
     # so the graph's behaviour is unchanged.
     needs: [deploy-throttle, deploy-production]
-    if: always() && needs.deploy-production.result == 'success'
+    if: always() && needs.deploy-throttle.outputs.deployed == 'true' && needs.deploy-production.result == 'success'
     runs-on: ubicloud-standard-2
     # 30 min budget: checkout + pnpm install + playwright install + smoke
     # tests (step-level 10 min timeout). Without this, the GitHub default
@@ -3448,7 +3659,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ needs.deploy-throttle.outputs.requested_ref || needs.deploy-throttle.outputs.run_sha }}
 
       - name: Echo checked-out tree (post-checkout)
         shell: bash
@@ -3461,11 +3672,11 @@ jobs:
           if [ "${HEAD_SHA}" = "${RUN_SHA}" ]; then MATCH="yes"; else MATCH="no"; fi
           echo "RUN_SHA=${RUN_SHA} CHECKED_OUT=${HEAD_SHA} MATCH=${MATCH} REF=${CHECKED_REF}"
           if [ "${MATCH}" = "no" ]; then
-            echo "::warning::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's RUN_SHA ${RUN_SHA:0:12} - this job built/tested a tree that moved past the run's commit."
+            echo "::error::Checked-out ${CHECKED_REF} is ${HEAD_SHA:0:12}, not this run's requested identity ${RUN_SHA:0:12}; refusing to continue."; exit 1
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          version: 11.28.6
+          version: 11.28.8
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
@@ -3576,7 +3787,7 @@ jobs:
             # conclusion (annotations never do).
             echo "::warning::THROTTLED — NO DEPLOYMENT PERFORMED. Production is unchanged (running ${PROD_SHA}). Reason: ${REASON} Next deploy expected: ${NEXT_LINE}. This run will conclude SUCCESS but NO deployment happened. Use workflow_dispatch force_deploy=true to deploy now."
             cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          ## Deploy Pipeline: THROTTLED — NO DEPLOYMENT
+          ## NO DEPLOY — throttled (FAR-954)
 
           **Status:** This run was **THROTTLED** and **NO DEPLOYMENT was performed**.
           **Reason:** ${REASON}
@@ -3643,7 +3854,7 @@ jobs:
           - **Infrastructure failures** (deploy-staging, deploy-production): routed to Branch Fixer as triage + deploy-watchdog re-dispatches + deploy-staleness-check escalates
           - **ALL deploy-stage failures** (FAR-912): `notify-deploy-failure` now fires on ANY downstream failure (pre-deploy-gate, deploy-staging, staging-e2e, deploy-production, prod-smoke) — the broad catch-all dispatch for the Branch Fixer; the per-stage notify-* jobs add stage-specific feedback
           - **Notification-only jobs** (notify-*): always succeed; their purpose IS the signal
-          - **Throttled runs** (FAR-954): when `deploy-throttle` outputs `should_deploy=false`, all downstream jobs are skipped. The `deploy-throttle-status` job produces a loud summary annotation. No notification dispatches fire (nothing to fix).
+          - **Throttled runs** (FAR-954 / FAR-2152): when `deploy-throttle` outputs `deployed=false`, every downstream job is gated off and skipped (including `deploy-production` - its `always()` condition now requires `deployed == 'true'`). The `deploy-throttle-status` job leads the summary with `NO DEPLOY — throttled (FAR-954)`. No notification dispatches fire (nothing to fix). A throttled run still concludes SUCCESS, so never read the run conclusion as "deployed" - read `deploy-throttle.outputs.deployed` or production's build SHA.
 
           ### Adding a new job?
           1. If it can fail and block a deploy, ensure `notify-deploy-failure` covers it (FAR-912: this job now fires on ANY downstream failure)

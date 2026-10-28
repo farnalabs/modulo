@@ -7,14 +7,13 @@
     cursor: pointer;
   }
 
-  *:focus-visible {
+  :where(:root :not(html)):focus-visible {
     outline: 2px solid hsla(var(--ring) / 0.8);
     outline-offset: 2px;
   }
 
-  *,
-  *::before,
-  *::after {
+  :where(:root, :root :not(html)),
+  :where(:root::before, :root :not(html)::before, :root::after, :root :not(html)::after) {
     border-color: hsl(var(--border));
   }
 }
@@ -107,7 +106,7 @@
     background-color: hsl(var(--card));
   }
 
-  .avatar-ring > * {
+  .avatar-ring > :where(:root :not(html)) {
     border-radius: 9999px;
   }
 
@@ -244,7 +243,7 @@
     padding: 1.5rem;
   }
 
-  .page-narrow > * + * {
+  .page-narrow > :where(:root :not(html)) + :where(:root :not(html)) {
     margin-top: 1.5rem;
   }
 
@@ -253,7 +252,7 @@
     padding: 1.5rem;
   }
 
-  .page-wide > * + * {
+  .page-wide > :where(:root :not(html)) + :where(:root :not(html)) {
     margin-top: 1.5rem;
   }
 }
@@ -449,10 +448,9 @@
   /* !important is required here: component-scoped <style> blocks declare their
      own animations/transitions at higher specificity, so without it the reset
      would lose and reduce-motion users would still get the motion. */
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+  :where(:root, :root :not(html), :root::before, :root :not(html)::before, :root::after, :root :not(html)::after) {
+    animation: none !important; /* NOSONAR css:S9423 */
+    transition: none !important; /* NOSONAR css:S9423 */
   }
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -473,7 +471,7 @@
   --primary-foreground: 222 29% 9%;
   /* FAR-1938: text-safe counterpart of --primary, following the
      --warning-text / --destructive-text precedent. --primary is tuned as a
-     FILL/accent hue; as TEXT on a bg-primary/* tint it only reaches 4.16-4.33:1
+     FILL/accent hue; as TEXT on a bg-primary tint it only reaches 4.16-4.33:1
      in light mode, below the WCAG AA 4.5:1 floor. --primary-text keeps the hue
      and is an exact copy of --primary in the dark/agent themes (already clear
      of AA), darkening only in light mode (measured there:
@@ -500,9 +498,10 @@
        light #cf1212  5.37:1 / 4.84:1
        agent #df0c0c  5.01:1 / 5.88:1 */
   --destructive-fill: 0 84% 44%;
-  /* FAR-1913: text-safe counterpart of --destructive. --destructive is tuned as
-     a FILL/accent hue, so destructive COLOURED TEXT on a bg-destructive/* tint
-     only reaches 4.32:1 here (dark) and 3.46:1 in light mode - both below the
+   /* FAR-1913: text-safe counterpart of --destructive. --destructive is tuned as
+      a FILL/accent hue, so destructive COLOURED TEXT on a bg-destructive tint
+      only reaches 4.32:1 here (dark) and 3.46:1 in light mode - both below the
+
      WCAG AA 4.5:1 floor for normal-size text (axe rule `color-contrast`, which
      the wcag-contrast spec now asserts). --destructive-text keeps the hue and
      lightens to 66% so every destructive-text-on-tint pairing clears AA. See
@@ -663,7 +662,7 @@
   font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
 }
 
-[data-theme="agent"] *:focus-visible {
+[data-theme="agent"] :where(:not(html)):focus-visible {
   outline: 2px solid hsl(var(--focus-ring));
   outline-offset: 2px;
 }
@@ -717,7 +716,7 @@ select option {
 }
 
 /* Firefox support */
-* {
+:where(html, html :not(html)) {
   scrollbar-width: thin;
   scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
 }

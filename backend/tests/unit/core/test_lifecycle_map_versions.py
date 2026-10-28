@@ -62,6 +62,7 @@ from modulo.db.models.journey import Journey
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.organisation import Organisation
+from modulo.settings import get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -2108,12 +2109,17 @@ async def test_create_route_audit_failure_does_not_fail_create() -> None:
 def _make_route_app(engine: AsyncEngine) -> FastAPI:
     app = FastAPI()
     app.include_router(lifecycle_maps_router)
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+    principal = TenantPrincipal(
         username="testuser",
         organisation_id=_ORG_ID,
         account_id=_ACCOUNT_ID,
         org_role="admin",
+        key_grants=None,
     )
+    app.dependency_overrides[get_current_tenant_user] = lambda: principal
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: principal
+    app.dependency_overrides[get_settings] = lambda: MagicMock(modulo_dev_mode=True)
+    app.dependency_overrides[get_settings] = lambda: MagicMock(modulo_dev_mode=True)
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
         maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
@@ -2709,8 +2715,10 @@ class TestSelfReportRouteStageId:
                 username="workflow",
                 organisation_id=_ORG_ID,
                 account_id=_ACCOUNT_ID,
-                org_role="runner",
+                org_role="operator",
+                key_grants=None,
             )
+            app.dependency_overrides[get_settings] = lambda: MagicMock(modulo_dev_mode=True)
             maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
             async def override_session() -> AsyncGenerator[AsyncSession, None]:
@@ -2759,8 +2767,10 @@ class TestSelfReportRouteStageId:
                 username="workflow",
                 organisation_id=_ORG_ID,
                 account_id=_ACCOUNT_ID,
-                org_role="runner",
+                org_role="operator",
+                key_grants=None,
             )
+            app.dependency_overrides[get_settings] = lambda: MagicMock(modulo_dev_mode=True)
             maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
             async def override_session() -> AsyncGenerator[AsyncSession, None]:

@@ -127,7 +127,7 @@ def bind_principal_context[PrincipalT: AuthenticatedPrincipal](
     return principal
 
 
-async def get_current_user(
+async def get_current_user(  # NOSONAR S7503 - FastAPI dependency coroutine seam
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
     settings: Settings = Depends(get_settings),
     # ``Request`` is injected by FastAPI (never a query param); it defaults to
@@ -530,7 +530,7 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
     return live_role
 
 
-async def require_system_admin(
+async def require_system_admin(  # NOSONAR S7503 - FastAPI dependency coroutine seam
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
 ) -> AuthenticatedPrincipal:
     """Require the current user to have system admin privileges."""

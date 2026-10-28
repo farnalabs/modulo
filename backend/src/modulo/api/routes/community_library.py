@@ -21,7 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
-from modulo.api.routes.library import LibraryPrimitiveResponse
+from modulo.api.routes.library import (
+    LibraryPrimitiveResponse,
+    _can_access_lifecycle_map_primitives,
+    _require_lifecycle_map_internal_access,
+)
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -31,17 +35,29 @@ from modulo.core.library_service.community import (
     list_community_entries,
 )
 from modulo.core.library_sync import LibraryClient, get_cached_manifest
+from modulo.core.lifecycle_map.import_export import PRIMITIVE_TYPE as LIFECYCLE_MAP_PRIMITIVE_TYPE
 from modulo.core.runtime_config import FLAG_COMMUNITY_OBJECTS_ENABLED, read_org_flag
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
 _MSG_COMMUNITY_LIBRARY_DISABLED = "Community library is disabled by the organisation administrator."
+_MSG_COMMUNITY_ENTRY_NOT_FOUND = "Community entry not found"
 
 router = APIRouter(prefix="/api/v1/libraries/community", tags=["community-library"])
 
 _log = logging.getLogger(__name__)
 
 _CODE_COMMUNITY_LIBRARY_INSTALL = "community_library.install"
+
+
+def _can_access_lifecycle_map_community(
+    principal: TenantPrincipal,
+) -> bool:
+    """Return whether this caller may see internal lifecycle-map primitives."""
+    return _can_access_lifecycle_map_primitives(
+        principal,
+        dev_mode=getattr(get_settings(), "modulo_dev_mode", True),
+    )
 
 
 async def _community_objects_enabled(session: AsyncSession, org_id: UUID) -> bool:
@@ -84,6 +100,8 @@ async def list_community(
     synced_at: str | None = None
     try:
         items = await list_community_entries(session, principal.organisation_id)
+        if not _can_access_lifecycle_map_community(principal):
+            items = [item for item in items if item.get("type") != LIFECYCLE_MAP_PRIMITIVE_TYPE]
         manifest = await get_cached_manifest(session)
         if isinstance(manifest, dict):
             generated = manifest.get("generated_at")
@@ -145,10 +163,12 @@ async def get_entry(
     except (ValueError, KeyError):
         _log.exception("community_library.get_entry")
         entry = None
-    if entry is None:
+    if entry is None or (
+        entry.get("type") == LIFECYCLE_MAP_PRIMITIVE_TYPE and not _can_access_lifecycle_map_community(_principal)
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Community entry not found",
+            detail=_MSG_COMMUNITY_ENTRY_NOT_FOUND,
         )
     content: Any = None
     content_sha256 = entry.get("content_sha256")
@@ -182,6 +202,14 @@ async def install(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            entry = await get_community_entry(session, entry_id)
+            if entry is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=_MSG_COMMUNITY_ENTRY_NOT_FOUND,
+                )
+            if entry.get("type") == LIFECYCLE_MAP_PRIMITIVE_TYPE:
+                _require_lifecycle_map_internal_access(principal)
             primitive = await install_community_entry(
                 session,
                 principal.organisation_id,
@@ -189,12 +217,14 @@ async def install(
                 target_team_id=req.target_team_id,
                 created_by=principal.account_id,
             )
+    except HTTPException:
+        raise
     except ValueError as exc:
         message = str(exc)
         if message == "entry not found":
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Community entry not found",
+                detail=_MSG_COMMUNITY_ENTRY_NOT_FOUND,
             ) from None
         if message == "already installed":
             raise HTTPException(

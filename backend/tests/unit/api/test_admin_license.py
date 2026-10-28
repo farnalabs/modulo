@@ -92,8 +92,12 @@ def _mock_org(settings_json: dict[str, object] | None = None) -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _reset_license_state() -> Generator[None, None, None]:
+def _reset_license_state(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     clear_license()
+    # FAR-2153: the process also tracks the persisted system-licence state.
+    # Reset it so a test's install cannot leak into the next test's refresh.
+    monkeypatch.setattr("modulo.core.license._persisted_state", None)
+    monkeypatch.setattr("modulo.core.license._persisted_state_checked_at", 0.0)
     set_public_key(_TEST_PUB)
     yield
     clear_license()
@@ -150,6 +154,46 @@ def tenantless_admin_client() -> Generator[TestClient, None, None]:
         account_id=_TEST_ACCOUNT_ID,
         org_role="admin",
     )
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def org_admin_client() -> Generator[TestClient, None, None]:
+    """An org admin WITHOUT the system-admin claim (FAR-2104's intended audience)."""
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = _make_mock_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="orgadmin",
+        organisation_id=_TEST_ORG_ID,
+        account_id=_TEST_ACCOUNT_ID,
+        org_role="admin",
+        is_system_admin=False,
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def system_admin_operator_client() -> Generator[TestClient, None, None]:
+    """A system admin whose ORG role is below admin (FAR-2104 hybrid read)."""
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = _make_mock_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="sysadmin",
+        organisation_id=_TEST_ORG_ID,
+        account_id=_TEST_ACCOUNT_ID,
+        org_role="operator",
+        is_system_admin=True,
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -337,6 +381,23 @@ class TestGetLicense:
     def test_requires_admin(self, operator_client: TestClient) -> None:
         resp = operator_client.get(self.URL)
         assert resp.status_code == 403
+
+    def test_an_org_admin_without_the_system_claim_can_read_the_licence(self, org_admin_client: TestClient) -> None:
+        """FAR-2104: the org admin who bought the licence is the read's audience."""
+        org = _mock_org(settings_json=None)
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = org_admin_client.get(self.URL)
+        assert resp.status_code == 200
+        assert resp.json()["tier"] == "community"
+
+    def test_a_system_admin_below_org_admin_can_read_the_licence(
+        self, system_admin_operator_client: TestClient
+    ) -> None:
+        """The read is system-OR-org admin, matching /auth/permissions' floor."""
+        org = _mock_org(settings_json=None)
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = system_admin_operator_client.get(self.URL)
+        assert resp.status_code == 200
 
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with patch("modulo.api.routes.admin_license.get_organisation", side_effect=RuntimeError("boom")):
@@ -960,3 +1021,505 @@ class TestLicenseCacheInvalidationSystemChange:
         assert resp.status_code == 200
         # The batched flush plus the trailing check cleared every seeded entry.
         assert probe.exists(*seeded) == 0
+
+
+class TestRemoveSystemLicense:
+    """FAR-2110: the instance-wide licence can be removed without a restart.
+
+    ``POST /api/v1/admin/license`` installs a verified key into the in-memory
+    store; before this route there was no way to undo it (the admin page's
+    "Remove License" control called a system endpoint that did not exist), so
+    an operator who installed a key by mistake — or wanted to return the
+    deployment to Community — had to restart the process.
+    """
+
+    URL = "/api/v1/admin/license"
+
+    def _install(self, client: TestClient) -> str:
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        resp = client.post(self.URL, json={"license_key": key})
+        assert resp.status_code == 200
+        assert get_license() is not None
+        return key
+
+    def test_system_admin_removes_the_instance_licence_without_a_restart(self, client: TestClient) -> None:
+        self._install(client)
+
+        resp = client.delete(self.URL)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["has_license"] is False
+        assert body["tier"] == "community"
+        assert body["licence_state"] == "none"
+        # The in-memory store is empty immediately — no process restart.
+        assert get_license() is None
+        # ...and the status endpoint the operator reads agrees.
+        org = _mock_org(settings_json={})
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            status = client.get(self.URL)
+        assert status.status_code == 200
+        assert status.json()["has_license"] is False
+        assert status.json()["tier"] == "community"
+        assert status.json()["licence_state"] == "none"
+
+    def test_removal_is_audited(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.core.audit_coverage import audit_session
+
+        self._install(client)
+        emitted: list[dict[str, Any]] = []
+
+        async def _capture_audit(_session: Any, _principal: Any, **kwargs: Any) -> None:
+            emitted.append(kwargs)
+
+        monkeypatch.setattr("modulo.core.audit_coverage.append_audit_event_isolated", _capture_audit)
+        app.dependency_overrides[audit_session] = lambda: _make_mock_session()
+        try:
+            resp = client.delete(self.URL)
+        finally:
+            app.dependency_overrides.pop(audit_session, None)
+
+        assert resp.status_code == 200
+        removal_events = [e for e in emitted if e.get("event_type") == "license_removed"]
+        assert removal_events, f"expected the audited licence removal event, got {emitted!r}"
+        event = removal_events[-1]
+        assert event["resource_type"] == "license"
+        assert event["payload"]["outcome"] == "success"
+
+    def test_an_org_admin_cannot_remove_the_instance_licence(self, org_admin_client: TestClient) -> None:
+        """The removal is strict system-admin — an org admin's licence stays put."""
+        result = parse_and_verify(_sign_license_payload(_make_valid_payload()))
+        assert result.license_data is not None
+        store_license("installed", result.license_data)
+
+        resp = org_admin_client.delete(self.URL)
+
+        assert resp.status_code == 403
+        assert get_license() is not None
+
+    def test_removal_requires_auth(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.delete(self.URL)
+        assert resp.status_code in (401, 403)
+
+    def test_a_tenantless_system_admin_can_remove_the_instance_licence(self) -> None:
+        """An instance-wide control must not require an org membership.
+
+        The route authenticates through ``require_system_permission`` (system
+        admin only), and its audit principal resolver must never turn the audit
+        wrapper into an access gate ahead of that check.
+        """
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_db_session] = _make_mock_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="sysadmin",
+            organisation_id=None,
+            account_id=_TEST_ACCOUNT_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        result = parse_and_verify(_sign_license_payload(_make_valid_payload()))
+        assert result.license_data is not None
+        store_license("installed", result.license_data)
+        try:
+            client = TestClient(app)
+            resp = client.delete(self.URL)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["has_license"] is False
+        assert get_license() is None
+
+    def test_removal_busts_the_cached_status_without_a_restart(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A stale ``license:{org_id}`` entry must not outlive the removal.
+
+        The status cache holds the RESOLVED effective licence for 60s. A GET
+        after installing the key caches ``team``; without a sweep the GET
+        following the DELETE would keep serving that cached team status.
+        """
+        server = FakeServer()
+
+        def _from_url(_url: str, **kwargs: Any) -> FakeAsyncRedis:
+            kwargs.pop("socket_connect_timeout", None)
+            kwargs.pop("socket_timeout", None)
+            return FakeAsyncRedis.from_url(str(_url), server=server, **kwargs)
+
+        fake_redis = MagicMock()
+        fake_redis.from_url = _from_url
+        monkeypatch.setattr(admin_license, "Redis", fake_redis)
+
+        def _settings() -> Settings:
+            return Settings(
+                database_url="postgresql+asyncpg://localhost/test",
+                secret_key=_VALID_32,
+                fernet_key=_VALID_32,
+                modulo_admin_password="testpass",
+                redis_url="redis://localhost:6379/0",
+            )
+
+        app.dependency_overrides[get_settings] = _settings
+        app.dependency_overrides[get_db_session] = _make_mock_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_TEST_ORG_ID,
+            account_id=_TEST_ACCOUNT_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        probe = FakeRedis.from_url("redis://localhost:6379/0", server=server, decode_responses=True)
+        try:
+            client = TestClient(app)
+            self._install(client)
+            org = _mock_org(settings_json={})
+            with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+                cached = client.get(self.URL)
+            assert cached.status_code == 200
+            assert cached.json()["tier"] == "team"
+            self_key = f"license:{_TEST_ORG_ID}"
+            assert probe.get(self_key) is not None
+
+            assert client.delete(self.URL).status_code == 200
+
+            with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+                after = client.get(self.URL)
+            assert after.status_code == 200
+            assert after.json()["has_license"] is False
+            assert after.json()["tier"] == "community"
+            assert after.json()["licence_state"] == "none"
+        finally:
+            app.dependency_overrides.clear()
+            probe.flushall()
+
+    def test_team_gated_route_returns_402_after_removal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Composed proof: removal flips a real Team-gated route to 402.
+
+        The plan context is derived from the SAME in-memory licence the remove
+        endpoint clears (``_plan_from_licence``), so this drives the whole
+        chain — removal -> empty licence store -> Community plan -> feature
+        gate — through the real route and gate rather than a mocked context.
+        """
+        from modulo.core.feature_flags import CommunityTier, LicenseKeyTier, PlanContext
+
+        def _plan_from_licence() -> PlanContext:
+            licensed = get_license()
+            return LicenseKeyTier(licensed) if licensed is not None else CommunityTier()
+
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_db_session] = _make_mock_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_TEST_ORG_ID,
+            account_id=_TEST_ACCOUNT_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        app.dependency_overrides[get_plan_context] = _plan_from_licence
+        monkeypatch.setattr("modulo.api.routes.audit.export_chain", AsyncMock(return_value={"events": []}))
+        try:
+            client = TestClient(app)
+            self._install(client)
+            before = client.get("/api/v1/admin/audit/export")
+            assert before.status_code == 200, before.text
+
+            assert client.delete(self.URL).status_code == 200
+
+            after = client.get("/api/v1/admin/audit/export")
+            assert after.status_code == 402, after.text
+            assert "audit_viewer" in after.text
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ── FAR-2153 instance-scope persistence ──────────────────────────────────
+
+
+class TestSystemLicencePersistence:
+    """The system-scope licence must be durable and cross-process.
+
+    The routes call the persistence helpers in ``core.license``; these tests pin
+    the WIRING (the DB behaviour is covered against a real SQLite database in
+    ``tests/unit/core/test_license_persistence.py``).
+    """
+
+    URL = "/api/v1/admin/license"
+
+    def test_upload_persists_the_installed_key(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        persist = AsyncMock()
+        monkeypatch.setattr(admin_license, "persist_installed_system_license", persist)
+        key = _sign_license_payload(_make_valid_payload())
+
+        resp = client.post(self.URL, json={"license_key": key})
+
+        assert resp.status_code == 200
+        persist.assert_awaited_once()
+        assert persist.await_args is not None
+        assert persist.await_args.args[1] == key
+        assert persist.await_args.kwargs["parked"] is False
+        assert persist.await_args.kwargs["updated_by"] == _TEST_ACCOUNT_ID
+        assert get_license() is not None
+
+    def test_upload_reports_a_parked_successor_to_the_persister(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        persist = AsyncMock()
+        monkeypatch.setattr(admin_license, "persist_installed_system_license", persist)
+        payload = _make_valid_payload(
+            starts_at=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
+        )
+        key = _sign_license_payload(payload)
+
+        resp = client.post(self.URL, json={"license_key": key})
+
+        assert resp.status_code == 200
+        assert resp.json()["parked"] is True
+        persist.assert_awaited_once()
+        assert persist.await_args is not None
+        assert persist.await_args.kwargs["parked"] is True
+
+    def test_remove_deletes_the_persisted_key(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        key = _sign_license_payload(_make_valid_payload())
+        assert client.post(self.URL, json={"license_key": key}).status_code == 200
+
+        clear = AsyncMock(return_value=True)
+        monkeypatch.setattr(admin_license, "clear_persisted_system_license", clear)
+
+        resp = client.delete(self.URL)
+
+        assert resp.status_code == 200
+        clear.assert_awaited_once()
+        assert get_license() is None
+
+    def test_status_refreshes_the_persisted_licence_before_resolving(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        refresh = AsyncMock(return_value=False)
+        monkeypatch.setattr(admin_license, "refresh_persisted_system_license", refresh)
+
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=_mock_org({}))):
+            resp = client.get(self.URL)
+
+        assert resp.status_code == 200
+        refresh.assert_awaited_once()
+        assert refresh.await_args is not None
+        assert refresh.await_args.kwargs.get("force") is not True
+
+
+# ── FAR-2146 chosen licence start / parked successor ─────────────────────
+
+
+class TestLicenceStartsAtStatus:
+    """The admin surface must say WHEN a parked successor begins.
+
+    ``licence_state`` keeps its existing five-value meaning (it describes the
+    ACTIVE licence); the successor is a separate field, so "valid but not yet
+    active" is never conflated with "active" or with "lapsed".
+    """
+
+    URL = "/api/v1/admin/license"
+
+    def _get(self, client: TestClient, org: Any) -> dict[str, Any]:
+        with patch("modulo.api.routes.admin_license.get_organisation", new=AsyncMock(return_value=org)):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def _store(self, payload: Mapping[str, object]) -> Any:
+        key = _sign_license_payload(payload)
+        result = parse_and_verify(key)
+        assert result.license_data is not None
+        store_license(key, result.license_data)
+        return result.license_data
+
+    def _parked_payload(
+        self,
+        days_ahead: int,
+        licence_id: str,
+        *,
+        base: datetime | None = None,
+    ) -> dict[str, object]:
+        start = (base or datetime.now(UTC)) + timedelta(days=days_ahead)
+        return _make_valid_payload(
+            starts_at=start.isoformat(),
+            expires_at=(start + timedelta(days=365)).isoformat(),
+            term=12,
+            licence_id=licence_id,
+        )
+
+    def test_an_old_key_reports_no_start_and_no_successor(self, client: TestClient) -> None:
+        self._store(_make_valid_payload())
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        assert data["starts_at"] is None
+        assert data["successor"] is None
+        assert data["licence_state"] == admin_license.LICENCE_STATE_ACTIVE
+
+    def test_an_active_licence_reports_its_own_start_date(self, client: TestClient) -> None:
+        starts_at = (datetime.now(UTC) - timedelta(days=30)).isoformat()
+        self._store(_make_valid_payload(starts_at=starts_at))
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        assert data["starts_at"] == starts_at
+        assert data["successor"] is None
+
+    def test_a_parked_successor_is_reported_without_displacing_the_active_licence(self, client: TestClient) -> None:
+        base = datetime.now(UTC)
+        active = self._store(
+            _make_valid_payload(
+                expires_at=(base + timedelta(days=20)).isoformat(),
+                licence_id="lic-active",
+            )
+        )
+        parked = self._store(self._parked_payload(days_ahead=40, licence_id="lic-successor", base=base))
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        # The ACTIVE licence is still the one reported as active...
+        assert data["licence_id"] == active.licence_id
+        assert data["expires_at"] == active.expires_at
+        assert data["licence_state"] == admin_license.LICENCE_STATE_ACTIVE
+        # ...and the successor is reported separately, with its chosen window.
+        assert data["successor"] == {
+            "starts_at": parked.starts_at,
+            "expires_at": parked.expires_at,
+            # now + 40d starts 20 days after now + 20d ends: a coverage gap.
+            "gap_days": 20,
+        }
+
+    def test_a_parked_licence_alone_reports_no_active_licence_but_names_the_successor(self, client: TestClient) -> None:
+        parked = self._store(self._parked_payload(days_ahead=40, licence_id="lic-successor"))
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        assert data["has_license"] is False
+        assert data["tier"] == "community"
+        assert data["licence_state"] == admin_license.LICENCE_STATE_NONE
+        assert data["successor"]["starts_at"] == parked.starts_at
+        assert data["successor"]["expires_at"] == parked.expires_at
+        # Nothing is active, so the gap concept does not apply.
+        assert data["successor"]["gap_days"] is None
+
+    def test_no_gap_is_reported_when_the_windows_meet(self, client: TestClient) -> None:
+        now = datetime.now(UTC)
+        expiry = now + timedelta(days=40)
+        self._store(_make_valid_payload(expires_at=expiry.isoformat(), licence_id="lic-active"))
+        self._store(
+            _make_valid_payload(
+                starts_at=expiry.isoformat(),
+                expires_at=(expiry + timedelta(days=365)).isoformat(),
+                licence_id="lic-successor",
+            )
+        )
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        assert data["successor"]["gap_days"] is None
+
+    def test_a_due_successor_becomes_active_through_the_status_surface(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No operator action: reading the status after the start promotes it."""
+        now = datetime.now(UTC)
+        start = now + timedelta(days=1)
+        self._store(_make_valid_payload(licence_id="lic-active"))
+        self._store(
+            _make_valid_payload(
+                starts_at=start.isoformat(),
+                expires_at=(start + timedelta(days=365)).isoformat(),
+                licence_id="lic-successor",
+            )
+        )
+
+        class _AtStart(datetime):
+            @classmethod
+            def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+                return start + timedelta(seconds=1) if tz is not None else start.replace(tzinfo=None)
+
+        monkeypatch.setattr("modulo.core.license.datetime", _AtStart)
+
+        data = self._get(client, _mock_org(settings_json={}))
+
+        assert data["licence_id"] == "lic-successor"
+        assert data["successor"] is None
+
+
+class TestSuccessorBlockGapGuarding:
+    """``_successor_block`` must never guess a gap from an unreadable timestamp.
+
+    ``active_expires_at`` reaches the helper from the ACTIVE licence row, which
+    a verified key can never leave unparseable — but the helper is a pure
+    boundary and must degrade to "no gap stated" rather than raise on one.
+    """
+
+    def test_an_unparseable_active_expiry_reports_no_gap(self) -> None:
+        start = datetime.now(UTC) + timedelta(days=30)
+        key = _sign_license_payload(
+            _make_valid_payload(
+                starts_at=start.isoformat(),
+                expires_at=(start + timedelta(days=365)).isoformat(),
+            )
+        )
+        successor = parse_and_verify(key).license_data
+        assert successor is not None
+
+        block = admin_license._successor_block(successor, "not-a-date")
+
+        assert block is not None
+        assert block.starts_at == start.isoformat()
+        assert block.gap_days is None
+
+
+class TestUploadReportsParked:
+    URL = "/api/v1/admin/license"
+
+    def test_a_future_dated_key_is_installed_as_a_parked_successor(self, client: TestClient) -> None:
+        start = datetime.now(UTC) + timedelta(days=30)
+        key = _sign_license_payload(
+            _make_valid_payload(
+                starts_at=start.isoformat(),
+                expires_at=(start + timedelta(days=365)).isoformat(),
+            )
+        )
+
+        resp = client.post(self.URL, json={"license_key": key})
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["parked"] is True
+        assert body["starts_at"] == start.isoformat()
+
+    def test_an_immediate_key_is_installed_as_active(self, client: TestClient) -> None:
+        resp = client.post(self.URL, json={"license_key": _sign_license_payload(_make_valid_payload())})
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["parked"] is False
+        assert body["starts_at"] is None
+
+    def test_a_future_dated_configured_key_is_reported_as_the_successor(self) -> None:
+        """An env-var/org successor has no park slot, so the status finds it."""
+        start = datetime.now(UTC) + timedelta(days=30)
+        key = _sign_license_payload(
+            _make_valid_payload(
+                starts_at=start.isoformat(),
+                expires_at=(start + timedelta(days=365)).isoformat(),
+                licence_id="lic-configured-successor",
+            )
+        )
+        settings = _make_settings()
+        settings.modulo_license_key = key
+
+        response = admin_license._resolve_effective_license(settings, _mock_org(settings_json={}))
+
+        assert response.has_license is False
+        assert response.successor is not None
+        assert response.successor.starts_at == start.isoformat()
+        assert response.successor.expires_at == (start + timedelta(days=365)).isoformat()

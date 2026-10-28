@@ -19,6 +19,7 @@ from modulo.db.crud.environment_profile import (
     get_environment_profile,
     list_environment_profiles,
 )
+from modulo.db.crud.library_primitive import get_library_primitive
 from modulo.db.crud.node_category import list_node_categories
 from modulo.db.crud.observability import update_otel_config
 from modulo.db.crud.pipeline import list_pipelines
@@ -121,6 +122,33 @@ async def test_list_pipelines_include_deleted() -> None:
     result = await list_pipelines(session, include_deleted=True)
 
     assert result.total == 5
+
+
+# ---------------------------------------------------------------------------
+# library_primitive
+# ---------------------------------------------------------------------------
+
+
+async def test_get_library_primitive_include_deleted() -> None:
+    primitive = MagicMock()
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(scalar=primitive))
+
+    result = await get_library_primitive(session, uuid.uuid4(), include_deleted=True)
+
+    assert result is primitive
+    stmt = session.execute.await_args.args[0]
+    assert stmt.get_execution_options()["include_deleted"] is True
+
+
+async def test_get_library_primitive_default_hides_deleted() -> None:
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(scalar=None))
+
+    assert await get_library_primitive(session, uuid.uuid4()) is None
+    stmt = session.execute.await_args.args[0]
+    assert "include_deleted" not in stmt.get_execution_options()
+    assert "deleted_at IS NULL" in str(stmt.compile(compile_kwargs={"literal_binds": True}))
 
 
 # ---------------------------------------------------------------------------

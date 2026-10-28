@@ -115,10 +115,18 @@ backend:
   image:
     repository: ghcr.io/farnalabs/modulo/backend
     digest: sha256:abc123...  # Preferred: immutable reference
-    tag: "latest"             # Fallback: mutable tag
+    tag: ""                   # Empty: defaults to the chart's appVersion
 ```
 
-**Trade-off:** Digest pinning ensures exact image reproducibility but requires manual updates when new images are published. Tag-based references are simpler but may pull different images over time.
+**Trade-off:** Digest pinning ensures exact image reproducibility but requires
+manual updates when new images are published. Tag-based references are simpler
+but may pull different images over time.
+
+An empty `tag` resolves to the chart's `appVersion` — the released image tag
+that `release-unified.yml` publishes — so the chart version and image version
+move together. Set an explicit tag only to pin a different build. The chart
+never defaults to the mutable `latest` tag; pass `tag: "latest"` explicitly if
+you really want the newest main build.
 
 When both are set the digest wins, and the chart renders a single image
 reference (`repository@digest`) — a tag is only used when no digest is set.
@@ -187,15 +195,28 @@ The full setup — provider env vars, the least-privilege Role/RoleBinding, and
 the workspace-pod ServiceAccount — is in the
 [Kubernetes guide](https://modulo.run/docs/kubernetes).
 
-### Workspace Egress NetworkPolicy (FAR-1690)
+### Workspace Egress NetworkPolicy (FAR-1690, FAR-2068)
 
-On the Kubernetes (T3) tier the runtime provider runs agent workspaces as pods
-and **deliberately does not enforce egress inside them** — the pod's network is
-owned by the cluster CNI, and an in-pod `deny_all`/`selected` request is
-refused with a typed error naming NetworkPolicy as the remediation. The chart
-closes that loop by **authoring** the policy: an optional, namespace-scoped
-`NetworkPolicy` selecting the workspace pods (`modulo.provider: kubernetes`)
-with a deny-by-default egress rule plus an exact-target (CIDR + port) allowlist.
+On the Kubernetes (T3) tier the runtime provider runs agent workspaces as pods.
+Egress `deny_all` (profile `network_policy: none`) is **accepted** and resolves
+to a **`declared`** egress posture when — and only when —
+`workspaceNetworkPolicy.enabled=true`: the chart then authors a `NetworkPolicy`
+selecting the workspace pods (`modulo.provider: kubernetes`) with a
+deny-by-default egress rule plus an exact-target (CIDR + port) allowlist. The
+cluster CNI enforces this policy; Modulo records the posture as declared (never
+an observation — Modulo does not see network traffic).
+
+`workspaceNetworkPolicy.enabled=false` is the default and the prerequisite in
+the other direction: with it off the manifest does not exist, so the chart
+injects no enforcement signal and a Kubernetes `deny_all` claim stays
+fail-closed (**refused**), never declared but unenforced. Enabling the value
+also sets `MODULO_WORKSPACE_NETWORK_POLICY=enabled` in the control-plane
+ConfigMap, which is the signal the backend gates the `declared` resolution and
+the provider's acceptance of an egress `none` workspace on. A `selected`-mode
+egress claim (with or without an allowlist) remains **refused** in every
+configuration, with a typed error naming NetworkPolicy as the remediation —
+the manifest cannot express a host:port allowlist without a higher-level
+controller.
 
 ```yaml
 workspaceNetworkPolicy:
@@ -215,7 +236,7 @@ workspaceNetworkPolicy:
 
 | Value | Default | Meaning |
 |---|---|---|
-| `workspaceNetworkPolicy.enabled` | `false` | Render the workspace egress NetworkPolicy |
+| `workspaceNetworkPolicy.enabled` | `false` | Render the workspace egress NetworkPolicy and inject the `MODULO_WORKSPACE_NETWORK_POLICY=enabled` enforcement signal; when off, Kubernetes `deny_all` is refused |
 | `workspaceNetworkPolicy.allowDns` | `true` | Permit UDP/TCP 53 so deny-by-default does not break DNS |
 | `workspaceNetworkPolicy.dnsNamespace` | `""` | Namespace holding cluster DNS; when set the DNS rule's `namespaceSelector` is narrowed to it, otherwise left cluster-wide (`{}`) |
 | `workspaceNetworkPolicy.egressAllowlist` | `[]` | Exact-target egress entries: `{cidr, ports: [{protocol, port}]}` |

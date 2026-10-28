@@ -57,6 +57,15 @@ def _enter_benign_sweeps(stack: ExitStack) -> None:
             return_value={},
         )
     )
+    # FAR-2116 — the pipeline-decay sweep reads the runs table; a test that is
+    # not about it must not reach the (fake) database with a real aggregate.
+    stack.enter_context(
+        patch(
+            "modulo.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
+            new_callable=AsyncMock,
+            return_value={},
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -252,3 +261,95 @@ async def test_capacity_alerts_sweep_swallows_a_generic_failure(
 
     assert "capacity_alerts_dispatched" not in summary
     assert any("dispatcher_reconcile.capacity_alerts_failed" in message for message in caplog.messages)
+
+
+# --- FAR-2116 — pipeline-decay sweep wiring -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_decay_sweep_lands_counts_and_logs_when_it_alerts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A raised/recovered alert is counted in the reconcile summary and logged."""
+    redis_client = make_redis_client()
+    summary: dict[str, Any] = {}
+
+    with ExitStack() as stack:
+        _enter_benign_sweeps(stack)
+        stack.enter_context(
+            patch(
+                "modulo.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
+                new_callable=AsyncMock,
+                return_value={
+                    "pipelines_measured": 3,
+                    "alerts": 1,
+                    "recoveries": 1,
+                    "notify_failed": 0,
+                },
+            )
+        )
+        stack.enter_context(
+            patch(
+                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                new_callable=AsyncMock,
+                return_value={},
+            )
+        )
+        stack.enter_context(caplog.at_level(logging.INFO, logger="modulo.core.cron_helpers"))
+        await ch._run_reconcile_sweeps(redis_client, summary)
+
+    assert summary["pipeline_decay_alerts_measured"] == 3
+    assert summary["pipeline_decay_alerts_raised"] == 1
+    assert summary["pipeline_decay_alerts_recovered"] == 1
+    assert summary["pipeline_decay_alerts_failed"] == 0
+    assert any("dispatcher_reconcile.pipeline_decay_alerts" in message for message in caplog.messages)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_decay_sweep_reraises_cancelled() -> None:
+    """Cancellation aborts the reconcile tick, never swallowed as a warning."""
+    redis_client = make_redis_client()
+    summary: dict[str, Any] = {}
+
+    with ExitStack() as stack:
+        _enter_benign_sweeps(stack)
+        stack.enter_context(
+            patch(
+                "modulo.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            )
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await ch._run_reconcile_sweeps(redis_client, summary)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_decay_sweep_swallows_a_generic_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failure in the decay sweep is a warning, never an aborted tick."""
+    redis_client = make_redis_client()
+    summary: dict[str, Any] = {}
+
+    with ExitStack() as stack:
+        _enter_benign_sweeps(stack)
+        stack.enter_context(
+            patch(
+                "modulo.core.pipeline_decay_alerts.evaluate_pipeline_decay_alerts",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("db down"),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "modulo.core.runner_capacity.reconcile_runner_dispatch_markers",
+                new_callable=AsyncMock,
+                return_value={},
+            )
+        )
+        stack.enter_context(caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"))
+        await ch._run_reconcile_sweeps(redis_client, summary)
+
+    assert "pipeline_decay_alerts_raised" not in summary
+    assert any("dispatcher_reconcile.pipeline_decay_alerts_failed" in message for message in caplog.messages)

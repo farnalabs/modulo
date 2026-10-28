@@ -95,7 +95,7 @@ Post-node automated quality checks. Runs before any HITL gate check on the same 
 
 | Type | Description |
 |------|-------------|
-| `llm_judge` | LLM-as-judge – passes agent output to a model for scoring (soft signal only, never a correctness gate) |
+| `model_judge` | LLM-as-judge – passes agent output to a model for scoring (soft signal only, never a correctness gate) |
 | `regex` | Pattern match against output (shape only) |
 | `json_schema` | Validate output against a JSON Schema (shape only) |
 | `custom_function` | User-defined Python function |
@@ -103,6 +103,8 @@ Post-node automated quality checks. Runs before any HITL gate check on the same 
 | `human_set` | Registered, versioned, human-authored assertion set (the trustworthy correctness path) |
 
 Each eval has a pass threshold and failure behaviour: `warn` (soft – run continues) or `block` (hard – run fails at this node). Eval results feed into the Feedback System.
+
+**Reviewer Independence Note (FAR-2031):** `model_judge` evals may share a model backend with the node under evaluation – the `ModelBackendHub` decrypts credentials once per run and the same backend ID can be referenced by both the node and its eval. This is acceptable because `model_judge` is explicitly a soft-signal eval (default `failure_behaviour: "warn"`), the evaluated content is wrapped with a guard instruction and delimiters to prevent prompt injection, and `human_set` evals provide the trustworthy correctness path. For correctness-critical gates, use `human_set` evals.
 
 ### HITL Manager (`modulo/core/hitl_manager/`)
 
@@ -246,7 +248,7 @@ Push notifications (WebSocket events) and outbound webhooks. Per-endpoint HMAC-s
 
 ### Runtime Provider Hub (`modulo/core/runtime_provider/`)
 
-Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner). Modulo has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) resolves the EnvironmentProfile for a Runner dispatch deterministically (delivered by D2): an explicit `provider_hint` or `provider_type` match wins, and anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider; there is no silent fallback. Providers: `local` (always registered, host processes; its provider-neutral `workspace_metadata` is ignored), `e2b` (registered when `MODULO_E2B_API_KEY` is set; metadata maps to E2B sandbox metadata), `runner_docker` (registered when a `MODULO_RUNNER_*` variable or a Docker endpoint (`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is configured; `docker` and legacy `local_docker` are explicit aliases of the same Docker tier), and `kubernetes` (alias `k8s`; registered when `MODULO_KUBERNETES_ENABLED` is a non-falsy value; workspace pods run in `MODULO_KUBERNETES_NAMESPACE`, default `modulo`, under ServiceAccount `MODULO_KUBERNETES_SERVICE_ACCOUNT`, default `default`). Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (the `runner_docker` provider ships with D2; D4 completes it with the first-party runner image and the compose overlay behind a filtered socket-proxy), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. D2 removed the unused WorkspaceLease scaffolding, including its API reader (FAR-587): workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410. D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
+Agent execution environments for the Runner tier (ADR 029: Agent Execution Tiers + the Bundled Runner). Modulo has exactly two node execution mechanisms: the **Inline Prompt** (`node_type: agent`), an in-process model call in the SAQ worker resolved through the Model Backend Hub with no isolation, and the **Runner** (`node_type: sandbox_agent`), where the agent runtime executes inside a provisioned workspace (provision -> execute -> collect structured output). The RuntimeProvider ABC (parallel to ConnectorHub/ModelBackendHub) resolves the EnvironmentProfile for a Runner dispatch deterministically (delivered by D2): an explicit `provider_hint` or `provider_type` match wins, and anything unresolvable raises `ProviderNotConfiguredError` naming the env var that would register the provider; there is no silent fallback. Providers: `local` (always registered, host processes; its provider-neutral `workspace_metadata` is ignored), `e2b` (registered when `MODULO_E2B_API_KEY` is set; metadata maps to E2B sandbox metadata), `runner_docker` (registered when a Docker endpoint (`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is configured; an unrelated `MODULO_RUNNER_*` variable never registers it, FAR-996; `docker` and legacy `local_docker` are explicit aliases of the same Docker tier), and `kubernetes` (alias `k8s`; registered when `MODULO_KUBERNETES_ENABLED` is a non-falsy value; workspace pods run in `MODULO_KUBERNETES_NAMESPACE`, default `modulo`, under ServiceAccount `MODULO_KUBERNETES_SERVICE_ACCOUNT`, default `default`). Runners come in three packagings of the same tier: **Bundled Runner (Docker)** (the `runner_docker` provider ships with D2; D4 completes it with the first-party runner image and the compose overlay behind a filtered socket-proxy), **remote Docker** (the same provider pointed at a remote engine via `MODULO_DOCKER_HOST`), and **External Runner (E2B)** (the operator's own E2B account via `AsyncSandbox.create`), plus the bare `local` provider tier, counted by the capacity gate alongside Docker. Hubs are fresh per `build_hub()` factory call (no singleton) and provider-owned clients are released via `aclose()`. D2 removed the unused WorkspaceLease scaffolding, including its API reader (FAR-587): workspace state lives in `runs.sandbox_dispatch_state`, and `GET /runs/{run_id}/workspace-lease` answers a deliberate 410. D8 will replace the dispatch-time capacity check with an atomic advisory-locked gate accounting Runner capacity by run dispatch-state.
 
 E2B direct-path inventory, sanctioned-site list, and the rewire plan that moved every E2B dispatch onto the RuntimeProvider ABC (FAR-1050 deliverable 1). The `MODULO_E2B_VIA_PROVIDER` flag the plan originally gated on was **retired by slice R6 (PR #1033)**: the provider path is now unconditional, and `via_provider` survives only as a historical attribution field on the dispatch marker and node telemetry: [`docs/design/e2b-provider-conformance-rewire.md`](design/e2b-provider-conformance-rewire.md).
 
@@ -335,7 +337,7 @@ The reference-integrity guard test (`tests/architecture/test_feature_flag_refere
    c. The agent's Jinja2 prompt is rendered (sandboxed environment) with `run_context` and previous outputs
    d. The LLM is called through the model backend
    e. Output is validated against the output Schema
-   f. EvalEngine runs configured evals (llm_judge, regex, json_schema, custom_function)
+   f. EvalEngine runs configured evals (model_judge, regex, json_schema, custom_function, human_set)
    g. If eval fails with `block` behaviour, run enters `failed` state
    h. If the outgoing edge has a HITL gate, `interrupt()` pauses the run
 
@@ -391,7 +393,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   and for any run the observation gate skips.
 - **Over-budget retry guard (FAR-2025):** a run-level retry re-executes the
   WHOLE run, so it is refused when the attempt that just ended had already
-  consumed the graph's node-budget allowance — the sum of its resolved
+  consumed the graph's node-budget allowance – the sum of its resolved
   per-node `timeout_seconds` (the pipeline-level `node_timeout_seconds` fills
   in any node that does not set one), less a 300 s window for provisioning,
   the post-run envelope, and a task's own end-of-budget reserve. Such an
@@ -468,7 +470,7 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
 
   1. **Age window (primary, fast path).** Default 3600s (`_CI_FAILURE_COALESCE_WINDOW_SECONDS`). Overridable per trigger via `config_json.ci_failure_coalesce_window_seconds`, clamped to a minimum of 1s and a maximum of 7 days (`_CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS`). A repeat delivery whose derived key already has a live entry in `webhook_dedup_hashes` (TTL = the window) is suppressed immediately. A `coalesced` TriggerEvent is recorded and `CiFailureCoalescedError` raised. The route commits the event inside its transaction and acks the sender with a handled 202.
 
-  2. **In-flight run (secondary).** When the age window has elapsed, a same-key delivery is STILL suppressed if any run for the same pipeline and derived key is non-terminal. Implemented in `has_in_flight_ci_failure_run` (called via the shared `_suppress_ci_failure` path). The check is pipeline-scoped, bounded by `CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS` (default 7200s), and limited to `COALESCE_CANDIDATE_LIMIT` recent candidates. Each candidate run's key is recomputed and compared against the key derived at entry: the engine-stamped key is authoritative, with derivation from the candidate's `input_payload` as the legacy/verbatim-payload fallback. Fail-open: an unreadable query logs `ci_failure_coalesce.inflight_check_failed` and falls through to the age decision — dispatch is never blocked.
+  2. **In-flight run (secondary).** When the age window has elapsed, a same-key delivery is STILL suppressed if any run for the same pipeline and derived key is non-terminal. Implemented in `has_in_flight_ci_failure_run` (called via the shared `_suppress_ci_failure` path). The check is pipeline-scoped, bounded by `CI_FAILURE_INFLIGHT_BACKSTOP_SECONDS` (default 7200s), and limited to `COALESCE_CANDIDATE_LIMIT` recent candidates. Each candidate run's key is recomputed and compared against the key derived at entry: the engine-stamped key is authoritative, with derivation from the candidate's `input_payload` as the legacy/verbatim-payload fallback. Fail-open: an unreadable query logs `ci_failure_coalesce.inflight_check_failed` and falls through to the age decision – dispatch is never blocked.
 
   **Audit.** Both legs funnel through the same suppression point. The `coalesced` TriggerEvent and `CiFailureCoalescedError` carry the stable marker `ci_failure_coalesced:<key>` in `error_detail`. The log distinguishes the leg (`"inside the <window>s coalesce window"` vs `"a run for the same PR + head SHA is still in flight"`), but the event shape is identical.
 
@@ -943,9 +945,9 @@ non-production use.
 
 Hosted Ubicloud runners (ubicloud-standard-2). Workflows:
 - Lint, type-check, unit test, frontend build, audit, and WCAG contrast test on every push
-- Each backend/frontend container is built once and published to ghcr.io only from `main` or a version tag, gated by image smoke checks (`import modulo`, `nginx -t`) only. The publish job does not yet scan the built image – the trivy/grype gates, digest-drift guard and cosign/SBOM attest are the D4 GA/CI follow-up item noted above. CI's Trivy check is a filesystem scan of the repository (dependency CVEs + misconfigurations), not a scan of the built images
+- Containers are built once and published to ghcr.io from `main` (a short-SHA tag plus `:latest`) or, on a release `cut` / `recut`, with versioned tags (`release-unified.yml`). Every GHCR push is gated by image smoke checks (for example `import modulo` and `nginx -t`); the release path also checks `opencode --version` on the runner image. The publish path does not yet scan the built image - the trivy/grype gates, digest-drift guard and cosign/SBOM attest are the D4 GA/CI follow-up item noted above. CI's Trivy check is a filesystem scan of the repository (dependency CVEs + misconfigurations), not a scan of the built images
 - Staging smoke, WCAG, and regression suites share one dependency/browser setup while retaining separate result artifacts
-- Release workflow (tag-driven, semver)
+- Release: Unified Pipeline (`.github/workflows/release-unified.yml`) owns `cut` / `recut` / `promote` / `dry-run`; it is `workflow_dispatch`-only and semver-driven. The promote path owns stable image and Helm publication; see `docs/release-process.md`
 
 ### Observability
 

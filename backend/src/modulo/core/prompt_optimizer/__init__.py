@@ -136,7 +136,7 @@ def _build_failure_context(
 
 
 # Matches a fenced code block with optional json language tag
-_CODE_FENCE_RE = re.compile(r"```\s*(?:json)?\s*\n?\s*(.*?)```", re.DOTALL)
+_CODE_FENCE_RE = r"```[^\S\r\n]*+(?:json)?[^\S\r\n]*+\r?\n?[^\S\r\n]*+(.*?)```"
 
 
 def _parse_llm_response(raw: str) -> OptimizationResult:
@@ -149,7 +149,7 @@ def _parse_llm_response(raw: str) -> OptimizationResult:
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
-        match = _CODE_FENCE_RE.search(cleaned)
+        match = re.search(_CODE_FENCE_RE, cleaned, re.DOTALL)
         if match:
             extracted = match.group(1).strip()
             try:

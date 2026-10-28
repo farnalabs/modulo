@@ -21,6 +21,7 @@ from modulo.auth.api_key import (
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.mcp.scope_validator import resolve_tool_access
+from modulo.settings import Settings
 
 
 def _principal(role: str, grants: frozenset[str] | None) -> TenantPrincipal:
@@ -89,6 +90,27 @@ class TestPipelinePrivilegeHelpers:
             "connector.list.in_dev",
         )
         assert result is None
+
+    def test_internal_gate_requires_dev_mode(self) -> None:
+        with (
+            patch(
+                "modulo.api.dependencies.get_settings",
+                return_value=Settings(
+                    database_url="postgresql+asyncpg://localhost/test",
+                    secret_key="a" * 32,
+                    fernet_key="a" * 32,
+                    modulo_admin_password="testpass",
+                    modulo_dev_mode=False,
+                ),
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            require_in_dev_operator(
+                _principal("operator", frozenset({"library.search.in_dev"})),
+                "library.search.in_dev",
+                require_dev_mode=True,
+            )
+        assert exc.value.status_code == 403
 
 
 class TestMcpPrivilegeHelpers:

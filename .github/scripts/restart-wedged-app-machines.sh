@@ -61,6 +61,10 @@
 set -euo pipefail
 
 APP="${1:?usage: restart-wedged-app-machines.sh <app>}"
+LOG_CAPTURE_TIMEOUT_SECONDS=90
+export PROCESS_GROUP="app"
+export LIVENESS_CHECK_NAME="app_liveness"
+export CRITICAL_CHECK_STATUS="critical"
 
 if ! command -v fly >/dev/null 2>&1; then
   echo "::warning::flyctl not on PATH - cannot check ${APP} for a wedged app machine; continuing to the next deploy attempt."
@@ -68,7 +72,7 @@ if ! command -v fly >/dev/null 2>&1; then
 fi
 
 MACHINES_JSON="$(fly machines list --app "${APP}" --json 2>/dev/null || true)"
-if [ -z "${MACHINES_JSON}" ]; then
+if [[ -z "${MACHINES_JSON}" ]]; then
   echo "::warning::fly machines list failed for ${APP} - machine state unknown; skipping wedge recovery and continuing to the next deploy attempt."
   exit 0
 fi
@@ -77,7 +81,11 @@ fi
 # app_liveness check is critical. A parse failure is treated as "unknown"
 # (warn, no action) rather than "healthy".
 WEDGED_IDS="$(printf '%s' "${MACHINES_JSON}" | python3 -c '
-import json, sys
+import json, os, sys
+
+PROCESS_GROUP = os.environ["PROCESS_GROUP"]
+LIVENESS_CHECK_NAME = os.environ["LIVENESS_CHECK_NAME"]
+CRITICAL_CHECK_STATUS = os.environ["CRITICAL_CHECK_STATUS"]
 
 try:
     machines = json.load(sys.stdin)
@@ -90,17 +98,21 @@ for machine in machines or []:
         continue
     config = machine.get("config") or {}
     group = (config.get("metadata") or {}).get("fly_process_group") or config.get("env", {}).get("FLY_PROCESS_GROUP") or ""
-    if str(group) != "app":
+    if str(group) != PROCESS_GROUP:
         continue
     checks = machine.get("checks") or []
-    if any(str(c.get("name", "")) == "app_liveness" and str(c.get("status", "")) == "critical" for c in checks):
+    if any(
+        str(c.get("name", "")) == LIVENESS_CHECK_NAME
+        and str(c.get("status", "")) == CRITICAL_CHECK_STATUS
+        for c in checks
+    ):
         print(machine.get("id", ""))
 ')" || {
   echo "::warning::could not parse the flyctl machines output for ${APP} - machine state unknown; skipping wedge recovery."
   exit 0
 }
 
-if [ -z "${WEDGED_IDS}" ]; then
+if [[ -z "${WEDGED_IDS}" ]]; then
   echo "No wedged app machine in ${APP} - nothing to restart."
   exit 0
 fi
@@ -115,11 +127,11 @@ LOG_DIR="${WEDGED_LOG_DIR:-/tmp/app-machine-logs}"
 mkdir -p "${LOG_DIR}" 2>/dev/null || true
 
 while IFS= read -r MID; do
-  [ -z "${MID}" ] && continue
+  [[ -z "${MID}" ]] && continue
   # Bounded and best-effort: capturing the log must never delay or fail the
   # recovery it precedes.
   LOG_FILE="${LOG_DIR}/${MID}.log"
-  timeout 90 fly logs --app "${APP}" --machine "${MID}" --no-tail > "${LOG_FILE}" 2>&1 || true
+  timeout "${LOG_CAPTURE_TIMEOUT_SECONDS}" fly logs --app "${APP}" --machine "${MID}" --no-tail > "${LOG_FILE}" 2>&1 || true
   # The entrypoint prints the DATABASE_URL prefix, so redact the credential
   # part before the log is echoed or persisted. Match on the `://user:pw@`
   # shape rather than a bare `postgres(ql)://` prefix: driver-qualified schemes
@@ -127,7 +139,7 @@ while IFS= read -r MID; do
   # into this file and the deploy artifact (2026-10-23 outage).
   sed -i -E 's#(://[^:/@]+:)[^@]*@#\1***@#g' "${LOG_FILE}" 2>/dev/null || true
   echo "::notice::Restarting wedged app machine ${MID} in ${APP} (app_liveness critical) so the next deploy attempt can make progress."
-  if [ -s "${LOG_FILE}" ]; then
+  if [[ -s "${LOG_FILE}" ]]; then
     echo "----- wedged machine ${MID} log (tail) -----"
     tail -n 60 "${LOG_FILE}" || true
     echo "----- end wedged machine ${MID} log -----"

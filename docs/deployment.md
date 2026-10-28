@@ -72,7 +72,13 @@ The local Docker Compose file includes an optional observability stack behind th
 
 ### Start
 
+The local compose file – like the root `docker-compose.yml` – refuses to start
+without a valid `FERNET_KEY` (compose prints
+`required variable FERNET_KEY is missing a value` and the generation command).
+Generate the key once and put it in `.env` at the repo root:
+
 ```bash
+printf 'FERNET_KEY=%s\n' "$(openssl rand -base64 32)" > .env
 docker compose -f docker-compose.local.yml --profile observability up -d
 ```
 
@@ -119,7 +125,8 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 The root `docker-compose.yml` ships a **`watchdog` service** - a [Gatus](https://gatus.io)
 instance that runs **by default**, so `docker compose up -d` starts it along with
 the rest of the stack. It exists for the one failure Modulo cannot report about
-itself: Modulo being down.
+itself: Modulo being down. (Like the rest of that file it needs a valid
+`FERNET_KEY` in `.env` - see the README quick start.)
 
 | | |
 |---|---|
@@ -374,6 +381,10 @@ For system requirements (minimum resources, supported databases), see [`docs/sys
 
 For upgrade procedures on existing deployments, see [`docs/upgrade-process.md`](./upgrade-process.md).
 
+For what a customer or successor keeps if Farnalabs stops operating, and how to
+build the image from source, see
+[`docs/continuity-and-escrow.md`](./continuity-and-escrow.md).
+
 For the production launch checklist, see [`docs/public-launch-checklist.md`](./public-launch-checklist.md).
 
 ---
@@ -385,7 +396,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `DATABASE_URL` | **Yes** | – | `postgresql+asyncpg://user:pass@host:port/db` |
 | `SECRET_KEY` | **Yes** | – | 32+ byte random string for JWT signing |
 | `FERNET_KEY` | **Yes** | – | 44-char base64 Fernet key for credential encryption |
-| `MODULO_USERS` | No | – | Comma-separated `email:password` pairs for initial user seed (plaintext is bcrypt-hashed at seed time; `admin` gets the admin role) |
+| `MODULO_USERS` | No (but needed for a first login) | – | Comma-separated `email:password` pairs for initial user seed (plaintext is bcrypt-hashed at seed time; `admin` gets the admin role). Without it - and without `modulo users add` - no account exists and login returns `401`; see *Docker Compose* step 1 |
 | `MODULO_DB` | No | `postgres` | Database backend (`postgres`, `sqlite`, `mariadb`, or `mysql`) |
 | `REDIS_URL` | **Yes** | `redis://localhost:6379/0` | Redis URL for the SAQ broker, scheduling, event coordination, and rate limiting. The API refuses to boot when this is explicitly empty. |
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects |
@@ -454,6 +465,10 @@ Runs and triggers require Redis plus the SAQ workers – see [`docs/quickstart.m
 
 ### Docker Compose (single-server, multi-user)
 
+The compose file pulls the all-in-one image from GHCR. To build that image
+yourself from source (for example as a continuity plan), see
+[Continuity and Escrow](continuity-and-escrow.md).
+
 **1. Create the environment file.** The stack will not start without it: compose
 refuses to run (naming the variable) until `MODULO_DB_PASSWORD`, `SECRET_KEY`,
 `FERNET_KEY`, `SAQ_AUTH_USERNAME` and `SAQ_AUTH_PASSWORD` are set.
@@ -466,6 +481,25 @@ cp .env.prod.example deploy/compose/.env
 #   FERNET_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 #   SAQ_AUTH_PASSWORD=$(openssl rand -hex 24)
 ```
+
+Those five start the stack, but **none of them creates a login**: with no user
+in the database, `POST /api/v1/auth/login` answers **401** and a perfectly
+healthy deployment looks broken. Create the first account with one of:
+
+- **Seed it at boot (simplest).** Add `MODULO_USERS=admin@example.com:<password>`
+  to the compose env file you created in step 1, **before** step 2. The boot
+  seeder creates the account, and an entry named `admin` gets the admin role.
+  Plaintext is bcrypt-hashed at seed time.
+- **Create it after the stack is up.** From the `modulo` container:
+
+  ```bash
+  docker compose -f deploy/compose/docker-compose.prod.yml exec modulo \
+    modulo users add admin@example.com --admin
+  # prompts for the password; pass --password '<pw>' for a non-interactive run
+  ```
+
+Either way, do not skip this for a deployment you intend to log into - there is
+no admin account unless you create one.
 
 **2. Start the stack.**
 
@@ -483,6 +517,18 @@ curl -s http://localhost/healthz/ready | python -m json.tool
 
 If `saq_workers` is not `ok`, no pipeline run, cron trigger or polling trigger
 will execute - see *What the single container runs* below.
+
+**3b. Verify a login actually works.** Readiness says nothing about accounts;
+a user-less stack is ready and still answers `401`.
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -X POST http://localhost/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"<the password from step 1>"}'
+# 200 = the account exists and the credentials work
+# 401 = no such user (create one - step 1), or a wrong password
+```
 
 **What runs.** The `modulo` service runs the **all-in-one image**: one
 container whose `supervisord` starts the API (`uvicorn`), `nginx`, and **both

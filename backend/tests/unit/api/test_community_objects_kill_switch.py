@@ -7,7 +7,7 @@ Verifies:
 """
 
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, status
@@ -63,6 +63,62 @@ class TestCommunityObjectsGateListCommunity:
         assert not result["items"]
         assert result["total"] == 0
         assert mock_flag is not None
+
+
+class TestLifecycleMapCommunityAccess:
+    @pytest.mark.asyncio
+    async def test_list_hides_lifecycle_maps_for_ordinary_operator(self) -> None:
+        from modulo.api.routes.community_library import list_community
+
+        session = configure_rls_preamble(AsyncMock())
+        principal = MagicMock()
+        principal.organisation_id = uuid.uuid4()
+        principal.org_role = "operator"
+        principal.key_grants = frozenset()
+        entries = [{"id": "map", "type": "lifecycle_map"}, {"id": "agent", "type": "agent"}]
+        with (
+            patch(
+                "modulo.api.routes.community_library.list_community_entries",
+                new_callable=AsyncMock,
+                return_value=entries,
+            ),
+            patch("modulo.api.routes.community_library.get_cached_manifest", new_callable=AsyncMock, return_value=None),
+            patch("modulo.api.routes.community_library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+            patch(
+                "modulo.api.routes.community_library._community_objects_enabled",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            result = await list_community(session, principal)
+        assert [item["type"] for item in result["items"]] == ["agent"]
+
+    @pytest.mark.asyncio
+    async def test_install_rejects_lifecycle_map_for_ordinary_operator(self) -> None:
+        from modulo.api.routes.community_library import InstallRequest, install
+
+        session = MagicMock()
+        principal = MagicMock()
+        principal.organisation_id = uuid.uuid4()
+        principal.org_role = "operator"
+        principal.key_grants = frozenset()
+        entry = {"id": "map", "type": "lifecycle_map"}
+        with (
+            patch(
+                "modulo.api.routes.community_library.get_community_entry",
+                new_callable=AsyncMock,
+                return_value=entry,
+            ),
+            patch("modulo.api.routes.community_library.get_settings", return_value=MagicMock(modulo_dev_mode=False)),
+            patch(
+                "modulo.api.routes.community_library._community_objects_enabled",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await install("map", InstallRequest(), session, principal)
+        assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
 
 
 class TestCommunityObjectsGateGetEntry:

@@ -6,7 +6,7 @@ All functions require RLS org context to be set by the caller.
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypedDict, Unpack
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError
@@ -23,32 +23,68 @@ from modulo.util.uuid import coerce_uuid
 _log = logging.getLogger(__name__)
 
 
+class CreateAgentOptions(TypedDict, total=False):
+    """Keyword-only options accepted by :func:`create_agent` (python:S107).
+
+    Grouped behind ``**options: Unpack[CreateAgentOptions]`` so the function
+    stays inside the S107 parameter budget without changing a single caller:
+    every option keeps its exact name, type and default, and mypy still
+    type-checks each keyword at the call site. ``total=False`` models the
+    defaults; the body applies them via ``options.get(name, default)``.
+    """
+
+    is_executable: bool
+    input_schema_id: uuid.UUID | None
+    input_schema_version: str
+    output_schema_id: uuid.UUID | None
+    output_schema_version: str
+    model_backend_id: uuid.UUID | None
+    description: str | None
+    connector_type_refs: list[dict[str, Any]] | None
+    evals: list[dict[str, Any]] | None
+    retry_policy: dict[str, Any] | None
+    token_budget: int | None
+    max_input_length: int | None
+    library_id: uuid.UUID | None
+    template_id: str | None
+    agent_commands: list[str] | None
+    prompt_always_visible: bool
+    required_environment_capabilities: list[str] | None
+    schema_profile: str | None
+
+
 async def create_agent(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
     name: str,
     account_id: uuid.UUID,
-    is_executable: bool = True,
-    input_schema_id: uuid.UUID | None = None,
-    input_schema_version: str = "latest",
-    output_schema_id: uuid.UUID | None = None,
-    output_schema_version: str = "latest",
     prompt_template: str,
-    model_backend_id: uuid.UUID | None = None,
-    description: str | None = None,
-    connector_type_refs: list[dict[str, Any]] | None = None,
-    evals: list[dict[str, Any]] | None = None,
-    retry_policy: dict[str, Any] | None = None,
-    token_budget: int | None = None,
-    max_input_length: int | None = None,
-    library_id: uuid.UUID | None = None,
-    template_id: str | None = None,
-    agent_commands: list[str] | None = None,
-    prompt_always_visible: bool = False,
-    required_environment_capabilities: list[str] | None = None,
-    schema_profile: str | None = None,
+    **options: Unpack[CreateAgentOptions],
 ) -> Agent:
+    """Create an agent; optional metadata rides on :class:`CreateAgentOptions`."""
+    is_executable = options.get("is_executable", True)
+    input_schema_id = options.get("input_schema_id")
+    input_schema_version = options.get("input_schema_version", "latest")
+    output_schema_id = options.get("output_schema_id")
+    output_schema_version = options.get("output_schema_version", "latest")
+    model_backend_id = options.get("model_backend_id")
+    description = options.get("description")
+    connector_type_refs = options.get("connector_type_refs")
+    evals = options.get("evals")
+    retry_policy = options.get("retry_policy")
+    token_budget = options.get("token_budget")
+    max_input_length = options.get("max_input_length")
+    library_id = options.get("library_id")
+    template_id = options.get("template_id")
+    agent_commands = options.get("agent_commands")
+    prompt_always_visible = options.get("prompt_always_visible", False)
+    required_environment_capabilities = options.get("required_environment_capabilities")
+    schema_profile = options.get("schema_profile")
+    unknown_options = set(options) - set(CreateAgentOptions.__annotations__)
+    if unknown_options:
+        raise TypeError(f"unexpected create_agent options: {sorted(unknown_options)}")
+
     agent = Agent(
         organisation_id=org_id,
         name=name,

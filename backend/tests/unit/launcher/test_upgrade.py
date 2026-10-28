@@ -11,9 +11,12 @@ record.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -827,6 +830,32 @@ def _manifest_triple(staging, target_version="1.2.0", *, manifest_release=None):
     return SimpleNamespace(tarball=tarball_path, manifest=manifest_path, signature=signature_path)
 
 
+def test_from_file_rejects_archive_for_other_host_os(tmp_path, monkeypatch):
+    archive = tmp_path / "modulo-1.2.0-darwin-arm64.tar.gz"
+    archive.write_bytes(b"archive")
+    monkeypatch.setattr(upgrade_module, "_host_os", lambda: "linux")
+    with pytest.raises(UpgradeError, match="OS does not match"):
+        upgrade_module._resolve_upgrade_assets(
+            from_file=archive,
+            target_version=None,
+            staging_dir=tmp_path / "stage",
+            fetch=None,
+        )
+
+
+def test_extract_rejects_mismatched_top_level_identity(tmp_path):
+    import tarfile
+
+    wrong_dir = tmp_path / "modulo-1.2.0-linux-amd64"
+    wrong_dir.mkdir()
+    (wrong_dir / "SHA256SUMS").write_text("", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-arm64.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(wrong_dir, arcname=wrong_dir.name)
+    with pytest.raises(UpgradeError, match="top-level directory"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
 def test_verify_release_stage_happy(tmp_path, patched_trust_store):
     release = _manifest_triple(tmp_path)
     manifest = upgrade_module._verify_release_stage(release.manifest, release.signature, release.tarball, "1.2.0")
@@ -1190,9 +1219,13 @@ class TestHostArch:
         with patch("platform.machine", return_value="arm64"):
             assert upgrade_module._host_arch() == "arm64"
 
-    def test_defaults_to_amd64(self):
-        with patch("platform.machine", return_value="unknown"):
-            assert upgrade_module._host_arch() == "amd64"
+    @pytest.mark.parametrize("machine", ["unknown", "riscv64", "mips64"])
+    def test_rejects_unknown_architecture(self, machine):
+        with (
+            patch("platform.machine", return_value=machine),
+            pytest.raises(UpgradeError, match=f"unsupported host architecture '{machine}'"),
+        ):
+            upgrade_module._host_arch()
 
 
 class TestTempOwnerPid:
@@ -1525,11 +1558,347 @@ class TestResolveCurrentTarget:
 
 
 class TestAssertUpgradePlatform:
-    def test_windows_raises(self):
-        if sys.platform != "win32":
-            pytest.skip("Windows test only")
+    def test_windows_raises(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
         with pytest.raises(UpgradeError, match="Windows"):
             upgrade_module.assert_upgrade_platform()
+
+    def test_darwin_fails_closed_until_artifact_is_published(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "darwin")
+        with pytest.raises(UpgradeError, match="macOS native artifact is not yet published"):
+            upgrade_module.assert_upgrade_platform()
+
+    def test_linux_does_not_raise(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        upgrade_module.assert_upgrade_platform()
+
+
+def test_installer_uses_portable_commands_and_fails_closed_for_darwin():
+    install_script = Path(__file__).resolve().parents[4] / "scripts" / "install.sh"
+    source = install_script.read_text(encoding="utf-8")
+    assert "base64 -D" in source
+    assert "base64 -d" in source
+    assert 'cp -- "${FROM_FILE}"' not in source
+    assert "macOS native artifact is not yet published" in source
+
+
+def _installer_probe(
+    tmp_path: Path,
+    archive_name: str,
+    root_name: str,
+    *,
+    bypass_manifest: bool = False,
+    legacy_shim: Path | None = None,
+    extra_top_level: str | None = None,
+    symlinked_checksum_parent: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    install_script = Path(__file__).resolve().parents[4] / "scripts" / "install.sh"
+    if bypass_manifest:
+        install_script = tmp_path / "install.sh"
+        source = Path(__file__).resolve().parents[4] / "scripts" / "install.sh"
+        install_script.write_text(
+            source.read_text(encoding="utf-8").replace(
+                'verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}" '
+                '"bundle-v${VERSION_NUM}"',
+                ": # test bypass: exercise archive extraction gate",
+            ),
+            encoding="utf-8",
+        )
+        install_script.chmod(0o755)
+    archive = tmp_path / archive_name
+    source_root = tmp_path / root_name
+    source_root.mkdir()
+    if symlinked_checksum_parent:
+        if os.name != "posix":
+            pytest.skip("POSIX symlinks")
+        real_parent = tmp_path / "real-parent"
+        real_parent.mkdir()
+        artifact = real_parent / "artifact.txt"
+        artifact.write_text("artifact", encoding="utf-8")
+        (source_root / "nested").symlink_to(real_parent, target_is_directory=True)
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        (source_root / "SHA256SUMS").write_text(f"{digest}  nested/artifact.txt\n", encoding="utf-8")
+    else:
+        (source_root / "SHA256SUMS").write_text("", encoding="utf-8")
+    tar_bin = shutil.which("tar")
+    bash_bin = shutil.which("bash")
+    assert tar_bin is not None
+    assert bash_bin is not None
+    archive_entries = [root_name]
+    if extra_top_level is not None:
+        extra = tmp_path / extra_top_level
+        if extra_top_level.startswith("."):
+            extra.write_text("unexpected", encoding="utf-8")
+        else:
+            extra.mkdir()
+        archive_entries.append(extra_top_level)
+    subprocess.run(  # noqa: S603 - resolved system tar and test-owned paths
+        [tar_bin, "-czf", str(archive), "-C", str(tmp_path), *archive_entries], check=True, timeout=30
+    )
+    env = {**os.environ, "HOME": str(tmp_path / "home"), "MODULO_INSTALL_ROOT": str(tmp_path / "install")}
+    if legacy_shim is not None:
+        env["MODULO_LEGACY_SHIM_PATH"] = str(legacy_shim)
+    if bypass_manifest:
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (tmp_path / "RELEASE_MANIFEST.json").write_text(
+            json.dumps({"release": "bundle-v1.2.3", "artifacts": [{"name": archive.name, "sha256": digest}]}),
+            encoding="utf-8",
+        )
+        (tmp_path / "RELEASE_MANIFEST.json.sig").write_text(
+            '{"key_id":"modulo-2026-a","signature":"' + "0" * 128 + '"}', encoding="utf-8"
+        )
+        stub_bin = tmp_path / "bin"
+        stub_bin.mkdir()
+        openssl_stub = stub_bin / "openssl"
+        openssl_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        openssl_stub.chmod(0o755)
+        env.update({"PATH": f"{stub_bin}:{os.environ['PATH']}", "TRUST_KEY_CURRENT_B64": "AA=="})
+    return subprocess.run(  # noqa: S603 - resolved bash and test-owned paths
+        [bash_bin, str(install_script), "--from-file", str(archive)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+        check=False,
+    )
+
+
+def test_installer_rejects_linux_host_with_darwin_archive(tmp_path: Path) -> None:
+    result = _installer_probe(tmp_path, "modulo-1.2.3-darwin-amd64.tar.gz", "modulo-1.2.3-darwin-amd64")
+    assert result.returncode != 0
+    assert "archive OS 'darwin' does not match detected host OS 'linux'" in result.stderr
+
+
+def test_installer_accepts_linux_archive_shape_before_manifest_gate(tmp_path: Path) -> None:
+    result = _installer_probe(tmp_path, "modulo-1.2.3-linux-amd64.tar.gz", "modulo-1.2.3-linux-amd64")
+    assert result.returncode != 0
+    assert "SIGNED release manifest must sit beside the tarball" in result.stderr
+    assert "archive OS 'linux' does not match" not in result.stderr
+    assert "archive top-level directory" not in result.stderr
+
+
+def test_installer_rejects_mismatched_archive_root_before_install_mutation(tmp_path: Path) -> None:
+    result = _installer_probe(tmp_path, "modulo-1.2.3-linux-amd64.tar.gz", "unexpected-root", bypass_manifest=True)
+    assert result.returncode != 0
+    assert "archive top-level directory 'unexpected-root' does not match archive identity" in result.stderr
+    assert not (tmp_path / "install").exists()
+
+
+def test_installer_rejects_hidden_top_level_entry_before_install_mutation(tmp_path: Path) -> None:
+    result = _installer_probe(
+        tmp_path,
+        "modulo-1.2.3-linux-amd64.tar.gz",
+        "modulo-1.2.3-linux-amd64",
+        bypass_manifest=True,
+        extra_top_level=".hidden",
+    )
+    assert result.returncode != 0
+    assert "unexpected archive layout" in result.stderr
+    assert not (tmp_path / "install").exists()
+
+
+def test_installer_rejects_symlinked_checksum_parent_before_install_mutation(tmp_path: Path) -> None:
+    result = _installer_probe(
+        tmp_path,
+        "modulo-1.2.3-linux-amd64.tar.gz",
+        "modulo-1.2.3-linux-amd64",
+        bypass_manifest=True,
+        symlinked_checksum_parent=True,
+    )
+    assert result.returncode != 0
+    assert "unsafe or missing artifact path 'nested/artifact.txt'" in result.stderr
+    assert not (tmp_path / "install").exists()
+
+
+@pytest.mark.parametrize(
+    "listed_name", ["foo\\bar", "C:relative/artifact.txt", "C:\\foo", "C:/foo", "\\\\server\\share"]
+)
+def test_shell_checksum_verifier_rejects_windows_manifest_paths_before_filesystem_access(
+    tmp_path: Path, listed_name: str
+) -> None:
+    """The shell verifier must enforce Python's Windows-path policy itself.
+
+    The extracted function is run with a deliberately nonexistent bundle root.
+    A rejection mentioning the unsafe manifest path proves validation happens
+    before the final ``SHA256SUMS`` redirect or any artifact lookup.
+    """
+    source = (Path(__file__).resolve().parents[4] / "scripts" / "install.sh").read_text(encoding="utf-8")
+    function_start = source.index("verify_sums_in_dir() {")
+    function_end = source.index("\n\nvalidate_legacy_shim_collision()", function_start)
+    verifier = source[function_start:function_end]
+    sums_dir = tmp_path / "bundle"
+    sums_dir.mkdir()
+    manifest = sums_dir / "SHA256SUMS"
+    manifest.write_text(f"{'a' * 64}  {listed_name}\n", encoding="utf-8")
+    harness = tmp_path / "verify.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "die() { printf 'ERROR: %b\\n' \"$*\" >&2; exit 1; }\n"
+        "sha256_of() { die 'sha256_of must not be reached'; }\n"
+        f"{verifier}\n"
+        f"verify_sums_in_dir {shlex.quote(str(sums_dir))}\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    bash_bin = shutil.which("bash")
+    assert bash_bin is not None
+    result = subprocess.run(  # noqa: S603 - resolved bash and test-owned harness
+        [bash_bin, str(harness)], capture_output=True, text=True, timeout=30, check=False
+    )
+    assert result.returncode != 0
+    assert "unsafe artifact path" in result.stderr
+    assert "sha256_of must not be reached" not in result.stderr
+    assert "No such file" not in result.stderr
+
+
+def test_installer_rejects_legacy_shim_before_install_root_mutation(tmp_path: Path) -> None:
+    legacy_shim = tmp_path / "legacy-modulo"
+    legacy_shim.write_text("legacy", encoding="utf-8")
+    install_root = tmp_path / "install"
+    current = install_root / "current"
+    result = _installer_probe(
+        tmp_path,
+        "modulo-1.2.3-linux-amd64.tar.gz",
+        "modulo-1.2.3-linux-amd64",
+        bypass_manifest=True,
+        legacy_shim=legacy_shim,
+    )
+    # The test seam points the installer at a test-owned legacy path, proving
+    # the refusal happens before the bundle is extracted or current is moved.
+    assert result.returncode != 0
+    assert not install_root.exists()
+    assert legacy_shim.read_text(encoding="utf-8") == "legacy"
+    assert not current.exists()
+
+
+def test_host_os(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert upgrade_module._host_os() == "darwin"
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert upgrade_module._host_os() == "linux"
+
+
+@pytest.mark.parametrize("machine", ["riscv64", "mips64"])
+def test_host_arch_rejects_unknown_architecture(machine):
+    with (
+        patch("platform.machine", return_value=machine),
+        pytest.raises(UpgradeError, match=f"unsupported host architecture '{machine}'"),
+    ):
+        upgrade_module._host_arch()
+
+
+def test_extract_rejects_extra_top_level_file(tmp_path):
+    import tarfile
+
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    (bundle / "SHA256SUMS").write_text("", encoding="utf-8")
+    extra = tmp_path / "extra.txt"
+    extra.write_text("unexpected", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name)
+        handle.add(extra, arcname=extra.name)
+    with pytest.raises(UpgradeError, match="exactly one non-symlink top-level directory"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
+def test_extract_rejects_symlink_listed_artifact(tmp_path):
+    import tarfile
+
+    if os.name != "posix":
+        pytest.skip("POSIX symlinks")
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    target = bundle / "target.txt"
+    target.write_text("target", encoding="utf-8")
+    (bundle / "artifact.txt").symlink_to("target.txt")
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(f"{digest}  artifact.txt\n", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz", dereference=False) as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+    with pytest.raises(UpgradeError, match="not a regular file"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
+def _checksum_archive(tmp_path: Path, listed_name: str, *, symlink_parent: bool = False) -> Path:
+    import tarfile
+
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    real = bundle / "real"
+    real.mkdir()
+    payload = real / "payload.txt"
+    payload.write_text("payload", encoding="utf-8")
+    if symlink_parent:
+        (bundle / "linked").symlink_to("real", target_is_directory=True)
+    digest = hashlib.sha256(payload.read_bytes()).hexdigest()
+    (bundle / "SHA256SUMS").write_text(f"{digest}  {listed_name}\n", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz", dereference=False) as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+    return archive
+
+
+def test_extract_rejects_symlinked_checksum_parent(tmp_path: Path) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX symlinks")
+    archive = _checksum_archive(tmp_path, "linked/payload.txt", symlink_parent=True)
+    with pytest.raises(UpgradeError, match="unsafe artifact path"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
+@pytest.mark.parametrize("listed_name", ["./real/payload.txt", "real/../real/payload.txt", "C:relative/payload.txt"])
+def test_extract_rejects_explicit_dot_checksum_components(tmp_path: Path, listed_name: str) -> None:
+    archive = _checksum_archive(tmp_path, listed_name)
+    with pytest.raises(UpgradeError, match="unsafe artifact path"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")
+
+
+def test_resolve_upgrade_assets_rejects_malformed_from_file_name(tmp_path):
+    tarball = tmp_path / "modulo-1.2.0-linux-amd64-extra.tar.gz"
+    tarball.write_bytes(b"archive")
+    with pytest.raises(UpgradeError, match="name is malformed"):
+        upgrade_module._resolve_upgrade_assets(
+            from_file=tarball,
+            target_version=None,
+            staging_dir=tmp_path / "stage",
+            fetch=None,
+        )
+
+
+def test_resolve_upgrade_assets_rejects_unsupported_from_file_arch(tmp_path, monkeypatch):
+    tarball = tmp_path / "modulo-1.2.0-linux-arm64.tar.gz"
+    tarball.write_bytes(b"archive")
+    monkeypatch.setattr(upgrade_module, "_host_arch", lambda: "amd64")
+    with pytest.raises(UpgradeError, match="archive architecture 'arm64' does not match"):
+        upgrade_module._resolve_upgrade_assets(
+            from_file=tarball,
+            target_version=None,
+            staging_dir=tmp_path / "stage",
+            fetch=None,
+        )
+
+
+def test_resolve_upgrade_assets_darwin_tarball(tmp_path, monkeypatch):
+    monkeypatch.setattr(upgrade_module, "_host_os", lambda: "darwin")
+    monkeypatch.setattr(upgrade_module, "_host_arch", lambda: "arm64")
+    tarball = tmp_path / "modulo-1.2.3-darwin-arm64.tar.gz"
+    tarball.write_text("dummy", encoding="utf-8")
+    manifest = tmp_path / "RELEASE_MANIFEST.json"
+    manifest.write_text("{}", encoding="utf-8")
+    sig = tmp_path / "RELEASE_MANIFEST.json.sig"
+    sig.write_text("dummy", encoding="utf-8")
+
+    _tb, ver, _mf, _sf = upgrade_module._resolve_upgrade_assets(
+        from_file=tarball,
+        target_version=None,
+        staging_dir=tmp_path / "staging",
+        fetch=None,
+    )
+    assert ver == "1.2.3"
 
 
 class TestAlembicHeads:
@@ -1985,9 +2354,9 @@ class TestExtractAndVerifyBundle:
         bundle_dir = tmp_path / "bundle"
         bundle_dir.mkdir()
         (bundle_dir / "somefile.txt").write_text("data", encoding="utf-8")
-        tarball = tmp_path / "test.tar.gz"
+        tarball = tmp_path / "modulo-1.0.0-linux-amd64.tar.gz"
         with tarfile_mod.open(tarball, "w:gz") as archive:
-            archive.add(str(bundle_dir), arcname="bundle-root")
+            archive.add(str(bundle_dir), arcname="modulo-1.0.0-linux-amd64")
         staging = tmp_path / "staging"
         with pytest.raises(UpgradeError, match="SHA256SUMS missing"):
             upgrade_module.extract_and_verify_bundle(tarball, staging)
@@ -2020,9 +2389,9 @@ class TestExtractAndVerifyBundle:
         bundle_dir.mkdir()
         (bundle_dir / "SHA256SUMS").write_text("short  file.txt\n", encoding="utf-8")
         (bundle_dir / "file.txt").write_text("data", encoding="utf-8")
-        tarball = tmp_path / "test.tar.gz"
+        tarball = tmp_path / "modulo-1.0.0-linux-amd64.tar.gz"
         with tarfile_mod.open(tarball, "w:gz") as archive:
-            archive.add(str(bundle_dir), arcname="bundle-root")
+            archive.add(str(bundle_dir), arcname="modulo-1.0.0-linux-amd64")
         staging = tmp_path / "staging"
         with pytest.raises(UpgradeError, match="malformed SHA256SUMS"):
             upgrade_module.extract_and_verify_bundle(tarball, staging)
@@ -2034,9 +2403,9 @@ class TestExtractAndVerifyBundle:
         bundle_dir.mkdir()
         fake_hash = "a" * 64
         (bundle_dir / "SHA256SUMS").write_text(f"{fake_hash}  missing.txt\n", encoding="utf-8")
-        tarball = tmp_path / "test.tar.gz"
+        tarball = tmp_path / "modulo-1.0.0-linux-amd64.tar.gz"
         with tarfile_mod.open(tarball, "w:gz") as archive:
-            archive.add(str(bundle_dir), arcname="bundle-root")
+            archive.add(str(bundle_dir), arcname="modulo-1.0.0-linux-amd64")
         staging = tmp_path / "staging"
         with pytest.raises(UpgradeError, match="is missing"):
             upgrade_module.extract_and_verify_bundle(tarball, staging)
@@ -2081,6 +2450,34 @@ class TestVerifyExtractedBundleArtifacts:
             pytest.raises(UpgradeError, match="bundle-side manifest verification FAILED"),
         ):
             upgrade_module._verify_extracted_bundle_artifacts(tmp_path, manifest, "tarball")
+
+
+class TestDarwinServiceLifecycle:
+    def test_stop_and_restart_use_launchctl(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        plist_path = tmp_path / "LaunchAgents" / "run.modulo.launcher.plist"
+        plist_path.parent.mkdir()
+        plist_path.write_text("<plist/>", encoding="utf-8")
+        calls = []
+        monkeypatch.setattr(upgrade_module.sys, "platform", "darwin")
+
+        def run_service(argv, **kwargs):
+            calls.append(argv)
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        monkeypatch.setattr(upgrade_module.subprocess, "run", run_service)
+        with (
+            patch("modulo.launcher.supervisor.request_stop"),
+            patch("modulo.launcher.supervisor._read_lock_holder", return_value=None),
+            patch.object(upgrade_module, "_service_unit_path", return_value=plist_path),
+        ):
+            upgrade_module.stop_running_stack(data_dir, unit_file=plist_path)
+            upgrade_module._restart_unit_best_effort(why="regression")
+        assert calls == [
+            ["launchctl", "unload", "-w", str(plist_path)],
+            ["launchctl", "load", "-w", str(plist_path)],
+        ]
 
 
 class TestStopRunningStack:
@@ -2365,3 +2762,17 @@ def test_fetch_release_assets_rejects_symlinked_tarball_escape(tmp_path):
 def test_validate_version_segment_accepts_normal_versions(raw, expected):
     stripped = upgrade_module._strip_bundle_prefix(raw)
     assert upgrade_module._validate_version_segment(stripped) == expected
+
+
+def test_extract_rejects_checksum_entry_with_missing_parent_directory(tmp_path: Path) -> None:
+    """A SHA256SUMS name whose parent dir is absent refuses (fail closed, never skips)."""
+    import tarfile
+
+    bundle = tmp_path / "modulo-1.2.0-linux-amd64"
+    bundle.mkdir()
+    (bundle / "SHA256SUMS").write_text(f"{'0' * 64}  absent/payload.txt\n", encoding="utf-8")
+    archive = tmp_path / "modulo-1.2.0-linux-amd64.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(bundle, arcname=bundle.name, recursive=True)
+    with pytest.raises(UpgradeError, match="unsafe artifact path"):
+        upgrade_module.extract_and_verify_bundle(archive, tmp_path / "extract")

@@ -14,28 +14,58 @@ See [Deployment](deployment.md) for production deployment.
 ## Required Tools
 
 - Python 3.12+
-- Node.js 20+ (CI pins 22) with `pnpm` - the repo pins `pnpm@11.28.6` in
+- Node.js 20+ (CI pins 22) with `pnpm` - the repo pins `pnpm@11.28.8` in
   `frontend/package.json` (`packageManager`), so use pnpm rather than npm
 - Docker Desktop (for local Postgres/Redis)
 - UV package manager, 0.11.13 to match the Docker image pin
   ([install](https://docs.astral.sh/uv/getting-started/installation/))
 
-## PrimeUI licence for local dev and e2e (FAR-1858)
+## PrimeVue licensing
 
-PrimeVue 5 verifies a licence key at runtime and shows an "Invalid PrimeUI
-License" banner when none is configured. Staging and production receive the key
-as a Docker build-arg (`VITE_PRIMEUI_LICENSE`, from the deploy workflow's
-GitHub secret). For local development there is no build step, so
-`frontend/vite.config.ts` lifts `VITE_PRIMEUI_LICENSE` from the nearest
-ancestor `.env` file (the workspace root `.env` in the standard layout) into
-the process environment when it is not already set; Vite then inlines it into
-`import.meta.env` exactly as it does for the production build. This covers
-`pnpm dev` and the Playwright e2e `webServer` with one mechanism.
+PrimeVue is pinned to the MIT-licensed v4 line (`primevue@4.5.5`), so no licence
+key, banner or build-arg is involved in local development, e2e or production.
+An old PrimeVue licence entry in a workspace `.env` is inert and can be
+removed.
 
-If you see the banner locally, add `VITE_PRIMEUI_LICENSE=<key>` to your
-workspace root `.env` (gitignored, so never commit the key; the repo is public
-and `VITE_*` values are inlined into the client bundle). A shell-exported
-`VITE_PRIMEUI_LICENSE` takes precedence over the `.env` lookup.
+## E2E visual/token slice on PRs (FAR-2017)
+
+Most Playwright specs run only in the post-deploy staging `@regression` gate.
+That left the specs asserting rendered CSS, design tokens and layout invisible
+to PR CI: a token change passed every check, landed on `main`, and only failed
+after the staging deploy, blocking the deploy train (FAR-2016's
+`json-viewer` light-mode probe; FAR-1913/FAR-2028's mobile-layout axe
+`color-contrast`).
+
+The `frontend` CI job now runs a narrow, **unconditional** slice of those
+specs against the local mock target on every frontend PR:
+
+| Spec | Why it is in the slice |
+|---|---|
+| `json-viewer.spec.ts` | Design-token colours (incl. the light-mode probe) and long-value geometry |
+| `staging-wcag.spec.ts` | WCAG AA axe audit (contrast/token class). Misleadingly named, but it runs against the local target |
+| `filter-bar-overlay.spec.ts` | Dropdown overlay anchoring |
+| `select-clipping-container.spec.ts` | Overlay escapes clipping ancestors; portalled to body |
+| `pipeline-editor-select-overlay.spec.ts` | Editor Selects portal out of the clipped editor column |
+
+Measured cost: **19 tests, ~2 min** locally (serial), versus ~313 tests / ~11
+min for the full suite against a deployed target. It is *additive*: the
+staging `@regression` gate is unchanged.
+
+The selection lives in `frontend/scripts/e2e-visual-slice.mjs`. `--check`
+scans every `@regression` spec for visual-assertion markers and fails if a
+spec is neither in the slice nor in an explicit `STAGING_ONLY` list carrying a
+reason. This prevents silent under-selection: adding a visual spec without
+classifying it is a PR failure, not a quiet coverage gap. The slice is not
+changed-path gated on purpose: a path filter can miss a spec whose subject
+changed without a matching path, and an under-selecting selector reads as
+coverage.
+
+Deliberately staging-only (with reasons in the script): `mobile-layout.spec.ts`
+(8.1 min local, and its axe findings can need seeded deployment data),
+`pipeline-editor.spec.ts`, `run-detail-metadata.spec.ts`, `notifications.spec.ts`,
+`dialog-select-overlay.spec.ts` (a pre-existing local-only focus failure),
+and `wcag-contrast.spec.ts` (already runs as its own earlier step in the same
+job).
 
 ## Docs validity sweep
 

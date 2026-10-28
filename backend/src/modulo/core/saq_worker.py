@@ -2300,8 +2300,8 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
         "after_process": _after_process_hook,
         # FAR-250: register SQLAlchemy listeners + configure the EventBus
         # Redis broker, and hold a non-relaying Redis subscription. Flows
-        # through both `Worker(**settings())` (run_system_web) and the plain
-        # `python -m saq ...runs_settings` CLI — saq awaits async callables.
+        # through both the custom system-web runner and the plain SAQ CLI;
+        # SAQ awaits async lifecycle callbacks.
         "startup": _startup_event_bus_hook,
         # FAR-1627: on worker shutdown (SIGTERM drain -> cancel -> stop), hand
         # every still-in-flight run back for re-dispatch instead of letting it
@@ -2318,7 +2318,7 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
     }
 
 
-async def _before_process_hook(ctx: dict[str, Any]) -> None:
+async def _before_process_hook(ctx: dict[str, Any]) -> None:  # NOSONAR S7503 - SAQ async lifecycle callback seam
     """SAQ ``before_process`` hook — bind the job's organisation for ERROR capture (FAR-1417).
 
     ``Worker.process()`` awaits this hook BEFORE ``asyncio.create_task``-ing the
@@ -2338,6 +2338,25 @@ async def _before_process_hook(ctx: dict[str, Any]) -> None:
     kwargs = getattr(job, "kwargs", None) or {}
     raw_org = kwargs.get("org_id", kwargs.get("organisation_id"))
     org_id_var.set(None if raw_org is None else str(raw_org))
+
+    # FAR-2153: the system licence is process memory restored from the instance
+    # store. A licence installed (or removed) by the API after this worker
+    # booted must be visible to the job that is about to resolve a tier, with
+    # no restart. TTL-throttled (the session is not even opened while the slot
+    # is fresh) and fail-open: a store blip keeps the last known tier and must
+    # never fail a job's start.
+    try:
+        from modulo.core.license import persisted_license_refresh_due, refresh_persisted_system_license
+
+        if persisted_license_refresh_due():
+            from modulo.db.session import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as session, session.begin():
+                await refresh_persisted_system_license(session)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("saq_worker.license_persistence_refresh_failed", exc_info=True)
 
 
 async def _after_process_hook(ctx: dict[str, Any]) -> None:
@@ -2387,11 +2406,20 @@ async def _startup_event_bus_hook(_ctx: dict[str, Any]) -> None:
     boot the worker rather than silently resolving every licence to Community.
     """
     from modulo.core.events import configure_event_bus, register_listeners
-    from modulo.core.license_bootstrap import configure_license_trust_anchor
+    from modulo.core.license_bootstrap import configure_license_trust_anchor, restore_persisted_license
 
     # FAR-2093: fail-closed, and FIRST — the anchor must exist before any job
     # (or any of the fail-open steps' own licence reads) can resolve a tier.
-    configure_license_trust_anchor(get_settings())
+    settings = get_settings()
+    configure_license_trust_anchor(settings)
+
+    # FAR-2153: the worker is a SEPARATE process, so the memory-only system
+    # licence the API installs was invisible to it. Restore the persisted
+    # instance licence into this process's slot now (fail-open on a DB blip,
+    # fail-closed on an anchor miss). A licence installed WHILE the worker runs
+    # is picked up by the TTL refresh in ``_before_process_hook``, which runs
+    # before every job — no background task and no restart.
+    await restore_persisted_license(settings)
 
     try:
         from modulo.core.health_alerts import install_event_loop_stall_attribution

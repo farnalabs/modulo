@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import type { components } from '../lib/api/schema'
@@ -53,13 +53,30 @@ async function settle(): Promise<void> {
 }
 
 function mountView() {
-  return mount(ComplianceEvidenceIndexView)
+  return mount(ComplianceEvidenceIndexView, {
+    global: {
+      stubs: {
+        RouterLink: {
+          props: ['to'],
+          template: '<a :href="to"><slot /></a>',
+        },
+      },
+    },
+  })
 }
+
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
 
 describe('ComplianceEvidenceIndexView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockGet.mockResolvedValue({ data: payload(), error: undefined })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard)
+    else Reflect.deleteProperty(navigator, 'clipboard')
   })
 
   it('fetches the exact endpoint and renders the response shape, metadata, and localized labels', async () => {
@@ -85,6 +102,25 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.find('dl').exists()).toBe(true)
     expect(wrapper.findAll('dl dt')).not.toHaveLength(0)
     expect(wrapper.findAll('dl dd')).not.toHaveLength(0)
+  })
+
+  it('makes every horizontally scrollable table a keyboard-reachable named region', async () => {
+    const wrapper = mountView()
+    await settle()
+
+    for (const testId of [
+      'compliance-evidence-index-coverage-scroll',
+      'compliance-evidence-index-artifacts-scroll',
+    ]) {
+      const region = wrapper.find(`[data-testid="${testId}"]`)
+      expect(region.exists()).toBe(true)
+      expect(region.attributes('tabindex')).toBe('0')
+      expect(region.attributes('role')).toBe('region')
+
+      const labelledBy = region.attributes('aria-labelledby')
+      expect(labelledBy).toBeTruthy()
+      expect(wrapper.find(`#${labelledBy}`).exists()).toBe(true)
+    }
   })
 
   it('renders incomplete indexes and every missing artefact type', async () => {
@@ -198,6 +234,124 @@ describe('ComplianceEvidenceIndexView', () => {
 
     expect(wrapper.find('[data-testid="compliance-evidence-index-permission-denied"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="compliance-evidence-index-error"]').exists()).toBe(false)
+  })
+
+  it('renders a pipeline snapshot identifier as a concise label with its raw value, link, details, and copy action', async () => {
+    const snapshotId = '3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b'
+    const pipelineId = 'pipeline-9'
+    const rawIdentifier = `pipeline-snapshot:${snapshotId}@v7`
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    mockGet.mockResolvedValue({
+      data: payload({
+        artifacts: [artifact({
+          artifact_type: 'run_snapshot',
+          identifiers: [rawIdentifier],
+          detail: { sample_pipeline_ids: [pipelineId] },
+        })],
+      }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.find('[data-testid="compliance-evidence-index-identifier-label"]').text()).toBe('Pipeline snapshot v7')
+    expect(wrapper.text()).toContain('#3f1c2b4a')
+    expect(wrapper.find('[data-testid="compliance-evidence-index-snapshot-link"]').attributes('href'))
+      .toBe(`/pipelines/${pipelineId}/editor?snapshot=${snapshotId}`)
+    const details = wrapper.find('[data-testid="compliance-evidence-index-identifier-details"]')
+    expect(details.attributes('open')).toBeUndefined()
+    expect(details.text()).toContain(rawIdentifier)
+
+    await wrapper.find('[data-testid="compliance-evidence-index-copy-identifier"]').trigger('click')
+    await settle()
+
+    expect(writeText).toHaveBeenCalledWith(rawIdentifier)
+    expect(wrapper.find('[data-testid="compliance-evidence-index-copy-identifier"]').text()).toBe('Copied')
+
+    await new Promise((resolve) => setTimeout(resolve, 2100))
+    await nextTick()
+    expect(wrapper.find('[data-testid="compliance-evidence-index-copy-identifier"]').text()).toBe('Copy')
+    wrapper.unmount()
+  })
+
+  it('keeps the snapshot label but omits the link when the pipeline ids are absent', async () => {
+    const snapshotId = '3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b'
+    mockGet.mockResolvedValue({
+      data: payload({
+        artifacts: [artifact({
+          artifact_type: 'run_snapshot',
+          identifiers: [`pipeline-snapshot:${snapshotId}@v1`],
+          detail: {},
+        })],
+      }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.find('[data-testid="compliance-evidence-index-identifier-label"]').text()).toBe('Pipeline snapshot v1')
+    expect(wrapper.find('[data-testid="compliance-evidence-index-snapshot-link"]').exists()).toBe(false)
+  })
+
+  it('keeps pipeline ids positionally aligned so a malformed entry never shifts a later link', async () => {
+    const first = '3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b'
+    const second = '9a8b7c6d-5e4f-4a3b-8c1d-2e3f4a5b6c7d'
+    mockGet.mockResolvedValue({
+      data: payload({
+        artifacts: [artifact({
+          artifact_type: 'run_snapshot',
+          identifiers: [`pipeline-snapshot:${first}@v1`, `pipeline-snapshot:${second}@v2`],
+          detail: { sample_pipeline_ids: [42, 'pipeline-9'] },
+        })],
+      }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await settle()
+
+    const links = wrapper.findAll('[data-testid="compliance-evidence-index-snapshot-link"]')
+    expect(links).toHaveLength(1)
+    expect(links[0].attributes('href')).toBe(`/pipelines/pipeline-9/editor?snapshot=${second}`)
+  })
+
+  it('surfaces a clipboard failure while keeping the raw identifier selectable', async () => {
+    const snapshotId = '3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b'
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard unavailable'))
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    mockGet.mockResolvedValue({
+      data: payload({
+        artifacts: [artifact({
+          artifact_type: 'run_snapshot',
+          identifiers: [`pipeline-snapshot:${snapshotId}@v2`],
+          detail: { sample_pipeline_ids: ['pipeline-9'] },
+        })],
+      }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await settle()
+
+    await wrapper.find('[data-testid="compliance-evidence-index-copy-identifier"]').trigger('click')
+    await settle()
+
+    expect(writeText).toHaveBeenCalledWith(`pipeline-snapshot:${snapshotId}@v2`)
+    expect(wrapper.find('[data-testid="compliance-evidence-index-copy-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="compliance-evidence-index-copy-identifier"]').text()).toBe('Copy')
+    expect(wrapper.find('[data-testid="compliance-evidence-index-identifier-details"]').text())
+      .toContain(`pipeline-snapshot:${snapshotId}@v2`)
+    wrapper.unmount()
+    warn.mockRestore()
+  })
+
+  it('leaves non-snapshot identifiers verbatim without snapshot controls', async () => {
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.text()).toContain('event-1')
+    expect(wrapper.find('[data-testid="compliance-evidence-index-identifier-label"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="compliance-evidence-index-snapshot-link"]').exists()).toBe(false)
   })
 
   it('shows a request failure and recovers when retry is clicked', async () => {

@@ -139,7 +139,10 @@ class TestManifestLoad:
         required_tier (see frontend/src/router/index.ts route guard and
         frontend/src/config/navigation.ts canSeeItem), so the explicit list
         preserves admin-only navigation while the tier stays community.
-        Any explicit list is constrained to exactly ["admin"] by
+        Any explicit list is constrained to exactly ["admin"], or to the
+        operator+admin in-dev set when the route is hidden behind an
+        `in_dev` visibility gate and the `library.search.in_dev` permission
+        (FAR-2200 internal lifecycle-map surfaces), by
         test_community_routes_roles_are_admin_only.
         """
         _reset_manifest()
@@ -154,20 +157,36 @@ class TestManifestLoad:
                 )
 
     def test_community_routes_roles_are_admin_only(self):
-        """A community-tier route declaring explicit roles must use exactly ["admin"].
+        """A community-tier route declaring explicit roles stays admin-gated.
 
         Pins the FAR-462 escape hatch (/admin/users is community-tier but
         admin-role-gated for nav) so it cannot widen silently to other roles.
+
+        FAR-2200 adds the only other permitted explicit list: the internal
+        lifecycle-map routes are community-tier, operator+admin, and must ALSO
+        be hidden behind an `in_dev` visibility gate requiring the
+        `library.search.in_dev` permission — so the wider role set is
+        unreachable outside developer mode.
         """
         _reset_manifest()
         from modulo.core.manifest import load_manifest
 
         manifest = load_manifest()
         for path, route in manifest["routes"].items():
-            if route["required_tier"] == "community" and route["required_roles"] is not None:
-                assert route["required_roles"] == ["admin"], (
-                    f"Community route {path} with explicit roles must require exactly ['admin']"
-                )
+            if route["required_tier"] != "community" or route["required_roles"] is None:
+                continue
+            if route["required_roles"] == ["admin"]:
+                continue
+            assert route.get("visibility") == "in_dev", (
+                f"Community route {path} may only widen roles to ['operator', 'admin'] behind an in_dev visibility gate"
+            )
+            assert "library.search.in_dev" in (route.get("required_permissions") or []), (
+                f"Community route {path} widened roles without the library.search.in_dev permission gate"
+            )
+            assert route["required_roles"] == ["operator", "admin"], (
+                f"Community route {path} with explicit roles must require exactly ['admin'] "
+                "or the in-dev ['operator', 'admin'] set"
+            )
 
     def test_admin_routes_require_admin_role(self):
         """Team-tier /admin routes require the admin org-role, except system_admin_only routes.

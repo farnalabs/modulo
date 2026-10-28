@@ -107,8 +107,8 @@ function mountWithLongMessageGroup() {
             level_peak: 'error',
             sample_message: LONG_MESSAGE,
             count: 3,
-            first_seen: new Date().toISOString(), // nosemgrep: new-date-without-guard
-            last_seen: new Date().toISOString(), // nosemgrep: new-date-without-guard
+            first_seen: new Date().toISOString(),
+            last_seen: new Date().toISOString(),
             status: 'new',
             assigned_to: null,
           },
@@ -140,7 +140,7 @@ describe('AdminErrorsView', () => {
               pipeline_id: '11111111-1111-4111-8111-111111111111',
               pipeline_name: 'Starved Pipeline',
               pending_count: 63,
-              oldest_created_at: new Date(Date.now() - 13 * 3600 * 1000).toISOString(), // nosemgrep: new-date-without-guard
+              oldest_created_at: new Date(Date.now() - 13 * 3600 * 1000).toISOString(),
               oldest_age_minutes: 780,
             },
           ],
@@ -339,8 +339,8 @@ describe('AdminErrorsView', () => {
               level_peak: 'error',
               sample_message: null,
               count: 1,
-              first_seen: new Date().toISOString(), // nosemgrep: new-date-without-guard
-              last_seen: new Date().toISOString(), // nosemgrep: new-date-without-guard
+              first_seen: new Date().toISOString(),
+              last_seen: new Date().toISOString(),
               status: 'new',
               assigned_to: null,
             },
@@ -518,6 +518,181 @@ describe('AdminErrorsView', () => {
     expect(wrapper.find('[data-testid="admin-errors-previous-page"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="admin-errors-next-page"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="admin-errors-page-indicator"]').text()).toContain('Page 1')
+    wrapper.unmount()
+  })
+
+  it('tests formatStarvationAge function for minutes', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as any
+    expect(vm.formatStarvationAge(30)).toContain('30')
+    expect(vm.formatStarvationAge(60)).toContain('60')
+    expect(vm.formatStarvationAge(119)).toContain('119')
+    wrapper.unmount()
+  })
+
+  it('tests formatStarvationAge function for hours', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as any
+    expect(vm.formatStarvationAge(120)).toContain('2')
+    expect(vm.formatStarvationAge(180)).toContain('3')
+    expect(vm.formatStarvationAge(780)).toContain('13')
+    wrapper.unmount()
+  })
+
+  it('tests handleFilterUpdate function', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { handleFilterUpdate: (key: string, value: string) => void; filterLevel: string; filterStatus: string; filterSource: string }
+    vm.handleFilterUpdate('level', 'error')
+    expect(vm.filterLevel).toBe('error')
+
+    vm.handleFilterUpdate('status', 'acknowledged')
+    expect(vm.filterStatus).toBe('acknowledged')
+
+    vm.handleFilterUpdate('source', 'backend')
+    expect(vm.filterSource).toBe('backend')
+    wrapper.unmount()
+  })
+
+  it('tests buildParams function includes all filters', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { buildParams: () => any; filterLevel: string; filterStatus: string; filterSource: string; filterEnvironment: string; filterSearch: string }
+    vm.filterLevel = 'error'
+    vm.filterStatus = 'new'
+    vm.filterSource = 'backend'
+    vm.filterEnvironment = 'production'
+    vm.filterSearch = 'test search'
+
+    const params = vm.buildParams()
+    expect(params.level).toBe('error')
+    expect(params.status).toBe('new')
+    expect(params.source).toBe('backend')
+    expect(params.environment).toBe('production')
+    expect(params.search).toBe('test search')
+    expect(params.limit).toBe(20)
+    expect(params.offset).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('tests resetFilters function resets all filters and reloads', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { resetFilters: () => void; filterLevel: string; filterStatus: string; filterSource: string; filterEnvironment: string; filterSearch: string; currentPage: number; offset: number }
+    vm.filterLevel = 'error'
+    vm.filterStatus = 'new'
+    vm.filterSource = 'backend'
+    vm.filterEnvironment = 'production'
+    vm.filterSearch = 'test'
+    vm.currentPage = 3
+    vm.offset = 40
+
+    vm.resetFilters()
+
+    expect(vm.filterLevel).toBe('')
+    expect(vm.filterStatus).toBe('')
+    expect(vm.filterSource).toBe('')
+    expect(vm.filterEnvironment).toBe('')
+    expect(vm.filterSearch).toBe('')
+    expect(vm.currentPage).toBe(1)
+    expect(vm.offset).toBe(0)
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/errors', expect.objectContaining({
+      params: { query: expect.objectContaining({ offset: 0 }) },
+    }))
+    wrapper.unmount()
+  })
+
+  it('tests nextPage function increments page and offset', async () => {
+    getMock.mockResolvedValue({ items: [], total: 100 })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { nextPage: () => void; currentPage: number; offset: number; limit: number }
+    expect(vm.currentPage).toBe(1)
+    expect(vm.offset).toBe(0)
+
+    vm.nextPage()
+    await nextTick()
+    await flushPromises()
+
+    expect(vm.currentPage).toBe(2)
+    expect(vm.offset).toBe(20)
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/errors', expect.objectContaining({
+      params: { query: expect.objectContaining({ offset: 20 }) },
+    }))
+    wrapper.unmount()
+  })
+
+  it('tests prevPage function decrements page and offset', async () => {
+    getMock.mockResolvedValue({ items: [], total: 100 })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { nextPage: () => void; prevPage: () => void; currentPage: number; offset: number; limit: number }
+    vm.nextPage()
+    vm.nextPage()
+    await nextTick()
+    await flushPromises()
+
+    expect(vm.currentPage).toBe(3)
+    expect(vm.offset).toBe(40)
+
+    vm.prevPage()
+    await nextTick()
+    await flushPromises()
+
+    expect(vm.currentPage).toBe(2)
+    expect(vm.offset).toBe(20)
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/errors', expect.objectContaining({
+      params: { query: expect.objectContaining({ offset: 20 }) },
+    }))
+
+    // prevPage at page 1 should not change offset
+    vm.prevPage()
+    vm.prevPage()
+    await nextTick()
+    await flushPromises()
+
+    expect(vm.currentPage).toBe(1)
+    expect(vm.offset).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('tests navigateToDetail for organisation scope', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { navigateToDetail: (id: string) => void }
+    vm.navigateToDetail('eg-123')
+    expect(routerMocks.push).toHaveBeenCalledWith('/admin/errors/eg-123')
+    wrapper.unmount()
+  })
+
+  it('tests navigateToDetail for instance scope', async () => {
+    authState.isSystemAdmin = true
+    routerMocks.query!.scope = 'instance'
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { navigateToDetail: (id: string) => void }
+    vm.navigateToDetail('eg-456')
+    expect(routerMocks.push).toHaveBeenCalledWith({ path: '/admin/errors/eg-456', query: { scope: 'instance' } })
     wrapper.unmount()
   })
 })

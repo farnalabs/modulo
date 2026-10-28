@@ -26,12 +26,26 @@ on:
 
 permissions:
   contents: read
+  # FAR-2160 reads this workflow's own run history (run list + per-run jobs) to
+  # derive the blind-cycle state vector. A job's `steps` carry the durable
+  # signal; job `outputs` are not exposed by the jobs API (FAR-2157).
+  actions: read
 
 jobs:
   check-audit-chain:
     name: Check app.modulo.run audit chain continuity
     runs-on: ubicloud-standard-2
     steps:
+      # FAR-2160: the escalation state machine and message renderers live in
+      # .github/scripts/ and are unit-tested. Pin to main so a schedule tick and
+      # a manual dispatch both run the merged definition.
+      - name: Checkout the audit-monitor escalation scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
       # Authenticate (FAR-1468): BOTH audit endpoints require
       # require_permission("audit.manage"), and audit.manage maps to the ADMIN
       # org role (backend/src/modulo/auth/permissions.py:180; role order
@@ -55,6 +69,10 @@ jobs:
           E2E_PROD_ADMIN_PASSWORD: ${{ secrets.E2E_PROD_ADMIN_PASSWORD }}
         run: |
           if [ -z "$E2E_PROD_ADMIN_EMAIL" ] || [ -z "$E2E_PROD_ADMIN_PASSWORD" ]; then
+            # FAR-2157: this is the monitor's "did nothing" path. Record it
+            # machine-readably (a step output the marker step below reads) so a
+            # green run can never be mistaken for "the chain was verified".
+            echo "authenticated=false" >> "$GITHUB_OUTPUT"
             echo "::warning::E2E_PROD_ADMIN_EMAIL/E2E_PROD_ADMIN_PASSWORD not set - skipping audit-chain monitor (FAR-1468)."
             exit 0
           fi
@@ -84,6 +102,7 @@ jobs:
 
           echo "::add-mask::$TOKEN"
           echo "MODULO_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "authenticated=true" >> "$GITHUB_OUTPUT"
           echo "admin login OK - JWT access token acquired for the audit-chain checks"
 
       # Check 1 - integrity: recompute the hash chain server-side.
@@ -403,3 +422,294 @@ jobs:
             -H "Content-Type: application/json" \
             -H "Authorization: $LINEAR_API_KEY" \
             -d "$BODY" || echo "::warning::Failed to create Linear ticket"
+
+      # FAR-2157: the monitor's "did nothing" path must be legible, not green
+      # silence. When the admin credentials are absent the two checks above
+      # skip and the job concludes SUCCESS - indistinguishable, in run
+      # history, from a cycle that verified the chain. This step runs ONLY on
+      # that no-op path, so its presence is the durable machine-readable
+      # signal (the jobs API exposes step names and conclusions, not job
+      # outputs), and it writes a summary a reader cannot miss. The job still
+      # concludes success by design (the documented monitor convention: a
+      # not-yet-configured secret must not red-queue the workflow); what
+      # changes is that the run now SAYS it did nothing.
+      - name: Record the NOT RUN monitor cycle (FAR-2157)
+        if: always() && steps.auth.outputs.authenticated == 'false'
+        shell: bash
+        run: |
+          echo "::notice::AUDIT-CHAIN MONITOR NOT RUN - no admin credentials, so neither the integrity nor the continuity check ran. This green run is NOT evidence that the audit chain was verified (FAR-2157)."
+          {
+            echo "## NOT RUN — audit-chain monitor had no credentials (FAR-2157)"
+            echo ""
+            echo "Neither check ran: E2E_PROD_ADMIN_EMAIL / E2E_PROD_ADMIN_PASSWORD are not configured."
+            echo "This run concludes success by design (a missing secret must not red-queue the"
+            echo "monitor), but it verified NOTHING. Configure the secrets to restore coverage."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      # =====================================================================
+      # FAR-2160: a blind cycle is legible (FAR-2157) but nobody is told.
+      #
+      # Policy (the FAR-2160 recommendation):
+      #   * the FIRST blind cycle opens a Linear ticket (threshold configurable,
+      #     default 1) naming the monitor, the measured facts and the repair;
+      #   * an email is sent on a TRANSITION only - not blind -> blind, and
+      #     blind -> not blind - through the same Zoho SMTP path issue-notify.yml
+      #     and deploy-health-notify.sh use;
+      #   * the run does NOT fail: a red monitor every 6h is noise, and this one
+      #     is designed to be read;
+      #   * one escalation per blind incident, not one per cycle.
+      #
+      # State vector: this workflow's own run history, read through the Actions
+      # jobs API. That API exposes `steps` (name + conclusion) and NOT job
+      # `outputs` (FAR-2157), so the durable signal is a named step's
+      # CONCLUSION. A skipped step is still returned by the API on every
+      # non-matching cycle, so step PRESENCE alone must never be read as "it ran".
+      # =====================================================================
+
+      # Decide the blind-cycle state. Read-only: this step never sends anything.
+      # An unreadable history is UNKNOWN and still escalates a blind cycle (the
+      # driver emits ::error::) - it never assumes the monitor is healthy.
+      - name: Evaluate blind-cycle escalation state (FAR-2160)
+        id: escalation
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          CURRENT_AUTHENTICATED: ${{ steps.auth.outputs.authenticated }}
+          # Consecutive blind cycles before the Linear ticket opens. Default 1:
+          # the FIRST blind cycle escalates. A compliance monitor that has
+          # verified nothing must not sit silently blind. Override with the
+          # repository variable AUDIT_BLIND_ESCALATION_THRESHOLD (e.g. 2 to
+          # tolerate one transient bad cycle); values below 1 are clamped to 1.
+          BLIND_THRESHOLD: ${{ vars.AUDIT_BLIND_ESCALATION_THRESHOLD || 1 }}
+          LOOKUP_BUDGET: "12"
+        run: bash .github/scripts/audit-chain-notify.sh evaluate
+
+      # The SUCCESS conclusion of this step is the durable "this blind incident
+      # was escalated" marker the next cycle reads. It exits non-zero when the
+      # ticket cannot be created or confirmed, so a broken escalation channel is
+      # loud instead of being silently recorded as escalated.
+      #
+      # Dedupe is per INCIDENT, not per condition: an open ticket carrying this
+      # incident id suppresses creation; a NEW incident (the previous cycle was
+      # authenticated) opens a fresh ticket even if an older one is still open.
+      # Recovery closes the incident ticket, which is what stops the FAR-1404
+      # trap (a three-week-old open Backlog ticket swallowing a new incident).
+      - name: Record the blind-cycle escalation (FAR-2160)
+        if: always() && steps.escalation.outputs.escalate == 'true'
+        shell: bash
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          STATE_JSON: ${{ steps.escalation.outputs.state_json }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "::error::A blind audit-chain incident needs a Linear ticket but LINEAR_API_KEY is not configured - the escalation would be lost. Failing loud instead of recording this cycle as escalated (FAR-2160)."
+            exit 1
+          fi
+          if [ ! -f "$STATE_JSON" ]; then
+            echo "::error::Escalation state JSON missing ($STATE_JSON) - cannot render the incident ticket (FAR-2160)."
+            exit 1
+          fi
+          PAYLOAD="$(python3 .github/scripts/audit_chain_monitor.py ticket --state-json "$STATE_JSON" --run-url "$RUN_URL")" || {
+            echo "::error::Could not render the audit-monitor incident ticket (FAR-2160)."
+            exit 1
+          }
+          TITLE="$(printf '%s' "$PAYLOAD" | jq -r .title)"
+          DESCRIPTION="$(printf '%s' "$PAYLOAD" | jq -r .description)"
+          INCIDENT_ID="$(printf '%s' "$PAYLOAD" | jq -r .incident_id)"
+          PREVIOUS_BLIND="$(jq -r '.previous_blind | if . == true then "true" elif . == false then "false" else "unknown" end' "$STATE_JSON")"
+          TEAM_ID="ae855baf-6439-4980-97fb-38da80129485"
+
+          SEARCH_BODY=$(jq -n '{
+            query: "query { issues(filter: { title: { contains: \"AUDIT-CHAIN MONITOR BLIND\" } }, first: 50) { nodes { id identifier title state { type } team { id } } } }"
+          }')
+          SEARCH_RESP="$(curl -sS -m 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$SEARCH_BODY" 2>/dev/null)" || SEARCH_RESP=""
+
+          OPEN_NODES="[]"
+          if [ -n "$SEARCH_RESP" ]; then
+            OPEN_NODES="$(printf '%s' "$SEARCH_RESP" | jq -c --arg team "$TEAM_ID" '
+              (((.data // {}) | (.issues // {}) | (.nodes // []))
+                | map(select(((.team // {}).id // "") == $team))
+                | map(select(
+                    (.state.type // "") == "backlog"
+                    or (.state.type // "") == "unstarted"
+                    or (.state.type // "") == "started"
+                  )))' 2>/dev/null || echo "[]")"
+          else
+            echo "::warning::Linear dedupe search failed - failing toward ALERTING (a duplicate ticket beats a lost escalation)."
+          fi
+
+          EXACT_ID="$(printf '%s' "$OPEN_NODES" | jq -r --arg marker "[incident ${INCIDENT_ID}]" '
+            [ .[] | select((.title // "") | contains($marker)) ][0].identifier // ""' 2>/dev/null || echo "")"
+          if [ -n "$EXACT_ID" ]; then
+            echo "::notice::Blind incident ${INCIDENT_ID} already has an open ticket (${EXACT_ID}) - not opening a duplicate (FAR-2160)."
+            exit 0
+          fi
+
+          if [ "$PREVIOUS_BLIND" = "true" ]; then
+            EXISTING_ID="$(printf '%s' "$OPEN_NODES" | jq -r '.[0].identifier // ""' 2>/dev/null || echo "")"
+            EXISTING_UUID="$(printf '%s' "$OPEN_NODES" | jq -r '.[0].id // ""' 2>/dev/null || echo "")"
+            if [ -n "$EXISTING_UUID" ] && [ -n "$EXISTING_ID" ]; then
+              # Continuation of an incident whose ticket is still open (e.g. the
+              # escalation marker aged out of the run window). Keep the ticket
+              # fresh instead of opening a duplicate.
+              NOTE="$(python3 .github/scripts/audit_chain_monitor.py still-blind-note --state-json "$STATE_JSON" --run-url "$RUN_URL" | jq -r .body)" || NOTE=""
+              if [ -n "$NOTE" ]; then
+                COMMENT_BODY=$(jq -n --arg issueId "$EXISTING_UUID" --arg body "$NOTE" '{
+                  query: "mutation($i: CommentCreateInput!){ commentCreate(input:$i){ success } }",
+                  variables: { i: { issueId: $issueId, body: $body } }
+                }')
+                if curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+                    -H "Content-Type: application/json" \
+                    -H "Authorization: $LINEAR_API_KEY" \
+                    -d "$COMMENT_BODY" >/dev/null 2>&1; then
+                  echo "::notice::Blind incident continues; appended the latest figures to open ticket ${EXISTING_ID}."
+                else
+                  echo "::warning::Could not append the latest figures to open ticket ${EXISTING_ID}."
+                fi
+              fi
+              exit 0
+            fi
+          fi
+
+          CREATE_BODY=$(jq -n --arg title "$TITLE" --arg desc "$DESCRIPTION" '{
+            query: "mutation($i: IssueCreateInput!){ issueCreate(input:$i){ success issue { identifier url } } }",
+            variables: { i: {
+              teamId: "ae855baf-6439-4980-97fb-38da80129485",
+              title: $title,
+              description: $desc,
+              priority: 2
+            } }
+          }')
+          CREATE_RESP="$(curl -sS -m 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$CREATE_BODY" 2>/dev/null)" || CREATE_RESP=""
+          if printf '%s' "$CREATE_RESP" | jq -e '.data.issueCreate.success == true' >/dev/null 2>&1; then
+            echo "::notice::Opened Linear ticket $(printf '%s' "$CREATE_RESP" | jq -r '.data.issueCreate.issue.identifier') for blind incident ${INCIDENT_ID}."
+          else
+            echo "::error::Failed to create the Linear ticket for the blind audit-chain incident - the escalation would be lost (FAR-2160). Response: ${CREATE_RESP:-<empty>}"
+            exit 1
+          fi
+
+      # One email per transition. The driver renders the exact payload (unit
+      # tested) and reuses the Zoho SMTP send issue-notify.yml uses. Unconfigured
+      # SMTP is a loud warning, not a silent green; the Linear ticket is the
+      # durable channel either way.
+      - name: Email the operator on an audit-monitor visibility transition (FAR-2160)
+        if: always() && steps.escalation.outputs.email_action != 'none' && steps.escalation.outputs.email_action != ''
+        shell: bash
+        env:
+          STATE_JSON: ${{ steps.escalation.outputs.state_json }}
+          EMAIL_ACTION: ${{ steps.escalation.outputs.email_action }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ZOHO_SMTP_USER: ${{ secrets.ZOHO_SMTP_USER }}
+          ZOHO_SMTP_PASS: ${{ secrets.ZOHO_SMTP_PASS }}
+          ISSUE_NOTIFY_EMAIL: ${{ secrets.ISSUE_NOTIFY_EMAIL }}
+          ISSUE_NOTIFY_FROM: ${{ secrets.ISSUE_NOTIFY_FROM }}
+        run: bash .github/scripts/audit-chain-notify.sh email
+
+      # Recovery is RECORDED, not just observed: post a recovery note on the
+      # incident ticket and close it, so a later blindness opens a fresh incident
+      # instead of deduping onto a stale one. Best effort with a loud warning:
+      # the recovery itself is real, and the per-incident ticket title still
+      # prevents a stale dedupe if Linear is unreachable.
+      - name: Record the recovered monitor cycle (FAR-2160)
+        if: always() && steps.escalation.outputs.email_action == 'recovery'
+        shell: bash
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          STATE_JSON: ${{ steps.escalation.outputs.state_json }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## RECOVERED — audit-chain monitor authenticated again (FAR-2160)"
+            echo ""
+            echo "An authenticated cycle ran both checks. The blind incident is over; the incident"
+            echo "ticket is closed so a future blindness opens a fresh incident."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "::warning::Recovery recorded in this run, but LINEAR_API_KEY is not configured - the incident ticket could not be closed."
+            exit 0
+          fi
+          if [ ! -f "$STATE_JSON" ]; then
+            echo "::warning::Recovery recorded, but the escalation state JSON is missing - the incident ticket could not be closed."
+            exit 0
+          fi
+          TEAM_ID="ae855baf-6439-4980-97fb-38da80129485"
+          SEARCH_BODY=$(jq -n '{
+            query: "query { issues(filter: { title: { contains: \"AUDIT-CHAIN MONITOR BLIND\" } }, first: 50) { nodes { id identifier title state { type } team { id } } } }"
+          }')
+          SEARCH_RESP="$(curl -sS -m 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$SEARCH_BODY" 2>/dev/null)" || SEARCH_RESP=""
+          if [ -z "$SEARCH_RESP" ]; then
+            echo "::warning::Recovery recorded, but the Linear dedupe search failed - the incident ticket could not be closed. The per-incident ticket title still prevents a stale dedupe."
+            exit 0
+          fi
+          OPEN_NODES="$(printf '%s' "$SEARCH_RESP" | jq -c --arg team "$TEAM_ID" '
+            (((.data // {}) | (.issues // {}) | (.nodes // []))
+              | map(select(((.team // {}).id // "") == $team))
+              | map(select(
+                  (.state.type // "") == "backlog"
+                  or (.state.type // "") == "unstarted"
+                  or (.state.type // "") == "started"
+                )))' 2>/dev/null || echo "[]")"
+          ISSUE_UUID="$(printf '%s' "$OPEN_NODES" | jq -r '.[0].id // ""' 2>/dev/null || echo "")"
+          ISSUE_ID="$(printf '%s' "$OPEN_NODES" | jq -r '.[0].identifier // ""' 2>/dev/null || echo "")"
+          if [ -z "$ISSUE_UUID" ]; then
+            echo "::notice::No open audit-chain blind incident ticket to close - recovery recorded in the run only."
+            exit 0
+          fi
+
+          NOTE="$(python3 .github/scripts/audit_chain_monitor.py recovery-note --state-json "$STATE_JSON" --run-url "$RUN_URL" | jq -r .body)" || NOTE=""
+          if [ -n "$NOTE" ]; then
+            COMMENT_BODY=$(jq -n --arg issueId "$ISSUE_UUID" --arg body "$NOTE" '{
+              query: "mutation($i: CommentCreateInput!){ commentCreate(input:$i){ success } }",
+              variables: { i: { issueId: $issueId, body: $body } }
+            }')
+            curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: $LINEAR_API_KEY" \
+              -d "$COMMENT_BODY" >/dev/null 2>&1 \
+              || echo "::warning::Recovery comment could not be posted on ticket ${ISSUE_ID}."
+          fi
+
+          STATES_BODY=$(jq -n --arg team "$TEAM_ID" '{
+            query: "query($team: String!){ team(id:$team){ states { nodes { id name type } } } }",
+            variables: { team: $team }
+          }')
+          STATES_RESP="$(curl -sS -m 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$STATES_BODY" 2>/dev/null)" || STATES_RESP=""
+          DONE_STATE="$(printf '%s' "$STATES_RESP" | jq -r '[(.data.team.states.nodes // [])[] | select(.type == "completed")][0].id // ""' 2>/dev/null || echo "")"
+          if [ -z "$DONE_STATE" ]; then
+            echo "::warning::Recovery comment posted, but the team's Done state could not be resolved - ticket ${ISSUE_ID} left open. Its incident id keeps a future blindness from deduping onto it."
+            exit 0
+          fi
+          CLOSE_BODY=$(jq -n --arg id "$ISSUE_UUID" --arg state "$DONE_STATE" '{
+            query: "mutation($id: String!, $state: String!){ issueUpdate(id:$id, input:{stateId:$state}){ success } }",
+            variables: { id: $id, state: $state }
+          }')
+          CLOSE_RESP="$(curl -sS -m 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$CLOSE_BODY" 2>/dev/null)" || CLOSE_RESP=""
+          if printf '%s' "$CLOSE_RESP" | jq -e '.data.issueUpdate.success == true' >/dev/null 2>&1; then
+            echo "::notice::Closed audit-chain blind incident ticket ${ISSUE_ID} after recovery."
+          else
+            echo "::warning::Recovery comment posted, but ticket ${ISSUE_ID} could not be closed. Its incident id keeps a future blindness from deduping onto it."
+          fi
+          exit 0

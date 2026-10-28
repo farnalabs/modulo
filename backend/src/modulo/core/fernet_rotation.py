@@ -223,6 +223,11 @@ async def _rotate_triggers(
     set instead; ``triggers`` is a small config table and rotation is a rare
     admin operation, so the scan costs nothing next to the drift it removes.
 
+    A row whose ``config_json`` is not a JSON OBJECT (a bare array or scalar,
+    left behind by schema drift or a manual edit) is SKIPPED with a warning:
+    it has no top-level keys, so it carries no secret to rotate, and one
+    malformed row must never abort the sweep.
+
     FAR-1735 lost-update fix: the write is NARROWED to the secret keys via
     ``jsonb_set`` (one per rotated key) instead of rewriting the whole
     ``config_json`` document — a concurrent trigger edit between this
@@ -232,8 +237,18 @@ async def _rotate_triggers(
     rows = (await session.execute(text("SELECT id, config_json FROM triggers"))).all()
     count = 0
     for row in rows:
+        config = row.config_json
+        if not isinstance(config, dict):
+            # ``config_json`` is a JSONB column, so schema drift or a manual
+            # edit can leave a non-object document (a bare array/scalar). Such
+            # a value cannot carry a TOP-LEVEL secret key, so there is nothing
+            # to rotate — skip it and keep sweeping. The same schema-drift
+            # guard migration 0306 and the webhook ingress route apply: a
+            # malformed row must never AttributeError out the whole rotation.
+            _log.warning("rotation.trigger_config_not_object", extra={"trigger_id": str(row.id)})
+            continue
         rotated = _rotated_trigger_secrets(
-            row.config_json,
+            config,
             row_id=row.id,
             new_fernet=new_fernet,
             old_fernet=old_fernet,

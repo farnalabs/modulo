@@ -68,6 +68,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import AdminCostBreakdownView from '../views/AdminCostBreakdownView.vue'
+import StatCard from '../components/StatCard.vue'
 
 describe('AdminCostBreakdownView', () => {
   beforeEach(() => {
@@ -89,6 +90,8 @@ describe('AdminCostBreakdownView', () => {
 
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Cost Breakdown')
+    expect(wrapper.find('header.page-header + .page-tabs-wrapper').exists()).toBe(true)
+    expect(wrapper.findAll('header.page-header + .page-tabs-wrapper .page-tab')).toHaveLength(4)
   })
 
   it('dismisses an anomaly via POST', async () => {
@@ -582,5 +585,222 @@ describe('AdminCostBreakdownView', () => {
     const alert = wrapper.find('[data-testid="cost-anomalies-error"]')
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toContain('Failed to dismiss anomaly')
+  })
+
+  it('uses the shared dashboard metric-label typography for the summary headings', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    // FAR-2175: the Costs metric headings are deliberately the same
+    // second-level label style as the Dashboard StatCard label - not the
+    // larger section-heading style. Pin the contract so a future heading
+    // sweep cannot silently diverge the two surfaces.
+    const dashboardLabelClasses = mount(StatCard, {
+      props: { label: 'Dashboard metric', value: 1 },
+    }).get('p').classes()
+
+    const metricLabels: Array<[string, string]> = [
+      ['cost-total-spend', 'Total Spend (This Month)'],
+      ['cost-avg-per-run', 'Avg Cost per Run'],
+      ['cost-per-successful-run', 'Cost per Successful Run'],
+      ['cost-total-runs', 'Total Runs'],
+    ]
+
+    for (const [testId, labelText] of metricLabels) {
+      const card = wrapper.get(`[data-testid="${testId}"]`).element.closest('.p-card')
+      expect(card).not.toBeNull()
+      const label = Array.from(card!.querySelectorAll('p, span')).find(
+        (element) => element.textContent?.trim() === labelText,
+      )
+      expect(label, `missing metric heading ${labelText}`).toBeTruthy()
+      expect(Array.from(label!.classList).sort()).toEqual([...dashboardLabelClasses].sort())
+    }
+  })
+
+  it('requests the team grouping and discloses spend with no team attribution', async () => {
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({
+          data: {
+            period: 'month',
+            group_by: 'team',
+            items: [
+              { entity_id: 'team-1', entity_name: 'Alpha', total_spend_usd: 250.0, total_runs: 10 },
+            ],
+            org_unassigned_components: '5.5',
+            legacy_total: '99.99',
+            org_total: '355.49',
+          },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/analytics/query') {
+        return Promise.resolve({ data: { buckets: [] }, error: undefined })
+      }
+      if (path === '/api/v1/admin/costs/anomalies') {
+        return Promise.resolve({ data: [], error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/admin/costs', {
+      params: { query: { group_by: 'team', period: 'month' } },
+    })
+    expect(wrapper.text()).toContain('team-attributed runs')
+    const table = wrapper.find('[data-testid="cost-team-table"]')
+    expect(table.text()).toContain('Alpha')
+    expect(table.text()).toContain('250.00')
+
+    const unattributed = wrapper.find('[data-testid="cost-team-unattributed"]')
+    expect(unattributed.exists()).toBe(true)
+    expect(unattributed.text()).toContain('$5.50')
+    expect(unattributed.text()).toContain('unassigned component spend')
+    // legacy_total is NOT excluded from team rows (team-owned legacy spend is
+    // written to the owner team's ledger row), so it must never be disclosed here.
+    expect(unattributed.text()).not.toContain('99.99')
+    expect(unattributed.text()).not.toContain('legacy')
+  })
+
+  it('omits the unattributed line when the reporting amounts are absent or unparseable', async () => {
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({
+          data: {
+            period: 'month',
+            group_by: 'team',
+            items: [
+              { entity_id: 'team-1', entity_name: 'Alpha', total_spend_usd: 10.0, total_runs: 1 },
+            ],
+            org_unassigned_components: 'not-a-number',
+          },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/analytics/query') {
+        return Promise.resolve({ data: { buckets: [] }, error: undefined })
+      }
+      if (path === '/api/v1/admin/costs/anomalies') {
+        return Promise.resolve({ data: [], error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="cost-team-unattributed"]').exists()).toBe(false)
+    const unavailable = wrapper.find('[data-testid="cost-team-unattributed-unavailable"]')
+    expect(unavailable.exists()).toBe(true)
+    expect(unavailable.text()).toContain('could not be loaded')
+  })
+
+  it('shows neither disclosure line when unassigned spend is a genuine zero', async () => {
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({
+          data: {
+            period: 'month',
+            group_by: 'team',
+            items: [
+              { entity_id: 'team-1', entity_name: 'Alpha', total_spend_usd: 10.0, total_runs: 1 },
+            ],
+            org_unassigned_components: '0',
+          },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/analytics/query') {
+        return Promise.resolve({ data: { buckets: [] }, error: undefined })
+      }
+      if (path === '/api/v1/admin/costs/anomalies') {
+        return Promise.resolve({ data: [], error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="cost-team-unattributed"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="cost-team-unattributed-unavailable"]').exists()).toBe(false)
+  })
+
+  it('discloses unassigned spend even when there are no team rows', async () => {
+    ;(api.GET as any).mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({
+          data: {
+            period: 'month',
+            group_by: 'team',
+            items: [],
+            org_unassigned_components: '12',
+          },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/analytics/query') {
+        return Promise.resolve({ data: { buckets: [] }, error: undefined })
+      }
+      if (path === '/api/v1/admin/costs/anomalies') {
+        return Promise.resolve({ data: [], error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="cost-team-empty"]').exists()).toBe(true)
+    const unattributed = wrapper.find('[data-testid="cost-team-unattributed"]')
+    expect(unattributed.exists()).toBe(true)
+    expect(unattributed.text()).toContain('$12.00')
   })
 })

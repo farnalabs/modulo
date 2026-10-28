@@ -18,6 +18,12 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 os.environ.setdefault("MODULO_DB", "sqlite")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "b" * 32)
+# FAR-2200 withdrew Lifecycle Maps from Alpha-facing surfaces: the routes and
+# the library copy-to-adapt path are retained for internal dogfood behind
+# ``MODULO_DEV_MODE`` plus an operator principal. The BDD suite exercises that
+# retained internal surface (the ``client`` fixture is an org admin, which
+# satisfies the operator role), so it runs with developer mode enabled.
+os.environ.setdefault("MODULO_DEV_MODE", "true")
 
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings
@@ -175,6 +181,17 @@ def harden_session_double(session: AsyncMock) -> AsyncMock:
     session.in_transaction = MagicMock(return_value=True)
     session.add = MagicMock()
     session.info = {}
+    # get_bind() is also a SYNC AsyncSession method, read by CRUD that picks a
+    # dialect-specific statement (e.g. system_config's ON CONFLICT upsert). A
+    # bare AsyncMock child returns an un-awaited coroutine, so give it a real
+    # bind. It must report a NON-Postgres dialect: these doubles bind their RLS
+    # context in ``session.info`` and stub only the generic SQL paths, so
+    # claiming Postgres would divert every dialect-guarded read (RLS GUC
+    # probes, settings-patch merges) into SQL this mock cannot model.
+    # Per-scenario overrides (``session.get_bind = ...``) still replace it.
+    bind_double = MagicMock()
+    bind_double.dialect.name = "sqlite"
+    session.get_bind = MagicMock(return_value=bind_double)
     nested_cm = AsyncMock()
     nested_cm.__aenter__ = AsyncMock(return_value=None)
     nested_cm.__aexit__ = AsyncMock(return_value=False)

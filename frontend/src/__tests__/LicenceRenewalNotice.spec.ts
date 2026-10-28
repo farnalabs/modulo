@@ -83,6 +83,17 @@ describe('LicenceRenewalNotice', () => {
       expect(wrapper.emitted('install-key')).toHaveLength(1)
     })
 
+    it('does not link to the removed /licence/claim page (FAR-2155)', () => {
+      const wrapper = mountNotice({ licence_state: 'renewal_due', renewal_mode: 'manual' })
+
+      const claimLinks = wrapper
+        .findAll('a')
+        .filter((anchor) => (anchor.attributes('href') ?? '').includes('/licence/claim'))
+      expect(claimLinks).toHaveLength(0)
+      // The purchase path is the pricing page; the claim copy is gone.
+      expect(wrapper.text()).not.toContain('Add days from my previous licence')
+    })
+
     it('auto mode states the renewal date and never offers a purchase path', () => {
       const wrapper = mountNotice({ licence_state: 'renewal_due', renewal_mode: 'auto' })
 

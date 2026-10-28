@@ -36,7 +36,6 @@
 {"block": ["api/routes/health.py:_configured_queues", "core/watchdog/worker_liveness.py:_configured_queues"]}
 {"block": ["cli/backup.py:_pg_child_env", "launcher/upgrade.py:_pg_child_env"]}
 {"block": ["core/feedback_manager/__init__.py:_dispatch_reject_correction_in_session", "core/guardrails/conformance.py:_set_rls", "db/crud/organisation.py:delete_organisation"]}
-{"block": ["core/library_sync/client.py:close", "core/notifier/__init__.py:close"]}
 {"block": ["core/pipeline_execution.py:_utc_or_none", "db/crud/token_family.py:_as_utc_aware"]}
 {"block": ["core/trigger_engine/__init__.py:_store_raw_payload", "core/trigger_engine/slack_app_mention.py:_store_raw_payload"]}
 {"block": ["db/crud/run.py:_get_dialect_name", "db/rls.py:_ensure_active_transaction"]}
@@ -47,7 +46,6 @@
 {"constant": "_CODE_EVAL_DEFINITION_CREATE", "modules": ["api/routes/evals.py", "api/routes/guardrail_config.py"], "value": "eval.definition.create"}
 {"constant": "_CODE_GUARDRAIL_MANAGE", "modules": ["api/routes/guardrail_config.py", "api/routes/pipelines.py"], "value": "guardrail.manage"}
 {"constant": "_CODE_NOTIFICATIONS_ENDPOINT_TABLE_MISSING", "modules": ["api/routes/admin_notifications.py", "api/routes/notifications.py"], "value": "notifications.endpoint_table_missing"}
-{"constant": "_CODE_SYSTEM_CONFIG_MANAGE", "modules": ["api/routes/admin_feature_flags.py", "api/routes/admin_system_config.py"], "value": "system.config.manage"}
 {"constant": "_DEFAULT_IMAGE", "modules": ["core/runtime_provider/docker.py", "core/runtime_provider/k8s.py"], "value": "python:3.13-slim"}
 {"constant": "_DEPLOYMENT_IDENTITY_ENV", "modules": ["core/runtime_provider/docker.py", "core/runtime_provider/e2b.py", "core/runtime_provider/k8s.py"], "value": "MODULO_RUNNER_MACHINE_ID"}
 {"constant": "_ERR_DATABASE_UNAVAILABLE", "modules": ["core/analytics/guardrails.py", "core/analytics/service.py"], "value": "Database temporarily unavailable."}

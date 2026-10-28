@@ -35,7 +35,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from langgraph.errors import NodeCancelledError
-from sqlalchemy import DateTime, bindparam, text
+from sqlalchemy import DateTime, bindparam, select, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionmaker
 
@@ -63,7 +63,15 @@ from modulo.core.dispatch_phases import (
     PHASE_STREAMING,
 )
 from modulo.db.crud.run import get_run
-from modulo.db.models.run import ACTIVE_RUN_STATUSES
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES
+from modulo.db.models.run_attempt import (
+    ATTEMPT_TERMINAL_REASON_COMPLETED,
+    ATTEMPT_TERMINAL_REASON_DEADLINE,
+    ATTEMPT_TERMINAL_REASON_GUARD_CAP,
+    ATTEMPT_TERMINAL_REASON_PROVIDER_ERROR,
+    ATTEMPT_TERMINAL_REASON_STALL,
+    ATTEMPT_TERMINAL_REASON_WORKER_LOST,
+)
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 
 __all__ = [
@@ -533,6 +541,43 @@ _STRANDED_REDISPATCH_TTL_MINUTES = 12
 # settings objects, so the draining cadence matches the reconcile
 # terminalisers under every configuration.
 _SAQ_ZERO_PROGRESS_SWEEP_MAX_ROWS = 25
+
+# FAR-1886 B1: the graceful worker-shutdown handback's registry code
+# (``worker_handoff.WORKER_LOST_ERROR_CODE``). Its terminal path writes no
+# sandbox attempt marker, so the run-detail triage surface was empty for the
+# exact class it exists to explain. Defined here as a literal (not imported
+# from ``worker_handoff``, which imports THIS module) and compared exactly:
+# the legacy ``worker_lost`` spelling belongs to a different class (its alias
+# is ``harness.dispatch_failed``, not worker-loss). Defined in the constants
+# block so the worker-loss classifiers below share one spelling.
+_WORKER_LOST_TRIAGE_ERROR_CODE = "harness.worker_lost"
+
+# FAR-2102: the derived-cost pass that runs AFTER the sweep's terminal UPDATEs
+# commit. The raw UPDATEs record no cost columns, so a run that occupied a
+# sandbox for hours reached the ledger as ``NULL``; the pass re-reads each
+# reaped row and books its ELAPSED occupancy window through the FAR-2077 helper
+# (``finalize_worker_lost_run``), exactly as the worker-shutdown handoff does.
+#
+# Only the two worker-lost spellings qualify: both mean "the run was EXECUTING
+# when its owner vanished", which is the premise FAR-2077's elapsed window
+# (``started_at`` -> the terminal write) relies on. ``never_dispatched`` and
+# ``queue.expired`` never ran at all. The FAR-1715 zero-progress arm
+# (``executor_stalled``) is deliberately EXCLUDED: its start->terminal window is
+# a wedge spanning the whole age bound, so crediting it would OVERSTATE sandbox
+# spend (the FAR-1993 rationale; that class is booked from a heartbeat
+# liveness window on the reconcile path, which this sweep does not compute).
+_SWEEP_DERIVED_COST_ERROR_CODES: frozenset[str] = frozenset({"worker_lost", _WORKER_LOST_TRIAGE_ERROR_CODE})
+
+# Per-tick cap on that pass. Each booking opens its own fail-open session (RLS
+# scope + bounded row lock + re-read + finalize), so a mass worker-loss backlog
+# must not blow ``stale_run_recovery``'s 120s cron budget. The pass is already
+# bounded to the cost-bearing worker-lost ids only — the high-volume
+# never-dispatched / queue-expired arms never enter it — and this hard cap is
+# the last line of defence. Overflow keeps its pre-FAR-2102 ``NULL`` cost (a
+# terminal run is not re-selected), so it is surfaced loudly: a WARNING plus the
+# ``derived_cost_deferred`` result count rather than a silent drop.
+_SWEEP_DERIVED_COST_MAX_PER_TICK = 100
+
 # Synthetic detail for the sweep's zero-progress terminalisations (mirrors the
 # reconcile age gate's detail shape): a constant prefix; the per-row
 # ``node_attempts=`` / ``claims=`` / ``dispatch_phase=`` values are
@@ -1351,6 +1396,202 @@ def _heartbeat_failure(
     return consecutive_failures
 
 
+# ---------------------------------------------------------------------------
+# FAR-2078 slice 2 — per-attempt execution instrumentation (close side).
+#
+# One ``run_attempts`` row is opened by the executor at ADMISSION
+# (``PipelineExecutor._claim_under_capacity``, in the same transaction as the
+# FAR-2076 execution-budget bump). This block is the CLOSE side: it stamps
+# ``ended_at`` / ``terminal_reason`` / ``error_code`` on the latest OPEN row
+# once the attempt ends.
+#
+# Every write is FAIL-OPEN: an attempt row is diagnostics, so a failure to
+# write one must never fail the run or the reset. ``CancelledError`` still
+# propagates — swallowing cancellation is not fail-open, it is a hang.
+# ---------------------------------------------------------------------------
+
+#: Error codes that identify a watchdog STALL kill (the run row's spelling and
+#: the registry spelling).
+_ATTEMPT_STALL_CODES: frozenset[str] = frozenset(
+    {
+        EXECUTOR_STALLED_ERROR_CODE,
+        "executor.stalled",
+    }
+)
+
+#: Error codes that identify a node-deadline kill. The run row carries the
+#: underscore spelling written by ``fail_run_terminal``; the executor's
+#: node-level taxonomy uses the dotted form.
+_ATTEMPT_DEADLINE_CODES: frozenset[str] = frozenset(
+    {
+        NODE_DEADLINE_EXCEEDED_ERROR_CODE,
+        "node.deadline_exceeded",
+        "node.timeout",
+    }
+)
+
+#: Error codes that identify a WORKER LOSS (graceful shutdown handback, lost
+#: heartbeat, or a stale sweep attributing the loss).
+_ATTEMPT_WORKER_LOST_CODES: frozenset[str] = frozenset(
+    {
+        EXECUTOR_HEARTBEAT_LOST_ERROR_CODE,
+        "harness.executor_heartbeat_lost",
+        _WORKER_LOST_TRIAGE_ERROR_CODE,
+        "worker_lost",
+        "harness.dispatch_failed",
+        "never_dispatched",
+        "no_progress",
+    }
+)
+
+#: Error codes / statuses that identify a GUARD CAP: a configured guard or
+#: ceiling ended the attempt (runaway protection, spend ceiling, retry-budget
+#: ceiling, or a guardrail eval block).
+_ATTEMPT_GUARD_CAP_CODES: frozenset[str] = frozenset(
+    {
+        "runaway",
+        "node.runaway",
+        "cost_ceiling_exceeded",
+        "harness.retry_budget_exhausted",
+        "eval_blocked",
+    }
+)
+
+#: Terminal statuses that end an attempt WITHOUT an execution error — the
+#: attempt ran to a deliberate end (a human rejected it, a router matched
+#: nothing, an operator cancelled it). Mapped to ``completed``: the closed
+#: vocabulary has no ``cancelled`` / ``rejected`` value, and every other value
+#: asserts a kill cause that did not happen. The run row carries the precise
+#: status; the attempt row records that the attempt did not die of a kill.
+_ATTEMPT_DELIBERATE_END_STATUSES: frozenset[str] = frozenset({"rejected", "router_no_match", "cancelled"})
+
+#: Terminal statuses whose ending is a configured cap rather than an error.
+_ATTEMPT_CAP_STATUSES: frozenset[str] = frozenset({"budget_exceeded", "cost_ceiling_exceeded", "eval_failed"})
+
+
+def attempt_terminal_reason(status: str | None, error_code: str | None) -> str | None:
+    """Map a run outcome to the closed ``run_attempts.terminal_reason`` set.
+
+    Returns ``None`` when the attempt has NOT ended: a non-terminal run (most
+    importantly ``awaiting_human`` — a HITL resume is a checkpoint
+    continuation, NOT a new execution attempt, so the same attempt row stays
+    open across the pause and is closed when the resumed stream ends).
+
+    ``provider_error`` is the ERROR bucket: the attempt terminalised on an
+    execution error that is not one of the specific causes above (a
+    provider/model refusal or a generic executor failure). ``error_code``
+    carries the concrete cause, so nothing is lost — the closed vocabulary
+    simply has no plain ``error`` value.
+    """
+    if status is None or status not in TERMINAL_STATUSES:
+        return None
+    code = (error_code or "").strip().lower()
+    if status == "complete":
+        return ATTEMPT_TERMINAL_REASON_COMPLETED
+    if status == "stalled" or code in _ATTEMPT_STALL_CODES:
+        return ATTEMPT_TERMINAL_REASON_STALL
+    if code in _ATTEMPT_DEADLINE_CODES:
+        return ATTEMPT_TERMINAL_REASON_DEADLINE
+    if code in _ATTEMPT_WORKER_LOST_CODES:
+        return ATTEMPT_TERMINAL_REASON_WORKER_LOST
+    if code in _ATTEMPT_GUARD_CAP_CODES or status in _ATTEMPT_CAP_STATUSES:
+        return ATTEMPT_TERMINAL_REASON_GUARD_CAP
+    if status in _ATTEMPT_DELIBERATE_END_STATUSES:
+        return ATTEMPT_TERMINAL_REASON_COMPLETED
+    return ATTEMPT_TERMINAL_REASON_PROVIDER_ERROR
+
+
+async def record_attempt_close(
+    session_factory: async_sessionmaker[Any],
+    run_id: str | uuid.UUID,
+    org_id: str | uuid.UUID,
+    *,
+    terminal_reason: str,
+    error_code: str | None = None,
+) -> int | None:
+    """Close the run's latest OPEN attempt on *session_factory* (FAIL-OPEN).
+
+    Never raises (``CancelledError`` excepted — swallowing cancellation is a
+    hang, not fail-open). Returns the closed ``attempt_index``, or ``None``
+    when there was no open row or the write failed. Every caller treats the
+    result as informational: this is diagnostics, and a failure here must
+    never fail the run, the reset, or the shutdown handback it records.
+
+    Takes a SESSION FACTORY rather than an engine so the executor can pass its
+    own ``_session_factory`` and every caller shares one implementation.
+    """
+    from modulo.db.crud.run_attempts import close_attempt
+
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, uuid.UUID(str(org_id)))
+            return await close_attempt(
+                session,
+                uuid.UUID(str(run_id)),
+                terminal_reason=terminal_reason,
+                error_code=error_code,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.attempt_close_failed run=%s org=%s terminal_reason=%s",
+            run_id,
+            org_id,
+            terminal_reason,
+            exc_info=True,
+        )
+        return None
+
+
+def engine_session_factory(aeng: AsyncEngine) -> async_sessionmaker[Any]:
+    """Session factory matching this module's ``autobegin=False`` convention."""
+    return async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+
+
+async def _close_attempt_for_terminal_row(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    status: str | None,
+    error_code: str | None,
+) -> None:
+    """Close the attempt when *status* is terminal (FAIL-OPEN, no-op otherwise)."""
+    reason = attempt_terminal_reason(status, error_code)
+    if reason is None:
+        return
+    await record_attempt_close(
+        engine_session_factory(aeng), run_id, org_id, terminal_reason=reason, error_code=error_code
+    )
+
+
+async def _record_executor_outcome_attempt(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    status: str | None,
+    error_code: str | None,
+) -> None:
+    """Close the attempt for the executor's resolved terminal status.
+
+    Named seam for ``run_executor_with_watchdog``: the wrapper tests patch it so
+    they pin the OUTCOME mapping without touching a database. FAIL-OPEN, and a
+    no-op for every non-terminal status (``awaiting_human`` keeps the attempt
+    open — a resume continues it).
+
+    *error_code* is the value the executor already returned on its ``Run`` row
+    (``None`` when the task was cancelled). No extra read: a terminal failure
+    that ended in a raw write was already closed by ``fail_run_terminal`` with
+    its code, and the remaining status-only outcomes (complete / cancelled /
+    stalled) need no code to be classified.
+    """
+    if status not in TERMINAL_STATUSES:
+        return
+    await _close_attempt_for_terminal_row(aeng, run_id, org_id, status=status, error_code=error_code)
+
+
 async def mark_complete(
     aeng: AsyncEngine,
     run_id: str,
@@ -1421,16 +1662,14 @@ async def mark_complete(
         # would never advance. Advance from the run's CREATE-STAMPED refs (no
         # self-report parse here — there are no merged outputs).
         await _advance_journeys_from_stored_refs(aeng, run_id, org_id, RUN_COMPLETE_STATUS)
-
-
-# FAR-1886 B1: the graceful worker-shutdown handback's registry code
-# (``worker_handoff.WORKER_LOST_ERROR_CODE``). Its terminal path writes no
-# sandbox attempt marker, so the run-detail triage surface was empty for the
-# exact class it exists to explain. Defined here as a literal (not imported
-# from ``worker_handoff``, which imports THIS module) and compared exactly:
-# the legacy ``worker_lost`` spelling belongs to a different class (its alias
-# is ``harness.dispatch_failed``, not worker-loss).
-_WORKER_LOST_TRIAGE_ERROR_CODE = "harness.worker_lost"
+        # FAR-2078: the attempt that produced this completion ended here
+        # (fail-open diagnostics; the attempt itself already committed).
+        await record_attempt_close(
+            engine_session_factory(aeng),
+            run_id,
+            org_id,
+            terminal_reason=ATTEMPT_TERMINAL_REASON_COMPLETED,
+        )
 
 
 async def _persist_worker_lost_triage(
@@ -1559,6 +1798,13 @@ async def fail_run_terminal(
         # triage entry here (its own session, fail-open).
         if error_code == _WORKER_LOST_TRIAGE_ERROR_CODE:
             await _persist_worker_lost_triage(aeng, run_id, org_id)
+        # FAR-2078: close the open attempt with this terminal outcome. This is
+        # the terminal-fail path shared by the watchdog kills (stall /
+        # deadline), heartbeat loss, the worker-shutdown handback, the generic
+        # executor failure and the stale sweeps — so one close site covers
+        # them all. The fenced write above landed, so the outcome is ours
+        # (a fence loss returns ``ok=False`` above and never reaches here).
+        await _close_attempt_for_terminal_row(aeng, run_id, org_id, status="failed", error_code=error_code)
     return ok
 
 
@@ -3043,6 +3289,20 @@ async def run_executor_with_watchdog(
         # no-op; a failed/pending/superseded run is filtered here before the
         # session even opens.
         await _salvage_cancelled_run_cost(aeng, run_id, org_id)
+    # FAR-2078: the ONE close point for an attempt that ended through the
+    # executor's own terminal tail (normal completion, a finalize downgrade, or
+    # an early terminal return such as a spend-ceiling refusal). Watchdog kills
+    # and raw terminal writes close in ``fail_run_terminal``; when that already
+    # closed the row this is a no-op (``close_attempt`` targets only an OPEN
+    # row). A non-terminal status — ``awaiting_human`` in particular — leaves
+    # the row open: a resume continues the SAME attempt.
+    await _record_executor_outcome_attempt(
+        aeng,
+        run_id,
+        org_id,
+        status=result_status,
+        error_code=getattr(exec_result, "error_code", None),
+    )
     return _executor_status_response(result_status)
 
 
@@ -3723,9 +3983,22 @@ async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
 # The fix therefore lives HERE, in the arm whose window is already the non-SAQ
 # one: a node-started run with no SAQ dispatcher identity and a dead heartbeat is
 # terminal-failed ``harness.worker_lost`` — the truthful code for "the executor is
-# gone" (the same code the shutdown handoff stamps), never a re-dispatch
+# gone" (the same code the shutdown handoff stamps), never RE-EXECUTED
 # (FAR-1649). It reuses this sweep's existing terminalisation path, so journeys,
 # the daily fact and the audit record are written exactly as for every other arm.
+#
+# FAR-2122 RECONCILIATION — ``dispatcher_reconcile``'s non-SAQ node-started leg
+# (``cron_helpers._build_re_dispatch_predicate``) recovers the SAME class via
+# ``resume_run`` when the thread carries a resumable checkpoint. Checkpoint
+# resume is NOT re-execution: LangGraph continues from the durable checkpoint, so
+# the started node's side effects are preserved (the FAR-1649 hazard is
+# ``execute_run`` from the graph start). The two arms are reconciled by
+# PRECEDENCE, not exclusion: this arm's cutoff is deferred by
+# ``_ORPHAN_RECONCILE_GRACE_SECONDS`` past the reconcile stale window, so the
+# 60s reconcile tick observes the row first. A successful resume stamps
+# ``dispatcher='saq'`` (``dispatch_run``) and the row leaves this predicate; a
+# row with NO checkpoint is refused by the reconcile guard and terminalised
+# here. This arm remains the terminal backstop, so the class can never leak.
 #
 # Grace: the arm's OWN ``wl_window`` (``SAQ_WORKER_LOST_WINDOW``, 600s = twenty
 # missed 30s heartbeats). The FAR-2005 300s bound is deliberately NOT reused:
@@ -3735,6 +4008,10 @@ async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
 # one. Both timestamps are BOUND datetimes (not ``now()`` arithmetic) so the
 # predicate is executable under the in-memory SQLite fixture — the same technique
 # ``run_admission._REAP_DEAD_HEARTBEAT_NODE_STARTED_SQL`` uses.
+# FAR-2122: one ``dispatcher_reconcile`` tick, so the checkpoint-resume arm is
+# guaranteed a chance before this terminaliser acts on the same row class.
+_ORPHAN_RECONCILE_GRACE_SECONDS = 60
+
 _ORPHANED_RUN_DETAIL = (
     "Worker lost: this node-started run carries no SAQ dispatcher identity (so the "
     "dispatcher-scoped recovery arms cannot see it) and its executor stopped "
@@ -3769,6 +4046,7 @@ async def _sweep_org_stale_runs(
     terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     queue_expired_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     orphaned_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
+    derived_cost_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
 ) -> tuple[int, int, int]:
     """Run one org's stale-run UPDATE set; return (never, queue_expired, lost) counts.
 
@@ -3783,6 +4061,14 @@ async def _sweep_org_stale_runs(
     journeys + daily fact + audit advance as every other arm); the caller that
     wants to report them under their own counter also passes a list here. A
     caller that does not care about the split still gets the terminalisation.
+
+    ``derived_cost_run_ids`` is a second OPTIONAL collector (FAR-2102): the
+    worker-lost rows of BOTH arms (the legacy ``worker_lost`` branch and the
+    orphan arm) that may have occupied a sandbox. The caller runs the
+    post-commit derived-cost pass over exactly this list — never the
+    never-dispatched / queue-expired arms, which never executed. The collector
+    carries ids only: the booking re-reads each row's own code/detail rather
+    than reconstructing them (see ``_attribute_swept_run_derived_cost``).
 
     FAR-1601 (row-lock bound, 55P03 contract): the bound is issued FIRST in
     the org transaction, so every one of the five ``UPDATE runs`` branches
@@ -3918,21 +4204,36 @@ async def _sweep_org_stale_runs(
         },
     )
     lost_count = lost_result.rowcount or 0
-    terminalised_run_ids.extend((row[0], org_id) for row in lost_result.all())
+    lost_rows = lost_result.all()
+    terminalised_run_ids.extend((row[0], org_id) for row in lost_rows)
+    if derived_cost_run_ids is not None:
+        # FAR-2102: the legacy worker-lost class was EXECUTING until its
+        # heartbeat stopped, so its elapsed window is the occupancy premise the
+        # FAR-2077 helper books from.
+        derived_cost_run_ids.extend((row[0], org_id) for row in lost_rows)
 
     # 2026-10-22 leak (see :data:`_SWEEP_ORPHANED_RUNS_SQL`): a node-started run
-    # with no SAQ dispatcher identity is out of every other arm's scope, so this
-    # arm is its ONLY terminaliser. Runs AFTER the legacy worker_lost branch: the
-    # legacy arm's stricter shape (claim_count >= 5, non-NULL heartbeat) keeps its
-    # own code, and the two can never double-write the same row (this statement
-    # re-checks ``status = 'running'``).
+    # with no SAQ dispatcher identity is out of every other arm's scope. Runs
+    # AFTER the legacy worker_lost branch: the legacy arm's stricter shape
+    # (claim_count >= 5, non-NULL heartbeat) keeps its own code, and the two can
+    # never double-write the same row (this statement re-checks
+    # ``status = 'running'``). FAR-2122: the cutoff defers one
+    # ``dispatcher_reconcile`` tick past the reconcile stale window so its
+    # checkpoint-resume arm observes the row first (see the reconciliation note
+    # on the SQL constant).
+    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR, _int_setting
+
+    reconcile_window = RECONCILE_STALE_HEARTBEAT_FACTOR * _int_setting(
+        getattr(get_settings(), "saq_job_heartbeat", None), 300
+    )
+    orphan_grace = max(wl_window, reconcile_window + _ORPHAN_RECONCILE_GRACE_SECONDS)
     orphan_now = datetime.now(UTC)
     orphaned_result = await conn.execute(
         _SWEEP_ORPHANED_RUNS_SQL,
         {
             "oid": str(org_id),
             "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
-            "orphan_cutoff": orphan_now - timedelta(seconds=wl_window),
+            "orphan_cutoff": orphan_now - timedelta(seconds=orphan_grace),
             "completed_at": orphan_now,
             "detail": _ORPHANED_RUN_DETAIL,
         },
@@ -3941,6 +4242,10 @@ async def _sweep_org_stale_runs(
     terminalised_run_ids.extend((row[0], org_id) for row in orphaned_rows)
     if orphaned_run_ids is not None:
         orphaned_run_ids.extend((row[0], org_id) for row in orphaned_rows)
+    if derived_cost_run_ids is not None:
+        # FAR-2102: same worker-lost class as the legacy arm above — a
+        # node-started run whose executor vanished mid-execution.
+        derived_cost_run_ids.extend((row[0], org_id) for row in orphaned_rows)
     return never_count, queue_expired_count, lost_count
 
 
@@ -4139,6 +4444,97 @@ async def _advance_terminalised_run(
     await advance_terminalised_run(async_engine, run_id, org_id, source="stale_run_recovery", status=status)
 
 
+def _json_id_pair(run_id: Any, org_id: Any) -> list[str]:
+    """Canonicalise a collected ``(run_id, org_id)`` pair for the JSON result.
+
+    Drivers differ on what a raw ``RETURNING id`` yields (Postgres gives a
+    ``uuid.UUID``; the SQLite unit fixture's raw statement gives the 32-char
+    storage form), and the sweep's result is persisted as JSON, so both halves
+    are rendered canonically and never as driver-specific spellings.
+    """
+    return [str(uuid.UUID(str(run_id))), str(uuid.UUID(str(org_id)))]
+
+
+async def _attribute_swept_run_derived_cost(
+    aengine: AsyncEngine,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> None:
+    """Book a sweep-terminalised worker-lost run's elapsed sandbox spend (FAR-2102).
+
+    The sweep's raw terminal UPDATE records NO cost columns, so a run that
+    occupied a sandbox for hours reached the ledger as ``NULL`` (and contributed
+    $0 to every cost report). This is the post-commit compensating write for
+    that class, the sweep-side twin of
+    ``record_worker_lost_derived_cost`` (FAR-2077): the bulk write has already
+    COMMITTED, so nothing here can roll it back.
+
+    The COST PATH is the FAR-2077 helper ``finalize_worker_lost_run``, which
+    owns every gate — the row must still be the failure this sweep wrote, it
+    must not already carry attributed cost, and the derived billable sandbox
+    line is written only with sandbox evidence (a retained per-attempt marker
+    or a live dispatch reservation). The duration is the run's ``started_at``
+    -> ``completed_at`` elapsed window.
+
+    ``error_code`` / ``error_detail`` are RE-READ from the row the UPDATE wrote,
+    never reconstructed (the rule
+    ``cron_helpers._attribute_age_gate_derived_cost`` follows): the terminal
+    message must survive the compensating write byte-for-byte. Only the sweep's
+    own worker-lost codes are priced, so a row a later writer relabelled is
+    skipped.
+
+    Fail-open PER RUN: the terminalisation is already committed and this booking
+    owns its OWN session/transaction, so an ordinary failure — including a
+    ``finalize_failed_run`` lock abort that would otherwise be re-raised — is
+    logged and swallowed while the remaining runs are still processed. (The
+    abort rolls back only this booking's transaction, never the reaping.)
+    ``asyncio.CancelledError`` is re-raised (worker shutdown is not ours to
+    swallow). FAR-1313: the finalize write takes the hot ``runs`` row lock, so
+    the transaction-scoped bound is issued FIRST, before any lock.
+    """
+    from modulo.core.cost_controller.finalize import finalize_worker_lost_run
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+    from modulo.db.models.run import Run
+
+    # A raw ``RETURNING id`` yields a UUID on Postgres but the storage string on
+    # SQLite; both are accepted so the gate is driver-independent.
+    run_uuid = run_id if isinstance(run_id, uuid.UUID) else uuid.UUID(str(run_id))
+    org_uuid = org_id if isinstance(org_id, uuid.UUID) else uuid.UUID(str(org_id))
+    try:
+        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_mutation_row_lock_timeout(session)
+            await set_rls_org(session, org_uuid)
+            row = (
+                await session.execute(select(Run.status, Run.error_code, Run.error_detail).where(Run.id == run_uuid))
+            ).one_or_none()
+            if row is None:
+                _log.info("pipeline_execution.swept_cost_run_missing run=%s", run_id)
+                return
+            status, stored_code, stored_detail = row
+            if status != "failed" or stored_code not in _SWEEP_DERIVED_COST_ERROR_CODES or not stored_detail:
+                # Not a row this sweep priced: a queue-expiry supersession
+                # (``rejected``), a never-dispatched / zero-progress row that
+                # never had a proven occupancy window, or a row a later writer
+                # relabelled. Never fabricate spend.
+                return
+            await finalize_worker_lost_run(
+                session,
+                run_id=run_uuid,
+                org_id=org_uuid,
+                error_code=stored_code,
+                error_detail=stored_detail,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "pipeline_execution.swept_cost_record_failed run=%s",
+            run_id,
+            exc_info=True,
+        )
+
+
 async def stale_run_recovery_sweep(
     async_engine: AsyncEngine,
     *,
@@ -4171,12 +4567,13 @@ async def stale_run_recovery_sweep(
       (``dispatcher IS NULL`` or a foreign value) whose liveness reference
       (``COALESCE(heartbeat_at, started_at, created_at)``) is older than the
       same worker-lost window are marked ``failed`` with ``harness.worker_lost``
-      (:data:`_SWEEP_ORPHANED_RUNS_SQL`). This is the ONLY arm that can reclaim
-      that shape — the reconcile retry-reset arm excludes node-started rows
-      (FAR-1649) and every dispatcher-scoped arm requires ``dispatcher='saq'`` —
-      so without it such a run stays ``running`` forever, holding a concurrency
-      slot. Counted separately as ``worker_orphaned_swept``; terminalised
-      without re-dispatch (a started node may already have run).
+      (:data:`_SWEEP_ORPHANED_RUNS_SQL`). Before that, ``dispatcher_reconcile``
+      (FAR-2122) has one tick of precedence over the same class to recover a
+      run that carries a resumable checkpoint via ``resume_run`` (checkpoint
+      resume, never re-execution); this arm is the terminal backstop for every
+      row the resume guard refuses, so the class can never leak. Counted
+      separately as ``worker_orphaned_swept``; terminalised without
+      re-execution (a started node may already have run).
     - FAR-1715: running ``dispatcher='saq'`` runs with ZERO node progress
       whose ``started_at`` is older than the shared zero-progress age bound
       (Settings ``saq_zero_progress_max_age_minutes``, ~135m at the default)
@@ -4197,6 +4594,13 @@ async def stale_run_recovery_sweep(
       ``finalize_cost``, so without this the swept runs would be invisible to
       the analytics failure/stall dimensions. Written in its own separate
       RLS-scoped session after the sweep's UPDATEs commit; fail-open per run.
+    - FAR-2102: every worker-lost run (the legacy ``worker_lost`` arm and the
+      orphan arm) also gets its ELAPSED sandbox spend booked after the bulk
+      write commits, through the FAR-2077 helper
+      (:func:`_attribute_swept_run_derived_cost`) — the same evidence and
+      double-booking gates as the worker-shutdown handoff. Capped per tick
+      (:data:`_SWEEP_DERIVED_COST_MAX_PER_TICK`); the ids it terminalised are
+      returned as JSON-safe ``[run_id, org_id]`` pairs.
 
     The ``never_dispatched`` / ``worker_lost`` writers stamp a synthetic
     ``error_detail`` (FAR-164): the daily-watcher hang-death detector keys on
@@ -4252,6 +4656,16 @@ async def stale_run_recovery_sweep(
     # :data:`_SWEEP_ORPHANED_RUNS_SQL`, reported under their own counter (they
     # also join ``terminalised_run_ids`` above for the advance).
     orphaned_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+    # FAR-2102: the worker-lost rows (both arms) whose elapsed sandbox spend is
+    # booked post-commit. Only these arms enter the cost pass — the high-volume
+    # never-dispatched / queue-expired arms never executed.
+    derived_cost_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+    # Ids are collected INSIDE an org transaction; on a mid-loop failure only
+    # the entries from orgs whose transaction COMMITTED may be surfaced (same
+    # truthfulness rule as the counts). Tracked as list lengths because both
+    # the failed-run ids and the cost ids are appended in the same places.
+    committed_terminalised_len = 0
+    committed_derived_cost_len = 0
     try:
         # Collect all org ids FIRST in system context (organisations is the
         # root table — the app role owns it, owner bypasses RLS). The sweep's
@@ -4272,6 +4686,9 @@ async def stale_run_recovery_sweep(
                 "saq_zero_progress_swept": 0,
                 "stranded_capacity_redispatched": 0,
                 "redispatch_outcomes": {},
+                "derived_cost_attempted": 0,
+                "derived_cost_deferred": 0,
+                "terminalised_run_ids": [],
             }
 
         for org_id in org_ids:
@@ -4290,6 +4707,7 @@ async def stale_run_recovery_sweep(
                     terminalised_run_ids=terminalised_run_ids,
                     queue_expired_run_ids=queue_expired_run_ids,
                     orphaned_run_ids=orphaned_run_ids,
+                    derived_cost_run_ids=derived_cost_run_ids,
                 )
                 # FAR-1715: the independent SAQ zero-progress branch runs in
                 # the SAME per-org transaction, after the legacy branches (its
@@ -4306,6 +4724,10 @@ async def stale_run_recovery_sweep(
                 queue_expired_count += queue_expired_delta
                 lost_count += lost_delta
                 zero_progress_count += zero_progress_delta
+            # The org's transaction COMMITTED — only now are its collected ids
+            # real; a rolled-back org rolls its UPDATEs back too.
+            committed_terminalised_len = len(terminalised_run_ids)
+            committed_derived_cost_len = len(derived_cost_run_ids)
             orphaned_count += len(orphaned_run_ids) - orphaned_before_org
         stranded_count = len(stranded_rows)
 
@@ -4325,6 +4747,29 @@ async def stale_run_recovery_sweep(
         # ``rejected`` so it never increments a journey's failed run_count.
         for run_id, run_org_id in queue_expired_run_ids:
             await _advance_terminalised_run(async_engine, run_id, run_org_id, status="rejected")
+
+        # FAR-2102 — book the DERIVED sandbox cost of every worker-lost run this
+        # tick terminalised. Runs strictly AFTER the per-org transactions have
+        # committed (a booking failure must never roll the reaping back) and
+        # opens one fail-open session per run. The pass is bounded TWICE: it
+        # only ever sees the cost-bearing worker-lost ids (never the
+        # never-dispatched / queue-expired arms, where a backlog of hundreds is
+        # normal), and a hard per-tick cap protects the 120s cron budget.
+        committed_cost_ids = derived_cost_run_ids[:committed_derived_cost_len]
+        derived_cost_attempted = 0
+        for run_id, run_org_id in committed_cost_ids[:_SWEEP_DERIVED_COST_MAX_PER_TICK]:
+            await _attribute_swept_run_derived_cost(async_engine, run_id, run_org_id)
+            derived_cost_attempted += 1
+        derived_cost_deferred = len(committed_cost_ids) - derived_cost_attempted
+        if derived_cost_deferred:
+            _log.warning(
+                "Stale run recovery: derived-cost attribution deferred for %d of %d "
+                "worker-lost runs this tick (per-tick cap %d); those runs keep their "
+                "pre-FAR-2102 NULL cost — surfaced here, never silently dropped",
+                derived_cost_deferred,
+                len(committed_cost_ids),
+                _SWEEP_DERIVED_COST_MAX_PER_TICK,
+            )
 
         if never_count or lost_count or orphaned_count or queue_expired_count or zero_progress_count or stranded_count:
             _log.info(
@@ -4347,6 +4792,12 @@ async def stale_run_recovery_sweep(
             "saq_zero_progress_swept": zero_progress_count,
             "stranded_capacity_redispatched": stranded_count,
             "redispatch_outcomes": redispatch_outcomes,
+            "derived_cost_attempted": derived_cost_attempted,
+            "derived_cost_deferred": derived_cost_deferred,
+            # FAR-2102: the ids this sweep terminalised, in the reconciler's
+            # (run_id, org_id) pair shape — stringified so the result stays
+            # JSON-serialisable for the cron stats blob (/healthz/ready).
+            "terminalised_run_ids": [_json_id_pair(run_id, org_id) for run_id, org_id in terminalised_run_ids],
         }
     except asyncio.CancelledError:
         raise
@@ -4366,6 +4817,13 @@ async def stale_run_recovery_sweep(
             "saq_zero_progress_swept": zero_progress_count,
             "stranded_capacity_redispatched": 0,
             "redispatch_outcomes": {},
+            # Only ids from orgs whose transaction COMMITTED are surfaced — the
+            # failing org's UPDATEs rolled back with it.
+            "derived_cost_attempted": 0,
+            "derived_cost_deferred": 0,
+            "terminalised_run_ids": [
+                _json_id_pair(run_id, org_id) for run_id, org_id in terminalised_run_ids[:committed_terminalised_len]
+            ],
             "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
         }
 

@@ -21,6 +21,7 @@ The application refuses to start if any required variable is absent or invalid.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | **Yes** | – | `postgresql+asyncpg://user:pass@host:port/db` |
+| `DATABASE_ADMIN_URL` | No | – | Privileged owner-role connection string read directly by Alembic from the process environment, the launcher-pinned config, or the `.env` file in `backend/` (not a `Settings` field). When set it wins over `DATABASE_URL` for migrations, so `uv run alembic upgrade heads` runs as the table owner rather than the RLS-bound app role. It is also the privileged connection for the role bootstrap (`python -m modulo.db.bootstrap_role` requires it) and the URL `modulo restore --db-url` points at. If neither it nor `DATABASE_URL` is set, migrations refuse to run instead of defaulting to a local database (FAR-2183). |
 | `MODULO_DB` | No | `postgres` | Database backend: `postgres`, `sqlite`, `mariadb`, or `mysql` |
 | `MODULO_SYSTEM_DATABASE_URL` | No | `""` | Dedicated connection string for cross-org system cron jobs (`modulo_system` role). When set, system crons use this instead of `DATABASE_URL`. |
 
@@ -187,7 +188,7 @@ See [`docs/product-map/configure/apply.md`](./product-map/configure/apply.md).
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_LICENSE_KEY` | No | – | Base64-encoded, Ed25519-signed JSON payload enabling Team-tier features. Verified against the configured trust anchor (`MODULO_LICENSE_PUBLIC_KEY`). Outside debug, configuring a licence key while only the built-in development key is available fails startup closed instead of silently running on Community. |
-| `MODULO_LICENSE_PUBLIC_KEY` | No | built-in development key | Ed25519 public key (hex, 64 chars) that verifies the licence signature — the production trust anchor. The default is the **development** keypair's public half, shipped so local and debug instances can exercise licensing; it is only trusted in debug and cannot verify a Farnalabs-issued production licence. Set it to the public key Farnalabs issued with your licence. |
+| `MODULO_LICENSE_PUBLIC_KEY` | No | built-in development key | Ed25519 public key (hex, 64 chars) that verifies the licence signature – the production trust anchor. The default is the **development** keypair's public half, shipped so local and debug instances can exercise licensing; it is only trusted in debug and cannot verify a Farnalabs-issued production licence. Set it to the public key Farnalabs issued with your licence. |
 | `MODULO_LICENSE_PRIVATE_KEY` | No | – | Ed25519 private key (hex) used to SIGN team license keys issued via the admin license-issue endpoint and Stripe purchase fulfilment. Empty disables issuance (signing fails closed). |
 
 ---
@@ -239,7 +240,7 @@ Optional visitor demo experience (FAR-535): navigating to `/demo` logs the visit
 
 Point `MODULO_DEMO_USER` at a **dedicated** account: if it names an existing account, boot re-stamps that account's password to the demo password. Regardless, the demo endpoint only ever mints a session scoped to the `demo` organisation with the `viewer` role; an authenticating account without a viewer membership in the demo org (e.g. a privileged account) answers the same 404 as the kill switch.
 
-The demo user gets a `viewer`-role membership (read-only; `is_system_admin` is forced off) and the seed is idempotent: it creates the `demo` organisation, the user, and benign sample data at boot, or immediately via `python -m modulo.db.seed_demo`: five schemas, six agents, four pipelines with editor-valid graphs (UUID node ids, first-class edges), including the Demo Governance Pipeline (Implement → PR risk level → Human review when risk > 0.50 → Open PR, with a conditional edge straight to Open PR when risk ≤ 0.50); twenty synthetic runs carrying per-node execution traces and costs, three triggers (including "Ticket ready" on the governance pipeline) and a "Delivery lifecycle" lifecycle map. Every boot converges existing demo rows to the current seed, so an upgrade repairs demo data seeded by an older release. Rate limiting: 10 requests/hour per IP on the demo endpoint.
+The demo user gets a `viewer`-role membership (read-only; `is_system_admin` is forced off) and the seed is idempotent: it creates the `demo` organisation, the user, and benign sample data at boot, or immediately via `python -m modulo.db.seed_demo`: five schemas, six agents, four pipelines with editor-valid graphs (UUID node ids, first-class edges), including the Demo Governance Pipeline (Implement → PR risk level → Human review when risk > 0.50 → Open PR, with a conditional edge straight to Open PR when risk ≤ 0.50); twenty synthetic runs carrying per-node execution traces and costs, three triggers (including "Ticket ready" on the governance pipeline) and other benign sample data. Lifecycle Maps are internal-only and withdrawn from Alpha; they are not ordinary demo data and are not part of the public demo seed. Every boot converges existing demo rows to the current seed, so an upgrade repairs demo data seeded by an older release. Rate limiting: 10 requests/hour per IP on the demo endpoint.
 
 ---
 
@@ -480,6 +481,11 @@ Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `MODULO_DOCKER_HOST` | No | unset (provider does not register) | Docker daemon endpoint for the `runner_docker` runtime provider (`docker` / `local_docker` aliases), the bundled-runner reconciler and its health probe. Setting it (or `DOCKER_HOST`) registers the provider; an unrelated `MODULO_RUNNER_*` variable does NOT (FAR-996). An explicitly constructed provider falls back to the local socket when unset. |
+| `DOCKER_HOST` | No | unset | Fallback Docker endpoint consulted after `MODULO_DOCKER_HOST`; setting it also registers the `runner_docker` provider. |
+| `DOCKER_TLS_VERIFY` | No | unset | Set to `1` to use TLS for the Docker endpoint. A non-loopback `tcp://` endpoint is rejected at provider registration unless `DOCKER_TLS_VERIFY` or `DOCKER_CERT_PATH` is truthy, or the insecure escape hatch below is set (FAR-1038). |
+| `DOCKER_CERT_PATH` | No | unset | Directory holding `ca.pem` (server TLS) and optionally `cert.pem` / `key.pem` (mutual TLS). A truthy value also satisfies the remote-endpoint TLS gate. |
+| `MODULO_DOCKER_ALLOW_INSECURE_ENDPOINT` | No | unset | Escape hatch: set to a non-empty, non-false value to allow a remote `tcp://` Docker endpoint without TLS. Logs a prominent warning at provider construction; not for a public-IP endpoint. |
 | `MODULO_E2B_API_KEY` | For E2B | – | E2B sandbox API key for runtime provider (read directly from env, not via Settings) |
 | `MODULO_KUBERNETES_ENABLED` | For Kubernetes | – | Registers the `kubernetes`/`k8s` runtime provider when set to any value except an explicit negative (`0`, `false`, `no`, `off`); unset/falsy leaves it unregistered. In-cluster auth is used when `KUBERNETES_SERVICE_HOST` is set, otherwise the standard kubeconfig chain (`KUBECONFIG` / default path). |
 | `MODULO_KUBERNETES_NAMESPACE` | No | `modulo` | Namespace the provider creates workspace pods in. |
@@ -532,6 +538,7 @@ LOAD.
 | `MODULO_SEED_DEMO_ORGS` | No | `false` | Seed demo organisations with signed licenses on boot (gated framework) |
 | `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` | No | `""` | Endpoint URL for opt-in aggregate product analytics. Empty disables. |
 | `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` | No | `""` | Instance secret for HMAC signing product analytics. Empty disables. |
+| `MODULO_PRODUCT_ANALYTICS_ENABLED` | No | unset | Explicit instance-level product-analytics switch (`1`/`true`/`yes` = ON; `false`/`0`/`no` = OFF; a set-but-blank value reads OFF). `core/product_analytics/consent.resolve_instance_analytics_switch` resolves it in this order, first match wins: (1) the stored `system_config.product_analytics_enabled` value, written or cleared by a system admin via `PUT /api/v1/product-analytics/instance-switch` (or the switch on `/admin/product-analytics`); (2) this variable, honoured only when no stored value exists; (3) the installed licence's `product_analytics_required` claim, which sets the default ON; (4) otherwise OFF. An explicit operator value always wins – including OFF over a licence that requires analytics – because the licence claim is a partner expectation (a contractual default), never a control. `GET /api/v1/product-analytics/transparency` reports the effective switch and its source (`operator` / `environment` / `licence` / `default`), so an operator can always see why analytics is on and turn it off. Analytics never changes an organisation's plan or tier. `MODULO_PRODUCT_ANALYTICS_ENDPOINT_URL` and `MODULO_PRODUCT_ANALYTICS_INSTANCE_SECRET` are the transport settings alongside this switch: either being empty disables delivery. |
 | `MODULO_MONITOR_DOMAINS` | No | `""` | Space-separated CSP connect-src expressions (e.g. custom Grafana Faro collectors) |
 | `MODULO_ARTIFACTS_ENABLED` | No | `true` | Enable pipeline artifact storage |
 | `MODULO_ARTIFACTS_DIR` | No | `""` | Base directory for artifact files. Empty defaults to `<backend>/.data/artifacts` resolved by the store factory. |
@@ -554,6 +561,44 @@ per-trigger `config_json` values (`max_no_delivery_streak`,
 | `MODULO_STREAK_DEACTIVATE_KILL_SWITCH` | No | `true` | Gates only the deactivate + notify side-effect of the streak sweep; classification always persists. Any of `0`, `false`, `off`, `no` disables the side-effect, any other value leaves it enabled |
 | `MODULO_ONGOING_STREAK_MIN_WINDOW_HOURS` | No | `24` | Deployment default minimum wall-clock window (hours) before an `ongoing` trigger's no-delivery streak may fire; `0` removes the window so a fast-moving repo's quiet stretch still deactivates the pool. Invalid values fall back to the default |
 | `MODULO_CRON_STREAK_MIN_WINDOW_HOURS` | No | `48` | Same window for `cron` triggers, kept separate from the ongoing default: two full daily periods, so a single missed day never trips while a broken intraday cron still surfaces within two days. `0` removes the window. Invalid values fall back to the default |
+
+---
+
+## Pipeline Health Alerts (pipeline decay)
+
+Readiness checks answer "is the app up". They do not answer "is a pipeline still
+doing its job": a webhook-triggered pipeline can run constantly, fail most of
+the time, and never make the instance unhealthy (observed: a pipeline at a 35%
+success rate for five days while every readiness probe stayed green).
+
+The pipeline-decay sweep (`core/pipeline_decay_alerts.py`, wired into the same
+60-second `dispatcher_reconcile` tick as the capacity sweep) measures every
+**webhook-triggered** pipeline over a rolling **2-hour** window and raises a
+`pipeline_decay` in-app notification / webhook event when either condition
+holds:
+
+| Condition | Threshold | Notes |
+|-----------|-----------|-------|
+| Rolling success rate | **below 80%** of terminal runs, with at least **5** terminal runs in the window | The rate counts `cancelled` in the denominator (the same numerator/denominator shape `/analytics` publishes). A single failed run is exactly 80% of five and never alerts |
+| Node-deadline watchdog firings | **5 or more** firings in the 2-hour window | `runs.node_deadline_watchdog_fired_count` summed over the window's runs – repeated killing of nodes that blew their per-attempt deadline |
+
+Noise control: **one alert per pipeline per incident**. The open state is kept
+in Redis (7-day TTL backstop) so a sustained degradation notifies once; a
+`pipeline_decay_recovered` event closes it when the rate recovers to 90% or
+above (80–90% holds the alert rather than flapping it), when the watchdog
+count drops to 2 or fewer, or when the pipeline leaves the window. Deduplication
+state is the noise guard, so if Redis is unavailable the sweep **skips**
+dispatch rather than risk a storm, and reports `state_unavailable` plus a
+WARNING.
+
+Both events are subscribable on the admin notification endpoints (see
+`GET /api/v1/admin/notifications/available-events`), so a pager can be wired to
+them. Nothing here gates or refuses admission – it is signal, not enforcement.
+
+The sweep's aggregate is served by the partial index
+`ix_runs_webhook_decay_sweep` (migration 0334): only webhook-triggered terminal
+runs enter it, keyed on `completed_at`, so the per-minute window read is a
+bounded index scan rather than a scan of `runs`.
 
 ---
 
@@ -786,6 +831,19 @@ against `autovacuum_freeze_max_age`, and grades `degraded` (never `unavailable`,
 never 503s readiness on its own) when either threshold is breached. A completed reading
 that grades `degraded` DOES gate the aggregate – only a probe that never finished is
 advisory.
+
+### Deploy-run correlation
+
+When the migrations check reports repo-vs-DB divergence, its detail links the most recent
+run of the configured deploy workflow so an operator can jump straight to it. The lookup
+is best-effort and never gates readiness: it is skipped when no `GITHUB_TOKEN` /
+`GITHUB_REVIEWBOT_PAT` is set or when `MODULO_DEPLOY_RUN_REPO` is empty.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_DEPLOY_RUN_REPO` | No | `farnalabs/modulo` | `owner/repo` whose deploy workflow run is linked; empty disables the lookup |
+| `MODULO_DEPLOY_RUN_WORKFLOW` | No | `deploy.yml` | Workflow file name (or numeric id) whose latest run is linked |
+| `MODULO_DEPLOY_RUN_API_BASE` | No | `https://api.github.com` | GitHub API base URL; a GitHub Enterprise Server deployment sets `https://<host>/api/v3` |
 
 ---
 

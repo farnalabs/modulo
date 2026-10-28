@@ -12,6 +12,30 @@ name: "Deploy staleness check (prod vs main)"
 # from main's commit date produces an age that never exceeds the grace window
 # (FAR-910: the original condition was unreachable in practice).
 #
+# FAR-2116 (the detection gap this adds): the check above was CORRECT and it
+# DID fire throughout the 2026-10-23..25 outage (prod 46h stale, ::error::
+# every run) -- but its only escalation was a Linear ticket, and FAR-1407's
+# "dedupe on the condition" append sent every one of those escalations as a
+# comment on a single ticket opened on 2026-10-02 (FAR-1404) that had sat in
+# Backlog for three weeks. A red run in the Actions tab plus a comment on a
+# month-old backlog ticket reached nobody. Two things change here:
+#
+#   1. A human channel: on a health TRANSITION (healthy -> unhealthy, and
+#      unhealthy -> healthy) the operator is emailed through the same Zoho
+#      SMTP secrets issue-notify.yml already uses. The email names the deploy
+#      workflow, the consecutive-failure count, prod's build age and the main
+#      HEAD it is behind -- actionable without opening anything.
+#   2. A second condition: N consecutive FAILED deploy runs (default 2), not
+#      only "prod is stale". During the outage production lagged by hours, so
+#      the existing condition covered it -- but a deploy can fail repeatedly
+#      while prod is still inside the grace window, and that must alert too.
+#
+# The transition (not every-tick) email is derived from THIS workflow's own
+# run history: the previous completed run's health step conclusion is the
+# durable state vector, so no new state store is introduced. An unreadable or
+# missing previous verdict is treated as UNKNOWN and emails the current state
+# (fail loud, never silently suppress the first alert after this change).
+#
 # Division of labour: deploy-watchdog.yml (*/30) is the fly-level SELF-HEAL --
 # it compares the fly image tag vs main HEAD and re-dispatches deploy.yml to
 # heal WITHIN this check's grace window. If this check's ::error:: fires,
@@ -24,8 +48,7 @@ name: "Deploy staleness check (prod vs main)"
 # persistent blindness is covered by the product's own in-app alerting (the
 # readiness-degradation email plus the worker-liveness watchdog; FAR-1571 for
 # the advisory class) and the deploy-watchdog's own escalation (3 consecutive
-# failures). The external uptime-monitor workflow (FAR-400) that also probed
-# prod has been removed in favour of dogfooding that in-app alerting.
+# failures).
 # FAR-1407: the escalation dedupes on the CONDITION (title marker + open
 # state), not on the run -- an existing open starvation ticket gets the
 # latest figures appended as a comment instead of a fresh duplicate ticket
@@ -33,20 +56,39 @@ name: "Deploy staleness check (prod vs main)"
 
 on:
   schedule:
-    - cron: "0 */2 * * *"
+    # FAR-2116: tightened from "0 */2" so a 2-consecutive-failure condition is
+    # surfaced within ~30 minutes of the second failure completing instead of
+    # up to two hours later. The workflow is one 30s job (a couple of API
+    # reads), and */30 is the cadence the sibling deploy-watchdog.yml already
+    # runs at. The staleness half is unaffected by the extra ticks (6h grace).
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
   issues: write
+  # Read the deploy workflow's run/job history (consecutive-failure count and
+  # the previous health verdict).
+  actions: read
 
 jobs:
   check-prod-staleness:
-    name: Prod build SHA vs origin/main HEAD
+    name: Deploy health (staleness + consecutive failures)
     runs-on: ubicloud-standard-2
     steps:
-      - name: Compare prod build SHA against origin/main HEAD
-        id: staleness
+      # The evaluator lives in .github/scripts/deploy_health.py so every
+      # threshold and transition below is proved by a unit test
+      # (backend/tests/unit/scripts/test_deploy_health.py) rather than by
+      # hoping a cron tick behaves.
+      - name: Checkout the deploy-health evaluator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Evaluate deploy health (staleness + consecutive failures)
+        id: health
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -58,106 +100,219 @@ jobs:
           # E2E (~2h) + retry headroom. Default 6h; overridable via the
           # STALENESS_GRACE_HOURS repo variable.
           GRACE_HOURS: ${{ vars.STALENESS_GRACE_HOURS || 6 }}
+          # FAR-2116: consecutive FAILED deploy runs before the deploy itself is
+          # declared unhealthy. 2 is the ticket's suggestion: a single red
+          # deploy is normal (transient npm timeout, a flake in pre-deploy CI),
+          # two in a row is not.
+          FAILURE_THRESHOLD: ${{ vars.DEPLOY_FAILURE_ALERT_THRESHOLD || 2 }}
         run: |
-          # ---- 1. main HEAD (for comparison + diagnostics) ----
-          MAIN_JSON="$(gh api "repos/$REPOSITORY/commits/$REF_NAME" --jq '{sha: .sha, date: .commit.committer.date}' 2>/dev/null || true)"
-          if [ -z "$MAIN_JSON" ]; then
-            echo "::warning::Deploy staleness check could not read origin/$REF_NAME HEAD (gh api error) - cannot determine staleness this cycle. Transient failures are warned, not failed; repeated warnings on consecutive runs still deserve investigation."
-            exit 0
-          fi
-          MAIN_SHA="$(echo "$MAIN_JSON" | jq -r .sha)"
-          MAIN_DATE="$(echo "$MAIN_JSON" | jq -r .date)"
+          set -o pipefail
 
-          # ---- 2. Prod metadata: SHA + build timestamp ----
-          PROD_JSON="$(curl -fsS -m 15 "https://app.modulo.run/api/v1/deployment" 2>/dev/null || true)"
-          PROD_SHA="$(echo "$PROD_JSON" | jq -r '.git_sha // empty' 2>/dev/null || true)"
-          if [ -z "$PROD_SHA" ]; then
-            echo "::warning::Deploy staleness check could not read the production build SHA from https://app.modula.run/api/v1/deployment (unreachable, or the build metadata env vars are missing) - cannot determine staleness this cycle."
-            exit 0
-          fi
-          PROD_BUILD_TS="$(echo "$PROD_JSON" | jq -r '.build_timestamp // empty' 2>/dev/null || true)"
+          # Each unreadable source is REMOVED rather than written empty: an
+          # absent file is the UNKNOWN signal the evaluator expects, so a
+          # transient API failure can never be read as "no failures".
+          WORK="/tmp/deploy-health"
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
 
-          MAIN_SHORT="${MAIN_SHA:0:7}"
-          PROD_SHORT="${PROD_SHA:0:7}"
-          echo "origin/$REF_NAME HEAD: $MAIN_SHORT ($MAIN_DATE)"
-          echo "app.modulo.run build SHA: $PROD_SHORT (${PROD_BUILD_TS:-unknown})"
-
-          # ---- 3. Fast path: prod is current ----
-          if [ "$MAIN_SHORT" = "$PROD_SHORT" ]; then
-            echo "::notice::Production is current with origin/$REF_NAME ($PROD_SHORT)."
-            exit 0
-          fi
-
-          # ---- 4. Compute staleness from production's build timestamp ----
-          # The age measures "how long has production been serving a commit
-          # that is NOT main HEAD?" -- computed from prod's BUILD_TIMESTAMP,
-          # not from main HEAD's commit date. On an active repo main HEAD is
-          # always fresh, so the old metric (NOW - MAIN_DATE) never exceeded
-          # the grace window (FAR-910 root cause).
-          if [ -n "$PROD_BUILD_TS" ]; then
-            PROD_BUILD_SEC=$(date -u -d "$PROD_BUILD_TS" +%s 2>/dev/null || echo "0")
+          if gh api "repos/$REPOSITORY/commits/$REF_NAME" \
+              --jq '{sha: .sha, date: .commit.committer.date}' > "$WORK/main.json" 2>/dev/null; then
+            echo "Read origin/$REF_NAME HEAD."
           else
-            PROD_BUILD_SEC=0
+            rm -f "$WORK/main.json"
+            echo "::warning::Deploy health check could not read origin/$REF_NAME HEAD (gh api error) - the staleness half is UNKNOWN this cycle."
           fi
-          NOW_TS=$(date -u +%s)
 
-          if [ "$PROD_BUILD_SEC" -gt 0 ]; then
-            AGE_H=$(( (NOW_TS - PROD_BUILD_SEC) / 3600 ))
+          if curl -fsS -m 15 "https://app.modulo.run/api/v1/deployment" > "$WORK/prod.json" 2>/dev/null; then
+            echo "Read the production deployment metadata."
           else
-            # build_timestamp unavailable or unparseable -- fail loud rather
-            # than silently skip: prod is behind main and we cannot determine
-            # how far behind.
-            AGE_H=-1
+            rm -f "$WORK/prod.json"
+            echo "::warning::Deploy health check could not read the production build metadata from https://app.modulo.run/api/v1/deployment (unreachable, or the build metadata env vars are missing) - the staleness half is UNKNOWN this cycle."
           fi
 
-          # Diagnostic outputs (also used by the Linear ticket step)
+          if gh run list --repo "$REPOSITORY" --workflow deploy.yml --branch main --limit 15 \
+              --json databaseId,status,conclusion,headSha,displayTitle,createdAt,url \
+              > "$WORK/runs.json" 2>/dev/null; then
+            echo "Read the deploy workflow's run history."
+          else
+            rm -f "$WORK/runs.json"
+            echo "::warning::Deploy health check could not list deploy.yml runs (gh API error) - the consecutive-failure half is UNKNOWN this cycle."
+          fi
+
+          # FAR-2152: a throttled run concludes SUCCESS but skipped
+          # "Deploy to app.modulo.run" - it deployed nothing. Enrich the run
+          # records with the deploy JOB's conclusion so the consecutive-failure
+          # walk classifies an ATTEMPT by the artefact, not by the run's colour.
+          # Fails open: without the field the evaluator falls back to run
+          # conclusions (the pre-FAR-2152 behaviour).
+          RUNS_INPUT="$WORK/runs.json"
+          if [ -f "$WORK/runs.json" ]; then
+            if python3 .github/scripts/deploy_run_attempts.py enrich \
+                --runs-json "$WORK/runs.json" --out "$WORK/runs-enriched.json" --repo "$REPOSITORY"; then
+              RUNS_INPUT="$WORK/runs-enriched.json"
+            else
+              echo "::warning::Deploy health check could not enrich the deploy run history with deploy-job conclusions - falling back to run conclusions this cycle (a throttled no-op may read as a success)."
+            fi
+          fi
+
+          # Fetch job conclusions for failed runs to classify failure stages.
+          # Keyed by run databaseId (not head SHA) so reruns of the same commit
+          # stay distinct. Best effort: a per-run fetch failure is logged and
+          # skipped, never fatal to the health step.
+          if [ -f "$WORK/runs.json" ]; then
+          python3 - "$WORK/runs.json" "$WORK/jobs.json" "$REPOSITORY" <<'PYEOF'
+          import json
+          import subprocess
+          import sys
+
+          runs_path, jobs_path, repository = sys.argv[1], sys.argv[2], sys.argv[3]
+
+          with open(runs_path, encoding="utf-8") as handle:
+              runs = json.load(handle)
+
+          jobs_data = {}
+          fetch_failures = 0
+
+          def parse_paginated_jobs(raw):
+              """Flatten ``gh api --paginate`` output (one JSON value per page)."""
+              decoder = json.JSONDecoder()
+              values = []
+              text = raw.strip()
+              index = 0
+              while index < len(text):
+                  while index < len(text) and text[index].isspace():
+                      index += 1
+                  if index >= len(text):
+                      break
+                  value, index = decoder.raw_decode(text, index)
+                  if isinstance(value, list):
+                      values.extend(value)
+                  else:
+                      values.append(value)
+              if not values:
+                  raise json.JSONDecodeError("empty jobs payload", text, 0)
+              return values
+
+          for run in runs:
+              if str(run.get("status") or "").lower() != "completed":
+                  continue
+              if str(run.get("conclusion") or "").lower() != "failure":
+                  continue
+              run_id = run.get("databaseId")
+              if not run_id:
+                  continue
+              try:
+                  result = subprocess.run(
+                      ["gh", "api", "--paginate",
+                       f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100",
+                       "--jq", "[.jobs[] | {name: .name, conclusion: .conclusion}]"],
+                      capture_output=True, text=True, timeout=30, check=False,
+                  )
+              except Exception as exc:  # noqa: BLE001 - best effort by design
+                  fetch_failures += 1
+                  print(f"::warning::could not fetch jobs for run {run_id}: {exc}")
+                  continue
+              if result.returncode != 0 or not result.stdout.strip():
+                  fetch_failures += 1
+                  print(f"::warning::could not read jobs for run {run_id} (exit {result.returncode})")
+                  continue
+              try:
+                  jobs = parse_paginated_jobs(result.stdout)
+              except json.JSONDecodeError as exc:
+                  fetch_failures += 1
+                  print(f"::warning::unparseable jobs JSON for run {run_id}: {exc}")
+                  continue
+              job_conclusions = {
+                  job["name"]: job["conclusion"]
+                  for job in jobs
+                  if job.get("name") and job.get("conclusion")
+              }
+              if job_conclusions:
+                  jobs_data[str(run_id)] = job_conclusions
+
+          with open(jobs_path, "w", encoding="utf-8") as handle:
+              json.dump(jobs_data, handle)
+          print(f"Fetched job conclusions for {len(jobs_data)} failed run(s); {fetch_failures} fetch failure(s).")
+          PYEOF
+          else
+            echo "{}" > "$WORK/jobs.json"
+          fi
+
+          python3 .github/scripts/deploy_health.py evaluate \
+            --main-json "$WORK/main.json" \
+            --prod-json "$WORK/prod.json" \
+            --runs-json "$RUNS_INPUT" \
+            --jobs-json "$WORK/jobs.json" \
+            --grace-hours "$GRACE_HOURS" \
+            --failure-threshold "$FAILURE_THRESHOLD" \
+            --github-output "$GITHUB_OUTPUT" \
+            --verdict-out "$WORK/verdict.json"
           {
-            echo "head_age_hours=${AGE_H}"
-            echo "main_sha=${MAIN_SHORT}"
-            echo "prod_sha=${PROD_SHORT}"
+            echo "verdict_json=$WORK/verdict.json"
+            echo "work_dir=$WORK"
           } >> "$GITHUB_OUTPUT"
-          echo "grace_hours=${GRACE_HOURS}"
-          echo "prod_build_ts=${PROD_BUILD_TS:-unknown}"
 
-          if [ "$AGE_H" -lt 0 ]; then
-            echo "::error::PRODUCTION DEPLOY STARVATION: app.modulo.run is running $PROD_SHORT (behind main $MAIN_SHORT) but the build timestamp is missing or unparseable from /api/v1/deployment - cannot confirm staleness age. Treat as starvation: investigate the deploy pipeline."
-            echo "stale=true" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          if [ "$AGE_H" -ge "$GRACE_HOURS" ]; then
-            echo "stale=true" >> "$GITHUB_OUTPUT"
-            echo "::error::PRODUCTION DEPLOY STARVATION: app.modulo.run is running $PROD_SHORT, built ${AGE_H}h ago (>= ${GRACE_HOURS}h grace), but origin/$REF_NAME HEAD is $MAIN_SHORT. The deploy pipeline has not released main's HEAD - check the 'Deploy: Staging + Prod' workflow runs and the throttle step. If no deploy is in flight, use workflow_dispatch with force_deploy=true."
-            exit 1
-          fi
-
-          echo "::notice::Production ($PROD_SHORT, built ${AGE_H}h ago) is behind origin/$REF_NAME HEAD ($MAIN_SHORT) but within the ${GRACE_HOURS}h grace window - the deploy pipeline may still be in flight (throttle batches up to DEPLOY_INTERVAL_HOURS)."
+      # FAR-2139: the transition decision, the message and the SMTP send are ONE
+      # shared step with deploy-watchdog.yml (.github/scripts/deploy-health-notify.sh),
+      # rendered by .github/scripts/deploy_health.py. Two copies of an escalation
+      # channel are exactly what drifted out of reach in the 2026-10-23..25 outage.
+      - name: Email the operator on a deploy-health transition
+        id: notify
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_HEALTHY: ${{ steps.health.outputs.healthy }}
+          VERDICT_JSON: ${{ steps.health.outputs.verdict_json }}
+          WORKFLOW_NAME: "Deploy staleness check (prod vs main)"
+          VERDICT_STEP_NAME: "Fail the run when deploy health is unhealthy"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEPLOY_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/deploy.yml
+          # --- Zoho SMTP (the existing email path issue-notify.yml uses) ---
+          ZOHO_SMTP_USER: ${{ secrets.ZOHO_SMTP_USER }}
+          ZOHO_SMTP_PASS: ${{ secrets.ZOHO_SMTP_PASS }}
+          ISSUE_NOTIFY_EMAIL: ${{ secrets.ISSUE_NOTIFY_EMAIL }}
+          ISSUE_NOTIFY_FROM: ${{ secrets.ISSUE_NOTIFY_FROM }}
+        run: bash .github/scripts/deploy-health-notify.sh
 
       - name: Create Linear ticket on starvation
-        if: failure()
+        if: always() && steps.health.outputs.stale == 'true'
         shell: bash
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          VERDICT_JSON: ${{ steps.health.outputs.verdict_json }}
         run: |
           if [ -z "$LINEAR_API_KEY" ]; then
             echo "LINEAR_API_KEY not set - skipping ticket (workflow failure still alerts via GitHub)."
             exit 0
           fi
-          HEAD_AGE="${{ steps.staleness.outputs.head_age_hours }}"
-          MAIN_SHA="${{ steps.staleness.outputs.main_sha }}"
-          PROD_SHA="${{ steps.staleness.outputs.prod_sha }}"
-          GRACE="${{ steps.staleness.outputs.grace_hours }}"
+          HEAD_AGE="${{ steps.health.outputs.age_hours }}"
+          MAIN_SHA="${{ steps.health.outputs.main_sha }}"
+          PROD_SHA="${{ steps.health.outputs.prod_sha }}"
+          GRACE="${{ steps.health.outputs.grace_hours }}"
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          # Read failure stages from verdict JSON. join("\n") emits REAL
+          # newlines so the create path (echo -e) and the append path
+          # (printf %s) render identical line breaks instead of a run-on
+          # literal backslash-n in the appended comment.
+          FAILURE_STAGES=$(jq -r '.failure_stages // [] | map("\(.sha): \(.stage)") | join("\n")' "$VERDICT_JSON" 2>/dev/null || echo "")
+          FAILURE_STAGES_SECTION=""
+          if [ -n "$FAILURE_STAGES" ]; then
+            # printf -v keeps the trailing newline (command substitution strips it).
+            printf -v FAILURE_STAGES_SECTION 'Failure stages:\n%s\n' "$FAILURE_STAGES"
+          fi
 
           TITLE="DEPLOY STARVATION: prod stale ${HEAD_AGE}h (FAR-910)"
           # FAR-1407: dedupe KEY is the condition marker (title prefix), not
           # the run-specific figures in TITLE. One continuous starvation = one
           # open ticket + appended comments, not one ticket per cron run.
           MARKER="DEPLOY STARVATION"
-          DESC="Production deploy starvation detected at ${TS}.\nProd SHA: ${PROD_SHA:-unknown}\nMain HEAD: ${MAIN_SHA:-unknown}\nHours stale: ${HEAD_AGE:-unknown}h\nGrace window: ${GRACE:-6}h\nThe deploy pipeline has not released main's HEAD within the grace window.\nIf no deploy is in flight, force one: gh workflow run 'Deploy: Staging + Prod' --ref main -f force_deploy=true\nThis is FAR-910 -- deploy staleness + watchdog checks must escalate, not annotate green runs."
+          DESC="Production deploy starvation detected at ${TS}.\nProd SHA: ${PROD_SHA:-unknown}\nMain HEAD: ${MAIN_SHA:-unknown}\nHours stale: ${HEAD_AGE:-unknown}h\nGrace window: ${GRACE:-6}h\n${FAILURE_STAGES_SECTION}The deploy pipeline has not released main's HEAD within the grace window.\nIf no deploy is in flight, force one: gh workflow run 'Deploy: Staging + Prod' --ref main -f force_deploy=true\nThe operator was also emailed on the health transition (FAR-2116), so this ticket is the durable queue record rather than the only signal."
           # Latest figures: appended to an existing open ticket instead of
           # creating a duplicate (FAR-1407).
-          UPDATE=$(printf 'Escalation still active at %s.\nProd SHA: %s\nMain HEAD: %s\nHours stale: %sh\nGrace window: %sh\nAppended by the deploy staleness check instead of opening a duplicate ticket (FAR-1407: dedupe on the condition, not the run).' "$TS" "${PROD_SHA:-unknown}" "${MAIN_SHA:-unknown}" "${HEAD_AGE:-unknown}" "${GRACE:-6}")
+          UPDATE=$(printf 'Escalation still active at %s.\nProd SHA: %s\nMain HEAD: %s\nHours stale: %sh\nGrace window: %sh\n%sAppended by the deploy staleness check instead of opening a duplicate ticket (FAR-1407: dedupe on the condition, not the run).' "$TS" "${PROD_SHA:-unknown}" "${MAIN_SHA:-unknown}" "${HEAD_AGE:-unknown}" "${GRACE:-6}" "${FAILURE_STAGES_SECTION}")
 
           # ---- FAR-1407: dedupe on the CONDITION, not the run ----
           # Search Linear for an existing OPEN ticket for this condition
@@ -247,3 +402,47 @@ jobs:
           else
             echo "::warning::Failed to create Linear ticket: $RESULT"
           fi
+
+      - name: Fail the run when deploy health is unhealthy
+        if: always() && steps.health.outputs.healthy == 'false'
+        shell: bash
+        env:
+          CONSECUTIVE: ${{ steps.health.outputs.consecutive_failures }}
+          FAILURE_THRESHOLD: ${{ steps.health.outputs.failure_threshold }}
+          AGE_HOURS: ${{ steps.health.outputs.age_hours }}
+          GRACE_HOURS: ${{ steps.health.outputs.grace_hours }}
+          PROD_SHA: ${{ steps.health.outputs.prod_sha }}
+          MAIN_SHA: ${{ steps.health.outputs.main_sha }}
+        run: |
+          # The red run IS the durable state vector the transition email reads
+          # (the next tick inspects this step's conclusion), and it keeps the
+          # long-standing Actions-tab signal. It runs LAST so every notify /
+          # ticket step above still executes.
+          echo "::error::Deploy health UNHEALTHY: ${CONSECUTIVE} consecutive failed deploy run(s) (threshold ${FAILURE_THRESHOLD}), production ${PROD_SHA} at ${AGE_HOURS:-unknown}h (grace ${GRACE_HOURS}h) behind origin/main ${MAIN_SHA}."
+          exit 1
+
+      # FAR-2157: a tick that measured NOTHING must not read back as healthy.
+      # When every source was unreadable the evaluator returns healthy=None,
+      # the verdict step above is skipped, and the run concludes SUCCESS - in
+      # run history that is indistinguishable from a healthy tick, so the
+      # NEXT tick's transition email treats it as a healthy verdict and can
+      # silently swallow the recovery email (an alert that is never closed).
+      # This step runs ONLY on the unmeasured path; its presence is the
+      # durable machine-readable signal `deploy_health.parse_previous_verdict`
+      # reads (the jobs API exposes step names and conclusions, not outputs).
+      # It still concludes success: an unmeasurable tick is not a deploy
+      # failure, and the ::warning::s above name what could not be read.
+      - name: Record the unmeasured tick (FAR-2157)
+        if: always() && steps.health.outputs.healthy == ''
+        shell: bash
+        run: |
+          echo "::warning::NO MEASUREMENT — deploy health could not be evaluated this tick, so this green run is NOT a healthy verdict (FAR-2157). The next tick treats it as UNKNOWN."
+          {
+            echo "## NOT MEASURED — deploy health UNKNOWN (FAR-2157)"
+            echo ""
+            echo "Every source this tick needed was unreadable, so neither the staleness nor"
+            echo "the consecutive-failure half was evaluated. This run concludes success because"
+            echo "an unmeasurable tick is not a deploy failure - it is NOT evidence that"
+            echo "production is healthy. No transition email is inferred from it."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
