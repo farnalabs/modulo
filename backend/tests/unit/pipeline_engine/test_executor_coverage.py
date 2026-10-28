@@ -52,6 +52,7 @@ from modulo.core.pipeline_engine.executor import (
     _interrupt_subject_parent,
     _map_lg_event,
     _node_output_agent_failure,
+    _node_output_connector_error_code,
     _node_output_connector_failure,
     _node_output_has_idempotency_gate,
     _node_output_sandbox_session_lost,
@@ -2455,3 +2456,65 @@ def test_retry_after_policy_legacy_eval_blocked():
     """Legacy 'eval_blocked' maps to 'eval.blocked' which matches eval_failed event."""
     result = _retry_after_policy({"max_retries": 2, "on": ["eval_failed"]}, "failed", "eval_blocked")
     assert result == 2
+
+
+def test_connector_failure_helpers_cover_unmarked_artifact_validation_branches():
+    """Unmarked artifacts require a matching runner node id and usable reason."""
+    output = {
+        "artifacts": [
+            "not an artifact",
+            {"status": "completed", "node_id": "node-conn"},
+            {"status": "failed", "node_id": "other-node", "error": "wrong node"},
+            {"status": "failed", "node_id": "node-conn", "error": ""},
+        ]
+    }
+
+    assert _node_output_connector_failure(output, "connector", expected_node_id="node-conn") == (
+        "Connector reported failure"
+    )
+    assert _node_output_connector_failure(output, "connector", expected_node_id="missing") is None
+    assert (
+        _node_output_connector_failure(
+            {"artifacts": [{"status": "failed", "node_id": "node-conn", "error": 123}]},
+            "connector",
+        )
+        == "Connector reported failure"
+    )
+    assert (
+        _node_output_connector_failure(
+            {"artifacts": [{"status": "failed", "node_id": "node-conn", "error": "real"}]},
+            "connector",
+        )
+        == "real"
+    )
+
+
+def test_connector_failure_helpers_cover_error_code_fallbacks():
+    """Connector error-code lookup handles malformed and artifact-only envelopes."""
+    assert _node_output_connector_error_code("not a dict") == "connector.failed"
+    assert _node_output_connector_error_code({"error_code": "connector.failed"}) == "connector.failed"
+    assert (
+        _node_output_connector_error_code({"artifacts": [{"status": "completed", "error_code": "ignored"}]})
+        == "connector.failed"
+    )
+    assert (
+        _node_output_connector_error_code(
+            {"artifacts": [{"status": "failed", "error_code": "connector.side_effect_unknown"}]}
+        )
+        == "connector.side_effect_unknown"
+    )
+    assert _node_output_connector_error_code({"artifacts": "not a list"}) == "connector.failed"
+
+
+def test_stream_terminal_connector_failure_uses_default_code():
+    """A connector marker without a code still terminalizes with connector.failed."""
+    result = _stream_terminal_reason(
+        _StreamState(connector_failure_reason="connector failed"),
+        MagicMock(),
+        uuid.uuid4(),
+    )
+
+    assert result is not None
+    assert result[0] == "failed"
+    assert result[1] == "connector.failed"
+    assert result[2] == "connector failed"
