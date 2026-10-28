@@ -462,9 +462,24 @@ PY
             fi
             sleep 1
         done
-        # Stop the restart wrappers and the health server. The wrappers normally
-        # exit on their own once the drain flag is set; this is the bounded
-        # backstop. Fly's kill_timeout then bounds anything still alive.
+        # Give the restart wrappers a brief bounded grace to observe the drain
+        # flag and exit on their own. They log their drain decision (and their
+        # worker's exit code) before returning; TERMing them in the same breath
+        # as observing the workers gone races that exit and can kill them
+        # before they report — the flake seen in
+        # test_entrypoint_forwards_sigterm_and_completes_a_bounded_drain, where
+        # the log went straight from WORKER_DRAIN: complete to exit with no
+        # wrapper evidence at all under parallel CI load.
+        local wrapper_deadline=$(( $(date +%s) + 2 ))
+        while _pid_alive "$SAQ_RUNS_WRAPPER_PID" || _pid_alive "$SAQ_SYSTEM_WRAPPER_PID"; do
+            if [[ $(date +%s) -ge $wrapper_deadline ]]; then
+                break
+            fi
+            sleep 0.1
+        done
+        # Stop anything still alive — the wrappers normally exited above, so
+        # this is the bounded backstop. Fly's kill_timeout then bounds
+        # anything still alive.
         for pid in "$SAQ_RUNS_WRAPPER_PID" "$SAQ_SYSTEM_WRAPPER_PID" "$WORKER_HEALTH_PID"; do
             if _pid_alive "$pid"; then
                 kill -TERM "$pid" 2>/dev/null || true

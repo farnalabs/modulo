@@ -1264,6 +1264,22 @@ describe('AnalyticsView', () => {
     wrapper.unmount()
   })
 
+  it('changes the measure from the filter bar and clears a pending debounce on unmount', async () => {
+    setupMocks(validResponse)
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    await wrapper.find('[data-testid="analytics-measure-cost"]').trigger('click')
+    await nextTick()
+    const store = useAnalyticsStore()
+    expect(store.measure).toBe('cost')
+
+    vi.useFakeTimers()
+    await wrapper.find('[data-testid="analytics-filter-error-code"]').setValue('executor_stalled')
+    wrapper.unmount()
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+  })
+
   it('renders the capacity overlay toggle button', async () => {
     setupMocks(validResponse)
     const wrapper = mount(AnalyticsView)

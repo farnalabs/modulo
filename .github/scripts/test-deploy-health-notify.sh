@@ -217,7 +217,7 @@ echo ""
 echo "Case 6: UNKNOWN current (no transition inferred, loud warning, no email)"
 OUT="$(run_notify "" unhealthy "$WORK/unhealthy.json" 2>&1)"
 assert_contains "warning emitted" "$WARNING_MARKER" "$OUT"
-assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+assert_not_contains "$NO_EMAIL_LABEL" "${SUBJECT_FIELD}" "$OUT"
 echo ""
 
 echo "Case 6b: a PARTIAL read takes the UNKNOWN path - no recovery, alert stays open"
@@ -225,7 +225,7 @@ OUT="$(run_notify "" unhealthy "$WORK/partial.json" 2>&1)"
 assert_contains "warning emitted" "$WARNING_MARKER" "$OUT"
 assert_contains "warning says the alert stays open" "live alert therefore stays open" "$OUT"
 assert_not_contains "no recovery email" "$RECOVERY_SUBJECT" "$OUT"
-assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+assert_not_contains "$NO_EMAIL_LABEL" "${SUBJECT_FIELD}" "$OUT"
 echo ""
 
 echo "Case 7: watchdog's own condition (shared renderer, caller-measured detail)"
@@ -530,7 +530,7 @@ echo "Case 11: an unmeasured tick between two unhealthy ticks does not re-send t
 OUT="$(run_notify_lookup false "$WORK/unhealthy.json" 2>&1)"
 assert_contains "$WALK_FIND_LABEL" "$PREVIOUS_STALENESS_LOG" "$OUT"
 assert_contains "$DUPLICATE_ALERT_LABEL" "$NO_TRANSITION_LOG" "$OUT"
-assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+assert_not_contains "$NO_EMAIL_LABEL" "${SUBJECT_FIELD}" "$OUT"
 echo ""
 
 # FAR-2176: the previous run is a MEASURED healthy tick that still carries the
@@ -575,7 +575,7 @@ echo "Case 15: a repeated watchdog escalation is suppressed, not re-alerted ever
 OUT="$(run_notify_lookup false "$WORK/unhealthy.json" "$WORK/runs-watchdog-unhealthy.json" watchdog 2>&1)"
 assert_contains "$WALK_READ_LABEL" "$PREVIOUS_WATCHDOG_LOG" "$OUT"
 assert_contains "$DUPLICATE_ALERT_LABEL" "$NO_TRANSITION_LOG" "$OUT"
-assert_not_contains "no email rendered" "${SUBJECT_FIELD}" "$OUT"
+assert_not_contains "$NO_EMAIL_LABEL" "${SUBJECT_FIELD}" "$OUT"
 echo ""
 
 echo "Case 16: a watchdog unmeasured tick is walked past under the forwarded name"

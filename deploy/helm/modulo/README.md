@@ -115,10 +115,18 @@ backend:
   image:
     repository: ghcr.io/farnalabs/modulo/backend
     digest: sha256:abc123...  # Preferred: immutable reference
-    tag: "latest"             # Fallback: mutable tag
+    tag: ""                   # Empty: defaults to the chart's appVersion
 ```
 
-**Trade-off:** Digest pinning ensures exact image reproducibility but requires manual updates when new images are published. Tag-based references are simpler but may pull different images over time.
+**Trade-off:** Digest pinning ensures exact image reproducibility but requires
+manual updates when new images are published. Tag-based references are simpler
+but may pull different images over time.
+
+An empty `tag` resolves to the chart's `appVersion` — the released image tag
+that `release-unified.yml` publishes — so the chart version and image version
+move together. Set an explicit tag only to pin a different build. The chart
+never defaults to the mutable `latest` tag; pass `tag: "latest"` explicitly if
+you really want the newest main build.
 
 When both are set the digest wins, and the chart renders a single image
 reference (`repository@digest`) — a tag is only used when no digest is set.

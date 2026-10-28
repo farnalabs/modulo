@@ -53,8 +53,8 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
       `group_by=team&period=month` report: it renders the team-attributed ledger
       rows, refused/clamped annotations and a client-computed average per run, and
       discloses the response's `org_unassigned_components` (component spend from
-      runs with no team) — with an explicit unavailable state when that bucket is
-      absent or corrupt — so the bucket is not silently omitted from the card
+      runs with no team) – with an explicit unavailable state when that bucket is
+      absent or corrupt – so the bucket is not silently omitted from the card
       (`AdminCostBreakdownView.vue`,
       `frontend/src/__tests__/AdminCostBreakdownView.spec.ts`)
 - [x] `GET/PUT /limits/org` and `PUT /limits/teams/{id}` read and set daily spend

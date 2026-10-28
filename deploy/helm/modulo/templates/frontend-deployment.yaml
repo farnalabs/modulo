@@ -42,7 +42,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: {{ include "modulo.image" (dict "image" .Values.frontend.image) | quote }}
+          image: {{ include "modulo.image" (dict "image" .Values.frontend.image "appVersion" .Chart.AppVersion) | quote }}
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           # Skip the nginx docker-entrypoint.sh which writes into /etc/nginx/conf.d/
           # (incompatible with readOnlyRootFilesystem). Our ConfigMap provides the

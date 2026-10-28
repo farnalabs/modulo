@@ -141,9 +141,10 @@ let journeysResponse: { items: unknown[]; next_cursor?: string | null }
 
 // FAR-654: seed the plan store directly so the view never fires a plan fetch
 // against the generic fetch stub. Flags default to OFF (absent = disabled).
-function seedPlan(flags: Record<string, boolean> = {}) {
+function seedPlan(flags: Record<string, boolean> = {}, devMode = false) {
   const planStore = usePlanStore()
   planStore.features = flags
+  planStore.devMode = devMode
   planStore.loaded = true
 }
 
@@ -345,6 +346,19 @@ describe('LifecycleMapView responsive layout (FAR-640)', () => {
 })
 
 describe('LifecycleMapView journey flag gating (FAR-654)', () => {
+  it('dev mode enables the internal journey path without a customer flag', async () => {
+    seedPlan({}, true)
+    journeysResponse = { items: [journeyItem] }
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
+    await flushPromises()
+
+    expect(journeysEndpointCalled()).toBe(true)
+    expect(wrapper.find('[aria-label="Unattributed journeys"]').exists()).toBe(true)
+  })
+
   it('flag off (default): makes no journeys API call and renders no journey UI', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -382,7 +396,7 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
   })
 
   it('flag on + checkbox checked: fetches journeys and renders the unattributed section and pagination', async () => {
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     journeysResponse = { items: [journeyItem], next_cursor: 'cursor-2' }
 
     const wrapper = mountView()
@@ -402,7 +416,7 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
   })
 
   it('flag on + checkbox checked: renders the journey detail panel when a journey is selected', async () => {
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     const wrapper = mountView()
     await flushPromises()
     await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
@@ -418,7 +432,7 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
   // FAR-1141: a journey's run history is a claim-ready run surface, so a
   // dispatched run must not read like one Modulo executed itself.
   it('badges only dispatched journey run rows with the provenance badge', async () => {
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     const wrapper = mountView()
     await flushPromises()
     await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
@@ -474,7 +488,7 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
     await flushPromises()
     expect(journeysEndpointCalled()).toBe(false)
 
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     await flushPromises()
 
     // FAR-742: the flag alone no longer triggers a fetch — the checkbox is
@@ -490,7 +504,7 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
 
 describe('LifecycleMapView work-items toggle and filters (FAR-742)', () => {
   async function mountFlagOn() {
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     const wrapper = mountView()
     await flushPromises()
     return wrapper
@@ -604,7 +618,7 @@ describe('LifecycleMapView work-items toggle and filters (FAR-742)', () => {
 
 describe('LifecycleMapView journeys loading spinner (FAR-818)', () => {
   async function mountFlagOn() {
-    seedPlan({ lifecycle_map_journeys: true })
+    seedPlan({}, true)
     const wrapper = mountView()
     await flushPromises()
     return wrapper

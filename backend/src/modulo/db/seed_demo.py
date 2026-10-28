@@ -35,14 +35,15 @@ Creates (idempotently, NO Alembic migrations):
 * 6 agents with realistic prompts (every seeded agent node binds one),
 * a webhook trigger (GitHub PR events), a cron trigger (weekly release
   notes) and a "Ticket ready" webhook trigger on the governance pipeline,
-* a "Delivery lifecycle" lifecycle map (Ticket -> Implement -> Review ->
-  Deploy staging -> Deploy prod) linking the governance and PR review
-  pipelines,
+
 * RunDailyFact rows for analytics surface seeding.
+Lifecycle Maps remain supported by the product, but are intentionally not seeded
+into the public demo organisation.
+
 
 Convergence: every spec-owned field (pipeline graph, edges, snapshot graph,
 run display fields + node-level data, daily-fact cost/tokens/status, trigger
-config, lifecycle-map content) is converged on existing rows at every boot, so
+config) is converged on existing rows at every boot, so
 a deployment seeded by an older release (e.g. string node ids) is repaired on
 the next boot without manual DB surgery.
 
@@ -99,6 +100,8 @@ from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
+
+__all__ = ["_seed_demo_lifecycle_map", "seed_demo", "seed_demo_runtime"]
 
 DEMO_ORG_NAME = "Demo"
 
@@ -1107,8 +1110,8 @@ async def _seed_demo_pipeline_and_runs(
     Race-safe across multi-instance boots: each insert runs in a savepoint with
     IntegrityError recovery on its natural key.
 
-    Returns the pipeline/snapshot lookup so callers (trigger + lifecycle-map
-    seeding) can reuse it instead of re-querying.
+    Returns the pipeline/snapshot lookup so callers can reuse it instead of
+    re-querying.
     """
     agents = agent_ids or {}
     pipeline_lookup: dict[str, tuple[Pipeline, PipelineSnapshot]] = {}
@@ -1618,6 +1621,7 @@ async def _seed_ticket_ready_trigger(
 _DEMO_LIFECYCLE_MAP_NAME = "Delivery lifecycle"
 
 
+# Retained for internal fixture callers; the public demo seed does not invoke it.
 def _lifecycle_map_content(
     pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
 ) -> dict[str, Any]:
@@ -1740,7 +1744,7 @@ async def _derive_lifecycle_map_stages(session: AsyncSession, lifecycle_map: Lif
     await session.flush()
 
 
-async def _seed_demo_lifecycle_map(
+async def _seed_demo_lifecycle_map(  # vulture: ignore - retained internal dogfood helper
     session: AsyncSession,
     org: Organisation,
     account: Account,
@@ -2242,10 +2246,9 @@ async def seed_demo(session: AsyncSession) -> str | None:
     await _seed_demo_schemas(session, org, account)
     agent_ids = await _seed_demo_agents(session, org, account)
     # Pipelines (graph + edges + snapshot) + runs (with node-level traces) +
-    # daily facts; returns the lookup for triggers and the lifecycle map.
+    # daily facts; returns the lookup used by the trigger seed.
     pipeline_lookup = await _seed_demo_pipeline_and_runs(session, org, account, agent_ids)
     await _seed_demo_triggers(session, org, account, pipeline_lookup)
-    await _seed_demo_lifecycle_map(session, org, account, pipeline_lookup)
 
     return f"org={DEMO_ORG_SLUG} user={email}"
 

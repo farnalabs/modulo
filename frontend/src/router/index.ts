@@ -127,10 +127,7 @@ const SettingsNotificationsView = () => import('../views/SettingsNotificationsVi
 const SettingsErrorForwardersView = () => import('../views/SettingsErrorForwardersView.vue')
 const SettingsMonitorConfigView = () => import('../views/SettingsMonitorConfigView.vue')
 const PipelineListView = () => import('../views/PipelineListView.vue')
-const LifecycleMapEditorView = () => import('../views/lifecycle-map/LifecycleMapEditorView.vue')
 const ModelBackendSetupView = () => import('../views/setup/ModelBackendSetupView.vue')
-const LifecycleMapList = () => import('../views/lifecycle-map/LifecycleMapList.vue')
-const LifecycleMapView = () => import('../views/lifecycle-map/LifecycleMapView.vue')
 const DevMetricsView = () => import('../views/DevMetricsView.vue')
 const AdminRunnersView = () => import('../views/AdminRunnersView.vue')
 const RunnersProfilesTab = () => import('../views/runners/RunnersProfilesTab.vue')
@@ -589,12 +586,6 @@ const router = createRouter({
       meta: { breadcrumb: 'Composite Editor', parent: 'library' },
     },
     {
-      path: '/lifecycle-maps/:id/editor',
-      name: 'lifecycle-map-editor',
-      component: LifecycleMapEditorView,
-      meta: { breadcrumb: 'Lifecycle Map Editor', parent: 'lifecycle-maps' },
-    },
-    {
       path: '/setup/model-backend/:id',
       name: 'ModelBackendSetup',
       component: ModelBackendSetupView,
@@ -603,17 +594,26 @@ const router = createRouter({
     {
       path: '/lifecycle-maps',
       name: 'lifecycle-maps',
-      component: LifecycleMapList,
+      component: () => import('../views/lifecycle-map/LifecycleMapList.vue'),
+      meta: { visibility: 'in_dev' },
     },
     {
       path: '/lifecycle-maps/:id',
       name: 'lifecycle-map-detail',
-      component: LifecycleMapView,
+      component: () => import('../views/lifecycle-map/LifecycleMapView.vue'),
+      meta: { visibility: 'in_dev' },
+    },
+    {
+      path: '/lifecycle-maps/:id/editor',
+      name: 'lifecycle-map-editor',
+      component: () => import('../views/lifecycle-map/LifecycleMapEditorView.vue'),
+      meta: { breadcrumb: 'Lifecycle Map Editor', parent: 'lifecycle-maps', visibility: 'in_dev' },
     },
     {
       path: '/lifecycle-maps/new',
       name: 'lifecycle-map-new',
       redirect: '/lifecycle-maps',
+      meta: { visibility: 'in_dev' },
     },
     {
       path: '/dev/metrics',
@@ -788,7 +788,9 @@ function metaCarriesGate(meta: RouteLocationTarget['meta'] | undefined): boolean
     meta?.requiresSystemAdmin ||
       meta?.requiredRoles?.length ||
       meta?.requiredTier ||
-      meta?.requiredPermissions?.length,
+      meta?.requiredPermissions?.length ||
+      meta?.visibility === 'private_preview' ||
+      meta?.visibility === 'in_dev',
   )
 }
 
@@ -806,6 +808,8 @@ export function entryCarriesGate(entry: ManifestEntry | undefined): boolean {
     entry.required_tier ||
       entry.required_roles?.length ||
       entry.required_permissions?.length ||
+      entry.visibility === 'private_preview' ||
+      entry.visibility === 'in_dev' ||
       entry.system_admin_only ||
       (groupId && manifestSidebarGroups[groupId]?.system_admin_only),
   )
@@ -987,7 +991,9 @@ async function enforceManifestGate(
     to.meta?.requiresSystemAdmin ||
     to.meta?.requiredRoles?.length ||
     to.meta?.requiredPermissions?.length ||
-    to.meta?.requiredTier
+    to.meta?.requiredTier ||
+    to.meta?.visibility === 'private_preview' ||
+    to.meta?.visibility === 'in_dev'
   ) {
     return enforceRoleTierVisibility(to, token)
   }

@@ -36,7 +36,6 @@ from modulo.api.routes.pipelines import PipelineGraphNode, PipelineGraphUpdate, 
 from modulo.auth.passwords import hash_password, verify_password
 from modulo.core.demo import DEMO_ORG_SLUG
 from modulo.core.graph_validator import GraphValidator
-from modulo.core.lifecycle_map.validation import normalize_content
 from modulo.db.crud import pipeline as pipeline_crud
 from modulo.db.crud.run_node_outputs import read_run_node_outputs_raw, replace_run_node_outputs
 from modulo.db.models.account import Account
@@ -1870,58 +1869,40 @@ async def test_second_seed_rewrites_no_run_trace(session: AsyncSession, monkeypa
     assert edge_writes.await_count == 0
 
 
-async def test_seed_creates_the_delivery_lifecycle_map(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A canonical lifecycle map links the governance + PR review pipelines, once."""
-    await _run_seed(session, monkeypatch, _demo_settings())
-    await _run_seed(session, monkeypatch, _demo_settings())
-
-    lifecycle_map = (await session.execute(select(LifecycleMap))).scalar_one()
-    assert lifecycle_map.name == "Delivery lifecycle"
-    assert lifecycle_map.visibility == "org"
-    assert normalize_content(lifecycle_map.content_json) == lifecycle_map.content_json
-    stage_names = [stage["name"] for stage in lifecycle_map.content_json["stages"]]
-    assert stage_names == ["Ticket", "Implement", "Review", "Deploy staging", "Deploy prod"]
-
-    governance = await _pipeline_by_name(session, "Demo Governance Pipeline")
-    review = await _pipeline_by_name(session, "PR Review & Triage")
-    stage_rows = list((await session.execute(select(LifecycleMapStage).order_by(LifecycleMapStage.position))).scalars())
-    assert [row.stage_name for row in stage_rows] == stage_names
-    linked = {row.stage_name: row.pipeline_id for row in stage_rows if row.pipeline_id is not None}
-    assert linked == {"Implement": governance.id, "Review": review.id}
-
-
-async def test_seed_converges_lifecycle_map_content(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A drifted or archived demo lifecycle map is restored to the spec."""
-    await _run_seed(session, monkeypatch, _demo_settings())
-    lifecycle_map = (await session.execute(select(LifecycleMap))).scalar_one()
-    lifecycle_map.content_json = {"stages": [], "edges": []}
-    lifecycle_map.archived_at = datetime.now(UTC)
-    await session.commit()
-
-    await _run_seed(session, monkeypatch, _demo_settings())
-
-    converged = (await session.execute(select(LifecycleMap))).scalar_one()
-    assert converged.archived_at is None
-    assert len(converged.content_json["stages"]) == 5
-    assert await _count(session, LifecycleMapStage) == 5
-
-
-async def test_lifecycle_map_failure_is_swallowed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+async def test_seed_does_not_create_a_public_demo_lifecycle_map(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A lifecycle-map write failure is logged, never fatal to the demo seed."""
-    exploding = _ExplodingFlush(session, LifecycleMap)
-    exploding.install()
-    try:
-        with caplog.at_level(logging.WARNING, logger="modulo.db.seed_demo"):
-            summary = await _run_seed(session, monkeypatch, _demo_settings())
-    finally:
-        exploding.uninstall()
+    """The public demo keeps lifecycle-map implementation support out of its seed data."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert await _count(session, LifecycleMap) == 0
+    assert await _count(session, LifecycleMapStage) == 0
+    assert await _count(session, Run) == 20
+
+
+async def test_seed_does_not_recreate_a_removed_demo_lifecycle_map(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repeated public-demo seeds do not recreate lifecycle-map rows."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    assert await _count(session, LifecycleMap) == 0
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    assert await _count(session, LifecycleMap) == 0
+    assert await _count(session, LifecycleMapStage) == 0
+
+
+async def test_lifecycle_map_seed_helper_is_not_called(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The public demo seed leaves internal lifecycle-map support untouched."""
+    lifecycle_seed = AsyncMock()
+    monkeypatch.setattr(seed_demo_module, "_seed_demo_lifecycle_map", lifecycle_seed)
+
+    summary = await _run_seed(session, monkeypatch, _demo_settings())
 
     assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
-    assert await _count(session, Run) == 20
-    assert await _count(session, LifecycleMap) == 0
-    assert any(r.getMessage().startswith("demo_seed.lifecycle_map_write_failed") for r in caplog.records)
+    assert lifecycle_seed.await_count == 0
 
 
 def test_split_int_zero_weights_returns_zeros() -> None:

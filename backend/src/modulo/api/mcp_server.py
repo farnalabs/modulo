@@ -162,6 +162,7 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # authenticated last, leaking cross-tenant data.
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import (
+    RETIRED_INTERNAL_FLAGS,
     get_registry,
     resolve_mcp_human_linked_hitl_authority,
     resolve_plan_context,
@@ -182,9 +183,11 @@ from modulo.core.library_service import (
     copy_to_adapt as library_copy_to_adapt,
 )
 from modulo.core.library_service import (
+    get_primitive,
     get_primitive_by_slug,
     list_primitives,
 )
+from modulo.core.library_service.primitive_types import PRIMITIVE_TYPES
 from modulo.core.logging_config import org_id_var
 from modulo.core.mcp.scope_validator import (
     MCPAuthorizationError,
@@ -552,6 +555,21 @@ def _ctx_user_id_val() -> uuid.UUID:
 def _ctx_role_val() -> str | None:
     """Get role from the request context (None if unset — scope checks then fail closed)."""
     return _ctx_role.get(None)
+
+
+def _mcp_internal_lifecycle_map_access() -> bool:
+    """Return whether the MCP caller has the retained internal lifecycle-map grant."""
+    if not getattr(get_settings(), "modulo_dev_mode", True):
+        return False
+    role = _ctx_role_val()
+    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
+        _ctx_key_grants.get(None), "library.search.in_dev"
+    )
+
+
+def _require_mcp_internal_lifecycle_map_access() -> None:
+    if not _mcp_internal_lifecycle_map_access():
+        raise MCPAuthorizationError("Lifecycle map tools are restricted to internal operators")
 
 
 def _ctx_team_id_val() -> uuid.UUID | None:
@@ -7268,6 +7286,9 @@ async def copy_library_primitive(
 
     async with _session(org_id) as s:
         try:
+            primitive = await get_primitive(s, org_id, pid)
+            if primitive is not None and primitive.primitive_type == "lifecycle_map":
+                _require_mcp_internal_lifecycle_map_access()
             result = await library_copy_to_adapt(s, org_id, pid, via_mcp=False)
         except LookupError:
             return {"error": "not_found", "primitive_id": primitive_id}
@@ -7308,13 +7329,22 @@ async def search_library(
         org_id = _ctx_org_id_val()
         try:
             _check_agent_tool_scope("search_library")
+            lifecycle_maps_allowed = _mcp_internal_lifecycle_map_access()
         except MCPAuthorizationError as exc:
             return {"error": "insufficient_scope", "detail": str(exc)}
+        if not lifecycle_maps_allowed and primitive_type == "lifecycle_map":
+            return {"items": [], "total": 0, "next_cursor": None, "has_more": False}
+        visible_primitive_types = None
+        if not lifecycle_maps_allowed:
+            visible_primitive_types = [
+                primitive_name for primitive_name in PRIMITIVE_TYPES if primitive_name != "lifecycle_map"
+            ]
         async with _session(org_id) as s:
             result = await list_primitives(
                 s,
                 org_id,
                 primitive_type=primitive_type,
+                primitive_types=visible_primitive_types,
                 search=search,
                 page=1,
                 page_size=limit,
@@ -10475,6 +10505,7 @@ async def list_lifecycle_maps(
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_lifecycle_maps")
+        _require_mcp_internal_lifecycle_map_access()
 
         owner_team: uuid.UUID | None = None
         if owner_team_id is not None:
@@ -10540,6 +10571,7 @@ async def get_lifecycle_map(lifecycle_map_id: str) -> dict[str, Any]:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("get_lifecycle_map")
+        _require_mcp_internal_lifecycle_map_access()
 
         org_id = _ctx_org_id_val()
         lmid, lmid_err = _parse_uuid_param(lifecycle_map_id, "lifecycle_map_id")
@@ -11272,7 +11304,11 @@ async def get_available_features() -> dict[str, Any]:
             plan_ctx = await resolve_plan_context(settings, s, org)
 
         current_tier = plan_ctx.tier()
-        all_flags = plan_ctx.list_enabled_features()
+        all_flags = [
+            flag
+            for flag in plan_ctx.list_enabled_features()
+            if flag.name not in RETIRED_INTERNAL_FLAGS or _mcp_internal_lifecycle_map_access()
+        ]
 
         lines = ["| Feature | Required Tier | Available |", "|---------|---------------|-----------|"]
         for flag in all_flags:
@@ -13231,10 +13267,17 @@ async def resource_library() -> str:
         return denied
     try:
         org_id = _ctx_org_id_val()
+        lifecycle_maps_allowed = _mcp_internal_lifecycle_map_access()
+        visible_primitive_types = None
+        if not lifecycle_maps_allowed:
+            visible_primitive_types = [
+                primitive_name for primitive_name in PRIMITIVE_TYPES if primitive_name != "lifecycle_map"
+            ]
         async with _session(org_id) as s:
             result = await list_primitives(
                 s,
                 org_id,
+                primitive_types=visible_primitive_types,
                 page=1,
                 page_size=50,
                 include_community=True,
@@ -13257,6 +13300,25 @@ async def resource_library() -> str:
         return "error: Failed to browse library"
 
 
+def _mask_library_content_for_summary(content: Any, primitive_type: str) -> Any:
+    """Mask credential-bearing node fields in a composite primitive's content.
+
+    FAR-1380: a composite primitive's ``content_json`` carries the SAME
+    credential-bearing node fields a pipeline graph stores (env_vars /
+    context_files / composite_parameter_values / parameter_overrides) — mask
+    them with the shipped per-node masker exactly like the pipeline graph
+    reads; non-composite content passes through untouched.
+    """
+    if primitive_type != "composite" or not isinstance(content, dict):
+        return content
+    nodes = content.get("nodes")
+    if not isinstance(nodes, list):
+        return content
+    masked = dict(content)
+    masked["nodes"] = [mask_pipeline_graph_node(node) if isinstance(node, dict) else node for node in nodes]
+    return masked
+
+
 @mcp.resource("modulo://library/{primitive_type}/{slug}")
 async def resource_library_detail(primitive_type: str, slug: str) -> str:
     """Get details of a single library primitive by type and slug."""
@@ -13268,9 +13330,12 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
     if denied is not None:
         return denied
     try:
+        if primitive_type == "lifecycle_map" and not _mcp_internal_lifecycle_map_access():
+            return f"Library primitive '{slug}' of type '{primitive_type}' not found."
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             p = await get_primitive_by_slug(s, org_id, primitive_type, slug)
+
         if p is None:
             return f"Library primitive '{slug}' of type '{primitive_type}' not found."
 
@@ -13278,20 +13343,10 @@ async def resource_library_detail(primitive_type: str, slug: str) -> str:
         rating_str = f"{p.average_rating:.2f}" if p.average_rating is not None else "N/A"
         downloads_str = str(p.download_count) if p.download_count is not None else "0"
         desc = p.description or "(no description)"
-        # FAR-1380: a composite primitive's content_json carries the SAME
-        # credential-bearing node fields a pipeline graph stores (env_vars /
-        # context_files / composite_parameter_values / parameter_overrides) —
-        # mask them with the shipped per-node masker exactly like the pipeline
-        # graph reads; non-composite content passes through untouched.
-        content_for_summary: Any = p.content_json
-        if p.primitive_type == "composite" and isinstance(content_for_summary, dict):
-            nodes = content_for_summary.get("nodes")
-            if isinstance(nodes, list):
-                content_for_summary = dict(content_for_summary)
-                content_for_summary["nodes"] = [
-                    mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes
-                ]
-        content_summary_str = json.dumps(content_for_summary, indent=2)
+        content_summary_str = json.dumps(
+            _mask_library_content_for_summary(p.content_json, p.primitive_type),
+            indent=2,
+        )
 
         parts = [
             f"Name: {p.name}",

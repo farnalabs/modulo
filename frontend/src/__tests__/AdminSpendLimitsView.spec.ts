@@ -7,6 +7,9 @@ import { usePlanStore } from '../stores/planStore'
 const apiState = vi.hoisted(() => ({
   orgLimit: 100,
   ceiling: null as Record<string, unknown> | null,
+  limitsOverride: undefined as Record<string, unknown> | null | undefined,
+  costsOverride: undefined as Record<string, unknown> | null | undefined,
+  ceilingError: undefined as Record<string, unknown> | undefined,
 }))
 
 vi.mock('../lib/api/client', () => ({
@@ -14,9 +17,10 @@ vi.mock('../lib/api/client', () => ({
     GET: vi.fn().mockImplementation((path: string) => {
       if (path === '/api/v1/admin/costs/limits') {
         return Promise.resolve({
-          data: {
-            org_daily_limit_usd: apiState.orgLimit,
-            teams: [
+           data: apiState.limitsOverride ?? {
+             org_daily_limit_usd: apiState.orgLimit,
+             teams: [
+
               { id: 'team-1', name: 'Alpha', daily_limit_usd: 50.0 },
               { id: 'team-2', name: 'Beta', daily_limit_usd: null },
             ],
@@ -26,10 +30,11 @@ vi.mock('../lib/api/client', () => ({
       }
       if (path === '/api/v1/admin/costs') {
         return Promise.resolve({
-          data: {
-            period: 'month',
-            group_by: 'team',
-            items: [
+           data: apiState.costsOverride ?? {
+             period: 'month',
+             group_by: 'team',
+             items: [
+
               { entity_id: 'team-1', entity_name: 'Alpha', total_spend_usd: 25.0, total_runs: 3, components: [{ name: 'llm_tokens', amount_usd: '25.000000' }], annotations: { refused_total_usd: null, clamped_total_usd: null } },
               { entity_id: 'team-2', entity_name: 'Beta', total_spend_usd: 17.5, total_runs: 2, components: [], annotations: { refused_total_usd: 1.25, clamped_total_usd: null } },
             ],
@@ -41,9 +46,10 @@ vi.mock('../lib/api/client', () => ({
           error: undefined,
         })
       }
-      if (path === '/api/v1/admin/costs/ceiling') {
-        return Promise.resolve({ data: apiState.ceiling, error: undefined })
-      }
+       if (path === '/api/v1/admin/costs/ceiling') {
+         return Promise.resolve({ data: apiState.ceiling, error: apiState.ceilingError })
+       }
+
       if (path === '/api/v1/admin/feature-flags') {
         return Promise.resolve({
           data: {
@@ -67,8 +73,12 @@ describe('AdminSpendLimitsView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    apiState.orgLimit = 100
-    apiState.ceiling = null
+     apiState.orgLimit = 100
+     apiState.ceiling = null
+     apiState.limitsOverride = undefined
+     apiState.costsOverride = undefined
+     apiState.ceilingError = undefined
+
   })
 
   async function mountWithFeatures() {
@@ -158,5 +168,63 @@ describe('AdminSpendLimitsView', () => {
       .find((s) => s.classes().includes('text-destructive') && s.text().includes('42.50'))
     expect(overBudget).toBeDefined()
     wrapper.unmount()
+  })
+
+  it('covers empty limits, invalid decimal values, and ceiling load/save branches', async () => {
+    apiState.limitsOverride = { org_daily_limit_usd: null, teams: [] }
+    apiState.costsOverride = { period: 'month', group_by: 'team', items: [], org_total: 'not-a-number' }
+    apiState.ceilingError = { detail: 'ceiling unavailable' }
+    const wrapper = await mountWithFeatures()
+    expect(wrapper.text()).toContain('No teams found.')
+    expect(wrapper.text()).toContain('$0.00')
+    expect(wrapper.text()).toContain('Failed to load: ceiling unavailable')
+
+    wrapper.unmount()
+    apiState.ceilingError = undefined
+    apiState.ceiling = { max_run_cost: null, spend_ceiling: null, remaining_budget_usd: null }
+    const successWrapper = await mountWithFeatures()
+    const apiPut = (await import('../lib/api/client')).api.PUT as ReturnType<typeof vi.fn>
+    apiPut.mockResolvedValue({ data: null, error: undefined })
+    await successWrapper.find('[data-testid="admin-spend-limits-ceiling-save"]').trigger('click')
+    await flushPromises()
+    expect(successWrapper.text()).toContain('Ceilings updated.')
+    successWrapper.unmount()
+  })
+
+  it('saves team limits through success, API error, and thrown error paths', async () => {
+    const wrapper = await mountWithFeatures()
+    const apiPut = (await import('../lib/api/client')).api.PUT as ReturnType<typeof vi.fn>
+    const save = wrapper.find('[data-testid="admin-spend-limits-team-save-team-1"]')
+
+    apiPut.mockResolvedValueOnce({ data: null, error: undefined })
+    await save.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('team denied')
+
+    apiPut.mockResolvedValueOnce({ data: null, error: { detail: 'team denied' } })
+    await save.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.text-destructive').text()).toContain('team denied')
+
+    apiPut.mockRejectedValueOnce(new Error('team offline'))
+    await save.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('team offline')
+  })
+
+  it('surfaces org-limit API and thrown errors', async () => {
+    const wrapper = await mountWithFeatures()
+    const apiPut = (await import('../lib/api/client')).api.PUT as ReturnType<typeof vi.fn>
+    const save = wrapper.find('[data-testid="admin-spend-limits-org-save"]')
+
+    apiPut.mockResolvedValueOnce({ data: null, error: { detail: 'org denied' } })
+    await save.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.text-destructive').text()).toContain('org denied')
+
+    apiPut.mockRejectedValueOnce(new Error('org offline'))
+    await save.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('org offline')
   })
 })

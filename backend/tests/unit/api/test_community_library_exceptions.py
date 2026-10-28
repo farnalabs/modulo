@@ -64,6 +64,42 @@ class TestListCommunityExceptionNarrowing:
         assert mock_entries is not None
 
 
+class TestListCommunityLifecycleMapVisibility:
+    """Internal callers keep lifecycle-map entries the ordinary filter drops."""
+
+    @pytest.mark.asyncio
+    @patch("modulo.api.routes.community_library.get_cached_manifest", new_callable=AsyncMock)
+    @patch("modulo.api.routes.community_library.list_community_entries", new_callable=AsyncMock)
+    @patch("modulo.api.routes.community_library.get_settings")
+    async def test_internal_operator_sees_lifecycle_map_entries(
+        self,
+        mock_settings: MagicMock,
+        mock_entries: AsyncMock,
+        mock_manifest: AsyncMock,
+    ) -> None:
+        from modulo.api.routes.community_library import list_community
+        from modulo.auth.jwt import TenantPrincipal
+
+        mock_settings.return_value = MagicMock(modulo_dev_mode=True)
+        mock_entries.return_value = [
+            {"slug": "map", "type": "lifecycle_map"},
+            {"slug": "schema", "type": "schema"},
+        ]
+        mock_manifest.return_value = None
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        principal = TenantPrincipal(
+            username="operator",
+            organisation_id="00000000-0000-0000-0000-000000000001",
+            account_id="00000000-0000-0000-0000-000000000002",
+            org_role="operator",
+            key_grants=frozenset({"library.search.in_dev"}),
+        )
+
+        result = await list_community(session, principal)
+
+        assert [item["type"] for item in result["items"]] == ["lifecycle_map", "schema"]
+
+
 class TestFetchEntryContentExceptionNarrowing:
     """FAR-882: _fetch_entry_content catches ValueError (JSON parse) but lets
     unexpected errors propagate."""

@@ -18,6 +18,12 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 os.environ.setdefault("MODULO_DB", "sqlite")
 os.environ.setdefault("SECRET_KEY", "a" * 32)
 os.environ.setdefault("FERNET_KEY", "b" * 32)
+# FAR-2200 withdrew Lifecycle Maps from Alpha-facing surfaces: the routes and
+# the library copy-to-adapt path are retained for internal dogfood behind
+# ``MODULO_DEV_MODE`` plus an operator principal. The BDD suite exercises that
+# retained internal surface (the ``client`` fixture is an org admin, which
+# satisfies the operator role), so it runs with developer mode enabled.
+os.environ.setdefault("MODULO_DEV_MODE", "true")
 
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings

@@ -86,6 +86,14 @@ private half of the same keypair as the configured anchor; a mismatch makes
 issuance fail closed with an anchor-mismatch error rather than emailing a key
 the deployment would reject.
 
+The anchor is operator-chosen, so a deployment can trust a keypair its operator
+generated rather than one Farnalabs issued. That is what makes the Team tier
+recoverable without Farnalabs: generate a keypair, configure its public half as
+`MODULO_LICENSE_PUBLIC_KEY`, and sign licences with the private half. The
+procedure and the continuity position (what a successor keeps, and the
+trust-anchor caveat) are documented in
+[Continuity and Escrow](../../continuity-and-escrow.md).
+
 ## Behaviours
 
 - [x] The licence trust anchor is explicit and fails closed (FAR-2091). The

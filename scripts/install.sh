@@ -3,6 +3,8 @@
 # Modulo native installer (Linux) — single-install distribution, P1a.
 # Spec: ADR 031 (single-install native distribution); this ticket: FAR-670.
 #        + pre-upgrade upgrade path (FAR-672).
+# macOS service/data seams exist, but no signed native Darwin artifact is
+# published yet; this installer fails closed on Darwin rather than implying one.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
@@ -150,23 +152,64 @@ sha256_of() {
 
 verify_sums_in_dir() {
   # verify_sums_in_dir <dir> — verify every file listed in <dir>/SHA256SUMS.
+  # Validate every path component before invoking either checksum tool;
+  # sha256sum --check follows symlinks named in the manifest.
   local dir="$1"
-  if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$dir" && sha256sum --check --quiet SHA256SUMS) || {
-      die "bundle integrity check FAILED: one or more files in the bundle do not match SHA256SUMS. Do not use this download — report it at https://github.com/${REPO}/issues"
-    }
-  else
-    local sum path actual
-    while read -r sum path; do
-      actual="$(sha256_of "${dir}/${path}")"
-      [[ "$actual" = "$sum" ]] || die "bundle integrity check FAILED for ${path}: expected ${sum}, got ${actual}"
-    done < "${dir}/SHA256SUMS"
+  local sum path actual artifact component current last_component
+  local -a components
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -z "${line}" ]] && continue
+    sum="${line%%  *}"
+    path="${line#*  }"
+    [[ "${sum}" =~ ^[[:xdigit:]]{64}$ && "${path}" != "${line}" && -n "${path}" ]] || \
+      die "bundle integrity check FAILED: malformed SHA256SUMS line '${line}'"
+    case "${path}" in
+      *\\* | [[:alpha:]]:* | ../* | */../* | */.. | . | .. | /* | *// | */)
+        die "bundle integrity check FAILED: unsafe artifact path '${path}'"
+        ;;
+      *)
+        # Safe shape (a plain relative component chain); validated below.
+        :
+        ;;
+    esac
+    IFS='/' read -r -a components <<< "${path}"
+    current="${dir}"
+    last_component="${components[${#components[@]}-1]}"
+    for component in "${components[@]}"; do
+      [[ -n "${component}" && "${component}" != "." && "${component}" != ".." ]] || \
+        die "bundle integrity check FAILED: unsafe artifact path '${path}'"
+      current="${current}/${component}"
+      if [[ "${component}" != "${last_component}" ]]; then
+        [[ ! -L "${current}" && -d "${current}" ]] || \
+          die "bundle integrity check FAILED: unsafe or missing artifact path '${path}'"
+      fi
+    done
+    artifact="${current}"
+    [[ -f "${artifact}" && ! -L "${artifact}" ]] || die "bundle integrity check FAILED: unsafe or missing artifact path '${path}'"
+    actual="$(sha256_of "${artifact}")"
+    [[ "${actual}" = "${sum}" ]] || die "bundle integrity check FAILED for ${path}: expected ${sum}, got ${actual}"
+  done < "${dir}/SHA256SUMS"
+}
+
+validate_legacy_shim_collision() {
+  # Refuse an unmanaged legacy shim BEFORE downloads, extraction, or any install
+  # root mutation. A dangling symlink is also a collision and must not be
+  # silently replaced.
+  local legacy_shim="${MODULO_LEGACY_SHIM_PATH:-/usr/local/bin/modulo}"
+  if [[ -e "${legacy_shim}" || -L "${legacy_shim}" ]] && [[ ! -f "${MARKER_FILE}" ]] && [[ "${FORCE}" -ne 1 ]]; then
+    die "found an existing ${legacy_shim} that this installer did not create.\\nRe-run with --force to rename it aside and let the native install take over, or remove it manually."
   fi
 }
 
 # --- upgrade machinery (FAR-672) --------------------------------------------
 
-DATA_DIR="${MODULO_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/modulo/data}"
+if [[ -n "${MODULO_DATA_DIR:-}" ]]; then
+  DATA_DIR="${MODULO_DATA_DIR}"
+elif [[ "$(uname -s)" = "Darwin" && -z "${XDG_DATA_HOME:-}" ]]; then
+  DATA_DIR="${HOME}/Library/Application Support/Modulo/data"
+else
+  DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/modulo/data"
+fi
 LOCK_FILE="${DATA_DIR}.lock"
 
 # lock_holder_pid — the holder PID recorded in the data-dir lock file, or 0.
@@ -253,7 +296,11 @@ resolve_latest_tag() {
 }
 
 preflight() {
-  [[ "$(uname -s)" = "Linux" ]] || die "this installer supports Linux only (P1a). macOS and Windows installers come later — see ADR 031."
+  case "$(uname -s)" in
+    Linux) OS="linux" ;;
+    Darwin) die "macOS native artifact is not yet published; the macOS service/data/launcher seam is present, but no complete signed and notarized Darwin bundle is available yet." ;;
+    *) die "this installer supports Linux. macOS native artifact is not yet published; Windows installers come later — see ADR 031." ;;
+  esac
   command -v curl >/dev/null 2>&1 || die "curl is required (install it, e.g. 'apt install curl')"
   command -v tar >/dev/null 2>&1 || die "tar is required (install it, e.g. 'apt install tar')"
   command -v python3 >/dev/null 2>&1 || die "python3 is required: install.sh extracts the sha256 + release fields from the SIGNED release manifest with it (FAR-675). Install it, e.g. 'apt install python3'."
@@ -266,6 +313,7 @@ preflight() {
       die "unsupported architecture: $(uname -m). Supported: x86_64 (amd64), aarch64 (arm64). Browse https://github.com/${REPO}/releases for available artifacts."
       ;;
   esac
+  validate_legacy_shim_collision
 }
 
 # --- argument parsing -------------------------------------------------------
@@ -303,15 +351,17 @@ preflight
 if [[ -n "${FROM_FILE}" ]]; then
   [[ -f "${FROM_FILE}" ]] || die "--from-file: no such file: ${FROM_FILE}"
   tarball_name="$(basename "${FROM_FILE}")"
-  case "${tarball_name}" in
-    modulo-*-linux-*.tar.gz)
-      VERSION_NUM="${tarball_name#modulo-}"
-      VERSION_NUM="${VERSION_NUM%%-linux-*}"
-      ;;
-    *)
-      die "cannot derive the bundle version from '${tarball_name}' (expected modulo-<version>-linux-<arch>.tar.gz)"
-      ;;
-  esac
+  if [[ "${tarball_name}" =~ ^modulo-([A-Za-z0-9][A-Za-z0-9._-]*)-(linux|darwin)-(amd64|arm64)\.tar\.gz$ ]]; then
+    VERSION_NUM="${BASH_REMATCH[1]}"
+    archive_os="${BASH_REMATCH[2]}"
+    archive_arch="${BASH_REMATCH[3]}"
+  else
+    die "cannot parse archive name '${tarball_name}' (expected modulo-<version>-${OS}-<arch>.tar.gz)"
+  fi
+  [[ "${archive_os}" = "${OS}" ]] || die \
+    "archive OS '${archive_os}' does not match detected host OS '${OS}' — refusing to install"
+  [[ "${archive_arch}" = "${ARCH}" ]] || die \
+    "archive architecture '${archive_arch}' does not match detected host architecture '${ARCH}' — refusing to install"
   RELEASE_TAG="(offline: ${tarball_name})"
 else
   if [[ -n "${VERSION:-}" ]] && [[ "${VERSION:-}" != "latest" ]]; then
@@ -324,7 +374,7 @@ else
     resolve_latest_tag
   fi
   VERSION_NUM="${RELEASE_TAG#bundle-v}"
-  tarball_name="modulo-${VERSION_NUM}-linux-${ARCH}.tar.gz"
+  tarball_name="modulo-${VERSION_NUM}-${OS}-${ARCH}.tar.gz"
 fi
 
 tmp="$(mktemp -d)"
@@ -361,10 +411,15 @@ _sig_key_id() {
 }
 
 _openssl_ed25519_check() {
-  # At least OpenSSL 1.1.1: ed25519 in `pkeyutl -rawin` needs it.
+  # OpenSSL 3.0+ is required: ed25519 verification runs through
+  # `pkeyutl -rawin`, which did NOT exist in 1.1.1's pkeyutl (it arrived in
+  # 3.0). A 1.1.1/2.x `openssl version` must therefore fail this gate
+  # loudly instead of reaching an argv their pkeyutl cannot parse.
+  local openssl_version
   openssl version >/dev/null 2>&1 || die "openssl is required to verify the SIGNED release manifest (e.g. 'apt install openssl')"
-  if ! printf '%s' "$(openssl version)" | grep -qE 'OpenSSL (1\.1|2\.|3\.|4\.)'; then
-    die "openssl ed25519 verification needs OpenSSL 1.1.1+ (the 'pkeyutl -rawin' mode); got: $(openssl version 2>/dev/null || echo none)"
+  openssl_version="$(openssl version)"
+  if ! printf '%s' "${openssl_version}" | grep -qE 'OpenSSL ([3-9]|[1-9][0-9])\.'; then
+    die "openssl ed25519 verification needs OpenSSL 3.0+ (the 'pkeyutl -rawin' mode does not exist in 1.1.1); got: ${openssl_version}"
   fi
 }
 
@@ -372,7 +427,7 @@ hex_to_bin() {
   # hex_to_bin <hex> -> binary on stdout (the ed25519 signature input).
   local hex="$1" out="" pair
   while [[ ${#hex} -ge 2 ]]; do
-    pair="${hex%${hex#??}}"
+    pair="${hex%"${hex#??}"}"
     hex="${hex#??}"
     out="${out}\x${pair}"
   done
@@ -383,7 +438,11 @@ b64_to_der() {
   # b64_to_der <b64> <output>: decode the trust-store SPKI DER key file.
   local key_body="$1" output="$2"
   [[ -n "$key_body" ]] || die "b64_to_der: empty key body"
-  printf '%s' "$key_body" | base64 -d > "$output" 2>/dev/null || die "base64 decode of the trust-store key failed (coreutils base64 required)"
+  if [[ "${OS}" = "darwin" ]]; then
+    printf '%s' "$key_body" | base64 -D > "$output" 2>/dev/null || die "base64 decode of the trust-store key failed (macOS base64 -D required)"
+  else
+    printf '%s' "$key_body" | base64 -d > "$output" 2>/dev/null || die "base64 decode of the trust-store key failed (Linux base64 -d required)"
+  fi
 }
 
 verify_shipped_manifest() {
@@ -395,7 +454,7 @@ verify_shipped_manifest() {
   # key_id BOTH embedded keys are tried (rotation race) - an unknown
   # key-id never reaches openssl at all.
   #
-  # Preconditions: openssl (>=1.1.1, ed25519 -rawin), coreutils base64, and
+  # Preconditions: openssl (>=3.0, ed25519 -rawin), coreutils base64, and
   # python3 (the manifest sha256 extraction below). The trust store is
   # EMBEDDED and empty-by-default: no operator-added key can ever verify.
   local manifest_file="$1" signature_file="$2" tarball_file="$3" expected_release="$4"
@@ -405,9 +464,11 @@ verify_shipped_manifest() {
   [[ -f "${signature_file}" ]] || die "the signature file is missing: ${signature_file}"
   [[ -n "${TRUST_KEY_CURRENT_B64}" ]] || [[ -n "${TRUST_KEY_NEXT_B64}" ]] || die \
     "no production trust keys are provisioned in this installer (TRUST_KEY_CURRENT_B64/NEXT_B64 are empty) - refusing to verify anything (provisioning: backend/src/modulo/launcher/manifest.py PROVISIONING_NOTE)"
-  local key_file sig_file sig_hex sig_key_id candidate_keys key_b64 verified=0
+  local key_file sig_file openssl_log sig_hex sig_key_id candidate_keys key_b64 verified=0
+  local openssl_output=""
   key_file="$(mktemp)"
   sig_file="$(mktemp)"
+  openssl_log="$(mktemp)"
   sig_hex="$(sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F]\{128\}\)".*/\1/p' "${signature_file}" | head -n 1)"
   [[ -n "${sig_hex}" ]] || die "the signature file's 'signature' field is malformed (expected 128 hex chars)"
   sig_key_id="$(_sig_key_id "${signature_file}")" || sig_key_id=""
@@ -424,14 +485,28 @@ verify_shipped_manifest() {
     case "${slot}" in current) key_b64="${TRUST_KEY_CURRENT_B64}" ;; next) key_b64="${TRUST_KEY_NEXT_B64}" ;; *) die "internal error: unknown trust-store slot '${slot}'" ;; esac
     [[ -n "${key_b64}" ]] || continue
     b64_to_der "${key_b64}" "${key_file}"
-    if openssl pkeyutl -verify -pubin -inform DER -in "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}" >/dev/null 2>&1; then
+    # pkeyutl takes the PUBLIC KEY via -inkey + -keyform, and the SIGNED
+    # BYTES via -in; it has NO -inform option (that is a `dgst`/`pkey`
+    # option). Passing -inform makes pkeyutl exit 1 with "Unknown option"
+    # before it ever looks at the signature.
+    #
+    # openssl's stdout+stderr go to openssl_log, NOT /dev/null: a failure
+    # must be able to explain itself below (format error vs a genuine
+    # signature mismatch look identical from the exit code alone).
+    if openssl pkeyutl -verify -pubin -keyform DER -inkey "${key_file}" -rawin -in "${manifest_file}" -sigfile "${sig_file}" > "${openssl_log}" 2>&1; then
       verified=1
       info "release-manifest signature verified (embedded ${slot} trust store, key-id '${sig_key_id:-any-store-key}')"
       break
     fi
+    openssl_output="$(cat "${openssl_log}" 2>/dev/null || true)"
   done
-  rm -f "${key_file}" "${sig_file}"
-  [[ "${verified}" -eq 1 ]] || die "release-manifest signature FAILED to verify against the embedded trust store - do not use this download; report it at https://github.com/${REPO}/issues (openssl 1.1.1+ required for the ed25519 -rawin mode)"
+  rm -f "${key_file}" "${sig_file}" "${openssl_log}"
+  if [[ "${verified}" -ne 1 ]]; then
+    # Surface openssl's own verdict: without it, the generic message sends
+    # the operator hunting for a key mismatch that may not exist.
+    printf 'openssl reported:\n%s\n' "${openssl_output:-<no openssl output captured>}" >&2
+    die "release-manifest signature FAILED to verify against the embedded trust store (key-id '${sig_key_id:-unparsable - both store keys tried}') - do not use this download; report it at https://github.com/${REPO}/issues. OpenSSL 3.0+ is required for the ed25519 'pkeyutl -rawin' mode."
+  fi
   local expected actual
   expected="$(python3 - "$manifest_file" "$tarball_name" <<'PYEOF'
 import json, sys
@@ -471,9 +546,9 @@ if [[ -n "${FROM_FILE}" ]]; then
     die "offline install REFUSED: the SIGNED release manifest must sit beside the tarball: ${manifest_file} (+ .sig). The bundle's internal SHA256SUMS is verified too, but a signature over the SIGNED manifest is REQUIRED (ADR 031 Decision 3) - download exactly these two release assets from the matched bundle release."
   fi
   verify_shipped_manifest "${manifest_file}" "${signature_file}" "${FROM_FILE}" "bundle-v${VERSION_NUM}"
-  cp -- "${FROM_FILE}" "${tmp}/${tarball_name}"
+  cp "${FROM_FILE}" "${tmp}/${tarball_name}"
 else
-  info "Installing Modulo bundle ${RELEASE_TAG} (linux-${ARCH})"
+  info "Installing Modulo bundle ${RELEASE_TAG} (${OS}-${ARCH})"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/${tarball_name}" "${tmp}/${tarball_name}"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/RELEASE_MANIFEST.json" "${tmp}/RELEASE_MANIFEST.json"
   fetch "${RELEASES_DOWNLOAD_URL}/${RELEASE_TAG}/RELEASE_MANIFEST.json.sig" "${tmp}/RELEASE_MANIFEST.json.sig"
@@ -485,14 +560,23 @@ fi
 
 # --- extract and verify the bundle's internal checksums ---------------------
 
-tar -xzf "${tmp}/${tarball_name}" -C "${tmp}"
-set -- "${tmp}"/*/
-if [[ "$#" -ne 1 ]]; then
-  die "unexpected archive layout: expected exactly one top-level directory, found $#, in ${tarball_name}"
+expected_bundle_dir="${tarball_name%.tar.gz}"
+extract_root="${tmp}/extracted"
+mkdir -p "${extract_root}"
+tar -xzf "${tmp}/${tarball_name}" -C "${extract_root}"
+entries=()
+while IFS= read -r -d '' entry; do
+  entries+=("${entry}")
+done < <(find "${extract_root}" -mindepth 1 -maxdepth 1 -print0)
+if [[ "${#entries[@]}" -ne 1 || ! -d "${entries[0]}" || -L "${entries[0]}" ]]; then
+  die "unexpected archive layout: expected exactly one non-symlink top-level directory '${expected_bundle_dir}', in ${tarball_name}"
 fi
-first_entry="$1"
-bundle_dir="${first_entry%/}"
-[[ -f "${bundle_dir}/SHA256SUMS" ]] || die "malformed bundle: SHA256SUMS missing from the archive"
+bundle_dir="${entries[0]}"
+bundle_dir_name="${bundle_dir##*/}"
+[[ "${bundle_dir_name}" = "${expected_bundle_dir}" ]] || die \
+  "archive top-level directory '${bundle_dir_name}' does not match archive identity '${expected_bundle_dir}'"
+[[ -f "${bundle_dir}/SHA256SUMS" && ! -L "${bundle_dir}/SHA256SUMS" ]] || \
+  die "malformed bundle: SHA256SUMS missing from the archive"
 verify_sums_in_dir "${bundle_dir}"
 info "bundle internal SHA256SUMS verified"
 
@@ -507,6 +591,7 @@ info "bundle internal SHA256SUMS verified"
 # newest pre-upgrade snapshot in the data dir (mtime order), for the
 # --skip-backup path: the operator must KNOW which snapshot is authoritative.
 newest_pre_upgrade_snapshot() {
+  # shellcheck disable=SC2012  # ls -1dt IS the newest-first mtime primitive; find has no portable mtime sort.
   ls -1dt "${DATA_DIR}"/pre-upgrade-dump-* 2>/dev/null | head -n 1
 }
 
@@ -559,18 +644,20 @@ info "installed bundle to ${target}"
 # Atomic-ish symlink swap: build a temp symlink, then rename it over `current`
 # (GNU mv -T). The upgrade machinery (FAR-672) reuses this primitive.
 ln -sfn "versions/${VERSION_NUM}" "${INSTALL_ROOT}/.current.new.$$"
-mv -Tf "${INSTALL_ROOT}/.current.new.$$" "${INSTALL_ROOT}/current"
+if [[ "${OS}" = "darwin" ]]; then
+  mv -f "${INSTALL_ROOT}/.current.new.$$" "${INSTALL_ROOT}/current"
+else
+  mv -Tf "${INSTALL_ROOT}/.current.new.$$" "${INSTALL_ROOT}/current"
+fi
 info "current -> $(readlink "${INSTALL_ROOT}/current")"
 
 # --- neutralise a previous /usr/local/bin/modulo ----------------------------
 #
-# The pre-ADR-031 installer put a `modulo` binary in /usr/local/bin. Only
-# touch it when a native-install marker matches (this machine is already
-# managed by install.sh, or the user passed --force); otherwise refuse loudly:
-# we will not replace a file we did not create.
+# The collision was validated in preflight before any install-root mutation.
+# This phase only performs the already-authorised rename.
 
-legacy_shim="/usr/local/bin/modulo"
-if [[ -e "${legacy_shim}" ]]; then
+legacy_shim="${MODULO_LEGACY_SHIM_PATH:-/usr/local/bin/modulo}"
+if [[ -e "${legacy_shim}" || -L "${legacy_shim}" ]]; then
   if [[ -f "${MARKER_FILE}" ]] || [[ "${FORCE}" -eq 1 ]]; then
     backup="${legacy_shim}.pre-native-$(date +%Y%m%d%H%M%S)"
     mv "${legacy_shim}" "${backup}" || die "could not rename ${legacy_shim} — re-run with sudo, or remove it manually"
@@ -608,6 +695,7 @@ for rc_file in "${HOME}/.bashrc" "${HOME}/.profile" "${HOME}/.zshrc"; do
   if grep -Fqs "${BIN_DIR}" "${rc_file}"; then
     continue
   fi
+  # shellcheck disable=SC2016  # $PATH must reach the generated rc line literally, not expand now.
   printf '\n# Added by Modulo install.sh (FAR-670)\nexport PATH="%s:$PATH"\n' "${BIN_DIR}" >> "${rc_file}"
   path_updated=1
   info "added ${BIN_DIR} to PATH in ${rc_file}"

@@ -105,7 +105,13 @@ function mountView() {
 // action menu and return the teleported menu item matching the given label.
 function findMenuItem(label: string): HTMLElement | null {
   const items = Array.from(document.body.querySelectorAll('[data-pc-section="item"]'))
-  return (items.find((el) => el.textContent?.trim() === label) as HTMLElement) ?? null
+  const item = items.find((el) => el.textContent?.trim() === label) as HTMLElement | undefined
+  if (!item) return null
+  // The item's click handler is attached to the inner item-content wrapper in
+  // PrimeVue 4 (and to the item root in some versions), so returning the root
+  // <li> would make .click() a no-op. Prefer the innermost element that always
+  // owns the handler.
+  return (item.querySelector('[data-pc-section="itemcontent"]') as HTMLElement | null) ?? item
 }
 
 describe('SchemaListView', () => {

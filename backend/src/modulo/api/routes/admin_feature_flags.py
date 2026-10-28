@@ -27,11 +27,21 @@ from modulo.api.db_error_handling import (
     raise_lock_timeout_conflict_if,
     raise_session_contract_error,
 )
-from modulo.api.dependencies import get_db_session, require_system_permission, resolve_audit_principal
+from modulo.api.dependencies import (
+    get_db_session,
+    require_in_dev_operator,
+    require_system_permission,
+    resolve_audit_principal,
+)
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
-from modulo.core.feature_flags import FeatureFlagRegistry, feature_overrides_from_settings, resolve_plan_context
+from modulo.core.feature_flags import (
+    RETIRED_INTERNAL_FLAGS,
+    FeatureFlagRegistry,
+    feature_overrides_from_settings,
+    resolve_plan_context,
+)
 from modulo.core.license import get_license, verify_license_key
 from modulo.db.crud.organisation import get_organisation, update_org_settings_patch
 from modulo.db.rls import set_rls_org
@@ -188,6 +198,33 @@ async def _write_org_override(session: AsyncSession, org_id: uuid.UUID, flag_nam
         await update_org_settings_patch(session, org_id, {"feature_overrides": overrides})
 
 
+def _reject_retired_internal_flag_for_ordinary_caller(
+    flag_name: str,
+    current_user: AuthenticatedPrincipal,
+    *,
+    settings: Settings,
+) -> None:
+    """Hide retired internal flags except through the retained internal gate."""
+    if flag_name not in RETIRED_INTERNAL_FLAGS:
+        return
+    principal = TenantPrincipal(
+        username=current_user.username,
+        organisation_id=current_user.organisation_id,
+        account_id=current_user.account_id,
+        org_role=current_user.org_role or "",
+        is_system_admin=current_user.is_system_admin,
+        via_api_key=current_user.via_api_key,
+        client_kind=current_user.client_kind,
+        key_grants=current_user.key_grants,
+    )
+    require_in_dev_operator(
+        principal,
+        "library.search.in_dev",
+        require_dev_mode=True,
+        settings=settings,
+    )
+
+
 def _enforce_team_tier_gate(
     flag: Any,
     flag_name: str,
@@ -235,6 +272,11 @@ async def _apply_org_flag_override(
             detail=_MSG_ORG_ID_REQUIRED,
         )
     registry = await _build_registry(settings, session, current_user)
+    if flag_name in RETIRED_INTERNAL_FLAGS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown feature flag: {flag_name}",
+        )
     flag = registry.get_flag(flag_name)
     if flag is None:
         raise HTTPException(
@@ -356,6 +398,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
+                if f.name not in RETIRED_INTERNAL_FLAGS
             ],
             "would_activate": [
                 {
@@ -365,6 +408,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.tier_gap_flags()
+                if f.name not in RETIRED_INTERNAL_FLAGS
                 if f.name not in org_overrides
             ],
         }
@@ -431,6 +475,11 @@ async def get_feature_flag(
 ) -> Response | dict[str, Any]:
     try:
         registry = await _build_registry(settings, session, current_user)
+        if flag_name in RETIRED_INTERNAL_FLAGS:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown feature flag: {flag_name}",
+            )
         flag = registry.get_flag(flag_name)
         if flag is None:
             raise HTTPException(
@@ -584,9 +633,11 @@ async def toggle_feature_flag(
 @handle_db_errors("admin.feature_flags.get_org_flag_override")
 async def get_org_flag_override(
     flag_name: str,
+    settings: Settings = Depends(get_settings),
     current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
+    _reject_retired_internal_flag_for_ordinary_caller(flag_name, current_user, settings=settings)
     if current_user.organisation_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -719,6 +770,7 @@ async def clear_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
+    _reject_retired_internal_flag_for_ordinary_caller(flag_name, current_user, settings=settings)
     if current_user.organisation_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

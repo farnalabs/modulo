@@ -65,6 +65,7 @@ def _make_settings() -> Settings:
         secret_key="a" * 32,
         fernet_key="a" * 32,
         modulo_admin_password="testpass",
+        modulo_dev_mode=True,
     )
 
 
@@ -1119,6 +1120,15 @@ def _gate_client(
 
 
 # --- CRITICAL 1: restore must see the soft-deleted row ----------------------
+
+
+def test_ordinary_user_cannot_discover_lifecycle_maps() -> None:
+    session = _team_gate_session(is_member_of=set(), row_deleted=False)
+    with _gate_client(session, org_role="viewer") as (http, harness):
+        harness.stub("list_lifecycle_maps", AsyncMock())
+        resp = http.get(_BASE)
+
+    assert resp.status_code == 403, resp.text
 
 
 def test_restore_non_admin_member_restores_a_soft_deleted_team_map() -> None:

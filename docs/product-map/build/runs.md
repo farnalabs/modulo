@@ -303,9 +303,9 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `ck_run_attempts_terminal_reason`). The executor opens a row on admission
       (a demoted claim or fence-rejected budget bump opens none; an attempt-row
       write failure never fails admission) and closes the latest open row on a
-      terminal outcome — an awaiting-human attempt stays OPEN, a retry/watchdog
+      terminal outcome – an awaiting-human attempt stays OPEN, a retry/watchdog
       re-dispatch and a handed-back worker loss close as `reset`, and a
-      fenced-out terminal write closes nothing — so the intermediate attempts
+      fenced-out terminal write closes nothing – so the intermediate attempts
       that previously left no durable record are diagnosable
       (`db/models/run_attempt.py`, `db/crud/run_attempts.py`,
       `core/pipeline_execution.py`, `test_run_attempts.py`,
@@ -315,7 +315,7 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `run.status` permission as run detail (`require_permission_any_credential`,
       so JWT and org API-key callers both work, deliberately not a new
       permission key). The run is loaded org-scoped behind `set_rls_org`, so a
-      missing run AND another organisation's run both answer 404 — never an
+      missing run AND another organisation's run both answer 404 – never an
       empty list, which would leak existence semantics. `items` is capped at
       100 while `total` carries the run's true attempt count, so a truncated
       page is visible rather than silently reported as complete
@@ -350,10 +350,10 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
   FAR-2078 per-attempt execution history surface. It shipped in three slices
   (storage `#2238`, read API `#2265`, run-detail view `#2291`) with registered
   `run-attempt-history*` testids but no home in either product-map layer, so the
-  whole diagnostic surface — the `run_attempts` table and its
+  whole diagnostic surface – the `run_attempts` table and its
   `attempt_index`/`terminal_reason` contracts, the executor instrumentation
   (open on admission, close-on-terminal, `reset` on re-dispatch, open while
-  awaiting a human) and the `GET /runs/{id}/attempts` read + run-detail table —
+  awaiting a human) and the `GET /runs/{id}/attempts` read + run-detail table –
   was invisible to the feature graph and to Assistant's
   `search_documentation` indexer. Added three checked behaviour lines, the
   `db/models/run_attempt.py` / `db/crud/run_attempts.py` / migration `0329` /

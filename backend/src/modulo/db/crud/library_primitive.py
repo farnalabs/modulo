@@ -15,6 +15,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.soft_delete import include_soft_deleted
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +71,14 @@ async def copy_to_adapt(
     return result.scalar_one_or_none()
 
 
-async def get_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) -> LibraryPrimitive | None:
+async def get_library_primitive(
+    session: AsyncSession,
+    primitive_id: uuid.UUID,
+    *,
+    include_deleted: bool = False,
+) -> LibraryPrimitive | None:
     stmt = select(LibraryPrimitive).where(LibraryPrimitive.id == primitive_id)
+    stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(LibraryPrimitive.deleted_at.is_(None))
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 

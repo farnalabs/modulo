@@ -394,6 +394,19 @@ Behaviour:
 Every process (API and workers) reads the same environment. Restart all of them
 after changing the key.
 
+### Retain the anchor with the licence
+
+`MODULO_LICENSE_PUBLIC_KEY` is the public half of the keypair that signed your
+licence. It is not secret, so keep a copy wherever you keep the licence key. If
+you hold a Farnalabs-issued licence and lose the anchor, that licence can no
+longer be verified, and only Farnalabs holds the matching private key to issue
+a replacement against the anchor you still have.
+
+A successor can also issue Team licences without Farnalabs: generate your own
+Ed25519 keypair, set its public half as `MODULO_LICENSE_PUBLIC_KEY`, and sign
+licences with the private half. The full procedure is in
+[Continuity and Escrow](../continuity-and-escrow.md#issue-your-own-team-licence).
+
 ---
 
 ## Cross-Reference

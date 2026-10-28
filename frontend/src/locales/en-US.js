@@ -1222,7 +1222,7 @@ export default {
     "AdminSystemOrgsView": {
       "create_organisation": "Create Organisation",
       "post_apiv1adminorgs": "POST /api/v1/admin/orgs",
-      "post_apiv1adminorgsorgidusers": "POST /api/v1/admin/orgs/{org_id}/users",
+      "post_apiv1adminorgsorgidusers": "POST /api/v1/admin/orgs/{'{'}org_id{'}'}/users",
       "crosstenant_organisation_management_system_admin_only": "Cross-tenant organisation management (system admin only)",
       "system_admin_organisations": "System Admin — Organisations",
       "create_user_in_organisation": "Create User in Organisation"

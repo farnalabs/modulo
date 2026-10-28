@@ -37,9 +37,10 @@ def _pr(
     base_full: str = "farnalabs/modulo",
     association: str | None = "MEMBER",
     author: str = "farnalabs",
+    author_type: str = "User",
 ) -> dict:
     pr: dict = {
-        "user": {"login": author},
+        "user": {"login": author, "type": author_type},
         "base": {"repo": {"full_name": base_full}},
         "head": {"repo": {"full_name": head_full}},
     }
@@ -58,6 +59,28 @@ def test_every_trusted_association_is_ok() -> None:
     for assoc in ("OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"):
         verdict, _ = guard.decide(_pr(association=assoc), BASE)
         assert verdict == "ok", f"expected ok for {assoc}, got {verdict}"
+
+
+def test_same_repo_dependabot_with_none_association_is_ok() -> None:
+    verdict, reason = guard.decide(_pr(association="NONE", author="dependabot[bot]", author_type="Bot"), BASE)
+    assert verdict == "ok"
+    assert "dependabot" in reason
+
+
+def test_dependabot_fork_head_is_external() -> None:
+    pr = _pr(head_full="someone/fork", association="NONE", author="dependabot[bot]", author_type="Bot")
+    verdict, _ = guard.decide(pr, BASE)
+    assert verdict == "external"
+
+
+def test_dependabot_lookalike_user_is_external() -> None:
+    verdict, _ = guard.decide(_pr(association="NONE", author="dependabot[bot]", author_type="User"), BASE)
+    assert verdict == "external"
+
+
+def test_other_bot_with_none_association_is_external() -> None:
+    verdict, _ = guard.decide(_pr(association="NONE", author="renovate[bot]", author_type="Bot"), BASE)
+    assert verdict == "external"
 
 
 def test_fork_head_is_external() -> None:

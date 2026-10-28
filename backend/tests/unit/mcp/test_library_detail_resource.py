@@ -207,3 +207,74 @@ class TestResourceLibraryDetailSuccess:
         result = await resource_library_detail(primitive_type="agent", slug="test-primitive")
 
         assert "error:" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle-map visibility gate
+# ---------------------------------------------------------------------------
+
+
+class TestResourceLibraryDetailLifecycleMapGate:
+    def setup_method(self) -> None:
+        from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
+
+        _ctx_org_id.set(_PLACEHOLDER_ORG_ID)
+        _ctx_role.set("runner")
+        _ctx_auth_token.set(_API_KEY)
+        _ctx_auth_type.set("api_key")
+
+    def teardown_method(self) -> None:
+        from modulo.api.mcp_server import (
+            _ctx_auth_token,
+            _ctx_auth_type,
+            _ctx_key_grants,
+            _ctx_org_id,
+            _ctx_role,
+        )
+
+        _ctx_key_grants.set(None)
+        _ctx_org_id.set(None)
+        _ctx_role.set(None)
+        _ctx_auth_token.set(None)
+        _ctx_auth_type.set(None)
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=False))
+    @patch("modulo.api.mcp_server.get_primitive_by_slug")
+    async def test_lifecycle_map_detail_hidden_from_ordinary_caller(
+        self,
+        mock_get_primitive_by_slug: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        result = await resource_library_detail(primitive_type="lifecycle_map", slug="map-one")
+
+        assert "not found" in result
+        mock_get_primitive_by_slug.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=True))
+    @patch("modulo.api.mcp_server.get_primitive_by_slug")
+    @patch("modulo.api.mcp_server._session")
+    async def test_lifecycle_map_detail_visible_to_internal_operator(
+        self,
+        mock_session: AsyncMock,
+        mock_get_primitive_by_slug: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_role
+
+        _ctx_role.set("operator")
+        _ctx_key_grants.set(frozenset({"library.search.in_dev"}))
+        mock_session.return_value.__aenter__.return_value = _make_mock_session()
+        mock_get_primitive_by_slug.return_value = _make_mock_primitive(
+            name="Map One",
+            primitive_type="lifecycle_map",
+            slug="map-one",
+        )
+
+        result = await resource_library_detail(primitive_type="lifecycle_map", slug="map-one")
+
+        assert "Name: Map One" in result
+        mock_get_primitive_by_slug.assert_awaited_once()

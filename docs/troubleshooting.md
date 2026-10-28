@@ -10,11 +10,26 @@ Common issues, their causes, and resolutions.
 |---|---|---|---|
 | `SECRET_KEY not set` | Missing env var | Set `SECRET_KEY` (minimum 32 bytes) | `ValidationError: SECRET_KEY must be at least 32 bytes` |
 | `FERNET_KEY not set` | Missing env var | Set `FERNET_KEY` (base64-encoded, at least 32 bytes) | `ValidationError: FERNET_KEY must be at least 32 bytes` |
+| `required variable FERNET_KEY is missing a value` | Compose is refusing to start: `docker-compose.yml` / `docker-compose.local.yml` require a valid Fernet key and `.env` does not supply one | Generate one into `.env` at the repo root: `printf 'FERNET_KEY=%s\n' "$(openssl rand -base64 32)" > .env`. This is the intended loud failure – starting without it produces a stack that accepts a login and then cannot store a credential. | `required variable FERNET_KEY is missing a value: FERNET_KEY is required - generate one ...` |
 | `Fernet key must be 32 url-safe base64-encoded bytes` | `FERNET_KEY` is long enough to pass the startup length check but does not decode to exactly 32 bytes | Regenerate the key with `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` (a 44-character value) | `ValueError: Fernet key must be 32 url-safe base64-encoded bytes.` |
 | `Cannot connect to Postgres` | DB not running, wrong `DATABASE_URL`, or network issue | Check `docker compose ps`, verify `DATABASE_URL` is correct, ensure Postgres is accepting connections | `sqlalchemy.exc.OperationalError: could not connect to server` |
-| `Alembic migration failed` | Version mismatch, branch migration, or `VARCHAR(32)` column width | Check `alembic_version` table exists with `VARCHAR(255)` for branch IDs; run `uv run alembic upgrade heads` | `alembic.util.exc.CommandError` or `psycopg2.errors.StringDataRightTruncationError` |
-| `Redis connection refused` | Redis not running or wrong `REDIS_URL` | Check `docker compose ps`, verify `REDIS_URL` | `redis.exceptions.ConnectionError: Error 10061` |
-| `Address already in use` | Port conflict (another process on the same port) | Change port via env vars or kill conflicting process (`netstat -ano \| findstr :PORT`) | `OSError: [Errno 10048] error while attempting to bind on address` |
+| `Alembic migration failed` | Version mismatch, branch migration, or `VARCHAR(32)` column width | Check `alembic_version` table exists with `VARCHAR(255)` for branch IDs; run `uv run alembic upgrade heads` | `alembic.util.exc.CommandError` or `psycopg.errors.StringDataRightTruncation` |
+| `Redis connection refused` | Redis not running or wrong `REDIS_URL` | Check `docker compose ps`, verify `REDIS_URL` | `redis.exceptions.ConnectionError: Error 111 connecting to localhost:6380. Connection refused.` |
+| `Address already in use` | Port conflict (another process on the same port) | Change port via env vars, or find and stop the process holding the port (`ss -ltnp 'sport = :8000'`, or `lsof -i :8000`) | `OSError: [Errno 98] Address already in use` |
+
+### Stack is up, login works, but nothing can store a credential (FAR-2181)
+
+A `FERNET_KEY` that is longer than 32 characters but is not a real Fernet key
+passes the `Settings` length check and then breaks later:
+
+| Symptom | Cause | Resolution |
+|---|---|---|
+| `POST /api/v1/model-backends` returns **500** while `GET /api/v1/auth/login` returns 200 | `ValueError: FernetSecretsBackend: invalid fernet_key: must be a base64-encoded 32-byte Fernet key` – the api_key is Fernet-encrypted at rest | Replace `FERNET_KEY` with a generated key (`openssl rand -base64 32`) and recreate the stack |
+| `/healthz/ready` reports `"checkpointer": {"status": "degraded"}`; `checkpoints` / `checkpoint_migrations` do not exist | `startup.checkpointer_init_failed` – checkpointer init uses the same key | Same fix; the tables are created on the next successful startup |
+
+Run `./scripts/smoke-compose.sh` to check both in one command (it creates and
+deletes a throwaway model backend and asserts the checkpointer tables exist).
+See [quickstart §3c](./quickstart.md#3c-smoke-check-the-stack).
 
 ---
 

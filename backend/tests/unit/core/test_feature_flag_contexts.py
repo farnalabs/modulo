@@ -620,7 +620,7 @@ class TestEffectiveFeatureFlags:
     def test_effective_flags_without_overrides_returns_full_set(self) -> None:
         ctx = CommunityTier()
         flags = effective_feature_flags(ctx)
-        assert len(flags) == len(ctx.list_all_features())
+        assert len(flags) == len([f for f in ctx.list_all_features() if f.name != "lifecycle_map_journeys"])
         inactive_names = {f.name for f in flags if not f.currently_active}
         assert "user_scoped_mcp_keys" in inactive_names
         assert "eval_system" not in inactive_names
@@ -630,7 +630,7 @@ class TestEffectiveFeatureFlags:
         flags = effective_feature_flags(ctx, {"no_such_flag": True})
         names = {f.name for f in flags}
         assert "no_such_flag" not in names
-        assert len(flags) == len(ctx.list_all_features())
+        assert len(flags) == len([f for f in ctx.list_all_features() if f.name != "lifecycle_map_journeys"])
 
     def test_db_plan_context_list_all_features_returns_full_registry(self) -> None:
         """The DB-backed context's full-set member returns every known flag.
