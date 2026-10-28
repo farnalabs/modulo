@@ -118,7 +118,7 @@ _INTERNAL_LIFECYCLE_MAP_PERMISSION = "library.search.in_dev"
 _log = logging.getLogger(__name__)
 
 
-async def _require_internal_lifecycle_map_access(
+def _require_internal_lifecycle_map_access(
     principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
     settings: Settings = Depends(get_settings),
 ) -> TenantPrincipal:
