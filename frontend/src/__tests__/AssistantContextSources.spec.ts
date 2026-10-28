@@ -98,6 +98,25 @@ describe('AssistantContextSources', () => {
     expect(wrapper.text()).toContain('Network down')
   })
 
+  it('uses an unknown-error message when fetch rejects with a non-Error', async () => {
+    apiGet.mockRejectedValue('offline')
+
+    const wrapper = mountSources()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Failed to load sources')
+  })
+
+  it('renders an empty source list when the API returns no data', async () => {
+    apiGet.mockResolvedValue({ data: undefined, error: undefined })
+
+    const wrapper = mountSources()
+    await flushPromises()
+
+    expect(wrapper.findAll('.assistant-cs-row')).toHaveLength(0)
+    expect(wrapper.text()).toContain('Knowledge Sources')
+  })
+
   it('shows "—" for sources with empty description', async () => {
     apiGet.mockResolvedValue({ data: [makeSource({ description: '' })], error: undefined })
 
@@ -262,6 +281,19 @@ describe('AssistantContextSources', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Reset failed')
+  })
+
+  it('uses an unknown-error message when reset rejects with a non-Error', async () => {
+    apiGet.mockResolvedValue({ data: [makeSource()], error: undefined })
+    apiDelete.mockRejectedValue({ reason: 'offline' })
+
+    const wrapper = mountSources()
+    await flushPromises()
+
+    await wrapper.find('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Failed to reset sources')
   })
 
   it('disables reset button while resetting', async () => {
