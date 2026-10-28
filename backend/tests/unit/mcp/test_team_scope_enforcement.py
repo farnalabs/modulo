@@ -784,6 +784,31 @@ class TestTriggerTeamScope(_OperatorAuthContext):
         mock_delete.assert_not_awaited()
 
 
+class TestViewerTriggerListAccountScope(_AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_triggers_passes_account_id_for_viewer(self, mock_validate_auth: AsyncMock) -> None:
+        from modulo.api.mcp_server import _ctx_role, _ctx_user_id
+
+        _ctx_role.set("viewer")
+        _ctx_user_id.set(_PLACEHOLDER_USER_ID)
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        mock_page = MagicMock()
+        mock_page.items = []
+        mock_page.total = 0
+        mock_page.next_cursor = None
+        mock_page.has_more = False
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.trigger.list_triggers", AsyncMock(return_value=mock_page)) as mock_list,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await list_triggers()
+
+        assert result["total"] == 0
+        mock_list.assert_awaited_once()
+        assert mock_list.await_args.kwargs["account_id"] == _PLACEHOLDER_USER_ID
+
+
 class TestQueryAnalyticsTeamScope(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_query_analytics_passes_team_id_for_team_scoped_key(self, mock_validate_auth: AsyncMock) -> None:
@@ -1316,6 +1341,49 @@ class TestCrudTeamFilterSQL:
         sql = self._compile(captured[0])
         assert "pipelines.owner_team_id IS NULL" in sql, "org-level pipelines must stay visible"
         assert f"pipelines.owner_team_id = '{team}'" in sql, "own-team pipelines must be visible"
+
+    async def test_db_list_triggers_applies_account_scope_for_viewer(self) -> None:
+        from modulo.db.crud.trigger import list_triggers as db_list_triggers
+
+        account_id = uuid.uuid4()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        captured: list = []
+        rows_result = MagicMock()
+        rows_result.scalars.return_value.all.return_value = []
+
+        async def fake_execute(stmt: Any, *a: Any, **k: Any) -> Any:
+            captured.append(stmt)
+            return rows_result
+
+        session.execute = fake_execute
+
+        page = await db_list_triggers(session, _PLACEHOLDER_ORG_ID, account_id=account_id)
+
+        assert page.total == 0
+        sql = self._compile(captured[0])
+        assert "pipelines.owner_team_id IS NULL" in sql, "org-level pipelines must stay visible"
+        assert "team_memberships" in sql, "viewer reads must use the account's team memberships"
+        assert f"team_memberships.account_id = '{account_id}'" in sql
+
+    async def test_db_list_triggers_without_team_or_account_applies_no_scope(self) -> None:
+        from modulo.db.crud.trigger import list_triggers as db_list_triggers
+
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        captured: list = []
+        rows_result = MagicMock()
+        rows_result.scalars.return_value.all.return_value = []
+
+        async def fake_execute(stmt: Any, *a: Any, **k: Any) -> Any:
+            captured.append(stmt)
+            return rows_result
+
+        session.execute = fake_execute
+
+        page = await db_list_triggers(session, _PLACEHOLDER_ORG_ID)
+
+        assert page.total == 0
+        sql = self._compile(captured[0])
+        assert "team_memberships" not in sql, "an unscoped read must not add a team boundary"
 
 
 class TestUserTeamPrivateDenial:
