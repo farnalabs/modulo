@@ -41,8 +41,12 @@ from modulo.db.crud.run_node_outputs import read_run_node_outputs_raw, replace_r
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.base import Base
+from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.notification import Notification
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -54,6 +58,7 @@ from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
+from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
 from modulo.db.seed_demo import seed_demo, seed_demo_runtime
 from modulo.db.soft_delete import include_soft_deleted
@@ -77,6 +82,11 @@ _SEED_TABLES = {
     "teams",
     "team_memberships",
     "agents",
+    "model_backends",
+    "connector_instances",
+    "notifications",
+    "hitl_claims",
+    "trigger_events",
     "triggers",
     "run_daily_facts",
     # FAR-1248: first-class graph edges, per-node run traces, lifecycle map.
@@ -180,6 +190,15 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, Agent) == 6
     # FAR-977: 2 triggers (webhook + cron); FAR-1248: + "Ticket ready".
     assert await _count(session, Trigger) == 3
+    assert await _count(session, HitlClaim) == 3
+    assert await _count(session, Notification) == 4
+    assert await _count(session, ModelBackend) == 2
+    assert await _count(session, ConnectorInstance) == 2
+    assert await _count(session, TriggerEvent) == 3
+
+    claims = list((await session.execute(select(HitlClaim))).scalars())
+    assert {claim.decision for claim in claims} == {None, "approved", "rejected"}
+    assert all(claim.gate_config_json and claim.gate_config_json["label"] == "Human review" for claim in claims)
 
     org = (await _orgs(session))[0]
     assert org.slug == DEMO_ORG_SLUG
@@ -250,6 +269,11 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "team_memberships": await _count(session, TeamMembership),
         "agents": await _count(session, Agent),
         "triggers": await _count(session, Trigger),
+        "hitl_claims": await _count(session, HitlClaim),
+        "notifications": await _count(session, Notification),
+        "model_backends": await _count(session, ModelBackend),
+        "connectors": await _count(session, ConnectorInstance),
+        "trigger_events": await _count(session, TriggerEvent),
         "run_daily_facts": await _count(session, RunDailyFact),
     }
 
@@ -268,6 +292,11 @@ async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.Mon
         "team_memberships": await _count(session, TeamMembership),
         "agents": await _count(session, Agent),
         "triggers": await _count(session, Trigger),
+        "hitl_claims": await _count(session, HitlClaim),
+        "notifications": await _count(session, Notification),
+        "model_backends": await _count(session, ModelBackend),
+        "connectors": await _count(session, ConnectorInstance),
+        "trigger_events": await _count(session, TriggerEvent),
         "run_daily_facts": await _count(session, RunDailyFact),
     }
     assert counts_second == counts_first

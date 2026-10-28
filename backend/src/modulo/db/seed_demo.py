@@ -82,8 +82,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from modulo.core.demo import DEMO_ORG_ROLE, DEMO_ORG_SLUG, demo_login_config
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
+from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.notification import Notification
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -95,6 +99,7 @@ from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
+from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import get_settings
@@ -1565,6 +1570,169 @@ _TICKET_READY_CONFIG: dict[str, Any] = {
 }
 
 
+_DEMO_REVIEW_CONFIG: dict[str, Any] = {
+    "label": "Human review",
+    "description": "Review the demo change before the governance pipeline continues.",
+    "claim_expiry_minutes": 60,
+    "human_only": True,
+}
+
+
+async def _seed_demo_governance_surfaces(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+) -> None:
+    """Seed the durable review, notification, integration and trigger surfaces."""
+    now = datetime.now(UTC)
+    _governance_pipeline, _snapshot = pipeline_lookup[DEMO_PIPELINE_NAME]
+    governance_nodes = {node.key: demo_node_id(DEMO_PIPELINE_NAME, node.key) for node in _GOVERNANCE_PIPELINE.nodes}
+    review_id = f"hitl_review_{governance_nodes['review']}_{governance_nodes['open_pr']}"
+    review_rows = (
+        (6, review_id, None, None, None),
+        (9, review_id, "approved", account.id, "Demo approval: risk review passed."),
+        (17, review_id, "rejected", account.id, "Demo rejection: inspect the risky change again."),
+    )
+    for run_number, current_review_id, decision, decided_by, reason in review_rows:
+        run = await _find_demo_run(session, org, run_number)
+        if run is None:
+            continue
+        result = await session.execute(
+            select(HitlClaim).where(HitlClaim.run_id == run.id, HitlClaim.review_id == current_review_id)
+        )
+        claim = result.scalar_one_or_none()
+        desired_context = {"description": _DEMO_REVIEW_CONFIG["description"], "source": "demo_seed"}
+        desired = {
+            "pipeline_id": run.pipeline_id,
+            "expires_at": now + timedelta(days=2),
+            "decision": decision,
+            "decided_by": decided_by,
+            "decision_at": now - timedelta(hours=2) if decision else None,
+            "decision_payload": {"reason": reason} if reason else None,
+            "context_json": desired_context,
+            "gate_config_json": dict(_DEMO_REVIEW_CONFIG),
+            "terminalize_at": now + timedelta(days=2),
+        }
+        if claim is None:
+            claim = HitlClaim(
+                organisation_id=org.id,
+                run_id=run.id,
+                required_team_id=None,
+                review_id=current_review_id,
+                account_id=None,
+                claimed_at=None,
+                claim_token=None,
+                **desired,
+            )
+            session.add(claim)
+        else:
+            for attr, value in desired.items():
+                setattr(claim, attr, value)
+
+    model_specs = (
+        ("Demo Stub Fast", "Demo Stub Fast", "custom", "demo-stub-fast"),
+        ("Demo Stub Accurate", "Demo Stub Accurate", "custom", "demo-stub-accurate"),
+    )
+    for name, display_name, provider, model_id in model_specs:
+        result = await session.execute(
+            select(ModelBackend).where(ModelBackend.organisation_id == org.id, ModelBackend.name == name)
+        )
+        backend = result.scalar_one_or_none()
+        values = {
+            "display_name": display_name,
+            "provider": provider,
+            "model_id": model_id,
+            "credentials_ciphertext": b"demo-read-only",
+            "default_params": {"temperature": 0, "demo": True},
+            "cost_tracking": "disabled",
+            "status": "active",
+            "visibility": "org",
+            "account_id": account.id,
+        }
+        if backend is None:
+            session.add(ModelBackend(organisation_id=org.id, name=name, **values))
+        else:
+            for attr, value in values.items():
+                setattr(backend, attr, value)
+
+    connector_specs = (
+        ("Demo GitHub (read-only)", "github"),
+        ("Demo Linear (read-only)", "linear"),
+    )
+    for name, connector_type_id in connector_specs:
+        result = await session.execute(
+            select(ConnectorInstance).where(ConnectorInstance.organisation_id == org.id, ConnectorInstance.name == name)
+        )
+        connector = result.scalar_one_or_none()
+        values = {
+            "connector_type_id": connector_type_id,
+            "credentials_ciphertext": b"demo-read-only",
+            "config_json": {"demo": True, "read_only": True},
+            "allowed_operations": ["query"],
+            "status": "active",
+            "visibility": "org",
+            "account_id": account.id,
+        }
+        if connector is None:
+            session.add(ConnectorInstance(organisation_id=org.id, name=name, **values))
+        else:
+            for attr, value in values.items():
+                setattr(connector, attr, value)
+
+    notifications = (
+        ("hitl_review_required", "Review required", "A demo governance run is waiting for human review.", "warning"),
+        ("spend_threshold", "Spend threshold warning", "Demo spend is approaching its sample budget.", "warning"),
+        ("run_completed", "Run completed", "A demo governance run completed successfully.", "info"),
+        ("run_failed", "Run failed", "A demo sample run failed without performing real work.", "error"),
+    )
+    for category, title, body, level in notifications:
+        result = await session.execute(
+            select(Notification).where(Notification.organisation_id == org.id, Notification.category == category)
+        )
+        notification = result.scalar_one_or_none()
+        values = {
+            "scope": "org",
+            "target_user_id": None,
+            "level": level,
+            "title": title,
+            "body": body,
+            "action_url": "/settings/hitl-review" if category == "hitl_review_required" else "/runs",
+            "dismiss_strategy": "any_scope",
+            "dismissible_at_scope": True,
+            "expires_at": now + timedelta(days=3),
+        }
+        if notification is None:
+            session.add(Notification(organisation_id=org.id, category=category, **values))
+        else:
+            for attr, value in values.items():
+                setattr(notification, attr, value)
+
+    triggers = list((await session.execute(select(Trigger).where(Trigger.organisation_id == org.id))).scalars())
+    for index, trigger in enumerate(triggers[:4]):
+        raw_hash = hashlib.sha256(f"demo-trigger-event-{trigger.id}-{index}".encode()).hexdigest()
+        result = await session.execute(
+            select(TriggerEvent).where(
+                TriggerEvent.organisation_id == org.id,
+                TriggerEvent.raw_payload_hash == raw_hash,
+            )
+        )
+        event = result.scalar_one_or_none()
+        values = {
+            "trigger_id": trigger.id,
+            "trigger_type": trigger.trigger_type,
+            "received_at": now - timedelta(hours=index + 1),
+            "validation_result": "accepted" if index % 2 == 0 else "passed",
+            "run_id": None,
+            "error_detail": None,
+        }
+        if event is None:
+            session.add(TriggerEvent(organisation_id=org.id, raw_payload_hash=raw_hash, **values))
+        else:
+            for attr, value in values.items():
+                setattr(event, attr, value)
+
+
 async def _seed_ticket_ready_trigger(
     session: AsyncSession,
     org: Organisation,
@@ -2249,6 +2417,7 @@ async def seed_demo(session: AsyncSession) -> str | None:
     # daily facts; returns the lookup used by the trigger seed.
     pipeline_lookup = await _seed_demo_pipeline_and_runs(session, org, account, agent_ids)
     await _seed_demo_triggers(session, org, account, pipeline_lookup)
+    await _seed_demo_governance_surfaces(session, org, account, pipeline_lookup)
 
     return f"org={DEMO_ORG_SLUG} user={email}"
 
