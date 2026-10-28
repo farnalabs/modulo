@@ -1427,6 +1427,19 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     return reason
 
 
+def _connector_failure_artifact_reason(node_output: dict[str, Any]) -> str | None:
+    """Return the first failure reason from a connector output's artifacts."""
+    artifacts = node_output.get("artifacts")
+    if not isinstance(artifacts, list):
+        return None
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("status") != "failed":
+            continue
+        error = artifact.get("error")
+        return error if isinstance(error, str) and error else "Connector reported failure"
+    return None
+
+
 def _node_output_connector_failure(node_output: Any, node_type: str | None = None) -> str | None:
     """Return a connector/dispatch failure reason from a captured envelope.
 
@@ -1442,14 +1455,9 @@ def _node_output_connector_failure(node_output: Any, node_type: str | None = Non
     marked = node_output.get("connector_failure") is True
     if not marked and node_type not in {"connector", "dispatch"}:
         return None
-    artifacts = node_output.get("artifacts")
-    if isinstance(artifacts, list):
-        for artifact in artifacts:
-            if isinstance(artifact, dict) and artifact.get("status") == "failed":
-                error = artifact.get("error")
-                if isinstance(error, str) and error:
-                    return error
-                return "Connector reported failure"
+    reason = _connector_failure_artifact_reason(node_output)
+    if reason is not None:
+        return reason
     return "Connector reported failure" if marked else None
 
 
