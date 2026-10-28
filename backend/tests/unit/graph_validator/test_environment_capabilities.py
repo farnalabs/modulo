@@ -303,3 +303,51 @@ async def test_non_uuid_agent_id_skipped():
         environment_profile_id=pid,
     )
     assert result.is_valid
+
+
+async def test_unbound_profile_validate_definition_enforces_default_e2b_cap():
+    """When no environment profile is bound, validate_definition enforces the default E2B cap."""
+    session = _mock_session()
+    graph = {
+        "nodes": [
+            {
+                "id": "n1",
+                "node_type": "sandbox_agent",
+                "agent_prompt": "prompt",
+                "agent_commands": ["cmd"],
+                "template_id": "opencode",
+                "timeout_seconds": 3600,
+            }
+        ],
+        "edges": [],
+    }
+    result = await GraphValidator().validate_definition(graph, session, environment_profile_id=None)
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" for i in result.issues)
+
+
+async def test_unbound_profile_validate_for_run_enforces_default_e2b_cap():
+    """When no environment profile is bound on snapshot, validate_for_run enforces default E2B cap."""
+    session = _mock_session()
+    snap = MagicMock()
+    snap.graph_json = {
+        "nodes": [
+            {
+                "id": "n1",
+                "node_type": "sandbox_agent",
+                "agent_prompt": "prompt",
+                "agent_commands": ["cmd"],
+                "template_id": "opencode",
+                "timeout_seconds": 3600,
+            }
+        ],
+        "edges": [],
+    }
+    snap.schema_pins_json = []
+    snap.connector_bindings_json = []
+    snap.model_backend_pins_json = []
+    snap.environment_profile_id = None
+
+    result = await GraphValidator().validate_for_run(snap, {}, session)
+    assert not result.is_valid
+    assert any(i.code == "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP" for i in result.issues)

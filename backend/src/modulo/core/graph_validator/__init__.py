@@ -726,6 +726,34 @@ def _check_sandbox_timeout(node: dict[str, Any], nid: str, result: ValidationRes
         )
 
 
+def _check_sandbox_timeout_e2b_cap(node: dict[str, Any], nid: str, result: ValidationResult) -> None:
+    """Sandbox check: timeout_seconds must stay under the E2B 1-hour cap (FAR-511).
+
+    The e2b SDK upgrade shipped in the Aug 30 deploy (Python 3.14) began
+    enforcing E2B's 1-hour sandbox timeout cap: a sandbox_agent node with
+    ``timeout_seconds`` above the cap now fails provisioning with
+    ``400: Timeout cannot be greater than 1 hours`` (previously accepted).
+    Reject anything above ``settings.MAX_NODE_TIMEOUT_SECONDS`` at save time so
+    there is provisioning headroom; do NOT clamp — the author must pick a value
+    explicitly. The cap lives in settings (FAR-1424) so this check and the
+    FAR-1088 nodeless in-flight floor can never drift apart.
+    """
+    timeout = node.get("timeout_seconds")
+    if timeout is None:
+        return
+    try:
+        t = int(timeout) if not isinstance(timeout, int) else timeout
+    except (ValueError, TypeError):
+        return
+    if t > settings.MAX_NODE_TIMEOUT_SECONDS:
+        result.error(
+            "SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
+            f"Sandbox agent node '{nid}' timeout_seconds {t} exceeds the E2B sandbox "
+            f"cap (1 hour); use <= {settings.MAX_NODE_TIMEOUT_SECONDS} to leave provisioning headroom",
+            node_id=nid,
+        )
+
+
 def _check_sandbox_timeout_cap(node: dict[str, Any], nid: str, result: ValidationResult, max_node_seconds: int) -> None:
     """Reject a node timeout above the selected environment capability."""
     timeout = node.get("timeout_seconds")
@@ -1665,12 +1693,8 @@ class GraphValidator:
             result,
             pipeline_name=pipeline_name,
             unverified_registry_ok=True,
+            environment_profile_id=environment_profile_id,
         )
-        if environment_profile_id is None:
-            transport_cap = settings.get_settings().saq_run_timeout
-            for node in graph_json.get("nodes", []):
-                if node.get("node_type") == "sandbox_agent":
-                    _check_sandbox_timeout_cap(node, _string_or_default(node.get("id")), result, transport_cap)
         self._check_node_idempotent(graph_json, result)
         self._check_failure_and_retry(graph_json, result)
         await self._check_node_send_budget_bindings(graph_json, connector_bindings or [], session, result)
@@ -1762,7 +1786,11 @@ class GraphValidator:
         # rule: defaults are strict — the SNAPSHOT's bake (or model_class) is
         # the only legitimate source; the live registry is never consulted
         # here (mint is the only resolution seam — replay determinism).
-        self._check_sandbox_agent_config(snapshot.graph_json, result)
+        self._check_sandbox_agent_config(
+            snapshot.graph_json,
+            result,
+            environment_profile_id=snapshot.environment_profile_id,
+        )
 
         # Node idempotency flag check (FAR-295).
         self._check_node_idempotent(snapshot.graph_json, result)
@@ -3373,6 +3401,7 @@ class GraphValidator:
         *,
         pipeline_name: str | None = None,
         unverified_registry_ok: bool = False,
+        environment_profile_id: uuid.UUID | None = None,
     ) -> None:
         """Validate sandbox_agent node configurations.
 
@@ -3427,7 +3456,8 @@ class GraphValidator:
             )
             _check_sandbox_template(node, nid, result)
             _check_sandbox_timeout(node, nid, result)
-
+            if environment_profile_id is None:
+                _check_sandbox_timeout_e2b_cap(node, nid, result)
             _check_sandbox_heredoc_list_item(node, nid, result)
             _check_sandbox_stall_timeout(node, nid, result)
             _check_sandbox_context_files(node, nid, result)

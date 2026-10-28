@@ -6439,7 +6439,7 @@ async def _save_locked_graph(
     org_id: uuid.UUID,
     principal: TenantPrincipal,
     pipeline_owner_team_id: uuid.UUID | None,
-    environment_profile_id: uuid.UUID | None,
+    environment_profile_id: uuid.UUID | None = None,
     nodes: list[dict[str, Any]],
     edges: list[Any],
 ) -> tuple[list[dict[str, Any]], list[Any], list[GraphValidationIssue]] | None:
