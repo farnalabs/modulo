@@ -4,23 +4,31 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/evidence.py
+  - backend/src/modulo/api/routes/compliance.py
   - backend/src/modulo/core/evidence_redaction.py
+  - backend/src/modulo/compliance/evidence_index.py
+  - backend/src/modulo/compliance/pack.py
   - backend/src/modulo/db/models/evidence_redaction_rule.py
   - backend/src/modulo/db/migrations/versions/0320_evidence_redaction_rules.py
   - frontend/src/views/EvidenceView.vue
+  - frontend/src/views/ComplianceEvidenceIndexView.vue
   - frontend/src/views/AdminEvidenceRedactionView.vue
 unit-tests:
   - backend/tests/unit/api/test_evidence_routes.py
+  - backend/tests/unit/api/test_compliance_endpoint.py
   - backend/tests/unit/core/evidence/test_evidence_redaction.py
+  - backend/tests/unit/compliance/test_evidence_index.py
   - backend/tests/integration/db/test_evidence_redaction_rules.py
+  - backend/tests/integration/test_compliance_evidence_index.py
   - frontend/src/__tests__/EvidenceView.spec.ts
+  - frontend/src/__tests__/ComplianceEvidenceIndexView.spec.ts
   - frontend/src/__tests__/AdminEvidenceRedactionView.spec.ts
 depends-on:
   - feat-core-evidence-store
 status: covered
 ---
 
-# Evidence Dashboard & Redaction Boundary
+# Evidence Dashboard, Compliance Index & Redaction Boundary
 
 The read-only `/evidence` dashboard (FAR-944 chunk 9b) over the core evidence
 fact store, with a SERVER-SIDE field-level redaction boundary: a caller's role
@@ -32,6 +40,12 @@ fail-closed default) and the covered evidence-value keys are replaced with the
 The `/evidence` route renders under the MONITOR sidebar group, and the
 `/admin/evidence-redaction` editor under the ADMIN sidebar group lets an admin
 maintain the rules the boundary consults.
+
+The same feature owns the per-instance **compliance evidence index** (FAR-2036):
+`/admin/compliance/evidence-index` renders pack metadata, framework coverage and
+one entry per artefact type the instance produces, keyed to the mapping rows the
+artefact satisfies, with the deprecated `/admin/evidence` URL kept as a
+compatibility alias to the same view.
 
 ## Behaviours
 
@@ -73,6 +87,29 @@ maintain the rules the boundary consults.
       vocabulary, the seeded `*` / `viewer` catch-all is marked mandatory (with
       a warning when it is absent), and the page configures the SERVER boundary
       only - it never redacts or hides evidence values in the client
+- [x] `GET /api/v1/compliance/evidence-index` returns the organisation's
+      per-instance evidence index, gated by `compliance.evidence_index.read`,
+      scoped to the caller's organisation from the authenticated principal
+      (never a query parameter) through RLS, and optionally scoped to an audit
+      period with the half-open `from`/`to` parameters (a start after the end is
+      rejected 422; no period means the organisation's full history, recorded as
+      null `period_from`/`period_to`). On Postgres the transaction carries a
+      30s transaction-local `statement_timeout` and a timeout is answered 503
+      with an audit-period remedy, not a pinned connection. Each artefact type
+      the instance produces is returned with its status/provenance/record
+      count/location; an absent type is returned as `absent` and named in
+      `missing_artifact_types`, customer-owned record types are deliberately
+      omitted, and `pack_version`/`pack_content_hash` pin which pack produced
+      the index
+- [x] The canonical `/admin/compliance/evidence-index` route renders
+      `ComplianceEvidenceIndexView.vue`, with the deprecated `/admin/evidence`
+      route kept as a compatibility alias to that same view. The page shows pack
+      metadata, framework coverage, present/absent/customer-supplied artefact
+      status, identifiers/locations/provenance/mapping row IDs, missing artefact
+      warnings and the human-only lower-bound warning; a pipeline-snapshot
+      identifier renders as a concise label plus a link to that exact version
+      and the raw identifier behind a details disclosure with a copy action,
+      while every other identifier stays verbatim
 
 ## Redaction rule editor
 
@@ -110,6 +147,11 @@ the page is careful about identity:
   not part of this entry; the decision-record NULL-duplicate grouping
   (acceptance criteria 12-14) belongs to the decision-record read path and is
   not implemented here.
+- `frontend/src/views/EvidenceIndexView.vue` is a superseded view: the
+  `/admin/evidence` URL now renders `ComplianceEvidenceIndexView.vue` and no
+  router entry mounts the old component, but it and its
+  `frontend/src/__tests__/evidence-index.spec.ts` remain in the tree. It is not
+  part of the shipped surface and carries no product-map element inventory.
 
 ## QA History
 
@@ -137,3 +179,29 @@ the page is careful about identity:
   admin-gated and audited, migration 0320 + org creation both seed the
   `*`/viewer catch-all, and the editor's create/edit guards match the
   documented contract. No behaviour change.
+
+- 2026-10-28: **Improve Architecture product-map walk** (second pass on this
+  entry, compliance evidence index). Fixed MINOR (product-map completeness +
+  stale inventory): the compliance index view shipped two focusable scroll
+  regions (`compliance-evidence-index-coverage-scroll`,
+  `compliance-evidence-index-artifacts-scroll`) and the shared
+  `error-alert-retry` (the load error passes `:on-retry`), but none were in the
+  manifest `elements` inventory, and `/admin/compliance/evidence-index` was
+  absent from `OWNED_PAGES` in
+  `backend/tests/architecture/test_product_map_consistency.py` - so
+  `test_mapped_route_elements_cover_owning_view_testids` never checked the
+  page's static testids and a future control could ship invisible to
+  `/api/v1/manifest` and Assistant's docs indexer. Registered the three
+  elements and added the route to `OWNED_PAGES`. Also fixed the deprecated
+  `/admin/evidence` inventory: it still listed `EvidenceIndexView.vue` testids
+  (`evidence-index-page`, `page-header-right`, `evidence-index-refresh`,
+  `evidence-index-loading`) although that URL has rendered
+  `ComplianceEvidenceIndexView.vue` since the canonical route shipped - a
+  phantom surface the guard could not see because the alias was not in
+  `OWNED_PAGES`. Dropped the stale block; the canonical route owns the
+  inventory. Verified the tracker against the code: the route is gated by
+  `compliance.evidence_index.read`, org comes from the principal through RLS,
+  `from`/`to` are half-open with a 422 on an inverted period, the Postgres
+  statement timeout is transaction-local, customer-owned record types are
+  omitted by design, and the alias resolves to the same view. No behaviour
+  change.

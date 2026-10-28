@@ -2823,22 +2823,11 @@ elements:
       - testid: error-alert-retry
         type: button
         dynamic_testid: false
-    /admin/evidence:
-      - testid: evidence-index-page
-        type: element
-        dynamic_testid: false
-      - testid: page-header-right
-        type: element
-        dynamic_testid: false
-      - testid: evidence-index-refresh
-        type: button
-        dynamic_testid: false
-      - testid: evidence-index-loading
-        type: element
-        dynamic_testid: false
-      - testid: error-alert-retry
-        type: button
-        dynamic_testid: false
+    # /admin/evidence is a deprecated compatibility alias to
+    # /admin/compliance/evidence-index and renders the same
+    # ComplianceEvidenceIndexView.vue. That canonical route owns the element
+    # inventory; the alias carries none so the map never advertises the retired
+    # EvidenceIndexView surface on a route that no longer renders it.
     /risk-assessment:
       - testid: risk-assessment-loading
         type: element
@@ -3051,6 +3040,12 @@ elements:
       - testid: compliance-evidence-index-coverage
         type: element
         dynamic_testid: false
+      - testid: compliance-evidence-index-coverage-scroll
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-index-artifacts-scroll
+        type: element
+        dynamic_testid: false
       - testid: compliance-evidence-index-artifact-count
         type: element
         dynamic_testid: false
@@ -3071,6 +3066,9 @@ elements:
         dynamic_testid: false
       - testid: compliance-evidence-index-customer-responsibility
         type: element
+        dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
         dynamic_testid: false
 
     /analytics:

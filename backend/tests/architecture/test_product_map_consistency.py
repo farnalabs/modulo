@@ -504,6 +504,7 @@ OWNED_PAGES = {
         "frontend/src/views/AdminEvidenceRedactionView.vue",
         "frontend/src/components/shared/ErrorAlert.vue",
     ),
+    "/admin/compliance/evidence-index": ("frontend/src/views/ComplianceEvidenceIndexView.vue",),
     "/admin/errors": (
         "frontend/src/views/AdminErrorsView.vue",
         "frontend/src/components/shared/FilterBar.vue",
