@@ -107,7 +107,34 @@ describe('AdminModelBackendsView — list', () => {
     expect(wrapper.text()).toContain('claude-sonnet')
     expect(wrapper.text()).toContain('Configured')
     expect(wrapper.text()).toContain('Missing')
-    expect(wrapper.text()).toContain('private')
+    expect(wrapper.text()).toContain('Organisation')
+    expect(wrapper.text()).toContain('Private')
+    expect(wrapper.text()).not.toContain('private')
+  })
+
+  it('falls back to the raw visibility value or an em dash for unknown scopes', async () => {
+    mockBackendsGet([
+      backend('mb-1', { visibility: 'team' }),
+      backend('mb-2', { visibility: '' }),
+    ])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    const rowOne = wrapper.find('[data-testid="model-backend-row-mb-1"]')
+    const rowTwo = wrapper.find('[data-testid="model-backend-row-mb-2"]')
+    expect(rowOne.text()).toContain('team')
+    expect(rowTwo.text()).toContain('—')
+  })
+
+  it('does not render the empty state when only preview backends exist', async () => {
+    mockBackendsGet([backend('preview-1', { display_name: 'Preview Only', tier: 'preview' })])
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).not.toContain('No model backends configured')
+    expect(wrapper.find('[data-testid="model-backends-preview-section"]').exists()).toBe(true)
   })
 
   it('shows the empty state when no backends are configured (fe-003)', async () => {
@@ -143,6 +170,7 @@ describe('AdminModelBackendsView — list', () => {
 
     const previewSection = wrapper.find('[data-testid="model-backends-preview-section"]')
     expect(previewSection.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="model-backends-preview-summary"]').exists()).toBe(true)
     expect(previewSection.text()).toContain('preview-1')
   })
 })
@@ -737,6 +765,7 @@ describe('AdminModelBackendsView — pipeline references', () => {
       '/api/v1/model-backends/{backend_id}/pipeline-references',
       expect.objectContaining({ params: { path: { backend_id: 'mb-1' }, query: { page: 1, page_size: 20 } } }),
     )
+    expect(wrapper.find('[data-testid="admin-model-backends-refs-summary-mb-1"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Pipeline p-1')
     expect(wrapper.text()).toContain('Direct')
     expect(wrapper.text()).toContain('Agent A')

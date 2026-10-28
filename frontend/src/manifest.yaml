@@ -1909,6 +1909,9 @@ elements:
       - testid: model-backends-preview-section
         type: element
         dynamic_testid: false
+      - testid: model-backends-preview-summary
+        type: element
+        dynamic_testid: false
       - testid: admin-model-backends-back-to-presets
         type: button
         dynamic_testid: false
