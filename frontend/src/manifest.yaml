@@ -3198,6 +3198,10 @@ elements:
       - testid: envprofile-form-back
         type: button
         dynamic_testid: false
+      - testid: envprofile-form-max-node-seconds
+        type: input
+        dynamic_testid: false
+
       - testid: envprofile-form-name
         type: input
         dynamic_testid: false
@@ -3244,9 +3248,13 @@ elements:
       - testid: envprofile-form-back
         type: button
         dynamic_testid: false
+      - testid: envprofile-form-max-node-seconds
+        type: input
+        dynamic_testid: false
       - testid: envprofile-form-name
         type: input
         dynamic_testid: false
+
       - testid: envprofile-form-description
         type: textarea
         dynamic_testid: false

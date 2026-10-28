@@ -61,6 +61,7 @@ from modulo.core.runtime_provider import (
     egress_tier_for_provider_type,
 )
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
+from modulo.settings import MAX_NODE_TIMEOUT_SECONDS
 from modulo.util import validate_workspace_network
 
 if TYPE_CHECKING:
@@ -71,7 +72,7 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-_E2B_MAX_TIMEOUT_SECONDS = 3300  # GraphValidator parity bound (ADR 029)
+_E2B_MAX_TIMEOUT_SECONDS = MAX_NODE_TIMEOUT_SECONDS
 _OUTPUT_JSON_PATH = "/home/user/output.json"
 _INPUT_JSON_PATH = "/home/user/input.json"
 _PROMPT_PATH = "/home/user/prompt.md"

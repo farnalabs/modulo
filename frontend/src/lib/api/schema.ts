@@ -19114,7 +19114,10 @@ export interface components {
             image_ref?: string | null;
             /** Capabilities */
             capabilities?: string[];
+            /** Max Node Seconds */
+            max_node_seconds?: number;
             /** Config Json */
+
             config_json?: {
                 [key: string]: unknown;
             };
@@ -19232,7 +19235,10 @@ export interface components {
             image_ref?: string | null;
             /** Capabilities */
             capabilities: string[];
+            /** Max Node Seconds */
+            max_node_seconds: number;
             /** Config Json */
+
             config_json: {
                 [key: string]: unknown;
             };
@@ -19275,8 +19281,11 @@ export interface components {
             /** Image Ref */
             image_ref?: string | null;
             /** Capabilities */
-            capabilities?: string[] | null;
+            capabilities?: string[];
+            /** Max Node Seconds */
+            max_node_seconds?: number;
             /** Config Json */
+
             config_json?: {
                 [key: string]: unknown;
             } | null;

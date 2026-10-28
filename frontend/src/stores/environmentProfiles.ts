@@ -17,6 +17,7 @@ export interface EnvironmentProfile {
   provider_type: string
   image_ref: string | null
   capabilities: string[]
+  max_node_seconds?: number
   network_policy: string
   initialisation_strategy: string
   persistence_policy: string
@@ -33,8 +34,10 @@ export interface EnvironmentProfileSummary {
   description: string | null
   provider_type: string
   image_ref: string | null
-  capabilities: string[]
-  status: string
+   capabilities: string[]
+   max_node_seconds?: number
+   status: string
+
   created_at: string
 }
 
