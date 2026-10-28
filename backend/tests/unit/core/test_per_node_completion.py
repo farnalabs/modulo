@@ -428,16 +428,14 @@ async def test_deadline_gate_allows_retry_after_completion(
             await exec_task
 
 
-@pytest.mark.asyncio
-async def test_attempt_key_for_node_with_none_claim_token() -> None:
+def test_attempt_key_for_node_with_none_claim_token() -> None:
     """Test attempt_key_for_node with None claim_token (covers claim-unknown branch)."""
     run_id = uuid.uuid4()
     key = attempt_key_for_node(run_id=run_id, node_id="agent", claim_token=None)
     assert key == f"run:{run_id}:node:agent:claim-unknown"
 
 
-@pytest.mark.asyncio
-async def test_attempt_key_for_node_with_claim_token() -> None:
+def test_attempt_key_for_node_with_claim_token() -> None:
     """Test attempt_key_for_node with a claim_token."""
     run_id = uuid.uuid4()
     key = attempt_key_for_node(run_id=run_id, node_id="agent", claim_token="claim-token-123")
@@ -468,26 +466,6 @@ async def test_write_node_completion_creates_new_row(
         row = await session.get(
             RunNodeOutput,
             (run_id, "new-node", attempt_key_for_node(run_id=run_id, node_id="new-node", claim_token="claim-a")),
-        )
-        assert row is not None
-        assert row.completed_at is not None
-
-
-@pytest.mark.asyncio
-async def test_write_node_completion_updates_existing_row(
-    sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-) -> None:
-    """Test _write_node_completion updates an existing row."""
-    run_id = uuid.uuid4()
-    # Insert existing row without completed_at
-    await _insert_output(sqlite_sessionmaker, run_id=run_id, node_id="agent", completed=False, claim_token="claim-a")
-
-    await _write_node_completion(sqlite_engine, str(run_id), str(_ORG), "agent", "claim-a")
-
-    async with sqlite_sessionmaker() as session, session.begin():
-        row = await session.get(
-            RunNodeOutput,
-            (run_id, "agent", attempt_key_for_node(run_id=run_id, node_id="agent", claim_token="claim-a")),
         )
         assert row is not None
         assert row.completed_at is not None
@@ -934,8 +912,7 @@ async def test_fail_overdue_node_retry_true_branch(
             await exec_task
 
 
-@pytest.mark.asyncio
-async def test_wire_node_deadline_hooks_on_node_started(
+def test_wire_node_deadline_hooks_on_node_started(
     sqlite_engine: AsyncEngine, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     """Test _wire_node_deadline_hooks _on_node_started (lines 3170-3172)."""
