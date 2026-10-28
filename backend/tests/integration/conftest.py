@@ -926,7 +926,7 @@ async def integration_client(db_url: str, app_engine: AsyncEngine) -> AsyncClien
     )
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
-        factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
         async with factory() as session:
             yield session
 

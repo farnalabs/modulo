@@ -613,19 +613,46 @@ def _serialize_key(k: OrgApiKey) -> dict[str, Any]:
     return out
 
 
+def _serialize_key_with_account(
+    k: OrgApiKey,
+    kind: str,
+    display_name: str,
+    email: str | None,
+) -> dict[str, Any]:
+    """Build a serialisable dict from an OrgApiKey with joined Account info."""
+    base = _serialize_key(k)
+    base["account_kind"] = kind
+    base["account_display_name"] = display_name
+    # The typed list response always includes this field. Service accounts
+    # deliberately expose an explicit null rather than omitting it.
+    base["account_email"] = email if kind == "human" else None
+    return base
+
+
 async def list_api_keys(
     session: AsyncSession,
     org_id: uuid.UUID,
     include_revoked: bool = False,
 ) -> list[dict[str, Any]]:
-    """List API keys for an organisation, ordered by creation date descending."""
-    stmt = select(OrgApiKey).where(OrgApiKey.organisation_id == org_id)
+    """List API keys for an organisation, ordered by creation date descending.
+
+    Joins with Account to include the owning account's kind (human/service),
+    display name, and email (for human accounts) so admins can see which
+    persona each key is linked to.
+    """
+    from modulo.db.models.account import Account
+
+    stmt = (
+        select(OrgApiKey, Account.kind, Account.display_name, Account.email)
+        .join(Account, Account.id == OrgApiKey.account_id)
+        .where(OrgApiKey.organisation_id == org_id)
+    )
     if not include_revoked:
         stmt = stmt.where(OrgApiKey.revoked_at.is_(None))
     stmt = stmt.order_by(OrgApiKey.created_at.desc())
     result = await session.execute(stmt)
-    keys = list(result.scalars())
-    return [_serialize_key(k) for k in keys]
+    rows = list(result.all())
+    return [_serialize_key_with_account(k, kind, display_name, email) for k, kind, display_name, email in rows]
 
 
 async def update_api_key(

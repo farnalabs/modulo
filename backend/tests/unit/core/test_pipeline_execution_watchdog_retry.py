@@ -33,6 +33,8 @@ from typing import Any, Self
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.core.pipeline_engine import watchdog_retry as wr
 from modulo.core.pipeline_engine.executor import RunRetryPolicyError
@@ -720,6 +722,134 @@ async def test_deadline_kill_hook_failure_fails_closed_to_terminal():
     assert box.requested is False
 
 
+async def test_deadline_kill_injected_completion_probe_failure_fails_closed_to_terminal(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-2050: an injected completion_probe that raises ValueError or a DB-style error
+    fails closed by logging the warning and terminalizing the run with node_deadline_exceeded."""
+    executor = _make_executor_mock(attempt_count=1)
+    fail = AsyncMock(return_value=True)
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    probe = AsyncMock(side_effect=ValueError("corrupted completion payload"))
+
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
+        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+    ):
+        await _fail_overdue_node(
+            MagicMock(),
+            "run-1",
+            "org-1",
+            deadlines,
+            exec_task,
+            done,
+            stall,
+            retry_hook=hook,
+            completion_probe=probe,
+        )
+
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+
+    probe.assert_awaited_once_with("run-1", "org-1", None)
+    fail.assert_awaited_once()
+    assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+    assert (
+        "No node completed in this attempt; re-dispatch skipped per FAR-2050" in fail.await_args.kwargs["error_detail"]
+    )
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+    assert any("pipeline_execution.node_deadline_completion_probe_failed" in rec.message for rec in caplog.records)
+
+
+async def test_deadline_kill_real_completion_probe_failure_fails_closed_to_terminal(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-2050: a failure from the real AsyncEngine _probe_completed_nodes query (SQLAlchemyError)
+    fails closed to terminal-fail without letting the exception escape unhandled."""
+    executor = _make_executor_mock(attempt_count=1)
+    fail = AsyncMock(return_value=True)
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    hook, box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    real_engine = MagicMock(spec=AsyncEngine)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_execution"),
+        patch(
+            "modulo.core.pipeline_execution._probe_completed_nodes",
+            AsyncMock(side_effect=SQLAlchemyError("database unreachable")),
+        ),
+        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+    ):
+        await _fail_overdue_node(
+            real_engine,
+            "run-1",
+            "org-1",
+            deadlines,
+            exec_task,
+            done,
+            stall,
+            retry_hook=hook,
+            claim_token="tok-claim-1",
+        )
+
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+
+    fail.assert_awaited_once()
+    assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
+    assert (
+        "No node completed in this attempt; re-dispatch skipped per FAR-2050" in fail.await_args.kwargs["error_detail"]
+    )
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+    assert any("pipeline_execution.node_deadline_completion_probe_failed" in rec.message for rec in caplog.records)
+
+
+async def test_deadline_kill_completion_probe_preserves_terminal_write_error() -> None:
+    """FAR-2050: probe failure does not mask a subsequent terminalisation failure."""
+    executor = _make_executor_mock(attempt_count=1)
+    fail = AsyncMock(side_effect=RuntimeError("terminal write fatal DB failure"))
+    deadlines = {"n1": (time.monotonic() - 1.0, 300)}
+    exec_task = asyncio.create_task(asyncio.sleep(999))
+    stall = asyncio.Event()
+    done = asyncio.Event()
+    hook, _box = wr.create_watchdog_retry_hook(MagicMock(), uuid.uuid4(), uuid.uuid4(), executor, exec_task=exec_task)
+    probe = AsyncMock(side_effect=ValueError("probe failed"))
+
+    with (
+        patch("modulo.core.pipeline_execution.fail_run_terminal", fail),
+        pytest.raises(RuntimeError, match="terminal write fatal DB failure"),
+    ):
+        await _fail_overdue_node(
+            MagicMock(),
+            "run-1",
+            "org-1",
+            deadlines,
+            exec_task,
+            done,
+            stall,
+            retry_hook=hook,
+            completion_probe=probe,
+        )
+
+    exec_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await exec_task
+
+    probe.assert_awaited_once()
+    fail.assert_awaited_once()
+
+
 async def test_deadline_kill_lost_fence_stands_down_without_redispatch():
     """A fence loss (rowcount 0 — a successor owns the run, or it just went
     terminal) must NOT re-dispatch; the watchdog's guarded terminal write
@@ -834,6 +964,7 @@ async def test_zombie_watchdog_reset_timeout_defers_without_terminal_fail():
                 grace_seconds=0.01,
                 retry_hook=hook,
             )
+
     finally:
         exec_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -1241,6 +1372,8 @@ async def _drive_deadline_kill(
             asyncio.Event(),
             asyncio.Event(),
             retry_hook=hook,
+            claim_token=executor._claim_token,
+            completion_probe=AsyncMock(return_value=True),
         )
     exec_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -1493,6 +1626,44 @@ async def test_watchdog_redispatch_reraises_run_retry_policy_error():
     assert exc_info.value.max_retries == 1
     fail.assert_not_awaited()
     executor._fenced_pending_reset.assert_awaited_once()
+
+
+async def test_watchdog_wires_completion_hook_with_caller_claim_token() -> None:
+    """The production wrapper passes its claimed token before executor startup.
+
+    The executor only captures ``_claim_token`` inside ``execute``/``resume``;
+    reading that attribute during wrapper wiring would therefore bind the
+    completion writer to the wrong attempt suffix.
+    """
+    executor = MagicMock()
+    captured: dict[str, Any] = {}
+
+    def _wire(*_args: Any, **kwargs: Any) -> None:
+        captured["claim_token"] = kwargs["claim_token"]
+
+    async def _execute() -> SimpleNamespace:
+        executor._claim_token = "executor-set-too-late"
+        return SimpleNamespace(status="complete")
+
+    with (
+        patch("modulo.core.pipeline_execution._wire_node_deadline_hooks", side_effect=_wire) as wire,
+        patch("modulo.core.pipeline_execution.zombie_watchdog", new_callable=AsyncMock),
+        patch("modulo.core.pipeline_execution.node_deadline_watchdog", new_callable=AsyncMock),
+        patch("modulo.core.pipeline_execution.heartbeat_loop", new_callable=AsyncMock),
+    ):
+        result = await run_executor_with_watchdog(
+            MagicMock(),
+            run_id=str(uuid.uuid4()),
+            org_id=str(uuid.uuid4()),
+            executor=executor,
+            job=MagicMock(function="resume_run"),
+            execute_fn=_execute,
+            claim_token="caller-claim-token",
+        )
+
+    assert result == {"status": "complete"}
+    wire.assert_called_once()
+    assert captured["claim_token"] == "caller-claim-token"
 
 
 async def test_watchdog_no_coverage_still_terminal_fails_and_returns_failed():

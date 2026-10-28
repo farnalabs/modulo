@@ -194,7 +194,9 @@ _TOOL_REQUIREMENTS: dict[str, ToolRequirement] = {
     "delete_secret": ToolRequirement(_SCOPE_SECRET_MANAGE),
     "list_secrets": ToolRequirement(_SCOPE_SECRET_MANAGE),
     "create_api_key": ToolRequirement("api_key.create"),
-    "list_api_keys": ToolRequirement("api_key.update"),
+    # Listing keys exposes the owning account's human display name/email, so it
+    # uses the same operator floor as the REST list endpoint.
+    "list_api_keys": ToolRequirement("api_key.list"),
     "revoke_api_key": ToolRequirement("api_key.revoke"),
     # FAR-614: the first caller-scoped (``.self``) MCP tools — get/set the
     # CALLER's own HITL email-alert preference. Target = the caller's account

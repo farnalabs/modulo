@@ -4,6 +4,7 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/lifecycle_maps.py
+  - backend/src/modulo/api/dependencies.py
   - backend/src/modulo/core/lifecycle_map
   - frontend/src/stores/lifecycleMaps.ts
   - frontend/src/views/lifecycle-map/LifecycleMapView.vue
@@ -25,20 +26,36 @@ bdd:
   - backend/tests/bdd/features/lifecycle_maps/journeys.feature
 depends-on:
   - feat-pipelines
-status: partial
+status: covered
 ---
 
 # Lifecycle Maps
 
 Lifecycle maps and stage workflows are retained for internal Farnalabs dogfood
-and future product work. They are not an Alpha-facing feature: the route is
-available only in dev mode, and ordinary navigation, library catalogue and
-pipeline-editor surfaces do not expose it. Maps define the lifecycle stages a
-pipeline's work items flow through, with edges representing transitions between
-stages.
+and future product work. They are not an Alpha-facing feature: the routes are
+registered with `visibility: in_dev` and an empty sidebar group, so ordinary
+navigation, the library catalogue, the pipeline editor, global/audit search and
+the ordinary feature-flag surfaces do not expose them, and the API router
+additionally requires `MODULO_DEV_MODE` plus the `library.search.in_dev`
+operator grant. Maps define the lifecycle stages a pipeline's work items flow
+through, with edges representing transitions between stages.
 
 ## Behaviours
 
+- [x] Internal-only concealment (FAR-2200): the `/lifecycle-maps`,
+      `/lifecycle-maps/:id` and `/lifecycle-maps/:id/editor` routes carry
+      `visibility: in_dev`, an empty `sidebar_group` and the
+      `operator`/`admin` roles with `library.search.in_dev`; library browse /
+      detail / copy-to-adapt, pipeline-editor pickers, global search, audit
+      search and feature-flag writes all exclude them for an ordinary caller.
+      The API router itself is guarded by `require_in_dev_operator(...,
+      require_dev_mode=True)`, so an operator with developer mode OFF is
+      refused 403 before the handler and the service layer never runs
+      (`backend/src/modulo/api/routes/lifecycle_maps.py`,
+      `backend/src/modulo/api/dependencies.py`,
+      `tests/unit/api/test_lifecycle_maps_routes.py::test_operator_is_denied_when_developer_mode_is_off`,
+      `tests/unit/api/test_global_search.py`,
+      `tests/unit/api/test_library_routes.py`)
 - [x] Lifecycle map CRUD: create, list, get, update, soft-delete, restore with
       name deduplication and org-scoped RLS
       (`backend/src/modulo/api/routes/lifecycle_maps.py`,
@@ -84,7 +101,10 @@ stages.
 
 ## Known Gaps
 
-None acknowledged: the journey surface (map journey list with keyset pagination,
+None acknowledged. Being retained for internal dogfood only (not exposed to
+Alpha users) is a deliberate product scope decision recorded above, not a
+coverage gap: every behaviour this entry tracks is implemented and tested.
+The journey surface (map journey list with keyset pagination,
 journey-detail run history, and the advisory self-report counters) is now locked
 by the executing `journeys.feature` BDD surface, driving the real
 `/journeys`, `/journeys/{kind}/{ref}` and `/journeys/self-report` routes with
@@ -93,6 +113,24 @@ for real, so malformed-entry rejection is asserted end to end). The
 journey-detail BDD gap tracked here since the 2026-09-12 walk is closed.
 
 ## QA History
+
+- 2026-10-28: **Improve Architecture product-map walk** – reconciled the two
+  product-map layers with FAR-2200 and closed a Lens-9 coverage gap. FAR-2200
+  shipped the internal-only concealment (routes moved to `visibility: in_dev`
+  with an empty sidebar group, library / pipeline-editor / global-search /
+  audit-search / feature-flag exposure closed, and the API router guarded by
+  `require_in_dev_operator` = developer mode + `library.search.in_dev`), yet the
+  manifest still carried that concealment as the entry's only `[ ]` behaviour,
+  so the registry reported the feature as `partial` and the tracker disagreed
+  with its own "None acknowledged" gaps. Ticked the shipped behaviour with its
+  real two-part gate, moved both layers to `covered`, and recorded the
+  internal-only scope as a deliberate product decision rather than a gap.
+  Lens 9 found the dev-mode refusal branch was implemented but unreachable in
+  the route tests (every existing test runs with `MODULO_DEV_MODE=True`):
+  added `test_operator_is_denied_when_developer_mode_is_off`, which drives the
+  real router dependency for a read and a mutation with developer mode OFF and
+  asserts both 403 ("This internal feature requires developer mode") with the
+  service layer never awaited.
 
 - 2026-10-03: **Improve Architecture product-map walk** – closed the
   `feat-lifecycle-maps` tracker lag left by FAR-654/FAR-742 (journey display

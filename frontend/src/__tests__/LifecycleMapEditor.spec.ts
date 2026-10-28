@@ -632,4 +632,218 @@ describe('LifecycleMapEditor interactions', () => {
     expect(nodes[nodes.length - 1].data.name).toBe('New Manual Stage')
     vi.unstubAllGlobals()
   })
+
+  /* ── graduation flow ──────────────────────────────────────────────────── */
+
+  it('onGraduateClick sets graduation state and opens dialog', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    ;(wrapper.vm as unknown as { onGraduateClick: (data: { id: string; name: string; stage_type: string }) => void }).onGraduateClick({
+      id: 'stage-a',
+      name: 'Stage A',
+      stage_type: 'modulo',
+    })
+
+    expect((wrapper.vm as unknown as { graduationStageId: string }).graduationStageId).toBe('stage-a')
+    expect((wrapper.vm as unknown as { graduationStageName: string }).graduationStageName).toBe('Stage A')
+    expect((wrapper.vm as unknown as { showGraduation: boolean }).showGraduation).toBe(true)
+  })
+
+  it('onGraduateConfirm updates node and calls handleSave', async () => {
+    putMock.mockResolvedValueOnce({ id: 'ver-1' })
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    const node = { id: 'stage-a', data: { name: 'Stage A', stage_type: 'placeholder', pipeline_id: null, graduated: false } }
+    ;(wrapper.vm as unknown as { onNodeClick: (e: { node: unknown }) => void }).onNodeClick({ node })
+
+    await (wrapper.vm as unknown as { onGraduateConfirm: (stageId: string, pipelineId: string) => Promise<void> }).onGraduateConfirm('stage-a', 'pipe-1')
+    await flushPromises()
+
+    const updatedNode = (wrapper.vm as unknown as { flowNodes: Array<{ id: string; data: { graduated: boolean; stage_type: string; pipeline_id: string } }> }).flowNodes.find((n) => n.id === 'stage-a')
+    expect(updatedNode!.data.graduated).toBe(true)
+    expect(updatedNode!.data.stage_type).toBe('modulo')
+    expect(updatedNode!.data.pipeline_id).toBe('pipe-1')
+    expect(putMock).toHaveBeenCalledOnce()
+    expect((wrapper.vm as unknown as { showGraduation: boolean }).showGraduation).toBe(false)
+  })
+
+  it('onGraduateConfirm handles save error and sets saveError', async () => {
+    putMock.mockRejectedValueOnce(new Error('Save failed'))
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    const node = { id: 'stage-a', data: { name: 'Stage A', stage_type: 'placeholder', pipeline_id: null, graduated: false } }
+    ;(wrapper.vm as unknown as { onNodeClick: (e: { node: unknown }) => void }).onNodeClick({ node })
+
+    await (wrapper.vm as unknown as { onGraduateConfirm: (stageId: string, pipelineId: string) => Promise<void> }).onGraduateConfirm('stage-a', 'pipe-1')
+    await flushPromises()
+
+    expect((wrapper.vm as unknown as { saveError: string }).saveError).toBe('Save failed')
+    expect((wrapper.vm as unknown as { showGraduation: boolean }).showGraduation).toBe(false)
+  })
+
+  it('onGraduateConfirm does nothing when node not found', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    await (wrapper.vm as unknown as { onGraduateConfirm: (stageId: string, pipelineId: string) => Promise<void> }).onGraduateConfirm('non-existent', 'pipe-1')
+    await flushPromises()
+
+    expect(putMock).not.toHaveBeenCalled()
+  })
+
+  /* ── loading state ────────────────────────────────────────────────────── */
+
+  it('shows loading spinner while loading is true', async () => {
+    vi.mocked(useApi).mockReturnValueOnce({
+      get: vi.fn((url: string) => {
+        if (url.endsWith('/versions')) return Promise.resolve(versions)
+        if (url.includes('/pipelines')) return Promise.resolve({ items: [] })
+        return new Promise(() => {}) // never resolves
+      }),
+      post: postMock,
+      put: putMock,
+    } as unknown as ReturnType<typeof useApi>)
+
+    const wrapper = mountEditor()
+    expect(wrapper.find('.animate-spin').exists()).toBe(true)
+  })
+
+  /* ── save error display ───────────────────────────────────────────────── */
+
+  it('displays saveError in toolbar when save fails', async () => {
+    putMock.mockRejectedValueOnce(new Error('Save failed'))
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    await (wrapper.vm as unknown as { handleSave: () => Promise<void> }).handleSave()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Save failed')
+  })
+
+  it('clears saveError on successful save after previous error', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    // First cause an error
+    putMock.mockRejectedValueOnce(new Error('Save failed'))
+    await (wrapper.vm as unknown as { handleSave: () => Promise<void> }).handleSave()
+    await flushPromises()
+    expect((wrapper.vm as unknown as { saveError: string }).saveError).toBe('Save failed')
+
+    // Then succeed
+    putMock.mockResolvedValueOnce({ id: 'ver-1' })
+    await (wrapper.vm as unknown as { handleSave: () => Promise<void> }).handleSave()
+    await flushPromises()
+    expect((wrapper.vm as unknown as { saveError: string }).saveError).toBeNull()
+  })
+
+  /* ── onDragOver edge cases ────────────────────────────────────────────── */
+
+  it('onDragOver prevents default', async () => {
+    class FakeDragEvent extends Event {
+      dataTransfer: { dropEffect: string } | null = null
+      preventDefault = vi.fn()
+      constructor(type: string, init?: { bubbles?: boolean; dataTransfer?: { dropEffect: string } }) {
+        super(type, { bubbles: init?.bubbles })
+        this.dataTransfer = init?.dataTransfer ?? null
+      }
+    }
+    vi.stubGlobal('DragEvent', FakeDragEvent)
+
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    const dt = { dropEffect: '' }
+    const event = new FakeDragEvent('dragover', { bubbles: true, dataTransfer: dt })
+    ;(wrapper.vm as unknown as { onDragOver: (e: unknown) => void }).onDragOver(event)
+
+    expect(event.preventDefault).toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  /* ── version switching edge cases ─────────────────────────────────────── */
+
+  it('onLoadVersion handles non-existent version gracefully', async () => {
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    wrapper.findComponent(VersionHistoryDropdown).vm.$emit('select', 'non-existent')
+    await flushPromises()
+
+    // Should not crash, selection should be cleared
+    expect((wrapper.vm as unknown as { selectedNode: unknown }).selectedNode).toBeNull()
+    expect((wrapper.vm as unknown as { selectedEdge: unknown }).selectedEdge).toBeNull()
+  })
+
+  it('onLoadVersion clears current version when loading empty version', async () => {
+    const emptyVersions = [
+      { id: 'ver-1', lifecycle_map_id: 'map-1', version_number: 1, stages: [], edges: [], created_by: 'alice', created_at: '2026-01-01T00:00:00Z', notes: '' },
+    ]
+    vi.mocked(useApi).mockReturnValueOnce({
+      get: vi.fn((url: string) => {
+        if (url.endsWith('/versions')) return Promise.resolve(emptyVersions)
+        if (url.includes('/pipelines')) return Promise.resolve({ items: [] })
+        return Promise.resolve({ id: 'map-1', name: 'Empty Map' })
+      }),
+      post: postMock,
+      put: putMock,
+    } as unknown as ReturnType<typeof useApi>)
+
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    const flow = wrapper.findComponent(VueFlowStub)
+    expect(flow.props('nodes')).toHaveLength(0)
+    expect(flow.props('edges')).toHaveLength(0)
+  })
+
+  /* ── computeLifecycleMapLayout integration ───────────────────────────── */
+
+  it('buildFlowNodes uses computed layout when stages lack positions', async () => {
+    const versionsWithNoPos = [
+      { id: 'ver-1', lifecycle_map_id: 'map-1', version_number: 1, stages: [{ id: 'stage-1', name: 'Stage 1', description: '', stage_type: 'placeholder', pipeline_id: null, external_url: null, owner: null, graduated: false }], edges: [], created_by: 'alice', created_at: '2026-01-01T00:00:00Z', notes: '' },
+    ]
+    vi.mocked(useApi).mockReturnValueOnce({
+      get: vi.fn((url: string) => {
+        if (url.endsWith('/versions')) return Promise.resolve(versionsWithNoPos)
+        if (url.includes('/pipelines')) return Promise.resolve({ items: [] })
+        return Promise.resolve({ id: 'map-1', name: 'Layout Map' })
+      }),
+      post: postMock,
+      put: putMock,
+    } as unknown as ReturnType<typeof useApi>)
+
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    const flow = wrapper.findComponent(VueFlowStub)
+    const nodes = flow.props('nodes') as Array<{ position: { x: number; y: number } }>
+    expect(nodes[0].position.x).not.toBe(0)
+    expect(nodes[0].position.y).not.toBe(0)
+  })
+
+  /* ── save button state ───────────────────────────────────────────────── */
+
+  it('sets saving state while saving', async () => {
+    let resolvePut: (value: unknown) => void
+    const putPromise = new Promise((resolve) => { resolvePut = resolve })
+    putMock.mockReturnValueOnce(putPromise)
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    const savePromise = (wrapper.vm as unknown as { handleSave: () => Promise<void> }).handleSave()
+    await flushPromises()
+
+    expect((wrapper.vm as unknown as { saving: boolean }).saving).toBe(true)
+
+    resolvePut!({ id: 'ver-1' })
+    await savePromise
+    await flushPromises()
+
+    expect((wrapper.vm as unknown as { saving: boolean }).saving).toBe(false)
+  })
 })

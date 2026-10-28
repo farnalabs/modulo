@@ -2671,6 +2671,9 @@ elements:
       - testid: admin-users-copy-password
         type: button
         dynamic_testid: false
+      - testid: admin-users-reveal-password
+        type: button
+        dynamic_testid: false
       - testid: admin-users-reset-done
         type: button
         dynamic_testid: false
@@ -6011,6 +6014,9 @@ elements:
       - testid: settings-mcp-oauth-revoke-error
         type: element
         dynamic_testid: false
+      - testid: settings-mcp-account-filter
+        type: select
+        dynamic_testid: false
     /settings/observability:
       - testid: feature-gate
         type: element
@@ -7083,9 +7089,9 @@ features:
             - "Universal license gating of every registered feature is tracked under feat-license"
     feat-lifecycle-maps:
         description: Internal lifecycle maps and stage workflows (dogfood only)
-        status: partial
+        status: covered
         behaviours:
-            - "[ ] Lifecycle Maps are not exposed in the Alpha sidebar, library catalogue, pipeline editor, or ordinary feature-flag surfaces; the implementation remains reachable only through the internal/dev route when dev mode is enabled"
+            - "[x] Lifecycle Maps are not exposed in the Alpha sidebar, library catalogue, pipeline editor, global search, audit search, or ordinary feature-flag surfaces (FAR-2200): the routes are registered with `visibility: in_dev` and an empty `sidebar_group`, and the API router is gated by `require_in_dev_operator` (developer mode AND the `library.search.in_dev` operator grant); an operator with developer mode OFF is refused with 403 before any handler runs"
             - "[x] Detail page delete: DELETE /api/v1/lifecycle-maps/{id} soft-deletes the map (204) and frees its stage pipelines; the detail page offers a Delete button behind a confirmation dialog and navigates back to the list on success"
             - "[x] Auto-layout is layered: linear chains render left-to-right, split sources and their branches share a column, and rejoin targets cluster — computed from stage/transition topology, not array index"
 

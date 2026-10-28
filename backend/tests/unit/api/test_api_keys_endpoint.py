@@ -267,8 +267,41 @@ def test_create_api_key_with_expires_at(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_list_api_keys_returns_200(client: TestClient) -> None:
-    entries = [{"id": str(_KEY_ID), "name": "Test", "role": "operator"}]
+def test_list_api_keys_returns_typed_human_and_service_rows(client: TestClient) -> None:
+    entries = [
+        {
+            "id": str(_KEY_ID),
+            "name": "Human Key",
+            "role": "operator",
+            "scope": "org",
+            "team_id": None,
+            "lookup_prefix": "mk_human****",
+            "last_used_at": None,
+            "created_at": _NOW.isoformat(),
+            "expires_at": None,
+            "revoked_at": None,
+            "is_active": True,
+            "account_kind": "human",
+            "account_display_name": "Duncan Tait",
+            "account_email": "duncan@example.com",
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Service Key",
+            "role": "runner",
+            "scope": "org",
+            "team_id": None,
+            "lookup_prefix": "mk_service****",
+            "last_used_at": None,
+            "created_at": _NOW.isoformat(),
+            "expires_at": None,
+            "revoked_at": None,
+            "is_active": True,
+            "account_kind": "service",
+            "account_display_name": "CI Service",
+            "account_email": None,
+        },
+    ]
     with (
         patch("modulo.api.routes.api_keys.list_api_keys", return_value=entries),
         patch("modulo.api.routes.api_keys.set_rls_org"),
@@ -276,7 +309,10 @@ def test_list_api_keys_returns_200(client: TestClient) -> None:
     ):
         resp = client.get("/api/v1/api-keys")
     assert resp.status_code == 200
-    assert len(resp.json()) == 1
+    body = resp.json()
+    assert len(body) == 2
+    assert body[0]["account_email"] == "duncan@example.com"
+    assert body[1]["account_email"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +426,7 @@ def test_list_api_keys_runner_gets_403(runner_client: TestClient) -> None:
     """Runner (who holds api_key.update) must be denied listing org keys (floor raised to operator)."""
     resp = runner_client.get("/api/v1/api-keys")
     assert resp.status_code == 403
-    assert "Only admin or operator users can list API keys" in resp.json()["detail"]
+    assert "Permission 'api_key.list' requires 'operator' role" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

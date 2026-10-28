@@ -393,9 +393,11 @@ def step_list_api_keys(request: Any, ctx: dict[str, Any]) -> None:
         )
         mock_key.name = ctx.get("api_key_name", "my-key")
         mock_key.scope = "org"
+        # list_api_keys now joins with Account - return tuple (key, kind, display_name, email)
+        mock_account_tuple = (mock_key, "human", "test-user", "test@example.com")
         _shaped_execute(
             session,
-            [MagicMock(scalars=MagicMock(return_value=[mock_key]))],
+            [MagicMock(all=MagicMock(return_value=[mock_account_tuple]))],
         )
 
     from tests.bdd.conftest import session_client

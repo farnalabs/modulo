@@ -1280,7 +1280,11 @@ async def admin_update_user(
             detail="Cannot deactivate yourself",
         )
 
+    org_role = ""
     try:
+        # This endpoint owns the mutation transaction.  A nested savepoint would
+        # release the role/deactivation writes when the surrounding request
+        # transaction is rolled back, so always use a durable top-level commit.
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
 
@@ -1335,6 +1339,9 @@ async def admin_update_user(
                     )
                     .values(deactivated_at=func.now())
                 )
+                # Keep the response object usable after commit without a
+                # post-commit lazy load under autobegin=False.
+                target_membership.deactivated_at = datetime.now(UTC)
                 # FAR-537: mirror the POST deactivate path's per-org revocation
                 # (the caller-bound deactivate_break_glass SECURITY DEFINER):
                 # blacklist the target's refresh-token families minted under the
@@ -1373,6 +1380,7 @@ async def admin_update_user(
                     )
                     .values(deactivated_at=None)
                 )
+                target_membership.deactivated_at = None
             if req.org_role is not None:
                 from sqlalchemy import update as sa_update
 
@@ -1384,6 +1392,12 @@ async def admin_update_user(
                     )
                     .values(role=req.org_role)
                 )
+
+            # The membership was loaded before the mutation transaction.  Use
+            # the requested role when present; otherwise its loaded role is
+            # unchanged.  Avoid a post-commit refresh or lookup: the DI session
+            # uses autobegin=False and cannot implicitly begin that read.
+            org_role = req.org_role if req.org_role is not None else target_membership.role
 
     except LastAdminLockoutError as exc:
         raise HTTPException(
@@ -1401,12 +1415,6 @@ async def admin_update_user(
 
         _raise_this_feature_not_available()
 
-    org_role = req.org_role or (await _get_org_role(session, user_id, current_user.organisation_id))
-    # Refresh the membership AFTER the tombstone writes committed — the bulk
-    # UPDATE does not refresh the in-session ORM object and (expire_on_commit
-    # off) a plain re-SELECT would return the same stale identity-map instance
-    # (gh-1794/FAR-533).
-    await session.refresh(target_membership)
     return _to_user_list_item(account, org_role, org_membership=target_membership)
 
 
@@ -1589,8 +1597,10 @@ async def admin_deactivate_user(
     # raw-SQL call does not refresh the in-session ORM object, and (with
     # expire_on_commit off) a plain re-SELECT would return the same stale
     # identity-map instance. is_active must reflect the caller's-org tombstone
-    # (gh-1794/FAR-533).
-    await session.refresh(membership)
+    # (gh-1794/FAR-533). With autobegin=False (production session config),
+    # explicitly begin a transaction for the refresh.
+    async with session.begin():
+        await session.refresh(membership)
     return _to_user_list_item(account, org_role, org_membership=membership)
 
 
@@ -1690,8 +1700,10 @@ async def admin_reactivate_user(
     # Refresh the membership AFTER the tombstone clear committed — the bulk
     # UPDATE does not refresh the in-session ORM object (same identity-map
     # caveat as the deactivate route). is_active must reflect the caller's-org
-    # state (gh-1794/FAR-533).
-    await session.refresh(membership)
+    # state (gh-1794/FAR-533). With autobegin=False (production session config),
+    # explicitly begin a transaction for the refresh.
+    async with session.begin():
+        await session.refresh(membership)
     return _to_user_list_item(account, org_role, org_membership=membership)
 
 

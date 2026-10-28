@@ -16,14 +16,17 @@ const i18n = createI18n({
   messages: { 'en-US': enUS },
 })
 
-function mountBar(filters: Partial<AnalyticsFilters> = {}) {
+function mountBar(
+  filters: Partial<AnalyticsFilters> = {},
+  options: { measure?: AnalyticsMeasure; folders?: { id: string; name: string }[]; pipelines?: { id: string; name: string }[] } = {},
+) {
   return mount(AnalyticsFilterBar, {
     global: { plugins: [i18n] },
     props: {
       filters: { timespan: '7d', groupBy: 'day', dimension: null, ...filters },
-      measure: 'count' as AnalyticsMeasure,
-      folders: [],
-      pipelines: [],
+      measure: options.measure ?? 'count',
+      folders: options.folders ?? [],
+      pipelines: options.pipelines ?? [],
     },
   })
 }
@@ -114,5 +117,285 @@ describe('AnalyticsFilterBar dimension picker (FAR-1567: trigger_id)', () => {
 
     const select = mountBar(filters).find('[data-testid="analytics-filter-dimension"]')
     expect((select.element as HTMLSelectElement).value).toBe('trigger_id')
+  })
+})
+
+describe('AnalyticsFilterBar timespan buttons', () => {
+  it('renders all timespan buttons', () => {
+    const wrapper = mountBar()
+    const buttons = wrapper.findAll('[data-testid^="analytics-timespan-"]')
+    expect(buttons.length).toBeGreaterThan(0)
+    // Check for common timespans
+    expect(wrapper.find('[data-testid="analytics-timespan-1h"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analytics-timespan-24h"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analytics-timespan-7d"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analytics-timespan-30d"]').exists()).toBe(true)
+  })
+
+  it('highlights the active timespan button', () => {
+    const wrapper = mountBar({ timespan: '7d' })
+    const activeBtn = wrapper.find('[data-testid="analytics-timespan-7d"]')
+    expect(activeBtn.classes()).toContain('bg-primary')
+    expect(activeBtn.classes()).toContain('text-primary-foreground')
+  })
+
+  it('emits update:filters when timespan button is clicked', async () => {
+    const wrapper = mountBar({ timespan: '7d' })
+    await wrapper.find('[data-testid="analytics-timespan-24h"]').trigger('click')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { timespan?: string }
+    expect(last.timespan).toBe('24h')
+  })
+
+  it('preserves other filters when timespan changes', async () => {
+    const wrapper = mountBar({ timespan: '7d', groupBy: 'week', dimension: 'status' })
+    await wrapper.find('[data-testid="analytics-timespan-1h"]').trigger('click')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { timespan?: string; groupBy?: string; dimension?: string }
+    expect(last.timespan).toBe('1h')
+    expect(last.groupBy).toBe('week')
+    expect(last.dimension).toBe('status')
+  })
+})
+
+describe('AnalyticsFilterBar groupBy buttons', () => {
+  it('renders day and week groupBy buttons when not hour granular', () => {
+    const wrapper = mountBar({ timespan: '7d' })
+    expect(wrapper.find('[data-testid="analytics-group-by-day"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analytics-group-by-week"]').exists()).toBe(true)
+  })
+
+  it('shows disabled hour button when timespan is hour granular', () => {
+    const wrapper = mountBar({ timespan: '1h' })
+    const hourBtn = wrapper.find('[data-testid="analytics-group-by-hour"]')
+    expect(hourBtn.exists()).toBe(true)
+    expect(hourBtn.attributes('disabled')).toBeDefined()
+    expect(hourBtn.attributes('aria-disabled')).toBe('true')
+  })
+
+  it('does not render day/week buttons when hour granular', () => {
+    const wrapper = mountBar({ timespan: '1h' })
+    expect(wrapper.find('[data-testid="analytics-group-by-day"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="analytics-group-by-week"]').exists()).toBe(false)
+  })
+
+  it('highlights active groupBy button', () => {
+    const wrapper = mountBar({ groupBy: 'week' })
+    const activeBtn = wrapper.find('[data-testid="analytics-group-by-week"]')
+    expect(activeBtn.classes()).toContain('bg-primary')
+  })
+
+  it('emits update:filters when groupBy button is clicked', async () => {
+    const wrapper = mountBar({ groupBy: 'day' })
+    await wrapper.find('[data-testid="analytics-group-by-week"]').trigger('click')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { groupBy?: string }
+    expect(last.groupBy).toBe('week')
+  })
+})
+
+describe('AnalyticsFilterBar measure buttons', () => {
+  it('renders all measure buttons', () => {
+    const wrapper = mountBar()
+    const buttons = wrapper.findAll('[data-testid^="analytics-measure-"]')
+    expect(buttons.length).toBeGreaterThan(0)
+  })
+
+  it('highlights active measure button', () => {
+    const wrapper = mountBar({}, { measure: 'count' })
+    const activeBtn = wrapper.find('[data-testid="analytics-measure-count"]')
+    expect(activeBtn.classes()).toContain('bg-primary')
+  })
+
+  it('emits update:measure when measure button is clicked', async () => {
+    const wrapper = mountBar({}, { measure: 'count' })
+    const btn = wrapper.find('[data-testid="analytics-measure-duration"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+
+    const emitted = wrapper.emitted('update:measure')
+    expect(emitted).toBeTruthy()
+    expect(emitted![0][0]).toBe('duration')
+  })
+})
+
+describe('AnalyticsFilterBar filter select handlers', () => {
+  it('emits update:filters when dimension select changes', async () => {
+    const wrapper = mountBar()
+    const select = wrapper.find('[data-testid="analytics-filter-dimension"]')
+    const el = select.element as HTMLSelectElement
+    el.value = 'status'
+    await select.trigger('change')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { dimension?: string }
+    expect(last.dimension).toBe('status')
+  })
+
+  it('emits update:filters with null when dimension is cleared', async () => {
+    const wrapper = mountBar({ dimension: 'status' })
+    const select = wrapper.find('[data-testid="analytics-filter-dimension"]')
+    const el = select.element as HTMLSelectElement
+    el.value = ''
+    await select.trigger('change')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { dimension?: string | null }
+    expect(last.dimension).toBeNull()
+  })
+
+  it('emits update:filters when folder select changes', async () => {
+    const wrapper = mountBar({}, { folders: [{ id: 'f1', name: 'Folder 1' }] })
+    await wrapper.find('[data-testid="analytics-filter-folder"]').setValue('f1')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { folderId?: string }
+    expect(last.folderId).toBe('f1')
+  })
+
+  it('emits update:filters with null when folder is cleared', async () => {
+    const wrapper = mountBar({ folderId: 'f1' }, { folders: [{ id: 'f1', name: 'Folder 1' }] })
+    await wrapper.find('[data-testid="analytics-filter-folder"]').setValue('')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { folderId?: string | null }
+    expect(last.folderId).toBeNull()
+  })
+
+  it('emits update:filters when pipeline select changes', async () => {
+    const wrapper = mountBar({}, { pipelines: [{ id: 'p1', name: 'Pipeline 1' }] })
+    await wrapper.find('[data-testid="analytics-filter-pipeline"]').setValue('p1')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { pipelineId?: string }
+    expect(last.pipelineId).toBe('p1')
+  })
+
+  it('emits update:filters when trigger type select changes', async () => {
+    const wrapper = mountBar()
+    await wrapper.find('[data-testid="analytics-filter-trigger-type"]').setValue('cron')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { triggerType?: string }
+    expect(last.triggerType).toBe('cron')
+  })
+
+  it('emits update:filters when status select changes', async () => {
+    const wrapper = mountBar()
+    await wrapper.find('[data-testid="analytics-filter-status"]').setValue('failed')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { status?: string }
+    expect(last.status).toBe('failed')
+  })
+
+  it('emits update:filters when error code input changes', async () => {
+    const wrapper = mountBar()
+    const input = wrapper.find('[data-testid="analytics-filter-error-code"]')
+    await input.setValue('provider.rate_limit')
+    await input.trigger('input')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { errorCode?: string }
+    expect(last.errorCode).toBe('provider.rate_limit')
+  })
+
+  it('emits update:filters with null when error code is cleared', async () => {
+    const wrapper = mountBar({ errorCode: 'some_error' })
+    const input = wrapper.find('[data-testid="analytics-filter-error-code"]')
+    await input.setValue('')
+    await input.trigger('input')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { errorCode?: string | null }
+    expect(last.errorCode).toBeNull()
+  })
+
+  it('trims error code input value', async () => {
+    const wrapper = mountBar()
+    const input = wrapper.find('[data-testid="analytics-filter-error-code"]')
+    await input.setValue('  provider.rate_limit  ')
+    await input.trigger('input')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { errorCode?: string }
+    expect(last.errorCode).toBe('provider.rate_limit')
+  })
+
+  it('preserves other filters when any filter changes', async () => {
+    const wrapper = mountBar({
+      timespan: '7d',
+      groupBy: 'day',
+      dimension: 'status',
+      folderId: 'f1',
+      pipelineId: 'p1',
+      triggerType: 'manual',
+      status: 'failed',
+      errorCode: 'some_error',
+    })
+    await wrapper.find('[data-testid="analytics-filter-status"]').setValue('complete')
+
+    const emitted = wrapper.emitted('update:filters')
+    const last = emitted![emitted!.length - 1][0] as Record<string, unknown>
+    expect(last.status).toBe('complete')
+    expect(last.dimension).toBe('status')
+    expect(last.folderId).toBe('f1')
+    expect(last.pipelineId).toBe('p1')
+    expect(last.triggerType).toBe('manual')
+    expect(last.errorCode).toBe('some_error')
+  })
+})
+
+describe('AnalyticsFilterBar i18n labels', () => {
+  it('uses i18n for timespan labels', () => {
+    const wrapper = mountBar()
+    const btn = wrapper.find('[data-testid="analytics-timespan-7d"]')
+    expect(btn.text()).not.toContain('timespan_7d')
+  })
+
+  it('uses i18n for groupBy labels', () => {
+    const wrapper = mountBar()
+    const btn = wrapper.find('[data-testid="analytics-group-by-day"]')
+    expect(btn.text()).not.toContain('group_by_day')
+  })
+
+  it('uses i18n for measure labels', () => {
+    const wrapper = mountBar()
+    const btn = wrapper.find('[data-testid="analytics-measure-count"]')
+    expect(btn.text()).not.toContain('measure_')
+  })
+
+  it('uses i18n for dimension option labels', () => {
+    const wrapper = mountBar()
+    const select = wrapper.find('[data-testid="analytics-filter-dimension"]')
+    const options = select.findAll('option')
+    for (const opt of options) {
+      const label = opt.text()
+      expect(label).not.toContain('dimension_')
+    }
+  })
+
+  it('uses i18n for folder option "All"', () => {
+    const wrapper = mountBar({}, { folders: [{ id: 'f1', name: 'Folder 1' }] })
+    const select = wrapper.find('[data-testid="analytics-filter-folder"]')
+    const allOption = select.find('option[value=""]')
+    expect(allOption.exists()).toBe(true)
+    expect(allOption.text()).toBe('All')
   })
 })

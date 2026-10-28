@@ -1,0 +1,113 @@
+name: "macOS: Build Installer (.dmg + notarization)"
+
+# FAR-678: native macOS packaging is deliberately fail-closed until a real
+# macOS-native runtime is available. The Linux bundle is never relabeled as
+# macOS, and dry-run only validates the workflow contract.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version in X.Y.Z form"
+        type: string
+        required: true
+      rc_tag:
+        description: "RC tag being released"
+        type: string
+        required: true
+      ref:
+        description: "Git ref to validate"
+        type: string
+        required: true
+      mode:
+        description: "Build mode: dry-run, cut, recut, promote"
+        type: string
+        default: dry-run
+concurrency:
+  group: macos-installer-${{ github.workflow }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  version-parity:
+    name: Assert bundle versions match
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Validate shared bundle pins
+        run: |
+          set -euo pipefail
+          test -s scripts/bundle-versions.env
+          echo "bundle-versions.env loaded; no native macOS pins are currently available."
+
+  build:
+    name: Validate macOS installer prerequisite
+    needs: version-parity
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      VERSION_NUM: ${{ inputs.version }}
+      MODE: ${{ inputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Validate native macOS runtime prerequisite
+        run: |
+          set -euo pipefail
+          echo "Native macOS runtime/binaries are not yet available."
+          echo "The current bundle artifact is Linux-only and must not be relabeled as macOS."
+          if [ "$MODE" != "dry-run" ]; then
+            echo "::error::Cannot publish macOS installer: no real macOS-native runtime/binaries exist."
+            exit 1
+          fi
+          scripts/create-macos-info-plist.sh "$VERSION_NUM" "INFO.plist"
+      - name: Dry-run summary
+        if: ${{ inputs.mode == 'dry-run' }}
+        run: |
+          {
+            echo "## macOS installer dry-run"
+            echo ""
+            echo "Native macOS artifacts are not yet available. No placeholder or Linux-derived installer was created or published."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  attest:
+    name: Attest macOS installer
+    needs: build
+    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Refuse incomplete native artifact
+        run: |
+          set -euo pipefail
+          echo "::error::Native macOS artifact publication is disabled until a real macOS build exists."
+          exit 1
+
+  publish:
+    name: Publish macOS installer
+    needs: [build, attest]
+    if: ${{ inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Refuse incomplete native artifact
+        run: |
+          set -euo pipefail
+          echo "::error::Cannot publish macOS installer: native artifact is unavailable."
+          exit 1
