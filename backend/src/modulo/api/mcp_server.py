@@ -2517,8 +2517,20 @@ def _parse_basic_auth_header(request: Request, params: dict[str, str]) -> tuple[
     return creds, None
 
 
-async def _load_trigger_row(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> Any | None:
-    """Load a non-deleted trigger row, org-scoped. None when not found."""
+async def _load_trigger_row(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    tid: uuid.UUID,
+    *,
+    account_id: uuid.UUID | None = None,
+) -> Any | None:
+    """Load a non-deleted trigger row, org-scoped. None when not found.
+
+    Pass *account_id* for a viewer-scoped read: the load is then additionally
+    bounded by that account's team memberships (``account_team_scope_clause``),
+    so ``trigger.list``'s viewer floor can never expose a trigger on a
+    team-private pipeline the viewer does not belong to.
+    """
     from sqlalchemy import select
 
     from modulo.db.models.trigger import Trigger
@@ -2528,6 +2540,15 @@ async def _load_trigger_row(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) 
         Trigger.organisation_id == org_id,
         Trigger.deleted_at.is_(None),
     )
+    if account_id is not None:
+        from modulo.db.crud.team_scope import account_team_scope_clause
+        from modulo.db.models.pipeline import Pipeline
+
+        q = (
+            q.join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+            .where(Pipeline.deleted_at.is_(None))
+            .where(account_team_scope_clause(Pipeline.owner_team_id, account_id))
+        )
     return (await s.execute(q)).scalar_one_or_none()
 
 
@@ -3445,6 +3466,11 @@ async def _list_runs_impl(
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", str(pid))
+        # ``run.list`` is viewer-reachable: a viewer (JWT/OAuth, no team-scoped
+        # credential) has ``_ctx_team_id`` None, so without the membership
+        # clause it would enumerate every team's runs. Fail closed on a missing
+        # account context rather than widening to an org-wide read.
+        viewer_account_id = _ctx_user_id_val() if _ctx_role_val() == "viewer" else None
         result = await db_list_runs(
             s,
             organisation_id=org_id,
@@ -3454,6 +3480,7 @@ async def _list_runs_impl(
             page_size=limit,
             cursor=cursor,
             team_id=_ctx_team_id_val(),
+            account_id=viewer_account_id,
         )
         # Child-run cost+count rollup: ONE GROUP BY query for the whole
         # page, joined in Python — never a per-row aggregate (avoids N+1).
@@ -7472,7 +7499,12 @@ async def _build_trigger_event_query(
             _Pipeline.deleted_at.is_(None),
         )
 
-    if viewer and account_id is not None:
+    if viewer:
+        # Fail closed: a viewer read MUST carry the account-membership
+        # boundary. An unset account is an auth-context failure — it must never
+        # degrade into an org-wide read.
+        if account_id is None:
+            raise McpAuthContextError("No authenticated user context for this MCP request")
         from modulo.db.crud.team_scope import account_team_scope_clause
 
         _ensure_pipeline_join()
@@ -7554,14 +7586,19 @@ async def _list_trigger_events_impl(
 
     async with _session(org_id) as s:
         key_team_id = _ctx_team_id_val()
+        viewer = _ctx_role_val() == "viewer"
+        # Fail closed: the viewer leg of the query needs a real account id.
+        # ``_ctx_user_id_val`` raises rather than returning None, so an unset
+        # context cannot silently skip the membership clause.
+        viewer_account_id = _ctx_user_id_val() if viewer else None
         q, q_err = await _build_trigger_event_query(
             s,
             org_id,
             key_team_id,
             trigger_id,
             pipeline_id,
-            account_id=_ctx_user_id.get(None),
-            viewer=_ctx_role_val() == "viewer",
+            account_id=viewer_account_id,
+            viewer=viewer,
         )
         if q_err:
             return q_err
@@ -7639,7 +7676,7 @@ async def list_triggers(
                 "team_id": _ctx_team_id_val(),
             }
             if _ctx_role_val() == "viewer":
-                trigger_list_kwargs["account_id"] = _ctx_user_id.get(None)
+                trigger_list_kwargs["account_id"] = _ctx_user_id_val()
             result = await db_list_triggers(s, org_id, **trigger_list_kwargs)
             # FAR-251 — surface the SAME streak_status shape as the REST
             # trigger serializers (via the shared routes helper), computed
@@ -8239,8 +8276,13 @@ async def _get_trigger_impl(trigger_id: str) -> dict[str, Any]:
 
     from modulo.core.cron_helpers import _count_ongoing_runs
 
+    # ``trigger.list`` is viewer-reachable, so a viewer read must be bounded by
+    # the account's team memberships — never org-wide. Fail closed when the
+    # account context is missing rather than degrading to an unscoped read.
+    viewer_account_id = _ctx_user_id_val() if _ctx_role_val() == "viewer" else None
+
     async with _session(org_id) as s:
-        trigger = await _load_trigger_row(s, org_id, tid)
+        trigger = await _load_trigger_row(s, org_id, tid, account_id=viewer_account_id)
         if trigger is not None:
             owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
             if _team_scoped_key_mismatch(owner_team_id):

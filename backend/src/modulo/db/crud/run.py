@@ -34,7 +34,7 @@ from modulo.db.crud.run_node_outputs import (
     read_run_node_outputs_raw,
     replace_run_node_outputs,
 )
-from modulo.db.crud.team_scope import team_scope_clause
+from modulo.db.crud.team_scope import account_team_scope_clause, team_scope_clause
 from modulo.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
     _SOURCE_RANK,
@@ -2833,6 +2833,7 @@ async def list_runs(
     page_size: int = 20,
     cursor: str | None = None,
     team_id: uuid.UUID | None = None,
+    account_id: uuid.UUID | None = None,
     variant_group_id: uuid.UUID | None = None,
     batch_id: uuid.UUID | None = None,
 ) -> PageResult[Run]:
@@ -2874,6 +2875,15 @@ async def list_runs(
         team_scope = team_scope_clause(effective_owner, team_id)
         q = q.where(team_scope)
         count_q = count_q.where(team_scope)
+    elif account_id is not None:
+        # Viewer reads are bounded by the account's team memberships rather
+        # than a team-scoped credential boundary (``run.list`` is
+        # viewer-reachable). Same effective owner as the team-key leg so a
+        # NULL run stamp can never widen the boundary.
+        effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+        account_scope = account_team_scope_clause(effective_owner, account_id)
+        q = q.where(account_scope)
+        count_q = count_q.where(account_scope)
     if pipeline_id is not None:
         q = q.where(Run.pipeline_id == pipeline_id)
         count_q = count_q.where(Run.pipeline_id == pipeline_id)

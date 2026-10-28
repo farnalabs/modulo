@@ -299,6 +299,33 @@ class TestGetTriggerEventsSuccess:
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
+    async def test_viewer_with_unset_account_fails_closed(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A viewer read without an account id must never degrade to org-wide."""
+        from modulo.api.mcp_server import _ctx_role, _ctx_user_id
+
+        _ctx_role.set("viewer")
+        _ctx_user_id.set(None)
+        try:
+            mock_cm = _make_mock_session()
+            mock_sesh = AsyncMock()
+            mock_cm.__aenter__ = AsyncMock(return_value=mock_sesh)
+            mock_cm.__aexit__ = AsyncMock(return_value=False)
+            mock_session.return_value = mock_cm
+
+            result = await list_trigger_events()
+
+            assert "error" in result
+            mock_sesh.execute.assert_not_called()
+        finally:
+            _ctx_user_id.set(None)
+            _ctx_role.set("runner")
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
     async def test_respects_limit(
         self,
         mock_session: AsyncMock,
