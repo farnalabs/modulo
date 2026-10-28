@@ -724,6 +724,9 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
         pytest.param(Trigger, Trigger, id="trigger"),
         pytest.param(Team, Team, id="team"),
         pytest.param(TeamMembership, TeamMembership, id="team-membership"),
+        pytest.param(ModelBackend, ModelBackend, id="model-backend"),
+        pytest.param(ConnectorInstance, ConnectorInstance, id="connector-instance"),
+        pytest.param(Notification, Notification, id="notification"),
     ],
 )
 async def test_seed_sample_data_inserts_recover_after_conflict(
@@ -1182,6 +1185,42 @@ async def test_seed_converges_schema_description_and_definition(
         "properties": {"title": {"type": "string"}, "summary": {"type": "string"}},
         "required": ["title"],
     }
+
+
+async def test_seed_preserves_governance_surface_provenance_on_refresh(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refreshes converge fixture fields without overwriting provenance fields."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    backend = (await session.execute(select(ModelBackend).where(ModelBackend.name == "Demo Stub Fast"))).scalar_one()
+    connector = (
+        await session.execute(select(ConnectorInstance).where(ConnectorInstance.name == "Demo GitHub (read-only)"))
+    ).scalar_one()
+    notification = (
+        await session.execute(select(Notification).where(Notification.category == "run_completed"))
+    ).scalar_one()
+    backend.credentials_ciphertext = b"operator-managed-backend-secret"
+    connector.credentials_ciphertext = b"operator-managed-connector-secret"
+    notification.title = "stale title"
+    await session.commit()
+
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    refreshed_backend = (
+        await session.execute(select(ModelBackend).where(ModelBackend.name == "Demo Stub Fast"))
+    ).scalar_one()
+    refreshed_connector = (
+        await session.execute(select(ConnectorInstance).where(ConnectorInstance.name == "Demo GitHub (read-only)"))
+    ).scalar_one()
+    refreshed_notification = (
+        await session.execute(select(Notification).where(Notification.category == "run_completed"))
+    ).scalar_one()
+    assert refreshed_backend.credentials_ciphertext == b"operator-managed-backend-secret"
+    assert refreshed_connector.credentials_ciphertext == b"operator-managed-connector-secret"
+    assert refreshed_backend.account_id == backend.account_id
+    assert refreshed_connector.account_id == connector.account_id
+    assert refreshed_notification.title == "Run completed"
 
 
 async def test_seed_converges_agent_description_and_prompt(

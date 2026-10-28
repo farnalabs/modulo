@@ -73,7 +73,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -1661,10 +1661,10 @@ async def _seed_demo_governance_surfaces(
         ("Demo Stub Accurate", "Demo Stub Accurate", "custom", "demo-stub-accurate"),
     )
     for name, display_name, provider, model_id in model_specs:
-        result = await session.execute(
+        backend_result = await session.execute(
             select(ModelBackend).where(ModelBackend.organisation_id == org.id, ModelBackend.name == name)
         )
-        backend = result.scalar_one_or_none()
+        backend_row = backend_result.scalar_one_or_none()
         values = {
             "display_name": display_name,
             "provider": provider,
@@ -1676,21 +1676,49 @@ async def _seed_demo_governance_surfaces(
             "visibility": "org",
             "account_id": account.id,
         }
-        if backend is None:
-            session.add(ModelBackend(organisation_id=org.id, name=name, **values))
+        if backend_row is None:
+            backend = ModelBackend(organisation_id=org.id, name=name, **values)
+            try:
+                async with session.begin_nested():
+                    session.add(backend)
+                    await session.flush()
+            except IntegrityError:
+                recovered = await session.execute(
+                    select(ModelBackend).where(ModelBackend.organisation_id == org.id, ModelBackend.name == name)
+                )
+                recovered_backend = cast(ModelBackend | None, recovered.scalar_one_or_none())
+                if recovered_backend is None:
+                    raise
+                backend = recovered_backend
+                _log.info("demo_seed.model_backend_recovered_after_conflict", extra={"model_backend_name": name})
+            else:
+                _log.info("demo_seed.model_backend_created", extra={"model_backend_name": name})
         else:
-            for attr, value in values.items():
-                setattr(backend, attr, value)
+            backend = backend_row
+            # Credentials and account ownership are provenance, not fixture display
+            # data.  Preserve them while converging the demo-owned configuration.
+            for attr in (
+                "display_name",
+                "provider",
+                "model_id",
+                "default_params",
+                "cost_tracking",
+                "status",
+                "visibility",
+            ):
+                value = values[attr]
+                if getattr(backend, attr) != value:
+                    setattr(backend, attr, value)
 
     connector_specs = (
         ("Demo GitHub (read-only)", "github"),
         ("Demo Linear (read-only)", "linear"),
     )
     for name, connector_type_id in connector_specs:
-        result = await session.execute(
+        connector_result = await session.execute(
             select(ConnectorInstance).where(ConnectorInstance.organisation_id == org.id, ConnectorInstance.name == name)
         )
-        connector = result.scalar_one_or_none()
+        connector_row = connector_result.scalar_one_or_none()
         values = {
             "connector_type_id": connector_type_id,
             "credentials_ciphertext": b"demo-read-only",
@@ -1700,11 +1728,40 @@ async def _seed_demo_governance_surfaces(
             "visibility": "org",
             "account_id": account.id,
         }
-        if connector is None:
-            session.add(ConnectorInstance(organisation_id=org.id, name=name, **values))
+        if connector_row is None:
+            connector = ConnectorInstance(organisation_id=org.id, name=name, **values)
+            try:
+                async with session.begin_nested():
+                    session.add(connector)
+                    await session.flush()
+            except IntegrityError:
+                recovered = await session.execute(
+                    select(ConnectorInstance).where(
+                        ConnectorInstance.organisation_id == org.id,
+                        ConnectorInstance.name == name,
+                    )
+                )
+                recovered_connector = cast(ConnectorInstance | None, recovered.scalar_one_or_none())
+                if recovered_connector is None:
+                    raise
+                connector = recovered_connector
+                _log.info("demo_seed.connector_recovered_after_conflict", extra={"connector_name": name})
+            else:
+                _log.info("demo_seed.connector_created", extra={"connector_name": name})
         else:
-            for attr, value in values.items():
-                setattr(connector, attr, value)
+            connector = connector_row
+            # Credentials and account ownership are provenance, not fixture display
+            # data. Preserve them while converging the demo-owned configuration.
+            for attr in (
+                "connector_type_id",
+                "config_json",
+                "allowed_operations",
+                "status",
+                "visibility",
+            ):
+                value = values[attr]
+                if getattr(connector, attr) != value:
+                    setattr(connector, attr, value)
 
     notifications = (
         ("hitl_review_required", "Review required", "A demo governance run is waiting for human review.", "warning"),
@@ -1713,10 +1770,10 @@ async def _seed_demo_governance_surfaces(
         ("run_failed", "Run failed", "A demo sample run failed without performing real work.", "error"),
     )
     for category, title, body, level in notifications:
-        result = await session.execute(
+        notification_result = await session.execute(
             select(Notification).where(Notification.organisation_id == org.id, Notification.category == category)
         )
-        notification = result.scalar_one_or_none()
+        notification_row = notification_result.scalar_one_or_none()
         values = {
             "scope": "org",
             "target_user_id": None,
@@ -1728,11 +1785,31 @@ async def _seed_demo_governance_surfaces(
             "dismissible_at_scope": True,
             "expires_at": now + timedelta(days=3),
         }
-        if notification is None:
-            session.add(Notification(organisation_id=org.id, category=category, **values))
+        if notification_row is None:
+            notification = Notification(organisation_id=org.id, category=category, **values)
+            try:
+                async with session.begin_nested():
+                    session.add(notification)
+                    await session.flush()
+            except IntegrityError:
+                recovered = await session.execute(
+                    select(Notification).where(
+                        Notification.organisation_id == org.id,
+                        Notification.category == category,
+                    )
+                )
+                recovered_notification = cast(Notification | None, recovered.scalar_one_or_none())
+                if recovered_notification is None:
+                    raise
+                notification = recovered_notification
+                _log.info("demo_seed.notification_recovered_after_conflict", extra={"category": category})
+            else:
+                _log.info("demo_seed.notification_created", extra={"category": category})
         else:
+            notification = notification_row
             for attr, value in values.items():
-                setattr(notification, attr, value)
+                if getattr(notification, attr) != value:
+                    setattr(notification, attr, value)
 
     triggers = list(
         (
