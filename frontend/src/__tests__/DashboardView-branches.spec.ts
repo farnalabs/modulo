@@ -223,9 +223,9 @@ describe('DashboardView branches — evalRateDisplay', () => {
     await flushPromises()
     await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
     await flushPromises()
-    // evalRateDisplay: period with null current -> dash
+    // A selected period with no eval observations shows the translated n/a state.
     const evalCard = wrapper.find('[data-testid="dashboard-eval-rate"]')
-    expect(evalCard.text()).toContain('—')
+    expect(evalCard.text()).toContain('n/a')
     wrapper.unmount()
   })
 

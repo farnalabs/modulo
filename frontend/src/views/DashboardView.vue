@@ -63,22 +63,25 @@
         <!-- Eval pass rate card -->
         <router-link to="/eval-editor" class="card card-hover p-4 block" data-testid="dashboard-eval-rate">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.eval_pass_rate') }}</p>
-          <div v-if="hasEvalData">
-            <p class="text-2xl font-semibold tabular-nums">{{ evalRateDisplay }}</p>
-            <div class="flex items-center gap-2 mt-1">
-              <span v-if="evalPeriodDelta?.delta_pct != null" :class="evalDeltaClass" class="inline-flex items-center text-sm font-medium">
-                <span aria-hidden="true">{{ evalDeltaArrow }}</span>{{ evalDeltaPctText }}
-              </span>
-              <span v-else :class="evalTrendClass" class="inline-flex items-center text-sm font-medium">
-                <ChevronUp v-if="evalTrend === 'up'" class="h-3.5 w-3.5" aria-hidden="true" />
-                <ChevronDown v-else class="h-3.5 w-3.5" aria-hidden="true" />
-                {{ evalTrendLabel }}
-              </span>
-              <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate?.total_evals }} {{ $t('views.DashboardView.total_evals') }}</span>
-            </div>
-            <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--primary-text))" :show-y-axis="true" />
-          </div>
-          <div v-else class="flex items-center justify-center py-6 text-sm text-muted-foreground">{{ $t('views.DashboardView.no_eval_data_yet') }}</div>
+           <div v-if="hasEvalData">
+             <p class="text-2xl font-semibold tabular-nums">{{ evalRateDisplay }}</p>
+             <div class="flex items-center gap-2 mt-1">
+               <span v-if="evalPeriodDelta?.delta_pct != null" :class="evalDeltaClass" class="inline-flex items-center text-sm font-medium">
+                 <span aria-hidden="true">{{ evalDeltaArrow }}</span>{{ evalDeltaPctText }}
+               </span>
+               <span v-else :class="evalTrendClass" class="inline-flex items-center text-sm font-medium">
+                 <ChevronUp v-if="evalTrend === 'up'" class="h-3.5 w-3.5" aria-hidden="true" />
+                 <ChevronDown v-else class="h-3.5 w-3.5" aria-hidden="true" />
+                 {{ evalTrendLabel }}
+               </span>
+               <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate?.total_evals }} {{ $t('views.DashboardView.total_evals_all_time') }}</span>
+             </div>
+             <Sparkline class="mt-2 h-12 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--primary-text))" :show-y-axis="true" />
+           </div>
+           <div v-else class="flex flex-col items-center justify-center gap-1 py-6 text-sm text-muted-foreground" aria-live="polite">
+             <span class="font-semibold">{{ $t('common.na') }}</span>
+             <span>{{ $t('views.DashboardView.no_eval_data_yet') }}</span>
+           </div>
         </router-link>
         <!-- Token spend card -->
         <router-link to="/admin/costs" class="card card-hover p-4 block" data-testid="dashboard-token-spend">
@@ -128,7 +131,7 @@
               <td class="py-2.5 text-right">{{ team.total_runs }}</td>
               <td class="py-2.5 text-right text-success-text">{{ team.run_counts_by_status?.running ?? 0 }}</td>
               <td class="py-2.5 text-right text-destructive">{{ team.run_counts_by_status?.failed ?? 0 }}</td>
-              <td class="py-2.5 text-right">{{ team.eval_pass_rate ? team.eval_pass_rate.pass_rate + '%' : '—' }}</td>
+               <td class="py-2.5 text-right">{{ team.eval_pass_rate ? team.eval_pass_rate.pass_rate + '%' : $t('common.na') }}</td>
               <td class="py-2.5 text-right">
                 <ChevronUp v-if="expandedTeam === team.id" class="h-3.5 w-3.5" aria-hidden="true" />
                 <ChevronDown v-else class="h-3.5 w-3.5" aria-hidden="true" />
@@ -161,7 +164,7 @@
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.eval_pass_rate_label') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendEvalRates" :labels="trendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--success-text))" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendEvalRates" :labels="trendLabels" unit="%" color="hsl(var(--success-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.token_spend') }}</p>
@@ -169,11 +172,11 @@
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.avg_approval_time') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendHitlWaitMs" :labels="trendLabels" missing-data="carry-forward" unit="ms" color="hsl(var(--warning-text))" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendHitlWaitMs" :labels="trendLabels" unit="ms" color="hsl(var(--warning-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.rejection_rate') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendRejectionRate" :labels="trendLabels" missing-data="carry-forward" unit="%" color="hsl(var(--destructive-text))" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendRejectionRate" :labels="trendLabels" unit="%" color="hsl(var(--destructive-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
         </div>
         <div v-else class="flex items-center justify-center py-12">
@@ -256,7 +259,13 @@ const recentRunColumns = computed<Column[]>(() => [
   { key: 'trigger_type', label: t('views.DashboardView.trigger') },
 ])
 
-const hasEvalData = computed(() => summary.value?.eval_pass_rate != null && summary.value.eval_pass_rate.total_evals > 0)
+const hasEvalData = computed(() => {
+  if (!summary.value) return false;
+  if (selectedWindow.value != null && summary.value.period) {
+    return summary.value.period.metrics?.eval_pass_rate?.current != null;
+  }
+  return summary.value.eval_pass_rate != null && summary.value.eval_pass_rate.total_evals > 0;
+})
 
 const expandedTeam = ref<string | null>(null)
 
@@ -270,21 +279,20 @@ const expandedTeamData = computed(() => {
 })
 
 const evalSparklineData = computed((): Array<number | null> => {
-  if (!summary.value?.trend) return []
-  // Raw values: null means "no evals that day" and is carried forward by the
-  // sparkline instead of crashing to a 0% line.
-  return summary.value.trend.map(d => d.eval_pass_rate)
+  if (!summary.value?.trend) return [];
+  // The summary trend is all-time only; selected-window charts use the same
+  // dashboard trends request as the period headline. All-time is the explicit
+  // null-window exception and intentionally uses the summary trend.
+  if (selectedWindow.value == null) return summary.value.trend.map(d => d.eval_pass_rate);
+  const windowedRates = dashboardStore.trends?.eval_pass_rates ?? [];
+  return trendData.value.map((entry) => windowedRates.find((rate) => rate.date === entry.date)?.pass_rate ?? null);
 })
 
-const lastEvalRates = computed(() => {
-  if (!summary.value?.trend) return []
-  return summary.value.trend
-    .map(d => d.eval_pass_rate)
-    .filter((r): r is number => r !== null && Number.isFinite(r))
-})
+const lastEvalRates = computed(() => evalSparklineData.value.filter((r): r is number => r !== null && Number.isFinite(r)))
 
 const evalTrend = computed(() => {
   const rates = lastEvalRates.value
+  if (selectedWindow.value != null && !summary.value?.period) return 'flat'
   if (rates.length < 2) return 'flat'
   const firstHalf = rates.slice(0, Math.floor(rates.length / 2))
   const secondHalf = rates.slice(Math.floor(rates.length / 2))
@@ -312,7 +320,10 @@ const spendSparklineData = computed(() => {
   return summary.value.trend.map(d => d.token_spend_usd)
 })
 
-const summaryTrendLabels = computed(() => summary.value?.trend?.map(d => d.date) ?? [])
+const summaryTrendLabels = computed(() => {
+  if (selectedWindow.value != null) return trendLabels.value
+  return summary.value?.trend?.map(d => d.date) ?? []
+})
 
 // --- Rolling-window toggle (FAR-92 / FAR-115) ---
 // Gated on the analytics_page flag (FAR-92): hidden when off — the dashboard
@@ -358,12 +369,14 @@ function selectWindow(days: number | null) {
   selectedWindow.value = days
   persistTrendWindow(days)
   if (days == null) {
-    // All-time: full reload is fine here — the all-time scalars aren't part
-    // of the period block.
+    // All-time is the only window represented by summary.trend; it has no
+    // finite trends endpoint window, so reload the all-time summary.
     void dashboardStore.fetchSummary()
   } else {
-    // Period windows refresh ONLY the period block — no full-page skeleton.
+    // Period windows refresh the period block and the charts from the same
+    // selected window — no full-page skeleton.
     void dashboardStore.fetchPeriodMetrics(days)
+    void dashboardStore.fetchTrends(days)
   }
 }
 
@@ -387,10 +400,10 @@ const evalRateDisplay = computed(() => {
   const period = evalPeriodDelta.value
   if (selectedWindow.value != null && period) {
     const current = period.current
-    return current == null ? '—' : `${current}%`
+    return current == null ? t('common.na') : `${current}%`
   }
   const allTime = summary.value?.eval_pass_rate?.overall_pass_rate
-  return allTime == null ? '—' : `${allTime}%`
+  return allTime == null ? t('common.na') : `${allTime}%`
 })
 const evalDeltaDirection = computed(() => deltaDirection(evalPeriodDelta.value?.delta_pct ?? null))
 const evalDeltaArrow = computed(() => {
@@ -473,7 +486,7 @@ onMounted(async () => {
   selectedWindow.value = loadTrendWindow();
   const promises: Promise<unknown>[] = [
     dashboardStore.fetchSummary(selectedWindow.value ?? undefined),
-    dashboardStore.fetchTrends(7),
+    ...(selectedWindow.value == null ? [] : [dashboardStore.fetchTrends(selectedWindow.value)]),
     loadCurrency(),
   ];
   if (!planStore.currentTier || planStore.currentTier === 'community') {

@@ -41,25 +41,33 @@
             <stop offset="100%" :stop-color="color" stop-opacity="0" />
           </linearGradient>
         </defs>
-        <template v-if="hasData">
-          <polygon :fill="`url(#${gradientId})`" :points="areaPoints" />
-          <polyline
-            fill="none"
-            :stroke="color"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            :points="linePoints"
-          />
+          <template v-if="hasData">
+            <polygon
+              v-for="(points, segmentIndex) in areaPointSegments"
+              :key="`area-${segmentIndex}`"
+              :fill="`url(#${gradientId})`"
+              :points="points"
+            />
+            <polyline
+              v-for="(points, segmentIndex) in linePointSegments"
+              :key="`line-${segmentIndex}`"
+              fill="none"
+              :stroke="color"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              :points="points"
+            />
           <!-- Endpoint marker: a <circle r="2.5"> would be stretched into a
                flat dash by the non-uniform preserveAspectRatio="none" scale.
                A zero-length path with a round linecap renders a uniform dot
                (diameter = stroke width), and vector-effect="non-scaling-stroke"
                keeps the stroke width in screen pixels so the dot stays round
                regardless of the chart's X/Y scale factors. -->
-          <path
+            <path
+            v-if="lastPoint"
             data-testid="sparkline-endpoint"
-            :d="`M ${xFor(chartData.length - 1)} ${yFor(chartData[chartData.length - 1])} l 0 0`"
+            :d="`M ${xFor(lastPoint.index)} ${yFor(lastPoint.value)} l 0 0`"
             :stroke="color"
             stroke-width="5"
             stroke-linecap="round"
@@ -172,9 +180,8 @@ const props = withDefaults(
     tickCount?: number;
     // How missing (null) values are rendered. "zero" plots them at the chart
     // floor (historical behaviour, used by absolute counts like run totals and
-    // spend). "carry-forward" drops leading nulls and extends the last known
-    // value across interior/trailing gaps, so a day with no evals holds the
-    // previous rate instead of reading as a 0% crash.
+    // spend). "carry-forward" is retained for compatibility but preserves null
+    // gaps rather than inventing observations.
     missingData?: "carry-forward" | "zero";
   }>(),
   {
@@ -196,60 +203,43 @@ const gradientId = computed(() => {
 });
 
 // --- Missing-data handling --------------------------------------------------
-// A single transform consumed by ALL geometry (x/y mapping, line, area,
-// endpoint, ticks, tooltip) so the drawn line and the hover labels can never
-// disagree. "zero" keeps the historical behaviour (null -> 0). "carry-forward"
-// drops LEADING nulls (the line starts at the first day that has data) and
-// replaces every interior/trailing null with the last known value before it.
-// Number.isFinite excludes Infinity/-Infinity (isNaN does not), which would
+// "zero" keeps the historical behaviour (null -> 0). "carry-forward" is
+// retained for compatibility but preserves null gaps rather than inventing
+// observations. Number.isFinite excludes Infinity/-Infinity, which would
 // otherwise leak into max/range and produce NaN, out-of-viewBox geometry.
-const transformedSeries = computed<{ values: number[]; labelOffset: number }>(() => {
+const transformedSeries = computed<{ values: Array<number | null>; labelOffset: number }>(() => {
   const raw = props.data;
   if (props.missingData !== "carry-forward") {
     return {
-      values: raw
-        .map((v) => (v === null ? 0 : v))
-        .filter((v): v is number => typeof v === "number" && Number.isFinite(v)),
+      values: raw.map((v) => (v === null ? 0 : v)).filter(
+        (v): v is number => typeof v === "number" && Number.isFinite(v),
+      ),
       labelOffset: 0,
     };
   }
-  let start = 0;
-  while (
-    start < raw.length &&
-    !(typeof raw[start] === "number" && Number.isFinite(raw[start]))
-  ) {
-    start++;
-  }
-  const values: number[] = [];
-  let lastKnown: number | null = null;
-  for (let i = start; i < raw.length; i++) {
-    const v = raw[i];
-    if (typeof v === "number" && Number.isFinite(v)) {
-      lastKnown = v;
-      values.push(v);
-    } else if (lastKnown !== null) {
-      values.push(lastKnown);
-    }
-  }
-  return { values, labelOffset: start };
+  return {
+    values: raw.map((v) => (typeof v === "number" && Number.isFinite(v) ? v : null)),
+    labelOffset: 0,
+  };
 });
 
-// A sparkline needs at least two points to draw a meaningful line. Fewer than
-// that renders the "no data" placeholder instead of a fabricated line.
 const chartData = computed(() => transformedSeries.value.values);
-const hasData = computed(() => chartData.value.length >= 2);
+const realPoints = computed(() => chartData.value.flatMap((value, index) =>
+  value === null ? [] : [{ index, value }],
+));
+// A sparkline needs at least two real observations to draw a meaningful line.
+const hasData = computed(() => realPoints.value.length >= 2);
+const lastPoint = computed(() => realPoints.value.at(-1) ?? null);
 
-// The labels array must shift by the same offset the series was sliced by, so
-// hover tooltips stay date-aligned after leading nulls are dropped.
 const labelOffset = computed(() => transformedSeries.value.labelOffset);
 
-const max = computed(() => Math.max(...chartData.value));
-const min = computed(() => Math.min(...chartData.value));
+const max = computed(() => Math.max(...realPoints.value.map(({ value }) => value)));
+const min = computed(() => Math.min(...realPoints.value.map(({ value }) => value)));
 const range = computed(() => max.value - min.value);
 
 const padding = 2;
 const stepX = computed(
-  () => (props.width - padding * 2) / (chartData.value.length - 1),
+  () => (props.width - padding * 2) / Math.max(1, chartData.value.length - 1),
 );
 
 function xFor(i: number): number {
@@ -270,16 +260,30 @@ function yFor(v: number): number {
   );
 }
 
-const linePoints = computed(() =>
-  chartData.value.map((v, i) => `${xFor(i)},${yFor(v)}`).join(" "),
-);
-
-const areaPoints = computed(() => {
-  const pts = chartData.value.map((v, i) => `${xFor(i)},${yFor(v)}`);
-  const firstX = xFor(0);
-  const lastX = xFor(chartData.value.length - 1);
-  return `${firstX},${props.height - padding} ${pts.join(" ")} ${lastX},${props.height - padding}`;
+const contiguousSegments = computed(() => {
+  const segments: Array<Array<{ index: number; value: number }>> = [];
+  for (const point of realPoints.value) {
+    const previous = segments.at(-1)?.at(-1);
+    if (!previous || point.index === previous.index + 1) {
+      if (!segments.length) segments.push([]);
+      segments.at(-1)!.push(point);
+    } else {
+      segments.push([point]);
+    }
+  }
+  return segments;
 });
+
+const linePointSegments = computed(() => contiguousSegments.value
+  .filter((segment) => segment.length >= 2)
+  .map((segment) => segment.map(({ index, value }) => `${xFor(index)},${yFor(value)}`).join(" ")));
+
+const areaPointSegments = computed(() => contiguousSegments.value
+  .filter((segment) => segment.length >= 2)
+  .map((segment) => {
+    const pts = segment.map(({ index, value }) => `${xFor(index)},${yFor(value)}`);
+    return `${xFor(segment[0].index)},${props.height - padding} ${pts.join(" ")} ${xFor(segment.at(-1)!.index)},${props.height - padding}`;
+  }));
 
 // --- Axis labels / ticks ----------------------------------------------------
 const yTickValues = computed(() => {
@@ -316,10 +320,10 @@ const yAxisLabelsDesc = computed(() => {
 const xTickIndices = computed(() => {
   if (!props.showXTicks || !hasData.value) return [];
   const count = chartData.value.length;
-  if (count <= 8) return chartData.value.map((_, i) => i);
+  if (count <= 8) return chartData.value.map((_, i) => i).filter((i) => chartData.value[i] !== null);
   // Show every Nth tick to avoid overcrowding
   const everyN = Math.ceil(count / 8);
-  return chartData.value.map((_, i) => i).filter(i => i % everyN === 0 || i === count - 1);
+  return chartData.value.map((_, i) => i).filter(i => chartData.value[i] !== null && (i % everyN === 0 || i === count - 1));
 });
 
 // --- Hover tooltip ---------------------------------------------------------
@@ -338,12 +342,13 @@ function onPointerMove(e: PointerEvent): void {
   const denom = rect.width || props.width;
   const x = clamp(e.clientX - rect.left, 0, denom);
   const viewboxX = (x / denom) * props.width;
-  const idx = clamp(
-    Math.round((viewboxX - padding) / stepX.value),
-    0,
-    chartData.value.length - 1,
-  );
-  hoveredIndex.value = idx;
+  const nearestRealIndex = chartData.value.reduce((nearest, value, index) => {
+    if (value === null) return nearest;
+    const distance = Math.abs(index - Math.round((viewboxX - padding) / stepX.value));
+    return distance < nearest.distance ? { index, distance } : nearest;
+  }, { index: -1, distance: Number.POSITIVE_INFINITY });
+  if (nearestRealIndex.index < 0) return;
+  hoveredIndex.value = nearestRealIndex.index;
   tooltipLeft.value = clamp(x, 8, Math.max(8, rect.width - 8));
   tooltipTop.value = clamp(
     e.clientY - rect.top - 26,
@@ -363,8 +368,8 @@ const tooltipStyle = computed(() => ({
   top: `${tooltipTop.value}px`,
 }));
 
-function formatValue(v: number): string {
-  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+function formatValue(v: number | null): string {
+   if (typeof v !== "number" || !Number.isFinite(v)) return t("common.na");
   return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
@@ -404,7 +409,7 @@ function formatAxisValue(v: number, seriesMax: number, unit: string, decimals = 
   return v.toLocaleString(undefined, { maximumFractionDigits: decimals });
 }
 
-function formatWithUnit(v: number): string {
+function formatWithUnit(v: number | null): string {
   const valueText = formatValue(v);
   if (props.unit === "$") return `$${valueText}`;
   if (props.unit) return `${valueText} ${props.unit}`;
@@ -424,7 +429,7 @@ const tooltipText = computed(() => {
 // technology instead of leaving the svg purely decorative.
 const accessibleLabel = computed(() => {
   if (!hasData.value) return t("components.Sparkline.no_data");
-  const values = chartData.value.map(formatWithUnit).join(", ");
+  const values = chartData.value.map((value) => formatWithUnit(value)).join(", ");
   return t("components.Sparkline.chart_series", {
     count: chartData.value.length,
     values,

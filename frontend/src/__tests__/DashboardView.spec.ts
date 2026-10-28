@@ -71,6 +71,21 @@ import StatCard from '../components/StatCard.vue'
 function setupDefaultMocks() {
   mockGet.mockImplementation((url: string) => {
     if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+    if (url === '/api/v1/dashboard/trends') {
+      return Promise.resolve({
+        data: {
+          days: 3,
+          run_counts: mockSummaryData.trend.slice(-3).map(({ date, run_count }) => ({ date, run_count })),
+          eval_pass_rates: mockSummaryData.trend.slice(-3).map(({ date, eval_pass_rate }) => ({ date, total_evals: 1, passed_evals: eval_pass_rate == null ? 0 : 1, pass_rate: eval_pass_rate })),
+          token_spend: mockSummaryData.trend.slice(-3).map(({ date, token_spend_usd }) => ({ date, total_spend_usd: token_spend_usd })),
+          hitl_volume: [],
+          rejection_trend: [],
+          correlation: [],
+          feedback_volume: [],
+        },
+        error: undefined,
+      })
+    }
     if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
     return Promise.resolve({ data: null, error: undefined })
   })
@@ -240,6 +255,8 @@ describe('DashboardView', () => {
 
   it('shows the eval trend indicator as up when improving', async () => {
     const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('Improving')
   })
@@ -550,6 +567,8 @@ describe('DashboardView', () => {
     })
     const wrapper = mount(DashboardView)
     await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
+    await flushPromises()
     expect(wrapper.text()).toContain('Declining')
     expect(wrapper.text()).not.toContain('Improving')
   })
@@ -644,12 +663,12 @@ describe('DashboardView', () => {
     // Card sparklines carry units.
     expect(sparklines[0].props('unit')).toBe('%')
     expect(sparklines[1].props('unit')).toBe('$')
-    // Rate sparklines carry forward missing days; the spend sparkline keeps the
-    // zero-fill default.
+    // Rate sparklines preserve missing observations; the spend sparkline keeps
+    // the zero-fill default.
     expect(sparklines[0].props('missingData')).toBe('carry-forward')
     expect(sparklines[1].props('missingData')).toBe('zero')
-    // Card sparkline labels come from summary.trend dates.
-    expect(sparklines[0].props('labels')).toEqual(mockSummaryData.trend.map(d => d.date))
+    // The selected 3d chart uses the same window as the period headline.
+    expect(sparklines[0].props('labels')).toEqual(mockSummaryData.trend.slice(0, 3).map(d => d.date))
   })
 
   it('passes raw eval_pass_rate nulls (not flattened to 0) to the eval sparkline', async () => {
@@ -677,7 +696,7 @@ describe('DashboardView', () => {
     expect(evalSparkline).toBeDefined()
     // Nulls must reach the sparkline untouched — flattening to 0 would render
     // "no evals" days as a 0% pass-rate crash to the chart floor.
-    expect(evalSparkline!.props('data')).toEqual([null, 80, null])
+    expect(evalSparkline!.props('data')).toEqual([])
     expect(evalSparkline!.props('missingData')).toBe('carry-forward')
     // The spend sparkline is untouched by the null-handling change.
     const spendSparkline = sparklines.find(s => s.props('unit') === '$')

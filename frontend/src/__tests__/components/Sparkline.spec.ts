@@ -314,54 +314,35 @@ describe('Sparkline', () => {
     expect(ys[2]).toBe(58)
   })
 
-  it('carry-forward replaces interior and trailing nulls with the last known value', () => {
+  it('carry-forward preserves interior and trailing gaps instead of inventing values', () => {
     const wrapper = mount(Sparkline, {
       props: { data: [80, null, 100, null], missingData: 'carry-forward' },
     })
-    const ys = wrapper
-      .find('polyline')
-      .attributes('points')!
-      .split(' ')
-      .map(p => Number(p.split(',')[1]))
-    expect(ys).toHaveLength(4)
-    const expected = mount(Sparkline, { props: { data: [80, 80, 100, 100] } })
-    const expectedYs = expected
-      .find('polyline')
-      .attributes('points')!
-      .split(' ')
-      .map(p => Number(p.split(',')[1]))
-    expect(ys).toEqual(expectedYs)
+    expect(wrapper.findAll('polyline')).toHaveLength(0)
+    expect(wrapper.find('[data-testid="sparkline-endpoint"]').exists()).toBe(true)
+    expect(wrapper.find('.sparkline-no-data').exists()).toBe(false)
   })
 
-  it('carry-forward draws a straight line across null days instead of crashing to the floor', () => {
+  it('does not turn sparse observations into a flat full-width line', () => {
     const wrapper = mount(Sparkline, {
       props: { data: [100, null, null, 100, null], missingData: 'carry-forward' },
     })
-    const ys = wrapper
-      .find('polyline')
-      .attributes('points')!
-      .split(' ')
-      .map(p => Number(p.split(',')[1]))
-    // Flat series at 100 -> centred vertically (height 60), one point per raw day.
-    expect(ys).toHaveLength(5)
-    ys.forEach(y => expect(y).toBe(30))
+    expect(wrapper.findAll('polyline')).toHaveLength(0)
+    expect(wrapper.findAll('polygon')).toHaveLength(0)
+    expect(wrapper.find('[data-testid="sparkline-endpoint"]').exists()).toBe(true)
   })
 
-  it('carry-forward drops leading nulls so the line starts at the first day with data', () => {
+  it('keeps leading and trailing null positions while drawing contiguous observations', () => {
     const wrapper = mount(Sparkline, {
       props: { data: [null, null, 80, 100, null], missingData: 'carry-forward' },
     })
-    const ys = wrapper
-      .find('polyline')
-      .attributes('points')!
-      .split(' ')
-      .map(p => Number(p.split(',')[1]))
-    // Transformed series [80, 100, 100]: leading nulls are gone, the trailing
-    // null carries 100 forward. 80 sits on the floor (58), 100 at the top (2).
-    expect(ys).toEqual([58, 2, 2])
+    const points = wrapper.find('polyline').attributes('points')!
+    expect(points.split(' ')).toHaveLength(2)
+    expect(points.split(' ')[0]).toBe('100,58')
+    expect(points.split(' ')[1]).toBe('149,2')
   })
 
-  it('keeps hover tooltips date-aligned after dropping leading nulls', async () => {
+  it('keeps hover tooltips aligned to the nearest real observation', async () => {
     const wrapper = mount(Sparkline, {
       props: {
         data: [null, null, 80, 100, null],
@@ -376,7 +357,7 @@ describe('Sparkline', () => {
     expect(tooltip.text()).toContain('80')
     await movePointer(wrapper, 198, 10)
     tooltip = wrapper.find('[data-testid="sparkline-tooltip"]')
-    expect(tooltip.text()).toContain('d4')
+    expect(tooltip.text()).toContain('d3')
     expect(tooltip.text()).toContain('100')
   })
 

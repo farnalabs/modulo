@@ -1883,7 +1883,8 @@ export default {
       "no_eval_data_yet": "No eval data yet",
       "overview_of_your_organisations_pipelines_and_runs": "Overview of your organisation's pipelines and runs",
       "token_spend_7d": "Token Spend (7d)",
-      "total_evals": "total evals",
+       "total_evals_all_time": "total evals (all time)",
+       "total_evals": "total evals",
       "days_tracked": "days tracked",
       "team_breakdown": "Team Breakdown",
       "team": "Team",
@@ -5268,6 +5269,7 @@ export default {
     }
   },
   "common": {
+    "na": "n/a",
     "email": "Email",
     "password": "Password",
     "sign_in": "Sign in",
