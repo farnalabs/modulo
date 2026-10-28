@@ -1,46 +1,28 @@
 name: "macOS: Build Installer (.dmg + notarization)"
 
-# FAR-678 — macOS native installer (.dmg, notarization, nested signing)
-# Builds a macOS .dmg installer for the Modulo native bundle
-# Triggered by release-unified.yml on promote, or manually for dry-run
+# FAR-678: native macOS packaging is deliberately fail-closed until a real
+# macOS-native runtime is available. The Linux bundle is never relabeled as
+# macOS, and dry-run only validates the workflow contract.
 
 on:
   workflow_call:
     inputs:
       version:
-        description: "Release version in X.Y.Z form (e.g. 0.4.0)"
+        description: "Release version in X.Y.Z form"
         type: string
         required: true
       rc_tag:
-        description: "RC tag being released (e.g. v0.4.0-rc1)"
+        description: "RC tag being released"
         type: string
         required: true
       ref:
-        description: "Git ref to build from (the RC tag for cut/recut; main for a dry-run)"
+        description: "Git ref to validate"
         type: string
         required: true
       mode:
         description: "Build mode: dry-run, cut, recut, promote"
         type: string
         default: dry-run
-    secrets:
-      APPLE_DEVELOPER_ID:
-        required: true
-      APPLE_TEAM_ID:
-        required: true
-      APPLE_ID:
-        required: true
-      APPLE_APP_SPECIFIC_PASSWORD:
-        required: true
-      APPLE_NOTARY_KEY_ID:
-        required: true
-      APPLE_NOTARY_ISSUER_ID:
-        required: true
-      APPLE_NOTARY_API_KEY_P8:
-        required: true
-      GH_TOKEN:
-        required: true
-
 concurrency:
   group: macos-installer-${{ github.workflow }}-${{ inputs.version }}
   cancel-in-progress: false
@@ -61,170 +43,47 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
-
-      - name: Assert bundle-versions.env has macOS-compatible entries
+      - name: Validate shared bundle pins
         run: |
           set -euo pipefail
-          source scripts/bundle-versions.env
-          echo "bundle-versions.env loaded for macOS build"
-          # Future: assert macOS-specific pins exist
+          test -s scripts/bundle-versions.env
+          echo "bundle-versions.env loaded; no native macOS pins are currently available."
 
   build:
-    name: Build macOS .dmg Installer
+    name: Validate macOS installer prerequisite
     needs: version-parity
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 15
     env:
       VERSION_NUM: ${{ inputs.version }}
-      RC_TAG: ${{ inputs.rc_tag }}
       MODE: ${{ inputs.mode }}
-      ARCH: arm64
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
-
-      - name: Download linux bundle artefact (for cross-platform verification)
-        uses: actions/download-artifact@v4
-        with:
-          name: bundle-artefacts-arm64
-          path: ${{ runner.temp }}/linux-bundle
-        continue-on-error: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Extract Linux bundle as source for macOS installer
+      - name: Validate native macOS runtime prerequisite
         run: |
           set -euo pipefail
-          version="${{ inputs.version }}"
-          arch="arm64"
-
-          # Use the Linux bundle as source (we rebuild the macOS-specific parts)
-          bundleDir="${{ runner.temp }}/modulo-${version}-macos-arm64"
-          linuxBundle="${{ runner.temp }}/linux-bundle"
-          tarball=$(find "$linuxBundle" -name "*.tar.gz" | head -1)
-
-          if [ -z "$tarball" ] || [ ! -f "$tarball" ]; then
-            echo "No Linux bundle artefact found - cannot build macOS installer without source bundle"
+          echo "Native macOS runtime/binaries are not yet available."
+          echo "The current bundle artifact is Linux-only and must not be relabeled as macOS."
+          if [ "$MODE" != "dry-run" ]; then
+            echo "::error::Cannot publish macOS installer: no real macOS-native runtime/binaries exist."
             exit 1
           fi
-
-          extractDir="${{ runner.temp }}/macos-bundle-extracted"
-          rm -rf "$extractDir"
-          mkdir -p "$extractDir"
-
-          tar -xzf "$tarball" -C "$extractDir"
-
-          # Rename bundle root to include macos-arch
-          oldRoot=$(find "$extractDir" -mindepth 1 -maxdepth 1 -type d | head -1)
-          newRoot="$extractDir/modulo-${{ inputs.version }}-macos-arm64"
-          if [ "$oldRoot" != "$newRoot" ]; then
-            mv "$oldRoot" "$newRoot"
-          fi
-
-          # Write macOS-specific launcher
-          launcherPath="$newRoot/modulo"
-          printf '#!/bin/sh\n# Modulo macOS launcher - placeholder\n# Real build would produce a native Mach-O executable\necho "Modulo macOS installer - placeholder executable"\necho "Version: $VERSION"\necho "Architecture: arm64"\n' > "$launcherPath"
-          chmod +x "$launcherPath"
-
-          # Write macOS bundle structure info using external script
-          "${{ github.workspace }}/scripts/create-macos-info-plist.sh" "$VERSION" "$newRoot/INFO.plist"
-
-      - name: Create .dmg installer
-        if: ${{ inputs.mode != 'dry-run' }}
+          scripts/create-macos-info-plist.sh "$VERSION_NUM" "INFO.plist"
+      - name: Dry-run summary
+        if: ${{ inputs.mode == 'dry-run' }}
         run: |
-          set -euo pipefail
-          version="${{ inputs.version }}"
-          appName="Modulo-${{ inputs.version }}"
-          dmgName="Modulo-${{ inputs.version }}-macos-arm64.dmg"
-
-          # Create a temporary directory for dmg contents
-          dmgRoot="${{ runner.temp }}/dmg-root"
-          rm -rf "$dmgRoot"
-          mkdir -p "$dmgRoot"
-
-          # Copy the bundle to dmg root
-          bundleSource="${{ runner.temp }}/macos-bundle-extracted/modulo-${{ inputs.version }}-macos-arm64"
-          cp -R "$bundleSource" "$dmgRoot/Modulo.app"
-
-          # Create .dmg
-          hdiutil create -volname "Modulo ${{ inputs.version }}" \
-            -srcfolder "${{ runner.temp }}/dmg-root" \
-            -ov -format UDZO \
-            "build/macos/${{ inputs.version }}-macos-arm64.dmg"
-
-          # Verify
-          hdiutil verify "build/macos/${{ inputs.version }}-macos-arm64.dmg"
-          ls -lh "build/macos/${{ inputs.version }}-macos-arm64.dmg"
-
-      - name: Sign and Notarize (Apple)
-        if: ${{ inputs.mode != 'dry-run' }}
-        env:
-          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: |
-          set -euo pipefail
-          dmgPath="build/macos/Modulo-${{ inputs.version }}-macos-arm64.dmg"
-
-          # Sign the .dmg
-          echo "Signing ${dmgPath}..."
-          codesign --force --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
-            --timestamp --options runtime \
-            "build/macos/Modulo-${{ inputs.version }}-macos-arm64.dmg"
-
-          # Submit for notarization
-          echo "Submitting for notarization..."
-          xcrun notarytool submit "build/macos/Modulo-${{ inputs.version }}-macos-arm64.dmg" \
-            --apple-id "${{ secrets.APPLE_ID }}" \
-            --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
-            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-            --wait
-
-          # Staple the notarization ticket
-          echo "Stapling notarization ticket..."
-          xcrun stapler staple "build/macos/Modulo-${{ inputs.version }}-macos-arm64.dmg"
-
-          # Verify
-          spctl -a -t open --context context:primary-signature "build/macos/Modulo-${{ inputs.version }}-macos-arm64.dmg"
-
-      - name: Generate SHA256SUMS
-        run: |
-          set -euo pipefail
-          cd build/macos
-          dmgFile="Modulo-${{ inputs.version }}-macos-arm64.dmg"
-          sha256=$(shasum -a 256 "$dmgFile" | awk '{print $1}')
-          echo "$sha256  $dmgFile" > SHA256SUMS
-          cat SHA256SUMS
-
-      - name: Upload installer artefact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-installer-${{ inputs.version }}
-          path: build/macos/Modulo-${{ inputs.version }}-macos-arm64.dmg
-          retention-days: 30
-
-      - name: Upload SHA256SUMS
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-installer-sha256-${{ inputs.version }}
-          path: build/macos/SHA256SUMS
-          retention-days: 30
+          {
+            echo "## macOS installer dry-run"
+            echo ""
+            echo "Native macOS artifacts are not yet available. No placeholder or Linux-derived installer was created or published."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   attest:
-    name: Attest installer
+    name: Attest macOS installer
     needs: build
-    if: ${{ inputs.mode != 'dry-run' }}
+    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -232,71 +91,23 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Download installer
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-installer-${{ inputs.version }}
-          path: build/macos
-
-      - name: Verify installer exists
+      - name: Refuse incomplete native artifact
         run: |
-          ls -la build/macos/
-
-      - name: Generate SLSA provenance
-        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
-        with:
-          base64-subjects: ${{ hashFiles('build/macos/Modulo-${{ inputs.version }}-macos-arm64.dmg') }}
-          provenance-name: macos-installer-provenance
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-
-      - name: Verify attestation
-        run: |
-          gh attestation verify build/macos/Modulo-${{ inputs.version }}-macos-arm64.dmg \
-            --repo farnalabs/modulo \
-            --signer-workflow .github/workflows/macos-installer.yml
-
-      - name: Upload attestation
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-installer-attestation-${{ inputs.version }}
-          path: |
-            build/macos/*.intoto.jsonl
-          retention-days: 30
+          set -euo pipefail
+          echo "::error::Native macOS artifact publication is disabled until a real macOS build exists."
+          exit 1
 
   publish:
-    name: Publish to GitHub Release
-    needs: [build]
-    if: ${{ inputs.mode == 'promote' }}
+    name: Publish macOS installer
+    needs: [build, attest]
+    if: ${{ inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - name: Download installer
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-installer-${{ inputs.version }}
-          path: build/macos
-
-      - name: Create GitHub Release asset
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: bundle-v${{ inputs.version }}
-          files: build/macos/Modulo-${{ inputs.version }}-macos-arm64.dmg
-          name: "macOS Installer (${{ inputs.version }})"
-          body: |
-            Modulo macOS Installer v${{ inputs.version }}
-
-            SHA256: $(cat build/macos/SHA256SUMS | awk '{print $1}')
-
-            This installer includes:
-            - Native macOS application bundle (Modulo.app)
-            - Bundled Python runtime
-            - Bundled PostgreSQL 16 + Redis 8
-            - LaunchAgent for auto-start on login
-            - Apple Developer ID signing + notarization
-
-            Installation: Open the .dmg, drag Modulo.app to Applications.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+      - name: Refuse incomplete native artifact
+        run: |
+          set -euo pipefail
+          echo "::error::Cannot publish macOS installer: native artifact is unavailable."
+          exit 1

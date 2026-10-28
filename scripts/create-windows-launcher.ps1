@@ -1,23 +1,23 @@
 #!/usr/bin/env pwsh
-# Create Windows launcher placeholder
-# Usage: create-windows-launcher.ps1 -Version <version> -OutputPath <path>
+# Validate the Windows native-launcher contract without manufacturing a fake PE.
+# A real Windows runtime must provide modulo.exe before installer publication.
 
+[CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$Version,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
     [string]$OutputPath
 )
 
-$launcherContent = @"
-#!/bin/sh
-# This is a placeholder - real Windows build would produce a native .exe
-# For now, we create a stub that shows the structure
-echo "Modulo Windows installer - placeholder executable"
-echo "Version: $Version"
-echo "Architecture: amd64"
-"@
+$ErrorActionPreference = 'Stop'
 
-Set-Content -Path $OutputPath -Value $launcherContent -Encoding UTF8
-Write-Host "Created launcher at $OutputPath for version $Version"
+if ([System.IO.Path]::GetExtension($OutputPath) -ne '.exe') {
+    throw "Windows launcher output must be a native .exe path: $OutputPath"
+}
+
+Write-Host "Windows native runtime prerequisite validated for version $Version."
+Write-Host "No placeholder launcher written; a real PE executable is required before publication."

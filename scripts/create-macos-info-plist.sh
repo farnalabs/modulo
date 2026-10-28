@@ -1,33 +1,30 @@
 #!/bin/sh
-# Generate macOS INFO.plist for the Modulo bundle
-# Usage: create-macos-info-plist.sh <version> <output-path>
+# Validate the inputs for the future native macOS bundle metadata generator.
+# The native macOS runtime is not available yet, so this helper intentionally
+# does not manufacture an executable or an installer artifact.
 
-set -euo pipefail
+set -eu
 
-VERSION="${1:-0.0.0}"
-OUTPUT_PATH="${2:-INFO.plist}"
+if [ "$#" -ne 2 ]; then
+    printf 'usage: %s <version> <output-path>\n' "$0" >&2
+    exit 2
+fi
 
-cat > "${OUTPUT_PATH}" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleIdentifier</key>
-    <string>run.modulo.launcher</string>
-    <key>CFBundleName</key>
-    <string>Modulo</string>
-    <key>CFBundleVersion</key>
-    <string>${VERSION}</string>
-    <key>CFBundleShortVersionString</key>
-    <string>${VERSION}</string>
-    <key>CFBundleExecutable</key>
-    <string>modulo</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-</dict>
-</plist>
-EOF
+VERSION=$1
+OUTPUT_PATH=$2
 
-echo "Generated ${OUTPUT_PATH} for version ${VERSION}"
+case "$VERSION" in
+    ''|*[!0-9.]*|*.*.*.*)
+        printf 'invalid macOS bundle version: %s\n' "$VERSION" >&2
+        exit 1
+        ;;
+esac
+
+case "$OUTPUT_PATH" in
+    ''|*..*|/*)
+        printf 'unsafe macOS metadata output path: %s\n' "$OUTPUT_PATH" >&2
+        exit 1
+        ;;
+esac
+
+printf 'macOS metadata contract validated for version %s (native bundle unavailable; no file written)\n' "$VERSION"
