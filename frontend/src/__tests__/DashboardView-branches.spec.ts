@@ -536,11 +536,17 @@ describe('DashboardView branches — selectWindow null', () => {
     mockGet.mockClear()
     await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
     await flushPromises()
-    // selectWindow(null) calls fetchSummary with no days parameter
+    // selectWindow(null) calls fetchSummary with no days parameter and keeps
+    // the legacy seven-day trend endpoint explicit.
     expect(mockGet).toHaveBeenCalledWith(
       '/api/v1/dashboard/summary',
       expect.objectContaining({ params: { query: {} } }),
     )
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/dashboard/trends',
+      expect.objectContaining({ params: { query: { days: 7 } } }),
+    )
+    expect(wrapper.find('[data-testid="dashboard-token-spend"]').text()).toContain('Token spend (All-time summary · last 7d trend)')
     wrapper.unmount()
   })
 })

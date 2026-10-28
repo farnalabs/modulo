@@ -431,7 +431,10 @@ const spendDeltaPctText = computed(() => {
 })
 const spendTrackedDays = computed(() => summary.value?.period?.days ?? summary.value?.trend?.length ?? 0)
 const selectedTrendLabel = computed(() => {
-  if (selectedWindow.value == null) return t('views.DashboardView.trend_all_time')
+  // The legacy all-time summary still exposes a seven-day trend series. Keep
+  // that existing behaviour, but name the series honestly instead of calling
+  // it all-time.
+  if (selectedWindow.value == null) return t('views.DashboardView.trend_all_time_legacy_7d')
   if (selectedWindow.value === 1) return t('views.DashboardView.trend_24h')
   return t(`views.DashboardView.trend_${selectedWindow.value}d`)
 })

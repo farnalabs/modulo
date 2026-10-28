@@ -166,7 +166,7 @@ describe('DashboardView', () => {
   it('renders token spend card', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
-    expect(wrapper.text()).toContain('Token Spend')
+    expect(wrapper.text()).toContain('Token spend (3d)')
     expect(wrapper.text()).toContain('100.25')
   })
 
@@ -345,15 +345,38 @@ describe('DashboardView', () => {
     expect(wrapper.findAll('.animate-pulse')).toHaveLength(0)
   })
 
-  it('All-time option calls fetchSummary with no days', async () => {
+  it('uses the same one-day window for summary cards and trend charts', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
+    mockGet.mockClear()
+    await wrapper.find('[data-testid="trend-toggle-1"]').trigger('click')
+    await flushPromises()
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/dashboard/summary',
+      expect.objectContaining({ params: { query: { days: 1 } } }),
+    )
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/dashboard/trends',
+      expect.objectContaining({ params: { query: { days: 1 } } }),
+    )
+    expect(wrapper.find('[data-testid="dashboard-token-spend"]').text()).toContain('Token spend (Last 24h)')
+  })
+
+  it('All-time option calls fetchSummary with no days and keeps the legacy trend window', async () => {
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    mockGet.mockClear()
     await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
     await flushPromises()
     expect(mockGet).toHaveBeenCalledWith(
       '/api/v1/dashboard/summary',
       expect.objectContaining({ params: { query: {} } }),
     )
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/dashboard/trends',
+      expect.objectContaining({ params: { query: { days: 7 } } }),
+    )
+    expect(wrapper.find('[data-testid="dashboard-token-spend"]').text()).toContain('Token spend (All-time summary · last 7d trend)')
   })
 
   it('defaults to the 3d window when nothing is stored', async () => {
