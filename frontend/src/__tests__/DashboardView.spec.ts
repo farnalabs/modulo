@@ -665,7 +665,7 @@ describe('DashboardView', () => {
     expect(sparklines[1].props('unit')).toBe('$')
     // Rate sparklines preserve missing observations; the spend sparkline keeps
     // the zero-fill default.
-    expect(sparklines[0].props('missingData')).toBe('carry-forward')
+    expect(sparklines[0].attributes('missing-data')).toBeUndefined()
     expect(sparklines[1].props('missingData')).toBe('zero')
     // The selected 3d chart uses the same window as the period headline.
     expect(sparklines[0].props('labels')).toEqual(mockSummaryData.trend.slice(0, 3).map(d => d.date))
@@ -697,7 +697,7 @@ describe('DashboardView', () => {
     // Nulls must reach the sparkline untouched — flattening to 0 would render
     // "no evals" days as a 0% pass-rate crash to the chart floor.
     expect(evalSparkline!.props('data')).toEqual([])
-    expect(evalSparkline!.props('missingData')).toBe('carry-forward')
+    expect(evalSparkline!.attributes('missing-data')).toBeUndefined()
     // The spend sparkline is untouched by the null-handling change.
     const spendSparkline = sparklines.find(s => s.props('unit') === '$')
     expect(spendSparkline).toBeDefined()

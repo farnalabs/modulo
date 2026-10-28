@@ -193,7 +193,7 @@ const props = withDefaults(
     showYAxis: false,
     showXTicks: false,
     tickCount: 3,
-    missingData: "zero",
+    missingData: "carry-forward",
   },
 );
 
