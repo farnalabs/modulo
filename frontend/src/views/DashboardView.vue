@@ -441,11 +441,19 @@ const spendDeltaPctText = computed(() => {
 })
 const spendTrackedDays = computed(() => selectedWindow.value == null ? 0 : summary.value?.period?.days ?? 0)
 
+const SPEND_LABEL_KEY_BY_DAYS: Record<number, string> = {
+  1: 'views.DashboardView.token_spend_24h',
+  3: 'views.DashboardView.token_spend_3d',
+  7: 'views.DashboardView.token_spend_7d',
+  30: 'views.DashboardView.token_spend_30d',
+  90: 'views.DashboardView.token_spend_90d',
+}
+
 const spendLabel = computed(() => {
-  const key = selectedWindow.value == null
+  const days = selectedWindow.value
+  return t(days == null
     ? 'views.DashboardView.token_spend_all_time'
-    : `views.DashboardView.token_spend_${selectedWindow.value}d`
-  return t(key)
+    : SPEND_LABEL_KEY_BY_DAYS[days])
 })
 
 function deltaDirection(deltaPct: number | null): 'up' | 'down' | 'flat' | null {

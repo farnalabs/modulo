@@ -376,9 +376,14 @@ describe('DashboardView', () => {
     expect(allTimeSparkline.props('labels')).toEqual([])
   })
 
-  it('uses timeframe-aware spend labels for 30d and All time', async () => {
+  it('uses timeframe-aware spend labels for 24h, 30d and All time', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="dashboard-token-spend"]').text()).toContain('Token Spend (24h)')
+    expect(wrapper.find('[data-testid="dashboard-token-spend"]').text()).not.toContain('token_spend_1d')
+
     await wrapper.find('[data-testid="trend-toggle-30"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-testid="dashboard-token-spend"]').text()).toContain('Token Spend (30d)')
