@@ -956,3 +956,131 @@ describe('DashboardView branches — evalDeltaArrow', () => {
     wrapper.unmount()
   })
 })
+
+// ── Eval trend + team eval edge cases ──────────────────────────────────
+describe('DashboardView branches — eval trend and team eval display', () => {
+  it('shows an improving indicator when windowed eval rates rise without a period delta', async () => {
+    const dates = ['2026-06-27', '2026-06-28', '2026-06-29']
+    const summaryTrend = dates.map((date, i) => ({
+      date, run_count: 10 + i, eval_pass_rate: [50, 70, 90][i], token_spend_usd: 1,
+    }))
+    const trendsResponse = {
+      days: 3,
+      run_counts: dates.map((date, i) => ({ date, run_count: 10 + i })),
+      eval_pass_rates: dates.map((date, i) => ({ date, total_evals: 1, passed_evals: 1, pass_rate: [50, 70, 90][i] })),
+      token_spend: [],
+      hitl_volume: [],
+      rejection_trend: [],
+      correlation: [],
+      feedback_volume: [],
+    }
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            trend: summaryTrend,
+            // A period exists (so the windowed trend is used) but has no baseline
+            // delta, forcing the improving/flat/declining label path.
+            period: { days: 3, metrics: { eval_pass_rate: { current: 90, previous: null, delta_pct: null } } },
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/dashboard/trends') return Promise.resolve({ data: trendsResponse, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const evalCard = wrapper.find('[data-testid="dashboard-eval-rate"]')
+    expect(evalCard.text()).toContain('Improving')
+    wrapper.unmount()
+  })
+
+  it('renders n/a for a team row without an eval pass rate', async () => {
+    const { usePlanStore } = await import('../stores/planStore')
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    usePlanStore().currentTier = 'team'
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            teams: [{
+              id: 'team-no-eval',
+              name: 'No Eval Team',
+              total_runs: 5,
+              active_pipelines: 1,
+              run_counts_by_status: { running: 0, awaiting_human: 0, failed: 0, idle: 5 },
+            }],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const row = wrapper.find('[data-testid="dashboard-team-row-team-no-eval"]')
+    expect(row.exists()).toBe(true)
+    expect(row.text()).toContain('n/a')
+    wrapper.unmount()
+  })
+
+  it('shows n/a when eval observations exist but the overall pass rate is null', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            eval_pass_rate: { overall_pass_rate: null, total_evals: 3, passed_evals: 2, per_pipeline: {}, per_team_pipeline: {} },
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const evalCard = wrapper.find('[data-testid="dashboard-eval-rate"]')
+    expect(evalCard.text()).toContain('n/a')
+    expect(evalCard.text()).toContain('3')
+    wrapper.unmount()
+  })
+})
+
+// ── Computed guard branches ────────────────────────────────────────────
+describe('DashboardView branches — computed guards', () => {
+  it('handles a null summary and a selected window with a null eval current', async () => {
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const { useDashboardStore } = await import('../stores/dashboard')
+    const store = useDashboardStore()
+    const vm = wrapper.vm as any
+
+    store.summary = null
+    await flushPromises()
+    expect(vm.hasEvalData).toBe(false)
+    expect(vm.evalSparklineData).toEqual([])
+
+    store.summary = {
+      ...mockSummaryData,
+      period: { days: 7, metrics: { eval_pass_rate: { current: null, previous: 80, delta_pct: null } } },
+    } as any
+    await flushPromises()
+    expect(vm.evalRateDisplay).toBe('n/a')
+    wrapper.unmount()
+  })
+
+  it('returns zero tracked days for the all-time window', async () => {
+    localStorage.setItem('modulo.dashboard.trendWindow', 'all')
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect((wrapper.vm as any).spendTrackedDays).toBe(0)
+    wrapper.unmount()
+  })
+})

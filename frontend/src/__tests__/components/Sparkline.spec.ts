@@ -387,4 +387,21 @@ describe('Sparkline', () => {
     expect(dot.attributes('stroke-width')).toBe('5')
     expect(dot.attributes('fill')).toBe('none')
   })
+
+  it('has a null last point when there are no observations', () => {
+    const wrapper = mount(Sparkline, { props: { data: [] } })
+    expect((wrapper.vm as any).lastPoint).toBeNull()
+  })
+
+  it('defensively renders n/a for a non-numeric axis value', () => {
+    const wrapper = mount(Sparkline, { props: { data: [1, 2] } })
+    expect((wrapper.vm as any).formatAxisValue('not-a-number', 10, '')).toBe('n/a')
+  })
+
+  it('does not prefix a dollar sign to a missing value in the accessible label', () => {
+    const wrapper = mount(Sparkline, { props: { data: [1, null, 2], unit: '$' } })
+    const label = wrapper.find('svg').attributes('aria-label')!
+    expect(label).toContain('n/a')
+    expect(label).not.toContain('$n/a')
+  })
 })
