@@ -240,6 +240,25 @@ async def insert_eval(conn: AsyncConnection, fixture: EvalFixture) -> None:
 # TC_MAX_TRIES=300) for LOCAL integration runs, and give the local pytest
 # invocation a wide per-test budget (--timeout=1800). CI runners are not
 # contended and need neither.
+@pytest_asyncio.fixture(scope="package", autouse=True)
+async def _isolate_integration_process_engines() -> AsyncGenerator[None, None]:
+    """Keep integration's Postgres engines isolated from neighbouring suites.
+
+    Unit and BDD tests may exercise audited routes against a process-shared
+    SQLite engine.  If those suites run before integration in one pytest
+    process, the cached engine survives the suite boundary and the integration
+    tests can accidentally use SQLite (whose lightweight fixture schema does
+    not include ``audit_chain_heads``) instead of the migrated testcontainer.
+    Reset on both sides of the session so suite order cannot determine which
+    database a later suite observes.
+    """
+    await dispose_process_global_engines()
+    try:
+        yield
+    finally:
+        await dispose_process_global_engines()
+
+
 @pytest.fixture(scope="session")
 def postgres_container() -> Generator[PostgresContainer, None, None]:
     with PostgresContainer("postgres:16-alpine") as pg:
@@ -946,12 +965,17 @@ async def integration_client(db_url: str, app_engine: AsyncEngine) -> AsyncClien
 
 
 async def dispose_process_global_engines() -> None:
-    """Dispose every process-global async engine and reset its cache.
+    """Dispose and clear every process-global async-engine cache.
 
-    Production code keeps one shared engine per process (``db.session``,
-    ``api.dependencies``) plus several module-level caches (``cron_helpers``,
-    ``saq_hooks``, ``saq_worker``). Integration helpers that drive a scenario on
-    a PRIVATE event loop (``asyncio.run``, e.g. the sync pytest-bdd steps in
+    Unit and BDD suites can leave SQLite engines in any of the lazy singleton
+    caches below. A mixed pytest invocation then reaches integration tests with
+    a process-global engine still bound to the wrong database. Keep this list
+    exhaustive: every production module that owns an async-engine cache is
+    represented, including caches used only by reports, snapshot locks, and
+    break-glass operations.
+
+    Integration helpers that drive a scenario on a PRIVATE event loop
+    (``asyncio.run``, e.g. the sync pytest-bdd steps in
     ``test_hitl_reject_bdd.py``) may create one of those engines on that loop;
     ``asyncio.run`` then closes the loop with asyncpg connections still open, so
     their graceful-close tasks never complete and the pending
@@ -959,15 +983,18 @@ async def dispose_process_global_engines() -> None:
     ``PytestUnraisableExceptionWarning`` under the warning gate.
 
     Call this from the coroutine that runs on the private loop, BEFORE the loop
-    closes. Resetting each cache to ``None`` makes the next caller recreate an
-    engine bound to the then-current loop.
+    closes. Resetting each cache makes the next caller recreate an engine bound
+    to the then-current loop and database URL.
     """
     from modulo.api import dependencies as api_dependencies
+    from modulo.cli import break_glass
     from modulo.core import cron_helpers, saq_worker
     from modulo.core.error_tracking import saq_hooks
+    from modulo.core.reports import scheduler
     from modulo.db import session as db_session
+    from modulo.db.crud import pipeline_snapshot
 
-    caches: tuple[tuple[object, str], ...] = (
+    single_engine_caches: tuple[tuple[object, str], ...] = (
         (db_session, "_shared_engine"),
         (api_dependencies, "_engine"),
         (api_dependencies, "_SYSTEM_ASYNC_ENGINE"),
@@ -976,18 +1003,36 @@ async def dispose_process_global_engines() -> None:
         (saq_hooks, "_ENGINE"),
         (saq_worker, "_ASYNC_ENGINE"),
         (saq_worker, "_SYSTEM_ASYNC_ENGINE"),
+        (scheduler, "_ENGINE"),
+        (scheduler, "_TEST_ENGINE"),
+        (break_glass, "_bg_engine"),
     )
     seen: set[int] = set()
-    for module, attr in caches:
+    for module, attr in single_engine_caches:
         engine = getattr(module, attr, None)
         if engine is None:
             continue
-        if id(engine) in seen:
-            setattr(module, attr, None)
-            continue
-        seen.add(id(engine))
-        # A cache may hold an engine already disposed by an earlier test; a
-        # second dispose is a no-op, but never let it mask the reset.
-        with contextlib.suppress(Exception):
-            await engine.dispose()
+        if id(engine) not in seen:
+            seen.add(id(engine))
+            # A cache may hold an engine already disposed by an earlier test; a
+            # second dispose is a no-op, but never let it mask the reset.
+            with contextlib.suppress(Exception):
+                await engine.dispose()
         setattr(module, attr, None)
+
+    for engine in tuple(pipeline_snapshot._SNAPSHOT_LOCK_ENGINES.values()):
+        if id(engine) not in seen:
+            seen.add(id(engine))
+            with contextlib.suppress(Exception):
+                await engine.dispose()
+    pipeline_snapshot._SNAPSHOT_LOCK_ENGINES.clear()
+
+    # Session factories retain an engine even after the corresponding engine
+    # cache is cleared; clear them as well so they cannot resurrect the polluted
+    # SQLite binding.
+    api_dependencies._session_factory = None
+    api_dependencies._SYSTEM_SESSION_FACTORY = None
+    api_dependencies._SYSTEM_ENGINE_IS_FALLBACK = False
+    break_glass._bg_engine_url = None
+    break_glass._bg_factory = None
+    break_glass._bg_factory_url = None
