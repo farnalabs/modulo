@@ -18,11 +18,11 @@
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
 
       <template v-else>
-        <Card>
-          <template #title>{{ $t('views.AdminSpendLimitsView.org_level_daily_spend_limit') }}</template>
-<template #subtitle>{{ $t('views.AdminSpendLimitsView.maximum_daily_spend_across_all_teams_in_usd') }}</template>
-
-          <template #content>
+        <DataCard
+          :title="$t('views.AdminSpendLimitsView.org_level_daily_spend_limit')"
+          :description="$t('views.AdminSpendLimitsView.maximum_daily_spend_across_all_teams_in_usd')"
+        >
+          <template #default>
             <div class="flex items-end gap-3">
               <div class="flex-1">
                 <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.daily_limit_usd') }}</span>
@@ -34,15 +34,15 @@
             </div>
             <p v-if="orgSaveError" class="mt-2 text-xs text-destructive">{{ orgSaveError }}</p>
             <p v-if="orgSaveSuccess" class="mt-2 text-xs text-success-text">{{ $t('views.AdminSpendLimitsView.org_limit_updated') }}</p>
-          </template>
-        </Card>
+           </template>
+         </DataCard>
 
         <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
-          <Card>
-            <template #title>{{ $t('views.AdminSpendLimitsView.hard_spend_ceilings') }}</template>
-            <template #subtitle>{{ $t('views.AdminSpendLimitsView.hard_spend_ceilings_subtitle') }}</template>
-
-            <template #content>
+          <DataCard
+            :title="$t('views.AdminSpendLimitsView.hard_spend_ceilings')"
+            :description="$t('views.AdminSpendLimitsView.hard_spend_ceilings_subtitle')"
+          >
+            <template #default>
               <LoadingSpinner v-if="ceilingLoading" />
               <ErrorAlert v-else-if="ceilingLoadError" :message="ceilingLoadError" :on-retry="loadCeiling" />
 
@@ -99,14 +99,14 @@
                 </div>
               </template>
             </template>
-          </Card>
+          </DataCard>
         </FeatureGate>
 
-        <Card>
-          <template #title>{{ $t('views.AdminSpendLimitsView.per_team_spend_limits') }}</template>
-<template #subtitle>{{ $t('views.AdminSpendLimitsView.override_the_org_level_limit_for_specific_teams') }}</template>
-
-          <template #content>
+        <DataCard
+          :title="$t('views.AdminSpendLimitsView.per_team_spend_limits')"
+          :description="$t('views.AdminSpendLimitsView.override_the_org_level_limit_for_specific_teams')"
+        >
+          <template #default>
             <div v-if="teams.length === 0" class="py-4 text-center text-sm text-muted-foreground">
               No teams found.
             </div>
@@ -142,13 +142,13 @@
               </tbody>
             </table>
           </template>
-        </Card>
+        </DataCard>
 
-        <Card>
-          <template #title>{{ $t('views.AdminSpendLimitsView.current_spend') }}</template>
-<template #subtitle>{{ $t('views.AdminSpendLimitsView.todays_accrued_costs_across_all_teams') }}</template>
-
-          <template #content>
+        <DataCard
+          :title="$t('views.AdminSpendLimitsView.current_spend')"
+          :description="$t('views.AdminSpendLimitsView.todays_accrued_costs_across_all_teams')"
+        >
+          <template #default>
             <LoadingSpinner v-if="costsLoading" />
             <div v-else-if="costsError" class="text-sm text-destructive">{{ costsError }}</div>
             <div v-else class="space-y-4">
@@ -173,7 +173,7 @@
               <p v-else class="text-sm text-muted-foreground">{{ $t('views.AdminSpendLimitsView.no_team_cost_data_available') }}</p>
             </div>
           </template>
-        </Card>
+        </DataCard>
       </template>
       </div>
     </FeatureGate>
@@ -190,7 +190,7 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import Card from 'primevue/card'
+import DataCard from '../components/ui/DataCard.vue'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import { formatMoney } from '../lib/money'

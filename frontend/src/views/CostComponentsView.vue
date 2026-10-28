@@ -45,8 +45,8 @@
           :description="$t('views.CostComponentsView.add_a_component_to_break_down_run_costs')"
         />
 
-        <Card v-else>
-          <template #content>
+        <DataCard v-else padding="none">
+          <template #default>
             <div class="-mx-5 -my-5">
             <DataTable
               :columns="[
@@ -105,7 +105,7 @@
             </DataTable>
             </div>
           </template>
-        </Card>
+        </DataCard>
 
         <p v-if="formError" class="mt-3 text-sm text-destructive" data-testid="cost-components-form-error">{{ formError }}</p>
         <p v-if="formSuccess" class="mt-3 text-sm text-success-text" data-testid="cost-components-form-success">{{ formSuccess }}</p>
@@ -253,7 +253,7 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
 import TableActions from '../components/shared/TableActions.vue'
 import Button from 'primevue/button'
-import Card from 'primevue/card'
+import DataCard from '../components/ui/DataCard.vue'
 import InputText from 'primevue/inputtext'
 import { DataTable } from '../components/ui/data-table'
 import Select from '../components/shared/AppSelect.vue'

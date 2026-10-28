@@ -6,7 +6,7 @@
     :class="cardClass"
   >
     <div class="flex flex-col gap-2">
-      <p class="text-xs font-medium text-muted-foreground">
+      <p class="text-sm font-medium text-muted-foreground">
         {{ label }}
       </p>
       <p
@@ -15,6 +15,7 @@
       >
         {{ value }}
       </p>
+      <slot />
       <div v-if="delta != null" class="flex items-center gap-1.5">
         <span
           class="inline-flex items-center gap-0.5 text-xs font-medium"
