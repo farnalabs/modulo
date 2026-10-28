@@ -3,6 +3,7 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy.dialects import postgresql
 
 from modulo.api.mcp_server import list_trigger_events
@@ -323,6 +324,30 @@ class TestGetTriggerEventsSuccess:
         finally:
             _ctx_user_id.set(None)
             _ctx_role.set("runner")
+
+    async def test_build_trigger_event_query_viewer_without_account_fails_closed(self) -> None:
+        """The query builder must refuse a viewer read with no account id.
+
+        ``list_trigger_events`` resolves the account before calling the builder,
+        so this guard is the builder's own fail-closed backstop: it must raise
+        rather than omit the membership boundary and degrade to an org-wide read.
+        """
+        from modulo.api.mcp_server import McpAuthContextError, _build_trigger_event_query
+
+        session = AsyncMock()
+
+        with pytest.raises(McpAuthContextError):
+            await _build_trigger_event_query(
+                session,
+                _PLACEHOLDER_ORG_ID,
+                None,
+                None,
+                None,
+                account_id=None,
+                viewer=True,
+            )
+
+        session.execute.assert_not_called()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
