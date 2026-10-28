@@ -740,6 +740,14 @@ describe('AdminUsersView', () => {
 })
 
 describe('generateStrongPassword', () => {
+  it('clamps short requested lengths to the minimum complexity length', () => {
+    const pw = generateStrongPassword(1)
+    expect(pw).toHaveLength(8)
+    expect(pw).toMatch(/[a-z]/)
+    expect(pw).toMatch(/[A-Z]/)
+    expect(pw).toMatch(/\d/)
+  })
+
   it('always meets complexity rules across many draws', () => {
     for (let i = 0; i < 200; i++) {
       const pw = generateStrongPassword()

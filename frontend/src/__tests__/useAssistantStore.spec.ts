@@ -284,6 +284,27 @@ describe('useAssistantStore API methods', () => {
     expect(store.messages).toHaveLength(0)
   })
 
+  it('createSession sends an optional name and accepts an empty session list payload', async () => {
+    const store = useAssistantStore()
+    const created = makeSession('s-named', '2026-09-02T00:00:00Z')
+    apiPost.mockResolvedValue({ data: created })
+
+    await expect(store.createSession({ name: 'Named session' })).resolves.toEqual(created)
+    expect(apiPost).toHaveBeenCalledWith('/api/v1/assistant/sessions', {
+      body: expect.objectContaining({ name: 'Named session' }),
+    })
+  })
+
+  it('createSession keeps a non-array sessions value unchanged when the API succeeds', async () => {
+    const store = useAssistantStore()
+    store.sessions = null as unknown as ChatSession[]
+    const created = makeSession('s-created', '2026-09-02T00:00:00Z')
+    apiPost.mockResolvedValue({ data: created })
+
+    await expect(store.createSession()).resolves.toEqual(created)
+    expect(store.activeSessionId).toBe('s-created')
+  })
+
   it('createSession returns null and sets the error on API failure', async () => {
     const store = useAssistantStore()
     apiPost.mockResolvedValue({ error: { detail: 'quota exhausted' } })
@@ -323,6 +344,16 @@ describe('useAssistantStore API methods', () => {
     expect(store.messages).toEqual(messages)
     expect(store.activeSessionId).toBe('s-1')
     expect(store.loading).toBe(false)
+  })
+
+  it('loadSession uses an empty message list when the API omits items', async () => {
+    const store = useAssistantStore()
+    apiGet.mockResolvedValue({ data: undefined })
+
+    await store.loadSession('s-empty')
+
+    expect(store.messages).toEqual([])
+    expect(store.activeSessionId).toBe('s-empty')
   })
 
   it('loadSession surfaces API errors without changing the active session', async () => {
@@ -448,6 +479,16 @@ describe('useAssistantStore API methods', () => {
     expect(store.sessions.map((s: ChatSession) => s.id)).toEqual(['s-2'])
     expect(store.activeSessionId).toBeNull()
     expect(store.messages).toHaveLength(0)
+  })
+
+  it('deleteSession tolerates a non-array sessions value and clears it', async () => {
+    const store = useAssistantStore()
+    store.sessions = null as unknown as ChatSession[]
+    apiDelete.mockResolvedValue({ data: undefined })
+
+    await store.deleteSession('s-1')
+
+    expect(store.sessions).toEqual([])
   })
 
   it('deleteSession keeps an unrelated active selection', async () => {
@@ -618,6 +659,17 @@ describe('useAssistantStore API methods', () => {
     expect(store.isPaused).toBe(false)
   })
 
+  it('append summary messages use an empty session id when none is active', () => {
+    const store = useAssistantStore()
+    store.appendSystemMessage('System notice')
+    store.appendTurnSeparator('Turn boundary')
+
+    expect(store.messages).toMatchObject([
+      { session_id: '', content: 'System notice' },
+      { session_id: '', content: 'Turn boundary' },
+    ])
+  })
+
   it('appendSystemMessage and appendTurnSeparator add summary messages', () => {
     const store = useAssistantStore()
     store.activeSessionId = 's-1'
@@ -669,6 +721,14 @@ describe('useAssistantStore API methods', () => {
 
     store.activeSessionId = 'missing'
     expect(store.activeSession).toBeNull()
+  })
+
+  it('activeSession and sortedSessions tolerate non-array session state', () => {
+    const store = useAssistantStore()
+    store.sessions = null as unknown as ChatSession[]
+
+    expect(store.activeSession).toBeNull()
+    expect(store.sortedSessions).toEqual([])
   })
 
   it('sortedSessions orders by updated_at descending and tolerates invalid dates', () => {
