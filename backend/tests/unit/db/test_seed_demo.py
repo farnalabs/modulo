@@ -248,6 +248,36 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     )
 
 
+async def test_seed_demo_eval_results_anchor_to_most_recent_runs(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Synthetic eval results must land on each pipeline's most-recent runs.
+
+    The dashboard eval rate is a rolling window on ``evaluated_at``, so results
+    anchored to the oldest runs age out of the cards immediately.  Pinning the
+    exact run-number sets below fails if ``_seed_demo_evals`` reverts to an
+    ascending slice — the ``EvalResult == 11`` count alone stays invariant under
+    that regression.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    async def eval_run_numbers(eval_name: str) -> set[int]:
+        result = await session.execute(
+            select(Run.run_number)
+            .join(EvalResult, EvalResult.run_id == Run.id)
+            .join(Eval, Eval.id == EvalResult.eval_id)
+            .where(Eval.name == eval_name)
+        )
+        return set(result.scalars())
+
+    # PR Review Triage has 9 runs; only the newest 6 (_DEMO_EVAL_RESULT_RUN_LIMIT)
+    # receive a result.  An ascending slice would pick {3, 4, 6, 7, 10, 13}.
+    assert await eval_run_numbers("Review completeness") == {20, 19, 16, 13, 10, 7}
+    # The governance pipeline has 5 runs — fewer than the limit — so all of them
+    # are evaluated.
+    assert await eval_run_numbers("PR risk quality") == {1, 2, 9, 12, 17}
+
+
 async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     await _run_seed(session, monkeypatch, _demo_settings())
     counts_first = {
