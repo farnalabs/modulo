@@ -2987,6 +2987,7 @@ export default {
       "scopes_retry": "Retry",
       "no_oauth_clients_registered_yet": "No OAuth clients registered yet.",
       "oauth_list_unexpected_response": "Could not read the OAuth client list. Try again.",
+      "api_keys_unexpected_response": "Could not read the API key list. Try again.",
       "oauth_clients_restricted": "You need an admin or operator role to view and manage OAuth clients.",
       "api_keys_restricted": "You need an admin or operator role to view and manage API keys.",
       "copy_failed_manual": "Copy failed - select the value and copy manually.",
@@ -3031,7 +3032,15 @@ export default {
       "key_will_be_masked_in": "This key will be masked in {seconds}s",
       "revoke_api_key": "Revoke API Key",
       "revoke_key_confirmation_part1": "Are you sure you want to revoke the key",
-      "revoke_key_confirmation_part2": "Any clients using this key will lose access immediately."
+      "revoke_key_confirmation_part2": "Any clients using this key will lose access immediately.",
+      "filter_by_account": "Filter by Account",
+      "all_accounts": "All Accounts",
+      "human_accounts": "Human Accounts",
+      "service_accounts": "Service Accounts",
+      "account": "Account",
+      "human": "Human",
+      "service": "Service",
+      "no_api_keys_match_filter": "No API keys match the selected filter."
     },
     "UserAssistantSkillsView": {
       "my_assistant_skills": "My Assistant Skills",
@@ -3709,6 +3718,8 @@ export default {
       "user_reactivated": "User {email} reactivated",
       "role_changed_to": "Role changed to {role} for {email}",
       "copy": "Copy",
+      "reveal_password": "Reveal",
+      "hide_password": "Hide",
       "copy_failed_manual": "Copy failed — select the value above and copy it manually.",
       "done": "Done",
       "invitation_ready": "Invitation Ready",

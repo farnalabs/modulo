@@ -1133,6 +1133,37 @@ describe('useUiCommandExecutor — waitForDomStable scope fallback', () => {
     const results = await runBatch([{ id: '1', name: 'navigate', args: { path: '/test' } }])
     expect(results[0].success).toBe(true)
   })
+
+  it('waits for a spinner to clear before declaring the DOM stable', async () => {
+    const spinner = document.createElement('div')
+    const routerPush = router.push as unknown as Mock
+    spinner.setAttribute('aria-busy', 'true')
+    document.body.appendChild(spinner)
+
+    const promise = executeCommandBatch([{ id: '1', name: 'navigate', args: { path: '/spinner' } }])
+    await vi.advanceTimersByTimeAsync(200)
+    expect(routerPush).toHaveBeenCalledWith('/spinner')
+
+    spinner.removeAttribute('aria-busy')
+    spinner.textContent = 'loaded'
+    await vi.advanceTimersByTimeAsync(250)
+    await vi.advanceTimersByTimeAsync(32)
+
+    const results = await promise
+    expect(results[0].success).toBe(true)
+  })
+
+  it('falls back to the DOM-stability timeout when a spinner never clears', async () => {
+    const spinner = document.createElement('div')
+    spinner.setAttribute('aria-busy', 'true')
+    document.body.appendChild(spinner)
+
+    const promise = executeCommandBatch([{ id: '1', name: 'navigate', args: { path: '/slow' } }])
+    await vi.advanceTimersByTimeAsync(10000)
+
+    const results = await promise
+    expect(results[0].success).toBe(true)
+  })
 })
 
 // ---- Branch coverage: getPageInteractables hidden elements ----

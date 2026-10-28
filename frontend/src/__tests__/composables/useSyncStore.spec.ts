@@ -64,4 +64,15 @@ describe('useDirtyTracker', () => {
     expect(tracker.dirtyIds.value.size).toBe(1)
     expect(runs.mock.calls.length).toBeGreaterThan(1)
   })
+
+  it('does not expose a dirty id after it is marked clean', () => {
+    const tracker = useDirtyTracker()
+    tracker.markDirty('draft-1')
+    expect(tracker.isDirty('draft-1')).toBe(true)
+
+    tracker.markClean('draft-1')
+
+    expect(tracker.isDirty('draft-1')).toBe(false)
+    expect(tracker.dirtyIds.value.has('draft-1')).toBe(false)
+  })
 })

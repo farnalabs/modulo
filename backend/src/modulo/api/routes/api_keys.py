@@ -140,6 +140,26 @@ class ApiKeyCreatedResponse(BaseModel):
     model_config = {"from_attributes": False}
 
 
+class ApiKeyListResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    role: str
+    scope: str
+    team_id: str | None = None
+    lookup_prefix: str
+    last_used_at: datetime | None = None
+    created_at: datetime
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    is_active: bool
+    account_kind: str
+    account_display_name: str
+    account_email: str | None
+    grants: list[str] | None = None
+
+    model_config = {"from_attributes": False}
+
+
 class ApiKeyRevokeResponse(BaseModel):
     id: uuid.UUID
     revoked: bool
@@ -569,12 +589,12 @@ async def create_api_key_endpoint(
     )
 
 
-@router.get("")
+@router.get("", response_model=list[ApiKeyListResponse])
 @handle_db_errors(_CODE_API_KEYS_LIST_API_KEYS_ENDPOINT)
 async def list_api_keys_endpoint(
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("api_key.update"),
-) -> list[dict[str, Any]]:
+    principal: TenantPrincipal = require_permission("api_key.list"),
+) -> list[ApiKeyListResponse]:
     # SECURITY (#1305): raise floor to operator — runners should not enumerate all org keys.
     if ORG_ROLE_HIERARCHY.get(principal.org_role, -1) < ORG_ROLE_HIERARCHY["operator"]:
         raise HTTPException(
@@ -585,7 +605,8 @@ async def list_api_keys_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            return await list_api_keys(session, principal.organisation_id)
+            entries = await list_api_keys(session, principal.organisation_id)
+            return [ApiKeyListResponse.model_validate(entry) for entry in entries]
     except ProgrammingError:
         logger.exception(_CODE_API_KEYS_LIST_API_KEYS_ENDPOINT)
         raise HTTPException(

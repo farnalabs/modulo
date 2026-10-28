@@ -338,4 +338,202 @@ describe('OutputValidationTab', () => {
     expect(wrapper.text()).toContain('0 evals configured')
     expect(wrapper.find('button').text()).toContain('Add Eval Definition')
   })
+
+  it('emits update:evalDefinitions when type select changes', async () => {
+    const evals = [makeEval({ id: 'e1', type: 'regex', config: { field: 'input', pattern: '^foo$' } })]
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: evals, maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    ;(wrapper.vm as unknown as { updateEval: (id: string, patch: Partial<EvalConfig>) => void }).updateEval('e1', { type: 'json_schema' })
+
+    const emitted = wrapper.emitted('update:evalDefinitions') as unknown[][]
+    expect(emitted).toBeTruthy()
+    const updated = emitted[0][0] as EvalConfig[]
+    expect(updated[0].type).toBe('json_schema')
+    // updateEval merges the patch over the existing eval - config is preserved, never reset
+    expect(updated[0].config).toEqual({ field: 'input', pattern: '^foo$' })
+  })
+
+  it('preserves config when type changes from regex to model_judge', async () => {
+    const evals = [makeEval({ id: 'e1', type: 'regex', config: { field: 'output', pattern: '.*' } })]
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: evals, maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    ;(wrapper.vm as unknown as { updateEval: (id: string, patch: Partial<EvalConfig>) => void }).updateEval('e1', { type: 'model_judge' })
+    await wrapper.vm.$nextTick()
+
+    const emitted = wrapper.emitted('update:evalDefinitions') as unknown[][]
+    expect(emitted).toBeTruthy()
+    const updated = emitted[0][0] as EvalConfig[]
+    expect(updated[0].type).toBe('model_judge')
+    // Config is NOT reset by updateEval - it preserves existing config
+    // Only addEval creates a new eval with default config
+    expect(updated[0].config).toEqual({ field: 'output', pattern: '.*' })
+  })
+
+  it('emits update:evalDefinitions when failure_behaviour select changes', async () => {
+    const evals = [makeEval({ id: 'e1', failure_behaviour: 'retry' })]
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: evals, maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    ;(wrapper.vm as unknown as { updateEval: (id: string, patch: Partial<EvalConfig>) => void }).updateEval('e1', { failure_behaviour: 'block' })
+
+    const emitted = wrapper.emitted('update:evalDefinitions') as unknown[][]
+    expect(emitted).toBeTruthy()
+    const updated = emitted[0][0] as EvalConfig[]
+    expect(updated[0].failure_behaviour).toBe('block')
+  })
+
+  it('emits update:evalDefinitions when updating json_schema field_optional', async () => {
+    const evals = [makeEval({ id: 'e1', type: 'json_schema', config: { field: '' } })]
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: evals, maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    const fieldInput = wrapper.find('input[placeholder="output field name (leave blank for entire output)"]')
+    await fieldInput.setValue('data.result')
+    await fieldInput.trigger('update:modelValue')
+
+    const emitted = wrapper.emitted('update:evalDefinitions') as unknown[][]
+    expect(emitted).toBeTruthy()
+    const updated = emitted[0][0] as EvalConfig[]
+    expect(updated[0].config.field).toBe('data.result')
+  })
+
+  it('shows regex fields when type changes to regex', async () => {
+    const evals = [makeEval({ id: 'e1', type: 'json_schema' })]
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: evals, maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    expect(wrapper.text()).not.toContain('Regex pattern')
+
+    ;(wrapper.vm as unknown as { updateEval: (id: string, patch: Partial<EvalConfig>) => void }).updateEval('e1', { type: 'regex' })
+    await wrapper.vm.$nextTick()
+
+    // Update the prop to simulate parent handling the update:evalDefinitions event
+    const updatedEvals: EvalConfig[] = [{ ...evals[0], type: 'regex' }]
+    await wrapper.setProps({ evalDefinitions: updatedEvals })
+
+    expect(wrapper.text()).toContain('Field')
+    expect(wrapper.text()).toContain('Pattern')
+    // The regex pattern textarea placeholder should be present
+    const textarea = wrapper.find('textarea')
+    expect(textarea.attributes('placeholder')).toContain('Regex pattern')
+  })
+
+  it('shows model_judge fields when type changes to model_judge', async () => {
+    const evals = [makeEval({ id: 'e1', type: 'regex' })]
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: evals, maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    expect(wrapper.text()).not.toContain('Rubric')
+
+    ;(wrapper.vm as unknown as { updateEval: (id: string, patch: Partial<EvalConfig>) => void }).updateEval('e1', { type: 'model_judge' })
+    await wrapper.vm.$nextTick()
+
+    // Update the prop to simulate parent handling the update:evalDefinitions event
+    const updatedEvals: EvalConfig[] = [{ ...evals[0], type: 'model_judge' }]
+    await wrapper.setProps({ evalDefinitions: updatedEvals })
+
+    expect(wrapper.text()).toContain('Rubric')
+  })
+
+  it('emits update:evalDefinitions when updating failure_behaviour to warn', async () => {
+    const evals = [makeEval({ id: 'e1', failure_behaviour: 'retry' })]
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: evals, maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    ;(wrapper.vm as unknown as { updateEval: (id: string, patch: Partial<EvalConfig>) => void }).updateEval('e1', { failure_behaviour: 'warn' })
+
+    const emitted = wrapper.emitted('update:evalDefinitions') as unknown[][]
+    expect(emitted).toBeTruthy()
+    const updated = emitted[0][0] as EvalConfig[]
+    expect(updated[0].failure_behaviour).toBe('warn')
+  })
+
+  it('handles multiple eval definitions independently', async () => {
+    const evals = [
+      makeEval({ id: 'e1', type: 'regex', name: 'Eval 1' }),
+      makeEval({ id: 'e2', type: 'json_schema', name: 'Eval 2' }),
+    ]
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: evals, maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    expect(wrapper.text()).toContain('Eval #1')
+    expect(wrapper.text()).toContain('Eval #2')
+
+    // Update first eval
+    const nameInputs = wrapper.findAll('input[type="text"]')
+    await nameInputs[0].setValue('Updated Eval 1')
+    await nameInputs[0].trigger('update:modelValue')
+
+    const emitted = wrapper.emitted('update:evalDefinitions') as unknown[][]
+    const updated = emitted[0][0] as EvalConfig[]
+    expect(updated[0].name).toBe('Updated Eval 1')
+    expect(updated[1].name).toBe('Eval 2')
+  })
+
+  it('removes correct eval when multiple exist', async () => {
+    const evals = [
+      makeEval({ id: 'e1', name: 'Eval 1' }),
+      makeEval({ id: 'e2', name: 'Eval 2' }),
+      makeEval({ id: 'e3', name: 'Eval 3' }),
+    ]
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: evals, maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    const removeBtns = wrapper.findAll('button').filter((b) => b.text().trim() === 'Remove')
+    expect(removeBtns.length).toBe(3)
+
+    await removeBtns[1].trigger('click') // Remove middle one
+
+    const emitted = wrapper.emitted('update:evalDefinitions') as unknown[][]
+    const remaining = emitted[0][0] as EvalConfig[]
+    expect(remaining).toHaveLength(2)
+    expect(remaining[0].id).toBe('e1')
+    expect(remaining[1].id).toBe('e3')
+  })
+
+  it('localRetries is initialized from prop but does not react to prop changes', async () => {
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: [], maxValidationRetries: 1 },
+      global: { plugins: [i18n] },
+    })
+    expect(wrapper.text()).toContain('Max Validation Retries: 1')
+
+    await wrapper.setProps({ maxValidationRetries: 3 })
+    // localRetries is a local ref initialized from prop, not a computed that watches prop
+    // So it won't update when prop changes
+    expect(wrapper.text()).toContain('Max Validation Retries: 1')
+  })
+
+  it('range input min/max bounds', () => {
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: [], maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    const rangeInput = wrapper.find('input[type="range"]')
+    expect(rangeInput.attributes('min')).toBe('0')
+    expect(rangeInput.attributes('max')).toBe('5')
+    expect(rangeInput.attributes('step')).toBe('1')
+  })
+
+  it('evalCount computed reflects current evalDefinitions length', async () => {
+    const wrapper = mount(OutputValidationTab, {
+      props: { evalDefinitions: [makeEval({ id: 'e1' }), makeEval({ id: 'e2' })], maxValidationRetries: 0 },
+      global: { plugins: [i18n] },
+    })
+    expect(wrapper.text()).toContain('2 evals configured')
+
+    await wrapper.setProps({ evalDefinitions: [makeEval({ id: 'e1' })] })
+    expect(wrapper.text()).toContain('1 eval configured')
+  })
 })

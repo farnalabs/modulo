@@ -99,6 +99,11 @@ class TestCheckToolScope:
         # for the declared tools so this row still pins the ROLE leg.
         assert check_tool_scope(role, tool, is_system_admin=tool in SYSTEM_ADMIN_TOOLS) is None
 
+    def test_api_key_list_is_operator_allowed_and_runner_denied(self) -> None:
+        assert check_tool_scope("operator", "list_api_keys") is None
+        with pytest.raises(MCPAuthorizationError):
+            check_tool_scope("runner", "list_api_keys")
+
     def test_query_analytics_resolves_to_viewer(self) -> None:
         from modulo.auth.permissions import resolve_required
         from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS

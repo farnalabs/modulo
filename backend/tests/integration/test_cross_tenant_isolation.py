@@ -482,7 +482,7 @@ async def integration_client(
         # app_engine sessions run as a non-superuser role, so the RLS policies
         # actually filter cross-org rows (the testcontainers superuser bypasses
         # RLS even under FORCE ROW LEVEL SECURITY).
-        factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        factory = async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
         async with factory() as session:
             yield session
 
@@ -926,6 +926,22 @@ class TestCrossTenantMembershipGuards:
             json={"org_role": "admin"},
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+    async def test_admin_update_user_activation_without_role_succeeds_for_own_org(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.put(
+            f"/api/v1/admin/users/{user_a}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"is_active": True},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["org_role"] == "admin"
+        assert resp.json()["is_active"] is True
 
 
 # ===================================================================
@@ -1405,7 +1421,7 @@ class TestTriggerEventRetentionRls:
         event_a = await _seed_trigger_event(db_engine, org_a, trigger_a, received_at=datetime.now(UTC))
         event_b = await _seed_trigger_event(db_engine, org_b, trigger_b, received_at=datetime.now(UTC))
 
-        app_factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        app_factory = async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
 
         # (a) No org context: FORCE RLS filters everything.
         async with app_factory() as session, session.begin():

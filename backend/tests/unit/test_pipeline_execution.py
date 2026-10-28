@@ -2346,7 +2346,7 @@ class TestRunExecutorWithWatchdog:
             executor.on_node_started("n1")  # type: ignore[attr-defined]
             started.append("n1")
             await asyncio.sleep(0.02)
-            executor.on_node_completed("n1")  # type: ignore[attr-defined]
+            await executor.on_node_completed("n1")  # type: ignore[attr-defined]
             completed.append("n1")
             return SimpleNamespace(status="complete")
 

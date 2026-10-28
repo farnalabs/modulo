@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import uuid
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -25,6 +26,7 @@ from modulo.core.eval_engine.coverage_gap import (
 )
 from modulo.core.eval_engine.execute_suite_run import (
     SuiteJudgingBudgetExhaustedError,
+    SuiteRunExecutionError,
     _budget_exhausted,
     _budget_exhausted_result,
     _case_result_row,
@@ -40,6 +42,7 @@ from modulo.core.eval_engine.execute_suite_run import (
     exclude_eval_families,
     is_eval_trigger,
 )
+from modulo.core.eval_engine.typed_judge import JudgeErrorCode
 from modulo.core.pipeline_engine.errors import (
     ConnectorNodeFailedError,
     NodeMissingModelBackendError,
@@ -54,6 +57,7 @@ from modulo.core.pipeline_impact import (
     node_port_signature,
     normalise_edge_port_delta,
 )
+from modulo.db.models.eval_suite_run import SuiteRunState
 
 
 class TestCoverageGapBoundaries:
@@ -335,3 +339,251 @@ class TestPipelineEngineErrors:
         connector = ConnectorNodeFailedError("connector", "upstream rejected request")
         assert connector.node_id == "connector"
         assert "upstream rejected request" in str(connector)
+
+
+class TestCoverageGapRemainingBranches:
+    def test_canonical_json_falls_back_when_encoder_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _raise_type_error(*args: object, **kwargs: object) -> str:
+            raise TypeError("bad")
+
+        monkeypatch.setattr("modulo.core.eval_engine.coverage_gap.json.dumps", _raise_type_error)
+        assert _canonical_json({"value": 1}) == "{'value': 1}"
+
+    def test_duplicate_variant_and_incomplete_results_are_ignored(self) -> None:
+        from modulo.core.eval_engine.coverage_gap import _eval_values_by_variant, _variant_representatives
+
+        first = uuid.uuid4()
+        duplicate = uuid.uuid4()
+        missing_variant = uuid.uuid4()
+        eval_id = uuid.uuid4()
+        runs = [
+            SimpleNamespace(id=first, variant_config_snapshot={"variant_id": "v"}),
+            SimpleNamespace(id=duplicate, variant_config_snapshot={"variant_id": "v"}),
+            SimpleNamespace(id=missing_variant, variant_config_snapshot={"variant_id": "other"}),
+        ]
+        representatives, keys = _variant_representatives(runs, {first, duplicate})
+        assert list(representatives) == ["v"]
+        results = [
+            SimpleNamespace(run_id=duplicate, eval_id=eval_id, score=0.1, passed=False),
+            SimpleNamespace(run_id=first, eval_id=None, score=0.9, passed=True),
+            SimpleNamespace(run_id=uuid.uuid4(), eval_id=eval_id, score=0.5, passed=True),
+        ]
+        assert not _eval_values_by_variant(results, {first, duplicate}, keys, representatives)
+
+    async def test_compute_coverage_gap_requires_scope_and_handles_empty_batch(self) -> None:
+        from modulo.core.eval_engine.coverage_gap import compute_coverage_gap
+
+        session = AsyncMock()
+        with pytest.raises(ValueError, match="provide batch_id or variant_group_id"):
+            await compute_coverage_gap(session, org_id=uuid.uuid4())
+
+        with pytest.MonkeyPatch.context() as patcher:
+            patcher.setattr(
+                "modulo.core.eval_engine.coverage_gap._load_runs",
+                AsyncMock(return_value=[]),
+            )
+            summary = await compute_coverage_gap(session, org_id=uuid.uuid4(), batch_id=uuid.uuid4())
+        assert summary.status == "insufficient_data"
+        assert summary.run_count == 0
+
+    async def test_batch_loader_and_output_reader_are_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.core.eval_engine import coverage_gap
+
+        run = SimpleNamespace(id=uuid.uuid4(), status="complete", variant_config_snapshot={"variant_id": "v"})
+        batch_loader = AsyncMock(return_value=[run])
+        monkeypatch.setattr(coverage_gap, "get_batch_runs", batch_loader)
+        session = AsyncMock()
+        loaded = await coverage_gap._load_runs(
+            session,
+            org_id=uuid.uuid4(),
+            batch_id=uuid.uuid4(),
+            variant_group_id=None,
+        )
+        assert loaded == [run]
+        batch_loader.assert_awaited_once()
+
+
+class TestExecuteSuiteRunRemainingBranches:
+    async def test_transition_rejects_unpersisted_and_illegal_runs(self) -> None:
+        from modulo.core.eval_engine.execute_suite_run import _suite_run_transition
+        from modulo.db.models.eval_suite_run import IllegalStateTransitionError
+
+        session = AsyncMock()
+        with pytest.raises(ValueError, match="persisted"):
+            await _suite_run_transition(session, SimpleNamespace(id=None), SuiteRunState.RUNNING)
+        run = SimpleNamespace(
+            id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+            state=SuiteRunState.COMPLETED.value,
+            version=0,
+        )
+        with pytest.raises(IllegalStateTransitionError):
+            await _suite_run_transition(session, run, SuiteRunState.RUNNING)
+
+    async def test_transition_detects_optimistic_lock_loss(self) -> None:
+        from modulo.core.eval_engine.execute_suite_run import _suite_run_transition
+        from modulo.db.models.eval_suite_run import OptimisticLockError
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session = AsyncMock()
+        session.execute.return_value = result
+        run = SimpleNamespace(
+            id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+            state=SuiteRunState.PENDING.value,
+            version=0,
+        )
+        with pytest.raises(OptimisticLockError):
+            await _suite_run_transition(session, run, SuiteRunState.RUNNING)
+
+    async def test_loader_not_found_errors_are_typed(self) -> None:
+        from modulo.core.eval_engine.execute_suite_run import load_dataset, load_model_backend, load_suite
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session = AsyncMock()
+        session.execute.return_value = result
+        org_id = uuid.uuid4()
+        with pytest.raises(SuiteRunExecutionError, match="EvalSuite"):
+            await load_suite(session, org_id, uuid.uuid4())
+        with pytest.raises(SuiteRunExecutionError, match="EvalDataset"):
+            await load_dataset(session, org_id, uuid.uuid4())
+        with pytest.raises(SuiteRunExecutionError, match="ModelBackend"):
+            await load_model_backend(session, org_id, uuid.uuid4())
+
+    async def test_deadline_timeout_and_budget_result(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = SimpleNamespace(id=uuid.uuid4())
+        definition = SimpleNamespace(id=uuid.uuid4(), node_id=None)
+
+        class _Engine:
+            def evaluate_result_async(self, *args: object, **kwargs: object) -> object:
+                async def _result() -> object:
+                    return object()
+
+                return _result()
+
+        monkeypatch.setattr("modulo.core.eval_engine.execute_suite_run.time.monotonic", lambda: 10.0)
+        with pytest.raises(SuiteJudgingBudgetExhaustedError):
+            await _evaluate_within_budget(_Engine(), {}, definition, run, None, 9.0)
+
+        async def _raise_timeout(awaitable: object, **kwargs: object) -> object:
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise TimeoutError
+
+        monkeypatch.setattr("modulo.core.eval_engine.execute_suite_run.time.monotonic", lambda: 0.0)
+        monkeypatch.setattr("modulo.core.eval_engine.execute_suite_run.asyncio.wait_for", _raise_timeout)
+        with pytest.raises(SuiteJudgingBudgetExhaustedError):
+            await _evaluate_within_budget(_Engine(), {}, definition, run, None, 1.0)
+        exhausted = _budget_exhausted_result(definition, run)
+        assert exhausted.judge_verdict.error_code is JudgeErrorCode.JUDGE_TIMEOUT
+
+    async def test_claimed_cost_and_sync_judge_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from modulo.core.eval_engine.execute_suite_run import _score_case
+
+        run = SimpleNamespace(id=uuid.uuid4(), organisation_id=uuid.uuid4(), claimed_cost=None)
+        case = SimpleNamespace(input_payload={"x": 1})
+        definition = SimpleNamespace(
+            id=uuid.uuid4(),
+            org_id=run.organisation_id,
+            node_id=None,
+            pipeline_id=None,
+            name="regex",
+            eval_type="regex",
+            config={"pattern": "1", "field": "output.x"},
+            pass_threshold=None,
+            suite_id=None,
+        )
+        session = AsyncMock()
+        claimed = AsyncMock()
+        monkeypatch.setattr("modulo.core.eval_engine.execute_suite_run._claim_case_cost", claimed)
+        results, errored = await _score_case(
+            session,
+            run,
+            case,
+            suite_defs=[definition],
+            engine=type(
+                "E",
+                (),
+                {
+                    "evaluate_result": lambda self, *args, **kwargs: SimpleNamespace(
+                        outcome=type("O", (), {"value": "passed"})(),
+                        passed=True,
+                        score=1.0,
+                        detail="ok",
+                        judge_verdict=None,
+                    )
+                },
+            )(),
+            model_judge_callable=object(),
+            scenario_inputs=None,
+            eval_definition_version=1,
+            claims_llm=True,
+            suite_ceiling=Decimal(1),
+            cost_per_llm_case=Decimal("0.1"),
+            judging_deadline=None,
+        )
+        assert len(results) == 1
+        assert errored == 0
+        claimed.assert_awaited_once()
+
+    def test_resolvers_and_tally_cover_remaining_boundaries(self) -> None:
+        from modulo.core.eval_engine.execute_suite_run import _failure_detail, _resolve_suite_ceiling
+
+        assert _resolve_suite_ceiling(SimpleNamespace(extra={"suite_ceiling": 2}), None) == Decimal(2)
+        assert _resolve_suite_ceiling(SimpleNamespace(extra={"suite_ceiling": None}), Decimal(3)) == Decimal(3)
+        assert _failure_detail(SuiteRunExecutionError("typed")) == "typed"
+        assert _failure_detail(RuntimeError("raw")) == "500: raw"
+
+
+class TestPipelineImpactRemainingBranches:
+    def test_schema_refs_and_port_delta_edges(self) -> None:
+        from modulo.core.pipeline_impact import _normalise_port_entry, _port_schema_ref, _ports_list
+
+        assert _port_schema_ref({"name": "p", "ref": 4}) == "4"
+        assert _port_schema_ref({"name": "p"}) is None
+        assert not _ports_list({"p": 4})
+        assert _normalise_port_entry({"direction": "output"}) is None
+        assert _normalise_port_entry(("node", "ignored")) == ("node", "", None, None)
+
+    def test_diff_and_impact_cover_modified_ports_and_duplicate_nodes(self) -> None:
+        old = {
+            "id": "n",
+            "inputs": [{"name": "in", "schema_ref": "a"}],
+            "outputs": [{"name": "out", "schema_ref": "a"}],
+        }
+        new = {
+            "id": "n",
+            "inputs": [{"name": "in", "schema_ref": "b"}],
+            "outputs": [{"name": "out", "schema_ref": "a"}, {"name": "extra"}],
+        }
+        changes = diff_node_ports(old, new)
+        assert {c["change"] for c in changes} == {"modified", "added"}
+        graph = {
+            "nodes": [{"id": "a"}, {"id": "b"}],
+            "edges": [{"source": "a", "target": "b"}],
+        }
+        assert compute_port_change_impact(graph, [{"node_id": "a"}, {"node_id": "a"}]) == {"a", "b"}
+
+    def test_port_breaking_checks_removed_modified_and_default_edges(self) -> None:
+        graph = {
+            "nodes": [{"id": "a", "outputs": [{"name": "kept", "schema_ref": "new"}]}],
+            "edges": [
+                {"source": "a", "target": "b", "source_port": "removed"},
+                {"source": "a", "target": "c"},
+                {"source": "a", "target": "d", "source_port": "kept"},
+            ],
+        }
+        findings = check_port_change_breaking(
+            graph,
+            [
+                {"node_id": "a", "direction": "output", "port": "removed", "change": "removed"},
+                {"node_id": "a", "direction": "output", "port": "kept", "change": "modified"},
+            ],
+        )
+        assert any(f["severity"] == "block" for f in findings)
+        assert any(f["severity"] == "warning" for f in findings)
+        assert not _check_edge_repoint_breaking(
+            {"node_id": "missing", "direction": "output", "port": "x", "edge": {}}, graph
+        )

@@ -436,6 +436,16 @@ describe('SettingsSsoView — toggle provider', () => {
     expect(wrapper.text()).toContain('Toggle failed:')
     expect(wrapper.text()).toContain('toggle exploded')
   })
+
+  it('clears a completed toggle request before unmount', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-sso-toggle"]').trigger('click')
+    await nextTick()
+    wrapper.unmount()
+
+    expect(api.PUT).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('SettingsSsoView — delete provider', () => {
@@ -554,6 +564,27 @@ describe('SettingsSsoView — test connection', () => {
     await nextTick()
     expect(wrapper.text()).toContain('Connection failed')
     expect(wrapper.text()).toContain('timeout')
+  })
+
+  it('clears the success-result timeout when the view unmounts', async () => {
+    vi.useFakeTimers()
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    try {
+      ;(api.POST as Mock).mockResolvedValue({
+        data: { success: true, message: 'All good', provider_info: null },
+        error: undefined,
+      })
+      const wrapper = mountView()
+      await nextTick()
+      await wrapper.find('[data-testid="settings-sso-test"]').trigger('click')
+      await nextTick()
+      expect(wrapper.text()).toContain('All good')
+      wrapper.unmount()
+      expect(clearTimeoutSpy).toHaveBeenCalled()
+    } finally {
+      clearTimeoutSpy.mockRestore()
+      vi.useRealTimers()
+    }
   })
 })
 
