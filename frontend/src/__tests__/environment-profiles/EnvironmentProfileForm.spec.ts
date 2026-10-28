@@ -129,8 +129,10 @@ describe('EnvironmentProfileForm — create mode', () => {
       description: 'dev sandbox',
       provider_type: 'local_docker',
       image_ref: 'python:3.12-slim',
-      capabilities: [],
-      network_policy: 'outbound',
+       capabilities: [],
+       max_node_seconds: 3300,
+       network_policy: 'outbound',
+
       initialisation_strategy: 'git_clone',
       persistence_policy: 'ephemeral',
       visibility: 'org',
