@@ -448,6 +448,22 @@ class TestListApiKeys(AuthContext):
         assert result["error"] == "insufficient_scope"
         assert "account_email" not in result
 
+    async def test_runner_with_tool_scope_still_cannot_list_org_keys(self) -> None:
+        """The operator floor is enforced after the tool-scope check."""
+        from modulo.api.mcp_server import _ctx_role, list_api_keys
+
+        _ctx_role.set("runner")
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server.check_tool_scope"),
+            patch("modulo.api.mcp_server._session") as mock_session,
+        ):
+            mock_session.return_value = make_session_context(_make_list_session([_make_key()]))
+            result = await list_api_keys()
+
+        assert result["error"] == "insufficient_scope"
+        assert result["detail"] == "Only admin or operator users can list API keys"
+
     async def test_operator_list_returns_account_metadata_without_secrets(self) -> None:
         from modulo.api.mcp_server import list_api_keys
 
