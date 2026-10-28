@@ -165,6 +165,37 @@ directions:
   CI-runner label, and the buildable CI types are `github_actions_ci`,
   `gitlab_ci` and `woodpecker`.
 
+### The stored `allowed_operations` allowlist
+
+The capability vocabulary is the `Capability` enum in
+`modulo/connectors/base.py` (22 values: `read`, `write`, `git_push`,
+`create_pr`, `code_review`, `trigger_run`, `get_run_status`, `get_run_logs`,
+`list_runs`, `ticket_read`, `ticket_write`, `ticket_search`, `monitoring`,
+`observability`, `vulnerability_scanning`, `incident_management`,
+`collaboration`, `messaging`, `notification`, `package_management`,
+`secrets_management`, `automation`). Two helpers decide what a stored
+`allowed_operations` value means, and every consumer imports them rather than
+re-implementing the rule:
+
+- **Unrestricted.** `None` and `[]` both mean "nothing was configured to
+  restrict", so the connector type's own capability set applies
+  (`unrestricted_allowed_operations`). `[]` is what the REST, MCP and UI
+  create paths store, so an instance created without an explicit allowlist is
+  unrestricted, not locked out.
+- **Restricted.** Any non-empty list, and any malformed value (a `dict`,
+  `str` or `int` where a list is expected), is restricted.
+  `canonical_capability_set` reduces each entry to a bare capability; the
+  legacy type-qualified spelling (`github.write`, `ci-runner.list_runs`) grants
+  only when its qualifier names the surface's own `connector_type_id` and is
+  rejected otherwise. An entry that is not a capability in any accepted
+  spelling grants nothing.
+
+The rule fails closed: malformed input restricts instead of granting. Both
+`ConnectorACL` (enforcement in `modulo/connectors/base.py`) and
+`core/guardrails/conformance.py` (certification) read the stored value through
+these same two helpers, so a surface cannot be certified for a capability the
+ACL denies.
+
 ## Credential handling
 
 Credentials are **never** stored as literal values in the connector source.
