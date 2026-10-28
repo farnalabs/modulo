@@ -8,6 +8,7 @@ code under test were deleted or altered.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -412,24 +413,110 @@ def test_map_lg_event_unknown_kind():
 # ---------------------------------------------------------------------------
 
 
-def test_publish_mapped_stream_event_fires_node_lifecycle_callbacks():
+async def test_stream_graph_awaits_async_completion_before_publishing_event():
+    """The production stream path waits for durable completion before publish."""
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    persisted = asyncio.Event()
+    published = asyncio.Event()
+
+    async def _completed(_node_id: str) -> None:
+        persisted.set()
+        order.append("persisted")
+        await asyncio.sleep(0)
+
+    order: list[str] = []
+
+    class _Broker:
+        def publish(self, event: str, _payload: dict[str, Any]) -> None:
+            order.append(f"publish:{event}")
+            if event == "node_completed":
+                published.set()
+
+    executor.on_node_completed = _completed
+    compiled = MagicMock()
+
+    async def _events(_initial: Any, _config: Any, *, version: str):
+        yield {"event": "on_chain_start", "name": "node-a", "data": {}}
+        yield {
+            "event": "on_chain_end",
+            "name": "node-a",
+            "data": {"output": {"result": "ok"}},
+            "run_id": "run-1",
+        }
+
+    compiled.astream_events = _events
+    result = await executor._stream_graph(
+        compiled,
+        None,
+        {},
+        {"node-a"},
+        _Broker(),
+        uuid.uuid4(),
+    )
+    assert result[0] == "complete"
+    assert published.is_set()
+    assert order.index("persisted") < order.index("publish:node_completed")
+    assert persisted.is_set()
+
+
+async def test_publish_mapped_stream_event_fires_node_lifecycle_callbacks():
     """Mapped node events invoke the wired start/completion callbacks and are
     published on the broker (FAR-369 absolute node-deadline watchdog)."""
     executor = PipelineExecutor(MagicMock())
     started: list[str] = []
     completed: list[str] = []
     executor.on_node_started = started.append
-    executor.on_node_completed = completed.append
+
+    async def _completed(node_id: str) -> None:
+        completed.append(node_id)
+
+    executor.on_node_completed = _completed
     broker = MagicMock()
     ctx = SimpleNamespace(broker=broker)
 
     executor._publish_mapped_stream_event(("node_started", {"node_id": "node-a"}), _StreamState(), ctx)
-    executor._publish_mapped_stream_event(("node_completed", {"node_id": "node-a"}), _StreamState(), ctx)
+    completion = executor._publish_mapped_stream_event(("node_completed", {"node_id": "node-a"}), _StreamState(), ctx)
+    if completion is not None:
+        await completion
 
     assert started == ["node-a"]
     assert completed == ["node-a"]
-    broker.publish.assert_any_call("node_started", {"node_id": "node-a"})
-    broker.publish.assert_any_call("node_completed", {"node_id": "node-a"})
+
+
+def test_publish_mapped_stream_event_preserves_synchronous_completion_hooks() -> None:
+    """Legacy synchronous completion hooks publish without an awaitable wrapper."""
+    executor = PipelineExecutor(MagicMock())
+    completed: list[str] = []
+    executor.on_node_completed = completed.append
+    broker = MagicMock()
+    ctx = SimpleNamespace(broker=broker)
+
+    result = executor._publish_mapped_stream_event(
+        ("node_completed", {"node_id": "node-sync"}),
+        _StreamState(),
+        ctx,
+    )
+
+    assert result is None
+    assert completed == ["node-sync"]
+    broker.publish.assert_called_once_with("node_completed", {"node_id": "node-sync"})
+
+
+def test_publish_mapped_stream_event_publishes_non_completion_events_without_hook() -> None:
+    """Non-completion lifecycle events retain the direct publish path."""
+    executor = PipelineExecutor(MagicMock())
+    broker = MagicMock()
+    ctx = SimpleNamespace(broker=broker)
+
+    result = executor._publish_mapped_stream_event(
+        ("node_started", {"node_id": "node-start"}),
+        _StreamState(),
+        ctx,
+    )
+
+    assert result is None
+    broker.publish.assert_called_once_with("node_started", {"node_id": "node-start"})
 
 
 # ---------------------------------------------------------------------------

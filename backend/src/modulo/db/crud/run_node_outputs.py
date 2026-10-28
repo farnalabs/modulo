@@ -74,6 +74,7 @@ attempt_key=<original key>)`` — evidence kept, never dropped (FAR-188).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import uuid
@@ -120,7 +121,10 @@ __all__ = [
     "OutputsSentinelViolation",
     "RunBlobs",
     "assert_write_org",
+    "attempt_key_for_node",
+    "claim_token_attempt_suffix",
     "dialect_insert",
+    "has_completed_nodes_in_attempt",
     "marker_attempt_suffix",
     "parse_marker_node_id",
     "persist_schema_enforcement_record",
@@ -1452,3 +1456,66 @@ async def persist_schema_enforcement_record(
         ),
     }
     await session.execute(_targeted_upsert_stmt(insert_factory, values, "schema_enforcement_json"), [values])
+
+
+# ── FAR-2050: per-node completion reader ──────────────────────────────
+
+
+def claim_token_attempt_suffix(claim_token: str | None) -> str:
+    """Return the shared attempt suffix derived from a claim token."""
+    return "claim-unknown" if not claim_token else hashlib.sha256(claim_token.encode("utf-8")).hexdigest()[:16]
+
+
+def attempt_key_for_node(*, run_id: uuid.UUID, node_id: str, claim_token: str | None) -> str:
+    """Return the claim-token-derived attempt key for a node completion row.
+
+    Dispatch and completion writers use the same suffix, so an earlier attempt
+    cannot satisfy a later watchdog read.
+    """
+    return f"run:{run_id}:node:{node_id}:{claim_token_attempt_suffix(claim_token)}"
+
+
+async def has_completed_nodes_in_attempt(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    claim_token: str | None = None,
+) -> bool:
+    """Check if this attempt has at least one completed node (FAR-2050).
+
+    Reads the run_node_outputs table for the current claim-token-derived
+    attempt rows with a non-NULL completed_at. Returns True if any such row exists.
+
+    Used by the node-deadline watchdog to gate re-dispatch: only re-dispatch
+    when this attempt has at least one completed node AND delivery veto has
+    not fired; otherwise terminal-fail with node_deadline_exceeded.
+
+    The claim_token fence ensures we only check the current attempt's
+    completions (a superseded attempt's completions don't count).
+    """
+    if claim_token is None:
+        _log.warning(
+            "run_node_outputs completion probe missing claim token run=%s; treating as no completion",
+            run_id,
+        )
+        return False
+    attempt_suffix = claim_token_attempt_suffix(claim_token)
+    attempt_keys = select(RunNodeOutput.attempt_key).where(
+        RunNodeOutput.run_id == run_id,
+        RunNodeOutput.node_id != META_NODE_ID,
+        RunNodeOutput.node_id != UNKNOWN_NODE_ID,
+        RunNodeOutput.completed_at.is_not(None),
+        RunNodeOutput.attempt_key.like(f"run:{run_id}:node:%:{attempt_suffix}"),
+    )
+    stmt = (
+        select(RunNodeOutput.node_id)
+        .where(
+            RunNodeOutput.run_id == run_id,
+            RunNodeOutput.organisation_id == organisation_id,
+            RunNodeOutput.attempt_key.in_(attempt_keys),
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.first() is not None
