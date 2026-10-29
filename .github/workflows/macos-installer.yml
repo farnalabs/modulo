@@ -228,16 +228,17 @@ jobs:
             exit 1
           }
           echo '::endgroup::'
-          RUNTIME_VERSION_OUTPUT="$("$RUNTIME" --version)"
-          printf '%s\n' "$RUNTIME_VERSION_OUTPUT"
+          RUNTIME_VERSION_OUTPUT_RAW="$("$RUNTIME" --version)"
+          RUNTIME_VERSION_OUTPUT="$(printf '%s' "$RUNTIME_VERSION_OUTPUT_RAW" | python3 -c 'import sys; print(sys.stdin.read().rstrip(" \\t\\r\\n"), end="")')"
+          printf 'Bundled Python runtime version raw=%q normalized=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT"
           if [[ "$RUNTIME_VERSION_OUTPUT" =~ ^Python[[:space:]]([0-9]+\.[0-9]+\.[0-9]+)(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
             RUNTIME_SEMVER="${BASH_REMATCH[1]}"
           else
-            echo "::error::bundled Python runtime did not report a strict semantic version; observed output: $RUNTIME_VERSION_OUTPUT" >&2
+            printf '::error::bundled Python runtime did not report a strict semantic version; raw=%q normalized=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" >&2
             exit 1
           fi
           if [[ "$RUNTIME_SEMVER" != '3.12.14' ]]; then
-            echo "::error::bundled Python runtime must report exactly Python 3.12.14; observed output: $RUNTIME_VERSION_OUTPUT" >&2
+            printf '::error::bundled Python runtime must report exactly Python 3.12.14; raw=%q normalized=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" >&2
             exit 1
           fi
 
@@ -384,16 +385,17 @@ jobs:
             exit 1
           }
           echo '::endgroup::'
-          RUNTIME_VERSION_OUTPUT="$("$RUNTIME" --version)"
-          printf '%s\n' "$RUNTIME_VERSION_OUTPUT"
+          RUNTIME_VERSION_OUTPUT_RAW="$("$RUNTIME" --version)"
+          RUNTIME_VERSION_OUTPUT="$(printf '%s' "$RUNTIME_VERSION_OUTPUT_RAW" | python3 -c 'import sys; print(sys.stdin.read().rstrip(" \\t\\r\\n"), end="")')"
+          printf 'Bundled Python runtime version raw=%q normalized=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT"
           if [[ "$RUNTIME_VERSION_OUTPUT" =~ ^Python[[:space:]]([0-9]+\.[0-9]+\.[0-9]+)(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
             RUNTIME_SEMVER="${BASH_REMATCH[1]}"
           else
-            echo "::error::bundled Python runtime did not report a strict semantic version; observed output: $RUNTIME_VERSION_OUTPUT" >&2
+            printf '::error::bundled Python runtime did not report a strict semantic version; raw=%q normalized=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" >&2
             exit 1
           fi
           if [[ "$RUNTIME_SEMVER" != '3.12.14' ]]; then
-            echo "::error::bundled Python runtime must report exactly Python 3.12.14; observed output: $RUNTIME_VERSION_OUTPUT" >&2
+            printf '::error::bundled Python runtime must report exactly Python 3.12.14; raw=%q normalized=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" >&2
             exit 1
           fi
           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
