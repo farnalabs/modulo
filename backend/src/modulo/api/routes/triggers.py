@@ -17,7 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1241,12 +1241,34 @@ async def test_polling_condition(
 # ---------------------------------------------------------------------------
 
 
+async def _require_unique_trigger_name(
+    session: AsyncSession, pipeline_id: uuid.UUID, name: str, *, exclude_id: uuid.UUID | None = None
+) -> None:
+    """409 when a live trigger on this pipeline already carries ``name``."""
+    stmt = select(Trigger.id).where(
+        Trigger.pipeline_id == pipeline_id,
+        Trigger.name == name,
+        Trigger.deleted_at.is_(None),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Trigger.id != exclude_id)
+    if (await session.execute(stmt)).first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"duplicate trigger name {name!r} for this pipeline - a live trigger "
+                "with this (pipeline, name) identity already exists"
+            ),
+        )
+
+
 class TriggerCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     trigger_type: str = Field(..., pattern=r"^(manual|webhook|cron|polling|agent_signal|ongoing|slack_app_mention)$")
-    # FAR-681 slice 2: declarative-apply identity within (pipeline, name).
-    # Optional so every existing creator (UI/MCP) stays source-compatible;
-    # name-based apply requires it.
-    name: str | None = Field(None, min_length=1, max_length=255)
+    # FAR-2227: REQUIRED. Identity within (pipeline, name) for humans, MCP and
+    # declarative apply alike. Whitespace is stripped before the 1..255 check.
+    name: str = Field(..., min_length=1, max_length=255)
     active: bool = True
     max_concurrent_runs: int = Field(default=1, ge=1)
     daily_spend_limit: Decimal | None = Field(None, ge=0, description="Daily spend ceiling in USD; None = unlimited")
@@ -1291,22 +1313,7 @@ async def create_trigger(
             # live duplicate name is a 409 CONFLICT (the 0201 partial unique
             # index enforces the same rule at the DB level; this check gives a
             # clear error before the insert instead of a raw IntegrityError).
-            if req.name is not None:
-                duplicate = await session.execute(
-                    select(Trigger.id).where(
-                        Trigger.pipeline_id == pipeline_id,
-                        Trigger.name == req.name,
-                        Trigger.deleted_at.is_(None),
-                    )
-                )
-                if duplicate.first() is not None:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=(
-                            f"duplicate trigger name {req.name!r} for this pipeline - a live trigger "
-                            "with this (pipeline, name) identity already exists"
-                        ),
-                    )
+            await _require_unique_trigger_name(session, pipeline_id, req.name)
             _validate_trigger_config_keys(req.config_json)
             # FAR-1595: a connector reference named at create time is
             # team-validated against the owning pipeline before the trigger can
@@ -1387,6 +1394,10 @@ async def create_trigger(
 
 
 class TriggerUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    # FAR-2227: rename. None leaves the name unchanged; the name can never be cleared.
+    name: str | None = Field(None, min_length=1, max_length=255)
     active: bool | None = None
     max_concurrent_runs: int | None = Field(None, ge=1)
     daily_spend_limit: Decimal | None = Field(
@@ -1395,6 +1406,13 @@ class TriggerUpdate(BaseModel):
     config_json: dict[str, Any] | None = None
     cron_expression: str | None = None
     cron_timezone: str | None = None
+
+
+async def _apply_trigger_rename(session: AsyncSession, trigger: Trigger, name: str | None) -> None:
+    """Rename the trigger when a new name was supplied, enforcing per-pipeline uniqueness."""
+    if name is not None and name != trigger.name:
+        await _require_unique_trigger_name(session, trigger.pipeline_id, name, exclude_id=trigger.id)
+        trigger.name = name
 
 
 async def _apply_trigger_update(
@@ -1423,6 +1441,7 @@ async def _apply_trigger_update(
     # Pre-mutation snapshot for the ongoing next_fire_at reset decision
     # (reset only when the pool/cadence/active actually CHANGES).
     prev_max = trigger.max_concurrent_runs
+    await _apply_trigger_rename(session, trigger, req.name)
     prev_active = await _apply_active_state(session, trigger, req.active)
     if req.max_concurrent_runs is not None:
         trigger.max_concurrent_runs = req.max_concurrent_runs

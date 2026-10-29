@@ -6472,6 +6472,12 @@ elements:
       - testid: settings-triggers-toggle-error
         type: element
         dynamic_testid: false
+      - testid: settings-triggers-name
+        type: element
+        dynamic_testid: false
+      - testid: settings-triggers-form-name
+        type: input
+        dynamic_testid: false
       - testid: settings-triggers-form-pipeline
         type: select
         dynamic_testid: false
@@ -7493,9 +7499,9 @@ features:
         status: covered
         behaviours:
             # Trigger types + CRUD surface
-            - "[x] A trigger is creatable on a pipeline (POST /api/v1/pipelines/{id}/triggers, 201) for each supported type — manual / webhook / cron / polling / agent_signal / ongoing / slack_app_mention — with a validated cron expression/timezone, max_concurrent_runs, a daily spend limit, and an org-scoped config_json"
+            - "[x] A trigger is creatable on a pipeline (POST /api/v1/pipelines/{id}/triggers, 201) with a REQUIRED name (trimmed, 1-255 chars, unique among the pipeline's live triggers; a duplicate is a 409, a missing/blank name a 422) for each supported type — manual / webhook / cron / polling / agent_signal / ongoing / slack_app_mention — with a validated cron expression/timezone, max_concurrent_runs, a daily spend limit, and an org-scoped config_json"
             - "[x] Per-funnel queueing is bounded ONLY by the type's own limits: a capacity-queued run waits indefinitely by default (no instance queued TTL); a cron pipeline may set the pipeline's `queue_timeout_seconds` to its period (a 1h cron to 3600) so a stale fire self-drops, while webhook (delivery coalescing folds repeats), manual and MCP pipelines leave it null; expiry ends the run as the `queue.expired` supersession, never a failure (far-1883)"
-            - "[x] Triggers are listed (GET /api/v1/triggers, paginated, created_at desc) filterable by pipeline_id and trigger_type; the response surfaces the org-wide triggers_paused state and paused_at, plus per-trigger daily_spend_limit, in_flight (ongoing), and the uniform 6-key streak_status"
+            - "[x] Triggers are listed (GET /api/v1/triggers, paginated, created_at desc) filterable by pipeline_id and trigger_type; every trigger carries its name (REST and MCP list/get/create/update responses alike; PUT and MCP update_trigger can rename it, with the same uniqueness check); the response surfaces the org-wide triggers_paused state and paused_at, plus per-trigger daily_spend_limit, in_flight (ongoing), and the uniform 6-key streak_status"
             - "[x] Trigger list/streak state is serialized INSIDE the RLS transaction so the transaction-scoped SET LOCAL org context is never lost to a post-commit read"
             - "[x] A pipeline-scoped listing exists (GET /api/v1/pipelines/{id}/triggers) with optional trigger_type filter"
             - "[x] General update (PUT /api/v1/triggers/{id}) MERGES config_json (a masked secret placeholder never clobbers the stored secret; an explicit null clears the key; a missing key leaves it intact), then re-encrypts secret fields"
