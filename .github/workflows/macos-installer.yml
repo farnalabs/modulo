@@ -26,9 +26,37 @@ on:
         required: false
       MACOS_NOTARY_ISSUER_ID:
         required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build in X.Y.Z form"
+        type: string
+        required: true
+      rc_tag:
+        description: "Release-candidate tag label for this validation run"
+        type: string
+        required: false
+        default: manual
+      ref:
+        description: "Git ref to build; blank uses the dispatch ref"
+        type: string
+        required: false
+        default: ""
+      mode:
+        description: "Manual dispatch mode"
+        type: choice
+        required: true
+        default: dry-run
+        options:
+          - dry-run
+      build_native:
+        description: "Run the real native build/signing/smoke rehearsal (dry-run only)"
+        type: boolean
+        required: true
+        default: false
 
 concurrency:
-  group: macos-installer-${{ github.workflow }}-${{ inputs.version }}
+  group: macos-installer-${{ inputs.version || github.ref }}
   cancel-in-progress: false
 
 defaults:
@@ -39,20 +67,84 @@ permissions:
   contents: read
 
 jobs:
+  normalize-inputs:
+    name: Normalize installer inputs
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.normalize.outputs.version }}
+      rc_tag: ${{ steps.normalize.outputs.rc_tag }}
+      ref: ${{ steps.normalize.outputs.ref }}
+      mode: ${{ steps.normalize.outputs.mode }}
+      run_native_build: ${{ steps.normalize.outputs.run_native_build }}
+    steps:
+      - id: normalize
+        env:
+          CALL_VERSION: ${{ inputs.version }}
+          CALL_RC_TAG: ${{ inputs.rc_tag }}
+          CALL_REF: ${{ inputs.ref }}
+          CALL_MODE: ${{ inputs.mode }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          DISPATCH_RC_TAG: ${{ github.event.inputs.rc_tag }}
+          DISPATCH_REF: ${{ github.event.inputs.ref }}
+          DISPATCH_MODE: ${{ github.event.inputs.mode }}
+          DISPATCH_BUILD_NATIVE: ${{ github.event.inputs.build_native }}
+        run: |
+          set -euo pipefail
+          version="$CALL_VERSION"
+          rc_tag="$CALL_RC_TAG"
+          ref="$CALL_REF"
+          mode="$CALL_MODE"
+          run_native_build=false
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$DISPATCH_VERSION"
+            rc_tag="$DISPATCH_RC_TAG"
+            ref="$DISPATCH_REF"
+            mode="$DISPATCH_MODE"
+            run_native_build="${DISPATCH_BUILD_NATIVE:-false}"
+            [[ -n "$ref" ]] || ref="$GITHUB_REF"
+          else
+            [[ "$mode" != "dry-run" ]] && run_native_build=true
+          fi
+          [[ -n "$version" ]] || { echo '::error::version input is required' >&2; exit 1; }
+          [[ -n "$rc_tag" ]] || { echo '::error::rc_tag input is required' >&2; exit 1; }
+          [[ -n "$ref" ]] || { echo '::error::ref input is required' >&2; exit 1; }
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$mode" != "dry-run" ]]; then
+            echo "::error::unsupported manual dispatch mode: $mode" >&2
+            exit 1
+          fi
+          case "$run_native_build" in
+            true|false) ;;
+            *) echo "::error::build_native must normalize to true or false, got: $run_native_build" >&2; exit 1 ;;
+          esac
+          if [[ "$mode" != "dry-run" && "$run_native_build" != true ]]; then
+            echo '::error::reusable non-dry-run calls must enable the native build' >&2
+            exit 1
+          fi
+          {
+            printf 'version=%s\n' "$version"
+            printf 'rc_tag=%s\n' "$rc_tag"
+            printf 'ref=%s\n' "$ref"
+            printf 'mode=%s\n' "$mode"
+            printf 'run_native_build=%s\n' "$run_native_build"
+          } >> "$GITHUB_OUTPUT"
+
   build:
-    name: Build and notarize macOS arm64 bundle
+    name: Build and smoke-test macOS arm64 bundle
+    needs: normalize-inputs
     runs-on: macos-14
     timeout-minutes: 90
     env:
-      VERSION_NUM: ${{ inputs.version }}
-      MODE: ${{ inputs.mode }}
-      RC_TAG: ${{ inputs.rc_tag }}
+      VERSION_NUM: ${{ needs.normalize-inputs.outputs.version }}
+      MODE: ${{ needs.normalize-inputs.outputs.mode }}
+      RC_TAG: ${{ needs.normalize-inputs.outputs.rc_tag }}
+      RUN_NATIVE_BUILD: ${{ needs.normalize-inputs.outputs.run_native_build }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.normalize-inputs.outputs.ref }}
 
       - name: Install build tools
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         run: |
           set -euo pipefail
           brew update
@@ -63,8 +155,8 @@ jobs:
           uname -m
           test "$(uname -m)" = arm64
 
-      - name: Validate dry-run contract
-        if: ${{ inputs.mode == 'dry-run' }}
+      - name: Validate workflow contract
+        if: ${{ env.RUN_NATIVE_BUILD == 'false' }}
         run: |
           set -euo pipefail
           test -x scripts/macos/build-native-bundle.sh
@@ -75,34 +167,44 @@ jobs:
           bash -n scripts/macos/install.sh
           grep -q 'macos-14' .github/workflows/macos-installer.yml
           {
-            echo '## macOS native installer dry-run'
+            echo '## macOS native installer dry-run (contract-only)'
             echo ''
-            echo 'Dry-run validated the native arm64 build contract only. No artifact was created or published.'
+            echo "This run is \`dry-run/build_native=false\`: contract-only validation. No native build, signing, notarization, upload or publication was attempted."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarize native artifact rehearsal
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
+        run: |
+          {
+            echo '## macOS native installer dry-run (artifact rehearsal)'
+            echo ''
+            echo "This run is \`dry-run/build_native=true\`: the real arm64 build, signing, notarization, stapling and smoke suite will run."
+            echo 'The DMG is uploaded only as a workflow artifact. No release publication or tag creation is performed.'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Node + pnpm (pinned frontend toolchain)
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.28.8
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         with:
           node-version: "22"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Set up uv
-        if: ${{ inputs.mode != 'dry-run' }}
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
+        uses: astral-sh/setup-uv@v5
         with:
           version: latest
           python-version: '3.12'
           enable-cache: true
 
       - name: Build genuine native bundle
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         run: |
           set -euo pipefail
           rm -rf build
@@ -121,7 +223,7 @@ jobs:
           "$APP/Contents/MacOS/modulo" --help >/dev/null
 
       - name: Sign, notarize and smoke-test native installer
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         env:
           CERTIFICATE_B64: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
@@ -315,10 +417,10 @@ jobs:
 
 
       - name: Upload real macOS installer
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ env.RUN_NATIVE_BUILD == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: macos-installer-${{ inputs.version }}
-          path: build/Modulo-${{ inputs.version }}-macos-arm64.dmg
+          name: macos-installer-${{ needs.normalize-inputs.outputs.version }}
+          path: build/Modulo-${{ needs.normalize-inputs.outputs.version }}-macos-arm64.dmg
           if-no-files-found: error
           retention-days: 30
