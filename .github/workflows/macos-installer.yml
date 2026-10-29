@@ -244,54 +244,9 @@ jobs:
             exit 1
           fi
 
-           DIAGNOSTICS="$RUNNER_TEMP/modulo-native-rehearsal-diagnostics"
-           mkdir -p "$DIAGNOSTICS"
-           run_diagnostic() {
-             local label="$1"
-             shift
-             local stdout_file="$DIAGNOSTICS/${label}.stdout"
-             local stderr_file="$DIAGNOSTICS/${label}.stderr"
-             local status
-             set +e
-             "$@" >"$stdout_file" 2>"$stderr_file"
-             status=$?
-             set -e
-             printf 'native rehearsal diagnostic: %s exit=%s\n' "$label" "$status"
-             printf '%s stdout: ' "$label"
-             sed -E 's/(token|password|secret|api[_-]?key)=([^[:space:]]+)/\1=[REDACTED]/Ig' "$stdout_file" | tr '\\n' ' '
-             printf '\n%s stderr: ' "$label"
-             sed -E 's/(token|password|secret|api[_-]?key)=([^[:space:]]+)/\1=[REDACTED]/Ig' "$stderr_file" | tr '\\n' ' '
-             printf '\n'
-             return "$status"
-           }
-           postgres_status=0
-           redis_status=0
-           help_status=0
-           run_diagnostic postgres "$APP/Contents/Resources/bundle/pg/bin/postgres" --version || postgres_status=$?
-           run_diagnostic redis "$APP/Contents/Resources/bundle/redis/redis-server" --version || redis_status=$?
-           run_diagnostic help "$APP/Contents/MacOS/modulo" --help || help_status=$?
-           if (( postgres_status == 0 )); then
-             if ! grep -Eq 'PostgreSQL 16\\.' "$DIAGNOSTICS/postgres.stdout"; then
-               postgres_status=1
-               echo '::error::bundled PostgreSQL version output did not match PostgreSQL 16.x' >&2
-             fi
-           fi
-           if (( redis_status == 0 )); then
-             if ! grep -Eq 'v=8\\.' "$DIAGNOSTICS/redis.stdout"; then
-               redis_status=1
-               echo '::error::bundled Redis version output did not match v=8.x' >&2
-             fi
-           fi
-           if (( postgres_status != 0 )); then
-             echo '::error::bundled PostgreSQL version assertion failed' >&2
-           fi
-           if (( redis_status != 0 )); then
-             echo '::error::bundled Redis version assertion failed' >&2
-           fi
-           if (( help_status != 0 )); then
-             echo '::error::bundled modulo --help smoke failed' >&2
-           fi
-           (( postgres_status == 0 && redis_status == 0 && help_status == 0 ))
+           "$APP/Contents/Resources/bundle/pg/bin/postgres" --version | grep -Eq 'PostgreSQL[)]?[[:space:]]+16[.]'
+           "$APP/Contents/Resources/bundle/redis/redis-server" --version | grep -Eq 'v=8[.]'
+           "$APP/Contents/MacOS/modulo" --help >/dev/null
 
 
       - name: Sign, notarize and smoke-test native installer
