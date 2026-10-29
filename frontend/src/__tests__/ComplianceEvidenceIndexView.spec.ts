@@ -218,6 +218,22 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(text).toContain('Not available')
   })
 
+  it('counts customer-supplied evidence as complete summary coverage', async () => {
+    mockGet.mockResolvedValue({
+      data: payload({
+        artifacts: [artifact({ status: 'customer_supplied', provenance: 'customer_supplied' })],
+      }),
+      error: undefined,
+    })
+    const wrapper = mountView()
+    await settle()
+
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-count"]').text()).toBe('1/1')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-percentage"]').text()).toContain('100%')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('All indexed evidence artefacts are present')
+    expect(wrapper.text()).toContain('Customer supplied')
+  })
+
   it('falls back to the raw timestamp and labels customer-supplied evidence', async () => {
     mockGet.mockResolvedValue({
       data: payload({

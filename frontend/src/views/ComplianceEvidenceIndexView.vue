@@ -302,7 +302,7 @@ const lowerBoundArtifacts = computed(() =>
 )
 
 const totalArtifactCount = computed(() => indexData.value?.artifacts.length ?? 0)
-const presentArtifactCount = computed(() => indexData.value?.artifacts.filter((artifact) => artifact.status === 'present').length ?? 0)
+const presentArtifactCount = computed(() => indexData.value?.artifacts.filter((artifact) => artifact.status === 'present' || artifact.status === 'customer_supplied').length ?? 0)
 const compliancePercentage = computed(() => totalArtifactCount.value === 0 ? 0 : Math.round((presentArtifactCount.value / totalArtifactCount.value) * 100))
 const complianceSummary = computed(() => indexData.value?.complete && compliancePercentage.value === 100
   ? $t('views.ComplianceEvidenceIndex.summary_complete')
