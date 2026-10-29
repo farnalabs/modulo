@@ -43,6 +43,12 @@
 <script setup lang="ts">
 import BaseCard from './BaseCard.vue'
 import { computed } from 'vue'
+import {
+  formatDeltaAbs,
+  formatDeltaPct,
+  useDeltaArrow,
+  useDeltaClass,
+} from '../../composables/useDeltaFormatting'
 
 interface Progress {
   value: number
@@ -81,47 +87,10 @@ const deltaAbs = computed(() => {
   return typeof d === 'number' && Number.isFinite(d) ? d : null
 })
 
-const deltaAbsText = computed(() => {
-  const d = deltaAbs.value
-  if (d == null) return ''
-  if (d === 0) return '0'
-  const sign = d > 0 ? '+' : '-'
-  const abs = Math.abs(d)
-  const formatted = Number.isInteger(abs) ? String(abs) : abs.toFixed(1)
-  return `${sign}${formatted}`
-})
-
-function arrowFor(delta: number): string {
-  if (delta > 0) return '▲'
-  if (delta < 0) return '▼'
-  return '→'
-}
-
-function classFor(delta: number): string {
-  if (delta > 0) return 'text-success-text'
-  if (delta < 0) return 'text-destructive'
-  return 'text-muted-foreground'
-}
-
-const deltaArrow = computed(() => {
-  const d = deltaPct.value ?? deltaAbs.value
-  if (d == null) return ''
-  return arrowFor(d)
-})
-
-const deltaClass = computed(() => {
-  const d = deltaPct.value ?? deltaAbs.value
-  if (d == null) return ''
-  return classFor(d)
-})
-
-const deltaPctText = computed(() => {
-  const d = deltaPct.value
-  if (d == null) return ''
-  const sign = d > 0 ? '+' : d < 0 ? '-' : ''
-  return `${sign}${Math.abs(d).toFixed(1)}%`
-})
-
+const deltaAbsText = computed(() => formatDeltaAbs(deltaAbs.value))
+const deltaPctText = computed(() => formatDeltaPct(deltaPct.value, true))
+const deltaArrow = useDeltaArrow(computed(() => deltaPct.value ?? deltaAbs.value))
+const deltaClass = useDeltaClass(computed(() => deltaPct.value ?? deltaAbs.value))
 const hasValidDelta = computed(() => deltaAbs.value != null || deltaPct.value != null)
 
 const progressPercent = computed(() => {

@@ -55,6 +55,12 @@
 <script setup lang="ts">
 import BaseCard from './ui/BaseCard.vue'
 import { computed } from 'vue'
+import {
+  formatDeltaAbs,
+  useDeltaPctText,
+  useDeltaArrow,
+  useDeltaClass,
+} from '../composables/useDeltaFormatting'
 
 export interface StatDelta {
   current?: number | null
@@ -108,59 +114,12 @@ const deltaAbs = computed(() => {
   return current - previous
 })
 
-const deltaAbsText = computed(() => {
-  const d = deltaAbs.value
-  if (d == null) return ''
-  if (d === 0) return '0'
-  const sign = d > 0 ? '+' : '-'
-  const abs = Math.abs(d)
-  const formatted = Number.isInteger(abs) ? String(abs) : abs.toFixed(1)
-  return `${sign}${formatted}`
-})
-
-function arrowFor(delta: number): string {
-  if (delta > 0) return '▲'
-  if (delta < 0) return '▼'
-  return '→'
-}
-
-function classFor(delta: number, inverted: boolean): string {
-  if (delta > 0) return inverted ? 'text-destructive' : 'text-success-text'
-  if (delta < 0) return inverted ? 'text-success-text' : 'text-destructive'
-  return 'text-muted-foreground'
-}
-
-const deltaArrow = computed(() => {
-  const d = deltaPct.value
-  if (d == null) return ''
-  return arrowFor(d)
-})
-
-const deltaAbsArrow = computed(() => {
-  const d = deltaAbs.value
-  if (d == null) return ''
-  return arrowFor(d)
-})
-
-const deltaClass = computed(() => {
-  const d = deltaPct.value
-  if (d == null) return ''
-  if (props.neutralTrend) return 'text-muted-foreground'
-  return classFor(d, props.inverted ?? false)
-})
-
-const deltaAbsClass = computed(() => {
-  const d = deltaAbs.value
-  if (d == null) return ''
-  if (props.neutralTrend) return 'text-muted-foreground'
-  return classFor(d, props.inverted ?? false)
-})
-
-const deltaPctText = computed(() => {
-  const d = deltaPct.value
-  if (d == null) return ''
-  return `${Math.abs(d).toFixed(1)}%`
-})
+const deltaAbsText = computed(() => formatDeltaAbs(deltaAbs.value))
+const deltaPctText = useDeltaPctText(deltaPct)
+const deltaArrow = useDeltaArrow(deltaPct)
+const deltaAbsArrow = useDeltaArrow(deltaAbs)
+const deltaClass = useDeltaClass(deltaPct, computed(() => props.inverted ?? false), computed(() => props.neutralTrend ?? false))
+const deltaAbsClass = useDeltaClass(deltaAbs, computed(() => props.inverted ?? false), computed(() => props.neutralTrend ?? false))
 </script>
 
 <style scoped>
