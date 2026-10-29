@@ -14,6 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from modulo.auth.jwt import create_access_token
 from modulo.db.crud.model_backend import (
@@ -134,7 +135,10 @@ async def tier_scoped_session(
             ),
             {"mid": str(uuid.uuid4()), "aid": str(test_user), "oid": str(org_id)},
         )
-    engine = create_async_engine(migrated_db_url, echo=False)
+    # NullPool: a per-test pooled engine's graceful-close task can still be
+    # pending at dispose(), leaving an asyncpg connection unclosed and
+    # surfacing as a PytestUnraisableExceptionWarning at a later test's setup.
+    engine = create_async_engine(migrated_db_url, echo=False, poolclass=NullPool)
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:

@@ -749,8 +749,18 @@ async def rls_session(migrated_db_url: str, test_org: uuid.UUID) -> AsyncGenerat
 
     Creates a dedicated engine + session on the current event loop so that
     connection operations never cross event loop boundaries.
+
+    The engine uses ``NullPool`` (matching ``db_engine`` / ``app_engine``).
+    A pooled engine is created and disposed once per test, so pooling buys
+    nothing but introduces a race: the pool's graceful-close task can still be
+    pending when the engine is disposed, leaving an asyncpg connection
+    unclosed. Garbage collection then surfaces it as a
+    ``PytestUnraisableExceptionWarning`` attributed to whatever unrelated test
+    happens to be setting up — the flake documented in
+    ``crud/test_connector_instance.py``. NullPool opens a fresh connection per
+    checkout and closes it on the same event loop, so teardown never races.
     """
-    engine = create_async_engine(migrated_db_url, echo=False)
+    engine = create_async_engine(migrated_db_url, echo=False, poolclass=NullPool)
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:
