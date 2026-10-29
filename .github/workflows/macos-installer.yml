@@ -268,48 +268,83 @@ jobs:
           CERT="$RUNNER_TEMP/modulo-developer-id.p12"
           IDENTITY_PEM_PATH="$RUNNER_TEMP/modulo-signing-identity.pem"
           NOTARY_KEY="$RUNNER_TEMP/modulo-notary.p8"
-           MOUNT="$RUNNER_TEMP/modulo-mount"
-           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
+          MOUNT="$RUNNER_TEMP/modulo-mount"
+          MOUNT_ATTACHED=0
+          DATA="$RUNNER_TEMP/modulo-native-smoke-data"
           OWNED_PIDS="$DATA/owned-pids"
           cleanup() {
-            status="${1:-$?}"
-            set +e
-            launchctl unload -w "$HOME/Library/LaunchAgents/run.modulo.launcher.plist" >/dev/null 2>&1 || true
-            if [[ -s "$OWNED_PIDS" ]]; then
-              while IFS= read -r owned_pid; do
-                [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
-                kill -TERM "$owned_pid" >/dev/null 2>&1 || true
-              done < "$OWNED_PIDS"
-              for _attempt in 1 2 3 4 5 6 7 8 9 10; do
-                still_running=0
-                while IFS= read -r owned_pid; do
-                  [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
-                  if kill -0 "$owned_pid" >/dev/null 2>&1; then still_running=1; fi
-                done < "$OWNED_PIDS"
-                [[ "$still_running" -eq 0 ]] && break
-                sleep 1
-              done
-              while IFS= read -r owned_pid; do
-                [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
-                if kill -0 "$owned_pid" >/dev/null 2>&1; then
-                  echo "::error::cleanup could not stop owned Modulo child PID $owned_pid" >&2
-                  [[ "$status" -eq 0 ]] && status=1
-                fi
-              done < "$OWNED_PIDS"
-            fi
-             detach_status=1
-             for _attempt in 1 2 3; do
-               if hdiutil detach "$MOUNT" >/dev/null 2>&1; then
-                 detach_status=0
-               fi
-               if [[ "$detach_status" -eq 0 ]] && ! hdiutil info | grep -Fq "$MOUNT"; then
-                 break
-               fi
-               sleep 1
-             done
-             if [[ "$detach_status" -ne 0 ]] || hdiutil info | grep -Fq "$MOUNT"; then
-               echo "::error::cleanup could not detach mounted volume $MOUNT" >&2
+             status="${1:-$?}"
+             set +e
+             launchctl unload -w "$HOME/Library/LaunchAgents/run.modulo.launcher.plist" >/dev/null 2>&1 || true
+             if [[ -s "$OWNED_PIDS" ]]; then
+               while IFS= read -r owned_pid; do
+                 [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
+                 kill -TERM "$owned_pid" >/dev/null 2>&1 || true
+               done < "$OWNED_PIDS"
+               for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+                 still_running=0
+                 while IFS= read -r owned_pid; do
+                   [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
+                   if kill -0 "$owned_pid" >/dev/null 2>&1; then still_running=1; fi
+                 done < "$OWNED_PIDS"
+                 [[ "$still_running" -eq 0 ]] && break
+                 sleep 1
+               done
+               while IFS= read -r owned_pid; do
+                 [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
+                 if kill -0 "$owned_pid" >/dev/null 2>&1; then
+                   echo "::error::cleanup could not stop owned Modulo child PID $owned_pid" >&2
+                   [[ "$status" -eq 0 ]] && status=1
+                 fi
+               done < "$OWNED_PIDS"
+             fi
+             mount_info=''
+             mount_info_ok=1
+             if ! mount_info="$(hdiutil info 2>&1)"; then
+               mount_info_ok=0
+               echo "::error::cleanup could not inspect mounted volumes for $MOUNT: $mount_info" >&2
                [[ "$status" -eq 0 ]] && status=1
+             fi
+             mount_present=0
+             if [[ "$mount_info_ok" -eq 0 ]] || grep -Fq "$MOUNT" <<< "$mount_info"; then
+               mount_present=1
+             fi
+             if [[ "$MOUNT_ATTACHED" -eq 0 && "$mount_present" -eq 0 ]]; then
+               echo "cleanup: mount already detached: $MOUNT"
+             else
+               if [[ "$MOUNT_ATTACHED" -eq 0 ]]; then
+                 echo "cleanup: mount state was detached, but an owned mount remains; retrying detach: $MOUNT" >&2
+               else
+                 echo "cleanup: mount state is attached; retrying detach: $MOUNT" >&2
+               fi
+               detach_succeeded=0
+               for _attempt in 1 2 3; do
+                 if hdiutil detach "$MOUNT" >/dev/null 2>&1; then
+                   detach_succeeded=1
+                 fi
+                 mount_info_ok=1
+                 if ! mount_info="$(hdiutil info 2>&1)"; then
+                   mount_info_ok=0
+                   echo "::error::cleanup could not inspect mounted volumes after detach attempt $_attempt for $MOUNT: $mount_info" >&2
+                 fi
+                 mount_present=0
+                 if [[ "$mount_info_ok" -eq 0 ]] || grep -Fq "$MOUNT" <<< "$mount_info"; then
+                   mount_present=1
+                 fi
+                 if [[ "$mount_present" -eq 0 ]]; then
+                   if [[ "$detach_succeeded" -eq 1 ]]; then
+                     echo "cleanup: detached mount: $MOUNT"
+                   else
+                     echo "cleanup: mount already detached: $MOUNT"
+                   fi
+                   break
+                 fi
+                 sleep 1
+               done
+               if [[ "$mount_present" -ne 0 ]]; then
+                 echo "::error::cleanup could not detach mounted volume $MOUNT" >&2
+                 [[ "$status" -eq 0 ]] && status=1
+               fi
              fi
              rm -rf "$MOUNT" "$CERT" "$NOTARY_KEY" "$IDENTITY_PEM_PATH" "$DATA" "$RUNNER_TEMP/modulo-install"
              if [[ -e "$CERT" || -e "$NOTARY_KEY" || -e "$IDENTITY_PEM_PATH" ]]; then
@@ -329,7 +364,6 @@ jobs:
            }
 
            trap 'cleanup "$?"' EXIT
-
 
           printf '%s' "$CERTIFICATE_B64" | base64 --decode > "$CERT"
           # Set up an empty keychain password so no generated password is leaked in argv.
@@ -367,6 +401,7 @@ jobs:
 
           mkdir -p "$MOUNT"
           hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -readonly
+          MOUNT_ATTACHED=1
           MOUNTED_APP="$MOUNT/Modulo-${VERSION_NUM}.app"
           file "$MOUNTED_APP/Contents/MacOS/modulo" | grep -E 'Mach-O 64-bit executable arm64'
           codesign --verify --deep --strict "$MOUNTED_APP"
@@ -403,9 +438,15 @@ jobs:
             exit 1
           fi
           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
-           PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
-           mkdir -p "$DATA"
-           hdiutil detach "$MOUNT" >/dev/null
+          PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
+          mkdir -p "$DATA"
+          hdiutil detach "$MOUNT" >/dev/null
+          if hdiutil info | grep -Fq "$MOUNT"; then
+            echo "::error::intentional pre-install detach left owned mount present: $MOUNT" >&2
+            exit 1
+          fi
+          MOUNT_ATTACHED=0
+          echo "pre-install: detached mount: $MOUNT"
           INSTALL_ROOT="$RUNNER_TEMP/modulo install"
           MODULO_INSTALL_ROOT="$INSTALL_ROOT" MODULO_DATA_DIR="$DATA" scripts/macos/install.sh "$DMG_WITH_SPACES"
           launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null
