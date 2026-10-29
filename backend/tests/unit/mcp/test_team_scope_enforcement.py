@@ -31,10 +31,12 @@ from modulo.api.mcp_server import (
     create_trigger,
     delete_pipeline,
     delete_trigger,
+    get_hitl_review,
     get_pipeline_graph_tool,
     get_run_evals,
     get_run_output,
     get_run_status,
+    list_hitl_reviews,
     list_pending_hitl,
     list_pipelines_tool,
     list_runs,
@@ -1873,3 +1875,167 @@ class TestPipelineTeamGateHelper(_AuthContext):
 
         assert owner == _TEAM_A
         assert denial is None
+
+
+class TestHitlViewerAccountTeamScope(_AuthContext):
+    """``hitl.list`` is viewer-reachable: every HITL read must carry the
+    account-team-membership clamp (``account_team_scope_clause``).
+
+    A viewer has no team-scoped credential (``_ctx_team_id`` None), so before
+    this clamp the read was effectively org-wide even though ``hitl_claims``
+    carries only the org-only RLS policy — a viewer could enumerate gates on
+    team-private pipelines.
+    """
+
+    @staticmethod
+    def _as_viewer() -> None:
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("viewer")
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_pending_hitl_viewer_sql_contains_account_team_scope(
+        self, mock_validate_auth: AsyncMock
+    ) -> None:
+        from sqlalchemy.dialects import postgresql
+
+        self._as_viewer()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        total_result = MagicMock()
+        total_result.scalar_one.return_value = 0
+        gates_result = MagicMock()
+        gates_result.scalars.return_value = []
+        captured: list[Any] = []
+
+        async def fake_execute(stmt: Any, *a: Any, **k: Any) -> Any:
+            captured.append(stmt)
+            if "count(" in str(stmt).lower():
+                return total_result
+            return gates_result
+
+        session.execute = fake_execute
+        with patch("modulo.api.mcp_server._session") as mock_session:
+            mock_session.return_value = _make_session_context(session)
+            result = await list_pending_hitl()
+
+        assert result["total"] == 0
+        sql = str(captured[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+        assert "team_memberships" in sql
+        assert f"'{_PLACEHOLDER_USER_ID}'" in sql
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_hitl_reviews_viewer_sql_contains_account_team_scope(
+        self, mock_validate_auth: AsyncMock
+    ) -> None:
+        from sqlalchemy.dialects import postgresql
+
+        self._as_viewer()
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        rows_result = MagicMock()
+        rows_result.all.return_value = []
+        captured: list[Any] = []
+
+        async def fake_execute(stmt: Any, *a: Any, **k: Any) -> Any:
+            captured.append(stmt)
+            return rows_result
+
+        session.execute = fake_execute
+        with patch("modulo.api.mcp_server._session") as mock_session:
+            mock_session.return_value = _make_session_context(session)
+            result = await list_hitl_reviews()
+
+        assert result["reviews"] == []
+        sql = str(captured[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+        assert "team_memberships" in sql
+        assert f"'{_PLACEHOLDER_USER_ID}'" in sql
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_hitl_review_viewer_sql_contains_account_team_scope(self, mock_validate_auth: AsyncMock) -> None:
+        from sqlalchemy.dialects import postgresql
+
+        self._as_viewer()
+        run = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_A)
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        visibility_result = MagicMock()
+        visibility_result.first.return_value = (run.id,)
+        captured: list[Any] = []
+
+        async def fake_execute(stmt: Any, *a: Any, **k: Any) -> Any:
+            captured.append(stmt)
+            return visibility_result
+
+        session.execute = fake_execute
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.get_run", AsyncMock(return_value=run)),
+            patch("modulo.core.hitl_manager.HITLManager.get_gate", AsyncMock(return_value=None)),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await get_hitl_review(run_id=str(run.id), review_id="gate-1")
+
+        assert result["error"] == "review_not_found"
+        sql = str(captured[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+        assert "team_memberships" in sql
+        assert f"'{_PLACEHOLDER_USER_ID}'" in sql
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_pending_hitl_viewer_without_account_context_fails_closed(
+        self, mock_validate_auth: AsyncMock
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_user_id
+
+        self._as_viewer()
+        _ctx_user_id.set(None)
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        with patch("modulo.api.mcp_server._session") as mock_session:
+            mock_session.return_value = _make_session_context(session)
+            result = await list_pending_hitl()
+
+        assert "reviews" not in result
+        assert result.get("error")
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_hitl_review_viewer_denied_when_run_outside_memberships(
+        self, mock_validate_auth: AsyncMock
+    ) -> None:
+        self._as_viewer()
+        run = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_B)
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        visibility_result = MagicMock()
+        visibility_result.first.return_value = None
+        session.execute = AsyncMock(return_value=visibility_result)
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.get_run", AsyncMock(return_value=run)),
+            patch("modulo.core.hitl_manager.HITLManager.get_gate", AsyncMock()) as mock_get_gate,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await get_hitl_review(run_id=str(run.id), review_id="gate-1")
+
+        assert result == {"error": "review_not_found", "run_id": str(run.id), "review_id": "gate-1"}
+        mock_get_gate.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_resource_hitl_review_viewer_outside_memberships_is_hidden(
+        self, mock_validate_auth: AsyncMock
+    ) -> None:
+        self._as_viewer()
+        run_id = uuid.uuid4()
+        gate = MagicMock()
+        gate.pipeline_id = uuid.uuid4()
+        gate.required_team_id = None
+        gate_result = MagicMock()
+        gate_result.scalar_one_or_none.return_value = gate
+        visibility_result = MagicMock()
+        visibility_result.first.return_value = None
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        session.execute = AsyncMock(side_effect=[gate_result, visibility_result])
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.get_run") as mock_get_run,
+        ):
+            mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_B)
+            mock_session.return_value = _make_session_context(session)
+            result = await resource_hitl_review(run_id=str(run_id), review_id="gate-1")
+
+        assert "not found" in result

@@ -97,6 +97,7 @@ from modulo.db.crud.hitl_review_config import (
     snapshot_review_config_map,
 )
 from modulo.db.crud.run import get_run, transition_run
+from modulo.db.crud.team_scope import account_team_scope_clause
 from modulo.db.models.account import Account
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
@@ -1458,6 +1459,17 @@ async def _describe_gates_from_snapshot(
     return review_label_map, review_description_map
 
 
+def _viewer_account_scope_id(principal: TenantPrincipal) -> uuid.UUID | None:
+    """Return the account id when a viewer read must be team-membership clamped.
+
+    ``hitl.list`` is viewer-reachable and ``hitl_claims`` carries only the
+    org-only RLS policy (migration 0110), so without an explicit predicate a
+    viewer would enumerate gates on team-private pipelines. Org-level and
+    owning-team rows stay visible; the membership clause is the only boundary.
+    """
+    return principal.account_id if principal.org_role == "viewer" else None
+
+
 async def _load_pending_run_data(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -1471,13 +1483,21 @@ async def _load_pending_run_data(
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-    result = await session.execute(
-        select(HitlClaim).where(
-            HitlClaim.run_id == run_id,
-            HitlClaim.organisation_id == principal.organisation_id,
-            HitlClaim.decision.is_(None),
-        )
+    gate_stmt = select(HitlClaim).where(
+        HitlClaim.run_id == run_id,
+        HitlClaim.organisation_id == principal.organisation_id,
+        HitlClaim.decision.is_(None),
     )
+    viewer_account_id = _viewer_account_scope_id(principal)
+    if viewer_account_id is not None:
+        gate_stmt = (
+            gate_stmt.join(Run, HitlClaim.run_id == Run.id)
+            .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .where(
+                account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id)
+            )
+        )
+    result = await session.execute(gate_stmt)
     gates = list(result.scalars())
 
     pipeline_name = await _load_pending_pipeline_name(session, gates)
@@ -1580,7 +1600,12 @@ async def list_org_pending_reviews(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             # include_claimed (FAR-686): claimed-but-undecided gates stay on
             # the review page so the reviewer can still act on them.
-            gates = await mgr.list_pending(session, principal.organisation_id, include_claimed=True)
+            gates = await mgr.list_pending(
+                session,
+                principal.organisation_id,
+                include_claimed=True,
+                account_id=_viewer_account_scope_id(principal),
+            )
 
             pipeline_ids = list({g.pipeline_id for g in gates})
             pipeline_map: dict[uuid.UUID, str] = {}
@@ -1715,6 +1740,7 @@ async def list_org_reviews(
                 fenced_to_actionable_runs=fenced_to_actionable_runs,
                 page=page,
                 effective_page_size=effective_page_size,
+                account_id=_viewer_account_scope_id(principal),
             )
             pipeline_map, description_by_review, review_label_map, claimant_names = await _load_review_page_enrichment(
                 session, gates=gates, organisation_id=principal.organisation_id
@@ -1794,24 +1820,38 @@ async def _fetch_review_page(
     fenced_to_actionable_runs: bool,
     page: int,
     effective_page_size: int,
+    account_id: uuid.UUID | None = None,
 ) -> tuple[int, list[HitlClaim]]:
     """Run the count + page queries for ``/hitl/reviews`` in the caller's transaction.
 
     Count and page derive from the SAME composed filters; the runs join is
     part of both so the count matches the fenced page. The page query is
     skipped entirely when the count is zero.
+
+    *account_id* applies the viewer account-team membership clamp to BOTH
+    statements (the count and the page must agree — ``hitl_claims`` has no
+    team RLS policy, so the app-layer clause is the only boundary).
     """
     count_stmt = select(func.count()).select_from(HitlClaim)
     if fenced_to_actionable_runs:
         count_stmt = count_stmt.join(Run, HitlClaim.run_id == Run.id)
     count_stmt = count_stmt.where(*decision_filters)
+    gates_stmt = select(HitlClaim)
+    if fenced_to_actionable_runs:
+        gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
+    if account_id is not None:
+        if not fenced_to_actionable_runs:
+            count_stmt = count_stmt.join(Run, HitlClaim.run_id == Run.id)
+            gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
+        membership_clause = account_team_scope_clause(
+            func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id
+        )
+        count_stmt = count_stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(membership_clause)
+        gates_stmt = gates_stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(membership_clause)
     total = (await session.execute(count_stmt)).scalar_one()
 
     gates: list[HitlClaim] = []
     if total:
-        gates_stmt = select(HitlClaim)
-        if fenced_to_actionable_runs:
-            gates_stmt = gates_stmt.join(Run, HitlClaim.run_id == Run.id)
         gates_stmt = (
             gates_stmt.where(*decision_filters)
             .order_by(

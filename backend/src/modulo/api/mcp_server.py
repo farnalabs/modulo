@@ -6339,6 +6339,17 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
 
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(team_scope_clause(effective_owner, key_team_id))
+        if _ctx_role_val() == "viewer":
+            # ``hitl.list`` is viewer-reachable: a viewer (no team-scoped
+            # credential, so ``_ctx_team_id`` is None) must be bounded by its
+            # account's team memberships. ``hitl_claims`` carries only the
+            # org-only RLS policy, so this predicate is the only boundary.
+            # ``_ctx_user_id_val`` raises when the account context is unset —
+            # an auth-context failure must never degrade to an org-wide read.
+            from modulo.db.crud.team_scope import account_team_scope_clause
+
+            effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+            base_where.append(account_team_scope_clause(effective_owner, _ctx_user_id_val()))
         gates, total = await _load_pending_hitl_reviews(s, base_where, page, page_size)
         # FAR-613: resolve each gate's description via the shared batched
         # resolver (same normalisation + the FAR-688 unified context-first
@@ -6460,6 +6471,14 @@ async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
             # sees reviews for runs owned by its own team (or org-level runs).
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(team_scope_clause(effective_owner, key_team_id))
+        if _ctx_role_val() == "viewer":
+            # ``hitl.list`` is viewer-reachable and ``hitl_claims`` has only
+            # the org-only RLS policy, so the account-team membership clamp is
+            # the only boundary. Fail closed when the account context is unset.
+            from modulo.db.crud.team_scope import account_team_scope_clause
+
+            effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+            base_where.append(account_team_scope_clause(effective_owner, _ctx_user_id_val()))
         result = await s.execute(
             select(HitlClaim, Pipeline.name, Run.run_number)
             .join(Run, HitlClaim.run_id == Run.id)
@@ -6521,9 +6540,15 @@ async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
     if rid_err:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+    # ``hitl.list`` is viewer-reachable: bound the read by the account's team
+    # memberships. ``_ctx_user_id_val`` raises when the account context is
+    # unset — fail closed rather than degrade to an unclamped read.
+    viewer_account_id = _ctx_user_id_val() if _ctx_role_val() == "viewer" else None
     async with _session(org_id) as s:
-        run = await _load_hitl_run(s, rid, org_id)
+        run = await _load_hitl_run(s, rid, org_id, viewer_account_id=viewer_account_id)
         if run is _TEAM_SCOPE_ERROR:
+            if viewer_account_id is not None:
+                return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
             return _team_scope_error("run", run_id)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
@@ -6651,6 +6676,8 @@ async def _load_hitl_run(
     s: AsyncSession,
     rid: uuid.UUID,
     org_id: uuid.UUID,
+    *,
+    viewer_account_id: uuid.UUID | None = None,
 ) -> Any | None:
     """Load the HITL gate's run, enforcing the team boundary.
 
@@ -6658,16 +6685,58 @@ async def _load_hitl_run(
     is the backstop; the explicit filter makes cross-tenant access impossible
     even if RLS were misconfigured.
 
+    Pass *viewer_account_id* for a viewer-scoped read: the load is then also
+    bounded by that account's team memberships (``account_team_scope_clause``)
+    against the run's effective owner, so ``get_hitl_review`` can never expose
+    a gate on a team-private pipeline the viewer does not belong to.
+
     Returns the run ORM object on success, ``_TEAM_SCOPE_ERROR`` when a
-    team-scoped key must not act on the run, or ``None`` when the run is not
-    found.
+    team-scoped key must not act on the run (or a viewer is outside its
+    membership boundary), or ``None`` when the run is not found.
     """
     run = await get_run(s, rid, organisation_id=org_id)
     if run is None:
         return None
+    if viewer_account_id is not None and not await _viewer_run_scope_visible(s, rid, viewer_account_id):
+        return _TEAM_SCOPE_ERROR
     if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
         return _TEAM_SCOPE_ERROR
     return run
+
+
+async def _viewer_run_scope_visible(
+    s: AsyncSession,
+    rid: uuid.UUID,
+    account_id: uuid.UUID,
+) -> bool:
+    """True when a viewer's team memberships cover the run's effective owner.
+
+    ``hitl_claims`` carries only the org-only RLS policy, so a viewer read has
+    no team boundary of its own; this predicate supplies the account-team
+    membership clamp the REST HITL lists also apply. Org-level runs (no owning
+    team) are visible to every account; team-private runs are visible only to
+    members of the owning team. The run's stamped owner is authoritative, with
+    the pipeline owner as the fallback for pre-stamp rows.
+    """
+    from sqlalchemy import func, select
+
+    from modulo.db.crud.team_scope import account_team_scope_clause
+    from modulo.db.models.pipeline import Pipeline
+
+    visible = (
+        await s.execute(
+            select(Run.id)
+            .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .where(
+                Run.id == rid,
+                account_team_scope_clause(
+                    func.coalesce(Run.owner_team_id, Pipeline.owner_team_id),
+                    account_id,
+                ),
+            )
+        )
+    ).first()
+    return visible is not None
 
 
 def _hitl_human_only_denial_payload(
@@ -13037,6 +13106,11 @@ async def _hitl_review_scope_error(
     )
     if _team_scoped_key_mismatch(owner_team_id):
         return _team_scope_error_str("run", str(rid))
+    if _ctx_role_val() == "viewer" and not await _viewer_run_scope_visible(s, rid, _ctx_user_id_val()):
+        # Same viewer membership boundary as the ``get_hitl_review`` tool this
+        # resource mirrors; render the boundary as a plain not-found so the
+        # resource never reveals a team-private gate.
+        return f"HITL gate not found on run {rid}."
     return None
 
 
