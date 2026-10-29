@@ -3,9 +3,11 @@ search_documentation / list_housekeeping / perform_housekeeping MCP tools."""
 
 import logging
 from datetime import UTC, datetime
+from http import HTTPStatus
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from modulo.api.mcp_server import (
@@ -22,7 +24,7 @@ from modulo.core.feature_flags import FeatureFlag
 from modulo.core.housekeeping import Candidate, CategoryResult, Scanner
 from modulo.db.models.secret import Secret
 from tests.unit.api.mock_session import make_session_scope
-from tests.unit.mcp.helpers import AuthContext, make_session_context
+from tests.unit.mcp.helpers import ORG_ID, USER_ID, AuthContext, make_session_context
 
 
 def _make_config(*, key: str, value: object) -> MagicMock:
@@ -429,6 +431,81 @@ class TestSystemMapsInternalFlagMCP:
 
         assert result["feature_count"] == 0
         assert "system_maps" not in result["results"]
+
+
+class TestSystemMapsAccessUsesSharedGrantCheck:
+    """FAR-2230: the MCP gate resolves grants through ``grants_permit``.
+
+    The retired hand-rolled check (``grants is None or "system_maps_access" in
+    grants``) only tested membership, so it would keep honouring an
+    already-minted grant after the key was marked non-delegable. The shared
+    resolver re-reads ``is_delegable`` live on every call — the same leg the
+    REST gate reaches via ``require_in_dev_operator`` -> ``assert_grant``.
+    """
+
+    def _access(self, *, role: str, grants: frozenset[str] | None) -> bool:
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_role, _mcp_internal_system_maps_access
+
+        with patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+            _ctx_role.set(role)
+            _ctx_key_grants.set(grants)
+            try:
+                return _mcp_internal_system_maps_access()
+            finally:
+                _ctx_role.set(None)
+                _ctx_key_grants.set(None)
+
+    def test_granted_operator_is_allowed(self) -> None:
+        assert self._access(role="operator", grants=frozenset({"system_maps_access"})) is True
+
+    def test_grant_bearing_key_without_the_grant_is_denied(self) -> None:
+        assert self._access(role="operator", grants=frozenset({"library.search.in_dev"})) is False
+
+    def test_ungranted_jwt_caller_keeps_role_behaviour(self) -> None:
+        assert self._access(role="operator", grants=None) is True
+
+    def test_non_delegable_grant_is_denied_like_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-delegable marking revokes an already-minted grant, as REST does."""
+        from modulo.api.dependencies import require_in_dev_operator
+        from modulo.auth import permissions as permissions_module
+        from modulo.auth.jwt import TenantPrincipal
+
+        monkeypatch.setattr(
+            permissions_module,
+            "NON_DELEGABLE_PERMISSIONS",
+            permissions_module.NON_DELEGABLE_PERMISSIONS | {"system_maps_access"},
+        )
+        grants = frozenset({"system_maps_access"})
+
+        assert self._access(role="operator", grants=grants) is False
+
+        principal = TenantPrincipal(
+            username="testuser",
+            organisation_id=ORG_ID,
+            account_id=USER_ID,
+            org_role="operator",
+            key_grants=grants,
+        )
+        with pytest.raises(HTTPException) as excinfo:
+            require_in_dev_operator(
+                principal,
+                "system_maps_access",
+                require_dev_mode=True,
+                settings=MagicMock(modulo_dev_mode=True),
+            )
+        assert excinfo.value.status_code == HTTPStatus.FORBIDDEN
+
+    def test_non_delegable_does_not_narrow_ungranted_caller(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No grant set (JWTs, legacy keys) does not narrow — identical to REST."""
+        from modulo.auth import permissions as permissions_module
+
+        monkeypatch.setattr(
+            permissions_module,
+            "NON_DELEGABLE_PERMISSIONS",
+            permissions_module.NON_DELEGABLE_PERMISSIONS | {"system_maps_access"},
+        )
+
+        assert self._access(role="operator", grants=None) is True
 
 
 # ---------------------------------------------------------------------------

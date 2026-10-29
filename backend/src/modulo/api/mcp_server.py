@@ -577,13 +577,21 @@ _SYSTEM_MAPS_INTERNAL_PERMISSION = "system_maps_access"
 
 
 def _mcp_internal_system_maps_access() -> bool:
-    """Return whether the MCP caller has the internal system maps grant."""
+    """Return whether the MCP caller has the internal system maps grant.
+
+    The grant leg goes through ``grants_permit`` — the same live resolver the
+    REST gate reaches via ``require_in_dev_operator`` -> ``_enforce_key_grant``
+    -> ``assert_grant``. Membership is never tested by hand: ``grants_permit``
+    re-reads ``is_delegable`` on every call, so marking the permission
+    non-delegable revokes it from already-minted grant-bearing credentials
+    without a second code change. ``grants is None`` (JWTs, legacy keys) does
+    not narrow, matching REST.
+    """
     if not getattr(get_settings(), "modulo_dev_mode", True):
         return False
     role = _ctx_role_val()
-    grants = _ctx_key_grants.get(None)
-    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and (
-        grants is None or _SYSTEM_MAPS_INTERNAL_PERMISSION in grants
+    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
+        _ctx_key_grants.get(None), _SYSTEM_MAPS_INTERNAL_PERMISSION
     )
 
 
