@@ -14,4 +14,12 @@ backend/src/modulo/db/**
 backend/src/modulo/settings.py
 backend/src/modulo/db/url_utils.py
 backend/src/modulo/api/main.py
+backend/src/modulo/launcher/service.py
+backend/tests/unit/launcher/test_service.py
 deploy/fly/**
+scripts/macos/**
+scripts/create-macos-info-plist.sh
+docs/system-requirements.md
+docs/release-process.md
+docs/upgrade-process.md
+.github/workflows/native-gate0.yml
