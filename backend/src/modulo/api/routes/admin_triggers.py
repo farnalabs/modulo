@@ -140,7 +140,7 @@ async def _fetch_trigger_event_rows(
             if validation_result:
                 q = q.where(TriggerEvent.validation_result == validation_result)
             if cursor:
-                q = apply_trigger_event_cursor(q, cursor)
+                q = apply_trigger_event_cursor(cast("Any", q), cursor)
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             return list((await session.execute(q)).all())
 
