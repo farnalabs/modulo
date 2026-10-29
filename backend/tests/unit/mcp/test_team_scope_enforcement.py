@@ -816,6 +816,7 @@ def _make_trigger(*, pipeline_id: uuid.UUID | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid.uuid4(),
         pipeline_id=pipeline_id or uuid.uuid4(),
+        name="test-trigger",
         trigger_type="webhook",
         active=True,
         max_concurrent_runs=None,
