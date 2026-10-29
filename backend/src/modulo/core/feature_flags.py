@@ -187,12 +187,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Run analytics dashboard (rolling-window run/cost/quality series)",
         tier="community",
     ),
-    # ── Community tier — mobile icon-rail experiment (default OFF) ──────────
-    FeatureFlag(
-        name="mobile_sidebar_rail",
-        description="Mobile icon-rail sidebar (experimental)",
-        tier="community",
-    ),
     # ── Community tier — user-scoped MCP keys (default OFF, FAR-620) ────────
     FeatureFlag(
         name="user_scoped_mcp_keys",
@@ -269,9 +263,8 @@ TIER_RANK: dict[str, int] = {"community": 0, "team": 1}
 # Flags shipped default-OFF on every tier regardless of tier rank. Each is
 # listed in the catalog for per-org toggling AND hardcoded here so the
 # community-tier tier-rank fallback in ``FeatureFlagRegistry._refresh`` can
-# never activate it (the "two-mechanism" precedent started by
-# ``mobile_sidebar_rail``). Orgs enable them per-org via
-# ``feature_overrides``; a system-level ``set_override`` also wins.
+# never activate it. Orgs enable them per-org via ``feature_overrides``; a
+# system-level ``set_override`` also wins.
 # Retained only in persisted data for backwards compatibility; it is not a
 # customer-configurable flag. Internal Lifecycle Map access is controlled by the
 # route's dev-mode visibility gate instead of an org feature override.
@@ -280,7 +273,6 @@ RETIRED_INTERNAL_FLAGS: frozenset[str] = frozenset({"lifecycle_map_journeys"})
 
 DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
     {
-        "mobile_sidebar_rail",
         "dashboard_charts",
         "saved_views",
         "user_scoped_mcp_keys",
@@ -712,7 +704,7 @@ class FeatureFlagRegistry:
         if db_flags:
             # Keep ALL catalog rows, including ``is_active=false`` ones, so the
             # admin UI can list and toggle them. Rows seeded inactive (e.g. the
-            # ``mobile_sidebar_rail`` experiment) are tracked in
+            # Inactive catalog flags are tracked in
             # ``_inactive_flags`` and stay ``currently_active=False`` in
             # ``_refresh`` unless an override exists.
             self._flags = [

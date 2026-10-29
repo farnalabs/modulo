@@ -34,10 +34,9 @@ pytestmark = pytest.mark.integration
 
 _VALID_32 = "a" * 32
 
-# Org override set: a default-OFF flag turned ON (proves the overlay applies
-# on a real row) and a default-ON community flag turned OFF (proves the overlay
-# bites in both directions against the real catalog).
-_ORG_SETTINGS = '{"feature_overrides": {"mobile_sidebar_rail": true, "analytics_page": false}}'
+# Org override set: a default-ON community flag turned OFF (proves the
+# overlay applies against the real catalog).
+_ORG_SETTINGS = '{"feature_overrides": {"analytics_page": false}}'
 
 
 async def _seed_org(db_engine: AsyncEngine) -> uuid.UUID:
@@ -109,8 +108,6 @@ async def test_plan_bootstrap_serves_effective_plan_to_non_admin(
     assert isinstance(body["dev_mode"], bool)
 
     flags = {f["name"]: f for f in body["flags"]}
-    # Org overlay applied ON: default-OFF flag the org enabled reads active.
-    assert flags["mobile_sidebar_rail"]["currently_active"] is True
     # Org overlay applied OFF: default-ON community flag the org disabled.
     assert flags["analytics_page"]["currently_active"] is False
     # Inactive flag PRESENT with false (the active-only payload dropped it).
@@ -149,6 +146,4 @@ async def test_viewmodel_feature_flags_agree_with_plan_bootstrap(
     plan_flags = {f["name"]: f["currently_active"] for f in plan_resp.json()["flags"]}
     vm_flags = {f["name"]: f["active"] for f in vm_resp.json()["feature_flags"]}
     assert plan_flags == vm_flags
-    # The disagreement this parity pins: pre-fix viewmodel omitted/overrode none.
-    assert vm_flags["mobile_sidebar_rail"] is True
     assert vm_flags["analytics_page"] is False
