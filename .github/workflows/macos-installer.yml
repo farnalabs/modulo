@@ -26,9 +26,32 @@ on:
         required: false
       MACOS_NOTARY_ISSUER_ID:
         required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build in X.Y.Z form"
+        type: string
+        required: true
+      rc_tag:
+        description: "Release-candidate tag label for this validation run"
+        type: string
+        required: false
+        default: manual
+      ref:
+        description: "Git ref to build; blank uses the dispatch ref"
+        type: string
+        required: false
+        default: ""
+      mode:
+        description: "Manual dispatch mode"
+        type: choice
+        required: true
+        default: dry-run
+        options:
+          - dry-run
 
 concurrency:
-  group: macos-installer-${{ github.workflow }}-${{ inputs.version }}
+  group: macos-installer-${{ inputs.version || github.ref }}
   cancel-in-progress: false
 
 defaults:
@@ -39,18 +62,65 @@ permissions:
   contents: read
 
 jobs:
+  normalize-inputs:
+    name: Normalize installer inputs
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.normalize.outputs.version }}
+      rc_tag: ${{ steps.normalize.outputs.rc_tag }}
+      ref: ${{ steps.normalize.outputs.ref }}
+      mode: ${{ steps.normalize.outputs.mode }}
+    steps:
+      - id: normalize
+        env:
+          CALL_VERSION: ${{ inputs.version }}
+          CALL_RC_TAG: ${{ inputs.rc_tag }}
+          CALL_REF: ${{ inputs.ref }}
+          CALL_MODE: ${{ inputs.mode }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          DISPATCH_RC_TAG: ${{ github.event.inputs.rc_tag }}
+          DISPATCH_REF: ${{ github.event.inputs.ref }}
+          DISPATCH_MODE: ${{ github.event.inputs.mode }}
+        run: |
+          set -euo pipefail
+          version="$CALL_VERSION"
+          rc_tag="$CALL_RC_TAG"
+          ref="$CALL_REF"
+          mode="$CALL_MODE"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$DISPATCH_VERSION"
+            rc_tag="$DISPATCH_RC_TAG"
+            ref="$DISPATCH_REF"
+            mode="$DISPATCH_MODE"
+            [[ -n "$ref" ]] || ref="$GITHUB_REF"
+          fi
+          [[ -n "$version" ]] || { echo '::error::version input is required' >&2; exit 1; }
+          [[ -n "$rc_tag" ]] || { echo '::error::rc_tag input is required' >&2; exit 1; }
+          [[ -n "$ref" ]] || { echo '::error::ref input is required' >&2; exit 1; }
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$mode" != "dry-run" ]]; then
+            echo "::error::unsupported manual dispatch mode: $mode" >&2
+            exit 1
+          fi
+          {
+            printf 'version=%s\n' "$version"
+            printf 'rc_tag=%s\n' "$rc_tag"
+            printf 'ref=%s\n' "$ref"
+            printf 'mode=%s\n' "$mode"
+          } >> "$GITHUB_OUTPUT"
+
   build:
-    name: Build and notarize macOS arm64 bundle
+    name: Build and smoke-test macOS arm64 bundle
+    needs: normalize-inputs
     runs-on: macos-14
     timeout-minutes: 90
     env:
-      VERSION_NUM: ${{ inputs.version }}
-      MODE: ${{ inputs.mode }}
-      RC_TAG: ${{ inputs.rc_tag }}
+      VERSION_NUM: ${{ needs.normalize-inputs.outputs.version }}
+      MODE: ${{ needs.normalize-inputs.outputs.mode }}
+      RC_TAG: ${{ needs.normalize-inputs.outputs.rc_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.normalize-inputs.outputs.ref }}
 
       - name: Install build tools
         run: |
@@ -64,7 +134,7 @@ jobs:
           test "$(uname -m)" = arm64
 
       - name: Validate dry-run contract
-        if: ${{ inputs.mode == 'dry-run' }}
+        if: ${{ needs.normalize-inputs.outputs.mode == 'dry-run' }}
         run: |
           set -euo pipefail
           test -x scripts/macos/build-native-bundle.sh
@@ -81,20 +151,20 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Node + pnpm (pinned frontend toolchain)
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ needs.normalize-inputs.outputs.mode != 'dry-run' }}
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.28.8
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ needs.normalize-inputs.outputs.mode != 'dry-run' }}
         with:
           node-version: "22"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Set up uv
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ needs.normalize-inputs.outputs.mode != 'dry-run' }}
         uses: astral-sh/setup-uv@v5
         with:
           version: latest
@@ -102,7 +172,7 @@ jobs:
           enable-cache: true
 
       - name: Build genuine native bundle
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ needs.normalize-inputs.outputs.mode != 'dry-run' }}
         run: |
           set -euo pipefail
           rm -rf build
@@ -121,7 +191,7 @@ jobs:
           "$APP/Contents/MacOS/modulo" --help >/dev/null
 
       - name: Sign, notarize and smoke-test native installer
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ needs.normalize-inputs.outputs.mode != 'dry-run' }}
         env:
           CERTIFICATE_B64: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
@@ -315,10 +385,10 @@ jobs:
 
 
       - name: Upload real macOS installer
-        if: ${{ inputs.mode != 'dry-run' }}
+        if: ${{ needs.normalize-inputs.outputs.mode != 'dry-run' }}
         uses: actions/upload-artifact@v4
         with:
-          name: macos-installer-${{ inputs.version }}
-          path: build/Modulo-${{ inputs.version }}-macos-arm64.dmg
+          name: macos-installer-${{ needs.normalize-inputs.outputs.version }}
+          path: build/Modulo-${{ needs.normalize-inputs.outputs.version }}-macos-arm64.dmg
           if-no-files-found: error
           retention-days: 30
