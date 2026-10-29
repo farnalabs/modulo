@@ -300,6 +300,137 @@ class TestGetAvailableFeaturesSuccess(AuthContext):
 
 
 # ---------------------------------------------------------------------------
+# FAR-2202: system_maps internal feature flag in get_available_features
+# ---------------------------------------------------------------------------
+
+
+class TestSystemMapsInternalFlagMCP:
+    """system_maps is an internal-only flag that must be hidden from ordinary
+    callers and visible only to internal dev-mode operators with the in-dev grant.
+    """
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_settings")
+    @patch("modulo.core.feature_flags.resolve_plan_context")
+    @patch("modulo.db.crud.organisation.get_organisation")
+    async def test_ordinary_caller_cannot_see_system_maps(
+        self,
+        mock_get_org: AsyncMock,
+        mock_resolve: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """Ordinary caller (no dev-mode, no in-dev grant) cannot see system_maps."""
+        from modulo.api.mcp_server import _ctx_org_id
+
+        _ctx_org_id.set(make_session_scope().org_id)
+        mock_get_settings.return_value = MagicMock(modulo_dev_mode=False)
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        plan_ctx.list_enabled_features.return_value = [
+            FeatureFlag(name="mcp_server", description="MCP", tier="community", currently_active=True),
+            FeatureFlag(name="webhook_trigger", description="Webhook", tier="community", currently_active=True),
+            FeatureFlag(name="sso", description="SSO", tier="team", currently_active=False),
+            FeatureFlag(
+                name="system_maps",
+                description="Beta System Maps (Delivery System Maps)",
+                tier="community",
+                currently_active=True,
+            ),
+        ]
+        mock_resolve.return_value = plan_ctx
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await get_available_features()
+
+        assert result["feature_count"] == 3  # mcp_server, webhook_trigger, sso (no system_maps)
+        assert "system_maps" not in result["results"]
+        assert "| mcp_server | community | yes |" in result["results"]
+        assert "| sso | team | no |" in result["results"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_settings")
+    @patch("modulo.core.feature_flags.resolve_plan_context")
+    @patch("modulo.db.crud.organisation.get_organisation")
+    async def test_internal_caller_can_see_system_maps(
+        self,
+        mock_get_org: AsyncMock,
+        mock_resolve: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """Internal dev-mode operator with in-dev grant can see system_maps."""
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_org_id, _ctx_role
+
+        _ctx_org_id.set(make_session_scope().org_id)
+        _ctx_role.set("operator")
+        mock_get_settings.return_value = MagicMock(modulo_dev_mode=True)
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        plan_ctx.list_enabled_features.return_value = [
+            FeatureFlag(
+                name="system_maps",
+                description="Beta System Maps (Delivery System Maps)",
+                tier="community",
+                currently_active=True,
+            ),
+        ]
+        mock_resolve.return_value = plan_ctx
+        mock_session.return_value = make_session_context(make_session_scope())
+        _ctx_key_grants.set(frozenset({"library.search.in_dev"}))
+        try:
+            result = await get_available_features()
+        finally:
+            _ctx_key_grants.set(None)
+
+        assert result["feature_count"] == 1
+        assert "| system_maps | community | yes |" in result["results"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_settings")
+    @patch("modulo.core.feature_flags.resolve_plan_context")
+    @patch("modulo.db.crud.organisation.get_organisation")
+    async def test_dev_mode_without_grant_cannot_see_system_maps(
+        self,
+        mock_get_org: AsyncMock,
+        mock_resolve: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """Dev-mode enabled but no in-dev grant cannot see system_maps."""
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_org_id
+
+        _ctx_org_id.set(make_session_scope().org_id)
+        mock_get_settings.return_value = MagicMock(modulo_dev_mode=True)
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        plan_ctx.list_enabled_features.return_value = [
+            FeatureFlag(
+                name="system_maps",
+                description="Beta System Maps (Delivery System Maps)",
+                tier="community",
+                currently_active=True,
+            ),
+        ]
+        mock_resolve.return_value = plan_ctx
+        mock_session.return_value = make_session_context(make_session_scope())
+        _ctx_key_grants.set(frozenset())  # no grant
+        try:
+            result = await get_available_features()
+        finally:
+            _ctx_key_grants.set(None)
+
+        assert result["feature_count"] == 0
+        assert "system_maps" not in result["results"]
+
+
+# ---------------------------------------------------------------------------
 # get_integration_status
 # ---------------------------------------------------------------------------
 

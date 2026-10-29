@@ -572,6 +572,25 @@ def _require_mcp_internal_lifecycle_map_access() -> None:
         raise MCPAuthorizationError("Lifecycle map tools are restricted to internal operators")
 
 
+def _mcp_internal_system_maps_access() -> bool:
+    """Return whether the MCP caller has the internal system maps grant."""
+    if not getattr(get_settings(), "modulo_dev_mode", True):
+        return False
+    role = _ctx_role_val()
+    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
+        _ctx_key_grants.get(None), "library.search.in_dev"
+    )
+
+
+def _require_mcp_internal_system_maps_access() -> None:
+    if not _mcp_internal_system_maps_access():
+        raise MCPAuthorizationError("System maps tools are restricted to internal operators")
+
+
+# Exported for future System Maps MCP tools.
+__all__ = ["_require_mcp_internal_system_maps_access"]
+
+
 def _ctx_team_id_val() -> uuid.UUID | None:
     """Get the team boundary of the current request (None when no team boundary).
 
@@ -1036,6 +1055,7 @@ async def _set_authz_enforce(org_id: uuid.UUID) -> None:
 
 # FAR-620: the org-level feature flag gating user-scoped MCP keys.
 _FLAG_USER_SCOPED_MCP_KEYS = "user_scoped_mcp_keys"
+_FLAG_SYSTEM_MAPS = "system_maps"
 
 
 async def _set_user_keys_flag(org_id: uuid.UUID) -> bool:
@@ -11311,10 +11331,16 @@ async def get_available_features() -> dict[str, Any]:
             plan_ctx = await resolve_plan_context(settings, s, org)
 
         current_tier = plan_ctx.tier()
+        internal_lifecycle_access = _mcp_internal_lifecycle_map_access()
+        internal_system_maps_access = _mcp_internal_system_maps_access()
         all_flags = [
             flag
             for flag in plan_ctx.list_enabled_features()
-            if flag.name not in RETIRED_INTERNAL_FLAGS or _mcp_internal_lifecycle_map_access()
+            if (
+                flag.name not in RETIRED_INTERNAL_FLAGS
+                and (flag.name != _FLAG_SYSTEM_MAPS or internal_system_maps_access)
+            )
+            or (flag.name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access)
         ]
 
         lines = ["| Feature | Required Tier | Available |", "|---------|---------------|-----------|"]

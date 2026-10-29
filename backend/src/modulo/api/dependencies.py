@@ -237,6 +237,30 @@ def require_in_dev_operator(
     _enforce_key_grant(principal, permission)
 
 
+_SYSTEM_MAPS_INTERNAL_PERMISSION = "library.search.in_dev"
+
+# Exported for future System Maps REST route modules.
+__all__ = ["_require_internal_system_maps_access"]
+
+
+def _require_internal_system_maps_access(
+    principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
+    settings: Settings = Depends(get_settings),
+) -> TenantPrincipal:
+    """Keep the system maps API surface on the internal path only.
+
+    Mirrors ``_require_internal_lifecycle_map_access``: requires dev-mode,
+    operator+ org role, and the in-dev grant.
+    """
+    require_in_dev_operator(
+        principal,
+        _SYSTEM_MAPS_INTERNAL_PERMISSION,
+        require_dev_mode=True,
+        settings=settings,
+    )
+    return principal
+
+
 def require_permission_any_credential(permission: str) -> Any:
     """FastAPI dependency factory — require the org role for JWT OR API-key callers.
 

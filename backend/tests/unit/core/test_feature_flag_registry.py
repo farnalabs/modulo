@@ -535,3 +535,81 @@ class TestResolveSsoUnrestrictedProvisioning:
             pytest.raises(asyncio.CancelledError),
         ):
             await resolve_sso_unrestricted_provisioning(org_id=self._ORG)
+
+
+class TestSystemMapsFlag:
+    """FAR-2202: system_maps flag scaffolding — default-OFF, internal-only."""
+
+    def test_system_maps_registered_in_known_flags(self) -> None:
+        registry = _make_default_off_registry()
+        flag = registry.get_flag("system_maps")
+        assert flag is not None, "system_maps must be registered in _KNOWN_FLAGS"
+        assert flag.tier == "community"
+        assert flag.description == "Beta System Maps (Delivery System Maps)"
+
+    def test_system_maps_in_default_off_flags(self) -> None:
+        from modulo.core.feature_flags import DEFAULT_OFF_FLAGS, INTERNAL_FLAGS
+
+        assert "system_maps" in DEFAULT_OFF_FLAGS
+        assert "system_maps" in INTERNAL_FLAGS
+
+    def test_system_maps_inactive_on_community_tier(self) -> None:
+        registry = _make_default_off_registry("community")
+        assert registry.get_flag("system_maps").currently_active is False  # type: ignore[union-attr]
+
+    def test_system_maps_inactive_on_team_tier(self) -> None:
+        registry = _make_default_off_registry("team", has_license_key=True)
+        assert registry.get_flag("system_maps").currently_active is False  # type: ignore[union-attr]
+
+    def test_system_maps_can_be_enabled_via_sys_override(self) -> None:
+        registry = _make_default_off_registry("community")
+        flag = registry.get_flag("system_maps")
+        assert flag is not None
+        try:
+            registry.set_override("system_maps", True)
+            assert flag.currently_active is True
+        finally:
+            registry.clear_override("system_maps")
+        assert flag.currently_active is False
+
+    async def test_system_maps_defaults_false_even_with_catalog_row_active(self) -> None:
+        """The DEFAULT_OFF_FLAGS hardcode wins over a DB catalog row marked
+        active — without the hardcode the tier-rank fallback would activate the
+        flag for community tier. An org override is the ONLY way to enable it."""
+        session = _make_session()
+        db_flags = [
+            {
+                "name": "system_maps",
+                "description": "Beta System Maps (Delivery System Maps)",
+                "tier_id": "community",
+                "depends_on": None,
+                "is_active": True,
+            },
+        ]
+        db_tiers = [
+            {"tier_id": "community", "rank": 0},
+            {"tier_id": "team", "rank": 1},
+        ]
+        with (
+            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
+        ):
+            registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
+        assert registry.get_flag("system_maps").currently_active is False  # type: ignore[union-attr]
+        # An org feature_overrides entry (the documented enable path) wins.
+        with patch.object(
+            FeatureFlagRegistry,
+            "_get_org_override",
+            new=AsyncMock(return_value=True),
+        ):
+            assert await registry.resolve_flag("system_maps", org_id=uuid.uuid4()) is True
+
+    def test_system_maps_filtered_from_effective_feature_flags(self) -> None:
+        """system_maps must not appear in customer-facing plan responses."""
+        from modulo.core.feature_flags import CommunityTier, effective_feature_flags
+
+        plan_ctx = CommunityTier()
+        flags = effective_feature_flags(plan_ctx)
+        names = {f.name for f in flags}
+        assert "system_maps" not in names
+        assert "lifecycle_map_journeys" not in names  # also internal
