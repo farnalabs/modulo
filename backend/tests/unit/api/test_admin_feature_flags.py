@@ -137,7 +137,7 @@ def _reset_license_state() -> Generator[None, None, None]:
 def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
-    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_settings] = _make_internal_settings
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: MagicMock()
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
@@ -147,6 +147,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin",
         is_system_admin=True,
+        key_grants=frozenset({"library.search.in_dev"}),
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -155,6 +156,25 @@ def client() -> Generator[TestClient, None, None]:
 @pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def ordinary_internal_flag_client() -> Generator[TestClient, None, None]:
+    """System-config caller without the internal System Maps contract."""
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_plan_context] = lambda: MagicMock()
+    app.dependency_overrides[get_db_session] = lambda: MagicMock()
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id="00000000-0000-0000-0000-000000000001",
+        account_id="00000000-0000-0000-0000-000000000002",
+        org_role="admin",
+        is_system_admin=True,
+        key_grants=frozenset(),
+    )
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -176,6 +196,7 @@ def no_org_client() -> Generator[TestClient, None, None]:
         account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin",
         is_system_admin=True,
+        key_grants=frozenset({"library.search.in_dev"}),
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -267,6 +288,26 @@ def _mock_registry() -> FeatureFlagRegistry:
 
 
 class TestListFeatureFlags:
+    def test_ordinary_caller_cannot_see_system_maps(self, ordinary_internal_flag_client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            response = ordinary_internal_flag_client.get("/api/v1/admin/feature-flags")
+        assert response.status_code == 200
+        names = {flag["name"] for flag in response.json()["flags"]}
+        assert "system_maps" not in names
+
+    def test_internal_caller_can_see_system_maps(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            response = client.get("/api/v1/admin/feature-flags")
+        assert response.status_code == 200
+        names = {flag["name"] for flag in response.json()["flags"]}
+        assert "system_maps" in names
+
     def test_returns_200(self, client: TestClient) -> None:
         with patch(
             "modulo.api.routes.admin_feature_flags._build_registry",
@@ -455,6 +496,19 @@ class TestListFeatureFlags:
 
 
 class TestGetFeatureFlag:
+    def test_ordinary_caller_cannot_inspect_system_maps(self, ordinary_internal_flag_client: TestClient) -> None:
+        response = ordinary_internal_flag_client.get("/api/v1/admin/feature-flags/system_maps")
+        assert response.status_code == 403
+
+    def test_internal_caller_can_inspect_system_maps(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            response = client.get("/api/v1/admin/feature-flags/system_maps")
+        assert response.status_code == 200
+        assert response.json()["name"] == "system_maps"
+
     def test_returns_200_for_known_flag(self, client: TestClient) -> None:
         with patch(
             "modulo.api.routes.admin_feature_flags._build_registry",
@@ -632,6 +686,32 @@ class TestProgrammingError:
 
 
 class TestToggleFeatureFlag:
+    def test_ordinary_caller_cannot_enable_system_maps(self, ordinary_internal_flag_client: TestClient) -> None:
+        response = ordinary_internal_flag_client.put("/api/v1/admin/feature-flags/system_maps", json={"enabled": True})
+        assert response.status_code == 403
+
+    def test_internal_caller_can_enable_system_maps(self, client: TestClient) -> None:
+        org = _org_with_overrides()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=AsyncMock(),
+            ),
+        ):
+            response = client.put("/api/v1/admin/feature-flags/system_maps", json={"enabled": True})
+        assert response.status_code == 200
+        assert response.json()["name"] == "system_maps"
+
     def test_toggle_known_flag_returns_200(self, client: TestClient) -> None:
         org = _org_with_overrides()
         redis_mock = AsyncMock()
@@ -755,7 +835,10 @@ class TestTogglePersistence:
             assert body["overridden"] is True
             assert body["currently_active"] is True
             assert org.settings_json["feature_overrides"]["webhook_trigger"] is True
-            redis_mock.delete.assert_awaited_once_with("feature-flags:00000000-0000-0000-0000-000000000001")
+            redis_mock.delete.assert_awaited_once_with(
+                "feature-flags:00000000-0000-0000-0000-000000000001:public",
+                "feature-flags:00000000-0000-0000-0000-000000000001:internal",
+            )
             listing = client.get("/api/v1/admin/feature-flags")
             assert listing.status_code == 200
             flag = next(f for f in listing.json()["flags"] if f["name"] == "webhook_trigger")
@@ -874,6 +957,38 @@ class TestOrgOverrideCacheInvalidation:
         assert resp.status_code == 404
         write_override.assert_not_awaited()
 
+    def test_set_system_maps_override_is_denied_for_ordinary_caller(
+        self, ordinary_internal_flag_client: TestClient
+    ) -> None:
+        response = ordinary_internal_flag_client.put(
+            "/api/v1/admin/feature-flags/system_maps/org-override", json={"enabled": True}
+        )
+        assert response.status_code == 403
+
+    def test_set_system_maps_override_succeeds_for_internal_caller(self, internal_client: TestClient) -> None:
+        org = _org_with_overrides()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=AsyncMock(),
+            ),
+        ):
+            response = internal_client.put(
+                "/api/v1/admin/feature-flags/system_maps/org-override", json={"enabled": True}
+            )
+        assert response.status_code == 200
+        assert response.json()["override"] is True
+
     def test_set_org_override_invalidates_redis_cache(self, client: TestClient) -> None:
         org = _org_with_overrides()
         redis_mock = AsyncMock()
@@ -896,7 +1011,10 @@ class TestOrgOverrideCacheInvalidation:
             resp = client.put("/api/v1/admin/feature-flags/webhook_trigger/org-override", json={"enabled": True})
         assert resp.status_code == 200
         assert resp.json()["override"] is True
-        redis_mock.delete.assert_awaited_once_with(f"feature-flags:{self._ORG_ID}")
+        redis_mock.delete.assert_awaited_once_with(
+            f"feature-flags:{self._ORG_ID}:public",
+            f"feature-flags:{self._ORG_ID}:internal",
+        )
 
     def test_clear_org_override_invalidates_redis_cache(self, client: TestClient) -> None:
         org = _org_with_overrides(webhook_trigger=True)
@@ -920,7 +1038,10 @@ class TestOrgOverrideCacheInvalidation:
             resp = client.delete("/api/v1/admin/feature-flags/webhook_trigger/org-override")
         assert resp.status_code == 200
         assert resp.json()["override"] is None
-        redis_mock.delete.assert_awaited_once_with(f"feature-flags:{self._ORG_ID}")
+        redis_mock.delete.assert_awaited_once_with(
+            f"feature-flags:{self._ORG_ID}:public",
+            f"feature-flags:{self._ORG_ID}:internal",
+        )
 
     def test_set_org_override_survives_cache_invalidation_failure(self, client: TestClient) -> None:
         """The best-effort cache delete must never fail an already-committed
@@ -947,12 +1068,31 @@ class TestOrgOverrideCacheInvalidation:
 
 
 class TestOrgOverrideRoundTrip:
-    def test_get_retired_internal_override_is_denied_without_reading(self, client: TestClient) -> None:
+    def test_get_system_maps_override_is_denied_for_ordinary_caller(
+        self, ordinary_internal_flag_client: TestClient
+    ) -> None:
+        response = ordinary_internal_flag_client.get("/api/v1/admin/feature-flags/system_maps/org-override")
+        assert response.status_code == 403
+
+    def test_get_system_maps_override_succeeds_for_internal_caller(self, internal_client: TestClient) -> None:
+        org = _org_with_overrides(system_maps=True)
+        with patch(
+            "modulo.api.routes.admin_feature_flags.get_organisation",
+            new_callable=AsyncMock,
+            return_value=org,
+        ):
+            response = internal_client.get("/api/v1/admin/feature-flags/system_maps/org-override")
+        assert response.status_code == 200
+        assert response.json()["override"] is True
+
+    def test_get_retired_internal_override_is_denied_without_reading(
+        self, ordinary_internal_flag_client: TestClient
+    ) -> None:
         with patch(
             "modulo.api.routes.admin_feature_flags.get_organisation",
             new_callable=AsyncMock,
         ) as get_org:
-            response = client.get(
+            response = ordinary_internal_flag_client.get(
                 "/api/v1/admin/feature-flags/lifecycle_map_journeys/org-override",
             )
         assert response.status_code == 403
@@ -1029,7 +1169,37 @@ class TestOrgOverrideRoundTrip:
 
 
 class TestRetiredOrgOverrideAccess:
-    def test_clear_retired_internal_override_is_denied_without_mutating(self, client: TestClient) -> None:
+    def test_clear_system_maps_override_is_denied_for_ordinary_caller(
+        self, ordinary_internal_flag_client: TestClient
+    ) -> None:
+        response = ordinary_internal_flag_client.delete("/api/v1/admin/feature-flags/system_maps/org-override")
+        assert response.status_code == 403
+
+    def test_clear_system_maps_override_succeeds_for_internal_caller(self, internal_client: TestClient) -> None:
+        org = _org_with_overrides(system_maps=True)
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.update_org_settings_patch",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=AsyncMock(),
+            ),
+        ):
+            response = internal_client.delete("/api/v1/admin/feature-flags/system_maps/org-override")
+        assert response.status_code == 200
+        assert response.json()["override"] is None
+
+    def test_clear_retired_internal_override_is_denied_without_mutating(
+        self, ordinary_internal_flag_client: TestClient
+    ) -> None:
         with (
             patch(
                 "modulo.api.routes.admin_feature_flags.get_organisation",
@@ -1040,7 +1210,7 @@ class TestRetiredOrgOverrideAccess:
                 new_callable=AsyncMock,
             ) as update_settings,
         ):
-            response = client.delete(
+            response = ordinary_internal_flag_client.delete(
                 "/api/v1/admin/feature-flags/lifecycle_map_journeys/org-override",
             )
         assert response.status_code == 403
