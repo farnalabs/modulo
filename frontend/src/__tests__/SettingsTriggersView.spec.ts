@@ -1262,6 +1262,27 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     expect(vm.formError).toContain('Please enter a name')
   })
 
+  it('create: a name typed into the form input over 255 characters is rejected before the POST', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+
+    const longName = 'x'.repeat(256)
+    await wrapper.find('[data-testid="settings-triggers-form-name"]').setValue(longName)
+    await flush()
+
+    const vm = wrapper.vm as any
+    expect(vm.form.name).toBe(longName)
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).not.toHaveBeenCalled()
+    expect(vm.formError).toContain('255')
+  })
+
   it('create: the name is trimmed before it is sent', async () => {
     const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
     await flush()

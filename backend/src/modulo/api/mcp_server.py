@@ -8012,11 +8012,11 @@ async def _validate_ongoing_trigger_create(
     return datetime.now(UTC), None
 
 
-def _normalise_trigger_name(name: Any) -> tuple[str | None, dict[str, Any] | None]:
+def _normalise_trigger_name(name: Any) -> tuple[str, dict[str, Any] | None]:
     """FAR-2227: strip and validate a trigger name (1..255 chars); returns (name, error)."""
     cleaned = name.strip() if isinstance(name, str) else ""
     if not cleaned or len(cleaned) > 255:
-        return None, {"error": "validation", "field": "name", "detail": "name is required (1-255 characters)"}
+        return cleaned, {"error": "validation", "field": "name", "detail": "name is required (1-255 characters)"}
     return cleaned, None
 
 
@@ -8088,8 +8088,6 @@ async def _create_trigger_impl(
     clean_name, name_err = _normalise_trigger_name(name)
     if name_err:
         return name_err
-    if clean_name is None:
-        raise RuntimeError("_create_trigger_impl: name validation returned no error and no name")
     try:
         _validate_trigger_config_keys(config_json)
     except FastAPIHTTPException as exc:
@@ -8483,6 +8481,56 @@ def _recompute_ongoing_next_fire(
             trigger.next_fire_at = datetime.now(UTC)
 
 
+async def _rename_trigger_in_session(s: AsyncSession, trigger: Any, name: str | None) -> dict[str, Any] | None:
+    """Apply a requested rename inside the update session; returns a conflict envelope or None."""
+    if name is not None and name != trigger.name:
+        # Validated BEFORE mutation: a clean early return commits.
+        try:
+            await _require_unique_trigger_name(s, trigger.pipeline_id, name, exclude_id=trigger.id)
+        except FastAPIHTTPException as exc:
+            return {"error": "conflict", "field": "name", "detail": exc.detail}
+        trigger.name = name
+    return None
+
+
+async def _validate_trigger_update_config(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    trigger: Any,
+    owner_team_id: uuid.UUID | None,
+    config_json: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Validate a write-time config merge before mutation; returns an error envelope or None."""
+    if config_json is None:
+        return None
+    # FAR-1735: validate the SAME recursive masked merge the write path uses
+    # (REST parity) — a shallow merge would judge a different shape than
+    # `_merge_trigger_config_json` persists.
+    merged_config = merge_masked_config_json(trigger.config_json or {}, config_json)
+    try:
+        _validate_trigger_config_keys(merged_config, context="merged config_json")
+    except FastAPIHTTPException as exc:
+        return {"error": "validation", "detail": exc.detail}
+    # FAR-1595: a NEW connector reference written through the general update
+    # path is team-validated too — same shared gate REST's PUT calls, so MCP is
+    # not a bypass around it. Judged on the MERGED config and against the
+    # PREVIOUS value (an unchanged reference is not re-judged), all BEFORE the
+    # ORM object is mutated: a clean early return from `_session` COMMITS.
+    try:
+        await _validate_connector_instance_team_scope(
+            s,
+            org_id=org_id,
+            pipeline_owner_team_id=owner_team_id,
+            config=merged_config,
+            previous_connector_instance_id=(trigger.config_json or {}).get("connector_instance_id"),
+        )
+    except FastAPIHTTPException as exc:
+        from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
+
+        return {"error": CONNECTOR_TEAM_MISMATCH, "detail": str(exc.detail)}
+    return None
+
+
 async def _update_trigger_txn(
     org_id: uuid.UUID,
     tid: uuid.UUID,
@@ -8541,41 +8589,12 @@ async def _update_trigger_txn(
         # `_session()` wraps the body in `s.begin()`, so a clean early
         # return COMMITS — validating after mutation would persist an
         # invalid merged config while reporting a validation error.
-        if config_json is not None:
-            # FAR-1735: validate the SAME recursive masked merge the write
-            # path uses (REST parity) — the shallow merge here previously
-            # judged a different shape than `_merge_trigger_config_json`
-            # persisted.
-            merged_config = merge_masked_config_json(trigger.config_json or {}, config_json)
-            try:
-                _validate_trigger_config_keys(merged_config, context="merged config_json")
-            except FastAPIHTTPException as exc:
-                return {"error": "validation", "detail": exc.detail}
-            # FAR-1595: a NEW connector reference written through the general
-            # update path is team-validated too — same shared gate REST's PUT
-            # calls, so MCP is not a bypass around it. Judged on the MERGED
-            # config and against the PREVIOUS value (an unchanged reference is
-            # not re-judged), all BEFORE the ORM object is mutated: a clean
-            # early return from ``_session`` COMMITS.
-            try:
-                await _validate_connector_instance_team_scope(
-                    s,
-                    org_id=org_id,
-                    pipeline_owner_team_id=owner_team_id,
-                    config=merged_config,
-                    previous_connector_instance_id=(trigger.config_json or {}).get("connector_instance_id"),
-                )
-            except FastAPIHTTPException as exc:
-                from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
-
-                return {"error": CONNECTOR_TEAM_MISMATCH, "detail": str(exc.detail)}
-        if name is not None and name != trigger.name:
-            # Validated BEFORE mutation: a clean early return commits.
-            try:
-                await _require_unique_trigger_name(s, trigger.pipeline_id, name, exclude_id=trigger.id)
-            except FastAPIHTTPException as exc:
-                return {"error": "conflict", "field": "name", "detail": exc.detail}
-            trigger.name = name
+        config_err = await _validate_trigger_update_config(s, org_id, trigger, owner_team_id, config_json)
+        if config_err is not None:
+            return config_err
+        rename_err = await _rename_trigger_in_session(s, trigger, name)
+        if rename_err is not None:
+            return rename_err
         await _apply_trigger_field_updates(
             s,
             trigger,

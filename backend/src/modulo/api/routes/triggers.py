@@ -1408,6 +1408,13 @@ class TriggerUpdate(BaseModel):
     cron_timezone: str | None = None
 
 
+async def _apply_trigger_rename(session: AsyncSession, trigger: Trigger, name: str | None) -> None:
+    """Rename the trigger when a new name was supplied, enforcing per-pipeline uniqueness."""
+    if name is not None and name != trigger.name:
+        await _require_unique_trigger_name(session, trigger.pipeline_id, name, exclude_id=trigger.id)
+        trigger.name = name
+
+
 async def _apply_trigger_update(
     session: AsyncSession,
     settings: Settings,
@@ -1434,9 +1441,7 @@ async def _apply_trigger_update(
     # Pre-mutation snapshot for the ongoing next_fire_at reset decision
     # (reset only when the pool/cadence/active actually CHANGES).
     prev_max = trigger.max_concurrent_runs
-    if req.name is not None and req.name != trigger.name:
-        await _require_unique_trigger_name(session, trigger.pipeline_id, req.name, exclude_id=trigger.id)
-        trigger.name = req.name
+    await _apply_trigger_rename(session, trigger, req.name)
     prev_active = await _apply_active_state(session, trigger, req.active)
     if req.max_concurrent_runs is not None:
         trigger.max_concurrent_runs = req.max_concurrent_runs
