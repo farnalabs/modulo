@@ -173,6 +173,7 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
     """
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
 
     from modulo.db.models.api_key import OrgApiKey
 
@@ -183,7 +184,7 @@ async def test_prefix_lookup_without_org_context_sees_no_rows(
         await conn.execute(text("COMMIT"))
 
     try:
-        engine = create_async_engine(migrated_db_url, echo=False)
+        engine = create_async_engine(migrated_db_url, echo=False, poolclass=NullPool)
         try:
             factory = async_sessionmaker(engine, expire_on_commit=False)
             async with factory() as session:

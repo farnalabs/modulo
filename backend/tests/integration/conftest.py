@@ -304,6 +304,15 @@ def db_url(
 
 @pytest.fixture(scope="session")
 def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str:
+    # The setup helpers below each run on a PRIVATE event loop via
+    # ``asyncio.run``. A pooled engine disposed in that loop schedules its
+    # connections' graceful close as a task that ``asyncio.run`` then discards
+    # when it closes the loop, so the asyncpg connection surfaces later as
+    # ``ResourceWarning: unclosed connection`` (a PytestUnraisableExceptionWarning,
+    # which the deploy gate escalates to an error) attributed to whatever
+    # unrelated test happens to be collecting garbage. NullPool opens and closes
+    # each connection on the same loop, so teardown never races - the same
+    # reasoning as ``db_engine`` / ``app_engine`` below.
     config = Config(BACKEND_ROOT / "alembic.ini")
     config.set_main_option("sqlalchemy.url", db_url)
     # script_location is CWD-relative in alembic.ini; pin it to the absolute
@@ -318,7 +327,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
 
     async def _ensure_alembic_table() -> None:
         """Pre-create alembic_version with VARCHAR(255) to support branch migration IDs."""
-        eng = create_async_engine(db_url)
+        eng = create_async_engine(db_url, poolclass=NullPool)
         async with eng.connect() as conn:
             await conn.execute(
                 text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"),
@@ -336,7 +345,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
         ``modulo_app``/``modulo_breakglass``, so all three roles must exist
         before ``alembic upgrade heads``.
         """
-        eng = create_async_engine(db_url)
+        eng = create_async_engine(db_url, poolclass=NullPool)
         async with eng.connect() as conn:
             await conn.execute(text('DROP ROLE IF EXISTS "modulo_migrate"'))
             await conn.execute(text('DROP ROLE IF EXISTS "modulo_breakglass"'))
@@ -371,7 +380,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
         (distinct from env.py's) makes a single worker perform the entire setup
         while the other blocks until it commits.
         """
-        eng = create_async_engine(db_url)
+        eng = create_async_engine(db_url, poolclass=NullPool)
         async with eng.connect() as lock_conn:
             await lock_conn.execution_options(isolation_level="AUTOCOMMIT")
             await lock_conn.execute(text("SELECT pg_advisory_lock(72002, 1)"))
@@ -412,7 +421,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
         runtime-managed LangGraph checkpoint tables and the test-only FORCE RLS
         remain.
         """
-        eng = create_async_engine(db_url)
+        eng = create_async_engine(db_url, poolclass=NullPool)
         async with eng.connect() as conn:
             # LangGraph checkpoint tables — created at production startup by
             # ``ModuloPostgresSaver.setup()`` (main.py lifespan), not by any
