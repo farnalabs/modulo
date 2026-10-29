@@ -173,12 +173,12 @@ def test_release_identity_step_passes_gh_token_to_its_gh_api_calls() -> None:
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["attest-artefacts"]
-    assert job["needs"] == ["produce-sbom", "bundle", "release"]
+    assert job["needs"] == ["produce-sbom", "final-release-manifest", "release"]
     names = _step_names(job["steps"])
     assert "Download the SBOM artefact" in names
-    assert "Download the published bundle artefact" in names
-    bundle_download = job["steps"][names.index("Download the published bundle artefact")]
-    assert bundle_download["with"]["name"] == "bundle-artefacts-amd64"
+    assert "Download the final cross-platform release artefact" in names
+    bundle_download = job["steps"][names.index("Download the final cross-platform release artefact")]
+    assert bundle_download["with"]["name"] == "final-release-artefacts-${{ inputs.version }}"
     assert bundle_download["with"]["path"] == "release-artefacts"
     assert bundle_download["if"] == "inputs.mode == 'cut' || inputs.mode == 'recut'"
     attest = job["steps"][names.index("Attest the file artefacts")]
