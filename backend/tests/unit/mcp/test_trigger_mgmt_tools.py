@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.mcp_server import create_trigger, list_triggers
@@ -27,10 +28,12 @@ def _make_mock_trigger(
     cron_expression: str | None = None,
     last_fired_at=None,
     created_at=None,
+    name: str = "test-trigger",
 ) -> MagicMock:
     t = MagicMock()
     t.id = uuid.uuid4()
     t.pipeline_id = uuid.uuid4()
+    t.name = name
     t.trigger_type = trigger_type
     t.active = active
     t.max_concurrent_runs = max_concurrent_runs
@@ -131,11 +134,17 @@ class _AuthContext:
             new=AsyncMock(return_value=(None, None)),
         )
         self._team_gate_patch.start()
+        # FAR-2227: the duplicate-name probe needs a real Result; the mocked
+        # sessions here do not model it, so it is stubbed to "no clash". The
+        # probe itself is covered by TestTriggerNameRequired and the REST tests.
+        self._unique_name_patch = patch("modulo.api.mcp_server._require_unique_trigger_name", new=AsyncMock())
+        self._unique_name_patch.start()
 
     def teardown_method(self) -> None:
         from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role, _ctx_user_id
 
         self._team_gate_patch.stop()
+        self._unique_name_patch.stop()
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)
@@ -157,7 +166,7 @@ class TestCreateTriggerErrors(_AuthContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
-        result = await create_trigger(pipeline_id=str(uuid.uuid4()))
+        result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="t")
         assert result["error"] == "auth_expired"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -174,7 +183,7 @@ class TestCreateTriggerErrors(_AuthContext):
             "modulo.api.mcp_server.check_tool_scope",
             side_effect=MCPAuthorizationError("Insufficient scope"),
         ):
-            result = await create_trigger(pipeline_id=str(uuid.uuid4()))
+            result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="t")
         assert result["error"] == "insufficient_scope"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -187,7 +196,7 @@ class TestCreateTriggerErrors(_AuthContext):
         mock_sesh = AsyncMock()
         mock_session.return_value = _make_session_context(mock_sesh)
 
-        result = await create_trigger(pipeline_id="not-a-uuid")
+        result = await create_trigger(pipeline_id="not-a-uuid", name="t")
 
         assert result["error"] == "invalid_id"
         assert result["field"] == "pipeline_id"
@@ -203,7 +212,7 @@ class TestCreateTriggerErrors(_AuthContext):
         mock_sesh = AsyncMock()
         mock_session.return_value = _make_session_context(mock_sesh)
 
-        result = await create_trigger(pipeline_id=str(uuid.uuid4()), max_concurrent_runs=0)
+        result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="t", max_concurrent_runs=0)
 
         assert result["error"] == "validation"
         assert result["field"] == "max_concurrent_runs"
@@ -219,7 +228,7 @@ class TestCreateTriggerErrors(_AuthContext):
         mock_sesh = AsyncMock()
         mock_session.return_value = _make_session_context(mock_sesh)
 
-        result = await create_trigger(pipeline_id=str(uuid.uuid4()), daily_spend_limit=-1)
+        result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="t", daily_spend_limit=-1)
 
         assert result["error"] == "validation"
         assert result["field"] == "daily_spend_limit"
@@ -238,6 +247,7 @@ class TestCreateTriggerErrors(_AuthContext):
         with patch("modulo.api.mcp_server.validate_cron_expression", return_value="bad expression"):
             result = await create_trigger(
                 pipeline_id=str(uuid.uuid4()),
+                name="t",
                 trigger_type="cron",
                 cron_expression="not a cron",
             )
@@ -269,11 +279,12 @@ class TestCreateTriggerSuccess(_AuthContext):
         mock_sesh = _make_add_session()
         mock_session.return_value = _make_session_context(mock_sesh)
 
-        result = await create_trigger(pipeline_id=str(uuid.uuid4()))
+        result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="t")
 
         assert result.get("error") is None
         assert result["id"] == str(uuid.UUID(result["id"]))
         assert result["pipeline_id"] == str(uuid.UUID(result["pipeline_id"]))
+        assert result["name"] == "t"
         assert result["trigger_type"] == "manual"
         assert result["active"] is True
         assert result["max_concurrent_runs"] == 1
@@ -294,6 +305,7 @@ class TestCreateTriggerSuccess(_AuthContext):
 
         result = await create_trigger(
             pipeline_id=str(uuid.uuid4()),
+            name="t",
             trigger_type="cron",
             active=False,
             max_concurrent_runs=3,
@@ -325,6 +337,7 @@ class TestCreateTriggerSuccess(_AuthContext):
         ):
             result = await create_trigger(
                 pipeline_id=str(uuid.uuid4()),
+                name="t",
                 trigger_type="cron",
                 cron_expression="0 5 * * *",
             )
@@ -389,6 +402,7 @@ class TestCreateTriggerConnectorTeamGate(_AuthContext):
         ) as find_mismatches:
             result = await create_trigger(
                 pipeline_id=str(uuid.uuid4()),
+                name="t",
                 trigger_type="polling",
                 config_json={"connector_instance_id": str(connector_id)},
             )
@@ -428,6 +442,7 @@ class TestCreateTriggerConnectorTeamGate(_AuthContext):
         ):
             result = await create_trigger(
                 pipeline_id=str(uuid.uuid4()),
+                name="t",
                 trigger_type="polling",
                 config_json={"connector_instance_id": str(connector_id)},
             )
@@ -563,6 +578,7 @@ class TestListTriggersSuccess(_AuthContext):
         first = result["data"][0]
         assert first["id"] == str(t1.id)
         assert first["pipeline_id"] == str(t1.pipeline_id)
+        assert first["name"] == "test-trigger"
         assert first["trigger_type"] == "cron"
         assert first["active"] is True
         assert first["max_concurrent_runs"] == 1
@@ -755,6 +771,7 @@ class TestCreateTriggerEncryptsWebhookSecrets(_AuthContext):
         with self._settings_patch():
             result = await create_trigger(
                 pipeline_id=str(uuid.uuid4()),
+                name="t",
                 config_json={
                     "input_template": {"foo": "bar"},
                     "hmac_secret": "hmac-value",
@@ -787,9 +804,75 @@ class TestCreateTriggerEncryptsWebhookSecrets(_AuthContext):
         with self._settings_patch():
             result = await create_trigger(
                 pipeline_id=str(uuid.uuid4()),
+                name="t",
                 config_json={"input_template": {"foo": "bar"}},
             )
 
         assert result.get("error") is None
         stored = mock_sesh.add.call_args[0][0].config_json
         assert stored == {"input_template": {"foo": "bar"}}
+
+
+# ---------------------------------------------------------------------------
+# FAR-2227: a trigger name is required, normalised and unique per pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestTriggerNameRequired(_AuthContext):
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("operator")
+
+    @pytest.mark.parametrize("bad_name", ["", "   ", "n" * 256])
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_blank_or_overlong_name_is_a_validation_error(
+        self, mock_validate_auth: AsyncMock, bad_name: str
+    ) -> None:
+        result = await create_trigger(pipeline_id=str(uuid.uuid4()), name=bad_name)
+
+        assert result["error"] == "validation"
+        assert result["field"] == "name"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_name_is_stripped_before_it_is_stored(
+        self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
+    ) -> None:
+        mock_sesh = _make_add_session()
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="  nightly  ")
+
+        assert result["name"] == "nightly"
+        assert mock_sesh.add.call_args.args[0].name == "nightly"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_duplicate_name_is_a_conflict_not_a_db_error(
+        self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
+    ) -> None:
+        from fastapi import HTTPException
+
+        mock_sesh = _make_add_session()
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with patch(
+            "modulo.api.mcp_server._require_unique_trigger_name",
+            new=AsyncMock(side_effect=HTTPException(status_code=409, detail="duplicate trigger name 'nightly'")),
+        ):
+            result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="nightly")
+
+        assert result["error"] == "conflict"
+        assert result["field"] == "name"
+        mock_sesh.add.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_blank_rename_is_a_validation_error(self, mock_validate_auth: AsyncMock) -> None:
+        from modulo.api.mcp_server import update_trigger
+
+        result = await update_trigger(trigger_id=str(uuid.uuid4()), name="   ")
+
+        assert result["error"] == "validation"
+        assert result["field"] == "name"

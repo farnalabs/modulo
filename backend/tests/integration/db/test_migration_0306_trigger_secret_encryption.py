@@ -205,9 +205,9 @@ async def _seed(engine: AsyncEngine) -> dict[str, uuid.UUID]:
         for key, config in seeds:
             await conn.execute(
                 text(
-                    "INSERT INTO triggers (id, organisation_id, pipeline_id, account_id, "
+                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, account_id, "
                     "trigger_type, config_json) "
-                    "VALUES (:id, :oid, :pid, :aid, 'webhook', CAST(:cfg AS jsonb))"
+                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, :aid, 'webhook', CAST(:cfg AS jsonb))"
                 ),
                 {
                     "id": str(ids[key]),
