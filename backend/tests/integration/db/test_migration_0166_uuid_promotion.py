@@ -85,7 +85,10 @@ def fresh_migration_db(monkeypatch):
     raw = pg.get_connection_url().replace("postgresql://", "postgresql+asyncpg://", 1).replace("psycopg2", "asyncpg")
 
     async def _provision():
-        eng = create_async_engine(raw)
+        # NullPool: this runs on a private ``asyncio.run`` loop, where a pooled
+        # engine's graceful-close task is discarded when the loop closes and the
+        # asyncpg connection later surfaces as an unclosed-connection warning.
+        eng = create_async_engine(raw, poolclass=NullPool)
         async with eng.connect() as conn:
             await conn.execute(text('DROP ROLE IF EXISTS "modulo_migrate"'))
             await conn.execute(text('DROP ROLE IF EXISTS "modulo_breakglass"'))
