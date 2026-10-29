@@ -50,14 +50,18 @@ kill-switch, authorization enforcement).
       the already-committed override
       (`backend/src/modulo/api/routes/admin_feature_flags.py`,
       `backend/tests/unit/api/test_admin_feature_flags.py`)
-- [x] Frontend renders org settings at `/admin/org` with org delete confirmation
-      and product-analytics toggle (`frontend/src/manifest.yaml` testids)
+- [x] Frontend renders org settings at `/admin/org` with export, product-analytics,
+      and community-objects controls (`frontend/src/manifest.yaml` testids). The
+      page intentionally has no self-service organisation-delete action: active-org
+      deletion is refused by every self-service API route (403, FAR-2225)
 - [x] Self-service org profile (`GET`/`PUT /api/v1/admin/org` in
       `api/routes/admin.py`): admins read and rename the org (slug immutable -
-      `test_update_org_ignores_slug_changes`), delete it immediately, and
-      regenerate the org API key (`POST /org/regenerate-api-key`); every
-      endpoint is admin-gated (operator/viewer → 403,
-      `backend/tests/unit/api/test_admin.py`)
+      `test_update_org_ignores_slug_changes`) and regenerate the org API key
+      (`POST /org/regenerate-api-key`); every endpoint is admin-gated (operator/viewer → 403,
+      `backend/tests/unit/api/test_admin.py`). `DELETE /api/v1/admin/org`,
+      `POST /org/deletion-request`, and `POST /org/deletion-confirm` are explicit
+      403 refusals, before any deletion DB work; system admins must use the
+      cross-organisation route in `admin_orgs.py`
 - [x] Member invites into the org are BDD-executed against
       `POST /api/v1/admin/orgs/{org_id}/users` (`system_admin_users.feature`:
       duplicate-membership 409, cross-tenant local-account 409, invalid role /
@@ -85,24 +89,25 @@ behaviour is covered by the citations above.
   closed the lingering `ui/org_settings.feature` gap. Archived the five
   never-executing UI-journey drafts (verified: 0/11 referenced testids exist in
   `frontend/src`; `/admin/org` ships a different surface - org profile, data
-  export, product-analytics + community-objects toggles, delete confirmation)
+  export, product-analytics + community-objects toggles, with no active-org
+  delete control because the self-service API refuses deletion (FAR-2225))
   and re-anchored `feat-org` to the real org-management coverage: self-service
-  org profile read/rename/delete + admin role gate (unit, `test_admin.py`),
+  org profile read/rename + admin role gate (unit, `test_admin.py`),
   member invites (`system_admin_users.feature`), API-key create/revoke +
   non-admin 403 (`auth/api_keys.feature`), viewer denial
-  (`viewmodel_current.feature`), and org deletion BDD
-  (`organisation/org_deletion.feature`). Removed the pinned scenarios from
+  (`viewmodel_current.feature`), and the self-service deletion refusals and
+  cancellation/export safety valves (`organisation/org_deletion.feature`). Removed the pinned scenarios from
   `PINNED_AWAITING_IMPLEMENTATION` and the manifest deferral. The manifest
   `feat-org` registry now has no deferral; the tracker's previous claim that the
   drafts were "exercised by component (vitest) and E2E suites" was stale.
 - 2026-09-27: **Improve Architecture product-map walk** -
   reconciled the stale "org settings UI not yet built" Known Gap: the
-  `/admin/org` UI ships (`AdminOrgSettingsView.vue`, org delete confirmation +
-  product-analytics / community-objects toggles + the product-analytics error
-  strip) and its surface is guarded in the manifest; the remaining gap was
-  re-scoped to the `@awaiting-implementation` UI-journey BDD scenarios, which
-  describe frontend flows covered by component + E2E suites rather than backend
-  BDD. Manifest `feat-org` gained the shipped UI behaviour line and the scoped
+  `/admin/org` UI ships (`AdminOrgSettingsView.vue`, org profile, data export,
+  product-analytics / community-objects toggles, and no active-org delete
+  control because self-service deletion is refused (FAR-2225)) and its surface
+  is guarded in the manifest; the remaining gap was re-scoped to the
+  `@awaiting-implementation` UI-journey BDD scenarios, which describe frontend
+  flows covered by component + E2E suites rather than backend BDD. Manifest `feat-org` gained the shipped UI behaviour line and the scoped
   deferral.
 - 2026-09-25: **Improve Architecture product-map walk** -
   closed the feat-org "governance and audit partially wired" gap: the admin
