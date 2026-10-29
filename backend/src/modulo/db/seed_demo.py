@@ -15,7 +15,9 @@ Creates (idempotently, NO Alembic migrations):
   hierarchy viewer < runner < operator < admin is the enforcement boundary for
   every route via ``require_permission``; the seed also forces the role BACK to
   viewer if it drifted, and forces ``is_system_admin`` off),
-* a ``Demo Engineering`` team with the demo user as a viewer member,
+* three demo teams (Demo Engineering, Demo Platform, Demo Governance) with the
+  demo user as a ``viewer`` member of each — team roles are capped by the org
+  role, so a viewer org member can never hold an elevated team role,
 * 5 published schemas with realistic JSON Schema definitions (Demo Intake,
   Demo Report, GitHub Pull Request, Linear Issue, Release Notes),
 * 4 named pipelines with multi-node graphs (PR Review & Triage, Release
@@ -2153,9 +2155,9 @@ async def _seed_demo_membership(session: AsyncSession, account: Account, org: Or
 
 
 _DEMO_TEAM_SPECS = (
-    ("Demo Engineering", "Builds and reviews the demo delivery pipelines.", "operator"),
-    ("Demo Platform", "Owns the release and documentation automation.", "runner"),
-    ("Demo Governance", "Approves high-risk changes and monitors outcomes.", "viewer"),
+    ("Demo Engineering", "Builds and reviews the demo delivery pipelines."),
+    ("Demo Platform", "Owns the release and documentation automation."),
+    ("Demo Governance", "Approves high-risk changes and monitors outcomes."),
 )
 
 
@@ -2229,13 +2231,20 @@ async def _ensure_demo_team_membership(
 
 
 async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Account) -> list[Team]:
-    """Idempotently seed the three demo teams and memberships."""
+    """Idempotently seed the three demo teams and memberships.
+
+    Every membership is granted ``DEMO_ORG_ROLE``: the database enforces the
+    team-role cap (team role must not exceed the account's org role), and the
+    demo account is a read-only ``viewer`` at org level. An elevated team role
+    (e.g. ``operator``) is rejected by ``check_team_privilege_cap`` and aborts
+    the seed.
+    """
     teams: list[Team] = []
-    for name, description, role in _DEMO_TEAM_SPECS:
+    for name, description in _DEMO_TEAM_SPECS:
         team = await _get_or_create_demo_team(session, org, account, name, description)
         if team.description != description:
             team.description = description
-        await _ensure_demo_team_membership(session, org, account, team, role)
+        await _ensure_demo_team_membership(session, org, account, team, DEMO_ORG_ROLE)
         teams.append(team)
     return teams
 
