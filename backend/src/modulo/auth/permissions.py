@@ -51,6 +51,10 @@ def authz_enforce_enabled() -> bool:
     return _authz_enforce_ctx.get() is not False
 
 
+# Single source of truth for the System Maps grant name. REST and MCP gates
+# import this rather than re-declaring the literal.
+SYSTEM_MAPS_ACCESS_PERMISSION = "system_maps_access"
+
 PERMISSIONS: dict[str, str] = {
     # pipelines
     "pipeline.create": "operator",
@@ -105,7 +109,7 @@ PERMISSIONS: dict[str, str] = {
     "connector.list.in_dev": "operator",
     "model_backend.list.in_dev": "operator",
     "library.search.in_dev": "operator",
-    "system_maps_access": "operator",
+    SYSTEM_MAPS_ACCESS_PERMISSION: "operator",
     # secrets
     "secret.manage": "operator",
     # triggers

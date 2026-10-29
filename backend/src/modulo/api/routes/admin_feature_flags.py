@@ -21,7 +21,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from modulo.api.constants import PERM_SYSTEM_CONFIG_MANAGE
+from modulo.api.constants import PERM_SYSTEM_CONFIG_MANAGE, SYSTEM_MAPS_FLAG
 from modulo.api.db_error_handling import (
     handle_db_errors,
     raise_lock_timeout_conflict_if,
@@ -48,8 +48,6 @@ from modulo.core.license import get_license, verify_license_key
 from modulo.db.crud.organisation import get_organisation, update_org_settings_patch
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
-
-_FLAG_SYSTEM_MAPS = "system_maps"
 
 _AUDIT_EVENT_FLAG_OVERRIDE_SET = "feature_flag_override_set"
 _AUDIT_EVENT_FLAG_OVERRIDE_CLEARED = "feature_flag_override_cleared"
@@ -221,7 +219,7 @@ def _require_internal_flag_access_if_needed(
         client_kind=current_user.client_kind,
         key_grants=current_user.key_grants,
     )
-    if flag_name == _FLAG_SYSTEM_MAPS:
+    if flag_name == SYSTEM_MAPS_FLAG:
         _require_internal_system_maps_access(principal, settings=settings)
     else:
         require_in_dev_operator(
@@ -434,7 +432,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
-                if f.name not in RETIRED_INTERNAL_FLAGS and (f.name != _FLAG_SYSTEM_MAPS or internal_system_maps_access)
+                if f.name not in RETIRED_INTERNAL_FLAGS and (f.name != SYSTEM_MAPS_FLAG or internal_system_maps_access)
             ],
             "would_activate": [
                 {
@@ -444,7 +442,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.tier_gap_flags()
-                if f.name not in RETIRED_INTERNAL_FLAGS and (f.name != _FLAG_SYSTEM_MAPS or internal_system_maps_access)
+                if f.name not in RETIRED_INTERNAL_FLAGS and (f.name != SYSTEM_MAPS_FLAG or internal_system_maps_access)
                 if f.name not in org_overrides
             ],
         }

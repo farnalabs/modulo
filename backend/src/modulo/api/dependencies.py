@@ -44,6 +44,7 @@ from modulo.auth.dependencies import (
 )
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal, decode_principal
 from modulo.auth.permissions import (
+    SYSTEM_MAPS_ACCESS_PERMISSION,
     PermissionConfigurationError,
     PermissionDenied,
     assert_grant,
@@ -237,9 +238,6 @@ def require_in_dev_operator(
     _enforce_key_grant(principal, permission)
 
 
-_SYSTEM_MAPS_INTERNAL_PERMISSION = "system_maps_access"
-
-
 def _require_internal_system_maps_access(
     principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
     settings: Settings = Depends(get_settings),
@@ -253,7 +251,7 @@ def _require_internal_system_maps_access(
     """
     require_in_dev_operator(
         principal,
-        _SYSTEM_MAPS_INTERNAL_PERMISSION,
+        SYSTEM_MAPS_ACCESS_PERMISSION,
         require_dev_mode=True,
         settings=settings,
     )

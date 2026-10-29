@@ -57,6 +57,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from modulo.api.constants import SYSTEM_MAPS_FLAG
 from modulo.api.db_error_handling import (
     _MSG_LOCK_TIMEOUT,
     raise_session_contract_error,
@@ -123,7 +124,12 @@ from modulo.auth.oauth import (
     oauth_grant_set,
     scopes_required_role,
 )
-from modulo.auth.permissions import _clamp_role, grants_permit, set_authz_enforce
+from modulo.auth.permissions import (
+    SYSTEM_MAPS_ACCESS_PERMISSION,
+    _clamp_role,
+    grants_permit,
+    set_authz_enforce,
+)
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.analytics.builder import (
     AnalyticsDimension,
@@ -573,9 +579,6 @@ def _require_mcp_internal_lifecycle_map_access() -> None:
         raise MCPAuthorizationError("Lifecycle map tools are restricted to internal operators")
 
 
-_SYSTEM_MAPS_INTERNAL_PERMISSION = "system_maps_access"
-
-
 def _mcp_internal_system_maps_access() -> bool:
     """Return whether the MCP caller has the internal system maps grant.
 
@@ -591,7 +594,7 @@ def _mcp_internal_system_maps_access() -> bool:
         return False
     role = _ctx_role_val()
     return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
-        _ctx_key_grants.get(None), _SYSTEM_MAPS_INTERNAL_PERMISSION
+        _ctx_key_grants.get(None), SYSTEM_MAPS_ACCESS_PERMISSION
     )
 
 
@@ -1059,7 +1062,6 @@ async def _set_authz_enforce(org_id: uuid.UUID) -> None:
 
 # FAR-620: the org-level feature flag gating user-scoped MCP keys.
 _FLAG_USER_SCOPED_MCP_KEYS = "user_scoped_mcp_keys"
-_FLAG_SYSTEM_MAPS = "system_maps"
 
 
 async def _set_user_keys_flag(org_id: uuid.UUID) -> bool:
@@ -10256,7 +10258,7 @@ async def list_feature_flags() -> dict[str, Any]:
                 for f in registry.list_flags()
                 if (
                     f.name not in INTERNAL_FLAGS
-                    or (f.name == _FLAG_SYSTEM_MAPS and internal_system_maps_access)
+                    or (f.name == SYSTEM_MAPS_FLAG and internal_system_maps_access)
                     or (f.name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access)
                 )
             ],
@@ -10271,7 +10273,7 @@ async def list_feature_flags() -> dict[str, Any]:
                 if f.name not in org_overrides
                 if (
                     f.name not in INTERNAL_FLAGS
-                    or (f.name == _FLAG_SYSTEM_MAPS and internal_system_maps_access)
+                    or (f.name == SYSTEM_MAPS_FLAG and internal_system_maps_access)
                     or (f.name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access)
                 )
             ],
@@ -11354,7 +11356,7 @@ async def get_available_features() -> dict[str, Any]:
             for flag in plan_ctx.list_enabled_features()
             if (
                 flag.name not in RETIRED_INTERNAL_FLAGS
-                and (flag.name != _FLAG_SYSTEM_MAPS or internal_system_maps_access)
+                and (flag.name != SYSTEM_MAPS_FLAG or internal_system_maps_access)
             )
             or (flag.name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access)
         ]
