@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Build the genuine arm64 macOS bundle. Every input is downloaded from an
 # upstream source and verified before it is compiled or copied into the app.
+#
+# The Python runtime is the pinned python-build-standalone CPython distribution,
+# not a CPython source build. It is trusted here as a native arm64 runtime input;
+# the workflow proves its architecture, version, and linkage before packaging.
 set -euo pipefail
 
 VERSION=${1:?version required}
@@ -39,6 +43,10 @@ download_verify "https://github.com/redis/redis/archive/refs/tags/${REDIS_VERSIO
 
 tar -xzf "${DOWNLOADS}/${PBS_TARBALL}" -C "${BUNDLE_ROOT}"
 mv "${BUNDLE_ROOT}/python" "${BUNDLE_ROOT}/runtime"
+# Verify the trusted runtime input before it becomes part of the release bundle.
+file "${BUNDLE_ROOT}/runtime/bin/python3" | grep -E 'Mach-O 64-bit executable arm64' >/dev/null
+otool -L "${BUNDLE_ROOT}/runtime/bin/python3" | grep -q '/usr/lib/libSystem.B.dylib'
+"${BUNDLE_ROOT}/runtime/bin/python3" --version | grep -Fqx "Python ${PBS_VERSION}"
 
 mkdir -p "${BUILD_ROOT}/src"
 tar -xzf "${DOWNLOADS}/postgresql-${PG_VERSION}.tar.gz" -C "${BUILD_ROOT}/src"
