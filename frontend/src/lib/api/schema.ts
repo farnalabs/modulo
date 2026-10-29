@@ -22208,6 +22208,10 @@ export interface components {
             created_at?: string | null;
             /** Run Id */
             run_id?: string | null;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
             /** Error Detail */
             error_detail?: string | null;
         };

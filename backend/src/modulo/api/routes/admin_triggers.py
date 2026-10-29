@@ -1,6 +1,7 @@
 """Admin-only trigger event log endpoints."""
 
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -17,6 +18,8 @@ from modulo.api.db_error_handling import handle_db_errors, raise_session_contrac
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.trigger import apply_trigger_event_cursor
+from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
 
@@ -64,6 +67,8 @@ class TriggerEventItem(BaseModel):
     received_at: str | None = None
     created_at: str | None = None
     run_id: str | None = None
+    pipeline_id: str | None = None
+    pipeline_name: str | None = None
     error_detail: str | None = None
 
 
@@ -114,14 +119,21 @@ async def _fetch_trigger_event_rows(
     validation_result: str | None,
     cursor: str | None,
     limit: int,
-) -> list[TriggerEvent]:
+) -> list[tuple[TriggerEvent, uuid.UUID | None, str | None]]:
     """Query trigger events with optional type/result filters and a keyset cursor."""
 
-    async def query() -> list[TriggerEvent]:
+    async def query() -> list[tuple[TriggerEvent, uuid.UUID | None, str | None]]:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            q = select(TriggerEvent).where(
-                TriggerEvent.organisation_id == principal.organisation_id,
+            q = (
+                select(TriggerEvent, Trigger.pipeline_id, Pipeline.name)
+                .join(Trigger, Trigger.id == TriggerEvent.trigger_id)
+                .outerjoin(Pipeline, Pipeline.id == Trigger.pipeline_id)
+                .where(
+                    TriggerEvent.organisation_id == principal.organisation_id,
+                    Trigger.organisation_id == principal.organisation_id,
+                    Pipeline.organisation_id == principal.organisation_id,
+                )
             )
             if trigger_type:
                 q = q.where(TriggerEvent.trigger_type == trigger_type)
@@ -130,10 +142,12 @@ async def _fetch_trigger_event_rows(
             if cursor:
                 q = apply_trigger_event_cursor(q, cursor)
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
-            return list((await session.execute(q)).scalars().all())
+            return list((await session.execute(q)).all())
 
     result: Any = await _run_trigger_event_query(query, "admin list_trigger_events failed")
-    rows: list[TriggerEvent] = cast("list[TriggerEvent]", result)
+    rows: list[tuple[TriggerEvent, uuid.UUID | None, str | None]] = cast(
+        "list[tuple[TriggerEvent, uuid.UUID | None, str | None]]", result
+    )
     return rows
 
 
@@ -236,25 +250,27 @@ async def list_trigger_events(
 
     items = [
         TriggerEventItem(
-            id=str(e.id),
-            trigger_id=str(e.trigger_id),
-            trigger_type=e.trigger_type,
-            validation_result=e.validation_result,
-            received_at=e.received_at.isoformat() if e.received_at else None,
-            created_at=e.created_at.isoformat() if e.created_at else None,
-            run_id=str(e.run_id) if e.run_id else None,
-            error_detail=e.error_detail,
+            id=str(event.id),
+            trigger_id=str(event.trigger_id),
+            trigger_type=event.trigger_type,
+            validation_result=event.validation_result,
+            received_at=event.received_at.isoformat() if event.received_at else None,
+            created_at=event.created_at.isoformat() if event.created_at else None,
+            run_id=str(event.run_id) if event.run_id else None,
+            pipeline_id=str(pipeline_id) if pipeline_id else None,
+            pipeline_name=pipeline_name,
+            error_detail=event.error_detail,
         )
-        for e in rows
+        for event, pipeline_id, pipeline_name in rows
     ]
 
     next_cursor: str | None = None
     prev_cursor: str | None = None
     if has_more and rows:
-        last = rows[-1]
+        last = rows[-1][0]
         next_cursor = f"{last.created_at.isoformat()}_{last.id}"
     if rows:
-        first = rows[0]
+        first = rows[0][0]
         prev_cursor = f"{first.created_at.isoformat()}_{first.id}"
 
     total = await _count_trigger_events_total(session, principal)

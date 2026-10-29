@@ -34,9 +34,11 @@ def _make_mock_event(**overrides: object) -> MagicMock:
     return e
 
 
-def _make_event_result(events: list[MagicMock]) -> MagicMock:
+def _make_event_result(
+    events: list[tuple[MagicMock, uuid.UUID | None, str | None]],
+) -> MagicMock:
     r = MagicMock()
-    r.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=events)))
+    r.all = MagicMock(return_value=events)
     r.scalar = MagicMock(return_value=len(events))
     return r
 
@@ -138,10 +140,12 @@ class TestListTriggerEvents:
     URL = "/api/v1/admin/trigger-events"
 
     def test_returns_200_with_events(self, client: TestClient) -> None:
-        event = _make_mock_event()
+        pipeline_id = uuid.uuid4()
+        run_id = uuid.uuid4()
+        event = _make_mock_event(run_id=run_id)
         with patch("modulo.api.routes.admin_triggers.set_rls_org"):
             session = _make_mock_session()
-            event_result = _make_event_result([event])
+            event_result = _make_event_result([(event, pipeline_id, "Release pipeline")])
             count_result = MagicMock()
             count_result.scalar = MagicMock(return_value=1)
             authz_result = MagicMock()
@@ -162,6 +166,9 @@ class TestListTriggerEvents:
         assert body["total"] == 1
         assert body["items"][0]["trigger_type"] == "manual"
         assert body["items"][0]["validation_result"] == "accepted"
+        assert body["items"][0]["run_id"] == str(run_id)
+        assert body["items"][0]["pipeline_id"] == str(pipeline_id)
+        assert body["items"][0]["pipeline_name"] == "Release pipeline"
         assert body["result_counts"]["recent"]["backpressure_skipped"] == 2
         assert body["result_counts"]["previous"]["backpressure_skipped"] == 1
         assert body["result_counts"]["total_recent"] == 2
@@ -172,7 +179,7 @@ class TestListTriggerEvents:
         event = _make_mock_event(trigger_type="webhook", validation_result="hmac_failed")
         with patch("modulo.api.routes.admin_triggers.set_rls_org"):
             session = _make_mock_session()
-            event_result = _make_event_result([event])
+            event_result = _make_event_result([(event, uuid.uuid4(), "Webhook pipeline")])
             count_result = MagicMock()
             count_result.scalar = MagicMock(return_value=1)
             authz_result = MagicMock()
