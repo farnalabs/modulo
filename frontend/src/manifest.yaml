@@ -17,7 +17,7 @@ routes:
         parent:
         product_map: [feat-dashboard]
         sidebar_group: build
-        sidebar_order: 1
+        sidebar_order: 0
         type: page
         <<: *community
         deprecated: false
@@ -29,7 +29,7 @@ routes:
         parent: /
         product_map: [feat-governance-stack]
         sidebar_group: build
-        sidebar_order: 0
+        sidebar_order: 4
         type: page
         <<: *community
         deprecated: false
@@ -140,7 +140,7 @@ routes:
         parent: /
         product_map: [feat-pipelines, feat-router, feat-apply]
         sidebar_group: build
-        sidebar_order: 2
+        sidebar_order: 1
         type: list_page
         exact: true
         <<: *community
@@ -152,7 +152,7 @@ routes:
         parent: /
         product_map: [feat-library]
         sidebar_group: build
-        sidebar_order: 3
+        sidebar_order: 2
         type: list_page
         <<: *community
         deprecated: false
@@ -174,7 +174,7 @@ routes:
         parent: /
         product_map: [feat-runs]
         sidebar_group: build
-        sidebar_order: 4
+        sidebar_order: 3
         type: list_page
         query_params:
           cursor: Keyset pagination cursor
