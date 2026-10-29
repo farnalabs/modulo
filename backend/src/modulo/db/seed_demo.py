@@ -15,9 +15,7 @@ Creates (idempotently, NO Alembic migrations):
   hierarchy viewer < runner < operator < admin is the enforcement boundary for
   every route via ``require_permission``; the seed also forces the role BACK to
   viewer if it drifted, and forces ``is_system_admin`` off),
-* three demo teams (Demo Engineering, Demo Platform, Demo Governance) with the
-  demo user as a ``viewer`` member of each — team roles are capped by the org
-  role, so a viewer org member can never hold an elevated team role,
+* a ``Demo Engineering`` team with the demo user as a viewer member,
 * 5 published schemas with realistic JSON Schema definitions (Demo Intake,
   Demo Report, GitHub Pull Request, Linear Issue, Release Notes),
 * 4 named pipelines with multi-node graphs (PR Review & Triage, Release
@@ -84,10 +82,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from modulo.core.demo import DEMO_ORG_ROLE, DEMO_ORG_SLUG, demo_login_config
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
+from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.notification import Notification
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -99,6 +101,7 @@ from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
+from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import get_settings
@@ -123,6 +126,9 @@ DOCS_MAINTAINER_AGENT_NAME = "Docs Maintainer"
 # relies on the same spec producing the same ids on every boot.
 _DEMO_ID_NAMESPACE = uuid.UUID("6f1c2a9e-4b7d-5e3a-9c81-0d2e4f6a8b1c")
 
+# Shared label for the demo HITL review surface (S1192: avoid duplicated literals).
+_HUMAN_REVIEW_LABEL = "Human review"
+
 
 def demo_node_id(pipeline_name: str, node_key: str) -> str:
     """Deterministic UUID (string) for a seeded graph node.
@@ -143,6 +149,27 @@ def demo_edge_id(organisation_id: uuid.UUID, pipeline_name: str, edge_key: str) 
     reproduces the same ids.
     """
     return uuid.uuid5(_DEMO_ID_NAMESPACE, f"edge:{organisation_id}:{pipeline_name}:{edge_key}")
+
+
+def demo_trigger_event_id(organisation_id: uuid.UUID, trigger_id: uuid.UUID) -> uuid.UUID:
+    """Deterministic primary key for one demo event per durable trigger.
+
+    The trigger row, not a query position, is the event's identity. Supplying
+    this existing primary key makes concurrent refreshes converge through the
+    normal savepoint/IntegrityError path without inventing a new constraint.
+    """
+    return uuid.uuid5(_DEMO_ID_NAMESPACE, f"trigger-event:{organisation_id}:{trigger_id}")
+
+
+def demo_fixture_id(organisation_id: uuid.UUID, fixture_key: str) -> uuid.UUID:
+    """Deterministic primary key for a demo-org fixture row.
+
+    The organisation is part of the key so the same stable fixture key can be
+    safely reused by separate demo organisations.  These ids make the primary
+    key, rather than a select-then-insert natural-key lookup, the concurrent
+    refresh convergence point.
+    """
+    return uuid.uuid5(_DEMO_ID_NAMESPACE, f"fixture:{organisation_id}:{fixture_key}")
 
 
 @dataclass(frozen=True)
@@ -221,13 +248,13 @@ _GOVERNANCE_PIPELINE = _PipelineSpec(
         ),
         _NodeSpec(
             key="review",
-            label="Human review",
+            label=_HUMAN_REVIEW_LABEL,
             description="Risky changes (risk > 0.50) wait here for a human approval.",
             x=680,
             y=60,
             node_type="hitl",
             hitl_config={
-                "label": "Human review",
+                "label": _HUMAN_REVIEW_LABEL,
                 "description": (
                     "The PR risk level scored above 0.50: a human must review and approve the change "
                     "before the PR is opened."
@@ -1747,6 +1774,354 @@ _TICKET_READY_CONFIG: dict[str, Any] = {
 }
 
 
+_DEMO_REVIEW_CONFIG: dict[str, Any] = {
+    "label": _HUMAN_REVIEW_LABEL,
+    "description": "Review the demo change before the governance pipeline continues.",
+    "claim_expiry_minutes": 60,
+    "human_only": True,
+}
+
+
+async def _seed_demo_hitl_claims(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+    now: datetime,
+) -> None:
+    """Seed HITL claims for the governance pipeline runs.
+
+    AWAITING claims (decision IS NULL) are the live review surface — their
+    deadlines roll forward on every refresh. DECIDED claims are immutable
+    provenance evidence and keep their original values.
+    """
+    _governance_pipeline, _snapshot = pipeline_lookup[DEMO_PIPELINE_NAME]
+    governance_nodes = {node.key: demo_node_id(DEMO_PIPELINE_NAME, node.key) for node in _GOVERNANCE_PIPELINE.nodes}
+    review_id = f"hitl_review_{governance_nodes['review']}_{governance_nodes['open_pr']}"
+    review_rows = (
+        (6, review_id, None, None, None),
+        (9, review_id, "approved", account.id, "Demo approval: risk review passed."),
+        (17, review_id, "rejected", account.id, "Demo rejection: inspect the risky change again."),
+    )
+    for run_number, current_review_id, decision, decided_by, reason in review_rows:
+        run = await _find_demo_run(session, org, run_number)
+        if run is None:
+            continue
+        result = await session.execute(
+            select(HitlClaim).where(HitlClaim.run_id == run.id, HitlClaim.review_id == current_review_id)
+        )
+        claim = result.scalar_one_or_none()
+        desired_context = {"description": _DEMO_REVIEW_CONFIG["description"], "source": "demo_seed"}
+        desired = {
+            "pipeline_id": run.pipeline_id,
+            "expires_at": now + timedelta(days=2),
+            "decision": decision,
+            "decided_by": decided_by,
+            "decision_at": now - timedelta(hours=2) if decision else None,
+            "decision_payload": {"reason": reason} if reason else None,
+            "context_json": desired_context,
+            "gate_config_json": dict(_DEMO_REVIEW_CONFIG),
+            "terminalize_at": now + timedelta(days=2),
+        }
+        if claim is None:
+            claim = HitlClaim(
+                organisation_id=org.id,
+                run_id=run.id,
+                required_team_id=None,
+                review_id=current_review_id,
+                account_id=None,
+                claimed_at=None,
+                claim_token=None,
+                **desired,
+            )
+            try:
+                async with session.begin_nested():
+                    session.add(claim)
+                    await session.flush()
+            except IntegrityError:
+                recovered = await session.execute(
+                    select(HitlClaim).where(HitlClaim.run_id == run.id, HitlClaim.review_id == current_review_id)
+                )
+                claim = recovered.scalar_one_or_none()
+                if claim is None:
+                    raise
+                _log.info("demo_seed.hitl_claim_recovered_after_conflict", extra={"run_number": run_number})
+        elif claim.decision is None:
+            claim.expires_at = now + timedelta(days=2)
+            claim.terminalize_at = now + timedelta(days=2)
+            _log.debug("demo_seed.hitl_claim_deadlines_refreshed", extra={"run_number": run_number})
+        else:
+            _log.debug("demo_seed.hitl_claim_preserved", extra={"run_number": run_number})
+
+
+async def _seed_demo_model_backends(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+) -> None:
+    """Seed demo model backends (idempotent by (organisation, name))."""
+    model_specs = (
+        ("Demo Stub Fast", "Demo Stub Fast", "custom", "demo-stub-fast"),
+        ("Demo Stub Accurate", "Demo Stub Accurate", "custom", "demo-stub-accurate"),
+    )
+    for name, display_name, provider, model_id in model_specs:
+        backend_result = await session.execute(
+            select(ModelBackend).where(ModelBackend.organisation_id == org.id, ModelBackend.name == name)
+        )
+        backend_row = backend_result.scalar_one_or_none()
+        values = {
+            "display_name": display_name,
+            "provider": provider,
+            "model_id": model_id,
+            "credentials_ciphertext": b"demo-read-only",
+            "default_params": {"temperature": 0, "demo": True},
+            "cost_tracking": "disabled",
+            "status": "active",
+            "visibility": "org",
+            "account_id": account.id,
+        }
+        if backend_row is None:
+            backend = ModelBackend(
+                id=demo_fixture_id(org.id, f"model-backend:{name}"),
+                organisation_id=org.id,
+                name=name,
+                **values,
+            )
+            try:
+                async with session.begin_nested():
+                    session.add(backend)
+                    await session.flush()
+            except IntegrityError:
+                recovered = await session.execute(
+                    select(ModelBackend).where(ModelBackend.organisation_id == org.id, ModelBackend.name == name)
+                )
+                recovered_backend = recovered.scalar_one_or_none()
+                if recovered_backend is None:
+                    raise
+                backend = recovered_backend
+                _log.info("demo_seed.model_backend_recovered_after_conflict", extra={"model_backend_name": name})
+            else:
+                _log.info("demo_seed.model_backend_created", extra={"model_backend_name": name})
+        else:
+            backend = backend_row
+            # Credentials and account ownership are provenance, not fixture display
+            # data.  Preserve them while converging the demo-owned configuration.
+            for attr in (
+                "display_name",
+                "provider",
+                "model_id",
+                "default_params",
+                "cost_tracking",
+                "status",
+                "visibility",
+            ):
+                value = values[attr]
+                if getattr(backend, attr) != value:
+                    setattr(backend, attr, value)
+
+
+async def _seed_demo_connectors(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+) -> None:
+    """Seed demo connector instances (idempotent by (organisation, name))."""
+    connector_specs = (
+        ("Demo GitHub (read-only)", "github"),
+        ("Demo Linear (read-only)", "linear"),
+    )
+    for name, connector_type_id in connector_specs:
+        connector_result = await session.execute(
+            select(ConnectorInstance).where(ConnectorInstance.organisation_id == org.id, ConnectorInstance.name == name)
+        )
+        connector_row = connector_result.scalar_one_or_none()
+        values = {
+            "connector_type_id": connector_type_id,
+            "credentials_ciphertext": b"demo-read-only",
+            "config_json": {"demo": True, "read_only": True},
+            "allowed_operations": ["query"],
+            "status": "active",
+            "visibility": "org",
+            "account_id": account.id,
+        }
+        if connector_row is None:
+            connector = ConnectorInstance(
+                id=demo_fixture_id(org.id, f"connector:{name}"),
+                organisation_id=org.id,
+                name=name,
+                **values,
+            )
+            try:
+                async with session.begin_nested():
+                    session.add(connector)
+                    await session.flush()
+            except IntegrityError:
+                recovered = await session.execute(
+                    select(ConnectorInstance).where(
+                        ConnectorInstance.organisation_id == org.id,
+                        ConnectorInstance.name == name,
+                    )
+                )
+                recovered_connector = recovered.scalar_one_or_none()
+                if recovered_connector is None:
+                    raise
+                connector = recovered_connector
+                _log.info("demo_seed.connector_recovered_after_conflict", extra={"connector_name": name})
+            else:
+                _log.info("demo_seed.connector_created", extra={"connector_name": name})
+        else:
+            connector = connector_row
+            # Credentials and account ownership are provenance, not fixture display
+            # data. Preserve them while converging the demo-owned configuration.
+            for attr in (
+                "connector_type_id",
+                "config_json",
+                "allowed_operations",
+                "status",
+                "visibility",
+            ):
+                value = values[attr]
+                if getattr(connector, attr) != value:
+                    setattr(connector, attr, value)
+
+
+async def _seed_demo_notifications(
+    session: AsyncSession,
+    org: Organisation,
+    now: datetime,
+) -> None:
+    """Seed demo notifications (idempotent by (organisation, category))."""
+    notifications = (
+        ("hitl_review_required", "Review required", "A demo governance run is waiting for human review.", "warning"),
+        ("spend_threshold", "Spend threshold warning", "Demo spend is approaching its sample budget.", "warning"),
+        ("run_completed", "Run completed", "A demo governance run completed successfully.", "info"),
+        ("run_failed", "Run failed", "A demo sample run failed without performing real work.", "error"),
+    )
+    for category, title, body, level in notifications:
+        notification_result = await session.execute(
+            select(Notification).where(Notification.organisation_id == org.id, Notification.category == category)
+        )
+        notification_row = notification_result.scalar_one_or_none()
+        values = {
+            "scope": "org",
+            "target_user_id": None,
+            "level": level,
+            "title": title,
+            "body": body,
+            "action_url": "/settings/hitl-review" if category == "hitl_review_required" else "/runs",
+            "dismiss_strategy": "any_scope",
+            "dismissible_at_scope": True,
+            "expires_at": now + timedelta(days=3),
+        }
+        if notification_row is None:
+            notification = Notification(
+                id=demo_fixture_id(org.id, f"notification:{category}"),
+                organisation_id=org.id,
+                category=category,
+                **values,
+            )
+            try:
+                async with session.begin_nested():
+                    session.add(notification)
+                    await session.flush()
+            except IntegrityError:
+                recovered = await session.execute(
+                    select(Notification).where(
+                        Notification.organisation_id == org.id,
+                        Notification.category == category,
+                    )
+                )
+                recovered_notification = recovered.scalar_one_or_none()
+                if recovered_notification is None:
+                    raise
+                notification = recovered_notification
+                _log.info("demo_seed.notification_recovered_after_conflict", extra={"category": category})
+            else:
+                _log.info("demo_seed.notification_created", extra={"category": category})
+        else:
+            notification = notification_row
+            for attr, value in values.items():
+                if getattr(notification, attr) != value:
+                    setattr(notification, attr, value)
+
+
+async def _seed_demo_trigger_events(
+    session: AsyncSession,
+    org: Organisation,
+    now: datetime,
+) -> None:
+    """Seed demo trigger events (idempotent by trigger identity).
+
+    The event is keyed on its durable trigger identity; the loop index
+    only feeds the deterministic ``raw_hash``/``received_at`` fixture
+    values, never the event's identity.
+    """
+    triggers = list(
+        (
+            await session.execute(
+                select(Trigger)
+                .where(Trigger.organisation_id == org.id)
+                .order_by(Trigger.pipeline_id, Trigger.name.asc().nulls_last(), Trigger.trigger_type, Trigger.id)
+            )
+        ).scalars()
+    )
+    for index, trigger in enumerate(triggers[:4]):
+        raw_hash = hashlib.sha256(f"demo-trigger-event:{trigger.id}:{index}".encode()).hexdigest()
+        result = await session.execute(
+            select(TriggerEvent)
+            .where(TriggerEvent.organisation_id == org.id, TriggerEvent.trigger_id == trigger.id)
+            .order_by(TriggerEvent.received_at, TriggerEvent.id)
+            .limit(1)
+        )
+        event = result.scalars().first()
+        values = {
+            "trigger_id": trigger.id,
+            "trigger_type": trigger.trigger_type,
+            "received_at": now - timedelta(hours=index + 1),
+            "run_id": None,
+            "error_detail": None,
+        }
+        if event is None:
+            event_kwargs = {
+                "id": demo_trigger_event_id(org.id, trigger.id),
+                "organisation_id": org.id,
+                "raw_payload_hash": raw_hash,
+                **values,
+            }
+            try:
+                async with session.begin_nested():
+                    # Keep each vocabulary value a literal at the constructor so
+                    # the TriggerEvent write-vocabulary architecture guard can
+                    # statically verify it against VALIDATION_RESULT_VALUES.
+                    if index % 2 == 0:
+                        new_event = TriggerEvent(validation_result="accepted", **event_kwargs)
+                    else:
+                        new_event = TriggerEvent(validation_result="passed", **event_kwargs)
+                    session.add(new_event)
+                    await session.flush()
+            except IntegrityError:
+                _log.info("demo_seed.trigger_event_recovered_after_conflict", extra={"trigger_id": str(trigger.id)})
+        # Existing event rows are historical demo evidence. Do not rewrite their
+        # trigger association, timestamp, payload identity, or validation result
+        # when trigger query ordering changes; only the missing-row path above is
+        # allowed to create a new deterministic event.
+
+
+async def _seed_demo_governance_surfaces(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+) -> None:
+    """Seed the durable review, notification, integration and trigger surfaces."""
+    now = datetime.now(UTC)
+    await _seed_demo_hitl_claims(session, org, account, pipeline_lookup, now)
+    await _seed_demo_model_backends(session, org, account)
+    await _seed_demo_connectors(session, org, account)
+    await _seed_demo_notifications(session, org, now)
+    await _seed_demo_trigger_events(session, org, now)
+
+
 async def _seed_ticket_ready_trigger(
     session: AsyncSession,
     org: Organisation,
@@ -2155,9 +2530,9 @@ async def _seed_demo_membership(session: AsyncSession, account: Account, org: Or
 
 
 _DEMO_TEAM_SPECS = (
-    ("Demo Engineering", "Builds and reviews the demo delivery pipelines."),
-    ("Demo Platform", "Owns the release and documentation automation."),
-    ("Demo Governance", "Approves high-risk changes and monitors outcomes."),
+    ("Demo Engineering", "Builds and reviews the demo delivery pipelines.", "operator"),
+    ("Demo Platform", "Owns the release and documentation automation.", "runner"),
+    ("Demo Governance", "Approves high-risk changes and monitors outcomes.", "viewer"),
 )
 
 
@@ -2231,20 +2606,13 @@ async def _ensure_demo_team_membership(
 
 
 async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Account) -> list[Team]:
-    """Idempotently seed the three demo teams and memberships.
-
-    Every membership is granted ``DEMO_ORG_ROLE``: the database enforces the
-    team-role cap (team role must not exceed the account's org role), and the
-    demo account is a read-only ``viewer`` at org level. An elevated team role
-    (e.g. ``operator``) is rejected by ``check_team_privilege_cap`` and aborts
-    the seed.
-    """
+    """Idempotently seed the three demo teams and memberships."""
     teams: list[Team] = []
-    for name, description in _DEMO_TEAM_SPECS:
+    for name, description, role in _DEMO_TEAM_SPECS:
         team = await _get_or_create_demo_team(session, org, account, name, description)
         if team.description != description:
             team.description = description
-        await _ensure_demo_team_membership(session, org, account, team, DEMO_ORG_ROLE)
+        await _ensure_demo_team_membership(session, org, account, team, role)
         teams.append(team)
     return teams
 
@@ -2467,6 +2835,7 @@ async def seed_demo(session: AsyncSession) -> str | None:
     pipeline_lookup = await _seed_demo_pipeline_and_runs(session, org, account, agent_ids, teams=teams)
     await _seed_demo_evals(session, org, account, pipeline_lookup)
     await _seed_demo_triggers(session, org, account, pipeline_lookup)
+    await _seed_demo_governance_surfaces(session, org, account, pipeline_lookup)
 
     return f"org={DEMO_ORG_SLUG} user={email}"
 
