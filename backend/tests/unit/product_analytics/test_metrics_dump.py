@@ -162,7 +162,7 @@ class TestGetConsentingOrgs:
 
     @pytest.mark.asyncio
     async def test_empty_when_no_orgs(self) -> None:
-        assert await _run_get_consenting_orgs([]) == []
+        assert not await _run_get_consenting_orgs([])
 
     @pytest.mark.asyncio
     async def test_parses_full_iso_datetime_level_changed_at(self) -> None:
@@ -211,7 +211,7 @@ class TestGetConsentingOrgs:
     )
     @pytest.mark.asyncio
     async def test_skips_non_consenting_or_malformed_settings(self, settings_json: object) -> None:
-        assert await _run_get_consenting_orgs([_org("cccc-3333", settings_json)]) == []
+        assert not await _run_get_consenting_orgs([_org("cccc-3333", settings_json)])
 
     @pytest.mark.asyncio
     async def test_malformed_row_does_not_drop_a_consenting_sibling(self) -> None:

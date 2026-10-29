@@ -163,8 +163,10 @@ class TestInstanceIdentity:
         first_id, first_secret = await get_or_create_instance_identity(session)
         second_id, second_secret = await get_or_create_instance_identity(session)
 
-        assert str(first_id) == str(second_id) == existing_id
-        assert first_secret == second_secret == existing_secret
+        assert str(first_id) == str(second_id)
+        assert str(second_id) == existing_id
+        assert first_secret == second_secret
+        assert second_secret == existing_secret
         assert session.flush.call_count == 0
 
     @pytest.mark.asyncio
