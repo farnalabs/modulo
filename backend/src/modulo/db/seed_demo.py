@@ -2050,21 +2050,26 @@ async def _seed_demo_governance_surfaces(
             "trigger_id": trigger.id,
             "trigger_type": trigger.trigger_type,
             "received_at": now - timedelta(hours=index + 1),
-            "validation_result": "accepted" if index % 2 == 0 else "passed",
             "run_id": None,
             "error_detail": None,
         }
         if event is None:
+            event_kwargs = {
+                "id": demo_trigger_event_id(org.id, trigger.id),
+                "organisation_id": org.id,
+                "raw_payload_hash": raw_hash,
+                **values,
+            }
             try:
                 async with session.begin_nested():
-                    session.add(
-                        TriggerEvent(
-                            id=demo_trigger_event_id(org.id, trigger.id),
-                            organisation_id=org.id,
-                            raw_payload_hash=raw_hash,
-                            **values,
-                        )
-                    )
+                    # Keep each vocabulary value a literal at the constructor so
+                    # the TriggerEvent write-vocabulary architecture guard can
+                    # statically verify it against VALIDATION_RESULT_VALUES.
+                    if index % 2 == 0:
+                        new_event = TriggerEvent(validation_result="accepted", **event_kwargs)
+                    else:
+                        new_event = TriggerEvent(validation_result="passed", **event_kwargs)
+                    session.add(new_event)
                     await session.flush()
             except IntegrityError:
                 _log.info("demo_seed.trigger_event_recovered_after_conflict", extra={"trigger_id": str(trigger.id)})
