@@ -65,7 +65,7 @@ Name: "{commondesktop}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}
 
 [Run]
 Filename: "{app}\modulo.exe"; Description: "Launch Modulo"; Flags: nowait postinstall shellexec skipifdoesntexist
-Filename: "sc.exe"; Parameters: "create Modulo binPath= \"{app}\modulo.exe service\" start= auto"; StatusMsg: "Installing Modulo service..."; Flags: runhidden waituntilterminated skipifdoesntexist
+Filename: "sc.exe"; Parameters: "create Modulo binPath= ""{app}\modulo.exe service"" start= auto"; StatusMsg: "Installing Modulo service..."; Flags: runhidden waituntilterminated skipifdoesntexist
 Filename: "sc.exe"; Parameters: "start Modulo"; StatusMsg: "Starting Modulo service..."; Flags: runhidden waituntilterminated skipifdoesntexist
 
 [UninstallRun]

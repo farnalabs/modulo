@@ -9,21 +9,24 @@ Run this on a Windows machine with Inno Setup 6.2+ installed.
 param(
     [Parameter(Mandatory=$false)]
     [string]$Version = "0.3.323",
-    
+
     [Parameter(Mandatory=$false)]
     [string]$Arch = "amd64",
-    
+
     [Parameter(Mandatory=$false)]
     [string]$BundleDir = "."
 )
 
 # Check if Inno Setup is installed
-$isccPath = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
-if (-not (Test-Path $isccPath)) {
-    $isccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-}
-if (-not (Test-Path $isccPath)) {
-    Write-Error "Inno Setup 6 not found. Install from https://jrsoftware.org/isdl.php"
+$isccCandidates = @(
+    "${env:ProgramFiles}\Inno Setup 7\ISCC.exe",
+    "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+    "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+)
+[string]$isccPath = [string]($isccCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1)
+if ([string]::IsNullOrWhiteSpace($isccPath)) {
+    Write-Error "Inno Setup 7 or 6 not found. Install from https://jrsoftware.org/isdl.php"
     exit 1
 }
 
@@ -51,22 +54,21 @@ Write-Host "ISS: $issPathFull"
 Write-Host "Output: $outputDir\$outputFile"
 Write-Host ""
 
-$cmd = @(
-    "iscc",
+$isccArguments = @(
     "/Qp",
     "/O$outputDir",
     "/Fmodulo-${Version}-windows-${Arch}",
     "/DVERSION_NUM=$Version",
     "/DBUNDLE_ARCH=$Arch",
     "/DBUNDLE_DIR=$BundleDir",
-    $issPathFull.FullName
+    $issPathFull.Path
 )
 
-Write-Host "Running: $($cmd -join ' ')"
+Write-Host "Running: $isccPath $($isccArguments -join ' ')"
 Write-Host ""
 
-$result = & $cmd
-$exitCode = $LASTEXITCODE
+$process = Start-Process -FilePath $isccPath -ArgumentList $isccArguments -Wait -NoNewWindow -PassThru
+$exitCode = $process.ExitCode
 
 if ($exitCode -eq 0) {
     $exePath = "build\windows\modulo-${Version}-windows-${Arch}.exe"
@@ -77,7 +79,7 @@ if ($exitCode -eq 0) {
         Write-Host "✅ SUCCESS! Installer compiled successfully."
         Write-Host "Output: $(Resolve-Path $exePath)"
         Write-Host "Size: ${sizeMB} MB"
-        
+
         # Quick validation
         Write-Host ""
         Write-Host "Validating installer..."
