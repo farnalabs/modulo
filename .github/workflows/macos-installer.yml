@@ -214,9 +214,22 @@ jobs:
           file "$APP/Contents/MacOS/modulo" | grep -E 'Mach-O 64-bit executable arm64'
           otool -L "$APP/Contents/MacOS/modulo"
           RUNTIME="$APP/Contents/Resources/bundle/runtime/bin/python3"
-          file "$RUNTIME" | grep -E 'Mach-O 64-bit executable arm64'
-          otool -L "$RUNTIME" | grep -q '/usr/lib/libSystem.B.dylib'
+          echo '::group::Verify bundled Python runtime artifact contract'
+          RUNTIME_FILE_OUTPUT="$(file "$RUNTIME")"
+          printf '%s\n' "$RUNTIME_FILE_OUTPUT"
+          [[ "$RUNTIME_FILE_OUTPUT" == *'Mach-O 64-bit executable arm64'* ]] || {
+            echo '::error::bundled Python runtime is not a native arm64 Mach-O executable' >&2
+            exit 1
+          }
+          RUNTIME_LINK_OUTPUT="$(otool -L "$RUNTIME")"
+          printf '%s\n' "$RUNTIME_LINK_OUTPUT"
+          [[ "$RUNTIME_LINK_OUTPUT" == *'/usr/lib/libSystem.B.dylib'* ]] || {
+            echo '::error::bundled Python runtime does not link against libSystem.B.dylib' >&2
+            exit 1
+          }
+          echo '::endgroup::'
           "$RUNTIME" --version | grep -Fqx 'Python 3.12.14'
+
           "$APP/Contents/Resources/bundle/pg/bin/postgres" --version | grep -E 'PostgreSQL 16\.'
           "$APP/Contents/Resources/bundle/redis/redis-server" --version | grep -E 'v=8\.'
 
@@ -345,10 +358,22 @@ jobs:
           codesign --verify --deep --strict "$MOUNTED_APP"
           spctl --assess --type execute "$MOUNTED_APP"
           "$MOUNTED_APP/Contents/MacOS/modulo" --help >/dev/null
-           RUNTIME="$MOUNTED_APP/Contents/Resources/bundle/runtime/bin/python3"
-           file "$RUNTIME" | grep -E 'Mach-O 64-bit executable arm64'
-           otool -L "$RUNTIME" | grep -q '/usr/lib/libSystem.B.dylib'
-           "$RUNTIME" --version | grep -Fqx 'Python 3.12.14'
+          RUNTIME="$MOUNTED_APP/Contents/Resources/bundle/runtime/bin/python3"
+          echo '::group::Verify bundled Python runtime artifact contract'
+          RUNTIME_FILE_OUTPUT="$(file "$RUNTIME")"
+          printf '%s\n' "$RUNTIME_FILE_OUTPUT"
+          [[ "$RUNTIME_FILE_OUTPUT" == *'Mach-O 64-bit executable arm64'* ]] || {
+            echo '::error::bundled Python runtime is not a native arm64 Mach-O executable' >&2
+            exit 1
+          }
+          RUNTIME_LINK_OUTPUT="$(otool -L "$RUNTIME")"
+          printf '%s\n' "$RUNTIME_LINK_OUTPUT"
+          [[ "$RUNTIME_LINK_OUTPUT" == *'/usr/lib/libSystem.B.dylib'* ]] || {
+            echo '::error::bundled Python runtime does not link against libSystem.B.dylib' >&2
+            exit 1
+          }
+          echo '::endgroup::'
+          "$RUNTIME" --version | grep -Fqx 'Python 3.12.14'
            DATA="$RUNNER_TEMP/modulo-native-smoke-data"
            PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
            mkdir -p "$DATA"
