@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Install a signed Modulo .dmg for the current macOS user.
+# Install a signed, notarized Modulo arm64 .dmg for the current macOS user.
+# The app bundle owns the service contract; this script only verifies/copies it.
 set -euo pipefail
 
 DMG=${1:?usage: install.sh <Modulo-version-macos-arm64.dmg>}
 [[ -f "$DMG" ]] || { echo "ERROR: DMG not found: $DMG" >&2; exit 1; }
-[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'ERROR: this installer requires macOS arm64' >&2; exit 1; }
+[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'ERROR: this installer requires macOS arm64 (Apple Silicon); x64/Rosetta is not supported' >&2; exit 1; }
 MOUNT=$(mktemp -d)
 MOUNT_ATTACHED=0
 cleanup() {
@@ -57,19 +58,15 @@ cp -R "$APP" "$TARGET"
 mkdir -p "$HOME/Library/LaunchAgents"
 PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
 DATA_DIR="${MODULO_DATA_DIR:-$HOME/Library/Application Support/Modulo/data}"
-python3 - "$TARGET" "$PLIST" "$DATA_DIR" <<'PY'
-import plistlib, sys
+PYTHONPATH="$TARGET/Contents/Resources/bundle/backend/src:$TARGET/Contents/Resources/bundle/backend/.venv/lib/python3.12/site-packages" \
+  "$TARGET/Contents/Resources/bundle/runtime/bin/python3" - "$TARGET" "$PLIST" "$DATA_DIR" <<'PY'
+import sys
 from pathlib import Path
+from modulo.launcher.service import render_launchd_plist
 app = Path(sys.argv[1])
-data_dir = sys.argv[3]
-plist = {
-    'Label': 'run.modulo.launcher',
-    'ProgramArguments': [str(app / 'Contents/MacOS/modulo'), 'start', '--data-dir', data_dir],
-    'RunAtLoad': True,
-    'KeepAlive': {'SuccessfulExit': False},
-    'ProcessType': 'Interactive',
-}
-Path(sys.argv[2]).write_bytes(plistlib.dumps(plist, fmt=plistlib.FMT_XML, sort_keys=False))
+plist_path = Path(sys.argv[2])
+data_dir = Path(sys.argv[3])
+plist_path.write_text(render_launchd_plist(app / 'Contents/MacOS/modulo', data_dir=data_dir), encoding='utf-8')
 PY
 launchctl unload -w "$PLIST" >/dev/null 2>&1 || true
 launchctl load -w "$PLIST"

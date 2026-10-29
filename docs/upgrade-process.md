@@ -62,8 +62,10 @@ those artifacts are installable. See the platform support matrix in
 [`docs/system-requirements.md`](./system-requirements.md).
 
 The native upgrade swaps the `current` symlink after a verified data
-snapshot; migrations run through the new bundle's boot lifespan. Two entry
-points perform the same swap:
+snapshot; migrations run through the new bundle's boot lifespan. On macOS arm64,
+install the signed/notarized `.dmg` on Apple Silicon only; x64/Rosetta is not
+supported. The installer verifies the release manifest/checksum chain before
+copying the app. Two entry points perform the same swap:
 
 - the published installer (`bash scripts/install.sh`), and
 - the launcher command (`modulo upgrade <target-version>`).
