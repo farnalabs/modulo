@@ -2152,10 +2152,14 @@ async def _seed_demo_membership(session: AsyncSession, account: Account, org: Or
         )
 
 
+# The demo account is a read-only org viewer (ADR 047), and
+# ``check_team_privilege_cap`` rejects a team role that exceeds the account's
+# org role, so every demo team membership is seeded at DEMO_ORG_ROLE. Do not
+# give these specs a higher role: the real seed would fail on Postgres.
 _DEMO_TEAM_SPECS = (
-    ("Demo Engineering", "Builds and reviews the demo delivery pipelines.", "operator"),
-    ("Demo Platform", "Owns the release and documentation automation.", "runner"),
-    ("Demo Governance", "Approves high-risk changes and monitors outcomes.", "viewer"),
+    ("Demo Engineering", "Builds and reviews the demo delivery pipelines."),
+    ("Demo Platform", "Owns the release and documentation automation."),
+    ("Demo Governance", "Approves high-risk changes and monitors outcomes."),
 )
 
 
@@ -2229,13 +2233,18 @@ async def _ensure_demo_team_membership(
 
 
 async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Account) -> list[Team]:
-    """Idempotently seed the three demo teams and memberships."""
+    """Idempotently seed the three demo teams and memberships.
+
+    Team memberships are seeded at ``DEMO_ORG_ROLE`` because a team role may
+    never exceed the account's org role (ADR 047,
+    ``check_team_privilege_cap``); the demo account is a read-only viewer.
+    """
     teams: list[Team] = []
-    for name, description, role in _DEMO_TEAM_SPECS:
+    for name, description in _DEMO_TEAM_SPECS:
         team = await _get_or_create_demo_team(session, org, account, name, description)
         if team.description != description:
             team.description = description
-        await _ensure_demo_team_membership(session, org, account, team, role)
+        await _ensure_demo_team_membership(session, org, account, team, DEMO_ORG_ROLE)
         teams.append(team)
     return teams
 
