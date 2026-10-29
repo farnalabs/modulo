@@ -836,6 +836,8 @@ class _LinuxProcessBackend:
         return -1 if starttime is None else starttime
 
     def start_epoch(self, pid: int) -> float | None:
+        if sys.platform == "win32":  # no /proc or os.sysconf; also lets mypy pass on Windows
+            return None
         ticks = self.starttime(pid)
         if ticks is None:
             return None
