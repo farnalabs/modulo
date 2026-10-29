@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -127,28 +128,62 @@ class ContainerHandle:
             )
         return f"http://127.0.0.1:{self.host_port}"
 
-    def exec(self, args: list[str], user: str | None = None) -> str:
+    def exec(self, args: list[str], user: str | None = None, *, timeout_seconds: float | None = None) -> str:
         """Run args inside the container; return utf-8 stdout; raise on failure.
 
         ``user`` is optional (docker exec user spec, e.g. ``"git"`` or
         ``"1000:1000"``) — needed for images whose CLI tools refuse to run
         as the container's default root user (gitea, notably).
 
-        There is deliberately no timeout parameter: testcontainers 4.15's
-        ``ExecConfig`` exposes no timeout, so accepting one here would be
-        dead code (FAR-934 review). A hung exec is bounded by the suite-level
-        ``--timeout`` in CI.
+        ``timeout_seconds`` must be passed for any exec that talks to the
+        network. testcontainers 4.15's ``ExecConfig`` exposes no timeout and
+        docker-py's ``exec_start`` blocks on the output socket for as long as
+        the command runs, so a stalled network command inside the container
+        (``ollama pull`` against an unreachable registry) hangs the
+        session-scoped fixture until the suite-level ``--timeout`` fires —
+        converting the fixture's intended "seed unavailable, record a skip"
+        into a 900s ERROR for every dependent test (observed 2026-10-29 on
+        PR #2571). On expiry the exec is abandoned (the caller's failure path
+        stops the container, which unblocks the worker) and
+        ``Tier1bFixtureError`` is raised so the fixture records the skip.
         """
         if self._docker_container is None:
             raise Tier1bFixtureError("container fixture already stopped")
         from testcontainers.core.container import ExecConfig as _ExecConfig
 
-        result = self._docker_container.exec(_ExecConfig(command=args, user=user))
+        result = self._exec_bounded(_ExecConfig(command=args, user=user), args, timeout_seconds)
         output = result.output
         out = output.decode("utf-8", errors="replace") if isinstance(output, bytes) else str(output)
         if result.exit_code != 0:
             raise Tier1bFixtureError(f"container exec {args} failed (exit {result.exit_code}): {out[-2000:]}")
         return out
+
+    def _exec_bounded(self, config: Any, args: list[str], timeout_seconds: float | None) -> Any:
+        """Run a docker exec, optionally bounded; raise ``Tier1bFixtureError`` on expiry.
+
+        The docker call runs on a daemon worker so an abandoned (hung) exec can
+        never block interpreter exit; its exception is re-raised on the
+        caller's thread so a genuine failure is still reported loudly.
+        """
+        if timeout_seconds is None:
+            return self._docker_container.exec(config)
+
+        outcome: dict[str, Any] = {}
+
+        def _run() -> None:
+            try:
+                outcome["result"] = self._docker_container.exec(config)
+            except Exception as exc:  # re-raised on the caller's thread below
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=_run, name="tier1b-exec", daemon=True)
+        worker.start()
+        worker.join(timeout_seconds)
+        if worker.is_alive():
+            raise Tier1bFixtureError(f"container exec {args} did not finish within {timeout_seconds:.0f}s")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["result"]
 
     def logs(self, tail: int = 100) -> str:
         """Return the last *tail* lines of the container log (diagnostics)."""

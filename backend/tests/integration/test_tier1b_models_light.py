@@ -36,6 +36,13 @@ from tests.helpers.tier1b_backends import (
 
 pytestmark = pytest.mark.integration
 
+# The seed pull is the one network call the ollama fixture makes inside the
+# container, and it can STALL rather than fail (the registry accepts the
+# connection and then never sends bytes), which hangs docker exec until the
+# suite-level ``--timeout`` fires. Bound it so the fixture's skip path runs:
+# a stalled seed is "unavailable", not a test failure.
+OLLAMA_SEED_PULL_TIMEOUT_SECONDS = 300.0
+
 
 # ── ollama ──────────────────────────────────────────────────────────────────
 
@@ -62,7 +69,7 @@ def ollama_service() -> Iterator[ContainerHandle]:
     # failure: record a skip rather than ERRORing every dependent test
     # (observed 2026-10-13 on PR #1764: `ollama pull qwen2:0.5b` returned 503).
     try:
-        handle.exec(["ollama", "pull", "qwen2:0.5b"])
+        handle.exec(["ollama", "pull", "qwen2:0.5b"], timeout_seconds=OLLAMA_SEED_PULL_TIMEOUT_SECONDS)
     except Tier1bFixtureError as exc:
         handle.stop()
         pytest.skip(f"Tier 1b ollama model seed unavailable (recorded skip): {exc}")
