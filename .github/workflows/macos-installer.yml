@@ -228,7 +228,12 @@ jobs:
             exit 1
           }
           echo '::endgroup::'
-          "$RUNTIME" --version | grep -Fqx 'Python 3.12.14'
+          RUNTIME_VERSION="$("$RUNTIME" --version)"
+          RUNTIME_SEMVER="${RUNTIME_VERSION#Python }"
+          if [[ ! "$RUNTIME_SEMVER" =~ ^3\.12\.14(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::bundled Python runtime must report semantic version 3.12.14 with optional build metadata; observed: $RUNTIME_VERSION" >&2
+            exit 1
+          fi
 
           "$APP/Contents/Resources/bundle/pg/bin/postgres" --version | grep -E 'PostgreSQL 16\.'
           "$APP/Contents/Resources/bundle/redis/redis-server" --version | grep -E 'v=8\.'
@@ -373,8 +378,13 @@ jobs:
             exit 1
           }
           echo '::endgroup::'
-          "$RUNTIME" --version | grep -Fqx 'Python 3.12.14'
-           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
+          RUNTIME_VERSION="$("$RUNTIME" --version)"
+          RUNTIME_SEMVER="${RUNTIME_VERSION#Python }"
+          if [[ ! "$RUNTIME_SEMVER" =~ ^3\.12\.14(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::bundled Python runtime must report semantic version 3.12.14 with optional build metadata; observed: $RUNTIME_VERSION" >&2
+            exit 1
+          fi
+          DATA="$RUNNER_TEMP/modulo-native-smoke-data"
            PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
            mkdir -p "$DATA"
            hdiutil detach "$MOUNT" >/dev/null
