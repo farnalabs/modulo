@@ -229,8 +229,11 @@ jobs:
           }
           echo '::endgroup::'
           RUNTIME_VERSION_OUTPUT_RAW="$("$RUNTIME" --version 2>&1)"
-          RUNTIME_VERSION_OUTPUT="$(RUNTIME_VERSION_OUTPUT_RAW="$RUNTIME_VERSION_OUTPUT_RAW" python3 -c 'import os; print(os.environ["RUNTIME_VERSION_OUTPUT_RAW"].rstrip(" \\t\\r\\n"), end="")')"
-          RUNTIME_SEMVER="$(RUNTIME_VERSION_OUTPUT="$RUNTIME_VERSION_OUTPUT" python3 -c 'import os, re; match = re.fullmatch(r"Python\\\\?[ \\t]+([0-9]+\\.[0-9]+\\.[0-9]+)(?:\\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", os.environ["RUNTIME_VERSION_OUTPUT"]); print(match.group(1) if match else "")')"
+          RUNTIME_VERSION_OUTPUT="$(RUNTIME_VERSION_OUTPUT_RAW="$RUNTIME_VERSION_OUTPUT_RAW" python3 -c 'import os; text = os.environ["RUNTIME_VERSION_OUTPUT_RAW"].rstrip(" \\t\\r\\n"); print(text.replace("\\\\ ", " "), end="")')"
+          RUNTIME_VERSION_CASE='Python\ 3.12.14'
+          RUNTIME_CASE_SEMVER="$(RUNTIME_VERSION_CASE="$RUNTIME_VERSION_CASE" python3 -c 'import os, re; text = os.environ["RUNTIME_VERSION_CASE"].rstrip(" \\t\\r\\n"); text = text.replace("\\ ", " "); match = re.fullmatch(r"Python[ \t]+([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", text); print(match.group(1) if match else "")')"
+          [[ "$RUNTIME_CASE_SEMVER" == '3.12.14' ]] || { printf '::error::Python version parser case test failed: raw=%q extracted=%q\n' "$RUNTIME_VERSION_CASE" "$RUNTIME_CASE_SEMVER" >&2; exit 1; }
+          RUNTIME_SEMVER="$(RUNTIME_VERSION_OUTPUT="$RUNTIME_VERSION_OUTPUT" python3 -c 'import os, re; text = os.environ["RUNTIME_VERSION_OUTPUT"].rstrip(" \\t\\r\\n"); text = text.replace("\\ ", " "); match = re.fullmatch(r"Python[ \t]+([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", text); print(match.group(1) if match else "")')"
           printf 'Bundled Python runtime version raw=%q normalized=%q extracted=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" "$RUNTIME_SEMVER"
           if [[ -z "$RUNTIME_SEMVER" ]]; then
             printf '::error::bundled Python runtime did not report a recognizable semantic version; raw=%q normalized=%q extracted=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" "$RUNTIME_SEMVER" >&2
@@ -385,8 +388,11 @@ jobs:
           }
           echo '::endgroup::'
           RUNTIME_VERSION_OUTPUT_RAW="$("$RUNTIME" --version 2>&1)"
-          RUNTIME_VERSION_OUTPUT="$(RUNTIME_VERSION_OUTPUT_RAW="$RUNTIME_VERSION_OUTPUT_RAW" python3 -c 'import os; print(os.environ["RUNTIME_VERSION_OUTPUT_RAW"].rstrip(" \\t\\r\\n"), end="")')"
-          RUNTIME_SEMVER="$(RUNTIME_VERSION_OUTPUT="$RUNTIME_VERSION_OUTPUT" python3 -c 'import os, re; match = re.fullmatch(r"Python\\\\?[ \\t]+([0-9]+\\.[0-9]+\\.[0-9]+)(?:\\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", os.environ["RUNTIME_VERSION_OUTPUT"]); print(match.group(1) if match else "")')"
+          RUNTIME_VERSION_OUTPUT="$(RUNTIME_VERSION_OUTPUT_RAW="$RUNTIME_VERSION_OUTPUT_RAW" python3 -c 'import os; text = os.environ["RUNTIME_VERSION_OUTPUT_RAW"].rstrip(" \\t\\r\\n"); print(text.replace("\\\\ ", " "), end="")')"
+          RUNTIME_VERSION_CASE='Python\ 3.12.14'
+          RUNTIME_CASE_SEMVER="$(RUNTIME_VERSION_CASE="$RUNTIME_VERSION_CASE" python3 -c 'import os, re; text = os.environ["RUNTIME_VERSION_CASE"].rstrip(" \\t\\r\\n"); text = text.replace("\\ ", " "); match = re.fullmatch(r"Python[ \t]+([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", text); print(match.group(1) if match else "")')"
+          [[ "$RUNTIME_CASE_SEMVER" == '3.12.14' ]] || { printf '::error::Python version parser case test failed: raw=%q extracted=%q\n' "$RUNTIME_VERSION_CASE" "$RUNTIME_CASE_SEMVER" >&2; exit 1; }
+          RUNTIME_SEMVER="$(RUNTIME_VERSION_OUTPUT="$RUNTIME_VERSION_OUTPUT" python3 -c 'import os, re; text = os.environ["RUNTIME_VERSION_OUTPUT"].rstrip(" \\t\\r\\n"); text = text.replace("\\ ", " "); match = re.fullmatch(r"Python[ \t]+([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", text); print(match.group(1) if match else "")')"
           printf 'Bundled Python runtime version raw=%q normalized=%q extracted=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" "$RUNTIME_SEMVER"
           if [[ -z "$RUNTIME_SEMVER" ]]; then
             printf '::error::bundled Python runtime did not report a recognizable semantic version; raw=%q normalized=%q extracted=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" "$RUNTIME_SEMVER" >&2
