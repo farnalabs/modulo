@@ -98,8 +98,13 @@ jobs:
           test -x "$APP/Contents/MacOS/modulo"
           file "$APP/Contents/MacOS/modulo" | grep -E 'Mach-O 64-bit executable arm64'
           otool -L "$APP/Contents/MacOS/modulo"
+          RUNTIME="$APP/Contents/Resources/bundle/runtime/bin/python3"
+          file "$RUNTIME" | grep -E 'Mach-O 64-bit executable arm64'
+          otool -L "$RUNTIME" | grep -q '/usr/lib/libSystem.B.dylib'
+          "$RUNTIME" --version | grep -Fqx 'Python 3.12.14'
           "$APP/Contents/Resources/bundle/pg/bin/postgres" --version | grep -E 'PostgreSQL 16\.'
           "$APP/Contents/Resources/bundle/redis/redis-server" --version | grep -E 'v=8\.'
+
           "$APP/Contents/MacOS/modulo" --help >/dev/null
 
       - name: Sign, notarize and smoke-test native installer
@@ -125,16 +130,54 @@ jobs:
           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
           REDIS_PID="$DATA/redis.pid"
           cleanup() {
+            status="${1:-$?}"
             set +e
             launchctl unload -w "$HOME/Library/LaunchAgents/run.modulo.launcher.plist" >/dev/null 2>&1 || true
-            if [[ -s "$REDIS_PID" ]]; then
-              kill "$(cat "$REDIS_PID")" >/dev/null 2>&1 || true
-            fi
-            hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
-            rm -rf "$MOUNT" "$CERT" "$NOTARY_KEY" "$IDENTITY_PEM_PATH" "$DATA" "$RUNNER_TEMP/modulo-install"
-            security delete-keychain "$KEYCHAIN" >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
+             if [[ -s "$REDIS_PID" ]]; then
+               redis_pid="$(cat "$REDIS_PID")"
+               kill "$redis_pid" >/dev/null 2>&1 || true
+               for _attempt in 1 2 3 4 5; do
+                 kill -0 "$redis_pid" >/dev/null 2>&1 || break
+                 sleep 1
+               done
+               if kill -0 "$redis_pid" >/dev/null 2>&1; then
+                 echo "::error::cleanup could not stop owned Redis process $redis_pid" >&2
+                 [[ "$status" -eq 0 ]] && status=1
+               fi
+             fi
+             detach_status=1
+             for _attempt in 1 2 3; do
+               if hdiutil detach "$MOUNT" >/dev/null 2>&1; then
+                 detach_status=0
+               fi
+               if [[ "$detach_status" -eq 0 ]] && ! hdiutil info | grep -Fq "$MOUNT"; then
+                 break
+               fi
+               sleep 1
+             done
+             if [[ "$detach_status" -ne 0 ]] || hdiutil info | grep -Fq "$MOUNT"; then
+               echo "::error::cleanup could not detach mounted volume $MOUNT" >&2
+               [[ "$status" -eq 0 ]] && status=1
+             fi
+             rm -rf "$MOUNT" "$CERT" "$NOTARY_KEY" "$IDENTITY_PEM_PATH" "$DATA" "$RUNNER_TEMP/modulo-install"
+             if [[ -e "$CERT" || -e "$NOTARY_KEY" || -e "$IDENTITY_PEM_PATH" ]]; then
+               echo '::error::cleanup left temporary signing material behind' >&2
+               [[ "$status" -eq 0 ]] && status=1
+             fi
+             security delete-keychain "$KEYCHAIN" >/dev/null 2>&1 || true
+             if security list-keychains -d user | grep -Fq "$KEYCHAIN"; then
+               echo "::error::cleanup left temporary keychain registered: $KEYCHAIN" >&2
+               [[ "$status" -eq 0 ]] && status=1
+             fi
+             if [[ -e "$KEYCHAIN" ]]; then
+               echo "::error::cleanup left temporary keychain on disk: $KEYCHAIN" >&2
+               [[ "$status" -eq 0 ]] && status=1
+             fi
+             return "$status"
+           }
+
+           trap 'cleanup "$?"' EXIT
+
 
           printf '%s' "$CERTIFICATE_B64" | base64 --decode > "$CERT"
           # Set up an empty keychain password so no generated password is leaked in argv.
@@ -167,6 +210,8 @@ jobs:
           codesign --verify --verbose=2 "$DMG"
           spctl --assess --type open --context context:primary-signature "$DMG"
           hdiutil verify "$DMG"
+          DMG_WITH_SPACES="$RUNNER_TEMP/Modulo ${VERSION_NUM} macos arm64.dmg"
+          cp "$DMG" "$DMG_WITH_SPACES"
 
           mkdir -p "$MOUNT"
           hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -readonly
@@ -175,24 +220,50 @@ jobs:
           codesign --verify --deep --strict "$MOUNTED_APP"
           spctl --assess --type execute "$MOUNTED_APP"
           "$MOUNTED_APP/Contents/MacOS/modulo" --help >/dev/null
-          PG="$MOUNTED_APP/Contents/Resources/bundle/pg"
-          REDIS="$MOUNTED_APP/Contents/Resources/bundle/redis"
-          DATA="$RUNNER_TEMP/modulo-native-smoke-data"
-          PGDATA="$DATA/postgres"
-          mkdir -p "$DATA"
-          "$PG/bin/initdb" -D "$PGDATA" --no-locale --encoding=UTF8 >/dev/null
-          "$PG/bin/pg_ctl" -D "$PGDATA" -o "-k $DATA" -w start >/dev/null
-          cleanup_pg() { "$PG/bin/pg_ctl" -D "$PGDATA" -m fast -w stop >/dev/null 2>&1 || true; }
-          trap 'cleanup_pg; cleanup' EXIT
-          "$PG/bin/pg_isready" -h "$DATA" >/dev/null
-          "$PG/bin/psql" -h "$DATA" -d postgres -c 'select 1' >/dev/null
-          "$REDIS/redis-server" --daemonize yes --dir "$DATA" --pidfile "$DATA/redis.pid" --logfile "$DATA/redis.log"
-          "$REDIS/redis-cli" ping | grep -qx PONG
-          launchctl list >/dev/null
-          hdiutil detach "$MOUNT" >/dev/null
-          MODULO_INSTALL_ROOT="$RUNNER_TEMP/modulo-install" scripts/macos/install.sh "$PWD/$DMG"
+           RUNTIME="$MOUNTED_APP/Contents/Resources/bundle/runtime/bin/python3"
+           file "$RUNTIME" | grep -E 'Mach-O 64-bit executable arm64'
+           otool -L "$RUNTIME" | grep -q '/usr/lib/libSystem.B.dylib'
+           "$RUNTIME" --version | grep -Fqx 'Python 3.12.14'
+           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
+           PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
+           mkdir -p "$DATA"
+           hdiutil detach "$MOUNT" >/dev/null
+          INSTALL_ROOT="$RUNNER_TEMP/modulo install"
+          MODULO_INSTALL_ROOT="$INSTALL_ROOT" MODULO_DATA_DIR="$DATA" scripts/macos/install.sh "$DMG_WITH_SPACES"
           launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null
-          launchctl unload -w "$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
+
+           STATE="$DATA/state.json"
+           API_PORT=''
+           for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+             if [[ -s "$STATE" ]]; then
+               API_PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["api_port"])' "$STATE")"
+               if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" >/dev/null; then
+                 break
+               fi
+             fi
+             sleep 2
+           done
+           [[ -n "$API_PORT" ]] || { echo '::error::native launcher never wrote state.json' >&2; exit 1; }
+           curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" >/dev/null
+           SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '/pid =/ {print $3; exit}')"
+           [[ "$SERVICE_PID" =~ ^[0-9]+$ ]] || { echo '::error::LaunchAgent has no numeric service PID' >&2; exit 1; }
+           SERVICE_BINARY="$(ps -p "$SERVICE_PID" -o command= | awk '{print $1}')"
+           [[ "$SERVICE_BINARY" == "$INSTALL_ROOT"/*/Contents/MacOS/modulo ]] || { echo "::error::unexpected service binary: $SERVICE_BINARY" >&2; exit 1; }
+           file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64'
+           if "$MOUNTED_APP/Contents/MacOS/modulo" start --data-dir "$DATA/failure" --bin-dir "$DATA/missing-bin" >/dev/null 2>&1; then
+             echo '::error::invalid bundled-binary path unexpectedly allowed launcher startup' >&2
+             exit 1
+           fi
+           launchctl unload -w "$PLIST"
+           if launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
+             echo '::error::LaunchAgent remained loaded after unload' >&2
+             exit 1
+           fi
+           if pgrep -f "$INSTALL_ROOT/.*/Contents/MacOS/modulo" >/dev/null 2>&1; then
+             echo '::error::owned Modulo process remained after unload' >&2
+             exit 1
+           fi
+
 
       - name: Upload real macOS installer
         if: ${{ inputs.mode != 'dry-run' }}
