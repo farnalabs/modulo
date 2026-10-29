@@ -102,6 +102,10 @@ describe('ComplianceEvidenceIndexView', () => {
     expect(wrapper.find('dl').exists()).toBe(true)
     expect(wrapper.findAll('dl dt')).not.toHaveLength(0)
     expect(wrapper.findAll('dl dd')).not.toHaveLength(0)
+    expect(wrapper.find('[data-testid="compliance-evidence-summary"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-count"]').text()).toBe('1/1')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-percentage"]').text()).toContain('100%')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('All indexed evidence artefacts are present')
   })
 
   it('makes every horizontally scrollable table a keyboard-reachable named region', async () => {
@@ -130,6 +134,11 @@ describe('ComplianceEvidenceIndexView', () => {
     })
     const wrapper = mountView()
     await settle()
+
+    expect(wrapper.find('[data-testid="compliance-evidence-summary"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-count"]').text()).toBe('0/0')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-percentage"]').text()).toContain('0%')
+    expect(wrapper.find('[data-testid="compliance-evidence-summary-status"]').text()).toContain('Some indexed evidence artefacts are missing')
 
     const warning = wrapper.find('[data-testid="compliance-evidence-index-incomplete"]')
     expect(warning.exists()).toBe(true)
