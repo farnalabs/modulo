@@ -11,8 +11,8 @@ closed. This produces a bundle directory, not an Inno Setup installer.
 
 The resulting artifact is not a runnable Windows runtime yet. The launcher
 currently refuses Windows; FAR-2229 must land before this contract can be marked
-supported. This script therefore fails closed for build mode and only validates
-native inputs with -ValidateOnly.
+supported. The manifest records runtime_support as unsupported pending FAR-2229.
+Pass -ValidateOnly to validate prerequisite inputs without running the full build.
 #>
 
 [CmdletBinding()]
@@ -83,14 +83,19 @@ if ($ValidateOnly) {
     exit 0
 }
 
-Fail "Windows runtime startup is unsupported until FAR-2229 supplies the launcher contract. Use -ValidateOnly to validate the artifact inputs."
-
 $pnpm = Get-Command pnpm -ErrorAction SilentlyContinue
 if ($null -eq $pnpm) { Fail "pnpm is required. Install the version declared in frontend/package.json (pnpm@11.28.8)." }
 $pyinstaller = Get-Command pyinstaller -ErrorAction SilentlyContinue
 if ($null -eq $pyinstaller) {
     Fail "PyInstaller is required to create a real modulo.exe. Install it in the backend environment (uv pip install pyinstaller) and retry."
 }
+$python = Get-Command python -ErrorAction SilentlyContinue
+if ($null -eq $python) { Fail "Python is required to validate the manifest against JSON Schema." }
+
+$pnpmVersion = ((& $pnpm.Source --version 2>&1) | Select-Object -Last 1).ToString().Trim()
+$pythonVersion = ((& $python.Source -c "import platform; print(platform.python_version())" 2>&1) | Select-Object -Last 1).ToString().Trim()
+$pyinstallerVersion = ((& $pyinstaller.Source --version 2>&1) | Select-Object -Last 1).ToString().Trim()
+$validatedAtUtc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 
 $output = [IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDirectory))
 if (Test-Path -LiteralPath $output) { Remove-Item -LiteralPath $output -Recurse -Force }
@@ -131,23 +136,73 @@ New-Item -ItemType Directory -Force -Path (Join-Path $output "redis") | Out-Null
 Copy-Item -Path (Join-Path $PostgresDirectory "*") -Destination (Join-Path $output "postgres") -Recurse -Force
 Copy-Item -Path (Join-Path $RedisDirectory "*") -Destination (Join-Path $output "redis") -Recurse -Force
 
+function Get-BinaryMetadata([string]$FilePath) {
+    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+        Fail "Binary missing when computing metadata: $FilePath"
+    }
+    $hash = (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $size = [int64](Get-Item -LiteralPath $FilePath).Length
+    return [ordered]@{
+        sha256 = $hash
+        size_bytes = $size
+    }
+}
+
+$postgresMetadata = [ordered]@{}
+foreach ($bin in $requiredPostgresBinaries) {
+    $binPath = Join-Path $output (Join-Path "postgres\bin" $bin)
+    $postgresMetadata[$bin] = Get-BinaryMetadata $binPath
+}
+
+$redisMetadata = [ordered]@{}
+foreach ($bin in $requiredRedisBinaries) {
+    $binPath = Join-Path $output (Join-Path "redis\bin" $bin)
+    $redisMetadata[$bin] = Get-BinaryMetadata $binPath
+}
+
 $manifest = [ordered]@{
     schema_version = 1
     version = $Version
     architecture = $Architecture
-    launcher = [ordered]@{ path = "modulo.exe"; entry_point = "modulo.cli.main:cli"; start_command = "modulo start" }
-    frontend = [ordered]@{ dist_path = "frontend-dist" }
+    runtime_support = [ordered]@{
+        status = "unsupported"
+        reason = "Windows launcher support is pending FAR-2229."
+    }
+    launcher = [ordered]@{
+        path = "modulo.exe"
+        entry_point = "modulo.cli.main:cli"
+        start_command = "modulo start"
+    }
+    frontend = [ordered]@{
+        dist_path = "frontend-dist"
+    }
     native_requirements = [ordered]@{
-        postgresql = [ordered]@{ required = $true; relative_path = "postgres/bin"; binaries = @("postgres.exe", "psql.exe", "pg_dump.exe", "pg_isready.exe") }
-        redis = [ordered]@{ required = $true; relative_path = "redis/bin"; binaries = @("redis-server.exe", "redis-cli.exe") }
+        postgresql = [ordered]@{
+            required = $true
+            relative_path = "postgres/bin"
+            binaries = @($requiredPostgresBinaries)
+            metadata = $postgresMetadata
+        }
+        redis = [ordered]@{
+            required = $true
+            relative_path = "redis/bin"
+            binaries = @($requiredRedisBinaries)
+            metadata = $redisMetadata
+        }
+    }
+    reproducibility = [ordered]@{
+        tool_versions = [ordered]@{
+            pnpm = $pnpmVersion
+            python = $pythonVersion
+            pyinstaller = $pyinstallerVersion
+        }
+        validated_at_utc = $validatedAtUtc
     }
 }
 $manifestPath = Join-Path $output "modulo-runtime.json"
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 -LiteralPath $manifestPath
 
-$validator = Get-Command python -ErrorAction SilentlyContinue
-if ($null -eq $validator) { Fail "Python is required to validate the manifest against JSON Schema." }
-& $validator.Source (Join-Path $PSScriptRoot "validate_windows_bundle_manifest.py") --manifest $manifestPath --schema $schemaPath --bundle $output
+& $python.Source (Join-Path $PSScriptRoot "validate_windows_bundle_manifest.py") --manifest $manifestPath --schema $schemaPath --bundle $output
 if ($LASTEXITCODE -ne 0) { Fail "Manifest validation failed with exit code $LASTEXITCODE." }
 
 Write-Host "Windows bundle created: $output"

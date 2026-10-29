@@ -98,7 +98,16 @@ def test_manifest_schema_rejects_wrong_architecture(tmp_path: Path) -> None:
         validate(manifest_path, _SCHEMA, bundle)
 
 
-@pytest.mark.parametrize("path", ["../modulo.exe", r"C:\\outside\\modulo.exe"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../modulo.exe",
+        r"..\modulo.exe",
+        r"subdir\..\..\escape.exe",
+        r"C:\\outside\\modulo.exe",
+        r"\outside\modulo.exe",
+    ],
+)
 def test_manifest_rejects_rooted_or_traversing_launcher_path(tmp_path: Path, path: str) -> None:
     bundle, manifest_path = _bundle(tmp_path)
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -106,6 +115,53 @@ def test_manifest_rejects_rooted_or_traversing_launcher_path(tmp_path: Path, pat
     manifest_path.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(ValueError, match="launcher path"):
+        validate(manifest_path, _SCHEMA, bundle)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"..\outside",
+        r"postgres\..\..\escape",
+    ],
+)
+def test_manifest_rejects_backslash_path_traversal_on_relative_path(tmp_path: Path, path: str) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data["native_requirements"]["postgresql"]["relative_path"] = path
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="relative path"):
+        validate(manifest_path, _SCHEMA, bundle)
+
+
+def test_manifest_rejects_missing_metadata_entry_for_listed_binary(tmp_path: Path) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del data["native_requirements"]["postgresql"]["metadata"]["initdb.exe"]
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="metadata is missing from manifest"):
+        validate(manifest_path, _SCHEMA, bundle)
+
+
+def test_manifest_rejects_missing_required_binary_from_inventory(tmp_path: Path) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data["native_requirements"]["postgresql"]["binaries"].remove("initdb.exe")
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing required postgresql binary from inventory"):
+        validate(manifest_path, _SCHEMA, bundle)
+
+
+def test_manifest_rejects_missing_required_redis_binary_from_inventory(tmp_path: Path) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data["native_requirements"]["redis"]["binaries"].remove("redis-server.exe")
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing required redis binary from inventory"):
         validate(manifest_path, _SCHEMA, bundle)
 
 
