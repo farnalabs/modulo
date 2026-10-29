@@ -261,9 +261,7 @@ RETIRED_INTERNAL_FLAGS: frozenset[str] = frozenset({"lifecycle_map_journeys"})
 
 DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
     {
-        "dashboard_charts",
         "user_scoped_mcp_keys",
-        "webhook_notification_log",
         "library_collection",
         "sso_unrestricted_provisioning",
         "api_key_grants",

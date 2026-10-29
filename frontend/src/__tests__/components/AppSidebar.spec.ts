@@ -195,18 +195,19 @@ describe('AppSidebar', () => {
       expect(hrefs[1]).toBe('/admin/errors')
     })
 
-    it('hides the flag-gated Webhook Notifications link while the flag is disabled (real manifest, FAR-656)', async () => {
+    it('shows the Webhook Notifications link by default (real manifest, FAR-2235)', async () => {
       mockMatchMedia(true)
       const wrapper = mountSidebar()
       const store = usePlanStore()
       store.currentTier = 'team'
+      store.features['webhook_notification_log'] = true
       await flushPromises()
       const monitorItems = wrapper.find('#sidebar-group-monitor')
       const hrefs = monitorItems.findAll('a.sidebar-link').map((l) => l.attributes('href'))
-      expect(hrefs).not.toContain('/admin/notification-delivery')
+      expect(hrefs).toContain('/admin/notification-delivery')
     })
 
-    it('shows the flag-gated Webhook Notifications link when the flag is enabled (real manifest, FAR-656)', async () => {
+    it('shows the Webhook Notifications link when the flag is enabled (real manifest, FAR-656)', async () => {
       mockMatchMedia(true)
       const wrapper = mountSidebar()
       const store = usePlanStore()

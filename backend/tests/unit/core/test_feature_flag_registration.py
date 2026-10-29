@@ -27,10 +27,7 @@ class TestRetiredViewFlags:
 
 
 class TestWebhookNotificationLogFlag:
-    """FAR-656: the webhook notification delivery log ships default-OFF —
-    registered in the catalog (per-org toggle) and pinned in
-    ``DEFAULT_OFF_FLAGS`` so the community-tier tier-rank fallback can never
-    activate it without an explicit org override."""
+    """FAR-656: the webhook notification delivery log is a community feature."""
 
     def test_flag_is_registered(self) -> None:
         registry = FeatureFlagRegistry()
@@ -43,11 +40,11 @@ class TestWebhookNotificationLogFlag:
         assert flag is not None
         assert flag.tier == "community"
 
-    def test_flag_inactive_on_community_by_default(self) -> None:
+    def test_flag_active_on_community_by_default(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")
         flag = registry.get_flag("webhook_notification_log")
         assert flag is not None
-        assert flag.currently_active is False
+        assert flag.currently_active is True
 
     def test_flag_has_description(self) -> None:
         registry = FeatureFlagRegistry()

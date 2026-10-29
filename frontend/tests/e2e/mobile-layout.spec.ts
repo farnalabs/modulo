@@ -105,8 +105,6 @@ const DEACTIVATED_ROUTES: Record<string, string> = {
   // /settings/monitoring, /feedback/inbox, /assistant, /settings/assistant)
   // were removed after they were observed RENDERING on staging; if the
   // staging dev-mode flag is turned off again they must come back.
-  // --- feature_flag inactive for the staging e2e identity ---
-  '/admin/notification-delivery': "feature_flag 'webhook_notification_log' inactive for the staging e2e identity and the local mock",
   // --- permission-gated (FAR-2104 moved /settings/license out of the FAR-938
   // SYSTEM group into the ADMIN group behind `org.license.manage`) ---
   // The staging e2e org admin HOLDS that permission, so the route renders there
