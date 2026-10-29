@@ -273,7 +273,8 @@ jobs:
           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
           OWNED_PIDS="$DATA/owned-pids"
            cleanup() {
-              cleanup_status="${1:-$?}"
+              local original_status="${1:-0}"
+              local final_status="$original_status"
               set +e
               cleanup_result() {
                 local name="$1" result="$2" detail="${3:-}"
@@ -281,7 +282,7 @@ jobs:
                   printf 'cleanup result: %s=ok' "$name"
                 else
                   printf 'cleanup result: %s=failed' "$name" >&2
-                  [[ "$cleanup_status" -eq 0 ]] && cleanup_status=1
+                  [[ "$final_status" -eq 0 ]] && final_status=1
                 fi
                 [[ -n "$detail" ]] && printf ' (%s)' "$detail"
                 printf '\n'
@@ -422,10 +423,16 @@ jobs:
               else
                 cleanup_result keychain_disk ok
               fi
-              return "$cleanup_status"
-            }
+               if [[ "$final_status" -eq 0 ]]; then
+                 cleanup_overall=ok
+               else
+                 cleanup_overall=failed
+               fi
+               printf 'cleanup result: overall=%s original_status=%s final_status=%s\n' "$cleanup_overall" "$original_status" "$final_status"
+               exit "$final_status"
+             }
 
-           trap 'cleanup "$?"' EXIT
+            trap 'cleanup "$?"' EXIT
 
           printf '%s' "$CERTIFICATE_B64" | base64 --decode > "$CERT"
           # Set up an empty keychain password so no generated password is leaked in argv.
