@@ -118,8 +118,10 @@ const deltaAbsText = computed(() => formatDeltaAbs(deltaAbs.value))
 const deltaPctText = useDeltaPctText(deltaPct)
 const deltaArrow = useDeltaArrow(deltaPct)
 const deltaAbsArrow = useDeltaArrow(deltaAbs)
-const deltaClass = useDeltaClass(deltaPct, computed(() => props.inverted ?? false), computed(() => props.neutralTrend ?? false))
-const deltaAbsClass = useDeltaClass(deltaAbs, computed(() => props.inverted ?? false), computed(() => props.neutralTrend ?? false))
+const inverted = computed(() => Boolean(props.inverted))
+const neutralTrend = computed(() => Boolean(props.neutralTrend))
+const deltaClass = useDeltaClass(deltaPct, inverted, neutralTrend)
+const deltaAbsClass = useDeltaClass(deltaAbs, inverted, neutralTrend)
 </script>
 
 <style scoped>

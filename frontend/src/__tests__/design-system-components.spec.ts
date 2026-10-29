@@ -514,6 +514,22 @@ describe('StatCard', () => {
       expect(nonNeutralVm.deltaAbsClass).toBe('text-success-text')
     })
 
+    it('mounts with noBaselineLabel, inverted: true, and delta: { current: 8, previous: 10 }', () => {
+      const wrapper = mount(StatCard, {
+        props: {
+          label: 'Failures',
+          value: 8,
+          noBaselineLabel: 'No baseline',
+          inverted: true,
+          delta: { current: 8, previous: 10 },
+        },
+      })
+
+      const noBaseline = wrapper.find('[data-testid="stat-no-baseline"]')
+      expect(noBaseline.exists()).toBe(true)
+      expect(noBaseline.classes()).toContain('text-success-text')
+      expect((wrapper.vm as unknown as { deltaAbsClass: string }).deltaAbsClass).toBe('text-success-text')
+    })
 
    it('renders as a router link when a destination is provided', () => {
     const wrapper = mount(StatCard, { props: { label: 'Runs', value: 12, to: '/runs' } })

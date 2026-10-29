@@ -260,4 +260,21 @@ describe('AdminSpendLimitsView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('org offline')
   })
+
+  it('updates org limit value and handles empty or null input', async () => {
+    const wrapper = await mountWithFeatures()
+    const input = wrapper.findComponent<any>('[data-testid="admin-spend-limits-org-limit"]')
+    expect(input.exists()).toBe(true)
+
+    const vm = wrapper.vm as unknown as { orgLimit: number | null }
+
+    await input.vm.$emit('update:modelValue', '250')
+    expect(vm.orgLimit).toBe(250)
+
+    await input.vm.$emit('update:modelValue', '')
+    expect(vm.orgLimit).toBe(null)
+
+    await input.vm.$emit('update:modelValue', null)
+    expect(vm.orgLimit).toBe(null)
+  })
 })

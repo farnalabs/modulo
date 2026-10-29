@@ -22,7 +22,7 @@
             <div class="flex items-end gap-3">
               <div class="flex-1">
                 <span class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminSpendLimitsView.daily_limit_usd') }}</span>
-                <InputText :aria-label="$t('views.AdminSpendLimitsView.form_control')" :model-value="orgLimit == null ? '' : String(orgLimit)" @update:model-value="(v: any) => orgLimit = v === '' ? null : Number(v)" type="number" min="0" step="0.01" :placeholder="$t('views.AdminSpendLimitsView.no_limit')" data-testid="admin-spend-limits-org-limit" />
+                <InputText :aria-label="$t('views.AdminSpendLimitsView.form_control')" :model-value="orgLimit == null ? '' : String(orgLimit)" @update:model-value="onUpdateOrgLimit" type="number" min="0" step="0.01" :placeholder="$t('views.AdminSpendLimitsView.no_limit')" data-testid="admin-spend-limits-org-limit" />
               </div>
               <Button :disabled="savingOrg" data-testid="admin-spend-limits-org-save" @click="saveOrgLimit">
                 {{ savingOrg ? $t('views.AdminSpendLimitsView.saving') : $t('views.AdminSpendLimitsView.save') }}
@@ -256,6 +256,10 @@ const { data: limitsData, loading, error: loadError, load: loadData } = useDataF
 
 const orgLimit = ref<number | null>(null)
 const teams = ref<TeamRow[]>([])
+
+function onUpdateOrgLimit(v: any) {
+  orgLimit.value = v === '' || v == null ? null : Number(v)
+}
 
 watch(() => limitsData.value, (data) => {
   if (data) {
