@@ -2122,23 +2122,6 @@ class _StreamContext:
     node_type_map: dict[str, str] | None
 
 
-@dataclass
-class _GraphExecutionResult:
-    """Result of graph execution including exception handling outcomes.
-
-    Extracted from ``execute``'s try/except block to reduce cognitive complexity
-    (S3776). Contains all values that the block mutates so the caller can
-    receive them as a single return value instead of tracking many locals.
-    """
-
-    final_status: str
-    error_code: str | None
-    error_detail: str | None
-    node_token_usage: dict[str, Any] | None
-    retry_policy_eligible: bool
-    gate_suppressed: bool
-
-
 def _try_agent_failure_elevation(
     broker: RunEventBroker,
     run_id: uuid.UUID,
@@ -6148,188 +6131,6 @@ class PipelineExecutor:
             session_factory=self._session_factory,
         )
 
-    async def _execute_graph_and_handle_exceptions(
-        self,
-        *,
-        run_id: uuid.UUID,
-        org_id: uuid.UUID,
-        pipeline_id: uuid.UUID,
-        snapshot_id: uuid.UUID,
-        thread_id: str,
-        snapshot: PipelineSnapshot,
-        input_payload: dict[str, Any],
-        variant_config_snapshot: dict[str, Any] | None,
-        graph_json: dict[str, Any],
-        eval_defs_by_node: dict[str, list[EvalDefDTO]],
-        node_ids: set[str],
-        completed_node_outputs: dict[str, Any],
-        guard: RunawayGuard,
-        node_type_map: dict[str, str],
-        pipeline_node_timeout_seconds: int,
-        broker: RunEventBroker,
-        pipeline_retry_policy: dict[str, Any] | None,
-        idempotency_key: Callable[[str, dict[str, Any]], str | None],
-        model_backend_hub: ModelBackendHub | None,
-        connector_hub: Any | None,
-        single_sandbox_node: bool,
-        graph_idempotent: bool,
-        stall_requested: asyncio.Event | None,
-    ) -> _GraphExecutionResult:
-        """Execute the graph and handle all exceptions, returning the result tuple.
-
-        Extracted from ``execute`` to reduce cognitive complexity (S3776). This
-        method encapsulates the try/except block that calls
-        ``_prepare_and_stream`` and handles all exception types, setting the
-        appropriate final status, error code, error detail, and flags.
-        """
-        final_status: str = "failed"
-        error_code: str | None = None
-        error_detail: str | None = None
-        node_token_usage: dict[str, Any] | None = None
-        retry_policy_eligible = True
-        gate_suppressed = False
-
-        try:
-            scope = _RunScope(
-                run_id=run_id,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                snapshot_id=snapshot_id,
-                thread_id=thread_id,
-            )
-            final_status, error_code, error_detail, node_token_usage = await self._prepare_and_stream(
-                scope=scope,
-                snapshot=snapshot,
-                input_payload=input_payload,
-                variant_config_snapshot=variant_config_snapshot,
-                graph_json=graph_json,
-                eval_defs_by_node=eval_defs_by_node,
-                node_ids=node_ids,
-                completed_node_outputs=completed_node_outputs,
-                guard=guard,
-                node_type_map=node_type_map,
-                pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
-                broker=broker,
-                pipeline_retry_policy=pipeline_retry_policy,
-                idempotency_key=idempotency_key,
-            )
-        except asyncio.CancelledError:
-            raise
-        except RouterNoMatchError as exc:
-            # FAR-402 P1 (F2-A): a Router node had no matching rule and no
-            # default — terminalize the run with the dedicated router_no_match
-            # status (terminal, non-failure; classified as excluded/notify).
-            _log.info("pipeline.router_no_match", extra={"run_id": str(run_id), "detail": str(exc)})
-            final_status = "router_no_match"
-            error_code = "router.no_match"
-            error_detail = _sanitize_detail(str(exc), limit=None)
-        except (NodeCancelledError, SandboxNodeFailedError) as exc:
-            # FAR-1994: a sandbox failure that produced no parseable node output
-            # records ZERO token usage by default. node_runner recovers the
-            # agent's own opencode ``step_finish`` counters from the retained
-            # raw output and attaches them to the exception; fold them into the
-            # accumulator as the AGENT-REPORTED family so the terminal write
-            # stops reporting a false zero (a no-op when nothing was recovered).
-            node_token_usage = merge_recovered_token_usage(node_token_usage, exc)
-            # FAR-592 (D6 F2): the Local-tier refusal is a DETERMINISTIC config
-            # fault — the profile opt-in cannot change mid-run, so requeueing
-            # it would burn the retry budget on a refusal that cannot succeed.
-            # Terminal-fail DIRECTLY (before ``_decide_transient_failure``) so
-            # the typed ``sandbox.tier_refused`` code is written and the run
-            # never requeues.
-            tier_refused = isinstance(exc, SandboxTierRefusedError)
-            if tier_refused:
-                _log.warning(
-                    "pipeline.tier_refused_terminal",
-                    extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
-                )
-                final_status = "failed"
-                error_code = _ERROR_CODE_SANDBOX_TIER_REFUSED
-                error_detail = _sanitize_detail(str(exc), limit=None)
-                # A tier refusal MUST also skip the pipeline retry_policy below:
-                # the "failure" event matches final_status == "failed" and would
-                # requeue the deterministic refusal despite the non-retryable
-                # registry flag.
-                retry_policy_eligible = False
-            else:
-                # Transient node cancellation / sandbox-infra failure (e.g. an E2B
-                # sandbox command wait cancelled from outside, a stall, or a command
-                # timeout). Do NOT terminal-fail: the run is still retryable.
-                # Bounded by the SAQ node-attempt count (NOT the claim count —
-                # capacity-deferred / non-executing claims must not consume the
-                # retry budget). Uses the ORIGINAL executor's captured claim token
-                # for the fenced pending-reset; a superseded original, a watchdog
-                # stall, or a requested cancellation SKIP the reset (the run is
-                # owned elsewhere / terminal / cancelled — never demote it).
-                # The gate/requeue/superseded/terminal decision chain lives in
-                # ``_decide_transient_failure`` — this handler is a thin dispatcher.
-                # For requeue/superseded the helper already performed the fenced
-                # pending-reset + cleanup, and the bare re-raise below propagates out
-                # of execute() BEFORE the post-stream try/finally, exactly as today.
-                _log.warning(
-                    "pipeline.node_cancelled_transient",
-                    extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
-                )
-                transient = await self._decide_transient_failure(
-                    exc=exc,
-                    run_id=run_id,
-                    org_id=org_id,
-                    graph_json=graph_json,
-                    graph_idempotent=graph_idempotent,
-                    single_sandbox_node=single_sandbox_node,
-                    model_backend_hub=model_backend_hub,
-                    connector_hub=connector_hub,
-                    broker=broker,
-                    stall_requested=stall_requested,
-                    pipeline_retry_policy=pipeline_retry_policy,
-                )
-                gate_suppressed, final_status, error_code, error_detail = self._apply_transient_decision(
-                    transient,
-                    completed_node_outputs=completed_node_outputs,
-                    gate_suppressed=gate_suppressed,
-                )
-            # A tier refusal MUST also skip the pipeline retry_policy below: the
-            # "failure" event matches final_status == "failed" and would requeue
-            # the deterministic refusal despite the non-retryable registry flag.
-        except Exception as exc:
-            _tb = _traceback_detail(exc, limit=2000)
-            # FAR-872: enrich the error detail with attribution (build SHA,
-            # failing column, table set) so executor failures are self-identifying.
-            error_detail = _enrich_failure_detail(_tb, exc)
-            _log.exception(
-                "pipeline.execution_error",
-                extra={
-                    "run_id": str(run_id),
-                    **(
-                        {
-                            "failure_build_sha": _failure_build_sha(),
-                            "failing_column": _failure_column(exc),
-                        }
-                        if _ATTRIBUTION_AVAILABLE
-                        else {}
-                    ),
-                },
-            )
-            final_status = "failed"
-            error_code = type(exc).__name__
-            # FAR-2006: a provider 401/402 raised out of a model backend is a
-            # provider refusal, not a generic exception. The raw class name
-            # (``APIStatusError``) resolved to ``harness.unknown``; classify
-            # the message so the run records provider.authentication /
-            # provider.billing and the terminal-path alert fires.
-            _provider_refusal = non_retryable_provider_code(str(exc)) or non_retryable_provider_code(error_detail)
-            if _provider_refusal is not None:
-                error_code = _provider_refusal
-
-        return _GraphExecutionResult(
-            final_status=final_status,
-            error_code=error_code,
-            error_detail=error_detail,
-            node_token_usage=node_token_usage,
-            retry_policy_eligible=retry_policy_eligible,
-            gate_suppressed=gate_suppressed,
-        )
-
     async def execute(
         self,
         *,
@@ -6487,39 +6288,139 @@ class PipelineExecutor:
         # FAR-228: set when guard B suppressed a transient retry — gates the
         # eval-suite/fire_agent_signal block. FAR-1534: it no longer publishes
         # run_completed; that happens post-finalize like every other complete run.
-        # gate_suppressed is initialized and managed inside the helper
+        gate_suppressed = False
 
-        exec_result = await self._execute_graph_and_handle_exceptions(
-            run_id=run_id,
-            org_id=org_id,
-            pipeline_id=pipeline_id,
-            snapshot_id=snapshot_id,
-            thread_id=thread_id,
-            snapshot=snapshot,
-            input_payload=input_payload,
-            variant_config_snapshot=variant_config_snapshot,
-            graph_json=graph_json,
-            eval_defs_by_node=eval_defs_by_node,
-            node_ids=node_ids,
-            completed_node_outputs=completed_node_outputs,
-            guard=guard,
-            node_type_map=node_type_map,
-            pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
-            broker=broker,
-            pipeline_retry_policy=pipeline_retry_policy,
-            idempotency_key=_node_idempotency_key,
-            model_backend_hub=model_backend_hub,
-            connector_hub=connector_hub,
-            single_sandbox_node=single_sandbox_node,
-            graph_idempotent=graph_idempotent,
-            stall_requested=self._stall_requested,
-        )
-        final_status = exec_result.final_status
-        error_code = exec_result.error_code
-        error_detail = exec_result.error_detail
-        node_token_usage = exec_result.node_token_usage
-        retry_policy_eligible = exec_result.retry_policy_eligible
-        # gate_suppressed is returned by the helper but not used in this method
+        try:
+            scope = _RunScope(
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                snapshot_id=snapshot_id,
+                thread_id=thread_id,
+            )
+            final_status, error_code, error_detail, node_token_usage = await self._prepare_and_stream(
+                scope=scope,
+                snapshot=snapshot,
+                input_payload=input_payload,
+                variant_config_snapshot=variant_config_snapshot,
+                graph_json=graph_json,
+                eval_defs_by_node=eval_defs_by_node,
+                node_ids=node_ids,
+                completed_node_outputs=completed_node_outputs,
+                guard=guard,
+                node_type_map=node_type_map,
+                pipeline_node_timeout_seconds=pipeline.node_timeout_seconds,
+                broker=broker,
+                pipeline_retry_policy=pipeline_retry_policy,
+                idempotency_key=_node_idempotency_key,
+            )
+        except asyncio.CancelledError:
+            raise
+        except RouterNoMatchError as exc:
+            # FAR-402 P1 (F2-A): a Router node had no matching rule and no
+            # default — terminalize the run with the dedicated router_no_match
+            # status (terminal, non-failure; classified as excluded/notify).
+            _log.info("pipeline.router_no_match", extra={"run_id": str(run_id), "detail": str(exc)})
+            final_status = "router_no_match"
+            error_code = "router.no_match"
+            error_detail = _sanitize_detail(str(exc), limit=None)
+        except (NodeCancelledError, SandboxNodeFailedError) as exc:
+            # FAR-1994: a sandbox failure that produced no parseable node output
+            # records ZERO token usage by default. node_runner recovers the
+            # agent's own opencode ``step_finish`` counters from the retained
+            # raw output and attaches them to the exception; fold them into the
+            # accumulator as the AGENT-REPORTED family so the terminal write
+            # stops reporting a false zero (a no-op when nothing was recovered).
+            node_token_usage = merge_recovered_token_usage(node_token_usage, exc)
+            # FAR-592 (D6 F2): the Local-tier refusal is a DETERMINISTIC config
+            # fault — the profile opt-in cannot change mid-run, so requeueing
+            # it would burn the retry budget on a refusal that cannot succeed.
+            # Terminal-fail DIRECTLY (before ``_decide_transient_failure``) so
+            # the typed ``sandbox.tier_refused`` code is written and the run
+            # never requeues.
+            tier_refused = isinstance(exc, SandboxTierRefusedError)
+            if tier_refused:
+                _log.warning(
+                    "pipeline.tier_refused_terminal",
+                    extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
+                )
+                final_status = "failed"
+                error_code = _ERROR_CODE_SANDBOX_TIER_REFUSED
+                error_detail = _sanitize_detail(str(exc), limit=None)
+                # A tier refusal MUST also skip the pipeline retry_policy below:
+                # the "failure" event matches final_status == "failed" and would
+                # requeue the deterministic refusal despite the non-retryable
+                # registry flag.
+                retry_policy_eligible = False
+            else:
+                # Transient node cancellation / sandbox-infra failure (e.g. an E2B
+                # sandbox command wait cancelled from outside, a stall, or a command
+                # timeout). Do NOT terminal-fail: the run is still retryable.
+                # Bounded by the SAQ node-attempt count (NOT the claim count —
+                # capacity-deferred / non-executing claims must not consume the
+                # retry budget). Uses the ORIGINAL executor's captured claim token
+                # for the fenced pending-reset; a superseded original, a watchdog
+                # stall, or a requested cancellation SKIP the reset (the run is
+                # owned elsewhere / terminal / cancelled — never demote it).
+                # The gate/requeue/superseded/terminal decision chain lives in
+                # ``_decide_transient_failure`` — this handler is a thin dispatcher.
+                # For requeue/superseded the helper already performed the fenced
+                # pending-reset + cleanup, and the bare re-raise below propagates out
+                # of execute() BEFORE the post-stream try/finally, exactly as today.
+                _log.warning(
+                    "pipeline.node_cancelled_transient",
+                    extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
+                )
+                transient = await self._decide_transient_failure(
+                    exc=exc,
+                    run_id=run_id,
+                    org_id=org_id,
+                    graph_json=graph_json,
+                    graph_idempotent=graph_idempotent,
+                    single_sandbox_node=single_sandbox_node,
+                    model_backend_hub=model_backend_hub,
+                    connector_hub=connector_hub,
+                    broker=broker,
+                    stall_requested=self._stall_requested,
+                    pipeline_retry_policy=pipeline_retry_policy,
+                )
+                gate_suppressed, final_status, error_code, error_detail = self._apply_transient_decision(
+                    transient,
+                    completed_node_outputs=completed_node_outputs,
+                    gate_suppressed=gate_suppressed,
+                )
+            # A tier refusal MUST also skip the pipeline retry_policy below: the
+            # "failure" event matches final_status == "failed" and would requeue
+            # the deterministic refusal despite the non-retryable registry flag.
+        except Exception as exc:
+            _tb = _traceback_detail(exc, limit=2000)
+            # FAR-872: enrich the error detail with attribution (build SHA,
+            # failing column, table set) so executor failures are self-identifying.
+            error_detail = _enrich_failure_detail(_tb, exc)
+            _log.exception(
+                "pipeline.execution_error",
+                extra={
+                    "run_id": str(run_id),
+                    **(
+                        {
+                            "failure_build_sha": _failure_build_sha(),
+                            "failing_column": _failure_column(exc),
+                        }
+                        if _ATTRIBUTION_AVAILABLE
+                        else {}
+                    ),
+                },
+            )
+            final_status = "failed"
+            error_code = type(exc).__name__
+            # FAR-2006: a provider 401/402 raised out of a model backend is a
+            # provider refusal, not a generic exception. The raw class name
+            # (``APIStatusError``) resolved to ``harness.unknown``; classify
+            # the message so the run records provider.authentication /
+            # provider.billing and the terminal-path alert fires.
+            _provider_refusal = non_retryable_provider_code(str(exc)) or non_retryable_provider_code(error_detail)
+            if _provider_refusal is not None:
+                error_code = _provider_refusal
 
         # Retry policy: if the run ended in a state the pipeline's
         # retry_policy says to retry and the attempt budget remains, reset the
