@@ -480,7 +480,7 @@ def user_creates_trigger(username: str, pipeline_name: str, request, ctx) -> Non
         username=username,
         method="post",
         url=f"/api/v1/pipelines/{pipeline['id']}/triggers",
-        json_body={"trigger_type": "manual"},
+        json_body={"trigger_type": "manual", "name": "gate-trigger"},
     )
 
 
@@ -495,7 +495,7 @@ def admin_creates_trigger(pipeline_name: str, request, ctx) -> None:
         username=None,
         method="post",
         url=f"/api/v1/pipelines/{pipeline['id']}/triggers",
-        json_body={"trigger_type": "manual"},
+        json_body={"trigger_type": "manual", "name": "gate-trigger"},
     )
 
 

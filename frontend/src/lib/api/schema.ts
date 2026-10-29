@@ -22167,7 +22167,7 @@ export interface components {
             /** Trigger Type */
             trigger_type: string;
             /** Name */
-            name?: string | null;
+            name: string;
             /**
              * Active
              * @default true
@@ -22266,6 +22266,8 @@ export interface components {
         };
         /** TriggerUpdate */
         TriggerUpdate: {
+            /** Name */
+            name?: string | null;
             /** Active */
             active?: boolean | null;
             /** Max Concurrent Runs */

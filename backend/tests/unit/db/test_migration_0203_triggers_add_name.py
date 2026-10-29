@@ -302,7 +302,8 @@ class TestSymmetryAndModelParity:
         from modulo.db.models.trigger import Trigger
 
         column = Trigger.__table__.c.name
-        assert column.nullable is True
+        # 0203 added it nullable; migration 0339 (FAR-2227) made it NOT NULL.
+        assert column.nullable is False
         assert column.type.length == 255
 
     def test_model_carries_identity_index(self) -> None:
