@@ -152,11 +152,11 @@ async def polling_trigger(seeded_db: AsyncSession) -> dict[str, Any]:
     )
     await seeded_db.execute(
         text(
-            "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+            "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
             "trigger_type, active, max_concurrent_runs, config_json, "
             "account_id, cron_expression, cron_timezone, "
             "last_fired_at, next_fire_at) "
-            "VALUES (:id, :oid, :pid, 'polling', true, 5, "
+            "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'polling', true, 5, "
             "(:config)::json, :uid, NULL, NULL, NULL, "
             "NOW() - INTERVAL '1 minute') "
             "ON CONFLICT (id) DO UPDATE SET trigger_type='polling', active=true, "

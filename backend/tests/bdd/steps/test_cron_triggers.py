@@ -14,7 +14,7 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/triggers/cron.feature")
 
 from modulo.db.models.trigger import Trigger
-from tests.bdd.conftest import harden_session_double, make_mock_run
+from tests.bdd.conftest import harden_session_double, make_mock_run, stub_no_duplicate_trigger
 
 
 def _make_mock_trigger(**overrides) -> MagicMock:
@@ -94,8 +94,8 @@ def accumulated_run_cost(cost: str, request):
 
 
 @when(parsers.parse('I create a cron trigger for pipeline "{pipeline}" with expression "{expression}"'))
-def create_cron_trigger_simple(pipeline: str, expression: str, client, request):
-    create_cron_trigger_full(pipeline, expression, "UTC", "{}", client, request)
+def create_cron_trigger_simple(pipeline: str, expression: str, client, request, mock_session):
+    create_cron_trigger_full(pipeline, expression, "UTC", "{}", client, request, mock_session)
 
 
 @when(
@@ -104,9 +104,9 @@ def create_cron_trigger_simple(pipeline: str, expression: str, client, request):
         'timezone "{timezone}" and input_template {template}'
     )
 )
-def create_cron_trigger_full(pipeline: str, expression: str, timezone: str, template, client, request):
+def create_cron_trigger_full(pipeline: str, expression: str, timezone: str, template, client, request, mock_session):
     input_template = json.loads(template) if isinstance(template, str) else template
-    _do_create_cron_trigger(client, request, expression, timezone, input_template)
+    _do_create_cron_trigger(client, request, expression, timezone, input_template, mock_session)
 
 
 @when(
@@ -114,11 +114,12 @@ def create_cron_trigger_full(pipeline: str, expression: str, timezone: str, temp
         'I create a cron trigger for pipeline "{pipeline}" with expression "{expression}" timezone "{timezone}"'
     )
 )
-def create_cron_trigger_timezone(pipeline: str, expression: str, timezone: str, client, request):
-    _do_create_cron_trigger(client, request, expression, timezone, {})
+def create_cron_trigger_timezone(pipeline: str, expression: str, timezone: str, client, request, mock_session):
+    _do_create_cron_trigger(client, request, expression, timezone, {}, mock_session)
 
 
-def _do_create_cron_trigger(client, request, expression, timezone, input_template):
+def _do_create_cron_trigger(client, request, expression, timezone, input_template, mock_session):
+    stub_no_duplicate_trigger(mock_session)
     now = datetime.datetime.now(datetime.UTC)
     mock_trigger = _make_mock_trigger(
         cron_expression=expression,
@@ -135,6 +136,7 @@ def _do_create_cron_trigger(client, request, expression, timezone, input_templat
             f"/api/v1/pipelines/{mock_trigger.pipeline_id}/triggers",
             json={
                 "trigger_type": "cron",
+                "name": "cron-trigger",
                 "cron_expression": expression,
                 "cron_timezone": timezone,
                 "config_json": {"input_template": input_template},

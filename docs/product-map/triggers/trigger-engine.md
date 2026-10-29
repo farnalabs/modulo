@@ -123,6 +123,16 @@ rate-limited by the `TriggerEngine`.
       restore) with per-type config (webhook / cron / polling / ongoing);
       secret fields are encrypted at rest and never returned
       (`test_trigger_config_secrets`, `test_triggers_endpoint`)
+- [x] Every trigger has a REQUIRED name (FAR-2227): trimmed, 1-255 characters,
+      unique among a pipeline's live triggers. Creating without one is a 422
+      (REST and the MCP `create_trigger` tool alike, plus the UI form and
+      declarative apply); a duplicate is a 409 with a clear message, not a raw
+      DB error. `name` is returned by every REST and MCP list / get / create /
+      update response, shown first in the Settings > Triggers table, and can be
+      changed through `PUT /api/v1/triggers/{id}` and MCP `update_trigger`
+      (same uniqueness check). Migration 0339 backfilled pre-existing unnamed
+      rows as `<trigger_type>-<first 8 id chars>` and made the column NOT NULL
+      (`test_migration_0339_triggers_name_not_null`)
 - [x] Manual run trigger: `POST /api/v1/runs` returns 202 and starts a pending
       run carrying caller-supplied `run_context`
 - [x] Webhook delivery (`POST /api/v1/triggers/{id}/webhook`): HMAC-SHA256

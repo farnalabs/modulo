@@ -709,7 +709,7 @@ class TestTriggerTeamScope(_OperatorAuthContext):
             patch("modulo.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope)),
         ):
             mock_session.return_value = _make_session_context(session)
-            result = await create_trigger(pipeline_id=str(pipeline_id))
+            result = await create_trigger(pipeline_id=str(pipeline_id), name="t")
 
         assert result["error"] == "team_boundary_violation"
 
@@ -1679,7 +1679,7 @@ class TestTriggerUserTeamGate(_OperatorAuthContext):
             patch("modulo.api.team_scope.team_membership_exists", AsyncMock(return_value=False)),
         ):
             mock_session.return_value = _make_session_context(session)
-            result = await create_trigger(pipeline_id=str(pipeline_id))
+            result = await create_trigger(pipeline_id=str(pipeline_id), name="t")
 
         assert result["error"] == "team_boundary_violation"
         assert "not a member" in result["detail"]
@@ -1772,6 +1772,8 @@ class TestTriggerUserMembershipGate(_OperatorAuthContext):
         stack.enter_context(
             patch("modulo.api.mcp_server._session", MagicMock(return_value=_make_session_context(make_session_scope())))
         )
+        # FAR-2227: the duplicate-name probe needs a real Result the scope session does not model.
+        stack.enter_context(patch("modulo.api.mcp_server._require_unique_trigger_name", AsyncMock()))
         return stack
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -1782,7 +1784,7 @@ class TestTriggerUserMembershipGate(_OperatorAuthContext):
 
         pipeline_id = uuid.uuid4()
         with self._patches(_TEAM_B, membership=False):
-            result = await create_trigger(pipeline_id=str(pipeline_id))
+            result = await create_trigger(pipeline_id=str(pipeline_id), name="t")
 
         assert result["error"] == "team_boundary_violation"
         assert result["detail"] == _MSG_USER_NOT_TEAM_MEMBER
@@ -1803,7 +1805,7 @@ class TestTriggerUserMembershipGate(_OperatorAuthContext):
             ),
             patch("modulo.api.mcp_server._streak_status_for", AsyncMock(return_value="ok")),
         ):
-            result = await create_trigger(pipeline_id=str(pipeline_id))
+            result = await create_trigger(pipeline_id=str(pipeline_id), name="t")
 
         assert "error" not in result
         assert result["pipeline_id"] == str(pipeline_id)
@@ -1828,7 +1830,7 @@ class TestTriggerUserMembershipGate(_OperatorAuthContext):
                 ),
                 patch("modulo.api.mcp_server._streak_status_for", AsyncMock(return_value="ok")),
             ):
-                result = await create_trigger(pipeline_id=str(pipeline_id))
+                result = await create_trigger(pipeline_id=str(pipeline_id), name="t")
 
             assert "error" not in result
             assert result["pipeline_id"] == str(pipeline_id)

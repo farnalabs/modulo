@@ -76,6 +76,7 @@ def _make_trigger(**overrides: object) -> MagicMock:
     t = MagicMock()
     t.id = overrides.get("id", _TRIGGER_ID)
     t.pipeline_id = overrides.get("pipeline_id", _PIPELINE_ID)
+    t.name = overrides.get("name", "test-trigger")
     t.organisation_id = _ORG_ID
     t.trigger_type = overrides.get("trigger_type", "cron")
     t.active = overrides.get("active", True)
@@ -99,6 +100,8 @@ def _trigger_result(triggers: list[MagicMock]) -> MagicMock:
     r.scalar_one_or_none = MagicMock(return_value=triggers[0] if triggers else None)
     r.scalar_one = MagicMock(return_value=len(triggers))
     r.one_or_none = MagicMock(return_value=None)
+    # FAR-2227: the create/rename duplicate-name probe (``.first()``) finds no clash.
+    r.first = MagicMock(return_value=None)
     r.scalar = MagicMock(return_value=len(triggers))
     return r
 
@@ -574,6 +577,7 @@ def test_create_trigger_cross_team_connector_returns_409(client: tuple[TestClien
         lambda: http.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
             json={
+                "name": "t",
                 "trigger_type": "polling",
                 "config_json": {"connector_instance_id": str(connector_id)},
             },
@@ -1028,6 +1032,7 @@ async def test_test_polling_condition_real_autobegin_false_session_returns_poll_
                 )
                 session.add(
                     Trigger(
+                        name="trigger-1",
                         id=_TRIGGER_ID,
                         organisation_id=_ORG_ID,
                         pipeline_id=_PIPELINE_ID,
@@ -1087,7 +1092,7 @@ def _create_flush_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> N
         try:
             resp = http.post(
                 f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
-                json={"trigger_type": "manual"},
+                json={"name": "t", "trigger_type": "manual"},
             )
         finally:
             for c in reversed(ctxs):
@@ -1108,7 +1113,7 @@ def test_create_trigger_cron_fields_on_webhook_type_returns_400(client: tuple[Te
     try:
         resp = http.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
-            json={"trigger_type": "webhook", "cron_expression": "0 * * * *"},
+            json={"name": "t", "trigger_type": "webhook", "cron_expression": "0 * * * *"},
         )
     finally:
         for c in reversed(ctxs):
@@ -1126,7 +1131,7 @@ def test_create_trigger_manual_happy_path_returns_201(client: tuple[TestClient, 
     try:
         resp = http.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
-            json={"trigger_type": "manual", "daily_spend_limit": 2},
+            json={"name": "t", "trigger_type": "manual", "daily_spend_limit": 2},
         )
     finally:
         for c in reversed(ctxs):
