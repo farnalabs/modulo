@@ -1,100 +1,106 @@
 <#
 .SYNOPSIS
-Test Windows Inno Setup installer compilation locally
+Validate the Windows Inno Setup installer contract locally.
 .DESCRIPTION
-Validates that the Inno Setup script compiles and produces a valid installer.
-Run this on a Windows machine with Inno Setup 6.2+ installed.
+Runs two compile checks against temporary fixture bundles: a bundle missing
+required runtime files must fail, while a minimal contract fixture containing
+modulo.exe and modulo-runtime.json may compile. The fixture and installer are
+never written to the repository.
+Run this on Windows with Inno Setup 6.2+ installed.
 #>
 
+[CmdletBinding()]
 param(
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$Version = "0.3.323",
-    
-    [Parameter(Mandatory=$false)]
-    [string]$Arch = "amd64",
-    
-    [Parameter(Mandatory=$false)]
-    [string]$BundleDir = "."
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("amd64")]
+    [string]$Arch = "amd64"
 )
 
-# Check if Inno Setup is installed
-$isccPath = "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
-if (-not (Test-Path $isccPath)) {
-    $isccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-}
-if (-not (Test-Path $isccPath)) {
-    Write-Error "Inno Setup 6 not found. Install from https://jrsoftware.org/isdl.php"
-    exit 1
+$ErrorActionPreference = "Stop"
+$repoRoot = (Get-Location).Path
+$issPath = Join-Path $repoRoot "deploy\windows\modulo.iss"
+if (-not (Test-Path -LiteralPath $issPath -PathType Leaf)) {
+    throw "Cannot find deploy\windows\modulo.iss. Run from repo root."
 }
 
-# Verify we're in the right place
-$issPath = "deploy\windows\modulo.iss"
-if (-not (Test-Path $issPath)) {
-    Write-Error "Cannot find deploy\windows\modulo.iss. Run from repo root."
-    exit 1
-}
-
-Write-Host "=== Modulo Windows Installer Local Compilation Test ==="
-Write-Host "Version: $Version"
-Write-Host "Architecture: $Arch"
-Write-Host "Bundle Dir: $BundleDir"
-Write-Host "Inno Setup: $isccPath"
-Write-Host ""
-
-# Compile with Inno Setup
-$issPathFull = Resolve-Path "deploy\windows\modulo.iss"
-$outputDir = "build\windows"
-$outputFile = "modulo-${Version}-windows-${Arch}.exe"
-
-Write-Host "Compiling with Inno Setup..."
-Write-Host "ISS: $issPathFull"
-Write-Host "Output: $outputDir\$outputFile"
-Write-Host ""
-
-$cmd = @(
-    "iscc",
-    "/Qp",
-    "/O$outputDir",
-    "/Fmodulo-${Version}-windows-${Arch}",
-    "/DVERSION_NUM=$Version",
-    "/DBUNDLE_ARCH=$Arch",
-    "/DBUNDLE_DIR=$BundleDir",
-    $issPathFull.FullName
+$isccCandidates = @(
+    (Join-Path ${env:ProgramFiles} "Inno Setup 6\ISCC.exe"),
+    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe")
 )
+$isccPath = $isccCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if (-not $isccPath) {
+    throw "Inno Setup 6 not found. Install from https://jrsoftware.org/isdl.php"
+}
 
-Write-Host "Running: $($cmd -join ' ')"
-Write-Host ""
+$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("modulo-installer-contract-" + [guid]::NewGuid().ToString("N"))
+$missingExeBundle = Join-Path $tempRoot "missing-exe"
+$missingMarkerBundle = Join-Path $tempRoot "missing-marker"
+$validBundle = Join-Path $tempRoot "valid"
+$outputDir = Join-Path $tempRoot "output"
+New-Item -ItemType Directory -Path $missingExeBundle, $missingMarkerBundle, $validBundle, $outputDir | Out-Null
 
-$result = & $cmd
-$exitCode = $LASTEXITCODE
+[System.IO.File]::WriteAllText((Join-Path $missingExeBundle "modulo-runtime.json"), '{"contract":"native-windows-v1"}')
+[System.IO.File]::WriteAllText((Join-Path $missingMarkerBundle "modulo.exe"), "placeholder")
 
-if ($exitCode -eq 0) {
-    $exePath = "build\windows\modulo-${Version}-windows-${Arch}.exe"
-    if (Test-Path $exePath) {
-        $size = (Get-Item $exePath).Length
-        $sizeMB = [math]::Round($size / 1MB, 2)
-        Write-Host ""
-        Write-Host "✅ SUCCESS! Installer compiled successfully."
-        Write-Host "Output: $(Resolve-Path $exePath)"
-        Write-Host "Size: ${sizeMB} MB"
-        
-        # Quick validation
-        Write-Host ""
-        Write-Host "Validating installer..."
-        $verify = & cmd /c "`"$exePath`" /?" 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "✅ Installer runs and shows help"
-        } else {
-            Write-Warning "Installer may not run correctly (exit code: $LASTEXITCODE)"
-        }
-    } else {
-        Write-Error "Compiler succeeded but output file not found"
-        exit 1
+function Invoke-Iscc([string]$bundleDir, [string]$outputName) {
+    $arguments = @(
+        "/Qp",
+        "/O$outputDir",
+        "/F$outputName",
+        "/DVERSION_NUM=$Version",
+        "/DBUNDLE_ARCH=$Arch",
+        "/DBUNDLE_DIR=$bundleDir",
+        "/DMODULO_URL=http://127.0.0.1:8000",
+        $issPath
+    )
+    $compilerOutput = & $isccPath @arguments 2>&1
+    $exitCode = [int]$LASTEXITCODE
+    $compilerOutput | ForEach-Object { Write-Host $_ }
+    return $exitCode
+}
+
+try {
+    Write-Host "=== Modulo Windows Installer Contract Test ==="
+    Write-Host "Inno Setup: $isccPath"
+    Write-Host "Installer source: $issPath"
+
+    Write-Host "Checking that a bundle missing modulo.exe fails compilation..."
+    $missingExeExit = Invoke-Iscc $missingExeBundle "missing-exe-contract"
+    Write-Host "Missing modulo.exe compile exit code: $missingExeExit"
+    if ($missingExeExit -eq 0) {
+        throw "Installer compiled despite missing modulo.exe."
     }
-} else {
-    Write-Error "Compilation failed with exit code $exitCode"
-    exit 1
-}
 
-Write-Host ""
-Write-Host "=== Test Complete ==="
+    Write-Host "Checking that a bundle missing modulo-runtime.json fails compilation..."
+    $missingMarkerExit = Invoke-Iscc $missingMarkerBundle "missing-marker-contract"
+    Write-Host "Missing modulo-runtime.json compile exit code: $missingMarkerExit"
+    if ($missingMarkerExit -eq 0) {
+        throw "Installer compiled despite missing modulo-runtime.json."
+    }
+
+    # Inno Setup validates source presence, not PE semantics. This deliberately
+    # minimal fixture proves the installer contract without pretending to be a
+    # runnable native runtime.
+    [System.IO.File]::WriteAllText((Join-Path $validBundle "modulo.exe"), "placeholder")
+    [System.IO.File]::WriteAllText((Join-Path $validBundle "modulo-runtime.json"), '{"contract":"native-windows-v1"}')
+
+    Write-Host "Checking that the minimal declared contract compiles..."
+    $validExit = Invoke-Iscc $validBundle "valid-contract"
+    Write-Host "Valid contract compile exit code: $validExit"
+    $installerPath = Join-Path $outputDir "valid-contract.exe"
+    if ($validExit -ne 0 -or -not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
+        throw "Installer failed to compile the minimal declared contract."
+    }
+
+    Write-Host "PASS: missing required runtime files fail closed."
+    Write-Host "PASS: declared marker/executable contract compiles without committing a fake bundle."
+}
+finally {
+    if (Test-Path -LiteralPath $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force
+    }
+}
