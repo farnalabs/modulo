@@ -1633,9 +1633,11 @@ def cron_trigger_with_expression(expression: str, request: pytest.FixtureRequest
 
 @when(parsers.parse('I create a cron trigger for pipeline "{pipeline_name}" with expression "{expression}"'))
 def create_cron_trigger(
-    pipeline_name: str, expression: str, client, request: pytest.FixtureRequest, patches: list[Any]
+    pipeline_name: str, expression: str, client, request: pytest.FixtureRequest, patches: list[Any], mock_session
 ) -> None:
-    from tests.bdd.conftest import make_mock_pipeline
+    from tests.bdd.conftest import make_mock_pipeline, stub_no_duplicate_trigger
+
+    stub_no_duplicate_trigger(mock_session)
 
     mock_pipeline = getattr(
         request.node,
