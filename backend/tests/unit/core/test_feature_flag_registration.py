@@ -26,25 +26,6 @@ class TestRetiredViewFlags:
         assert "saved_views" not in DEFAULT_OFF_FLAGS
 
 
-class TestMobileSidebarRailFlag:
-    def test_flag_is_registered(self) -> None:
-        registry = FeatureFlagRegistry()
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None, "mobile_sidebar_rail flag must be registered in _KNOWN_FLAGS"
-
-    def test_flag_tier_is_community(self) -> None:
-        registry = FeatureFlagRegistry()
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None
-        assert flag.tier == "community"
-
-    def test_flag_has_description(self) -> None:
-        registry = FeatureFlagRegistry()
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None
-        assert flag.description
-
-
 class TestWebhookNotificationLogFlag:
     """FAR-656: the webhook notification delivery log ships default-OFF —
     registered in the catalog (per-org toggle) and pinned in

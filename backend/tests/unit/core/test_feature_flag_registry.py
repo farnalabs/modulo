@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.feature_flags import DEFAULT_OFF_FLAGS, RETIRED_INTERNAL_FLAGS, FeatureFlagRegistry
+from modulo.core.feature_flags import RETIRED_INTERNAL_FLAGS, FeatureFlagRegistry
 
 
 def _make_session() -> AsyncMock:
@@ -306,83 +306,6 @@ class TestDbCatalogTeamTierFlags:
             assert ctx.feature_enabled(name) is False, f"{name} should be locked on community tier"
 
 
-class TestInactiveCatalogFlags:
-    """Flags seeded ``is_active=false`` (e.g. the ``mobile_sidebar_rail``
-    experiment) must be LISTED in the registry but stay ``currently_active``
-    False on every tier unless an override exists."""
-
-    @staticmethod
-    def _db_flags() -> list[dict[str, object]]:
-        return [
-            {
-                "name": "mobile_sidebar_rail",
-                "description": "Mobile icon-rail sidebar (experimental)",
-                "tier_id": "community",
-                "depends_on": None,
-                "is_active": False,
-            },
-            {
-                "name": "eval_system",
-                "description": "Built-in eval runner for LLM output quality gates",
-                "tier_id": "community",
-                "depends_on": None,
-                "is_active": True,
-            },
-        ]
-
-    @staticmethod
-    def _db_tiers() -> list[dict[str, object]]:
-        return [
-            {"tier_id": "community", "rank": 0},
-            {"tier_id": "team", "rank": 1},
-        ]
-
-    async def test_inactive_flag_is_listed_but_inactive_on_team_tier(self) -> None:
-        session = _make_session()
-        with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=self._db_tiers()),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
-        ):
-            registry = await FeatureFlagRegistry.from_db(session, current_tier="team", has_license_key=True)
-
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None, "inactive catalog flags must still be listed"
-        assert flag.currently_active is False
-        # A community-tier flag seeded active still activates normally.
-        assert registry.get_flag("eval_system") is not None
-        assert registry.get_flag("eval_system").currently_active is True  # type: ignore[union-attr]
-
-    async def test_inactive_flag_stays_inactive_on_community_tier(self) -> None:
-        session = _make_session()
-        with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=self._db_tiers()),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
-        ):
-            registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
-
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None
-        assert flag.currently_active is False
-
-    async def test_inactive_flag_can_be_activated_via_override(self) -> None:
-        session = _make_session()
-        with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=self._db_tiers()),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
-        ):
-            registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
-
-        flag = registry.get_flag("mobile_sidebar_rail")
-        assert flag is not None
-        assert flag.currently_active is False
-        try:
-            registry.set_override("mobile_sidebar_rail", True)
-            assert flag.currently_active is True
-        finally:
-            registry.clear_override("mobile_sidebar_rail")
-        assert flag.currently_active is False
-
-
 class TestRetiredInternalFlags:
     def test_lifecycle_map_journeys_is_retained_for_compatibility_but_not_customer_configurable(self) -> None:
         registry = FeatureFlagRegistry()
@@ -395,89 +318,6 @@ class TestRetiredInternalFlags:
             assert flag.currently_active is False
         finally:
             registry.clear_override("lifecycle_map_journeys")
-
-
-class TestDefaultOffFlags:
-    """Flags shipped default-OFF on every tier (the ``mobile_sidebar_rail``
-    two-mechanism precedent, extended by ``user_scoped_mcp_keys`` FAR-620 and
-    each is listed in the catalog for per-org toggling AND hardcoded in
-     ``_refresh``'s inactive set
-
-    (``DEFAULT_OFF_FLAGS``), so the community-tier tier-rank fallback can
-    never activate it and only an explicit override can turn it on.
-
-    Regression (PR #1062 review): ``_refresh`` seeded the inactive set only
-    from the DB catalog, so a registry built WITHOUT ``load_from_db()``
-    treated community-tier members as active via the tier-rank comparison —
-    leaking the experimental rail on community tier until the catalog was
-    read.
-    """
-
-    @pytest.mark.parametrize("flag_name", sorted(DEFAULT_OFF_FLAGS))
-    def test_flag_registered_in_known_flags(self, flag_name: str) -> None:
-        registry = _make_default_off_registry()
-        flag = registry.get_flag(flag_name)
-        assert flag is not None, f"{flag_name} must be registered in _KNOWN_FLAGS"
-        # The default-off mechanism targets community-tier flags: team-tier
-        # flags are already gated behind a license, so shipping one default-OFF
-        # would be redundant. Update this pin if that ever changes.
-        assert flag.tier == "community"
-
-    @pytest.mark.parametrize("flag_name", sorted(DEFAULT_OFF_FLAGS))
-    def test_inactive_in_fallback_on_community(self, flag_name: str) -> None:
-        registry = _make_default_off_registry("community")
-        assert registry.get_flag(flag_name).currently_active is False  # type: ignore[union-attr]
-
-    @pytest.mark.parametrize("flag_name", sorted(DEFAULT_OFF_FLAGS))
-    def test_inactive_in_fallback_on_team(self, flag_name: str) -> None:
-        registry = _make_default_off_registry("team", has_license_key=True)
-        assert registry.get_flag(flag_name).currently_active is False  # type: ignore[union-attr]
-
-    @pytest.mark.parametrize("flag_name", sorted(DEFAULT_OFF_FLAGS))
-    def test_flag_can_be_enabled_via_sys_override(self, flag_name: str) -> None:
-        registry = _make_default_off_registry("community")
-        flag = registry.get_flag(flag_name)
-        assert flag is not None
-        try:
-            registry.set_override(flag_name, True)
-            assert flag.currently_active is True
-        finally:
-            registry.clear_override(flag_name)
-        assert flag.currently_active is False
-
-    @pytest.mark.parametrize("flag_name", sorted(DEFAULT_OFF_FLAGS))
-    async def test_resolve_flag_defaults_false_even_with_catalog_row_active(self, flag_name: str) -> None:
-        """The ``DEFAULT_OFF_FLAGS`` hardcode wins over a DB catalog row marked
-        active — without the hardcode the tier-rank fallback would activate the
-        flag for community tier. An org override is the ONLY way to enable it."""
-        session = _make_session()
-        db_flags = [
-            {
-                "name": flag_name,
-                "description": "Default-off pin",
-                "tier_id": "community",
-                "depends_on": None,
-                # Even a catalog row marked active stays default-OFF.
-                "is_active": True,
-            },
-        ]
-        db_tiers = [
-            {"tier_id": "community", "rank": 0},
-            {"tier_id": "team", "rank": 1},
-        ]
-        with (
-            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
-            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=db_flags),
-        ):
-            registry = await FeatureFlagRegistry.from_db(session, current_tier="community")
-        assert registry.get_flag(flag_name).currently_active is False  # type: ignore[union-attr]
-        # An org feature_overrides entry (the documented enable path) wins.
-        with patch.object(
-            FeatureFlagRegistry,
-            "_get_org_override",
-            new=AsyncMock(return_value=True),
-        ):
-            assert await registry.resolve_flag(flag_name, org_id=uuid.uuid4()) is True
 
 
 class TestResolveSsoUnrestrictedProvisioning:

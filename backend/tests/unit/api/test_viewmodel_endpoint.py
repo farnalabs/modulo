@@ -397,7 +397,6 @@ def test_viewmodel_current_feature_flags_full_set_with_org_overlay(client: TestC
     plan_ctx.list_all_features = MagicMock(
         return_value=[
             FeatureFlag(name="eval_system", description="d", tier="community", currently_active=True),
-            FeatureFlag(name="mobile_sidebar_rail", description="d", tier="community", currently_active=False),
             FeatureFlag(name="analytics_page", description="d", tier="community", currently_active=True),
         ]
     )
@@ -416,9 +415,7 @@ def test_viewmodel_current_feature_flags_full_set_with_org_overlay(client: TestC
 
     assert resp.status_code == 200
     by_name = {f["name"]: f for f in resp.json()["feature_flags"]}
-    assert len(by_name) == 3
-    # Inactive flag PRESENT with active=false (was dropped entirely before).
-    assert by_name["mobile_sidebar_rail"]["active"] is False
+    assert len(by_name) == 2
     # Org override applied on top of the registry state (was ignored before).
     assert by_name["analytics_page"]["active"] is False
     # Untouched default stays as the registry computed it.

@@ -51,7 +51,6 @@ import AppLayout from '../../components/AppLayout.vue'
 import { usePlanStore } from '../../stores/planStore'
 import { useOnboardingStore } from '../../composables/useOnboarding'
 import { useAssistantStore } from '../../composables/useAssistantStore'
-import { MOBILE_NAV_PENDING_TESTID } from '../../composables/useSidebarMode'
 import { api, getAccessToken } from '../../lib/api/client'
 
 const router = createRouter({
@@ -87,8 +86,8 @@ describe('AppLayout', () => {
     expect(wrapper.text()).toContain('V1')
   })
 
-  describe('mobile — hamburger drawer (flag OFF, default)', () => {
-    it('applies pt-14 to main and shows the hamburger header on mobile when the flag is off', async () => {
+  describe('mobile — unconditional icon rail', () => {
+    it('uses the in-flow rail without top-menu padding regardless of plan state', async () => {
       mockMatchMedia(false)
       const wrapper = mount(AppLayout, {
         global: {
@@ -96,10 +95,6 @@ describe('AppLayout', () => {
           stubs: { LogoMark: true },
         },
       })
-      // Resolve the flag OFF (payload applied): the drawer is the resolved
-      // mode here — an unresolved store must render the pending placeholder
-      // instead (asserted in the FAR-1237 block below).
-      usePlanStore().features['mobile_sidebar_rail'] = false
       // The onboarding banner renders in normal flow and reserves its own
       // height, so its active/dismissed state does not change <main>'s padding
       // class at all. Dismiss it here purely for determinism.
@@ -108,11 +103,12 @@ describe('AppLayout', () => {
       await nextTick()
       await nextTick()
       const main = wrapper.find('main')
-      expect(main.classes()).toContain('pt-14')
-      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
+      expect(main.classes()).not.toContain('pt-14')
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
     })
 
-    it('keeps header-only padding when the mobile header and the onboarding banner are both active', async () => {
+    it('keeps the rail layout when the onboarding banner is active', async () => {
       // Regression pin: the onboarding banner is in normal flow, so it reserves
       // its own height and <main> must NOT add a banner offset. The padding here
       // is identical to the banner-inactive case ("pt-14" on mobile) — any
@@ -137,7 +133,7 @@ describe('AppLayout', () => {
       // inactive-banner tests in this file use).
       expect(wrapper.find('[data-testid="onboarding-banner-trigger"]').exists()).toBe(true)
       const main = wrapper.find('main')
-      expect(main.classes()).toContain('pt-14')
+      expect(main.classes()).not.toContain('pt-14')
       expect(main.classes()).not.toContain('pt-[calc(3.5rem+8.25rem)]')
       expect(main.classes()).not.toContain('pt-[8.25rem]')
       expect(main.classes()).not.toContain('md:pt-20')
@@ -154,8 +150,6 @@ describe('AppLayout', () => {
           stubs: { LogoMark: true },
         },
       })
-      const planStore = usePlanStore()
-      planStore.features['mobile_sidebar_rail'] = true
       const onboarding = useOnboardingStore()
       onboarding.ready = true
       onboarding.isFirstRun = true
@@ -170,96 +164,35 @@ describe('AppLayout', () => {
     })
   })
 
-  describe('mobile — icon rail (flag ON)', () => {
-    it('omits pt-14 from main and shows the rail on mobile when the flag is on', async () => {
+  describe('mobile — plan loading', () => {
+    it('keeps the rail visible while plan loading is unresolved', async () => {
       mockMatchMedia(false)
-      const wrapper = mount(AppLayout, {
-        global: {
-          plugins: [createPinia(), router],
-          stubs: { LogoMark: true },
-        },
-      })
-      const store = usePlanStore()
-      store.features['mobile_sidebar_rail'] = true
-      await nextTick()
-      await nextTick()
-      const main = wrapper.find('main')
-      expect(main.classes()).not.toContain('pt-14')
-      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
-      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
-    })
-  })
-
-  describe('mobile — nav flag unresolved (FAR-1237 pending placeholder)', () => {
-    it('renders neither chrome on first paint — pending placeholder + header offset, no hamburger, no rail', async () => {
-      mockMatchMedia(false)
-      // Hold the plan-bootstrap response so the store is genuinely IN FLIGHT
-      // ('none') at assertion time. The store currently reads the flags from
-      // `/api/v1/admin/feature-flags`; FAR-1809 (PR #1863) repoints that read
-      // to the caller-scoped `/api/v1/plan`, so BOTH paths are held — the
-      // test stays genuine on either side of that merge. Without the hold the
-      // no-payload mock would settle the store to terminal 'unavailable'
-      // (FAR-1805) — the settled case is pinned by the companion test next
-      // door. The flushPromises() below makes the discrimination real: it
-      // drains the settle chain, so a hold that misses the live path leaves
-      // flagsSource 'none' only by timing luck and the assertion fails once
-      // the chain settles (proven by mutation: a bogus hold path fails this
-      // test).
       ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((path: string) => {
-        if (path === '/api/v1/admin/feature-flags' || path === '/api/v1/plan') {
-          return new Promise(() => {})
-        }
+        if (path === '/api/v1/plan') return new Promise(() => {})
         return Promise.resolve({ data: null, error: undefined })
       })
       const wrapper = mount(AppLayout, {
-        global: {
-          plugins: [createPinia(), router],
-          stubs: { LogoMark: true },
-        },
+        global: { plugins: [createPinia(), router], stubs: { LogoMark: true } },
       })
-      const onboarding = useOnboardingStore()
-      onboarding.dismissed = true
-      // Drain the microtask chain fully: license/tiers settle (no-payload),
-      // and the held bootstrap request must STILL leave the store in 'none'.
-      // Without this the assertions below could pass on timing luck alone,
-      // before an unheld request had time to settle the store.
       await flushPromises()
 
       expect(usePlanStore().flagsSource).toBe('none')
-      const pending = wrapper.find(`[data-testid="${MOBILE_NAV_PENDING_TESTID}"]`)
-      expect(pending.exists()).toBe(true)
-      // A labelled live region with a non-interactive hamburger affordance, so
-      // an attempted tap reads as pending nav rather than a dead blank slot.
-      // The native <output> carries the implicit status role (Web:S6819).
-      expect(pending.element.tagName).toBe('OUTPUT')
-      expect(pending.attributes('role')).toBeUndefined()
-      expect(pending.attributes('aria-busy')).toBe('true')
-      expect(pending.find('[data-testid="mobile-nav-pending-hamburger"]').exists()).toBe(true)
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
-      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
-      // The placeholder occupies the fixed header slot, so the offset matches.
-      expect(wrapper.find('main').classes()).toContain('pt-14')
+      expect(wrapper.find('main').classes()).not.toContain('pt-14')
     })
 
-    it("unmounts the placeholder once the fetch settles unreadable — hamburger + drawer render (FAR-1805)", async () => {
+    it('keeps the rail after the plan request settles unreadable', async () => {
       mockMatchMedia(false)
       const wrapper = mount(AppLayout, {
-        global: {
-          plugins: [createPinia(), router],
-          stubs: { LogoMark: true },
-        },
+        global: { plugins: [createPinia(), router], stubs: { LogoMark: true } },
       })
-      const onboarding = useOnboardingStore()
-      onboarding.dismissed = true
       await flushPromises()
 
-      // The no-payload mock has settled the store: terminal 'unavailable',
-      // logged by the store (console.warn is spied in beforeEach).
       expect(usePlanStore().flagsSource).toBe('unavailable')
-      expect(wrapper.find(`[data-testid="${MOBILE_NAV_PENDING_TESTID}"]`).exists()).toBe(false)
-      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true) // interactive
-      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false) // drawer fallback, not rail
-      expect(wrapper.find('main').classes()).toContain('pt-14') // header slot still occupied
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
+      expect(wrapper.find('main').classes()).not.toContain('pt-14')
     })
   })
 
