@@ -99,7 +99,6 @@ const AdminCostControlsView = () => import('../views/AdminCostControlsView.vue')
 const CostComponentsView = () => import('../views/CostComponentsView.vue')
 const AdminConnectorsView = () => import('../views/AdminConnectorsView.vue')
 const AdminNodeCategoriesView = () => import('../views/AdminNodeCategoriesView.vue')
-const AdminViewsView = () => import('../views/AdminViewsView.vue')
 const AdminEvidenceRedactionView = () => import('../views/AdminEvidenceRedactionView.vue')
 const ComplianceEvidenceIndexView = () => import('../views/ComplianceEvidenceIndexView.vue')
 const AdminModelBackendsView = () => import('../views/AdminModelBackendsView.vue')
@@ -445,11 +444,6 @@ const router = createRouter({
       path: '/admin/node-categories',
       name: 'admin-node-categories',
       component: AdminNodeCategoriesView,
-    },
-    {
-      path: '/admin/views',
-      name: 'admin-views',
-      component: AdminViewsView,
     },
     {
       path: '/admin/evidence-redaction',

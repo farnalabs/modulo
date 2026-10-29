@@ -12,29 +12,18 @@ def _clean_global_overrides() -> None:
     FeatureFlagRegistry._overrides.clear()
 
 
-class TestSavedViewsFlag:
-    def test_flag_is_registered(self) -> None:
-        registry = FeatureFlagRegistry()
-        flag = registry.get_flag("saved_views")
-        assert flag is not None, "saved_views flag must be registered in _KNOWN_FLAGS"
+class TestRetiredViewFlags:
+    """FAR-2233: Saved Views is gone, so its two plan flags must be too."""
 
-    def test_flag_tier_is_free(self) -> None:
+    @pytest.mark.parametrize("name", ["saved_views", "view_modes"])
+    def test_flag_is_not_registered(self, name: str) -> None:
         registry = FeatureFlagRegistry()
-        flag = registry.get_flag("saved_views")
-        assert flag is not None
-        assert flag.tier == "community"
+        assert registry.get_flag(name) is None, f"{name} must no longer be registered in _KNOWN_FLAGS"
 
-    def test_flag_has_description(self) -> None:
-        registry = FeatureFlagRegistry()
-        flag = registry.get_flag("saved_views")
-        assert flag is not None
-        assert flag.description
+    def test_flag_is_not_default_off(self) -> None:
+        from modulo.core.feature_flags import DEFAULT_OFF_FLAGS
 
-    def test_flag_default_state(self) -> None:
-        registry = FeatureFlagRegistry()
-        flag = registry.get_flag("saved_views")
-        assert flag is not None
-        assert flag.currently_active is False
+        assert "saved_views" not in DEFAULT_OFF_FLAGS
 
 
 class TestMobileSidebarRailFlag:

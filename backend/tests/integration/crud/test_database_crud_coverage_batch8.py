@@ -66,14 +66,6 @@ from modulo.db.crud.schema_folder import (
     update_folder as update_schema_folder,
 )
 from modulo.db.crud.tier_catalog import get_feature_flag, list_feature_flags, list_tiers
-from modulo.db.crud.view import (
-    create_view,
-    get_view,
-    list_views,
-    restore_view,
-    soft_delete_view,
-    update_view,
-)
 
 pytestmark = pytest.mark.integration
 
@@ -191,40 +183,6 @@ async def test_parameter_schema_crud_lifecycle_and_references(
     assert await restore_parameter_schema(rls_session, schema.id) is schema
     assert schema.deleted_at is None
     assert await delete_parameter_schema(rls_session, uuid.uuid4()) is False
-
-
-async def test_saved_view_crud_pagination_and_soft_delete(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
-    view = await create_view(
-        rls_session,
-        org_id=test_org,
-        name="Runs",
-        view_type="run_list",
-        account_id=test_user,
-        description="A view",
-        filters={"status": "failed"},
-        columns=["status"],
-        sort_by="created_at",
-    )
-    assert await get_view(rls_session, view.id) is view
-    updated = await update_view(rls_session, view.id, {"description": "Updated"})
-    assert updated is view
-    assert view.description == "Updated"
-    page = await list_views(rls_session, view_type="run_list", page=1, page_size=1)
-    assert view in page.items
-    assert page.total >= 1
-    assert await update_view(rls_session, uuid.uuid4(), {"name": "missing"}) is None
-
-    assert await soft_delete_view(rls_session, view.id) is view
-    assert await get_view(rls_session, view.id) is None
-    deleted = await get_view(rls_session, view.id, include_deleted=True)
-    assert deleted is view
-    deleted_page = await list_views(rls_session, include_deleted=True, page=1, page_size=100)
-    assert view in deleted_page.items
-    assert await restore_view(rls_session, view.id) is view
-    assert await soft_delete_view(rls_session, uuid.uuid4()) is None
-    assert await restore_view(rls_session, uuid.uuid4()) is None
 
 
 async def test_tier_catalog_reads_real_seeded_catalog(rls_session: AsyncSession) -> None:

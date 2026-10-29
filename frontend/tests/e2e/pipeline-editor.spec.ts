@@ -62,7 +62,7 @@ test.describe('Pipeline Editor', { tag: '@regression' }, () => {
     // The Assistant floating panel (rendered where dev-mode is on) opens by default
     // and its fixed-position overlay intercepts clicks on interactive page
     // content. Force the panel closed before the app boots. Mirrors
-    // json-viewer.spec.ts / view-modes-admin.spec.ts.
+    // json-viewer.spec.ts / error-tracking.spec.ts.
     await page.addInitScript(() => {
       localStorage.setItem('assistant-panel-state', 'closed')
     })

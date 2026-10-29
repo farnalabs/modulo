@@ -113,7 +113,7 @@ def _make_mock_session() -> AsyncMock:
     scalars_mock.all = MagicMock(return_value=[])
     execute_result.scalars.return_value = scalars_mock
     execute_result.scalar_one_or_none = MagicMock(return_value=None)
-    # The offset-pagination count reads (e.g. list_views) go through
+    # The offset-pagination count reads go through
     # scalar_one()/scalar(); a bare MagicMock there makes the new has_more
     # comparison raise TypeError, so serve a real 0 (empty page) total.
     execute_result.scalar_one = MagicMock(return_value=0)
@@ -330,7 +330,6 @@ def test_viewmodel_current_pending_hitl_query_filters_to_actionable_run_statuses
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
             patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
             patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
-            patch("modulo.api.routes.viewmodel.list_views", return_value=MagicMock(items=[])),
             patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
         ):
             resp = client.get("/api/v1/viewmodel/current")
@@ -613,7 +612,6 @@ def test_viewmodel_current_system_admin_without_org_returns_200(client: TestClie
     assert body["pipelines_total"] == 0
     assert body["runs_total"] == 0
     assert not body["pending_hitl_reviews"]
-    assert not body["views"]
 
 
 def test_viewmodel_current_view_as_team_existing_team_returns_200() -> None:
@@ -647,7 +645,6 @@ def test_viewmodel_current_view_as_team_existing_team_returns_200() -> None:
         with (
             patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
             patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
-            patch("modulo.api.routes.viewmodel.list_views", return_value=MagicMock(items=[])),
             patch("modulo.api.routes.viewmodel.set_rls_org"),
             patch("modulo.api.routes.viewmodel.set_rls_user_context"),
             patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),

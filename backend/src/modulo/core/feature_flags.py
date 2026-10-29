@@ -46,11 +46,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
-        name="saved_views",
-        description="Persistent saved views for run and pipeline lists",
-        tier="community",
-    ),
-    FeatureFlag(
         name="dashboard_charts",
         description="Dashboard trend charts (run activity sparklines)",
         tier="community",
@@ -104,13 +99,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
     FeatureFlag(
         name="admin_cost_controls",
         description="Budget overview, team budgets, alert thresholds, and billing settings",
-        tier="team",
-    ),
-    FeatureFlag(
-        name="view_modes",
-        description=(
-            "Multiple named UI views with admin-defined feature visibility per view and user/team/role assignment"
-        ),
         tier="team",
     ),
     FeatureFlag(
@@ -282,7 +270,6 @@ DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
     {
         "mobile_sidebar_rail",
         "dashboard_charts",
-        "saved_views",
         "user_scoped_mcp_keys",
         "webhook_notification_log",
         "library_collection",

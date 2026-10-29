@@ -35,7 +35,6 @@ from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pipeline import list_pipelines
 from modulo.db.crud.run import list_runs
 from modulo.db.crud.team_membership import list_team_memberships_for_account
-from modulo.db.crud.view import get_view, list_views
 from modulo.db.models.account import Account
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.organisation import Organisation
@@ -43,7 +42,6 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
-from modulo.db.models.view import SavedView
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import Settings, get_settings
@@ -137,33 +135,6 @@ class LicenseInfo(BaseModel):
     is_valid: bool = True
 
 
-class ViewInfo(BaseModel):
-    id: uuid.UUID
-    name: str
-    description: str | None
-    view_type: str
-    filters: dict[str, Any]
-    columns: list[str] | None
-    sort_by: str | None
-    sort_order: str
-    created_by: uuid.UUID = Field(validation_alias="account_id")
-    created_by_me: bool
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True, "populate_by_name": True}
-
-
-class ViewModelViewsResponse(BaseModel):
-    items: list[ViewInfo]
-    total: int
-    page: int
-    page_size: int
-    run_list_views: list[ViewInfo]
-    pipeline_list_views: list[ViewInfo]
-    audit_log_views: list[ViewInfo]
-
-
 class FeatureFlagInfo(BaseModel):
     name: str
     description: str
@@ -233,8 +204,6 @@ class ViewModelCurrent(BaseModel):
     recent_runs: list[RunSummary]
     runs_total: int
     pending_hitl_reviews: list[PendingHitlReview]
-    views: list[ViewInfo] | None = None
-    current_view: ViewInfo | None = None
     is_system_admin: bool = False
 
 
@@ -386,13 +355,12 @@ async def viewmodel_current(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
     view_as_team: uuid.UUID | None = Query(None),
-    current_view_id: uuid.UUID | None = Query(None),
 ) -> ViewModelCurrent:
     if view_as_team is not None and current_user.org_role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can use view_as_team")
 
     try:
-        fetched = await _fetch_viewmodel(session, current_user, settings, view_as_team, current_view_id)
+        fetched = await _fetch_viewmodel(session, current_user, settings, view_as_team)
     except ProgrammingError:
         logger.exception("viewmodel.viewmodel_current")
         raise HTTPException(
@@ -432,8 +400,6 @@ async def viewmodel_current(
         recent_runs=recent_runs,
         runs_total=runs_total,
         pending_hitl_reviews=[PendingHitlReview.model_validate(h) for h in fetched.pending_hitl],
-        views=fetched.all_views,
-        current_view=fetched.current_view,
         is_system_admin=current_user.is_system_admin,
     )
 
@@ -506,59 +472,6 @@ async def plan_bootstrap(
     )
 
 
-@router.get("/api/v1/viewmodel/views")
-@handle_db_errors("viewmodel.viewmodel_list_views")
-async def viewmodel_list_views(
-    session: AsyncSession = Depends(get_db_session),
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=100, ge=1, le=200),
-) -> ViewModelViewsResponse:
-    try:
-        async with session.begin():
-            await set_rls_org(session, current_user.organisation_id)
-            await set_rls_user_context(session, current_user.account_id, current_user.org_role or "admin")
-            result = await list_views(session, page=page, page_size=page_size)
-    except ProgrammingError:
-        logger.exception("viewmodel.viewmodel_list_views")
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=MSG_FEATURE_NOT_AVAILABLE,
-        ) from None
-    except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "viewmodel.viewmodel_list_views")
-        logger.exception("viewmodel.list_views_failed")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database error while listing views.",
-        ) from None
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("viewmodel.list_views_failed")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to list views.",
-        ) from None
-
-    items = [_enrich_view(v, current_user.account_id) for v in result.items]
-    return ViewModelViewsResponse(
-        items=items,
-        total=result.total,
-        page=result.page,
-        page_size=result.page_size,
-        run_list_views=[v for v in items if v.view_type == "run_list"],
-        pipeline_list_views=[v for v in items if v.view_type == "pipeline_list"],
-        audit_log_views=[v for v in items if v.view_type == "audit_log"],
-    )
-
-
-def _enrich_view(view: SavedView, user_id: uuid.UUID) -> ViewInfo:
-    info = ViewInfo.model_validate(view)
-    info.created_by_me = view.account_id == user_id
-    return info
-
-
 def _org_feature_overrides(org: Organisation | None) -> dict[str, bool]:
     """The org's ``feature_overrides`` map (bool entries only); ``{}`` without an org.
 
@@ -625,8 +538,6 @@ class _ViewModelFetch:
     pipelines_page: PageResult[Pipeline] | None
     runs_page: PageResult[Run] | None
     pending_hitl: list[PendingHitlReview]
-    all_views: list[ViewInfo]
-    current_view: ViewInfo | None
     plan_ctx: PlanContext
 
 
@@ -635,7 +546,6 @@ async def _fetch_viewmodel(
     current_user: AuthenticatedPrincipal,
     settings: Settings,
     view_as_team: uuid.UUID | None,
-    current_view_id: uuid.UUID | None,
 ) -> _ViewModelFetch:
     """Fetch everything ``/viewmodel/current`` aggregates, inside one transaction.
 
@@ -659,22 +569,16 @@ async def _fetch_viewmodel(
         pipelines_page: PageResult[Pipeline] | None
         runs_page: PageResult[Run] | None
         pending_hitl: list[PendingHitlReview]
-        all_views: list[ViewInfo]
-        current_view: ViewInfo | None
         if current_user.organisation_id is not None:
-            pipelines_page, runs_page, pending_hitl, all_views, current_view = await _load_org_dashboard(
+            pipelines_page, runs_page, pending_hitl = await _load_org_dashboard(
                 session,
                 current_user.organisation_id,
-                current_user.account_id,
                 memberships,
-                current_view_id,
             )
         else:
             pipelines_page = None
             runs_page = None
             pending_hitl = []
-            all_views = []
-            current_view = None
 
         plan_ctx = await resolve_plan_context(settings, session, org=org)
 
@@ -685,8 +589,6 @@ async def _fetch_viewmodel(
         pipelines_page=pipelines_page,
         runs_page=runs_page,
         pending_hitl=pending_hitl,
-        all_views=all_views,
-        current_view=current_view,
         plan_ctx=plan_ctx,
     )
 
@@ -733,27 +635,16 @@ async def _resolve_viewmodel_org(
 async def _load_org_dashboard(
     session: AsyncSession,
     organisation_id: uuid.UUID,
-    account_id: uuid.UUID,
     memberships: list[TeamMembership],
-    current_view_id: uuid.UUID | None,
-) -> tuple[PageResult[Pipeline], PageResult[Run], list[PendingHitlReview], list[ViewInfo], ViewInfo | None]:
-    """Load the org-scoped dashboard slice: pipelines, runs, pending HITL reviews, saved views."""
+) -> tuple[PageResult[Pipeline], PageResult[Run], list[PendingHitlReview]]:
+    """Load the org-scoped dashboard slice: pipelines, runs, pending HITL reviews."""
     pipelines_page = await list_pipelines(session, page=1, page_size=20, organisation_id=organisation_id)
     runs_page = await list_runs(session, organisation_id=organisation_id, page=1, page_size=10)
 
     user_team_ids = [m.team_id for m in memberships]
     pending_hitl = await _fetch_pending_hitl_reviews(session, organisation_id, user_team_ids)
 
-    all_views_result = await list_views(session, page=1, page_size=100)
-    all_views = [_enrich_view(v, account_id) for v in all_views_result.items]
-
-    current_view = None
-    if current_view_id is not None:
-        view = await get_view(session, current_view_id)
-        if view is not None:
-            current_view = _enrich_view(view, account_id)
-
-    return pipelines_page, runs_page, pending_hitl, all_views, current_view
+    return pipelines_page, runs_page, pending_hitl
 
 
 async def _fetch_pending_hitl_reviews(

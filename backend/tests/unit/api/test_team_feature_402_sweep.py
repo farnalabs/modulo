@@ -98,7 +98,6 @@ TEAM_ROUTES: list[tuple[str, str, str]] = [
     ("admin_spend_limits", "get", "/api/v1/admin/costs/limits"),
     ("admin_cost_controls", "get", "/api/v1/admin/costs/controls"),
     ("admin_cost_breakdown", "get", "/api/v1/admin/costs/export"),
-    ("view_modes", "get", "/api/v1/views"),
     ("environment_profiles", "get", "/api/v1/environment-profiles"),
     ("plugin_management", "get", "/api/v1/plugins"),
     ("admin_run_retention", "get", "/api/v1/admin/runs/retention"),

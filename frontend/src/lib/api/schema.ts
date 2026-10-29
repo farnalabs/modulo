@@ -5751,60 +5751,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/views": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Views Endpoint */
-        get: operations["list_views_endpoint_api_v1_views_get"];
-        put?: never;
-        /** Create View Endpoint */
-        post: operations["create_view_endpoint_api_v1_views_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/views/{view_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get View Endpoint */
-        get: operations["get_view_endpoint_api_v1_views__view_id__get"];
-        put?: never;
-        post?: never;
-        /** Delete View Endpoint */
-        delete: operations["delete_view_endpoint_api_v1_views__view_id__delete"];
-        options?: never;
-        head?: never;
-        /** Update View Endpoint */
-        patch: operations["update_view_endpoint_api_v1_views__view_id__patch"];
-        trace?: never;
-    };
-    "/api/v1/views/{view_id}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore View Endpoint */
-        post: operations["restore_view_endpoint_api_v1_views__view_id__restore_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/license": {
         parameters: {
             query?: never;
@@ -5881,23 +5827,6 @@ export interface paths {
          *     SQLAlchemyError -> 503, HTTPException re-raised, Exception -> 500.
          */
         get: operations["plan_bootstrap_api_v1_plan_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/viewmodel/views": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Viewmodel List Views */
-        get: operations["viewmodel_list_views_api_v1_viewmodel_views_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -22652,80 +22581,6 @@ export interface components {
              */
             notes: string;
         };
-        /** ViewCreate */
-        ViewCreate: {
-            /** Name */
-            name: string;
-            /** Description */
-            description?: string | null;
-            /** View Type */
-            view_type: string;
-            /** Filters */
-            filters?: {
-                [key: string]: unknown;
-            };
-            /** Columns */
-            columns?: string[] | null;
-            /** Sort By */
-            sort_by?: string | null;
-            /**
-             * Sort Order
-             * @default desc
-             */
-            sort_order: string;
-        };
-        /** ViewInfo */
-        ViewInfo: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Name */
-            name: string;
-            /** Description */
-            description: string | null;
-            /** View Type */
-            view_type: string;
-            /** Filters */
-            filters: {
-                [key: string]: unknown;
-            };
-            /** Columns */
-            columns: string[] | null;
-            /** Sort By */
-            sort_by: string | null;
-            /** Sort Order */
-            sort_order: string;
-            /**
-             * Created By
-             * Format: uuid
-             */
-            created_by: string;
-            /** Created By Me */
-            created_by_me: boolean;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /** ViewListResponse */
-        ViewListResponse: {
-            /** Items */
-            items: components["schemas"]["ViewResponse"][];
-            /** Total */
-            total: number;
-            /** Page */
-            page: number;
-            /** Page Size */
-            page_size: number;
-        };
         /** ViewModelCurrent */
         ViewModelCurrent: {
             user: components["schemas"]["UserInfo"];
@@ -22753,92 +22608,11 @@ export interface components {
             runs_total: number;
             /** Pending Hitl Reviews */
             pending_hitl_reviews: components["schemas"]["PendingHitlReview"][];
-            /** Views */
-            views?: components["schemas"]["ViewInfo"][] | null;
-            current_view?: components["schemas"]["ViewInfo"] | null;
             /**
              * Is System Admin
              * @default false
              */
             is_system_admin: boolean;
-        };
-        /** ViewModelViewsResponse */
-        ViewModelViewsResponse: {
-            /** Items */
-            items: components["schemas"]["ViewInfo"][];
-            /** Total */
-            total: number;
-            /** Page */
-            page: number;
-            /** Page Size */
-            page_size: number;
-            /** Run List Views */
-            run_list_views: components["schemas"]["ViewInfo"][];
-            /** Pipeline List Views */
-            pipeline_list_views: components["schemas"]["ViewInfo"][];
-            /** Audit Log Views */
-            audit_log_views: components["schemas"]["ViewInfo"][];
-        };
-        /** ViewResponse */
-        ViewResponse: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Organisation Id
-             * Format: uuid
-             */
-            organisation_id: string;
-            /** Name */
-            name: string;
-            /** Description */
-            description: string | null;
-            /** View Type */
-            view_type: string;
-            /** Filters */
-            filters: {
-                [key: string]: unknown;
-            };
-            /** Columns */
-            columns: string[] | null;
-            /** Sort By */
-            sort_by: string | null;
-            /** Sort Order */
-            sort_order: string;
-            /**
-             * Created By
-             * Format: uuid
-             */
-            created_by: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /** ViewUpdate */
-        ViewUpdate: {
-            /** Name */
-            name?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Filters */
-            filters?: {
-                [key: string]: unknown;
-            } | null;
-            /** Columns */
-            columns?: string[] | null;
-            /** Sort By */
-            sort_by?: string | null;
-            /** Sort Order */
-            sort_order?: string | null;
         };
         /** WebVitalBatchItem */
         WebVitalBatchItem: {
@@ -35525,209 +35299,6 @@ export interface operations {
             };
         };
     };
-    list_views_endpoint_api_v1_views_get: {
-        parameters: {
-            query?: {
-                view_type?: string | null;
-                page?: number;
-                page_size?: number;
-                _fresh?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ViewListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProblemDetail"];
-                };
-            };
-        };
-    };
-    create_view_endpoint_api_v1_views_post: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ViewCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ViewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProblemDetail"];
-                };
-            };
-        };
-    };
-    get_view_endpoint_api_v1_views__view_id__get: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                view_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ViewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProblemDetail"];
-                };
-            };
-        };
-    };
-    delete_view_endpoint_api_v1_views__view_id__delete: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                view_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProblemDetail"];
-                };
-            };
-        };
-    };
-    update_view_endpoint_api_v1_views__view_id__patch: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                view_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ViewUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ViewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProblemDetail"];
-                };
-            };
-        };
-    };
-    restore_view_endpoint_api_v1_views__view_id__restore_post: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                view_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ViewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProblemDetail"];
-                };
-            };
-        };
-    };
     license_info_api_v1_license_get: {
         parameters: {
             query?: {
@@ -35794,7 +35365,6 @@ export interface operations {
         parameters: {
             query?: {
                 view_as_team?: string | null;
-                current_view_id?: string | null;
                 _fresh?: boolean;
             };
             header?: never;
@@ -35841,39 +35411,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlanBootstrapResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProblemDetail"];
-                };
-            };
-        };
-    };
-    viewmodel_list_views_api_v1_viewmodel_views_get: {
-        parameters: {
-            query?: {
-                page?: number;
-                page_size?: number;
-                _fresh?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ViewModelViewsResponse"];
                 };
             };
             /** @description Validation Error */

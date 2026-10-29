@@ -731,18 +731,6 @@ routes:
         <<: *team
         deprecated: false
 
-    /admin/views:
-        name: admin-views
-        breadcrumb: Saved Views
-        parent: /
-        product_map: [feat-dashboard]
-        sidebar_group: admin
-        sidebar_order: 8
-        type: list_page
-        <<: *team
-        visibility: private_preview
-        deprecated: false
-
     /admin/evidence-redaction:
          name: admin-evidence-redaction
          breadcrumb: Evidence Redaction
@@ -2729,61 +2717,6 @@ elements:
         type: button
         dynamic_testid: false
       - testid: admin-invitations-confirm-revoke
-        type: button
-        dynamic_testid: false
-      - testid: feature-gate
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-disabled
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-lock
-        type: element
-        dynamic_testid: false
-      - testid: feature-gate-title
-        type: element
-        dynamic_testid: false
-      - testid: lock-icon
-        type: element
-        dynamic_testid: false
-    /admin/views:
-      - testid: admin-views-add
-        type: button
-        dynamic_testid: false
-      - testid: admin-views-error
-        type: element
-        dynamic_testid: false
-      - testid: admin-views-form-title
-        type: element
-        dynamic_testid: false
-      - testid: admin-views-name-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-views-type-select
-        type: select
-        dynamic_testid: false
-      - testid: admin-views-filters-input
-        type: textarea
-        dynamic_testid: false
-      - testid: admin-views-columns-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-views-sort-by-input
-        type: input
-        dynamic_testid: false
-      - testid: admin-views-sort-order-select
-        type: select
-        dynamic_testid: false
-      - testid: admin-views-save
-        type: button
-        dynamic_testid: false
-      - testid: admin-views-cancel
-        type: button
-        dynamic_testid: false
-      - testid: admin-views-delete-confirm
-        type: button
-        dynamic_testid: false
-      - testid: admin-views-delete-cancel
         type: button
         dynamic_testid: false
       - testid: feature-gate
@@ -6935,15 +6868,12 @@ features:
             - "No pre-flight / predictive run-cost ESTIMATE — spend limits and ceilings are enforced reactively at run finalization; there is no 'this run will cost ≈X' projection before dispatch"
             - "Cost-probe ledger self-healing (core/cost_controller/probe.py) tracks run-total vs breakdown consistency as an operational probe, not a surfaced admin report"
     feat-dashboard:
-        description: Home dashboard, metrics overview, and saved views
+        description: Home dashboard, metrics overview, and trend series
         status: covered
         behaviours:
             - "[x] The dashboard renders token spend, eval rate, and run activity widgets"
             - "[x] Dashboard metrics are scoped to the caller's organisation with per-team breakdown"
             - "[x] The rolling-window timespan toggle (24h/3d/7d/30d/90d + All time, default 3d, persisted in localStorage — FAR-92/FAR-115) scopes the stat cards to the selected window with per-metric trend arrows comparing it to the immediately-preceding equal-length window, value+arrow from the same source (run_daily_facts for counts/status/tokens/success/duration, the org-level org_daily_run_counts ledger row team_id IS NULL for spend, eval_results for pass rate); delta_pct is null with no prior baseline; when the analytics_page flag is off the toggle is hidden and GET /dashboard/summary keeps the legacy all-time shape (days ignored, no period block) with the summary cache keyed dashboard:summary:{org_id}:{days}:{flag} (backend/src/modulo/api/routes/dashboard.py, frontend/src/views/DashboardView.vue)"
-            - "[x] Saved Views ship end to end as the admin CRUD surface: `/admin/views` renders AdminViewsView.vue with create/edit/delete over GET/POST/PATCH/DELETE /api/v1/views (gated by the `view_modes` feature flag), covering custom filters (JSON), column layouts, view type, and sort configuration — locked by views.feature BDD + test_view_endpoint.py"
-        deferrals:
-            - "Saved Views are a private_preview surface (FAR-546): the /admin/views route is hidden from the sidebar nav and the `saved_views` plan toggle is default-off per org; the ViewToggle 'apply to list' frontend component ships but is not yet wired into the runs/pipelines list pages, so a saved view is created/edited from /admin/views rather than applied in-context"
     feat-evidence:
         description: Evidence dashboard with a server-side field-level redaction boundary
         status: covered
