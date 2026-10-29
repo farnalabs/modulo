@@ -1944,7 +1944,7 @@ class TestHitlViewerAccountTeamScope(_AuthContext):
             mock_session.return_value = _make_session_context(session)
             result = await list_hitl_reviews()
 
-        assert result["reviews"] == []
+        assert not result["reviews"]
         sql = str(captured[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
         assert "team_memberships" in sql
         assert f"'{_PLACEHOLDER_USER_ID}'" in sql
