@@ -660,6 +660,45 @@ def test_run_mcp_tool_calls_reraises_http_exception() -> None:
         _collect(assistant_routes._run_mcp_tool_calls(calls, req, "http://base"))
 
 
+def test_run_manifest_calls_without_path_returns_full_manifest() -> None:
+    manifest = {
+        "routes": {"/a": {"name": "A", "testid": "a", "type": "page", "sidebar_group": "g"}},
+        "elements": {"/a": [{"testid": "create"}]},
+        "sidebar_groups": {"g": {}},
+    }
+    with patch("modulo.core.manifest.get_manifest", return_value=manifest):
+        events = _collect(assistant_routes._run_manifest_calls([{"id": "t1", "name": "get_manifest", "args": {}}]))
+    assert events[0]["tool_call_id"] == "t1"
+    assert events[0]["tool_name"] == "get_manifest"
+    assert events[0]["success"] is True
+    assert events[0]["result"]["routes"]["/a"]["name"] == "A"
+    assert events[0]["result"]["sidebar_groups"] == {"g": {}}
+
+
+def test_run_manifest_calls_with_path_returns_single_route() -> None:
+    manifest = {"routes": {"/a": {"name": "A"}}, "elements": {"/a": [{"testid": "create"}]}, "sidebar_groups": {}}
+    with patch("modulo.core.manifest.get_manifest", return_value=manifest):
+        events = _collect(
+            assistant_routes._run_manifest_calls([{"id": "t1", "name": "navigate", "args": {"path": "/a"}}])
+        )
+    assert events[0]["result"] == {"route": {"name": "A"}, "elements": [{"testid": "create"}]}
+
+
+def test_stream_tool_events_splits_navigation_from_mcp() -> None:
+    ctx = _stream_ctx()
+    manifest = {"routes": {"/a": {"name": "A"}}, "elements": {}, "sidebar_groups": {}}
+    tool_calls = [
+        {"id": "n1", "name": "navigate", "args": {"path": "/a"}},
+        {"id": "m1", "name": "search", "args": {}},
+    ]
+    results: list[dict[str, Any]] = []
+    with patch("modulo.core.manifest.get_manifest", return_value=manifest):
+        events = _collect(assistant_routes._stream_tool_events(tool_calls, ctx, results))
+    assert len(events) == 2
+    assert len(results) == 2
+    assert all(event.startswith("event: tool_call") for event in events)
+
+
 def test_save_and_add_assistant_messages() -> None:
     ctx = _ctx_with_id_assigning_flush()
     parent_id = asyncio.run(assistant_routes._save_stream_user_message(ctx))

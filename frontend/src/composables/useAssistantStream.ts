@@ -13,7 +13,7 @@ export interface ToolCallEvent {
 }
 
 export interface StreamOptions {
-  excludeUiTools?: boolean
+  excludeNavigationTools?: boolean
 }
 
 const FETCH_TIMEOUT_MS = 30000
@@ -49,8 +49,8 @@ function buildStreamStartBody(
     context_window_tokens: session.context_window_tokens,
     api_key: '',
     mcp_api_key: headers.Authorization?.replace('Bearer ', '') || '',
-    page_context: options.excludeUiTools ? undefined : buildPageContext(pageCtx),
-    exclude_ui_tools: options.excludeUiTools || undefined,
+    page_context: options.excludeNavigationTools ? undefined : buildPageContext(pageCtx),
+    exclude_navigation_tools: options.excludeNavigationTools || undefined,
   }
 }
 

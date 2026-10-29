@@ -24,8 +24,10 @@ status: covered
 
 Assistant is the in-app AI assistant (PRD §8.23). The user-facing surface
 (`/api/v1/assistant/sessions*`, `/assistant`) provides persistent multi-turn sessions with SSE
-streaming, message CRUD, permission responses, UI-command results and
-permission resets (ADR 007 / ADR 011). The admin surface (`/api/v1/admin/assistant`,
+streaming, message CRUD, and navigation tool resolution (ADR 007 / ADR 011).
+Browser UI driving (click/fill/select/press/extract) was removed in FAR-2232; navigation
+(`navigate`, `go_back`, `get_url`, `get_manifest`) remains and is resolved server-side
+against the app manifest. The admin surface (`/api/v1/admin/assistant`,
 `/admin/assistant`, `/settings/assistant`) manages org-level assistant config (provider,
 model, system prompt, access list), reusable org/user skills, and context sources.
 Access control restricts who may use Assistant (explicit user/role allow-list; admins and
@@ -40,9 +42,9 @@ listed org roles always granted).
       `POST` appends a user message
 - [x] Streaming: `POST /api/v1/assistant/sessions/{id}/stream` returns an SSE stream of the
       LLM response for the session history
-- [x] Assistant loops back to the user for permission prompts
-      (`/permission-response`), executes UI commands (`/ui-command-results`, ADR 007)
-      and resets accumulated permissions (`/reset-permissions`)
+- [x] Assistant resolves navigation tool calls (`navigate`, `go_back`, `get_url`,
+      `get_manifest`) locally against the app manifest and reports them as `tool_call`
+      SSE events
 - [x] Admin config: `GET/PUT /api/v1/admin/assistant/config` reads and updates the
       assistant's provider/model/prompt/access settings with feature-flag + org
       scoping; `GET /available-providers` lists selectable providers
@@ -79,14 +81,12 @@ listed org roles always granted).
   MCP API-key/JWT binding is tracked under `feat-mcp` (ADR 014), not here.
 - **Test breadth**: the user-session streaming/SSE surface is BDD-covered at the
   feature-file level; the API-level unit coverage is split across
-  `test_assistant_routes.py` (session/message CRUD, the SSE
-  stream/permission-response/reset-permissions routes, and the permission
-  round-trip helpers – `_default_tool_permission`, `_resolve_tool_permission`,
-  `_check_nogo`, `_tool_allowlist_disabled`, `_build_permission_request_payload`
-  / `_merge_ui_command_results`, `_classify_ui_tool_permissions`,
-  `clear_session_approvals_for_account`) and `test_admin_assistant_routes.py`
-  (the admin config/skills surface); `test_me_assistant_skills.py` covers the
-  user-facing skills list/create path.
+  `test_assistant_routes.py` (session/message CRUD, the SSE stream loop, and
+  navigation tool resolution – `_run_manifest_calls`, `_stream_tool_events`,
+  `_get_all_tool_definitions`), `test_assistant_exclude_navigation_tools.py`
+  (assistant-only mode), and `test_admin_assistant_routes.py` (the admin
+  config/skills surface); `test_me_assistant_skills.py` covers the user-facing
+  skills list/create path.
 
 ## QA History
 - 2026-09-28: **Improve Architecture product-map walk**: reconciled the stale

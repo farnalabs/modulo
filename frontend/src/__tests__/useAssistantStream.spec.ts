@@ -211,7 +211,7 @@ describe('useAssistantStream', () => {
     expect(store.isStreaming).toBe(false)
   })
 
-  it('POST body omits exclude_ui_tools by default and drops page_context when opted in', async () => {
+  it('POST body omits exclude_navigation_tools by default and drops page_context when opted in', async () => {
     const store = setupStore()
     store.pageContext = { route: '/dashboard', params: { id: '1' }, entities: ['pipeline'] }
     const bodies: any[] = []
@@ -225,11 +225,11 @@ describe('useAssistantStream', () => {
 
     const { connectStream } = useAssistantStream()
     await connectStream('session-1')
-    expect(bodies[0].exclude_ui_tools).toBeUndefined()
+    expect(bodies[0].exclude_navigation_tools).toBeUndefined()
     expect(bodies[0].page_context).toContain('Page: /dashboard')
 
-    await connectStream('session-1', { excludeUiTools: true })
-    expect(bodies[1].exclude_ui_tools).toBe(true)
+    await connectStream('session-1', { excludeNavigationTools: true })
+    expect(bodies[1].exclude_navigation_tools).toBe(true)
     expect(bodies[1].page_context).toBeUndefined()
   })
 

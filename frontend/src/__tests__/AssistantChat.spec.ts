@@ -223,7 +223,7 @@ describe('AssistantChat sending', () => {
     await wrapper.find('button[aria-label="Send message"]').trigger('click')
     expect(sendSpy).toHaveBeenCalledWith('Hello Assistant')
     expect((wrapper.find('.assistant-input').element as HTMLTextAreaElement).value).toBe('')
-    expect(connectStreamMock).toHaveBeenCalledWith('session-1', { excludeUiTools: false })
+    expect(connectStreamMock).toHaveBeenCalledWith('session-1', { excludeNavigationTools: false })
   })
 
   it('sends on Enter but not on Shift+Enter', async () => {

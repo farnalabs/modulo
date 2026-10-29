@@ -132,7 +132,6 @@ __all__ = [
     "_decode_id_token_claims",
     "_parse_saml_datetime",
     "_require_runner",
-    "build_tool_definitions_for_text",
     # --- CRUD functions referenced only by tests ---
     # FAR-795: create-time refs read used by test_work_item_refs_slice2b.py;
     # the node-runner injection site now reads the same semantics via the

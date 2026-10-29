@@ -585,7 +585,7 @@ async function handleSend() {
   await store.sendMessage(text);
   if (store.activeSessionId) {
     try {
-      connectStream(store.activeSessionId, { excludeUiTools: !!props.assistantOnly });
+      connectStream(store.activeSessionId, { excludeNavigationTools: !!props.assistantOnly });
     } catch (e) {
       console.error("Failed to start Assistant stream:", e);
     }
