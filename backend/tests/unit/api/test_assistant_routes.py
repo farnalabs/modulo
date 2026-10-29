@@ -684,6 +684,25 @@ def test_run_manifest_calls_with_path_returns_single_route() -> None:
     assert events[0]["result"] == {"route": {"name": "A"}, "elements": [{"testid": "create"}]}
 
 
+def test_get_all_tool_definitions_includes_navigation_by_default() -> None:
+    mcp_tools = [{"type": "function", "function": {"name": "mcp_tool", "parameters": {}}}]
+    with patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools):
+        tools = assistant_routes._get_all_tool_definitions()
+
+    names = [tool["function"]["name"] for tool in tools]
+    assert names == ["navigate", "go_back", "get_url", "get_manifest", "mcp_tool"]
+    get_manifest = next(tool for tool in tools if tool["function"]["name"] == "get_manifest")
+    assert get_manifest["function"]["parameters"]["properties"]["path"]["type"] == "string"
+
+
+def test_get_all_tool_definitions_excludes_navigation_when_disabled() -> None:
+    mcp_tools = [{"type": "function", "function": {"name": "mcp_tool", "parameters": {}}}]
+    with patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools):
+        tools = assistant_routes._get_all_tool_definitions(include_navigation=False)
+
+    assert [tool["function"]["name"] for tool in tools] == ["mcp_tool"]
+
+
 def test_stream_tool_events_splits_navigation_from_mcp() -> None:
     ctx = _stream_ctx()
     manifest = {"routes": {"/a": {"name": "A"}}, "elements": {}, "sidebar_groups": {}}
