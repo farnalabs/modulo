@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Modulo native installer (Linux) — single-install distribution, P1a.
+# Modulo native installer (Linux only) — single-install distribution, P1a.
+# macOS arm64 uses scripts/macos/install.sh and the signed .dmg artifact.
 # Spec: ADR 031 (single-install native distribution); this ticket: FAR-670.
 #        + pre-upgrade upgrade path (FAR-672).
 # macOS service/data seams exist, but no signed native Darwin artifact is

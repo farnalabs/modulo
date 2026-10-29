@@ -1,28 +1,32 @@
 name: "macOS: Build Installer (.dmg + notarization)"
 
-# FAR-678: native macOS packaging is deliberately fail-closed until a real
-# macOS-native runtime is available. The Linux bundle is never relabeled as
-# macOS, and dry-run only validates the workflow contract.
-
 on:
   workflow_call:
     inputs:
       version:
-        description: "Release version in X.Y.Z form"
         type: string
         required: true
       rc_tag:
-        description: "RC tag being released"
         type: string
         required: true
       ref:
-        description: "Git ref to validate"
         type: string
         required: true
       mode:
-        description: "Build mode: dry-run, cut, recut, promote"
         type: string
         default: dry-run
+    secrets:
+      MACOS_DEVELOPER_ID_CERTIFICATE_P12:
+        required: false
+      MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD:
+        required: false
+      MACOS_NOTARY_API_KEY_P8:
+        required: false
+      MACOS_NOTARY_KEY_ID:
+        required: false
+      MACOS_NOTARY_ISSUER_ID:
+        required: false
+
 concurrency:
   group: macos-installer-${{ github.workflow }}-${{ inputs.version }}
   cancel-in-progress: false
@@ -35,79 +39,150 @@ permissions:
   contents: read
 
 jobs:
-  version-parity:
-    name: Assert bundle versions match
-    runs-on: macos-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
-      - name: Validate shared bundle pins
-        run: |
-          set -euo pipefail
-          test -s scripts/bundle-versions.env
-          echo "bundle-versions.env loaded; no native macOS pins are currently available."
-
   build:
-    name: Validate macOS installer prerequisite
-    needs: version-parity
-    runs-on: macos-latest
-    timeout-minutes: 15
+    name: Build and notarize macOS arm64 bundle
+    runs-on: macos-14
+    timeout-minutes: 90
     env:
       VERSION_NUM: ${{ inputs.version }}
       MODE: ${{ inputs.mode }}
+      RC_TAG: ${{ inputs.rc_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
-      - name: Validate native macOS runtime prerequisite
+
+      - name: Install build tools
         run: |
           set -euo pipefail
-          echo "Native macOS runtime/binaries are not yet available."
-          echo "The current bundle artifact is Linux-only and must not be relabeled as macOS."
-          if [ "$MODE" != "dry-run" ]; then
-            echo "::error::Cannot publish macOS installer: no real macOS-native runtime/binaries exist."
-            exit 1
-          fi
-          scripts/create-macos-info-plist.sh "$VERSION_NUM" "INFO.plist"
-      - name: Dry-run summary
+          brew update
+          brew install shellcheck
+          shellcheck --version
+          clang --version
+          sw_vers
+          uname -m
+          test "$(uname -m)" = arm64
+
+      - name: Validate dry-run contract
         if: ${{ inputs.mode == 'dry-run' }}
         run: |
+          set -euo pipefail
+          test -x scripts/macos/build-native-bundle.sh
+          shellcheck scripts/macos/build-native-bundle.sh
+          bash -n scripts/macos/build-native-bundle.sh
+          grep -q 'macos-14' .github/workflows/macos-installer.yml
           {
-            echo "## macOS installer dry-run"
-            echo ""
-            echo "Native macOS artifacts are not yet available. No placeholder or Linux-derived installer was created or published."
+            echo '## macOS native installer dry-run'
+            echo ''
+            echo 'Dry-run validated the native arm64 build contract only. No artifact was created or published.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  attest:
-    name: Attest macOS installer
-    needs: build
-    if: ${{ inputs.mode != 'dry-run' && needs.build.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    steps:
-      - name: Refuse incomplete native artifact
-        run: |
-          set -euo pipefail
-          echo "::error::Native macOS artifact publication is disabled until a real macOS build exists."
-          exit 1
+      - name: Set up uv
+        if: ${{ inputs.mode != 'dry-run' }}
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+          python-version: '3.12'
+          enable-cache: true
 
-  publish:
-    name: Publish macOS installer
-    needs: [build, attest]
-    if: ${{ inputs.mode == 'promote' && needs.build.result == 'success' && needs.attest.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - name: Refuse incomplete native artifact
+      - name: Build genuine native bundle
+        if: ${{ inputs.mode != 'dry-run' }}
         run: |
           set -euo pipefail
-          echo "::error::Cannot publish macOS installer: native artifact is unavailable."
-          exit 1
+          rm -rf build
+          scripts/macos/build-native-bundle.sh "$VERSION_NUM" "$PWD/build"
+          APP="build/Modulo-${VERSION_NUM}.app"
+          test -x "$APP/Contents/MacOS/modulo"
+          file "$APP/Contents/MacOS/modulo" | grep -E 'Mach-O 64-bit executable arm64'
+          otool -L "$APP/Contents/MacOS/modulo"
+          "$APP/Contents/Resources/bundle/pg/bin/postgres" --version | grep -E 'PostgreSQL 16\.'
+          "$APP/Contents/Resources/bundle/redis/redis-server" --version | grep -E 'v=8\.'
+          "$APP/Contents/MacOS/modulo" --help >/dev/null
+
+      - name: Import Developer ID certificate
+        if: ${{ inputs.mode != 'dry-run' }}
+        env:
+          CERTIFICATE_B64: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CERTIFICATE_B64" || -z "$CERTIFICATE_PASSWORD" ]]; then
+            echo '::error::Developer ID certificate secrets are required for a real macOS release.'
+            exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/modulo-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          CERT="$RUNNER_TEMP/modulo-developer-id.p12"
+          printf '%s' "$CERTIFICATE_B64" | base64 --decode > "$CERT"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT" -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          trap 'security delete-keychain "$KEYCHAIN" 2>/dev/null || true; rm -f "$CERT"' EXIT
+
+      - name: Sign nested executables and app
+        if: ${{ inputs.mode != 'dry-run' }}
+        env:
+          SIGNING_IDENTITY: ${{ vars.MACOS_DEVELOPER_IDENTITY }}
+        run: |
+          set -euo pipefail
+          [[ -n "$SIGNING_IDENTITY" ]] || { echo '::error::MACOS_DEVELOPER_IDENTITY repository variable is required.'; exit 1; }
+          APP="build/Modulo-${VERSION_NUM}.app"
+          while IFS= read -r binary; do
+            file "$binary" | grep -E 'Mach-O 64-bit executable arm64'
+            codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$binary"
+          done < <(find "$APP/Contents" -type f -perm -111 -print)
+          codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Create, sign, notarize and staple DMG
+        if: ${{ inputs.mode != 'dry-run' }}
+        env:
+          NOTARY_KEY_B64: ${{ secrets.MACOS_NOTARY_API_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          SIGNING_IDENTITY: ${{ vars.MACOS_DEVELOPER_IDENTITY }}
+        run: |
+          set -euo pipefail
+          APP="build/Modulo-${VERSION_NUM}.app"
+          DMG="build/Modulo-${VERSION_NUM}-macos-arm64.dmg"
+          hdiutil create -volname "Modulo ${VERSION_NUM}" -srcfolder "$APP" -ov -format UDZO "$DMG"
+          codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
+          [[ -n "$NOTARY_KEY_B64" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER" ]] || { echo '::error::Apple notarytool API-key secrets are required for a real macOS release.'; exit 1; }
+          NOTARY_KEY="$RUNNER_TEMP/modulo-notary.p8"
+          printf '%s' "$NOTARY_KEY_B64" | base64 --decode > "$NOTARY_KEY"
+          xcrun notarytool submit "$DMG" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 30m
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          codesign --verify --verbose=2 "$DMG"
+          hdiutil verify "$DMG"
+          rm -f "$NOTARY_KEY"
+
+      - name: Smoke mounted DMG and clean up
+        if: ${{ inputs.mode != 'dry-run' }}
+        run: |
+          set -euo pipefail
+          DMG="build/Modulo-${VERSION_NUM}-macos-arm64.dmg"
+          MOUNT="$RUNNER_TEMP/modulo-mount"
+          cleanup() { hdiutil detach "$MOUNT" >/dev/null 2>&1 || true; rm -rf "$MOUNT"; }
+          trap cleanup EXIT
+          mkdir -p "$MOUNT"
+          hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -readonly
+          APP="$MOUNT/Modulo-${VERSION_NUM}.app"
+          file "$APP/Contents/MacOS/modulo" | grep -E 'Mach-O 64-bit executable arm64'
+          codesign --verify --deep --strict "$APP"
+          "$APP/Contents/MacOS/modulo" --help >/dev/null
+          "$APP/Contents/Resources/bundle/pg/bin/postgres" --version
+          "$APP/Contents/Resources/bundle/redis/redis-server" --version
+
+      - name: Upload real macOS installer
+        if: ${{ inputs.mode != 'dry-run' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer-${{ inputs.version }}
+          path: build/Modulo-${{ inputs.version }}-macos-arm64.dmg
+          if-no-files-found: error
+          retention-days: 30

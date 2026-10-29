@@ -844,7 +844,7 @@ jobs:
   # Build macOS installer (cut and recut)
   # ---------------------------------------------------------------------------
   macos-installer:
-    name: Validate macOS installer prerequisite
+    name: Build and notarize macOS installer
     needs: [release, bundle]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     uses: ./.github/workflows/macos-installer.yml
@@ -892,6 +892,13 @@ jobs:
         with:
           name: macos-installer-${{ inputs.version }}
           path: release-artefacts
+
+      - name: Assert macOS artifact is real
+        run: |
+          set -euo pipefail
+          DMG="release-artefacts/Modulo-${{ inputs.version }}-macos-arm64.dmg"
+          test -s "$DMG"
+          hdiutil verify "$DMG"
 
       - name: Set up Python 3.12 for OpenAPI dump
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
