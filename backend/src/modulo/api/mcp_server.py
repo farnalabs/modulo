@@ -582,15 +582,6 @@ def _mcp_internal_system_maps_access() -> bool:
     )
 
 
-def _require_mcp_internal_system_maps_access() -> None:
-    if not _mcp_internal_system_maps_access():
-        raise MCPAuthorizationError("System maps tools are restricted to internal operators")
-
-
-# Exported for future System Maps MCP tools.
-__all__ = ["_require_mcp_internal_system_maps_access"]
-
-
 def _ctx_team_id_val() -> uuid.UUID | None:
     """Get the team boundary of the current request (None when no team boundary).
 
