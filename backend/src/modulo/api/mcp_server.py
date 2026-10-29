@@ -598,6 +598,24 @@ def _mcp_internal_system_maps_access() -> bool:
     )
 
 
+def _mcp_flag_visible(
+    flag_name: str,
+    *,
+    internal_lifecycle_access: bool,
+    internal_system_maps_access: bool,
+) -> bool:
+    """Return whether the MCP caller may see ``flag_name`` in a flag listing.
+
+    Internal flags are hidden from ordinary callers; each internal namespace
+    has its own gate (System Maps grant vs the retained lifecycle-map grant).
+    """
+    if flag_name not in INTERNAL_FLAGS:
+        return True
+    if flag_name == SYSTEM_MAPS_FLAG:
+        return internal_system_maps_access
+    return flag_name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access
+
+
 def _ctx_team_id_val() -> uuid.UUID | None:
     """Get the team boundary of the current request (None when no team boundary).
 
@@ -10256,10 +10274,10 @@ async def list_feature_flags() -> dict[str, Any]:
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
-                if (
-                    f.name not in INTERNAL_FLAGS
-                    or (f.name == SYSTEM_MAPS_FLAG and internal_system_maps_access)
-                    or (f.name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access)
+                if _mcp_flag_visible(
+                    f.name,
+                    internal_lifecycle_access=internal_lifecycle_access,
+                    internal_system_maps_access=internal_system_maps_access,
                 )
             ],
             "would_activate": [
@@ -10271,10 +10289,10 @@ async def list_feature_flags() -> dict[str, Any]:
                 }
                 for f in registry.tier_gap_flags()
                 if f.name not in org_overrides
-                if (
-                    f.name not in INTERNAL_FLAGS
-                    or (f.name == SYSTEM_MAPS_FLAG and internal_system_maps_access)
-                    or (f.name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access)
+                if _mcp_flag_visible(
+                    f.name,
+                    internal_lifecycle_access=internal_lifecycle_access,
+                    internal_system_maps_access=internal_system_maps_access,
                 )
             ],
         }
@@ -11354,11 +11372,11 @@ async def get_available_features() -> dict[str, Any]:
         all_flags = [
             flag
             for flag in plan_ctx.list_enabled_features()
-            if (
-                flag.name not in RETIRED_INTERNAL_FLAGS
-                and (flag.name != SYSTEM_MAPS_FLAG or internal_system_maps_access)
+            if _mcp_flag_visible(
+                flag.name,
+                internal_lifecycle_access=internal_lifecycle_access,
+                internal_system_maps_access=internal_system_maps_access,
             )
-            or (flag.name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access)
         ]
 
         lines = ["| Feature | Required Tier | Available |", "|---------|---------------|-----------|"]

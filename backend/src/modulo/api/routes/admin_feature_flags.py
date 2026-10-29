@@ -161,6 +161,20 @@ async def _invalidate_cache(settings: Settings, org_id: str | uuid.UUID) -> None
             await redis.aclose()
 
 
+def _feature_flag_cache_key(
+    org_id: str | uuid.UUID | None,
+    *,
+    internal_system_maps_access: bool,
+) -> str:
+    """Build the cache key scoped to the caller's flag-visibility class.
+
+    The visibility gate is part of the key so an internal response can never be
+    served to an ordinary caller (and vice versa).
+    """
+    visibility = "internal" if internal_system_maps_access else "public"
+    return f"feature-flags:{org_id}:{visibility}"
+
+
 async def _read_org_overrides(session: AsyncSession, org_id: uuid.UUID) -> dict[str, bool]:
     """Read the org's ``feature_overrides`` map (bool entries only).
 
@@ -252,6 +266,13 @@ def _internal_system_maps_access(
             return False
         raise
     return True
+
+
+def _flag_visible_to_caller(flag_name: str, *, internal_system_maps_access: bool) -> bool:
+    """Return whether ``flag_name`` belongs in this caller's flag catalogue."""
+    if flag_name == SYSTEM_MAPS_FLAG:
+        return internal_system_maps_access
+    return flag_name not in RETIRED_INTERNAL_FLAGS
 
 
 def _enforce_team_tier_gate(
@@ -387,8 +408,10 @@ async def list_feature_flags(
         redis = Redis.from_url(
             settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
         )
-        visibility = "internal" if internal_system_maps_access else "public"
-        cache_key = f"feature-flags:{current_user.organisation_id}:{visibility}"
+        cache_key = _feature_flag_cache_key(
+            current_user.organisation_id,
+            internal_system_maps_access=internal_system_maps_access,
+        )
         cached = await redis.get(cache_key)
         if cached:
             return cast("dict[str, Any]", json.loads(cached))
@@ -432,7 +455,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
-                if f.name not in RETIRED_INTERNAL_FLAGS and (f.name != SYSTEM_MAPS_FLAG or internal_system_maps_access)
+                if _flag_visible_to_caller(f.name, internal_system_maps_access=internal_system_maps_access)
             ],
             "would_activate": [
                 {
@@ -442,7 +465,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.tier_gap_flags()
-                if f.name not in RETIRED_INTERNAL_FLAGS and (f.name != SYSTEM_MAPS_FLAG or internal_system_maps_access)
+                if _flag_visible_to_caller(f.name, internal_system_maps_access=internal_system_maps_access)
                 if f.name not in org_overrides
             ],
         }
@@ -452,8 +475,10 @@ async def list_feature_flags(
             redis = Redis.from_url(
                 settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
             )
-            visibility = "internal" if internal_system_maps_access else "public"
-            cache_key = f"feature-flags:{current_user.organisation_id}:{visibility}"
+            cache_key = _feature_flag_cache_key(
+                current_user.organisation_id,
+                internal_system_maps_access=internal_system_maps_access,
+            )
             await redis.setex(cache_key, 60, json.dumps(response_data, default=str))
         except Exception:
             logger.warning("feature-flags.cache_write_failed", exc_info=True)
