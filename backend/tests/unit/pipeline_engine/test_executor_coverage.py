@@ -2504,6 +2504,19 @@ def test_connector_failure_helpers_cover_error_code_fallbacks():
         == "connector.side_effect_unknown"
     )
     assert _node_output_connector_error_code({"artifacts": "not a list"}) == "connector.failed"
+    assert (
+        _node_output_connector_error_code(
+            {
+                "error_code": "",
+                "artifacts": [
+                    "not an artifact",
+                    {"status": "completed", "error_code": "ignored"},
+                    {"status": "failed", "error_code": "connector.failed"},
+                ],
+            }
+        )
+        == "connector.failed"
+    )
 
 
 def test_stream_terminal_connector_failure_uses_default_code():

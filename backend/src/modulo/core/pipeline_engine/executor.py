@@ -1467,20 +1467,27 @@ def _connector_failure_artifact_reason(
     return None
 
 
-def _node_output_connector_error_code(node_output: Any) -> str:
-    """Return the error code for a connector failure envelope."""
-    if isinstance(node_output, dict):
-        code = node_output.get("error_code")
+def _connector_artifact_error_code(artifacts: Any) -> str | None:
+    """Return the first non-empty code from a failed connector artifact."""
+    if not isinstance(artifacts, list):
+        return None
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("status") != "failed":
+            continue
+        code = artifact.get("error_code")
         if isinstance(code, str) and code:
             return code
-        artifacts = node_output.get("artifacts")
-        if isinstance(artifacts, list):
-            for artifact in artifacts:
-                if isinstance(artifact, dict) and artifact.get("status") == "failed":
-                    art_code = artifact.get("error_code")
-                    if isinstance(art_code, str) and art_code:
-                        return art_code
-    return _CODE_CONNECTOR_FAILED
+    return None
+
+
+def _node_output_connector_error_code(node_output: Any) -> str:
+    """Return the error code for a connector failure envelope."""
+    if not isinstance(node_output, dict):
+        return _CODE_CONNECTOR_FAILED
+    code = node_output.get("error_code")
+    if isinstance(code, str) and code:
+        return code
+    return _connector_artifact_error_code(node_output.get("artifacts")) or _CODE_CONNECTOR_FAILED
 
 
 def _node_output_connector_failure(
