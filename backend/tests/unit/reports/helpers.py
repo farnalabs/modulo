@@ -133,11 +133,36 @@ def make_cost_report_mock(*, schedule_type: str) -> MagicMock:
     )
 
 
-def make_http_client(side_effect: list[object] | None = None) -> MagicMock:
-    """Build an async HTTP client double whose ``post`` replays *side_effect*."""
+def make_http_client(
+    side_effect: list[object] | None = None,
+    *,
+    return_value: object = _UNSET,
+) -> MagicMock:
+    """Build an async HTTP client double whose ``post`` returns/replays responses.
+
+    Pass *return_value* for the "every POST succeeds identically" shape and
+    *side_effect* for a scripted sequence; the two are mutually exclusive, as
+    they are on ``AsyncMock`` itself.
+    """
     client = AsyncMock()
-    client.post = AsyncMock(side_effect=side_effect or [])
+    if return_value is not _UNSET and side_effect is not None:
+        raise ValueError("make_http_client takes either return_value or side_effect, not both")
+    if return_value is not _UNSET:
+        client.post = AsyncMock(return_value=return_value)
+    else:
+        client.post = AsyncMock(side_effect=side_effect or [])
     return client
+
+
+def select_returns(report: MagicMock | None) -> MagicMock:
+    """Build the SELECT result double ``_fire_scheduled_report`` reads first.
+
+    ``scalar_one_or_none`` returns *report* (or ``None`` for the missing-report
+    case), matching the production read of the scheduled-report row.
+    """
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = report
+    return result
 
 
 def make_http_response(
