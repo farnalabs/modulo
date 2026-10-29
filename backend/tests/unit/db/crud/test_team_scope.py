@@ -18,6 +18,7 @@ from modulo.db.crud.team_scope import (
     account_team_scope_clause,
     pipeline_team_scope_team_blind,
     pipelines_binding_connector,
+    viewer_run_scope_visible,
 )
 from modulo.db.models.pipeline import Pipeline
 
@@ -39,6 +40,40 @@ def test_account_team_scope_clause_allows_org_rows_and_membership_rows() -> None
     assert "owner_team_id IS NULL" in sql
     assert "team_memberships" in sql
     assert "account_id" in sql
+
+
+def _visible_session(row: object) -> tuple[AsyncMock, list[object]]:
+    session = AsyncMock()
+    captured: list[object] = []
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        captured.append(stmt)
+        result = MagicMock()
+        result.first = MagicMock(return_value=row)
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session, captured
+
+
+async def test_viewer_run_scope_visible_true_when_membership_covers_the_run() -> None:
+    summary = MagicMock()
+    session, captured = _visible_session(summary)
+
+    visible = await viewer_run_scope_visible(session, uuid.uuid4(), uuid.uuid4())
+
+    assert visible is True
+    sql = str(captured[0])
+    assert "team_memberships" in sql, "the run visibility read must carry the membership clamp"
+    assert "COALESCE" in sql.upper(), "the run's stamped owner must take precedence over the pipeline owner"
+
+
+async def test_viewer_run_scope_visible_false_when_outside_the_membership_boundary() -> None:
+    session, _captured = _visible_session(None)
+
+    visible = await viewer_run_scope_visible(session, uuid.uuid4(), uuid.uuid4())
+
+    assert visible is False
 
 
 async def test_pipelines_binding_connector_returns_the_prefilter_rows() -> None:

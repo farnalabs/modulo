@@ -20,12 +20,14 @@ import uuid
 from datetime import UTC, datetime
 from typing import cast
 
-from sqlalchemy import ColumnElement, Select, String, and_, bindparam, or_, select, text
+from sqlalchemy import ColumnElement, Select, String, and_, bindparam, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.crud.team_scope import account_team_scope_clause
 from modulo.db.lifecycle_refs import canonicalise_kind, canonicalise_ref
 from modulo.db.models.journey import Journey
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 
 _DEFAULT_LIMIT = 50
@@ -86,22 +88,35 @@ async def _stage_pipeline_ids(session: AsyncSession, map_id: uuid.UUID) -> set[u
     return {row for (row,) in result.all() if row is not None}
 
 
-async def _referenced_ref_pairs(session: AsyncSession, pipeline_ids: set[uuid.UUID]) -> set[tuple[str, str]]:
+async def _referenced_ref_pairs(
+    session: AsyncSession,
+    pipeline_ids: set[uuid.UUID],
+    *,
+    viewer_account_id: uuid.UUID | None = None,
+) -> set[tuple[str, str]]:
     """Distinct canonical (kind, ref) pairs stamped on runs of *pipeline_ids*.
 
     JSONB containment (``work_item_refs @> [...]``) is Postgres-only, so the
     match is done portably: fetch the refs of the map's stage-pipeline runs and
     collect their (kind, ref) pairs in Python. Journey (kind, ref) columns are
     canonical, matching the canonical refs stamped on runs (FAR-142).
+
+    *viewer_account_id* applies the account-team membership clamp to the run
+    read: ``runs`` carries only the org-isolation RLS policy, so without it a
+    viewer could learn the work-item refs of a team-private pipeline that
+    happens to be a stage of an org-visible map.
     """
     if not pipeline_ids:
         return set()
-    result = await session.execute(
-        select(Run.work_item_refs).where(
-            Run.pipeline_id.in_(pipeline_ids),
-            Run.work_item_refs.isnot(None),
-        )
+    stmt = select(Run.work_item_refs).where(
+        Run.pipeline_id.in_(pipeline_ids),
+        Run.work_item_refs.isnot(None),
     )
+    if viewer_account_id is not None:
+        stmt = stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(
+            account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id)
+        )
+    result = await session.execute(stmt)
     pairs: set[tuple[str, str]] = set()
     for (refs,) in result.all():
         for entry in refs or []:
@@ -121,6 +136,7 @@ async def list_map_journeys(
     updated_since: datetime | None = None,
     cursor: str | None = None,
     limit: int = _DEFAULT_LIMIT,
+    viewer_account_id: uuid.UUID | None = None,
 ) -> tuple[list[tuple[Journey, bool]], str | None]:
     """Map-scoped journeys ordered by ``updated_at DESC, id DESC``.
 
@@ -138,7 +154,9 @@ async def list_map_journeys(
     team-scoped maps. ``status`` narrows to a ``latest_status`` value
     (``complete`` / ``failed``; validated by the route). ``updated_since``
     keeps only journeys whose ``updated_at`` (when the journey last moved) is
-    at or after the given instant.
+    at or after the given instant. ``viewer_account_id`` clamps the underlying
+    run read to the account's team memberships (see
+    ``_referenced_ref_pairs``).
     """
     if kind is not None:
         kind = canonicalise_kind(kind)
@@ -148,7 +166,7 @@ async def list_map_journeys(
         ref = ref.strip()
 
     stage_pipeline_ids = await _stage_pipeline_ids(session, map_id)
-    referenced = await _referenced_ref_pairs(session, stage_pipeline_ids)
+    referenced = await _referenced_ref_pairs(session, stage_pipeline_ids, viewer_account_id=viewer_account_id)
 
     conditions = [Journey.map_id == map_id]
     if referenced:
@@ -200,19 +218,21 @@ async def get_map_journey(
     kind: str,
     ref: str,
     owner_team_id: uuid.UUID | None = None,
+    viewer_account_id: uuid.UUID | None = None,
 ) -> tuple[Journey, bool] | None:
     """Single journey detail by exact (kind, ref), scoped to *map_id*.
 
     Returns ``(journey, unattributed)`` or ``None`` when no journey matches;
     ``unattributed`` is True when a map stage pipeline has seen the journey's
     work item but it never advanced into a map stage (see
-    ``_is_unattributed``).
+    ``_is_unattributed``). ``viewer_account_id`` clamps the underlying run read
+    to the account's team memberships (see ``_referenced_ref_pairs``).
     """
     kind = canonicalise_kind(kind)
     ref = canonicalise_ref(kind, ref)
 
     stage_pipeline_ids = await _stage_pipeline_ids(session, map_id)
-    referenced = await _referenced_ref_pairs(session, stage_pipeline_ids)
+    referenced = await _referenced_ref_pairs(session, stage_pipeline_ids, viewer_account_id=viewer_account_id)
 
     conditions = [Journey.map_id == map_id]
     if (kind, ref) in referenced:
@@ -273,19 +293,31 @@ def _journey_refs_containment(journey: Journey) -> ColumnElement[bool]:
     )
 
 
-def _journey_runs_postgres_query(journey: Journey, *, limit: int) -> Select[Run]:
+def _journey_runs_postgres_query(
+    journey: Journey,
+    *,
+    limit: int,
+    viewer_account_id: uuid.UUID | None = None,
+) -> Select[Run]:
     """Scalable Postgres predicate walk for ``list_journey_runs``.
 
     Translates the portable scan exactly: only refs-carrying runs, matched by
     JSONB containment OR the canonical work-item-id anchor (when set), newest
-    first, SQL-side ``LIMIT``.
+    first, SQL-side ``LIMIT``. ``viewer_account_id`` adds the account-team
+    membership clamp against the run's effective owner (``runs`` carries only
+    the org-isolation RLS policy).
     """
     conditions: list[ColumnElement[bool]] = [Run.work_item_refs.isnot(None)]
     if journey.canonical_work_item_id is not None:
         conditions.append(or_(_journey_refs_containment(journey), Run.work_item_id == journey.canonical_work_item_id))
     else:
         conditions.append(_journey_refs_containment(journey))
-    return select(Run).where(*conditions).order_by(Run.completed_at.desc().nulls_last()).limit(limit)
+    query = select(Run).where(*conditions)
+    if viewer_account_id is not None:
+        query = query.join(Pipeline, Run.pipeline_id == Pipeline.id).where(
+            account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id)
+        )
+    return query.order_by(Run.completed_at.desc().nulls_last()).limit(limit)
 
 
 async def list_journey_runs(
@@ -293,6 +325,7 @@ async def list_journey_runs(
     *,
     journey: Journey,
     limit: int = _DEFAULT_RUN_HISTORY_LIMIT,
+    viewer_account_id: uuid.UUID | None = None,
 ) -> list[Run]:
     """Recent runs touching *journey*, most recent first (best-effort).
 
@@ -304,14 +337,23 @@ async def list_journey_runs(
     otherwise); non-Postgres dialects (SQLite unit tests) fall back to the
     portable Python scan with identical semantics. Runs may be purged — an
     empty result is a valid "history lost to retention" outcome, not an error.
+
+    *viewer_account_id* applies the account-team membership clamp so a viewer
+    never sees the run history of a team-private pipeline it does not belong
+    to (``runs`` carries only the org-isolation RLS policy).
     """
     if _is_postgres(session):
-        result = await session.execute(_journey_runs_postgres_query(journey, limit=limit))
+        result = await session.execute(
+            _journey_runs_postgres_query(journey, limit=limit, viewer_account_id=viewer_account_id)
+        )
         return list(result.scalars())
     # Portable fallback (SQLite unit tests): unbounded walk, Python filter.
-    result = await session.execute(
-        select(Run).where(Run.work_item_refs.isnot(None)).order_by(Run.completed_at.desc().nulls_last())
-    )
+    fallback = select(Run).where(Run.work_item_refs.isnot(None))
+    if viewer_account_id is not None:
+        fallback = fallback.join(Pipeline, Run.pipeline_id == Pipeline.id).where(
+            account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), viewer_account_id)
+        )
+    result = await session.execute(fallback.order_by(Run.completed_at.desc().nulls_last()))
     matched: list[Run] = []
     for run in result.scalars():
         if _run_matches_journey(run, journey):

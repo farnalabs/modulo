@@ -97,7 +97,7 @@ from modulo.db.crud.hitl_review_config import (
     snapshot_review_config_map,
 )
 from modulo.db.crud.run import get_run, transition_run
-from modulo.db.crud.team_scope import account_team_scope_clause
+from modulo.db.crud.team_scope import account_team_scope_clause, viewer_run_scope_visible
 from modulo.db.models.account import Account
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline import Pipeline
@@ -1475,7 +1475,11 @@ async def _load_pending_run_data(
     principal: TenantPrincipal,
     run_id: uuid.UUID,
 ) -> _PendingRunData:
-    """Resolve the run's pending gates and their render maps."""
+    """Resolve the run's pending gates and their render maps.
+
+    A viewer is bounded to the runs its team memberships cover; a run outside
+    that boundary is rendered as not-found (never as an empty-gate 200).
+    """
     # Defence-in-depth org predicate (FAR-328): RLS is the backstop, the
     # explicit filter makes cross-tenant access impossible even if RLS
     # were misconfigured.
@@ -1483,12 +1487,18 @@ async def _load_pending_run_data(
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
+    viewer_account_id = _viewer_account_scope_id(principal)
+    if viewer_account_id is not None and not await viewer_run_scope_visible(session, run_id, viewer_account_id):
+        # Mirror the MCP ``get_hitl_review`` not-found mapping: the unclamped
+        # existence check above would otherwise answer 200-with-empty-gates for
+        # a foreign team-private run, i.e. a cross-team run-existence oracle.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+
     gate_stmt = select(HitlClaim).where(
         HitlClaim.run_id == run_id,
         HitlClaim.organisation_id == principal.organisation_id,
         HitlClaim.decision.is_(None),
     )
-    viewer_account_id = _viewer_account_scope_id(principal)
     if viewer_account_id is not None:
         gate_stmt = (
             gate_stmt.join(Run, HitlClaim.run_id == Run.id)

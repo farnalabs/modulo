@@ -1529,13 +1529,57 @@ def test_viewer_run_pending_gates_query_contains_account_team_scope(
     run.owner_team_id = None
     captured = _empty_execute_capture(session)
 
-    with patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)):
+    with (
+        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.api.routes.hitl.viewer_run_scope_visible", new=AsyncMock(return_value=True)),
+    ):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == 200, resp.text
     assert any("team_memberships" in str(stmt) for stmt in captured), (
         "a viewer run-level pending read must be bounded by the account's team memberships"
     )
+
+
+def test_viewer_run_pending_foreign_team_run_maps_to_not_found(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Mirror the MCP ``get_hitl_review`` not-found mapping: a viewer outside
+    the run's owning team must not learn the run exists — 404, never a
+    200-with-empty-gates cross-team existence oracle."""
+    http, _session = client
+    app.dependency_overrides[get_current_user] = _viewer_principal
+    run = MagicMock()
+    run.snapshot_id = None
+    run.owner_team_id = None
+
+    with (
+        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.api.routes.hitl.viewer_run_scope_visible", new=AsyncMock(return_value=False)),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Run not found"
+
+
+def test_run_pending_non_viewer_never_consults_the_membership_clamp(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    http, _session = client
+    run = MagicMock()
+    run.snapshot_id = None
+    run.owner_team_id = None
+    clamp = AsyncMock(return_value=False)
+
+    with (
+        patch("modulo.api.routes.hitl.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.api.routes.hitl.viewer_run_scope_visible", new=clamp),
+    ):
+        resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
+
+    assert resp.status_code == 200, resp.text
+    clamp.assert_not_awaited()
 
 
 def test_viewer_reviews_query_contains_account_team_scope(

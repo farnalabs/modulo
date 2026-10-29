@@ -6712,31 +6712,12 @@ async def _viewer_run_scope_visible(
     """True when a viewer's team memberships cover the run's effective owner.
 
     ``hitl_claims`` carries only the org-only RLS policy, so a viewer read has
-    no team boundary of its own; this predicate supplies the account-team
-    membership clamp the REST HITL lists also apply. Org-level runs (no owning
-    team) are visible to every account; team-private runs are visible only to
-    members of the owning team. The run's stamped owner is authoritative, with
-    the pipeline owner as the fallback for pre-stamp rows.
+    no team boundary of its own; :func:`modulo.db.crud.team_scope.viewer_run_scope_visible`
+    supplies the account-team membership clamp the REST HITL lists also apply.
     """
-    from sqlalchemy import func, select
+    from modulo.db.crud.team_scope import viewer_run_scope_visible
 
-    from modulo.db.crud.team_scope import account_team_scope_clause
-    from modulo.db.models.pipeline import Pipeline
-
-    visible = (
-        await s.execute(
-            select(Run.id)
-            .join(Pipeline, Run.pipeline_id == Pipeline.id)
-            .where(
-                Run.id == rid,
-                account_team_scope_clause(
-                    func.coalesce(Run.owner_team_id, Pipeline.owner_team_id),
-                    account_id,
-                ),
-            )
-        )
-    ).first()
-    return visible is not None
+    return await viewer_run_scope_visible(s, rid, account_id)
 
 
 def _hitl_human_only_denial_payload(

@@ -1015,10 +1015,10 @@ class HITLManager:
         ``include_claimed=False`` to restrict to UNCLAIMED gates only.
 
         ``account_id`` applies the viewer account-team membership clamp
-        (FAR-2XXX): only gates on org-level runs or runs whose effective
-        owner team the account belongs to are returned. ``hitl_claims``
-        carries only the org-only RLS policy, so this predicate is the only
-        team boundary on the read.
+        (viewer-scoped HITL reads): only gates on org-level runs or runs whose
+        effective owner team the account belongs to are returned.
+        ``hitl_claims`` carries only the org-only RLS policy, so this
+        predicate is the only team boundary on the read.
         """
         filters: list[Any] = [
             HitlClaim.organisation_id == org_id,
