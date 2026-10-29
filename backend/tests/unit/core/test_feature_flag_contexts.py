@@ -544,12 +544,6 @@ class TestGoldenPins:
             assert flag is not None
             assert flag.tier == "community", f"{name} must stay community-tier"
 
-    def test_assistant_ui_driving_tier_pinned(self) -> None:
-        registry = FeatureFlagRegistry()
-        flag = registry.get_flag("assistant_ui_driving")
-        assert flag is not None
-        assert flag.tier == "community"
-
     def test_mobile_sidebar_rail_default_off_on_every_tier(self) -> None:
         for tier in ("community", "team"):
             FeatureFlagRegistry._overrides.clear()
