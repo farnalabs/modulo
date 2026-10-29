@@ -4,7 +4,7 @@ import { nextTick } from 'vue'
 import { setActivePinia, createPinia } from 'pinia'
 import type { ChatMessage, ChatSession } from '../../types/assistant'
 
-const { apiGet, apiPost, apiPatch, apiDelete, featureEnabledMock } = vi.hoisted(() => ({
+const { apiGet, apiPost, apiPatch, apiDelete } = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   apiPatch: vi.fn(),
@@ -22,21 +22,6 @@ vi.mock('@/lib/api/client', () => ({
     PUT: vi.fn(),
     DELETE: apiDelete,
   },
-}))
-
-vi.mock('@/composables/useUiCommandExecutor', () => ({
-  setActionSpeed: vi.fn(),
-  resumeUiCommands: vi.fn(),
-  pauseUiCommands: vi.fn(),
-  abortUiCommands: vi.fn(),
-  executeCommandBatch: vi.fn(),
-  isPaused: vi.fn(() => false),
-}))
-
-vi.mock('@/stores/planStore', () => ({
-  usePlanStore: vi.fn(() => ({
-    featureEnabled: featureEnabledMock,
-  })),
 }))
 
 vi.mock('../../components/assistant/AssistantChat.vue', () => ({
@@ -132,7 +117,6 @@ describe('AssistantPanel', () => {
     localStorage.clear()
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    featureEnabledMock.mockReturnValue(false)
     apiGet.mockResolvedValue({ data: { items: [] }, error: undefined })
     apiPost.mockResolvedValue({ data: makeSession(), error: undefined })
     apiPatch.mockResolvedValue({ data: makeSession(), error: undefined })
@@ -221,17 +205,6 @@ describe('AssistantPanel', () => {
     await wrapper.find('button[title="Close"]').trigger('click')
     expect(store.panelState).toBe('closed')
     expect(wrapper.find('.assistant-floating-btn').exists()).toBe(true)
-  })
-
-  it('resets session permissions when the shield button is clicked', async () => {
-    const store = useAssistantStore()
-    const wrapper = await mountPanelOpen()
-    await wrapper.find('button[title="Reset Permissions"]').trigger('click')
-    await flushPromises()
-    expect(apiPost).toHaveBeenCalledWith('/api/v1/assistant/sessions/{session_id}/reset-permissions', {
-      params: { path: { session_id: 'sess-1' } },
-    })
-    expect(store.error).toBeNull()
   })
 
   it('exports the transcript as a markdown blob', async () => {
@@ -356,44 +329,6 @@ describe('AssistantPanel', () => {
     document.dispatchEvent(new MouseEvent('mousemove', { clientX: 60, clientY: 0 }))
     expect(store.panelSize.width).toBe(startW + 60)
     document.dispatchEvent(new MouseEvent('mouseup'))
-  })
-
-  it('cycles the UI navigation speed when the feature is enabled', async () => {
-    featureEnabledMock.mockReturnValue(true)
-    const wrapper = await mountPanelOpen()
-    const speedBtn = wrapper.find('.assistant-titlebar button[aria-label^="Speed:"]')
-    expect(speedBtn.exists()).toBe(true)
-    expect(speedBtn.text()).toContain('normal')
-    await speedBtn.trigger('click')
-    const { setActionSpeed } = await import('@/composables/useUiCommandExecutor')
-    expect(vi.mocked(setActionSpeed)).toHaveBeenLastCalledWith('lightning')
-    expect(wrapper.text()).toContain('Navigates as fast as possible')
-    await speedBtn.trigger('click')
-    expect(vi.mocked(setActionSpeed)).toHaveBeenLastCalledWith('review')
-    await speedBtn.trigger('click')
-    expect(vi.mocked(setActionSpeed)).toHaveBeenLastCalledWith('normal')
-    const { resumeUiCommands } = await import('@/composables/useUiCommandExecutor')
-    expect(vi.mocked(resumeUiCommands)).toHaveBeenCalled()
-  })
-
-  it('shows the review-mode bar with a resume control when speed is review', async () => {
-    featureEnabledMock.mockReturnValue(true)
-    localStorage.setItem('assistant-action-speed', 'review')
-    const wrapper = await mountPanelOpen()
-    const store = useAssistantStore()
-    expect(store.activeSession).not.toBeNull()
-    expect(wrapper.text()).toContain('Stops after each navigation')
-    const resumeBtn = wrapper.findAll('button').find(b => b.text() === 'Resume')
-    expect(resumeBtn).toBeDefined()
-    const { resumeUiCommands } = await import('@/composables/useUiCommandExecutor')
-    await resumeBtn!.trigger('click')
-    expect(vi.mocked(resumeUiCommands)).toHaveBeenCalled()
-  })
-
-  it('hides the speed button when the UI-driving feature is disabled', async () => {
-    featureEnabledMock.mockReturnValue(false)
-    const wrapper = await mountPanelOpen()
-    expect(wrapper.find('.assistant-titlebar button[aria-label^="Speed:"]').exists()).toBe(false)
   })
 
   it('loads the saved session on mount when it still exists', async () => {

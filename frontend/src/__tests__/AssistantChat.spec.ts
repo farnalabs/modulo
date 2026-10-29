@@ -15,12 +15,6 @@ vi.mock('@/lib/api/client', () => ({
   },
 }))
 
-vi.mock('@/stores/planStore', () => ({
-  usePlanStore: vi.fn(() => ({
-    featureEnabled: vi.fn((name: string) => name === 'assistant_ui_driving'),
-  })),
-}))
-
 const { connectStreamMock, disconnectStreamMock } = vi.hoisted(() => ({
   connectStreamMock: vi.fn(() => Promise.resolve()),
   disconnectStreamMock: vi.fn(() => Promise.resolve()),
@@ -32,14 +26,6 @@ vi.mock('@/composables/useAssistantStream', () => ({
     disconnectStream: disconnectStreamMock,
     connected: { value: false },
   })),
-}))
-
-vi.mock('@/composables/useUiCommandExecutor', () => ({
-  pauseUiCommands: vi.fn(),
-  resumeUiCommands: vi.fn(),
-  abortUiCommands: vi.fn(),
-  executeCommandBatch: vi.fn(),
-  isPaused: vi.fn(() => false),
 }))
 
 vi.mock('vue-echarts', () => ({
@@ -65,28 +51,6 @@ async function triggerDeleteFlow(wrapper: ReturnType<typeof mountChat>) {
 }
 
 describe('AssistantChat assistantOnly prop', () => {
-  it('hides the permission/NOGO card when assistantOnly, even with a pending permission', () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.pendingPermission = {
-      request_id: 'req-1',
-      tools: [{ name: 'click', args: { selector: '.delete-btn' } }],
-    }
-    const wrapper = mountChat(true)
-    expect(wrapper.find('.assistant-permission-card').exists()).toBe(false)
-  })
-
-  it('still renders the permission card when NOT assistantOnly (panel regression)', () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.pendingPermission = {
-      request_id: 'req-1',
-      tools: [{ name: 'click', args: { selector: '.delete-btn' } }],
-    }
-    const wrapper = mountChat(false)
-    expect(wrapper.find('.assistant-permission-card').exists()).toBe(true)
-  })
-
   it('does NOT auto-create a new session after deleting the last session in assistant-only mode', async () => {
     const store = useAssistantStore()
     store.activeSessionId = 'session-1'
@@ -113,21 +77,6 @@ describe('AssistantChat assistantOnly prop', () => {
     expect(createSpy).toHaveBeenCalled()
   })
 
-  it('does NOT render the UI-executing indicator when assistantOnly', () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.isExecutingUi = true
-    const wrapper = mountChat(true)
-    expect(wrapper.find('.assistant-executing-indicator').exists()).toBe(false)
-  })
-
-  it('renders the UI-executing indicator when NOT assistantOnly (panel regression)', () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.isExecutingUi = true
-    const wrapper = mountChat(false)
-    expect(wrapper.find('.assistant-executing-indicator').exists()).toBe(true)
-  })
 })
 
 describe('AssistantChat analytics chart card', () => {
@@ -303,17 +252,6 @@ describe('AssistantChat sending', () => {
     expect(sendBtn.attributes('disabled')).toBeDefined()
   })
 
-  it('does not send while the UI is executing', async () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.isExecutingUi = true
-    const sendSpy = vi.spyOn(store, 'sendMessage').mockResolvedValue(undefined as never)
-    const wrapper = mountChat(false)
-    await wrapper.find('.assistant-input').setValue('hello')
-    await wrapper.find('button[aria-label="Send message"]').trigger('click')
-    expect(sendSpy).not.toHaveBeenCalled()
-  })
-
   it('copies an assistant message to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
@@ -476,115 +414,6 @@ describe('AssistantChat tool cards', () => {
     store.appendToolCall({ tool_call_id: 'tc-10', tool_name: 'click', success: false, error: 'selector not found' })
     const wrapper = mountChat(false)
     expect(wrapper.find('.tool-badge').text()).toBe('Failed')
-  })
-})
-
-describe('AssistantChat permission requests', () => {
-  it('describes known tools in human-friendly wording', () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.pendingPermission = {
-      request_id: 'req-1',
-      tools: [
-        { name: 'navigate', args: { path: '/pipelines' } },
-        { name: 'click', args: { selector: '[data-testid="delete-btn"]' } },
-        { name: 'fill', args: { selector: '.search', value: 'assistant' } },
-        { name: 'wait', args: { ms: 500 } },
-      ],
-    }
-    const wrapper = mountChat(false)
-    const text = wrapper.find('.assistant-permission-card').text()
-    expect(text).toContain('Navigate to /pipelines')
-    expect(text).toContain("Click 'delete btn'")
-    expect(text).toContain("Type into .search: 'assistant'")
-    expect(text).toContain('Wait 500ms')
-  })
-
-  it('disables the action buttons while a nogo countdown runs', () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.pendingPermission = {
-      request_id: 'req-2',
-      tools: [{ name: 'click', args: { selector: '.x' }, nogo: true }],
-    }
-    const wrapper = mountChat(false)
-    const denyBtn = wrapper.findAll('.assistant-permission-actions button').find(b => b.text().startsWith('Deny'))
-    expect(denyBtn!.attributes('disabled')).toBeDefined()
-    expect(denyBtn!.text()).toContain('(3s)')
-    expect(wrapper.text()).toContain('Destructive Page')
-  })
-
-  it('keeps the action buttons enabled when no nogo tool is present', () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.pendingPermission = {
-      request_id: 'req-3',
-      tools: [{ name: 'click', args: { selector: '.x' } }],
-    }
-    const wrapper = mountChat(false)
-    const allowBtn = wrapper.findAll('.assistant-permission-actions button').find(b => b.text().startsWith('Allow Once'))
-    expect(allowBtn!.attributes('disabled')).toBeUndefined()
-  })
-
-  it('approves with "Allow Once" and clears the pending request', async () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.pendingPermission = {
-      request_id: 'req-4',
-      tools: [{ name: 'navigate', args: { path: '/' } }],
-    }
-    const approveSpy = vi.spyOn(store, 'approvePermission').mockResolvedValue(undefined as never)
-    const wrapper = mountChat(false)
-    await wrapper.findAll('.assistant-permission-actions button').find(b => b.text().startsWith('Allow Once'))!.trigger('click')
-    expect(approveSpy).toHaveBeenCalledWith('req-4', 'approve')
-  })
-})
-
-// ---- Branch coverage: describeArgs various tool types ----
-describe('AssistantChat — describeArgs branches', () => {
-  beforeEach(() => {
-    localStorage.clear()
-    setActivePinia(createPinia())
-    vi.restoreAllMocks()
-  })
-
-  it('describes extract, extract_all, get_page_interactables, get_url, press and go_back tools', () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.pendingPermission = {
-      request_id: 'req-1',
-      tools: [
-        { name: 'extract', args: { selector: '[data-testid="name"]' } },
-        { name: 'extract_all', args: { selector: '.items' } },
-        { name: 'get_page_interactables', args: {} },
-        { name: 'get_url', args: {} },
-        { name: 'press', args: { key: 'Escape' } },
-        { name: 'go_back', args: {} },
-      ],
-    }
-    const wrapper = mountChat(false)
-    const text = wrapper.find('.assistant-permission-card').text()
-    expect(text).toContain('Read text from name')
-    expect(text).toContain("Read text from all '.items' elements")
-    expect(text).toContain('Discover all clickable')
-    expect(text).toContain('Get current page URL')
-    expect(text).toContain("Press 'Escape' key")
-    expect(text).toContain('Go back to previous page')
-  })
-
-  it('describes wait with selector and unknown tool as empty string', () => {
-    const store = useAssistantStore()
-    store.activeSessionId = 'session-1'
-    store.pendingPermission = {
-      request_id: 'req-2',
-      tools: [
-        { name: 'wait', args: { selector: '.spinner' } },
-        { name: 'custom_tool', args: {} },
-      ],
-    }
-    const wrapper = mountChat(false)
-    const text = wrapper.find('.assistant-permission-card').text()
-    expect(text).toContain("Wait for '.spinner' to appear")
   })
 })
 

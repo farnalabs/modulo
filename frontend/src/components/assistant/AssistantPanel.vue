@@ -60,32 +60,11 @@
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
             <polyline points="7 10 12 15 17 10" />
             <line x1="12" y1="15" x2="12" y2="3" />
-          </svg>
-        </button>
-        <button
-          v-if="store.activeSessionId"
-          type="button"
-          class="assistant-titlebar-btn"
-          @click="store.resetSessionPermissions()"
-          title="Reset Permissions"
-          :aria-label="$t('components.assistant.reset_permissions')"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-          </svg>
-        </button>
-        <button type="button"
-          v-if="store.panelState === 'floating'"
+           </svg>
+         </button>
+         <button type="button"
+           v-if="store.panelState === 'floating'"
+
           class="assistant-titlebar-btn"
           @click="store.setPanelState('docked')"
           title="Dock"
@@ -119,15 +98,7 @@
             <path d="M21 3l-9 9" />
           </svg>
         </button>
-        <button type="button"
-          v-if="planStore.featureEnabled('assistant_ui_driving')"
-          class="assistant-titlebar-btn text-xs font-medium px-1.5"
-          @click="cycleSpeed"
-          :title="`UI Navigation Speed — ${currentSpeedLabel} — ${speedDescriptions[currentSpeed] ?? ''}`"
-          :aria-label="`Speed: ${currentSpeedLabel} — ${speedDescriptions[currentSpeed] ?? ''}`"
-        >
-          <span>{{ speedIcon }}</span><span class="ml-0.5 text-[10px] uppercase tracking-wider">{{ currentSpeedLabel }}</span>
-        </button>
+
         <button type="button"
           v-if="store.panelState !== 'maximised'"
           class="assistant-titlebar-btn"
@@ -196,13 +167,6 @@
     </div>
 
     <div
-      v-if="speedFlash"
-      class="text-center text-xs text-muted-foreground/60 py-1 px-3 border-b select-none"
-    >
-      {{ speedFlash }}
-    </div>
-
-    <div
       v-if="store.error"
       class="flex items-center justify-between px-3 py-2 text-sm border-b"
       :class="isRateLimitError ? 'text-warning-text bg-warning/10 border-warning/20' : 'text-destructive-text bg-destructive/5'"
@@ -217,10 +181,7 @@
         &times;
       </button>
     </div>
-    <div v-if="currentSpeed === 'review' && store.activeSession" class="flex items-center justify-between px-3 py-1.5 text-xs border-b bg-muted/30">
-      <span>⏸ {{ $t('components.assistant.AssistantPanel.stops_after_each_navigation') }}</span>
-      <button type="button" class="text-xs font-medium underline hover:no-underline" @click="resumeUiCommands">{{ $t('components.assistant.AssistantPanel.resume') }}</button>
-    </div>
+
     <div class="assistant-body">
       <div class="assistant-sidebar" :class="{ open: showSidebar }">
         <AssistantSessionDrawer
@@ -304,19 +265,15 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
-import { useStorage } from '@vueuse/core';
 import { shortId } from "@/utils/format";
 import { useAssistantStore } from "@/composables/useAssistantStore";
 import { useAssistantContext } from "@/composables/useAssistantContext";
-import { setActionSpeed, resumeUiCommands } from "@/composables/useUiCommandExecutor";
-import { usePlanStore } from "@/stores/planStore";
 import AssistantChat from "./AssistantChat.vue";
 import AssistantSessionDrawer from "./AssistantSessionDrawer.vue";
 import AssistantSkillManager from "./AssistantSkillManager.vue";
 import AssistantContextSources from "./AssistantContextSources.vue";
 
 const store = useAssistantStore();
-const planStore = usePlanStore();
 const { pageContext } = useAssistantContext();
 watch(
   pageContext,
@@ -327,39 +284,6 @@ watch(
 );
 const showSidebar = ref(false);
 const activeTab = ref<"chat" | "skills" | "sessions" | "sources">("chat");
-
-const speedLabels = ['review', 'normal', 'lightning']
-const speedIcons = ['⏸', '▶', '⚡']
-const speedDescriptions: Record<string, string> = {
-  review: 'Stops after each navigation so you can review',
-  normal: 'Navigates at a pace you can comfortably follow',
-  lightning: 'Navigates as fast as possible',
-}
-const currentSpeed = useStorage('assistant-action-speed', 'normal')
-const currentSpeedLabel = computed(() => {
-  const idx = speedLabels.indexOf(currentSpeed.value)
-  return speedLabels[idx >= 0 ? idx : 1]
-})
-const speedIcon = computed(() => {
-  const idx = speedLabels.indexOf(currentSpeed.value)
-  return speedIcons[idx >= 0 ? idx : 1]
-})
-const speedFlash = ref('')
-let speedFlashTimer: ReturnType<typeof setTimeout> | null = null
-function showSpeedFlash(msg: string) {
-  speedFlash.value = msg
-  if (speedFlashTimer) clearTimeout(speedFlashTimer)
-  speedFlashTimer = setTimeout(() => { speedFlash.value = '' }, 2500)
-}
-function cycleSpeed() {
-  const idx = speedLabels.indexOf(currentSpeed.value)
-  const next = speedLabels[(idx + 1) % speedLabels.length]
-  currentSpeed.value = next
-  setActionSpeed(next)
-  const desc = speedDescriptions[next]
-  if (desc) showSpeedFlash(`UI Nav: ${speedIcons[speedLabels.indexOf(next)]} ${desc}`)
-  if (next !== 'review') resumeUiCommands()
-}
 
 const editingName = ref(false)
 const editNameValue = ref('')
@@ -391,9 +315,6 @@ function cancelEditName() {
 const isRateLimitError = computed(() => {
   return store.error ? store.error.toLowerCase().includes('rate limit') : false
 })
-
-// Init speed from localStorage on mount
-setActionSpeed(currentSpeed.value)
 
 const DOCKED_MIN_WIDTH = 320
 const DOCKED_MAX_WIDTH = 800
@@ -585,7 +506,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  if (speedFlashTimer) clearTimeout(speedFlashTimer)
+
   window.removeEventListener("resize", onWindowResize)
   document.removeEventListener("mousemove", onDrag);
   document.removeEventListener("mouseup", stopDrag);
