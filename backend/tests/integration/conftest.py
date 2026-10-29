@@ -695,12 +695,10 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> 
 
     sys.unraisablehook = chained
     result: Any = None
-    in_flight: BaseException | None = None
+    teardown_completed = False
     try:
         result = yield
-    except BaseException as exc:
-        in_flight = exc
-        raise
+        teardown_completed = True
     finally:
         collateral: list[Any] = []
 
@@ -726,7 +724,10 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> 
             )
         # A teardown error is already failing this item; do not mask it, but the
         # leak is still logged and listed in the session summary above.
-        if leaked and in_flight is None and _strict_connection_leaks():
+        # ``teardown_completed`` is only True when the wrapped hook chain
+        # returned normally, so any propagating exception (including
+        # KeyboardInterrupt/SystemExit) leaves it False and keeps its failure.
+        if leaked and teardown_completed and _strict_connection_leaks():
             detail = str(leaked[0].exc_value)
             pytest.fail(
                 f"unclosed asyncpg connection leaked by {item.nodeid}: {detail}",
