@@ -573,13 +573,17 @@ def _require_mcp_internal_lifecycle_map_access() -> None:
         raise MCPAuthorizationError("Lifecycle map tools are restricted to internal operators")
 
 
+_SYSTEM_MAPS_INTERNAL_PERMISSION = "system_maps_access"
+
+
 def _mcp_internal_system_maps_access() -> bool:
     """Return whether the MCP caller has the internal system maps grant."""
     if not getattr(get_settings(), "modulo_dev_mode", True):
         return False
     role = _ctx_role_val()
-    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
-        _ctx_key_grants.get(None), "library.search.in_dev"
+    grants = _ctx_key_grants.get(None)
+    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and (
+        grants is None or _SYSTEM_MAPS_INTERNAL_PERMISSION in grants
     )
 
 
@@ -10224,7 +10228,8 @@ async def list_feature_flags() -> dict[str, Any]:
                 if isinstance(raw_overrides, dict):
                     org_overrides = {k: bool(v) for k, v in raw_overrides.items()}
 
-        internal_flags_visible = _mcp_internal_lifecycle_map_access()
+        internal_lifecycle_access = _mcp_internal_lifecycle_map_access()
+        internal_system_maps_access = _mcp_internal_system_maps_access()
         return {
             "license": {
                 "tier": registry.current_tier,
@@ -10241,7 +10246,11 @@ async def list_feature_flags() -> dict[str, Any]:
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
-                if internal_flags_visible or f.name not in INTERNAL_FLAGS
+                if (
+                    f.name not in INTERNAL_FLAGS
+                    or (f.name == _FLAG_SYSTEM_MAPS and internal_system_maps_access)
+                    or (f.name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access)
+                )
             ],
             "would_activate": [
                 {
@@ -10252,7 +10261,11 @@ async def list_feature_flags() -> dict[str, Any]:
                 }
                 for f in registry.tier_gap_flags()
                 if f.name not in org_overrides
-                if internal_flags_visible or f.name not in INTERNAL_FLAGS
+                if (
+                    f.name not in INTERNAL_FLAGS
+                    or (f.name == _FLAG_SYSTEM_MAPS and internal_system_maps_access)
+                    or (f.name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access)
+                )
             ],
         }
     except MCPAuthorizationError as exc:

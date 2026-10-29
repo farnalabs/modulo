@@ -237,7 +237,7 @@ def require_in_dev_operator(
     _enforce_key_grant(principal, permission)
 
 
-_SYSTEM_MAPS_INTERNAL_PERMISSION = "library.search.in_dev"
+_SYSTEM_MAPS_INTERNAL_PERMISSION = "system_maps_access"
 
 # Exported for future System Maps REST route modules.
 __all__ = ["_require_internal_system_maps_access"]
@@ -249,15 +249,40 @@ def _require_internal_system_maps_access(
 ) -> TenantPrincipal:
     """Keep the system maps API surface on the internal path only.
 
-    Mirrors ``_require_internal_lifecycle_map_access``: requires dev-mode,
-    operator+ org role, and the in-dev grant.
+    System Maps deliberately has its own grant, separate from the retained
+    lifecycle-map ``library.search.in_dev`` grant. Legacy JWTs and keys without
+    an explicit grant-set keep the role-based behaviour; grant-bearing keys must
+    carry the dedicated System Maps grant.
     """
-    require_in_dev_operator(
-        principal,
-        _SYSTEM_MAPS_INTERNAL_PERMISSION,
-        require_dev_mode=True,
-        settings=settings,
-    )
+    if not getattr(settings, "modulo_dev_mode", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This internal feature requires developer mode",
+        )
+    try:
+        assert_org_role(principal.org_role, "operator", _SYSTEM_MAPS_INTERNAL_PERMISSION, kill_switch_eligible=False)
+    except PermissionDenied as exc:
+        logger.warning(
+            _CODE_PERMISSION_DENIED,
+            extra={
+                "permission": _SYSTEM_MAPS_INTERNAL_PERMISSION,
+                "required": "operator",
+                "actual": principal.org_role,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{_SYSTEM_MAPS_INTERNAL_PERMISSION}' requires 'operator' role",
+        ) from exc
+    if principal.key_grants is not None and _SYSTEM_MAPS_INTERNAL_PERMISSION not in principal.key_grants:
+        logger.warning(
+            _CODE_PERMISSION_DENIED,
+            extra={"permission": _SYSTEM_MAPS_INTERNAL_PERMISSION, "reason": "not_granted"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{_SYSTEM_MAPS_INTERNAL_PERMISSION}' is not granted to this API key",
+        )
     return principal
 
 

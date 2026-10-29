@@ -82,7 +82,7 @@ def internal_client() -> Generator[TestClient, None, None]:
         account_id="00000000-0000-0000-0000-000000000002",
         org_role="operator",
         is_system_admin=True,
-        key_grants=frozenset({"library.search.in_dev"}),
+        key_grants=frozenset({"system_maps_access"}),
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -147,7 +147,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin",
         is_system_admin=True,
-        key_grants=frozenset({"library.search.in_dev"}),
+        key_grants=frozenset({"system_maps_access"}),
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -173,7 +173,7 @@ def ordinary_internal_flag_client() -> Generator[TestClient, None, None]:
         account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin",
         is_system_admin=True,
-        key_grants=frozenset(),
+        key_grants=frozenset({"library.search.in_dev"}),
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -289,6 +289,7 @@ def _mock_registry() -> FeatureFlagRegistry:
 
 class TestListFeatureFlags:
     def test_ordinary_caller_cannot_see_system_maps(self, ordinary_internal_flag_client: TestClient) -> None:
+        """library.search.in_dev alone does not grant system_maps access."""
         with patch(
             "modulo.api.routes.admin_feature_flags._build_registry",
             return_value=_mock_registry(),
@@ -497,6 +498,7 @@ class TestListFeatureFlags:
 
 class TestGetFeatureFlag:
     def test_ordinary_caller_cannot_inspect_system_maps(self, ordinary_internal_flag_client: TestClient) -> None:
+        """library.search.in_dev alone does not grant system_maps access."""
         response = ordinary_internal_flag_client.get("/api/v1/admin/feature-flags/system_maps")
         assert response.status_code == 403
 
@@ -687,6 +689,7 @@ class TestProgrammingError:
 
 class TestToggleFeatureFlag:
     def test_ordinary_caller_cannot_enable_system_maps(self, ordinary_internal_flag_client: TestClient) -> None:
+        """library.search.in_dev alone does not grant system_maps access."""
         response = ordinary_internal_flag_client.put("/api/v1/admin/feature-flags/system_maps", json={"enabled": True})
         assert response.status_code == 403
 
@@ -960,6 +963,7 @@ class TestOrgOverrideCacheInvalidation:
     def test_set_system_maps_override_is_denied_for_ordinary_caller(
         self, ordinary_internal_flag_client: TestClient
     ) -> None:
+        """library.search.in_dev alone does not grant system_maps access."""
         response = ordinary_internal_flag_client.put(
             "/api/v1/admin/feature-flags/system_maps/org-override", json={"enabled": True}
         )
@@ -1071,6 +1075,7 @@ class TestOrgOverrideRoundTrip:
     def test_get_system_maps_override_is_denied_for_ordinary_caller(
         self, ordinary_internal_flag_client: TestClient
     ) -> None:
+        """library.search.in_dev alone does not grant system_maps access."""
         response = ordinary_internal_flag_client.get("/api/v1/admin/feature-flags/system_maps/org-override")
         assert response.status_code == 403
 
@@ -1172,6 +1177,7 @@ class TestRetiredOrgOverrideAccess:
     def test_clear_system_maps_override_is_denied_for_ordinary_caller(
         self, ordinary_internal_flag_client: TestClient
     ) -> None:
+        """library.search.in_dev alone does not grant system_maps access."""
         response = ordinary_internal_flag_client.delete("/api/v1/admin/feature-flags/system_maps/org-override")
         assert response.status_code == 403
 

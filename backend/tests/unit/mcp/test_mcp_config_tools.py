@@ -364,7 +364,7 @@ class TestSystemMapsInternalFlagMCP:
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        """Internal dev-mode operator with in-dev grant can see system_maps."""
+        """Internal dev-mode operator with the dedicated grant can see system_maps."""
         from modulo.api.mcp_server import _ctx_key_grants, _ctx_org_id, _ctx_role
 
         _ctx_org_id.set(make_session_scope().org_id)
@@ -382,7 +382,7 @@ class TestSystemMapsInternalFlagMCP:
         ]
         mock_resolve.return_value = plan_ctx
         mock_session.return_value = make_session_context(make_session_scope())
-        _ctx_key_grants.set(frozenset({"library.search.in_dev"}))
+        _ctx_key_grants.set(frozenset({"system_maps_access"}))
         try:
             result = await get_available_features()
         finally:
@@ -404,7 +404,7 @@ class TestSystemMapsInternalFlagMCP:
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        """Dev-mode enabled but no in-dev grant cannot see system_maps."""
+        """Dev-mode enabled but no dedicated grant cannot see system_maps."""
         from modulo.api.mcp_server import _ctx_key_grants, _ctx_org_id
 
         _ctx_org_id.set(make_session_scope().org_id)
@@ -421,7 +421,7 @@ class TestSystemMapsInternalFlagMCP:
         ]
         mock_resolve.return_value = plan_ctx
         mock_session.return_value = make_session_context(make_session_scope())
-        _ctx_key_grants.set(frozenset())  # no grant
+        _ctx_key_grants.set(frozenset({"library.search.in_dev"}))  # lifecycle-map grant is not enough
         try:
             result = await get_available_features()
         finally:
@@ -489,7 +489,7 @@ class TestListFeatureFlagsVisibility(AuthContext):
         _ctx_is_system_admin.set(True)
         grants = {"resource.read_only"}
         if internal_access:
-            grants.add("library.search.in_dev")
+            grants.add("system_maps_access")
         _ctx_key_grants.set(frozenset(grants))
         try:
             result = await list_feature_flags()
