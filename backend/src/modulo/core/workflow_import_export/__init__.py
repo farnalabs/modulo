@@ -970,6 +970,7 @@ async def _fetch_v2_triggers(session: AsyncSession, pipeline_id: uuid.UUID) -> l
         triggers = (await session.execute(trig_stmt)).scalars().all()
         return [
             {
+                "name": t.name,
                 "trigger_type": t.trigger_type,
                 "config": dict(t.config_json or {}),
                 "active": t.active,

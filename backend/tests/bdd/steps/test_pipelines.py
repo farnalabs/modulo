@@ -1651,6 +1651,7 @@ def create_cron_trigger(
         f"/api/v1/pipelines/{pid}/triggers",
         json={
             "trigger_type": "cron",
+            "name": "cron-trigger",
             "cron_expression": expression,
             "active": True,
         },

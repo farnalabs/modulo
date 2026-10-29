@@ -52,6 +52,7 @@ def _make_mock_trigger(**overrides: object) -> MagicMock:
     t = MagicMock()
     t.id = overrides.get("id", _TRIGGER_ID)
     t.pipeline_id = overrides.get("pipeline_id", _PIPELINE_ID)
+    t.name = overrides.get("name", "test-trigger")
     t.organisation_id = _ORG_ID
     t.trigger_type = overrides.get("trigger_type", "cron")
     t.active = overrides.get("active", True)
@@ -75,6 +76,8 @@ def _make_trigger_result(triggers: list[MagicMock]) -> MagicMock:
     # The list route's org-state read (trigger pause) uses ``one_or_none`` —
     # default to "no org row" => not paused.
     r.one_or_none = MagicMock(return_value=None)
+    # FAR-2227: the create/rename duplicate-name probe (``.first()``) finds no clash.
+    r.first = MagicMock(return_value=None)
     return r
 
 
@@ -363,7 +366,7 @@ def test_create_trigger_returns_201(client: TestClient) -> None:
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
-            json={"trigger_type": "cron", "cron_expression": "0 * * * *"},
+            json={"name": "t", "trigger_type": "cron", "cron_expression": "0 * * * *"},
         )
 
     assert resp.status_code == 201
@@ -386,7 +389,7 @@ def test_create_trigger_invalid_cron_returns_422(client: TestClient) -> None:
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
-            json={"trigger_type": "cron", "cron_expression": "invalid"},
+            json={"name": "t", "trigger_type": "cron", "cron_expression": "invalid"},
         )
 
     assert resp.status_code == 422
@@ -932,11 +935,15 @@ def test_create_trigger_with_daily_spend_limit_returns_201(client: TestClient) -
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
         patch("modulo.api.routes.triggers.Trigger") as mock_trigger_cls,
+        # The class is mocked out, so the duplicate-name probe cannot build its
+        # ``select(Trigger.id)``; it is covered by the dedicated name tests.
+        patch("modulo.api.routes.triggers._require_unique_trigger_name", new=AsyncMock()),
     ):
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_trigger_result([]))
         mock_trigger = mock_trigger_cls.return_value
         mock_trigger.id = _TRIGGER_ID
+        mock_trigger.name = "t"
         mock_trigger.pipeline_id = _PIPELINE_ID
         mock_trigger.trigger_type = "polling"
         mock_trigger.active = True
@@ -954,7 +961,7 @@ def test_create_trigger_with_daily_spend_limit_returns_201(client: TestClient) -
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
-            json={"trigger_type": "polling", "daily_spend_limit": 25.5},
+            json={"name": "t", "trigger_type": "polling", "daily_spend_limit": 25.5},
         )
 
     assert resp.status_code == 201
@@ -977,7 +984,7 @@ def test_create_trigger_negative_daily_spend_limit_returns_422(client: TestClien
         client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(
             f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
-            json={"trigger_type": "polling", "daily_spend_limit": -5},
+            json={"name": "t", "trigger_type": "polling", "daily_spend_limit": -5},
         )
 
     assert resp.status_code == 422
@@ -1199,6 +1206,7 @@ def _pipeline_cap(cap: int):
 
 def _ongoing_create_payload(**overrides):
     payload = {
+        "name": "ongoing-trigger",
         "trigger_type": "ongoing",
         "active": True,
         "max_concurrent_runs": 3,
@@ -1816,7 +1824,114 @@ def test_trigger_type_regex_accepts_ongoing_and_agent_signal() -> None:
 
     from modulo.api.routes.triggers import TriggerCreate
 
-    assert TriggerCreate(trigger_type="ongoing").trigger_type == "ongoing"
-    assert TriggerCreate(trigger_type="agent_signal").trigger_type == "agent_signal"
+    assert TriggerCreate(name="t", trigger_type="ongoing").trigger_type == "ongoing"
+    assert TriggerCreate(name="t", trigger_type="agent_signal").trigger_type == "agent_signal"
     with pytest.raises(ValidationError):
-        TriggerCreate(trigger_type="not_a_trigger")
+        TriggerCreate(name="t", trigger_type="not_a_trigger")
+
+
+# ---------------------------------------------------------------------------
+# FAR-2227: every trigger carries a required name
+# ---------------------------------------------------------------------------
+
+
+def _duplicate_name_result() -> MagicMock:
+    """A result whose ``.first()`` finds a live trigger already holding the name."""
+    result = _make_trigger_result([_make_mock_trigger()])
+    result.first = MagicMock(return_value=(uuid.uuid4(),))
+    return result
+
+
+def _post_create(client: TestClient, session: AsyncMock, body: dict[str, object]) -> object:
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.triggers.set_rls_org"),
+            patch("modulo.api.routes.triggers.validate_cron_expression", return_value=None),
+            patch("modulo.api.routes.triggers.compute_next_fire", return_value=_NOW),
+        ):
+            return client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/triggers", json=body)
+    finally:
+        client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+@pytest.mark.parametrize("body", [{"trigger_type": "manual"}, {"trigger_type": "manual", "name": ""}])
+def test_create_trigger_without_name_returns_422(client: TestClient, body: dict[str, object]) -> None:
+    session = _make_mock_session()
+    session.execute = AsyncMock(return_value=_make_trigger_result([_make_mock_trigger()]))
+    resp = _post_create(client, session, body)
+    assert resp.status_code == 422
+
+
+def test_create_trigger_with_whitespace_only_name_returns_422(client: TestClient) -> None:
+    session = _make_mock_session()
+    session.execute = AsyncMock(return_value=_make_trigger_result([_make_mock_trigger()]))
+    resp = _post_create(client, session, {"trigger_type": "manual", "name": "   "})
+    assert resp.status_code == 422
+
+
+def test_create_trigger_with_overlong_name_returns_422(client: TestClient) -> None:
+    session = _make_mock_session()
+    session.execute = AsyncMock(return_value=_make_trigger_result([_make_mock_trigger()]))
+    resp = _post_create(client, session, {"trigger_type": "manual", "name": "n" * 256})
+    assert resp.status_code == 422
+
+
+def test_create_trigger_strips_name_and_returns_it(client: TestClient) -> None:
+    session = _make_mock_session()
+    session.execute = AsyncMock(return_value=_make_trigger_result([_make_mock_trigger(name="nightly")]))
+    resp = _post_create(client, session, {"trigger_type": "manual", "name": "  nightly  "})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "nightly"
+    added = session.add.call_args.args[0]
+    assert added.name == "nightly"
+
+
+def test_create_trigger_duplicate_name_returns_409(client: TestClient) -> None:
+    session = _make_mock_session()
+    session.execute = AsyncMock(return_value=_duplicate_name_result())
+    resp = _post_create(client, session, {"trigger_type": "manual", "name": "nightly"})
+    assert resp.status_code == 409
+    assert "duplicate trigger name 'nightly'" in resp.json()["detail"]
+
+
+def _put_update(client: TestClient, session: AsyncMock, body: dict[str, object]) -> object:
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
+    try:
+        with patch("modulo.api.routes.triggers.set_rls_org"):
+            return client.put(f"/api/v1/triggers/{_TRIGGER_ID}", json=body)
+    finally:
+        client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_trigger_renames_and_returns_new_name(client: TestClient) -> None:
+    trigger = _make_mock_trigger(name="old-name")
+    session = _make_mock_session()
+    session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+    resp = _put_update(client, session, {"name": "  new-name  "})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "new-name"
+
+
+def test_update_trigger_rename_to_taken_name_returns_409(client: TestClient) -> None:
+    trigger = _make_mock_trigger(name="old-name")
+    session = _make_mock_session()
+    result = _make_trigger_result([trigger])
+    result.first = MagicMock(return_value=(uuid.uuid4(),))
+    session.execute = AsyncMock(return_value=result)
+    resp = _put_update(client, session, {"name": "taken"})
+    assert resp.status_code == 409
+    assert trigger.name == "old-name"
+
+
+def test_update_trigger_rejects_blank_name(client: TestClient) -> None:
+    session = _make_mock_session()
+    session.execute = AsyncMock(return_value=_make_trigger_result([_make_mock_trigger()]))
+    resp = _put_update(client, session, {"name": "   "})
+    assert resp.status_code == 422

@@ -240,7 +240,7 @@ def step_create_cron_trigger(expression: str, client, request: pytest.FixtureReq
         request,
         client.post(
             f"/api/v1/pipelines/{uuid.uuid4()}/triggers",
-            json={"trigger_type": "cron", "cron_expression": expression},
+            json={"trigger_type": "cron", "name": "cron-trigger", "cron_expression": expression},
         ),
     )
 

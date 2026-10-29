@@ -101,7 +101,7 @@ describe('SettingsTriggersView — org-wide trigger pause', () => {
     putMock.mockRejectedValue(new Error('network down'))
     const wrapper = mountView(fakeJwt('admin'), {
       ...baseListData,
-      items: [{ id: 't1', pipeline_id: 'p1', trigger_type: 'webhook', active: true, config_json: {} }],
+      items: [{ id: 't1', pipeline_id: 'p1', name: 'fixture-trigger', trigger_type: 'webhook', active: true, config_json: {} }],
       triggers_paused: false,
       paused_at: null,
     })
@@ -187,7 +187,7 @@ describe('SettingsTriggersView', () => {
     const wrapper = mountView(fakeJwt('admin'), baseListData)
     await flush()
     const vm = wrapper.vm as any
-    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'polling', poll_interval: 30 }
+    vm.form = { ...vm.defaultForm, name: 'my-trigger', pipeline_id: 'p1', trigger_type: 'polling', poll_interval: 30 }
     await vm.saveTrigger()
     await flush()
     expect(vm.formError).toContain('at least 60')
@@ -208,7 +208,7 @@ describe('SettingsTriggersView', () => {
     })
     await flush()
     const vm = wrapper.vm as any
-    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'polling' }
+    vm.form = { ...vm.defaultForm, name: 'my-trigger', pipeline_id: 'p1', trigger_type: 'polling' }
     await nextTick()
 
     const input = wrapper.find('[data-testid="settings-triggers-form-polling-interval"]')
@@ -232,12 +232,12 @@ describe('SettingsTriggersView', () => {
     await flush()
     const vm = wrapper.vm as any
 
-    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'webhook' }
+    vm.form = { ...vm.defaultForm, name: 'my-trigger', pipeline_id: 'p1', trigger_type: 'webhook' }
     await nextTick()
     const headers = wrapper.find('[data-testid="settings-triggers-form-webhook-headers"]')
     expect(headers.attributes('placeholder')).toContain('X-Custom-Header')
 
-    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'cron' }
+    vm.form = { ...vm.defaultForm, name: 'my-trigger', pipeline_id: 'p1', trigger_type: 'cron' }
     await nextTick()
     const tpl = wrapper.find('[data-testid="settings-triggers-form-cron-input"]')
     expect(tpl.attributes('placeholder')).toContain('"key"')
@@ -253,6 +253,7 @@ describe('SettingsTriggersView — ongoing trigger (FAR-158)', () => {
   const ongoingTrigger = {
     id: 'trig-ongoing-1',
     pipeline_id: 'p1',
+    name: 'fixture-trigger',
     trigger_type: 'ongoing',
     active: true,
     max_concurrent_runs: 4,
@@ -296,6 +297,7 @@ describe('SettingsTriggersView — ongoing trigger (FAR-158)', () => {
     // Select 'ongoing' in the type dropdown (setupState-backed form binding).
     ;(wrapper.vm as any).form.trigger_type = 'ongoing'
     ;(wrapper.vm as any).form.pipeline_id = 'p1'
+    ;(wrapper.vm as any).form.name = 'my-trigger'
     await flush()
 
     // The ongoing form controls are rendered and carry the expected testids.
@@ -317,6 +319,7 @@ describe('SettingsTriggersView — ongoing trigger (FAR-158)', () => {
     const [url, options] = (api.POST as any).mock.calls[0]
     expect(url).toBe('/api/v1/pipelines/{pipeline_id}/triggers')
     expect(options.body).toEqual({
+      name: 'my-trigger',
       trigger_type: 'ongoing',
       active: true,
       config_json: { scan_interval_seconds: 120, input_template: { topic: 'security' } },
@@ -333,6 +336,7 @@ describe('SettingsTriggersView — ongoing trigger (FAR-158)', () => {
     await flush()
     ;(wrapper.vm as any).form.trigger_type = 'ongoing'
     ;(wrapper.vm as any).form.pipeline_id = 'p1'
+    ;(wrapper.vm as any).form.name = 'my-trigger'
     await flush()
 
     await wrapper.find('[data-testid="settings-triggers-form-ongoing-target"]').setValue(3)
@@ -374,6 +378,7 @@ describe('SettingsTriggersView — ongoing trigger (FAR-158)', () => {
     expect(api.PUT).toHaveBeenCalledTimes(1)
     const [url, options] = (api.PUT as any).mock.calls[0]
     expect(url).toBe('/api/v1/triggers/{trigger_id}')
+    expect(options.body.name).toBe('fixture-trigger')
     expect(options.body.max_concurrent_runs).toBe(4)
     expect(options.body.daily_spend_limit).toBe('50')
     expect(options.body.config_json.scan_interval_seconds).toBe(300)
@@ -400,6 +405,7 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
   const ongoing = (over: Record<string, unknown> = {}) => ({
     id: 'trig-ongoing-1',
     pipeline_id: 'p1',
+    name: 'fixture-trigger',
     trigger_type: 'ongoing',
     active: true,
     max_concurrent_runs: 4,
@@ -421,6 +427,7 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
   const cron = (over: Record<string, unknown> = {}) => ({
     id: 'trig-cron-1',
     pipeline_id: 'p1',
+    name: 'fixture-trigger',
     trigger_type: 'cron',
     active: true,
     cron_expression: '0 * * * *',
@@ -508,8 +515,8 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     const wrapper = mountView(fakeJwt('admin'), {
       ...baseListData,
       items: [
-        { id: 't-webhook', pipeline_id: 'p1', trigger_type: 'webhook', active: true, config_json: {}, streak_status: streakStatus() },
-        { id: 't-polling', pipeline_id: 'p1', trigger_type: 'polling', active: true, config_json: {}, streak_status: streakStatus() },
+        { id: 't-webhook', pipeline_id: 'p1', name: 'fixture-trigger', trigger_type: 'webhook', active: true, config_json: {}, streak_status: streakStatus() },
+        { id: 't-polling', pipeline_id: 'p1', name: 'fixture-trigger', trigger_type: 'polling', active: true, config_json: {}, streak_status: streakStatus() },
       ],
     })
     await flush()
@@ -524,7 +531,7 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
         // A cron row from a pre-FAR-1387 cached/stale payload: no streak_status
         // key at all. Covered type + enabled engine is what renders the badge,
         // so an absent status must not (and must not crash).
-        { id: 't-cron', pipeline_id: 'p1', trigger_type: 'cron', active: true, config_json: {} },
+        { id: 't-cron', pipeline_id: 'p1', name: 'fixture-trigger', trigger_type: 'cron', active: true, config_json: {} },
         ongoing({ streak_status: { enabled: false, streak: 0, threshold: 5, state: 'unconfigured', deactivated_reason: null, last_outcomes: [] } }),
       ],
     })
@@ -867,6 +874,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
   const cronTrigger = {
     id: 'trig-cron-1',
     pipeline_id: 'p1',
+    name: 'fixture-trigger',
     trigger_type: 'cron',
     active: true,
     config_json: {},
@@ -949,7 +957,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
     await flush()
     const vm = wrapper.vm as any
-    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'webhook', webhook_url: 'https://hook.example/x', webhook_method: 'POST' }
+    vm.form = { ...vm.defaultForm, name: 'my-trigger', pipeline_id: 'p1', trigger_type: 'webhook', webhook_url: 'https://hook.example/x', webhook_method: 'POST' }
 
     await nextTick()
     await wrapper.find('[data-testid="settings-triggers-form-webhook-url"]').setValue('https://hook.example/x')
@@ -969,6 +977,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     expect(url).toBe('/api/v1/pipelines/{pipeline_id}/triggers')
     expect(options.params.path.pipeline_id).toBe('p1')
     expect(options.body).toEqual({
+      name: 'my-trigger',
       trigger_type: 'webhook',
       active: true,
       config_json: { url: 'https://hook.example/x', method: 'POST', headers: { 'X-Key': 'v' } },
@@ -985,6 +994,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     const vm = wrapper.vm as any
     vm.form = {
       ...vm.defaultForm,
+      name: 'my-trigger',
       pipeline_id: 'p1',
       trigger_type: 'polling',
       connector_instance_id: 'conn-1',
@@ -1016,6 +1026,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     const vm = wrapper.vm as any
     vm.form = {
       ...vm.defaultForm,
+      name: 'my-trigger',
       pipeline_id: 'p1',
       trigger_type: 'agent_signal',
       signal_source_pipeline: 'p1',
@@ -1040,6 +1051,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     const vm = wrapper.vm as any
     vm.form = {
       ...vm.defaultForm,
+      name: 'my-trigger',
       pipeline_id: 'p1',
       trigger_type: 'cron',
       cron_expression: '*/5 * * * *',
@@ -1068,7 +1080,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
     await flush()
     const vm = wrapper.vm as any
-    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'webhook', webhook_url: '', webhook_method: '' }
+    vm.form = { ...vm.defaultForm, name: 'my-trigger', pipeline_id: 'p1', trigger_type: 'webhook', webhook_url: '', webhook_method: '' }
     await flush()
 
     await wrapper.find('form').trigger('submit')
@@ -1088,6 +1100,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     const vm = wrapper.vm as any
     vm.form = {
       ...vm.defaultForm,
+      name: 'my-trigger',
       pipeline_id: 'p1',
       trigger_type: 'polling',
       poll_interval: 120,
@@ -1114,6 +1127,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     const vm = wrapper.vm as any
     vm.form = {
       ...vm.defaultForm,
+      name: 'my-trigger',
       pipeline_id: 'p1',
       trigger_type: 'agent_signal',
       signal_source_pipeline: '',
@@ -1136,7 +1150,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
     await flush()
     const vm = wrapper.vm as any
-    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'cron', input_template: '{bad json' }
+    vm.form = { ...vm.defaultForm, name: 'my-trigger', pipeline_id: 'p1', trigger_type: 'cron', input_template: '{bad json' }
     await flush()
 
     await wrapper.find('form').trigger('submit')
@@ -1155,6 +1169,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     const vm = wrapper.vm as any
     vm.form = {
       ...vm.defaultForm,
+      name: 'my-trigger',
       pipeline_id: 'p1',
       trigger_type: 'ongoing',
       ongoing_scan_interval: 0,
@@ -1182,6 +1197,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     const vm = wrapper.vm as any
     vm.form = {
       ...vm.defaultForm,
+      name: 'my-trigger',
       pipeline_id: 'p1',
       trigger_type: 'ongoing',
       ongoing_scan_interval: 120,
@@ -1205,7 +1221,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
     await flush()
     const vm = wrapper.vm as any
-    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'mystery' }
+    vm.form = { ...vm.defaultForm, name: 'my-trigger', pipeline_id: 'p1', trigger_type: 'mystery' }
     await flush()
 
     await wrapper.find('form').trigger('submit')
@@ -1216,12 +1232,77 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     expect(options.body.config_json).toEqual({})
   })
 
+  // FAR-2227: every trigger carries a required name.
+  it('lists each trigger by its name in the first column', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), {
+      ...baseListData,
+      items: [{ id: 't-named', pipeline_id: 'p1', name: 'Nightly release notes', trigger_type: 'cron', active: true, config_json: {} }],
+    })
+    await flush()
+
+    const cell = wrapper.find('[data-testid="settings-triggers-name"]')
+    expect(cell.exists()).toBe(true)
+    expect(cell.text()).toBe('Nightly release notes')
+  })
+
+  it.each(['', '   '])('create: a blank name (%j) blocks the POST with the name error', async (blank) => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, name: blank, pipeline_id: 'p1', trigger_type: 'webhook' }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).not.toHaveBeenCalled()
+    expect(vm.formError).toContain('Please enter a name')
+  })
+
+  it('create: the name is trimmed before it is sent', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, name: '  Padded name  ', pipeline_id: 'p1', trigger_type: 'webhook' }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    const [, options] = (api.POST as any).mock.calls[0]
+    expect(options.body.name).toBe('Padded name')
+  })
+
+  it('create: a 409 duplicate-name error from the API surfaces in the form', async () => {
+    ;(api.POST as any).mockResolvedValue({ data: null, error: { detail: "duplicate trigger name 'x' for this pipeline" } })
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, name: 'x', pipeline_id: 'p1', trigger_type: 'webhook' }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(vm.formError).toContain('duplicate trigger name')
+    expect(vm.dialogOpen).toBe(true)
+  })
+
   it('save without a pipeline shows the pipeline error and never calls the API', async () => {
     const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
     await flush()
 
     const vm = wrapper.vm as any
-    vm.form = { ...vm.defaultForm, trigger_type: 'webhook' }
+    vm.form = { ...vm.defaultForm, name: 'my-trigger', trigger_type: 'webhook' }
     await vm.saveTrigger()
     await flush()
 
@@ -1260,7 +1341,7 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     ;(api.POST as any).mockRejectedValue(new Error('socket hang up'))
 
     const vm = wrapper.vm as any
-    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'webhook', webhook_url: 'https://h.example' }
+    vm.form = { ...vm.defaultForm, name: 'my-trigger', pipeline_id: 'p1', trigger_type: 'webhook', webhook_url: 'https://h.example' }
     await wrapper.find('form').trigger('submit')
     await flush()
 

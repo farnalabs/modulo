@@ -135,6 +135,7 @@ def _do_create_cron_trigger(client, request, expression, timezone, input_templat
             f"/api/v1/pipelines/{mock_trigger.pipeline_id}/triggers",
             json={
                 "trigger_type": "cron",
+                "name": "cron-trigger",
                 "cron_expression": expression,
                 "cron_timezone": timezone,
                 "config_json": {"input_template": input_template},

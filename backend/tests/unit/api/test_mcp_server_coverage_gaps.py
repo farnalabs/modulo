@@ -2794,6 +2794,7 @@ class TestTriggerToolGaps(_AuthContext):
         ):
             await _create_trigger_impl(
                 pipeline_id=str(uuid.uuid4()),
+                name="t",
                 trigger_type="manual",
                 active=True,
                 cron_expression=None,
@@ -2804,10 +2805,10 @@ class TestTriggerToolGaps(_AuthContext):
 
     async def test_create_error_envelopes(self) -> None:
         with patch.object(ms, "_create_trigger_impl", side_effect=ProgrammingError("s", {}, Exception())):
-            result = await create_trigger(pipeline_id=str(uuid.uuid4()))
+            result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="t")
         assert result["error"] == "migration_required"
         with patch.object(ms, "_create_trigger_impl", side_effect=RuntimeError("boom")):
-            result = await create_trigger(pipeline_id=str(uuid.uuid4()))
+            result = await create_trigger(pipeline_id=str(uuid.uuid4()), name="t")
         assert result["error"] == "server_error"
 
     async def test_get_trigger_defensive_invalid_id(self) -> None:

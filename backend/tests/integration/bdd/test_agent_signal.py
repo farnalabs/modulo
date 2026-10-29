@@ -145,10 +145,10 @@ async def trigger_id(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
                 "trigger_type, active, max_concurrent_runs, config_json, "
                 "account_id) "
-                "VALUES (:id, :oid, :pid, 'agent_signal', true, 5, "
+                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, 5, "
                 "CAST(:config AS json), :uid)",
             ),
             {
@@ -269,10 +269,10 @@ class TestFireAgentSignalIntegration:
                 await set_rls_org(session, org_id)
                 await session.execute(
                     text(
-                        "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                        "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
                         "trigger_type, active, max_concurrent_runs, config_json, "
                         "account_id) "
-                        "VALUES (:id, :oid, :pid, 'agent_signal', true, 1, "
+                        "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, 1, "
                         "CAST(:config AS json), :uid)",
                     ),
                     {
@@ -434,10 +434,10 @@ class TestFireAgentSignalIntegration:
                 for pid in (pid_b, pid_c):
                     await session.execute(
                         text(
-                            "INSERT INTO triggers (id, organisation_id, "
+                            "INSERT INTO triggers (name, id, organisation_id, "
                             "pipeline_id, trigger_type, active, "
                             "max_concurrent_runs, config_json, account_id) "
-                            "VALUES (:id, :oid, :pid, 'agent_signal', true, "
+                            "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, "
                             "5, CAST(:config AS json), :uid)",
                         ),
                         {

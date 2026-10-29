@@ -531,9 +531,9 @@ class TestDependentTriggerSuppression:
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
                     "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                    "VALUES (:id, :oid, :pid, 'agent_signal', true, 5, (:cfg)::json, :uid)"
+                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, 5, (:cfg)::json, :uid)"
                 ),
                 {
                     "id": str(child_trigger_id),

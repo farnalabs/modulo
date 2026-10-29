@@ -84,7 +84,10 @@
           <tbody class="divide-y">
             <template v-for="t in items" :key="t.id">
               <tr class="transition-colors hover:bg-muted/30">
-                <td class="px-4 py-3 font-medium">
+                <td class="px-4 py-3 font-medium" data-testid="settings-triggers-name">
+                  {{ t.name }}
+                </td>
+                <td class="px-4 py-3 text-muted-foreground">
                   {{ pipelineName(t.pipeline_id) }}
                 </td>
               <td class="px-4 py-3">
@@ -171,7 +174,7 @@
               </td>
               </tr>
               <tr v-if="expandedOutcomes.has(t.id) && hasOutcomes(t)" :id="`outcomes-${t.id}`" class="bg-muted/20">
-                <td :colspan="6" class="px-4 py-3">
+                <td :colspan="TABLE_COLUMNS.length" class="px-4 py-3">
                   <p class="text-xs font-medium uppercase text-muted-foreground">
                     {{ $t('views.SettingsTriggersView.recent_outcomes') }}
                   </p>
@@ -213,6 +216,20 @@
       @confirm="saveTrigger"
     >
       <form @submit.prevent="saveTrigger" class="space-y-4">
+        <div>
+          <label for="settingstriggersview-name" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.name') }}</label>
+          <input
+            id="settingstriggersview-name"
+            v-model="form.name"
+            type="text"
+            maxlength="255"
+            required
+            class="input-base"
+            :placeholder="$t('views.SettingsTriggersView.name_placeholder')"
+            data-testid="settings-triggers-form-name"
+          />
+        </div>
+
         <div>
           <label for="settingstriggersview-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.pipeline') }}</label>
           <Select
@@ -537,7 +554,7 @@ const { track } = useProductAnalytics()
 // Single source of truth for the triggers table shape. The loading skeleton
 // iterates this exactly like the real table's <th> row, so adding or removing a
 // column keeps the placeholder in lock-step instead of drifting (STATE-3).
-const TABLE_COLUMNS = ['pipeline', 'type', 'status', 'last_fired', 'next_fire', 'actions'] as const
+const TABLE_COLUMNS = ['name', 'pipeline', 'type', 'status', 'last_fired', 'next_fire', 'actions'] as const
 
 const isOrgAdmin = computed(() => jwtPayload.value?.org_role === 'admin')
 // FAR-191: the re-enable action is operator-or-above (backend trigger.update
@@ -628,6 +645,7 @@ interface StreakStatus {
 interface TriggerItem {
   id: string
   pipeline_id: string
+  name: string
   trigger_type: string
   active: boolean
   max_concurrent_runs?: number
@@ -642,6 +660,7 @@ interface TriggerItem {
 type PipelineItem = components['schemas']['PipelineResponse']
 
 interface TriggerForm {
+  name: string
   pipeline_id: string
   trigger_type: string
   active: boolean
@@ -718,6 +737,7 @@ const actionErrors = ref<Record<string, string>>({})
 const deleteError = ref<string | null>(null)
 
 const defaultForm: TriggerForm = {
+  name: '',
   pipeline_id: '',
   trigger_type: '',
   active: true,
@@ -921,6 +941,7 @@ function openEditDialog(trigger: TriggerItem) {
   const cfg = trigger.config_json || {}
 
   form.value = {
+    name: trigger.name,
     pipeline_id: trigger.pipeline_id,
     trigger_type: trigger.trigger_type,
     active: trigger.active,
@@ -968,6 +989,13 @@ function parseJsonOrError(
 
 /** Validate form fields before save; returns an i18n error key or '' on success. */
 function validateTriggerForm(): string {
+  const name = form.value.name.trim()
+  if (!name) {
+    return 'views.SettingsTriggersView.please_enter_a_name'
+  }
+  if (name.length > 255) {
+    return 'views.SettingsTriggersView.name_too_long'
+  }
   if (!form.value.pipeline_id) {
     return 'views.SettingsTriggersView.please_select_a_pipeline'
   }
@@ -1066,6 +1094,7 @@ function buildConfigJson(triggerType: string): Record<string, unknown> | string 
 /** Build the PUT body for updating an existing trigger. */
 function buildUpdateBody(triggerType: string, configJson: Record<string, unknown>): Record<string, unknown> {
   const body: Record<string, unknown> = {
+    name: form.value.name.trim(),
     active: form.value.active,
     config_json: Object.keys(configJson).length > 0 ? configJson : undefined,
     // max_concurrent_runs was previously never sent on PUT — send it now
@@ -1085,6 +1114,7 @@ function buildUpdateBody(triggerType: string, configJson: Record<string, unknown
 /** Build the POST body for creating a new trigger. */
 function buildCreateBody(triggerType: string, configJson: Record<string, unknown>): Record<string, unknown> {
   const body: Record<string, unknown> = {
+    name: form.value.name.trim(),
     trigger_type: triggerType,
     active: form.value.active,
     config_json: configJson,
