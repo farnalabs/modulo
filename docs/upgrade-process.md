@@ -53,12 +53,13 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
 
 ### Native single-install (Linux)
 
-The native single-install path is **Linux-only** today: `scripts/install.sh`
-refuses a non-Linux host, and no macOS or Windows bundle exists to upgrade.
-Native macOS and Windows installers are in the Alpha scope (FAR-678 and FAR-679,
-with validation in FAR-2196 and FAR-2197), and this section will gain their
-upgrade paths once those artifacts are published. See the platform support
-matrix in [`docs/system-requirements.md`](./system-requirements.md).
+The native single-install path is **Linux-first** and still in progress: it
+cannot complete an install from a clean clone yet, so there is nothing to
+upgrade until that is resolved (FAR-2213). Native macOS and Windows installs are
+in the Alpha scope (implementation record FAR-678 and FAR-679, validation in
+FAR-2196 and FAR-2197), and this section will gain their upgrade paths once
+those artifacts are installable. See the platform support matrix in
+[`docs/system-requirements.md`](./system-requirements.md).
 
 The native upgrade swaps the `current` symlink after a verified data
 snapshot; migrations run through the new bundle's boot lifespan. Two entry

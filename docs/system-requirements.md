@@ -6,44 +6,36 @@ Supported platforms, minimum resources, and database backends for running Modulo
 
 ## Supported Platforms
 
-Linux is the production server host. Native macOS and Windows installers are
-also in the Alpha scope, not deferred beyond the release: macOS is FAR-678 and
-Windows is FAR-679, with native validation tracked in FAR-2196 (macOS) and
-FAR-2197 (Windows). Per-platform delivery status changes faster than this page,
-so ADR 031 defers it to those tickets rather than restating it here.
+Linux is the production server host, deployed with Docker Compose. The native
+single-install is the workstation and evaluation path (ADR 031 Decision 11):
+Linux-first, and still in progress, because it cannot complete an install yet
+(FAR-2213). Native macOS and Windows installs are in the Alpha scope; FAR-678
+and FAR-679 record the implementation, with native validation tracked in
+FAR-2196 (macOS) and FAR-2197 (Windows). Per-platform status changes faster
+than this page, so read those tickets rather than this paragraph.
 
 ### Platform support matrix
 
-This matrix is about the **server host** for a production or evaluation
-deployment, not about developer workstations (see Development / Evaluation
-below).
+This matrix covers where Modulo can run. The **server host** is the machine a
+production deployment runs on; the **workstation / evaluation** path is the
+native install on an individual machine (see Development / Evaluation below).
 
-| Server host platform | Status |
-|----------------------|--------|
-| **Linux** | Supported (Docker Compose, and the Linux-first native single-install) |
-| **macOS** | In Alpha scope for a native install (FAR-678, validation FAR-2196). No macOS artifact is published yet and the installer workflow is fail-closed, so it is not a usable server host today. |
-| **Windows** | In Alpha scope for a native install (FAR-679, validation FAR-2197). No Windows installer is published yet and the installer workflow is fail-closed, so it is not a usable server host today. |
+| Host platform | Status |
+|---------------|--------|
+| **Linux (server host)** | Supported, via Docker Compose. The native single-install is Linux-first but still in progress: it cannot complete an install yet (FAR-2213). |
+| **macOS (workstation / evaluation)** | Native install in Alpha scope: implementation record FAR-678, validation FAR-2196. Not installable yet. |
+| **Windows (workstation / evaluation)** | Native install in Alpha scope: implementation record FAR-679, validation FAR-2197. Not installable yet. |
 
 Docker Desktop (see Development / Evaluation below) is a developer
 convenience on macOS and Windows: it runs the Linux containers inside a Linux
 VM, so the deployed stack is still Linux. It is not a supported production
 host.
 
-**Native installer status today:**
-
-- `scripts/install.sh` is the Linux installer and fails closed everywhere else.
-  On Darwin it aborts with "macOS native artifact is not yet published"; on any
-  other host it reports that it supports Linux only.
-- The release pipeline builds one native bundle, `linux-amd64`
-  (`bundle-release.yml`). No macOS or Windows bundle is published yet; FAR-678
-  and FAR-679 carry those.
-- No `bundle-v*` release is published, so the native install path fails closed
-  on every platform for now. ADR 031 Decision 12 records that state and the
-  tickets that change it.
-- The macOS and Windows installer workflows exist and are wired into
-  `release-unified.yml`, but both are fail-closed: they validate the packaging
-  contract and refuse to publish a non-dry-run installer until a real native
-  runtime exists.
+**Native installer status:** per-platform state is recorded on the tickets
+named above rather than restated here, because it changes faster than this
+page. Two things are durable: the native single-install is the workstation and
+evaluation path while Docker Compose is the server path (ADR 031 Decision 11),
+and the native install cannot complete from a clean clone yet (FAR-2213).
 
 A Windows-hosted production deployment therefore means Windows Server running
 the Linux stack in a VM or container host, not native Windows binaries. Docker
@@ -74,8 +66,8 @@ actually ship - do not widen these rows until the packaging tickets land):
 | Debian 13+ | 2.41 | Supported |
 | Ubuntu 26.04+ | 2.41+ | Supported |
 | Ubuntu 24.04 and earlier | 2.39 and below | Not supported (below the bundled service-binary floor) |
-| macOS | - | No published bundle yet (Alpha scope: FAR-678, validation FAR-2196) |
-| Windows | - | No published bundle yet (Alpha scope: FAR-679, validation FAR-2197) |
+| macOS | - | Not installable yet (implementation record FAR-678, validation FAR-2196) |
+| Windows | - | Not installable yet (implementation record FAR-679, validation FAR-2197) |
 
 The hard requirement is **glibc 2.41 or newer**. The bundled PostgreSQL 16 and
 Redis 8 binaries are extracted from Debian 13 (trixie) packages, and the venv's
@@ -91,8 +83,8 @@ supported native-install target.
 |--------------|--------|
 | linux-amd64 (x86_64) | Supported target; the only architecture `bundle-release.yml` builds (no `bundle-v*` release published yet) |
 | linux-arm64 | Planned (pins exist; no artifact published yet) |
-| macOS arm64 / x64 | Alpha scope, no published artifact (FAR-678, validation FAR-2196) |
-| Windows amd64 | Alpha scope, no published artifact (FAR-679, validation FAR-2197) |
+| macOS arm64 / x64 | Alpha scope, not installable yet (implementation record FAR-678, validation FAR-2196) |
+| Windows amd64 | Alpha scope, not installable yet (implementation record FAR-679, validation FAR-2197) |
 
 `linux-arm64` is not installable yet: the bundle build matrix carries only
 `amd64`, so no `linux-arm64` tarball is published even though the arm64 pins
