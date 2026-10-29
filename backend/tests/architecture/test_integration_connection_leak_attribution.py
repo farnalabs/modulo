@@ -41,6 +41,8 @@ GATE_WARNING = "error::pytest.PytestUnraisableExceptionWarning"
 
 _CONFTEST = """
 from tests.integration.conftest import (
+    pytest_runtest_logreport,
+    pytest_runtest_makereport,
     pytest_runtest_teardown,
     pytest_terminal_summary,
 )
@@ -84,7 +86,7 @@ def test_d_innocent_after_collateral():
 """
 
 
-def _run_scratch_suite(tmp_path: Path, **extra_env: str) -> subprocess.CompletedProcess[str]:
+def _run_scratch_suite(tmp_path: Path, *extra_args: str, **extra_env: str) -> subprocess.CompletedProcess[str]:
     rootdir = tmp_path / "scratch"
     rootdir.mkdir()
     (rootdir / "conftest.py").write_text(_CONFTEST, encoding="utf-8")
@@ -107,6 +109,7 @@ def _run_scratch_suite(tmp_path: Path, **extra_env: str) -> subprocess.Completed
             "no:cacheprovider",
             "-W",
             GATE_WARNING,
+            *extra_args,
         ],
         cwd=rootdir,
         env=env,
@@ -150,3 +153,19 @@ def test_strict_mode_fails_the_leaking_test(tmp_path: Path) -> None:
     assert result.returncode == 1, output
     assert "test_a_leaks_asyncpg_connection" in output
     assert "unclosed asyncpg connection leaked by" in output
+
+
+def test_leak_summary_renders_under_xdist(tmp_path: Path) -> None:
+    """A leak must still be named in the controller's summary under ``-n 2``.
+
+    pytest-xdist is how CI and the deploy gate run the integration suite. The
+    hook executes on a worker, whose stdout/log output xdist swallows, so the
+    summary has to be rebuilt on the controller from the reports the workers
+    send back; without that propagation this section is empty in CI.
+    """
+    result = _run_scratch_suite(tmp_path, "-n", "2")
+
+    output = result.stdout + result.stderr
+    assert "Integration suite — unclosed asyncpg connections detected" in output, output
+    assert "test_a_leaks_asyncpg_connection" in output, output
+    assert "unclosed asyncpg connection" in output, output

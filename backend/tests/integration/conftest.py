@@ -626,7 +626,20 @@ async def cron_helpers_rls_engine(non_superuser_role: str) -> Generator[None, No
 # session summary. Set ``MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS=1`` to make
 # a detected leak fail the leaking test outright (the deterministic replacement
 # for the old random-attribution failure) once the remaining sites are fixed.
+#
+# The summary lives on the CONTROLLER process, but under pytest-xdist (how CI
+# and the deploy gate run the integration suite) the concrete test — and this
+# hook — execute on a worker, whose ``logging``/``print`` output xdist swallows.
+# A module-level list alone is therefore invisible in CI. Leak records are
+# carried from the worker to the controller on the item's teardown report
+# (``user_properties``, which xdist serialises), so the controller's terminal
+# summary can name the leaking test in every run mode.
+_LEAK_PROPERTY = "modulo.unclosed_asyncpg_connection"
 _leaked_asyncpg_connections: list[tuple[str, str]] = []
+# Leaks recorded during one item's teardown, moved onto that item's report by
+# ``pytest_runtest_makereport``. Nodeid-keyed because the teardown hook and the
+# report hook are separate calls.
+_leaks_by_nodeid: dict[str, list[str]] = {}
 _leak_logger = logging.getLogger("modulo.tests.integration.connection_leaks")
 
 
@@ -652,7 +665,7 @@ def _is_unclosed_asyncpg_connection(unraisable: Any) -> bool:
 def _record_unclosed_asyncpg_connection(item: pytest.Item, unraisable: Any) -> None:
     """Log and remember a leaked asyncpg connection against the leaking test."""
     detail = str(unraisable.exc_value)
-    _leaked_asyncpg_connections.append((item.nodeid, detail))
+    _leaks_by_nodeid.setdefault(item.nodeid, []).append(detail)
     _leak_logger.error(
         "Unclosed asyncpg connection surfaced in the teardown of %s: %s. Close the "
         "session/connection that owns it (per-test engines must use NullPool or be "
@@ -660,6 +673,32 @@ def _record_unclosed_asyncpg_connection(item: pytest.Item, unraisable: Any) -> N
         item.nodeid,
         detail,
     )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[pytest.TestReport, pytest.TestReport, pytest.TestReport]:
+    """Carry this item's leaks to the controller on its teardown report.
+
+    pytest-xdist serialises ``user_properties`` with every report, so this is the
+    channel that makes the leak visible to ``pytest_terminal_summary`` on the
+    controller process — a module-level list on the worker never reaches it.
+    """
+    report = yield
+    if report.when != "teardown":
+        return report
+    for detail in _leaks_by_nodeid.pop(item.nodeid, []):
+        report.user_properties.append((_LEAK_PROPERTY, detail))
+    return report
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Collect leak records from reports, on the worker and the controller alike."""
+    for name, value in report.user_properties:
+        if name == _LEAK_PROPERTY:
+            _leaked_asyncpg_connections.append((report.nodeid, str(value)))
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
