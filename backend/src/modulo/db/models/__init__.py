@@ -102,7 +102,6 @@ from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.trigger_event_finding import TriggerEventFinding
 from modulo.db.models.variant_batch_state import VariantBatchState
 from modulo.db.models.variant_group import VariantGroup
-from modulo.db.models.view import SavedView
 from modulo.db.models.web_vital_event import WebVitalEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
 
@@ -189,7 +188,6 @@ __all__ = [
     "RunEvidence",
     "RunNodeOutput",
     "RunnerProbeCache",
-    "SavedView",
     "ScheduledReport",
     "Schema",
     "SchemaFolder",

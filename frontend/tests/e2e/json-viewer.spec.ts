@@ -26,7 +26,7 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
     // by default and its fixed-position overlay intercepts clicks on interactive
     // page content, timing out locator.click() with "subtree intercepts pointer
     // events". Force the panel closed before the app boots so it can never cover
-    // the JsonViewer toolbar/expand controls. Mirrors view-modes-admin.spec.ts.
+    // the JsonViewer toolbar/expand controls. Mirrors error-tracking.spec.ts.
     await page.addInitScript(() => {
       localStorage.setItem('assistant-panel-state', 'closed')
     })

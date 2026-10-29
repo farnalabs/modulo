@@ -17,7 +17,6 @@ vi.mock('../../lib/api/client', () => ({
 
 import SidebarRail from '../../components/SidebarRail.vue'
 import AppSidebar from '../../components/AppSidebar.vue'
-import { usePlanStore } from '../../stores/planStore'
 
 /**
  * NotificationBell is stubbed so this spec can observe WHICH size the rail
@@ -86,12 +85,10 @@ function mockMatchMedia(matches: boolean) {
   }))
 }
 
-/** Mount AppSidebar (same recipe as AppSidebar.spec.ts) with the bell stubbed. */
-function mountSidebar(props = {}, opts: { mobileRail?: boolean } = {}) {
+/** Mount AppSidebar with the bell stubbed. */
+function mountSidebar(props = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
-  const store = usePlanStore()
-  store.features['mobile_sidebar_rail'] = opts.mobileRail === true
   return mount(AppSidebar, {
     props: { ...railProps, ...props },
     global: {
@@ -277,7 +274,7 @@ describe('SidebarRail touch targets', () => {
 
   describe('AppSidebar wiring', () => {
     it('passes touch sizing to the rail on the MOBILE rail path (flag ON)', async () => {
-      const wrapper = mountSidebar({}, { mobileRail: true })
+      const wrapper = mountSidebar({})
       await flushPromises()
 
       const expand = wrapper.find('[aria-label="Expand sidebar"]')
@@ -311,7 +308,7 @@ describe('SidebarRail touch targets', () => {
     })
 
     it('flows touch sizing through the rail to its nav toggles and logout button (flag ON)', async () => {
-      const wrapper = mountSidebar({}, { mobileRail: true })
+      const wrapper = mountSidebar({})
       await flushPromises()
 
       const toggle = wrapper.find('.sidebar-group-rail-toggle')

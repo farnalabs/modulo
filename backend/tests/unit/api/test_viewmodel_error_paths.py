@@ -1,4 +1,4 @@
-"""Error-path unit tests for /api/v1/viewmodel/current and /api/v1/viewmodel/views."""
+"""Error-path unit tests for /api/v1/viewmodel/current."""
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
@@ -42,9 +42,9 @@ def _make_mock_session() -> AsyncMock:
     execute_result.scalars.return_value = scalars_mock
     # scalar_one_or_none is called synchronously in viewmodel code, not awaited
     execute_result.scalar_one_or_none = MagicMock(return_value=None)
-    # The offset-pagination count reads (e.g. list_views) go through
-    # scalar_one()/scalar(); a bare MagicMock there makes the new has_more
-    # comparison raise TypeError, so serve a real 0 (empty page) total.
+    # The offset-pagination count reads go through scalar_one()/scalar(); a
+    # bare MagicMock there makes the has_more comparison raise TypeError, so
+    # serve a real 0 (empty page) total.
     execute_result.scalar_one = MagicMock(return_value=0)
     execute_result.scalar = MagicMock(return_value=0)
     session.execute = AsyncMock(return_value=execute_result)
@@ -236,19 +236,6 @@ class TestViewModelCurrentErrorPaths:
         ):
             team_id = uuid.uuid4()
             resp = client.get(f"/api/v1/viewmodel/current?view_as_team={team_id}")
-
-        assert resp.status_code == 501
-        assert "migrations" in resp.json()["detail"].lower()
-
-
-class TestViewModelViewsErrorPaths:
-    def test_programming_error_501(self, client: TestClient) -> None:
-        with (
-            patch("modulo.api.routes.viewmodel.set_rls_org"),
-            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
-            patch("modulo.api.routes.viewmodel.list_views", side_effect=ProgrammingError("stmt", "params", "orig")),
-        ):
-            resp = client.get("/api/v1/viewmodel/views")
 
         assert resp.status_code == 501
         assert "migrations" in resp.json()["detail"].lower()

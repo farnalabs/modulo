@@ -11,10 +11,7 @@
       @open-command-palette="openCommandPalette"
     />
 
-    <main
-      class="flex-1 min-w-0 overflow-auto bg-background relative"
-      :class="mainPaddingClass"
-    >
+    <main class="flex-1 min-w-0 overflow-auto bg-background relative">
       <div class="relative z-10 space-y-2">
         <DbCapacityBanner v-if="isAdminUser" />
         <!--
@@ -71,7 +68,6 @@ import Breadcrumb from "./Breadcrumb.vue";
 import AssistantPanel from "./assistant/AssistantPanel.vue";
 import AppSidebar from "./AppSidebar.vue";
 import { useAssistantStore } from "../composables/useAssistantStore";
-import { useSidebarMode } from "../composables/useSidebarMode";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import { applyPrimeVueTokenBridge } from "../lib/primevue-theme";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
@@ -89,24 +85,6 @@ const assistantStore = useAssistantStore();
 const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
 
 const isLight = ref(document.documentElement.classList.contains("light"));
-
-// The fixed mobile chrome — the legacy hamburger header AND the neutral
-// pending placeholder AppSidebar draws while the nav flag is unresolved
-// (FAR-1237) — is a fixed h-14 overlay, so main content needs a pt-14 offset
-// on mobile whenever that chrome is shown. When the resolved mode is the left
-// rail there is no fixed header (the rail is in-flow) so no offset. Shared
-// with AppSidebar via useSidebarMode so the two can't drift.
-const { showMobileHeader } = useSidebarMode();
-
-// <main>'s only top offset is the fixed mobile chrome described above
-// (h-14 / 3.5rem). The onboarding banner needs NO offset: it is in normal flow
-// (OnboardingBanner.vue `.onboarding-banner { position: relative }`) and
-// reserves its own height, so padding <main> for it double-counts the gap. The
-// old 8.25rem/5rem banner terms were a stale leftover from when the banner was
-// an overlay.
-const mainPaddingClass = computed(() =>
-  showMobileHeader.value ? 'pt-14 md:pt-0' : '',
-);
 
 // The Assistant panel is a position:fixed overlay (AssistantPanel .assistant-panel) in every
 // open state, including "docked" — it floats above the page on the right with

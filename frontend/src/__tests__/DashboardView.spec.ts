@@ -53,7 +53,10 @@ const mockSummaryData = {
 const mockPlanData = {
   license: { tier: 'community', expires_at: null, org_id: null },
   dev_mode: false,
-  flags: [{ name: 'analytics_page', currently_active: true }],
+  flags: [
+    { name: 'analytics_page', currently_active: true },
+    { name: 'dashboard_charts', currently_active: true },
+  ],
 }
 
 const mockGet = vi.hoisted(() => vi.fn())
@@ -191,11 +194,10 @@ describe('DashboardView', () => {
     expect(wrapper.text()).not.toContain('Team Breakdown')
   })
 
-  it('hides the run activity trend section when the dashboard_charts flag is off', async () => {
+  it('renders the run activity trend section by default', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
-    // dashboard_charts is off by default (MVP) — the trend section must not render.
-    expect(wrapper.text()).not.toContain('Run Activity')
+    expect(wrapper.text()).toContain('Run Activity')
   })
 
   it('renders the run activity trend section when the dashboard_charts flag is on', async () => {
@@ -563,8 +565,8 @@ describe('DashboardView', () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     expect(wrapper.text()).toContain('No runs yet')
-    // The run-activity trend section (whose empty state was 'No data yet') is
-    // hidden when dashboard_charts is off; the eval card empty state remains.
+    // The run-activity trend section and eval card both retain their empty states.
+    expect(wrapper.text()).toContain('No data yet')
     expect(wrapper.text()).toContain('No eval data yet')
   })
 
@@ -696,10 +698,9 @@ describe('DashboardView', () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     const sparklines = wrapper.findAllComponents({ name: 'SparklineChart' })
-    // dashboard_charts is off by default (MVP): only the 2 always-on card
-    // sparklines (eval pass rate, token spend) render. The 3 run-activity
-    // sparklines are gated behind the flag.
-    expect(sparklines.length).toBe(2)
+    // dashboard_charts is on by default: the 2 card sparklines (eval pass rate,
+    // token spend) and 3 run-activity sparklines all render.
+    expect(sparklines.length).toBe(7)
     // Card sparklines carry units.
     expect(sparklines[0].props('unit')).toBe('%')
     expect(sparklines[1].props('unit')).toBe('$')

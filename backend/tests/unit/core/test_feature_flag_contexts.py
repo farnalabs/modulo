@@ -534,7 +534,7 @@ class TestGoldenPins:
     def test_core_flag_tier_contract_pinned(self) -> None:
         registry = FeatureFlagRegistry()
         team_flags = {"sso", "team_rbac", "audit_viewer", "admin_spend_limits", "runtime_config", "rate_limits"}
-        community_flags = {"eval_system", "webhook_trigger", "saved_views", "assistant"}
+        community_flags = {"eval_system", "webhook_trigger", "dashboard_charts", "assistant"}
         for name in team_flags:
             flag = registry.get_flag(name)
             assert flag is not None
@@ -549,14 +549,6 @@ class TestGoldenPins:
         flag = registry.get_flag("assistant_ui_driving")
         assert flag is not None
         assert flag.tier == "community"
-
-    def test_mobile_sidebar_rail_default_off_on_every_tier(self) -> None:
-        for tier in ("community", "team"):
-            FeatureFlagRegistry._overrides.clear()
-            registry = FeatureFlagRegistry(current_tier=tier)
-            flag = registry.get_flag("mobile_sidebar_rail")
-            assert flag is not None
-            assert flag.currently_active is False, f"mobile_sidebar_rail must be default-OFF on {tier}"
 
     def test_community_tier_activates_only_community_flags(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")
@@ -593,8 +585,6 @@ class TestEffectiveFeatureFlags:
         ctx = CommunityTier()
         all_names = {f.name for f in ctx.list_all_features()}
         active_names = {f.name for f in ctx.list_enabled_features()}
-        assert "mobile_sidebar_rail" in all_names
-        assert "mobile_sidebar_rail" not in active_names
         assert active_names.issubset(all_names)
 
     def test_list_all_features_folds_licence_features(self) -> None:
@@ -603,19 +593,14 @@ class TestEffectiveFeatureFlags:
         # Licence-named feature reads active in the full set (parity with
         # ``list_enabled_features``) while default-OFF flags stay present.
         assert by_name["sso"] is True
-        assert by_name["mobile_sidebar_rail"] is False
 
-    def test_effective_flags_flips_both_directions_without_mutating_context(self) -> None:
+    def test_effective_flags_preserves_context_when_overriding(self) -> None:
         ctx = CommunityTier()
-        flags = effective_feature_flags(ctx, {"analytics_page": False, "mobile_sidebar_rail": True})
+        flags = effective_feature_flags(ctx, {"analytics_page": False})
         by_name = {f.name: f.currently_active for f in flags}
-        # analytics_page is community-tier default-ON; mobile_sidebar_rail is
-        # DEFAULT_OFF — the overlay must flip BOTH.
         assert by_name["analytics_page"] is False
-        assert by_name["mobile_sidebar_rail"] is True
         # The plan context's own registry state is untouched (copies only).
         assert ctx.feature_enabled("analytics_page") is True
-        assert ctx.feature_enabled("mobile_sidebar_rail") is False
 
     def test_effective_flags_without_overrides_returns_full_set(self) -> None:
         ctx = CommunityTier()
@@ -641,10 +626,7 @@ class TestEffectiveFeatureFlags:
         """
         ctx = DbPlanContext(FeatureFlagRegistry(current_tier="community", has_license_key=False))
         flags = ctx.list_all_features()
-        names = {f.name for f in flags}
-        assert "mobile_sidebar_rail" in names
         inactive = {f.name for f in flags if not f.currently_active}
-        assert "mobile_sidebar_rail" in inactive
         assert "eval_system" not in inactive
 
     def test_plan_context_protocol_declares_list_all_features(self) -> None:

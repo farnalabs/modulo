@@ -263,8 +263,6 @@ PERMISSIONS: dict[str, str] = {
     # team-specific control on top.
     "team.members.manage": "operator",
     "admin.rate_limit.manage": "admin",
-    "view.manage": "operator",
-    "view.list": "viewer",
     # variants
     "variant.create": "operator",
     "variant.update": "operator",

@@ -572,11 +572,6 @@ OWNED_PAGES = {
         "frontend/src/components/FeatureGate.vue",
         "frontend/src/components/LockIcon.vue",
     ),
-    "/admin/views": (
-        "frontend/src/views/AdminViewsView.vue",
-        "frontend/src/components/FeatureGate.vue",
-        "frontend/src/components/LockIcon.vue",
-    ),
     "/admin/node-categories": (
         "frontend/src/views/AdminNodeCategoriesView.vue",
         "frontend/src/components/FeatureGate.vue",

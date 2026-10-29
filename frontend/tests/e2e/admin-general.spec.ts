@@ -19,31 +19,20 @@ test.describe('Admin My Profile', { tag: "@regression" }, () => {
 })
 
 test.describe('Admin Notification Delivery', { tag: "@regression" }, () => {
-  test('renders the Webhook Notifications page when the flag is enabled', { tag: "@regression" }, async ({ page, env }) => {
+  test('renders the Webhook Notifications page by default', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
-    // FAR-656: the webhook delivery log is gated behind the
-    // webhook_notification_log flag (default OFF) — mock the plan fetch so the
-    // router guard resolves the flag as enabled for this regression run.
-    // FAR-1809 repointed the plan bootstrap at the caller-scoped GET
-    // /api/v1/plan, so the mock must own that endpoint (the old instance-admin
-    // /api/v1/admin/feature-flags is no longer read by the store).
-    await page.route('**/api/v1/plan*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'team' }, flags: [{ name: 'webhook_notification_log', currently_active: true }] }) })
-    })
-    // The caller-scoped plan resolves during login (200 for any authenticated
-    // member), so the guard's `!loaded` fetch is skipped on a plain goto and
-    // the mock above would never be read. Reload for a fresh plan store so the
-    // guard re-reads the mocked plan before navigating.
-    await page.reload()
     await page.goto('/admin/notification-delivery')
     await expect(page.locator('h1')).toContainText('Webhook Notifications')
     await expect(page.getByTestId('admin-notification-log-title')).toBeVisible()
   })
 
-  test('redirects to the dashboard while the webhook_notification_log flag is off', { tag: "@regression" }, async ({ page, env }) => {
+  test('redirects to the dashboard when an explicit feature override disables the flag', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
+    await page.route('**/api/v1/plan*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ license: { tier: 'team' }, flags: [{ name: 'webhook_notification_log', currently_active: false }] }) })
+    })
+    await page.reload()
     await page.goto('/admin/notification-delivery')
-    // The manifest feature_flag guard redirects a disabled-flag route to '/'.
     await expect(page).toHaveURL(/\/$/)
   })
 })

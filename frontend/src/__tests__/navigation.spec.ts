@@ -382,7 +382,7 @@ describe('navigation.ts', () => {
     expect(webhookLog.labelKey).toBe('components.SidebarNav.item_notification_log')
   })
 
-  it('isNavItemVisible hides flag-gated items while their flag is disabled (FAR-656)', () => {
+  it('isNavItemVisible shows the webhook log when its community flag is enabled by default (FAR-2235)', () => {
     const item: NavItem = {
       to: '/admin/notification-delivery',
       icon: 'Bell',
@@ -390,8 +390,8 @@ describe('navigation.ts', () => {
       labelKey: 'components.SidebarNav.item_notification_log',
       requiredFeatureFlag: 'webhook_notification_log',
     }
-    expect(isNavItemVisible(item, visibilityContext())).toBe(false)
     expect(isNavItemVisible(item, visibilityContext({ isFeatureEnabled: () => true }))).toBe(true)
+    expect(isNavItemVisible(item, visibilityContext({ isFeatureEnabled: () => false }))).toBe(false)
   })
 
   it('isNavItemVisible hides flag-gated items until tier info is loaded (FAR-656)', () => {
