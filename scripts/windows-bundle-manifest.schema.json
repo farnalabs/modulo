@@ -4,50 +4,46 @@
   "title": "Modulo Windows native bundle manifest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "version", "architecture", "launcher", "frontend", "native_requirements"],
+  "required": ["schema_version", "version", "architecture", "runtime_support", "launcher", "frontend", "native_requirements", "reproducibility"],
   "properties": {
     "schema_version": {"const": 1},
     "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
     "architecture": {"const": "amd64"},
+    "runtime_support": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {"status": {"const": "unsupported"}, "reason": {"const": "Windows launcher support is pending FAR-2229."}}
+    },
     "launcher": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["path", "entry_point", "start_command"],
-      "properties": {
-        "path": {"const": "modulo.exe"},
-        "entry_point": {"const": "modulo.cli.main:cli"},
-        "start_command": {"const": "modulo start"}
-      }
+      "properties": {"path": {"const": "modulo.exe"}, "entry_point": {"const": "modulo.cli.main:cli"}, "start_command": {"const": "modulo start"}}
     },
-    "frontend": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["dist_path"],
-      "properties": {"dist_path": {"const": "frontend-dist"}}
-    },
+    "frontend": {"type": "object", "additionalProperties": false, "required": ["dist_path"], "properties": {"dist_path": {"const": "frontend-dist"}}},
     "native_requirements": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["postgresql", "redis"],
-      "properties": {
-        "postgresql": {"$ref": "#/$defs/native_requirement"},
-        "redis": {"$ref": "#/$defs/native_requirement"}
-      }
-    }
+      "type": "object", "additionalProperties": false, "required": ["postgresql", "redis"],
+      "properties": {"postgresql": {"$ref": "#/$defs/native_requirement"}, "redis": {"$ref": "#/$defs/native_requirement"}}
+    },
+    "reproducibility": {"$ref": "#/$defs/reproducibility"}
   },
   "$defs": {
     "native_requirement": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["required", "relative_path", "binaries"],
+      "type": "object", "additionalProperties": false,
+      "required": ["required", "relative_path", "binaries", "metadata"],
       "properties": {
-        "required": {"const": true},
-        "relative_path": {"type": "string", "minLength": 1},
-        "binaries": {
-          "type": "array",
-          "minItems": 1,
-          "items": {"type": "string", "minLength": 1}
+        "required": {"const": true}, "relative_path": {"type": "string", "minLength": 1},
+        "binaries": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "metadata": {
+          "type": "object", "minProperties": 1, "additionalProperties": false,
+          "patternProperties": {"^[^/\\\\]+$": {"type": "object", "additionalProperties": false, "required": ["sha256", "size_bytes"], "properties": {"sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "size_bytes": {"type": "integer", "minimum": 1}}}}
         }
+      }
+    },
+    "reproducibility": {
+      "type": "object", "additionalProperties": false, "required": ["tool_versions", "validated_at_utc"],
+      "properties": {
+        "tool_versions": {"type": "object", "additionalProperties": false, "required": ["pnpm", "python", "pyinstaller"], "properties": {"pnpm": {"type": "string", "minLength": 1}, "python": {"type": "string", "minLength": 1}, "pyinstaller": {"type": "string", "minLength": 1}}},
+        "validated_at_utc": {"type": "string", "minLength": 1}
       }
     }
   }

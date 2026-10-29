@@ -9,9 +9,10 @@ Python CLI with PyInstaller, and stages only real files into a bundle directory.
 PostgreSQL and Redis native binaries are explicit inputs; missing inputs fail
 closed. This produces a bundle directory, not an Inno Setup installer.
 
-The resulting launcher preserves the existing application contract: use
-`modulo start` to initialise and run the bundled services. This script does not
-replace or invoke the launcher runtime.
+The resulting artifact is not a runnable Windows runtime yet. The launcher
+currently refuses Windows; FAR-2229 must land before this contract can be marked
+supported. This script therefore fails closed for build mode and only validates
+native inputs with -ValidateOnly.
 #>
 
 [CmdletBinding()]
@@ -53,7 +54,7 @@ if ([string]::IsNullOrWhiteSpace($RedisDirectory)) {
 
 function RequireDirectory([string]$Label, [string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) {
-        Fail "$Label input is required. Pass -$Label`Directory or set MODULO_WINDOWS_$($Label.ToUpper())_DIR."
+        Fail "$Label input is required. Pass -${Label}Directory or set MODULO_WINDOWS_$($Label.ToUpper())_DIR."
     }
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
         Fail "$Label directory does not exist: $Path"
@@ -72,21 +73,23 @@ $postgresBin = Join-Path $PostgresDirectory "bin"
 $redisBin = Join-Path $RedisDirectory "bin"
 RequireDirectory "Postgres bin" $postgresBin
 RequireDirectory "Redis bin" $redisBin
-RequireFile "PostgreSQL server" (Join-Path $postgresBin "postgres.exe")
-RequireFile "PostgreSQL client" (Join-Path $postgresBin "psql.exe")
-RequireFile "Redis server" (Join-Path $redisBin "redis-server.exe")
-RequireFile "Redis client" (Join-Path $redisBin "redis-cli.exe")
+$requiredPostgresBinaries = @("initdb.exe", "postgres.exe", "pg_isready.exe", "psql.exe", "pg_dump.exe")
+$requiredRedisBinaries = @("redis-server.exe", "redis-cli.exe")
+foreach ($binary in $requiredPostgresBinaries) { RequireFile "PostgreSQL $binary" (Join-Path $postgresBin $binary) }
+foreach ($binary in $requiredRedisBinaries) { RequireFile "Redis $binary" (Join-Path $redisBin $binary) }
 
 if ($ValidateOnly) {
-    Write-Host "Validated Windows bundle prerequisites for $Version ($Architecture)."
+    Write-Host "Validated Windows bundle artifact prerequisites for $Version ($Architecture). Runtime startup remains unsupported until FAR-2229."
     exit 0
 }
+
+Fail "Windows runtime startup is unsupported until FAR-2229 supplies the launcher contract. Use -ValidateOnly to validate the artifact inputs."
 
 $pnpm = Get-Command pnpm -ErrorAction SilentlyContinue
 if ($null -eq $pnpm) { Fail "pnpm is required. Install the version declared in frontend/package.json (pnpm@11.28.8)." }
 $pyinstaller = Get-Command pyinstaller -ErrorAction SilentlyContinue
 if ($null -eq $pyinstaller) {
-    Fail "PyInstaller is required to create a real modulo.exe. Install it in the backend environment (`uv pip install pyinstaller`) and retry."
+    Fail "PyInstaller is required to create a real modulo.exe. Install it in the backend environment (uv pip install pyinstaller) and retry."
 }
 
 $output = [IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDirectory))
