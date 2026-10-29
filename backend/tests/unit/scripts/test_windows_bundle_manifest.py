@@ -5,6 +5,10 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,11 +21,20 @@ assert _VALIDATOR_SPEC.loader is not None
 _VALIDATOR_MODULE = importlib.util.module_from_spec(_VALIDATOR_SPEC)
 _VALIDATOR_SPEC.loader.exec_module(_VALIDATOR_MODULE)
 validate = _VALIDATOR_MODULE.validate
+main = _VALIDATOR_MODULE.main
 _SCHEMA = _REPO_ROOT / "scripts" / "windows-bundle-manifest.schema.json"
+_BUILDER = _REPO_ROOT / "scripts" / "build-windows-bundle.ps1"
+_PWSH = shutil.which("pwsh")
 
 
 _POSTGRES_BINARIES = ("initdb.exe", "postgres.exe", "pg_isready.exe", "psql.exe", "pg_dump.exe")
 _REDIS_BINARIES = ("redis-server.exe", "redis-cli.exe")
+_SCAFFOLDING_ENTRIES = (
+    "pyinstaller",
+    "pyinstaller-work",
+    "pyinstaller-spec",
+    "pyinstaller-entrypoint.py",
+)
 
 
 def _bundle(tmp_path: Path, *, include_native: bool = True) -> tuple[Path, Path]:
@@ -80,6 +93,67 @@ def test_valid_manifest_is_contract_validation_only(tmp_path: Path) -> None:
     assert set(manifest["native_requirements"]["postgresql"]["binaries"]) == set(_POSTGRES_BINARIES)
 
 
+def test_validate_does_not_mutate_the_manifest_it_validated(tmp_path: Path) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    before = manifest_path.read_text(encoding="utf-8")
+
+    returned = validate(manifest_path, _SCHEMA, bundle)
+
+    assert manifest_path.read_text(encoding="utf-8") == before
+    assert returned["reproducibility"]["validated_at_utc"] == "2026-01-01T00:00:00+00:00"
+
+
+def test_print_inventory_is_the_builder_contract(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--print-inventory"]) == 0
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == {
+        "postgresql": {"relative_path": "postgres/bin", "binaries": list(_POSTGRES_BINARIES)},
+        "redis": {"relative_path": "redis/bin", "binaries": list(_REDIS_BINARIES)},
+    }
+
+
+def test_forbidden_scaffolding_contract_is_pinned() -> None:
+    assert set(_VALIDATOR_MODULE.FORBIDDEN_BUNDLE_ENTRIES) == set(_SCAFFOLDING_ENTRIES)
+
+
+@pytest.mark.parametrize("entry", _SCAFFOLDING_ENTRIES)
+def test_validate_rejects_bundle_build_scaffolding(tmp_path: Path, entry: str) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    (bundle / entry).mkdir()
+
+    with pytest.raises(ValueError, match="build scaffolding"):
+        validate(manifest_path, _SCHEMA, bundle)
+
+
+def test_check_bundle_cli_reports_scaffolding(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    bundle, _ = _bundle(tmp_path)
+    (bundle / "pyinstaller-work").mkdir()
+
+    exit_code = main(["--check-bundle", str(bundle)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "pyinstaller-work" in captured.err
+    assert captured.err.startswith("error: ")
+
+
+def test_cli_rejection_prints_one_error_line_without_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    (bundle / "redis" / "bin" / "redis-server.exe").unlink()
+
+    exit_code = main(["--manifest", str(manifest_path), "--schema", str(_SCHEMA), "--bundle", str(bundle)])
+
+    captured = capsys.readouterr()
+    lines = [line for line in captured.err.splitlines() if line.strip()]
+    assert exit_code == 1
+    assert len(lines) == 1
+    assert lines[0].startswith("error: ")
+    assert "Traceback" not in captured.err
+
+
 def test_missing_native_runtime_input_fails_closed(tmp_path: Path) -> None:
     bundle, manifest_path = _bundle(tmp_path)
     (bundle / "redis" / "bin" / "redis-server.exe").unlink()
@@ -135,6 +209,16 @@ def test_manifest_rejects_backslash_path_traversal_on_relative_path(tmp_path: Pa
         validate(manifest_path, _SCHEMA, bundle)
 
 
+def test_manifest_rejects_a_native_layout_that_diverges_from_the_inventory(tmp_path: Path) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data["native_requirements"]["postgresql"]["relative_path"] = "pg/bin"
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="relative_path must be"):
+        validate(manifest_path, _SCHEMA, bundle)
+
+
 def test_manifest_rejects_missing_metadata_entry_for_listed_binary(tmp_path: Path) -> None:
     bundle, manifest_path = _bundle(tmp_path)
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -181,3 +265,107 @@ def test_manifest_rejects_changed_native_hash(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="hash does not match"):
         validate(manifest_path, _SCHEMA, bundle)
+
+
+# ---------------------------------------------------------------------------
+# Builder output-path guard: exercised through the real script so the guard that
+# actually runs in the build is the guard that is proven.
+# ---------------------------------------------------------------------------
+
+
+def _fake_repo(tmp_path: Path) -> Path:
+    """A throwaway repo root holding only what the guard needs to be reachable."""
+    fake = tmp_path / "fake-repo"
+    scripts = fake / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(_BUILDER, scripts / _BUILDER.name)
+    shutil.copy2(_SCHEMA, scripts / _SCHEMA.name)
+    shutil.copy2(_VALIDATOR_PATH, scripts / _VALIDATOR_PATH.name)
+    (fake / "frontend").mkdir()
+    (fake / "frontend" / "package.json").write_text(json.dumps({"version": "9.9.9"}), encoding="utf-8")
+    (fake / "keep-me.txt").write_text("must survive a refused build", encoding="utf-8")
+    return fake
+
+
+def _clean_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    environment.pop("MODULO_WINDOWS_POSTGRES_DIR", None)
+    environment.pop("MODULO_WINDOWS_REDIS_DIR", None)
+    return environment
+
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_ERROR_RENDER_GUTTER = re.compile(r"^\s*\|\s?")
+
+
+def _plain(text: str) -> str:
+    """Flatten PowerShell's wrapped error render: strip ANSI and the '     | ' gutter."""
+    without_ansi = _ANSI_ESCAPE.sub("", text)
+    lines = [_ERROR_RENDER_GUTTER.sub("", line) for line in without_ansi.splitlines()]
+    return " ".join(" ".join(lines).split())
+
+
+def _run_builder(
+    script: Path,
+    *arguments: str,
+    workdir: Path,
+) -> subprocess.CompletedProcess[str]:
+    assert _PWSH is not None
+    return subprocess.run(  # noqa: S603 - fixed argv, the repo's own builder script under test
+        [_PWSH, "-NoProfile", "-NonInteractive", "-File", str(script), *arguments],
+        cwd=str(workdir),
+        env=_clean_environment(),
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+
+
+@pytest.mark.skipif(_PWSH is None, reason="pwsh 7 is required to exercise the bundle builder")
+@pytest.mark.parametrize(
+    ("output_directory", "expected_refusal"),
+    [
+        (".", "is the repository root"),
+        ("..", "not strictly beneath the repository root"),
+        ("scripts/../../..", "not strictly beneath the repository root"),
+        (".git/hooks", "inside a .git directory"),
+    ],
+)
+def test_builder_refuses_an_unsafe_output_directory(
+    tmp_path: Path, output_directory: str, expected_refusal: str
+) -> None:
+    fake = _fake_repo(tmp_path)
+
+    result = _run_builder(
+        fake / "scripts" / _BUILDER.name,
+        "-OutputDirectory",
+        output_directory,
+        "-ValidateOnly",
+        workdir=fake,
+    )
+
+    combined = result.stdout + result.stderr
+    normalised = _plain(combined)
+    assert result.returncode != 0
+    assert expected_refusal in normalised
+    assert (fake / "keep-me.txt").exists()
+
+
+@pytest.mark.skipif(_PWSH is None, reason="pwsh 7 is required to exercise the bundle builder")
+def test_builder_allows_a_safe_output_directory_and_writes_nothing_in_validate_only(tmp_path: Path) -> None:
+    fake = _fake_repo(tmp_path)
+
+    result = _run_builder(
+        fake / "scripts" / _BUILDER.name,
+        "-OutputDirectory",
+        "build/windows-bundle",
+        "-ValidateOnly",
+        workdir=fake,
+    )
+
+    combined = result.stdout + result.stderr
+    normalised = _plain(combined)
+    assert "refusing OutputDirectory" not in normalised
+    assert "Not checked:" in normalised
+    assert not (fake / "build" / "windows-bundle").exists()
