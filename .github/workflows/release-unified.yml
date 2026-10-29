@@ -960,6 +960,13 @@ jobs:
           (cd release-artefacts && sha256sum --check SHA256SUMS)
           echo "Final signed manifest and SHA256SUMS cover Linux, Windows and macOS arm64 artifacts."
 
+      - name: Assert macOS artifact is real
+        run: |
+          set -euo pipefail
+          DMG="release-artefacts/Modulo-${{ inputs.version }}-macos-arm64.dmg"
+          test -s "$DMG"
+          hdiutil verify "$DMG"
+
       - name: Set up Python 3.12 for OpenAPI dump
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
         with:

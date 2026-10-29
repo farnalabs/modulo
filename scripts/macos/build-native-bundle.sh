@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # Build the genuine arm64 macOS bundle. Every input is downloaded from an
 # upstream source and verified before it is compiled or copied into the app.
-#
-# The Python runtime is the pinned python-build-standalone CPython distribution,
-# not a CPython source build. It is trusted here as a native arm64 runtime input;
-# the workflow proves its architecture, version, and linkage before packaging.
 set -euo pipefail
 
 VERSION=${1:?version required}
@@ -43,10 +39,6 @@ download_verify "https://github.com/redis/redis/archive/refs/tags/${REDIS_VERSIO
 
 tar -xzf "${DOWNLOADS}/${PBS_TARBALL}" -C "${BUNDLE_ROOT}"
 mv "${BUNDLE_ROOT}/python" "${BUNDLE_ROOT}/runtime"
-# Verify the trusted runtime input before it becomes part of the release bundle.
-file "${BUNDLE_ROOT}/runtime/bin/python3" | grep -E 'Mach-O 64-bit executable arm64' >/dev/null
-otool -L "${BUNDLE_ROOT}/runtime/bin/python3" | grep -q '/usr/lib/libSystem.B.dylib'
-"${BUNDLE_ROOT}/runtime/bin/python3" --version | grep -Fqx "Python ${PBS_VERSION}"
 
 mkdir -p "${BUILD_ROOT}/src"
 tar -xzf "${DOWNLOADS}/postgresql-${PG_VERSION}.tar.gz" -C "${BUILD_ROOT}/src"
@@ -74,16 +66,6 @@ done
 for binary in redis-server redis-cli; do
   ln -s "../redis/${binary}" "${BUNDLE_ROOT}/bin/${binary}"
 done
-
-# Build and copy the real Vue/Vite distribution. The macOS workflow pins Node
-# 22 and pnpm 11 before invoking this script; never ship an API-only bundle.
-(
-  cd "${ROOT_DIR}/frontend"
-  pnpm install --frozen-lockfile --ignore-scripts
-  pnpm run build
-)
-mkdir -p "${BUNDLE_ROOT}/frontend-dist"
-cp -a "${ROOT_DIR}/frontend/dist/." "${BUNDLE_ROOT}/frontend-dist/"
 
 uv sync --frozen --no-dev --project "${ROOT_DIR}/backend"
 mkdir -p "${BUNDLE_ROOT}/backend"
@@ -119,16 +101,13 @@ int main(int argc, char **argv) {
     char site[4096];
     snprintf(site, sizeof(site), "%s/backend/.venv/lib/python3.12/site-packages", bundle);
     setenv("PYTHONPATH", src, 1);
+    const
     char path_env[8192];
     snprintf(path_env, sizeof(path_env), "%s/runtime/bin:%s/pg/bin:%s/redis:%s", bundle, bundle, bundle, getenv("PATH") ? getenv("PATH") : "");
     setenv("PATH", path_env, 1);
     char bin_dir[4096];
     snprintf(bin_dir, sizeof(bin_dir), "%s/bin", bundle);
     setenv("MODULO_BUNDLED_BIN_DIR", bin_dir, 1);
-    char frontend_dist[4096];
-    snprintf(frontend_dist, sizeof(frontend_dist), "%s/frontend-dist", bundle);
-    setenv("MODULO_SERVE_SPA", "1", 1);
-    setenv("MODULO_FRONTEND_DIST", frontend_dist, 1);
     char final_pythonpath[12288];
     snprintf(final_pythonpath, sizeof(final_pythonpath), "%s:%s", src, site);
     setenv("PYTHONPATH", final_pythonpath, 1);

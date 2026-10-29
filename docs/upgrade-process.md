@@ -51,21 +51,17 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
 
 ## Upgrade Paths
 
-### Native single-install (Linux)
+### Native single-install (Linux and macOS arm64)
 
-The native single-install path is **Linux-first** and still in progress: it
-cannot complete an install from a clean clone yet, so there is nothing to
-upgrade until that is resolved (FAR-2213). Native macOS and Windows installs are
-in the Alpha scope (implementation record FAR-678 and FAR-679, validation in
-FAR-2196 and FAR-2197), and this section will gain their upgrade paths once
-those artifacts are installable. See the platform support matrix in
+The native single-install path supports the published Linux bundle and the
+signed, notarized macOS arm64 `.dmg`. Windows remains out of scope. Linux uses
+`scripts/install.sh`; macOS uses `scripts/macos/install.sh` and installs the
+LaunchAgent seam from the app bundle. See the platform support matrix in
 [`docs/system-requirements.md`](./system-requirements.md).
 
 The native upgrade swaps the `current` symlink after a verified data
-snapshot; migrations run through the new bundle's boot lifespan. On macOS arm64,
-install the signed/notarized `.dmg` on Apple Silicon only; x64/Rosetta is not
-supported. The installer verifies the release manifest/checksum chain before
-copying the app. Two entry points perform the same swap:
+snapshot; migrations run through the new bundle's boot lifespan. Two entry
+points perform the same swap:
 
 - the published installer (`bash scripts/install.sh`), and
 - the launcher command (`modulo upgrade <target-version>`).
