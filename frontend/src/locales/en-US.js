@@ -1927,6 +1927,7 @@ export default {
       "trend_30d": "30d",
       "trend_90d": "90d",
       "trend_all_time": "All time",
+      "trend_all_time_legacy_7d": "All-time summary · last 7d trend",
       "no_prior_data": "No prior period data",
       "invalid_dashboard_data": "Received invalid dashboard data from server.",
       "invalid_trends_data": "Received invalid trends data from server.",
