@@ -493,6 +493,25 @@ class TestRequiredInputs:
         assert proc.returncode != 0
         assert "DISPATCH_URL is required" in proc.stderr
 
+    def test_empty_url_writes_config_result_file(self, tmp_path: Path) -> None:
+        result_file = tmp_path / "result.env"
+        env = make_env(tmp_path, codes="202", body="{}")
+        env["DISPATCH_URL"] = ""
+        env["DISPATCH_RESULT_FILE"] = str(result_file)
+        proc = subprocess.run(  # noqa: S603 — fixed argv, repo script under test
+            ["bash", str(SCRIPT)],  # noqa: S607
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert proc.returncode == 1
+        content = result_file.read_text(encoding="utf-8")
+        assert "DISPATCH_LAST_CLASS=config" in content
+        assert r"DISPATCH_LAST_DETAIL=DISPATCH_URL\ is\ empty" in content
+        assert "DISPATCH_DELIVERED=false" in content
+
     def test_missing_body_fails_loudly(self, tmp_path: Path) -> None:
         env = make_env(tmp_path, codes="202", body="{}")
         del env["DISPATCH_BODY"]

@@ -7,7 +7,9 @@ import type { components } from '../lib/api/schema'
 // Wire shapes for environment-profile writes, taken from the generated OpenAPI
 // schema so vue-tsc can verify the full payload against the contract
 // (TYPE-1: no hand-maintained shapes, no `as any` at the call sites).
-export type ProfileCreatePayload = components['schemas']['ProfileCreate']
+export type ProfileCreatePayload = Omit<components['schemas']['ProfileCreate'], 'max_node_seconds'> & {
+  max_node_seconds?: number
+}
 export type ProfileUpdatePayload = components['schemas']['ProfileUpdate']
 
 export interface EnvironmentProfile {
@@ -17,6 +19,7 @@ export interface EnvironmentProfile {
   provider_type: string
   image_ref: string | null
   capabilities: string[]
+  max_node_seconds?: number
   network_policy: string
   initialisation_strategy: string
   persistence_policy: string
@@ -33,8 +36,10 @@ export interface EnvironmentProfileSummary {
   description: string | null
   provider_type: string
   image_ref: string | null
-  capabilities: string[]
-  status: string
+   capabilities: string[]
+   max_node_seconds?: number
+   status: string
+
   created_at: string
 }
 
@@ -89,6 +94,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
         provider_type: created.provider_type,
         image_ref: created.image_ref,
         capabilities: created.capabilities,
+        max_node_seconds: created.max_node_seconds,
         status: created.status,
         created_at: created.created_at,
       })
@@ -114,6 +120,7 @@ export const useEnvironmentProfilesStore = defineStore('environmentProfiles', ()
           provider_type: updated.provider_type,
           image_ref: updated.image_ref,
           capabilities: updated.capabilities,
+          max_node_seconds: updated.max_node_seconds,
           status: updated.status,
           created_at: updated.created_at,
         }

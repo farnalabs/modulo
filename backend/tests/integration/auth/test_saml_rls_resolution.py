@@ -187,10 +187,18 @@ async def system_engine() -> AsyncGenerator[AsyncEngine, None]:
     await engine.dispose()
 
 
-@pytest.fixture
-def system_session(system_engine: AsyncEngine) -> AsyncSession:
-    """Session on the ``modulo_system`` role — mirrors ``get_system_db_session``."""
-    return AsyncSession(bind=system_engine, autobegin=False, expire_on_commit=False)
+@pytest_asyncio.fixture
+async def system_session(system_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
+    """Session on the ``modulo_system`` role — mirrors ``get_system_db_session``.
+
+    Closed on teardown: a session that is merely returned leaks its checked-out
+    asyncpg connection (``engine.dispose()`` cannot reap an in-use connection,
+    and garbage collection surfaces it as a ``PytestUnraisableExceptionWarning``
+    under the integration warning gate). The production dependency closes its
+    session, so the fixture must too.
+    """
+    async with AsyncSession(bind=system_engine, autobegin=False, expire_on_commit=False) as session:
+        yield session
 
 
 @pytest_asyncio.fixture

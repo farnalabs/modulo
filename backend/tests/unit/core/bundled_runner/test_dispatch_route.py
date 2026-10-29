@@ -88,6 +88,7 @@ def _profile(provider_type: str, **kwargs: object) -> SimpleNamespace:
         "network_policy": "outbound",
         "capabilities_json": [],
         "config_json": {"timeout_seconds": 1800, "memory_mb": 1024, "workspace_network": "modulo-runner-workspace"},
+        "max_node_seconds": 3300,
     }
     base.update(kwargs)
     return SimpleNamespace(**base)
@@ -326,6 +327,12 @@ def test_e2b_timeout_at_graph_validator_bound_passes() -> None:
 def test_e2b_timeout_over_bound_raises_loudly() -> None:
     with pytest.raises(SandboxDispatchTimeoutValidationError, match="3301"):
         validate_e2b_dispatch_timeout(3301)
+
+
+def test_e2b_timeout_uses_selected_profile_cap() -> None:
+    assert validate_e2b_dispatch_timeout(300, max_timeout_seconds=300) is None
+    with pytest.raises(SandboxDispatchTimeoutValidationError, match="301"):
+        validate_e2b_dispatch_timeout(301, max_timeout_seconds=300)
 
 
 def test_e2b_timeout_none_and_unparsable_are_noops() -> None:
@@ -1011,3 +1018,81 @@ async def test_run_dispatch_same_team_binding_resolves_through_the_real_chain() 
     assert route.profile.id == snapshot.environment_profile_id
     assert cm.owner_team_queries == 1
     assert cm.session.info.get("execution_context") is True
+
+
+async def test_sandbox_impl_runner_docker_validates_profile_timeout_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-E2B providers (runner_docker) validate sandbox_timeout against profile effective cap."""
+    from modulo.core.pipeline_engine import node_runner
+    from modulo.core.pipeline_engine.node_runner import set_conformance_ctx
+
+    org_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    bound_profile_id = uuid.uuid4()
+    team_a = uuid.uuid4()
+
+    snapshot = await _freeze_snapshot_with_bound_profile(
+        org_id=org_id, pipeline_id=pipeline_id, bound_profile_id=bound_profile_id
+    )
+    profile = _profile(
+        "runner_docker",
+        id=bound_profile_id,
+        visibility="team",
+        owner_team_id=team_a,
+        max_node_seconds=300,
+    )
+    cm = _TeamScopeSessionCM(
+        profile,
+        expected_profile_id=bound_profile_id,
+        pipeline_owner_team=team_a,
+        expected_pipeline_id=pipeline_id,
+    )
+
+    def session_factory() -> object:
+        return cm
+
+    set_conformance_ctx(session_factory, org_id, snapshot.environment_profile_id, pipeline_id, [], False)
+    state = {"_org_id": str(org_id), "_pipeline_id": str(pipeline_id)}
+
+    config = MagicMock()
+    config.node_id = "node-1"
+    config.node_def = {}
+    config.sandbox_mode = "script"
+    config.agent_command = []
+    config.agent_prompt_template = ""
+    config.template_id = "opencode"
+    config.egress_policy = None
+    config.egress_allowlist = None
+    config.resource_limits = None
+    config.read_only = False
+    config.git_credentials = False
+    config.wallclock_budget_seconds = None
+    config.output_schema_json = None
+    config.sandbox_timeout = 301
+    config.stall_timeout_override = None
+    config.context_files = None
+    config.enable_heartbeat = False
+    config.watch_log_path = None
+    config.stdout_percentage_delta = None
+    config.watch_globs = None
+    config.stdout_retention_mode = None
+    config.stdout_max_bytes = None
+    config.delivery_sentinel = None
+    config.single_pr_per_run = False
+    config.loop_intercept_config = None
+    config.session_factory = session_factory
+    config.single_sandbox_node = False
+    config.workspace_inputs = None
+    config.schema_id = None
+    config.schema_version = None
+
+    fake_hub = MagicMock()
+    fake_hub.resolve.return_value = MagicMock()
+    monkeypatch.setattr("modulo.core.bundled_runner.runner_dispatch.build_hub", lambda **_: fake_hub)
+    monkeypatch.setattr(node_runner, "_run_conformance_gate", AsyncMock())
+    monkeypatch.setattr(node_runner, "_resolve_schema_validator_mode", AsyncMock(return_value="lenient"))
+
+    try:
+        with pytest.raises(SandboxDispatchTimeoutValidationError, match="301"):
+            await node_runner._sandbox_agent_impl(state, config=config)
+    finally:
+        node_runner._conformance_ctx_cv.set(None)

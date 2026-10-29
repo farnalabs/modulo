@@ -458,6 +458,7 @@ OWNED_PAGES = {
     ),
     "/accept-invite": "frontend/src/views/AcceptInviteView.vue",
     "/oauth/authorize": "frontend/src/views/OAuthConsentView.vue",
+    "/evidence": "frontend/src/views/EvidenceView.vue",
     "/risk-assessment": (
         "frontend/src/views/RiskAssessmentView.vue",
         "frontend/src/components/risk-assessment/RiskAssessmentFacets.vue",
@@ -503,6 +504,7 @@ OWNED_PAGES = {
         "frontend/src/views/AdminEvidenceRedactionView.vue",
         "frontend/src/components/shared/ErrorAlert.vue",
     ),
+    "/admin/compliance/evidence-index": ("frontend/src/views/ComplianceEvidenceIndexView.vue",),
     "/admin/errors": (
         "frontend/src/views/AdminErrorsView.vue",
         "frontend/src/components/shared/FilterBar.vue",

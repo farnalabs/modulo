@@ -2044,6 +2044,11 @@ jobs:
                 DISPATCH_CAUSE="the Branch Fixer webhook or a gateway in front of it was unavailable (HTTP ${LAST_HTTP}) for the whole retry budget"
                 DISPATCH_ACTION="Check that app.modulo.run is healthy and that MODULO_BRANCH_FIXER_WEBHOOK_URL points at it, then re-run this CI job."
                 ;;
+              config)
+                DISPATCH_FAILURE="webhook secret unavailable"
+                DISPATCH_CAUSE="${LAST_DETAIL} for this run, so no request was sent. GitHub withholds Actions secrets from dependabot[bot] PRs; they need Dependabot secrets"
+                DISPATCH_ACTION="Add MODULO_BRANCH_FIXER_WEBHOOK_URL and MODULO_BRANCH_FIXER_HMAC_SECRET under Settings > Secrets and variables > Dependabot, then re-run this CI job."
+                ;;
               *)
                 DISPATCH_FAILURE="non-retryable rejection"
                 DISPATCH_CAUSE="the Branch Fixer webhook rejected the request outright (HTTP ${LAST_HTTP}) - retrying cannot help"
@@ -2249,6 +2254,7 @@ jobs:
             case "$LAST_CLASS" in
               capacity) DISPATCH_FAILURE="capacity saturated" ;;
               transient) DISPATCH_FAILURE="webhook unreachable" ;;
+              config) DISPATCH_FAILURE="webhook secret unavailable" ;;
               *) DISPATCH_FAILURE="non-retryable rejection" ;;
             esac
             echo "::error::Branch Fixer webhook dispatch failed — ${DISPATCH_FAILURE} after ${ATTEMPTS} attempt(s) in ${DISPATCH_ELAPSED}s (last HTTP ${LAST_HTTP}: ${LAST_DETAIL}). Main CI failure was not handed to the autonomous fix loop."
