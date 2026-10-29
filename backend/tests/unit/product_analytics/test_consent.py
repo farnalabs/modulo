@@ -187,16 +187,21 @@ class TestConsentTransitions:
         assert result["level"] == LEVEL_ALL
         assert result["prompted"] == PROMPTED_YES
 
-    def test_dismiss_from_declined_is_sticky_no(self) -> None:
-        """Once declined, dismiss still sets prompted=no... wait, actually:
-        decline sets prompted=no (sticky forever). Dismiss only sets prompted=dismissed.
-        But the spec says decline is sticky — a declined org should never be re-prompted.
-        This test verifies the prompt eligibility check handles this correctly.
+    def test_dismiss_after_decline_writes_dismissed_and_stays_ineligible(self) -> None:
+        """A later dismiss overwrites ``prompted=no`` and starts the cooldown.
+
+        Decline is not literally sticky: a dismiss action replaces the stored
+        ``prompted`` value with ``dismissed``. The org stays ineligible while the
+        cooldown runs, which is what matters to the caller.
         """
-        now = datetime(2026, 8, 21, tzinfo=UTC)
+        now = datetime.now(UTC)
         declined = apply_consent_action(default_consent_state(), "decline", now=now)
-        # Declined org is NOT eligible (prompted=no is sticky)
         assert is_prompt_eligible(declined) is False
+
+        dismissed = apply_consent_action(declined, "dismiss", now=now)
+        assert dismissed["prompted"] == PROMPTED_DISMISSED
+        assert dismissed["level"] == LEVEL_OFF
+        assert is_prompt_eligible(dismissed) is False
 
 
 # ---------------------------------------------------------------------------
@@ -235,17 +240,18 @@ class TestSetLevel:
 
 
 class TestEgressGate:
-    def test_both_off(self) -> None:
-        assert is_egress_allowed(False, LEVEL_OFF) is False
-
-    def test_instance_on_org_off(self) -> None:
-        assert is_egress_allowed(True, LEVEL_OFF) is False
-
-    def test_instance_off_org_on(self) -> None:
-        assert is_egress_allowed(False, LEVEL_ALL) is False
-
-    def test_both_on(self) -> None:
-        assert is_egress_allowed(True, LEVEL_ALL) is True
+    @pytest.mark.parametrize(
+        ("instance_on", "org_level", "expected"),
+        [
+            (False, LEVEL_OFF, False),
+            (True, LEVEL_OFF, False),
+            (False, LEVEL_ALL, False),
+            (True, LEVEL_ALL, True),
+        ],
+        ids=["both-off", "instance-on-org-off", "instance-off-org-on", "both-on"],
+    )
+    def test_egress_requires_both_switches_on(self, instance_on: bool, org_level: str, expected: bool) -> None:
+        assert is_egress_allowed(instance_on, org_level) is expected
 
 
 # ---------------------------------------------------------------------------
@@ -287,34 +293,44 @@ class TestCoerceSwitchValue:
 
 
 class TestPartnerLicenseClaim:
-    """``product_analytics_required`` now drives the switch DEFAULT, not enforcement."""
+    """``product_analytics_required`` now drives the switch DEFAULT, not enforcement.
 
-    def test_license_with_required_claim(self) -> None:
-        license_data = SimpleNamespace(claims={PARTNER_LICENSE_CLAIM: True})
-        assert partner_license_requires_analytics(license_data) is True
+    The single canonical suite for the claim reader: the licence-resolution
+    tests in ``test_license_enforcement.py`` exercise the resolver, not this
+    reader, so every accepted/rejected input shape is pinned here once.
+    """
 
-    def test_license_without_required_claim(self) -> None:
-        license_data = SimpleNamespace(claims={})
-        assert partner_license_requires_analytics(license_data) is False
-
-    def test_license_with_false_claim(self) -> None:
-        license_data = SimpleNamespace(claims={PARTNER_LICENSE_CLAIM: False})
-        assert partner_license_requires_analytics(license_data) is False
-
-    def test_license_data_raw_payload_is_read(self) -> None:
-        """A real LicenseData has no ``claims`` attr - read its signed payload."""
-        license_data = SimpleNamespace(raw_payload={PARTNER_LICENSE_CLAIM: True})
-        assert partner_license_requires_analytics(license_data) is True
-
-    def test_dict_license_with_claim(self) -> None:
-        license_data = {PARTNER_LICENSE_CLAIM: True}
-        assert partner_license_requires_analytics(license_data) is True
-
-    def test_none_license_returns_false(self) -> None:
-        assert partner_license_requires_analytics(None) is False
-
-    def test_malformed_license_returns_false(self) -> None:
-        assert partner_license_requires_analytics("not a dict") is False
+    @pytest.mark.parametrize(
+        ("license_data", "expected"),
+        [
+            (SimpleNamespace(claims={PARTNER_LICENSE_CLAIM: True}), True),
+            (SimpleNamespace(claims={PARTNER_LICENSE_CLAIM: "true"}), True),
+            (SimpleNamespace(claims={PARTNER_LICENSE_CLAIM: False}), False),
+            (SimpleNamespace(claims={PARTNER_LICENSE_CLAIM: "false"}), False),
+            (SimpleNamespace(claims={}), False),
+            (SimpleNamespace(raw_payload={PARTNER_LICENSE_CLAIM: True}), True),
+            (SimpleNamespace(raw_payload=None), False),
+            ({PARTNER_LICENSE_CLAIM: True}, True),
+            ({}, False),
+            (None, False),
+            ("not a dict", False),
+        ],
+        ids=[
+            "claims-true",
+            "claims-string-true",
+            "claims-false",
+            "claims-string-false",
+            "claims-absent",
+            "raw-payload-true",
+            "raw-payload-none",
+            "mapping-true",
+            "mapping-empty",
+            "none",
+            "malformed",
+        ],
+    )
+    def test_claim_must_be_explicitly_true(self, license_data: object, expected: bool) -> None:
+        assert partner_license_requires_analytics(license_data) is expected
 
     def test_unreadable_license_is_fail_safe(self) -> None:
         """A licence whose claims access raises must log and return False, never escape."""
