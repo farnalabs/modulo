@@ -160,6 +160,7 @@ class TestFunctionsWiring:
         with patch.object(sw, "get_settings", return_value=_settings()):
             jobs = {c.function.__name__: c for c in sw._system_cron_jobs()}
         assert set(jobs) == {
+            "demo_daily_refresh",
             "fire_due_triggers",
             "dispatcher_reconcile",
             "claim_expiry",
