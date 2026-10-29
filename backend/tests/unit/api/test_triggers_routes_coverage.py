@@ -404,6 +404,26 @@ def test_preview_cron_schedule_returns_times(client: tuple[TestClient, AsyncMock
     assert len(body["next_fire_times"]) == 3
 
 
+def test_viewer_cron_preview_query_includes_membership_scope(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="viewer@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    session.execute = AsyncMock(return_value=_trigger_result([_make_trigger()]))
+    ctxs = list(_happy_patches())
+    for c in ctxs:
+        c.__enter__()
+    try:
+        resp = http.get(f"/api/v1/triggers/{_TRIGGER_ID}/cron/preview")
+    finally:
+        for c in reversed(ctxs):
+            c.__exit__(None, None, None)
+
+    assert resp.status_code == 200, resp.text
+    preview_stmt = session.execute.await_args.args[0]
+    assert "team_memberships" in str(preview_stmt)
+
+
 # ---------------------------------------------------------------------------
 # PATCH /triggers/{id}/polling
 # ---------------------------------------------------------------------------

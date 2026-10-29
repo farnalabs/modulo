@@ -1599,7 +1599,8 @@ async def list_org_pending_reviews(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             # include_claimed (FAR-686): claimed-but-undecided gates stay on
-            # the review page so the reviewer can still act on them.
+            # the review page so the reviewer can still act on them. The
+            # account clamp is mandatory for viewer-level hitl.list.
             gates = await mgr.list_pending(
                 session,
                 principal.organisation_id,

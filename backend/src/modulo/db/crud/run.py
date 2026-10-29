@@ -4818,6 +4818,7 @@ get_dialect_name = _get_dialect_name
 async def get_run_stats(
     session: AsyncSession,
     period: str = "30d",
+    account_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Aggregated run stats for the given period (7d|30d|90d).
 
@@ -4832,8 +4833,12 @@ async def get_run_stats(
 
     dialect = await _get_dialect_name(session)
     if dialect == "postgresql":
-        return await _get_run_stats_postgres(session, cutoff)
-    return await _get_run_stats_python(session, cutoff)
+        if account_id is None:
+            return await _get_run_stats_postgres(session, cutoff)
+        return await _get_run_stats_postgres(session, cutoff, account_id=account_id)
+    if account_id is None:
+        return await _get_run_stats_python(session, cutoff)
+    return await _get_run_stats_python(session, cutoff, account_id=account_id)
 
 
 def _completed_durations_ms(completed_runs: list[Run]) -> list[int]:
@@ -4888,16 +4893,18 @@ def _failure_reason_counts(runs: list[Run]) -> dict[str, int]:
 async def _get_run_stats_python(
     session: AsyncSession,
     cutoff: datetime,
+    *,
+    account_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Generic-backend fallback: load runs into Python, compute percentiles locally."""
+    filters: list[Any] = [
+        Run.created_at >= cutoff,
+        Pipeline.deleted_at.is_(None),
+    ]
+    if account_id is not None:
+        filters.append(account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id))
     result = await session.execute(
-        select(Run)
-        .join(Pipeline, Run.pipeline_id == Pipeline.id)
-        .where(
-            Run.created_at >= cutoff,
-            Pipeline.deleted_at.is_(None),
-        )
-        .order_by(Run.created_at)
+        select(Run).join(Pipeline, Run.pipeline_id == Pipeline.id).where(*filters).order_by(Run.created_at)
     )
     runs: list[Run] = list(result.scalars().all())
 
@@ -4940,6 +4947,8 @@ async def _get_run_stats_python(
 async def _get_run_stats_postgres(
     session: AsyncSession,
     cutoff: datetime,
+    *,
+    account_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Postgres fast path: duration percentiles computed in SQL via ``percentile_cont``.
 
@@ -4950,10 +4959,14 @@ async def _get_run_stats_postgres(
     duration); an empty percentile group yields ``None`` in the response.
     """
     duration_ms = func.extract("epoch", Run.completed_at - Run.started_at) * 1000
-    base_where = (
+    base_where: list[Any] = [
         Run.created_at >= cutoff,
         Pipeline.deleted_at.is_(None),
-    )
+    ]
+    if account_id is not None:
+        base_where.append(
+            account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id)
+        )
     day = cast(Run.created_at, Date).label("day")
 
     # Per-day count/success/failed buckets plus per-day average duration. A day
@@ -5064,20 +5077,21 @@ async def _get_run_stats_postgres(
 async def get_run_heatmap(
     session: AsyncSession,
     year: int,
+    account_id: uuid.UUID | None = None,
 ) -> list[dict[str, Any]]:
     """Run counts per day for the given year (for calendar heatmap)."""
     cutoff_start = datetime(year, 1, 1, tzinfo=UTC)
     cutoff_end = datetime(year + 1, 1, 1, tzinfo=UTC)
 
+    filters: list[Any] = [
+        Run.created_at >= cutoff_start,
+        Run.created_at < cutoff_end,
+        Pipeline.deleted_at.is_(None),
+    ]
+    if account_id is not None:
+        filters.append(account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id))
     result = await session.execute(
-        select(Run)
-        .join(Pipeline, Run.pipeline_id == Pipeline.id)
-        .where(
-            Run.created_at >= cutoff_start,
-            Run.created_at < cutoff_end,
-            Pipeline.deleted_at.is_(None),
-        )
-        .order_by(Run.created_at)
+        select(Run).join(Pipeline, Run.pipeline_id == Pipeline.id).where(*filters).order_by(Run.created_at)
     )
     runs: list[Run] = list(result.scalars().all())
 

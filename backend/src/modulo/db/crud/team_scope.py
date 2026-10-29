@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import ColumnElement, Text, cast, or_, select, text
+from sqlalchemy import ColumnElement, Text, cast, false, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.pipeline import Pipeline
@@ -59,12 +59,16 @@ def team_scope_clause(owner_team_id_col: Any, team_id: Any) -> ColumnElement[boo
     return or_(owner_team_id_col.is_(None), owner_team_id_col == team_id)
 
 
-def account_team_scope_clause(owner_team_id_col: Any, account_id: uuid.UUID) -> ColumnElement[bool]:
+def account_team_scope_clause(owner_team_id_col: Any, account_id: uuid.UUID | None) -> ColumnElement[bool]:
     """Build the team-visibility predicate for an account-scoped viewer read.
 
     Org-visible rows are available to every account. Team-private rows are
-    available only when the account has a membership in the owning team.
+    available only when the account has a membership in the owning team. A
+    missing account context is fail-closed rather than becoming an unscoped
+    read.
     """
+    if account_id is None:
+        return false()
     membership_team_ids = select(TeamMembership.team_id).where(TeamMembership.account_id == account_id)
     return or_(owner_team_id_col.is_(None), owner_team_id_col.in_(membership_team_ids))
 
