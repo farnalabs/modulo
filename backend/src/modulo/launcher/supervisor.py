@@ -113,6 +113,7 @@ from typing import IO, Any, Protocol, Self
 
 from modulo.launcher import policy
 from modulo.launcher.initdb import _sweep_stale_tmp_dirs
+from modulo.launcher.platform import binary_name, supports_posix_file_locking, supports_posix_process_groups
 from modulo.launcher.state import STATE_FILENAME
 
 _log = logging.getLogger(__name__)
@@ -487,8 +488,9 @@ class DataDirLock:
 
     def acquire(self) -> None:
         """Take the exclusive lock or refuse naming the current holder."""
-        if sys.platform == "win32":
-            # Deferred P3: Windows Job Objects / named-mutex lock implementation.
+        if not supports_posix_file_locking():
+            # Windows requires a named mutex implementation; refuse rather than
+            # pretending a JSON holder record is an exclusive lock.
             raise DataDirLockError(
                 "The data-dir lock is not implemented on Windows yet (TODO(P3)); "
                 "the native launcher is Linux-first (ADR 031 P1a)."
@@ -554,7 +556,7 @@ class DataDirLock:
         """
         if self._fd is None:
             return
-        if sys.platform != "win32":
+        if supports_posix_file_locking():
             import fcntl
 
             try:
@@ -583,7 +585,7 @@ def _lock_is_free(lock_path: Path) -> bool:
     This is the ground truth for "has the launcher stopped" — the holder
     JSON can be stale or cleared independently of the kernel lock.
     """
-    if sys.platform == "win32":
+    if not supports_posix_file_locking():
         return False
     import fcntl
 
@@ -690,9 +692,11 @@ def request_stop(data_dir: Path, *, timeout: float = 10.0) -> int:
     launcher stopped (or no live holder exists), 1 when it could not be
     confirmed stopped.
     """
-    if sys.platform == "win32":
-        # Deferred P3: Windows service-control seam.
-        raise LauncherError("modulo stop is not supported on Windows yet (TODO(P3))")
+    if not supports_posix_file_locking():
+        raise LauncherError(
+            "modulo stop requires a Windows service-control implementation and installer validation (FAR-2229); "
+            "refusing to signal an unverified Windows launcher"
+        )
     lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
     holder = _read_lock_holder(lock_path)
     if holder is None:
@@ -1649,8 +1653,9 @@ class Supervisor:
     @staticmethod
     def _signal_group(process: ChildProcess, signum: int) -> None:
         """Signal the child's whole process group (shim + service together)."""
-        if sys.platform == "win32":
-            # Deferred P3: Windows has no killpg; Job Objects own teardown then.
+        if not supports_posix_process_groups():
+            # Windows child teardown remains an explicit installer/runtime
+            # validation boundary; this fallback never pretends to own a Job Object.
             with contextlib.suppress(OSError):
                 process.terminate()
             return
@@ -1768,7 +1773,7 @@ def _resolve_bundled_postgres_version() -> str | None:
     from modulo.launcher.entry import resolve_bin_dir
 
     bin_dir = resolve_bin_dir()
-    binary = bin_dir / ("postgres.exe" if sys.platform == "win32" else "postgres")
+    binary = bin_dir / binary_name("postgres")
     if not binary.is_file():
         return None
     try:

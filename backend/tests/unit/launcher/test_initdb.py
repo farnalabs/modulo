@@ -107,6 +107,15 @@ def test_initdb_argv_pins_every_argument(tmp_path: Path) -> None:
     assert str(pwfile) in argv
 
 
+def test_initdb_argv_uses_windows_locale_and_executable_seam(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    tmp_pgdata = tmp_path / "tmp"
+    pwfile = tmp_path / "pw"
+    monkeypatch.setattr(sys, "platform", "win32")
+    argv = initdb_argv(tmp_pgdata, tmp_path / "bin", BOOTSTRAP_USERNAME, pwfile)
+    assert argv[argv.index("--locale") + 1] == "C"
+    assert argv[0].endswith("initdb.exe")
+
+
 def test_bootstrap_role_name_is_fixed_not_os_username() -> None:
     # ADR 031 Decision 8: the bundled cluster's bootstrap role is FIXED —
     # never derived from the OS user running the launcher.

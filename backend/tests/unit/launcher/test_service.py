@@ -155,7 +155,7 @@ def test_macos_is_refused_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_windows_is_refused_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
-    with pytest.raises(ServiceError, match=r"TODO\(P3\)"):
+    with pytest.raises(ServiceError, match="Task Scheduler"):
         assert_linux()
 
 
