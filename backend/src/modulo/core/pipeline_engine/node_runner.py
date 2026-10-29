@@ -63,7 +63,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard, cast, get_args
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn, TypeGuard, cast, get_args
 
 import httpx
 import jinja2
@@ -414,6 +414,22 @@ class SupersededNodeError(Exception):
     ``superseded`` failure (a token-guarded no-op if a successor already owns
     the run) — never a completed run with zero work.
     """
+
+
+class ConnectorNodeFailedError(Exception):
+    """Raised after a connector action fails and its typed envelope is built.
+
+    The envelope remains attached to the exception so the executor can persist
+    the observed connector failure after the P5 retry/edge/compensation wrapper
+    has made its decision. ``cause`` preserves the original failure class for
+    retry classification.
+    """
+
+    def __init__(self, *, node_id: str, envelope: dict[str, Any], cause: BaseException) -> None:
+        self.node_id = node_id
+        self.envelope = envelope
+        self.cause = cause
+        super().__init__(str(cause))
 
 
 class ScriptModeError(Exception):
@@ -7459,7 +7475,7 @@ async def _connector_action_failure(
     data: dict[str, Any],
     intent_active: bool,
     exc: Exception,
-) -> dict[str, Any]:
+) -> NoReturn:
     """Classify a RAISED connector error and return a failure envelope.
 
     The raised connector error is classified by the SINGLE authority
@@ -7469,9 +7485,9 @@ async def _connector_action_failure(
     fail_closed suppresses the re-fire ("possible silent miss"), fail_open
     re-fires (unchanged). No no-delivery evidence is persisted for a raise.
 
-    Returns a failure envelope that survives through stream handling and
-    finalization, allowing the typed connector failure to be persisted
-    (FAR-2090).
+    The envelope is attached to a raised ``ConnectorNodeFailedError`` rather
+    than returned. This preserves the P5 retry/edge/compensation wrapper and
+    lets the executor recover the typed envelope at finalization (FAR-2090).
     """
     await _connector_write_outcome_for_state(
         session_factory,
@@ -7486,7 +7502,7 @@ async def _connector_action_failure(
         exception=exc,
     )
     error_code = _CODE_CONNECTOR_FAILED if op not in {"write", "dispatch"} else _CODE_CONNECTOR_UNKNOWN
-    return {
+    envelope = {
         "artifacts": [
             {
                 "node_id": node_id,
@@ -7499,6 +7515,7 @@ async def _connector_action_failure(
         "connector_failure": True,
         "error_code": error_code,
     }
+    raise ConnectorNodeFailedError(node_id=node_id, envelope=envelope, cause=exc) from exc
 
 
 async def _connector_success_phase(
@@ -7663,10 +7680,11 @@ async def _connector_invoke_phase(
 ) -> tuple[bool, Any]:
     """Run the connector action (+ optional dispatch wait).
 
-    Returns ``(True, result)`` on success, or ``(False, failure_envelope)`` when
-    the action raised. A ``DispatchWaitTimeoutError`` propagates (terminal and
-    typed — the job is already fired, so it must never be retried).
+    Returns ``(True, result)`` on success. A raised connector action is
+    re-raised after its typed envelope is attached, so the P5 wrapper can apply
+    retry, edge-retry, or compensation semantics.
     """
+
     try:
         result = await _run_connector_action(connector, op, resource, filters, data, dispatch_action=dispatch_action)
         if op == "dispatch" and dispatch_action == "trigger_run" and await_completion:
@@ -7681,7 +7699,7 @@ async def _connector_invoke_phase(
     except DispatchWaitTimeoutError:
         raise
     except Exception as exc:
-        failure_envelope = await _connector_action_failure(
+        await _connector_action_failure(
             session_factory,
             connector,
             state,
@@ -7693,7 +7711,7 @@ async def _connector_invoke_phase(
             intent_active,
             exc,
         )
-        return False, failure_envelope
+        raise AssertionError("_connector_action_failure must raise") from exc  # pragma: no cover
 
 
 async def _run_connector_node(

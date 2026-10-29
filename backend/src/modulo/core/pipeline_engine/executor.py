@@ -131,6 +131,7 @@ from modulo.core.pipeline_engine.model_backend_errors import (
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
     MODULO_SYNTHETIC_FAILURE_MARKER,
+    ConnectorNodeFailedError,
     OutputSchemaValidationError,
     SandboxNodeFailedError,
     SandboxTierRefusedError,
@@ -8760,6 +8761,17 @@ class PipelineExecutor:
             broker.publish("run_cancelled", {})
             self._log_accumulation_state(run_id, state.segments_completed, state.node_token_usage)
             return "cancelled", None, None, node_token_usage
+        if isinstance(exc, ConnectorNodeFailedError):
+            # Preserve the typed connector envelope when P5 has no retry or
+            # compensation route left to resolve the failure.
+            envelope = exc.envelope
+            return _terminal_failure(
+                broker,
+                "failed",
+                envelope.get("error_code", _CODE_CONNECTOR_FAILED),
+                _sanitize_detail(str(exc.cause), limit=None),
+                node_token_usage,
+            )
         if isinstance(exc, CompensationFailedError):
             # FAR-402 P5 (§E): a watched node's compensation target itself failed.
             # The node wrapper wrapped the watched-node terminal failure into a
@@ -8888,6 +8900,8 @@ class PipelineExecutor:
         broker = ctx.broker
         run_id = ctx.run_id
         node_token_usage = state.node_token_usage or None
+        if isinstance(exc, ConnectorNodeFailedError) and ctx.completed_node_outputs is not None:
+            ctx.completed_node_outputs[exc.node_id] = exc.envelope
         if isinstance(exc, GraphInterrupt):
             interrupts = exc.args[0] if exc.args else []
             return await self._handle_graph_interrupt(interrupts, state, ctx)

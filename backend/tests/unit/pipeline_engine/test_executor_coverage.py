@@ -81,6 +81,7 @@ from modulo.core.pipeline_engine.executor import (
     compute_retry_aware_topology_hash,
 )
 from modulo.core.pipeline_engine.node_runner import (
+    ConnectorNodeFailedError,
     SupersededNodeError,
     make_connector_fn,
 )
@@ -824,10 +825,12 @@ async def test_connector_failure_envelope_survives_node_stream_and_finalization(
     )
     set_connector_hub(_Hub(_FailingConnector()))
     try:
-        envelope = await connector_fn({"run_context": {"input": {}}})
+        with pytest.raises(ConnectorNodeFailedError) as exc_info:
+            await connector_fn({"run_context": {"input": {}}})
     finally:
         set_connector_hub(None)
 
+    envelope = exc_info.value.envelope
     assert envelope["connector_failure"] is True
     assert envelope["artifacts"][0]["status"] == "failed"
 
@@ -923,10 +926,12 @@ async def test_connector_write_failure_envelope_survives_node_stream_and_finaliz
     )
     set_connector_hub(_Hub(_FailingWriteConnector()))
     try:
-        envelope = await connector_fn({"run_context": {"input": {}}})
+        with pytest.raises(ConnectorNodeFailedError) as exc_info:
+            await connector_fn({"run_context": {"input": {}}})
     finally:
         set_connector_hub(None)
 
+    envelope = exc_info.value.envelope
     assert envelope["connector_failure"] is True
     assert envelope["error_code"] == "connector.side_effect_unknown"
     assert envelope["artifacts"][0]["status"] == "failed"

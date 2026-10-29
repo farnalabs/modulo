@@ -1972,7 +1972,9 @@ async def test_connector_node_connector_raise_returns_failure_envelope(monkeypat
     monkeypatch.setattr(nr, "_resolve_connector_write_outcome", outcome)
     try:
         fn = make_connector_fn(_connector_node_def())
-        result = await fn({"run_context": {"input": {}}})
+        with pytest.raises(nr.ConnectorNodeFailedError) as exc_info:
+            await fn({"run_context": {"input": {}}})
+        result = exc_info.value.envelope
         assert result["artifacts"][0]["status"] == "failed"
         assert result["artifacts"][0]["error"] == "boom"
         assert result["artifacts"][0]["error_code"] == "connector.failed"
@@ -2058,10 +2060,12 @@ async def test_connector_node_dispatch_raise_uses_side_effect_unknown(monkeypatc
     monkeypatch.setattr(nr, "_resolve_connector_write_outcome", resolve)
     try:
         fn = make_connector_fn(node_def)
-        result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+        with pytest.raises(nr.ConnectorNodeFailedError) as exc_info:
+            await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
     finally:
         set_connector_hub(None)
 
+    result = exc_info.value.envelope
     assert result["artifacts"][0]["status"] == "failed"
     assert result["artifacts"][0]["error"] == "dispatch exploded"
     assert result["artifacts"][0]["error_code"] == "connector.side_effect_unknown"
@@ -2104,7 +2108,9 @@ async def test_connector_node_write_raise_returns_failure_envelope(monkeypatch: 
     monkeypatch.setattr(nr, "_resolve_connector_write_outcome", resolve)
     try:
         fn = make_connector_fn(node_def)
-        result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+        with pytest.raises(nr.ConnectorNodeFailedError) as exc_info:
+            await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+        result = exc_info.value.envelope
         assert result["artifacts"][0]["status"] == "failed"
         assert result["artifacts"][0]["error"] == "write exploded"
         assert result["artifacts"][0]["error_code"] == "connector.side_effect_unknown"
