@@ -3,6 +3,7 @@
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy.dialects import postgresql
 
 from modulo.api.mcp_server import list_trigger_events
@@ -221,6 +222,132 @@ class TestGetTriggerEventsSuccess:
         executed = _executed_sql(mock_sesh)
         assert any(f"triggers.pipeline_id = '{pipeline_id}'" in sql for sql in executed)
         assert any("pipelines.deleted_at IS NULL" in sql for sql in executed)
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_viewer_without_pipeline_filters_by_account_membership(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_role, _ctx_user_id
+
+        _ctx_role.set("viewer")
+        account_id = uuid.uuid4()
+        _ctx_user_id.set(account_id)
+        try:
+            mock_cm = _make_mock_session()
+            mock_sesh = AsyncMock()
+            mock_cm.__aenter__ = AsyncMock(return_value=mock_sesh)
+            mock_cm.__aexit__ = AsyncMock(return_value=False)
+            mock_session.return_value = mock_cm
+
+            execute_result = MagicMock()
+            execute_result.scalars.return_value.all.return_value = []
+            execute_result.scalar_one_or_none.return_value = 0
+            mock_sesh.execute = AsyncMock(return_value=execute_result)
+
+            result = await list_trigger_events()
+
+            assert result["total"] == 0
+            executed = _executed_sql(mock_sesh)
+            joined = [sql for sql in executed if "team_memberships" in sql]
+            assert joined, "a viewer query must scope events by account team membership"
+            assert any("pipelines.owner_team_id IS NULL" in sql for sql in joined)
+            assert any(f"team_memberships.account_id = '{account_id}'" in sql for sql in joined)
+        finally:
+            _ctx_user_id.set(None)
+            _ctx_role.set("runner")
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_viewer_with_pipeline_filters_by_account_membership(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_role, _ctx_user_id
+
+        _ctx_role.set("viewer")
+        account_id = uuid.uuid4()
+        _ctx_user_id.set(account_id)
+        try:
+            mock_cm = _make_mock_session()
+            mock_sesh = AsyncMock()
+            mock_cm.__aenter__ = AsyncMock(return_value=mock_sesh)
+            mock_cm.__aexit__ = AsyncMock(return_value=False)
+            mock_session.return_value = mock_cm
+
+            pipeline_id = uuid.uuid4()
+            execute_result = MagicMock()
+            execute_result.scalars.return_value.all.return_value = []
+            execute_result.scalar_one_or_none.return_value = 0
+            mock_sesh.execute = AsyncMock(return_value=execute_result)
+
+            result = await list_trigger_events(pipeline_id=str(pipeline_id))
+
+            assert result["total"] == 0
+            executed = _executed_sql(mock_sesh)
+            joined = [sql for sql in executed if "team_memberships" in sql]
+            assert joined, "a viewer query must scope events by account team membership"
+            assert any(f"team_memberships.account_id = '{account_id}'" in sql for sql in joined)
+            # The pipeline filter already joined triggers/pipelines, so the
+            # viewer clause must reuse that join rather than add a second one.
+            assert any(f"triggers.pipeline_id = '{pipeline_id}'" in sql for sql in joined)
+        finally:
+            _ctx_user_id.set(None)
+            _ctx_role.set("runner")
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_viewer_with_unset_account_fails_closed(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A viewer read without an account id must never degrade to org-wide."""
+        from modulo.api.mcp_server import _ctx_role, _ctx_user_id
+
+        _ctx_role.set("viewer")
+        _ctx_user_id.set(None)
+        try:
+            mock_cm = _make_mock_session()
+            mock_sesh = AsyncMock()
+            mock_cm.__aenter__ = AsyncMock(return_value=mock_sesh)
+            mock_cm.__aexit__ = AsyncMock(return_value=False)
+            mock_session.return_value = mock_cm
+
+            result = await list_trigger_events()
+
+            assert "error" in result
+            mock_sesh.execute.assert_not_called()
+        finally:
+            _ctx_user_id.set(None)
+            _ctx_role.set("runner")
+
+    async def test_build_trigger_event_query_viewer_without_account_fails_closed(self) -> None:
+        """The query builder must refuse a viewer read with no account id.
+
+        ``list_trigger_events`` resolves the account before calling the builder,
+        so this guard is the builder's own fail-closed backstop: it must raise
+        rather than omit the membership boundary and degrade to an org-wide read.
+        """
+        from modulo.api.mcp_server import McpAuthContextError, _build_trigger_event_query
+
+        session = AsyncMock()
+
+        with pytest.raises(McpAuthContextError):
+            await _build_trigger_event_query(
+                session,
+                _PLACEHOLDER_ORG_ID,
+                None,
+                None,
+                None,
+                account_id=None,
+                viewer=True,
+            )
+
+        session.execute.assert_not_called()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")

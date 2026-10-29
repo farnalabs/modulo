@@ -42,7 +42,12 @@ class TestCheckToolScope:
             ("operator", "trigger_pipeline"),
             ("admin", "trigger_pipeline"),
             ("runner", "cancel_run"),
-            ("runner", "list_pending_hitl"),
+            ("viewer", "list_runs"),
+            ("viewer", "list_triggers"),
+            ("viewer", "list_trigger_events"),
+            ("viewer", "list_pending_hitl"),
+            ("viewer", "list_hitl_reviews"),
+            ("viewer", "get_hitl_review"),
             ("runner", "copy_library_primitive"),
             # FAR-1879: the MCP housekeeping LIST tool now shares the admin
             # org-role floor of its REST twin (GET /api/v1/admin/housekeeping),
@@ -71,7 +76,12 @@ class TestCheckToolScope:
             "operator-trigger_pipeline",
             "admin-trigger_pipeline",
             "runner-cancel_run",
-            "runner-list_pending_hitl",
+            "viewer-list_runs",
+            "viewer-list_triggers",
+            "viewer-list_trigger_events",
+            "viewer-list_pending_hitl",
+            "viewer-list_hitl_reviews",
+            "viewer-get_hitl_review",
             "runner-copy_library_primitive",
             "admin-list_housekeeping",
             "admin-perform_housekeeping",
@@ -189,7 +199,6 @@ class TestCheckToolScope:
         [
             ("viewer", "trigger_pipeline"),
             ("viewer", "cancel_run"),
-            ("viewer", "list_pending_hitl"),
             ("viewer", "copy_library_primitive"),
             ("viewer", "review_hitl"),
             ("viewer", "list_housekeeping"),
@@ -215,7 +224,6 @@ class TestCheckToolScope:
         ids=[
             "viewer-trigger_pipeline",
             "viewer-cancel_run",
-            "viewer-list_pending_hitl",
             "viewer-copy_library_primitive",
             "viewer-review_hitl",
             "viewer-list_housekeeping",
@@ -422,6 +430,7 @@ class TestNewlyGuardedTools:
             ("admin", "delete_secret"),
             ("operator", "list_secrets"),
             ("admin", "list_secrets"),
+            ("viewer", "list_trigger_events"),
             ("runner", "list_trigger_events"),
             ("operator", "list_trigger_events"),
             ("admin", "list_trigger_events"),
@@ -435,6 +444,7 @@ class TestNewlyGuardedTools:
             "admin-delete_secret",
             "operator-list_secrets",
             "admin-list_secrets",
+            "viewer-list_trigger_events",
             "runner-list_trigger_events",
             "operator-list_trigger_events",
             "admin-list_trigger_events",
@@ -442,10 +452,6 @@ class TestNewlyGuardedTools:
     )
     def test_authorized_role_passes(self, role: str, tool: str) -> None:
         assert check_tool_scope(role, tool) is None
-
-    def test_viewer_denied_list_trigger_events(self) -> None:
-        with pytest.raises(MCPAuthorizationError):
-            check_tool_scope("viewer", "list_trigger_events")
 
 
 class TestAllowedToolsNarrowing:

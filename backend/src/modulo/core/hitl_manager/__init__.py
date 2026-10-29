@@ -45,7 +45,9 @@ from modulo.core.audit_logger import append_audit_event
 from modulo.core.hitl_manager.sweep_alarm import maybe_alarm_approve_sweep
 from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import unpark_parked_run
+from modulo.db.crud.team_scope import account_team_scope_clause
 from modulo.db.models.hitl_claim import HitlClaim
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, HITL_CLAIMABLE_RUN_STATUSES, Run
 from modulo.db.models.team_membership import TeamMembership
 from modulo.settings import HITL_CLAIM_TTL_SECONDS
@@ -996,6 +998,7 @@ class HITLManager:
         org_id: uuid.UUID,
         *,
         include_claimed: bool = True,
+        account_id: uuid.UUID | None = None,
     ) -> list[HitlClaim]:
         """All undecided gates for the org whose run is still actionable.
 
@@ -1010,6 +1013,12 @@ class HITLManager:
         org review endpoint passes this through so a claimed gate stays
         visible and actionable instead of vanishing on refresh); pass
         ``include_claimed=False`` to restrict to UNCLAIMED gates only.
+
+        ``account_id`` applies the viewer account-team membership clamp
+        (FAR-2XXX): only gates on org-level runs or runs whose effective
+        owner team the account belongs to are returned. ``hitl_claims``
+        carries only the org-only RLS policy, so this predicate is the only
+        team boundary on the read.
         """
         filters: list[Any] = [
             HitlClaim.organisation_id == org_id,
@@ -1018,7 +1027,15 @@ class HITLManager:
         ]
         if not include_claimed:
             filters.append(HitlClaim.account_id.is_(None))
-        result = await session.execute(select(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*filters))
+        stmt = select(HitlClaim).join(Run, HitlClaim.run_id == Run.id)
+        if account_id is not None:
+            stmt = stmt.join(Pipeline, Run.pipeline_id == Pipeline.id).where(
+                account_team_scope_clause(
+                    func.coalesce(Run.owner_team_id, Pipeline.owner_team_id),
+                    account_id,
+                )
+            )
+        result = await session.execute(stmt.where(*filters))
         return list(result.scalars())
 
     async def list_overdue(
