@@ -33,6 +33,7 @@ from modulo.core.pipeline_engine.executor import (
     _apply_work_intact,
     _can_fenced_requeue,
     _can_retry_after_policy,
+    _connector_failure_views,
     _connector_scope_agent_ids,
     _enrich_failure_detail,
     _extract_chat_model_token_usage,
@@ -2536,3 +2537,8 @@ def test_stream_terminal_connector_failure_uses_default_code():
     assert result[0] == "failed"
     assert result[1] == "connector.failed"
     assert result[2] == "connector failed"
+
+
+def test_connector_failure_views_handles_non_dict_completed_outputs():
+    assert not _connector_failure_views("n1", {}, {}, {})
+    assert not _connector_failure_views("n1", {"n1": "not-a-dict"}, {}, {})

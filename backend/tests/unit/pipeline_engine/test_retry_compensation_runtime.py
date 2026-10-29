@@ -33,6 +33,7 @@ import pytest
 from modulo.core.pipeline_engine.node_runner import ConnectorNodeFailedError, SandboxNodeFailedError
 from modulo.core.pipeline_engine.runtime_retry import (
     CompensationFailedError,
+    failure_event,
     make_retrying_node_fn,
 )
 
@@ -800,3 +801,8 @@ async def test_compile_path_wires_retry_wrapper_without_breaking_normal_exec() -
     # the run completed normally through the retry-wrapped callables.
     assert not result["run_context"]["input"]
     assert isinstance(result.get("artifacts"), list)
+
+
+def test_failure_event_non_retryable_provider_code() -> None:
+    assert failure_event(RuntimeError("HTTP 401 Unauthorized")) is None
+    assert failure_event(RuntimeError("HTTP 402 payment required")) is None

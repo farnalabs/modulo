@@ -32,6 +32,7 @@ from modulo.core.pipeline_engine.executor import (
 )
 from modulo.core.pipeline_engine.node_runner import (
     SANDBOX_AGENT_FAILED_SUMMARY,
+    ConnectorNodeFailedError,
     SandboxNodeFailedError,
     SandboxQueueTimeoutError,
     SandboxRateLimitedError,
@@ -881,6 +882,47 @@ async def test_stream_graph_maps_compensation_failed_error_to_terminal_status():
     assert len(published) == 1
     assert published[0][1]["error"] == COMPENSATION_FAILED_CODE
     executor._otel_bridge.end_run_root.assert_called_once()
+    detach.assert_called_once()
+
+
+async def test_stream_graph_maps_connector_node_failed_error_to_terminal_status():
+    """FAR-2090: when a connector node fails, ConnectorNodeFailedError propagates
+    to the stream graph handler which persists the envelope and terminalizes as failed.
+    """
+    envelope = {"error_code": "connector.failed", "artifacts": [{"status": "failed"}]}
+    compiled = _mock_compiled_raising(
+        ConnectorNodeFailedError(
+            node_id="node-a",
+            envelope=envelope,
+            cause=RuntimeError("connector boom"),
+        )
+    )
+
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    completed_outputs: dict[str, Any] = {}
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach") as detach,
+    ):
+        status, error_code, detail, _ntu = await executor._stream_graph(
+            compiled,
+            None,
+            {"configurable": {"thread_id": "org:run"}},
+            {"node-a"},
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed_outputs,
+        )
+
+    assert status == "failed"
+    assert error_code == "connector.failed"
+    assert "connector boom" in detail
+    assert completed_outputs["node-a"] == envelope
     detach.assert_called_once()
 
 
