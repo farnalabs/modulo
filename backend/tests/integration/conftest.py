@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import uuid
+import warnings
 from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -648,6 +649,19 @@ def _is_unclosed_asyncpg_connection(unraisable: Any) -> bool:
     )
 
 
+def _record_unclosed_asyncpg_connection(item: pytest.Item, unraisable: Any) -> None:
+    """Log and remember a leaked asyncpg connection against the leaking test."""
+    detail = str(unraisable.exc_value)
+    _leaked_asyncpg_connections.append((item.nodeid, detail))
+    _leak_logger.error(
+        "Unclosed asyncpg connection surfaced in the teardown of %s: %s. Close the "
+        "session/connection that owns it (per-test engines must use NullPool or be "
+        "disposed on the loop that created them).",
+        item.nodeid,
+        detail,
+    )
+
+
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None, None, None]:
     """Attribute GC-discovered unclosed asyncpg connections to the leaking test.
@@ -655,38 +669,69 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> 
     ``tryfirst`` + ``wrapper`` makes this the OUTERMOST teardown hook, so the
     capture spans every fixture finaliser for the test, and the forced cyclic
     collection runs once they have all finished.
+
+    The hook is CHAINED, not replaced: only asyncpg-shaped events are captured
+    and consumed here; every other unraisable is passed straight to pytest's
+    own hook so it lands in pytest's per-session deque *before* the ``trylast``
+    ``collect_unraisable`` drains it inside THIS item's teardown. Replacing the
+    hook outright left the deque empty at the drain point and forwarded the
+    events afterwards, which made pytest raise them against the NEXT (innocent)
+    test at setup — the exact misattribution this hook exists to remove.
+
+    The forced ``gc.collect()`` runs after that drain point, so events it
+    surfaces are captured locally and re-emitted below: asyncpg leaks are
+    attributed to this item, and any other unraisable is raised as a
+    ``PytestUnraisableExceptionWarning`` here rather than being left in the
+    deque for the next item.
     """
-    captured: list[Any] = []
+    leaked: list[Any] = []
     previous_hook = sys.unraisablehook
 
-    sys.unraisablehook = captured.append
+    def chained(unraisable: Any) -> None:
+        if _is_unclosed_asyncpg_connection(unraisable):
+            leaked.append(unraisable)
+        else:
+            previous_hook(unraisable)
+
+    sys.unraisablehook = chained
     result: Any = None
+    in_flight: BaseException | None = None
     try:
         result = yield
+    except BaseException as exc:
+        in_flight = exc
+        raise
     finally:
-        with contextlib.suppress(Exception):
-            gc.collect()
-        sys.unraisablehook = previous_hook
+        collateral: list[Any] = []
 
-    for unraisable in captured:
-        if _is_unclosed_asyncpg_connection(unraisable):
-            detail = str(unraisable.exc_value)
-            _leaked_asyncpg_connections.append((item.nodeid, detail))
-            _leak_logger.error(
-                "Unclosed asyncpg connection surfaced in the teardown of %s: %s. Close the "
-                "session/connection that owns it (per-test engines must use NullPool or be "
-                "disposed on the loop that created them).",
-                item.nodeid,
-                detail,
+        def collect_after_drain(unraisable: Any) -> None:
+            if _is_unclosed_asyncpg_connection(unraisable):
+                leaked.append(unraisable)
+            else:
+                collateral.append(unraisable)
+
+        sys.unraisablehook = collect_after_drain
+        try:
+            with contextlib.suppress(Exception):
+                gc.collect()
+        finally:
+            sys.unraisablehook = previous_hook
+
+        for unraisable in leaked:
+            _record_unclosed_asyncpg_connection(item, unraisable)
+        for unraisable in collateral:
+            warnings.warn(
+                pytest.PytestUnraisableExceptionWarning(str(unraisable.exc_value)),
+                stacklevel=2,
             )
-            if _strict_connection_leaks():
-                pytest.fail(
-                    f"unclosed asyncpg connection leaked by {item.nodeid}: {detail}",
-                    pytrace=False,
-                )
-            continue
-        # Everything else keeps the gate's normal behaviour.
-        previous_hook(unraisable)
+        # A teardown error is already failing this item; do not mask it, but the
+        # leak is still logged and listed in the session summary above.
+        if leaked and in_flight is None and _strict_connection_leaks():
+            detail = str(leaked[0].exc_value)
+            pytest.fail(
+                f"unclosed asyncpg connection leaked by {item.nodeid}: {detail}",
+                pytrace=False,
+            )
     return result
 
 
