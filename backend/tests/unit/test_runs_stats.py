@@ -12,14 +12,15 @@ Covers the two dialect paths:
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.run import _get_dialect_name, _percentile, get_run_stats
+from modulo.db.crud.run import _get_dialect_name, _percentile, get_run_heatmap, get_run_stats
 
 
 def _make_session(dialect: str) -> AsyncMock:
@@ -509,3 +510,83 @@ async def test_get_run_stats_postgres_excludes_benign_from_failure_aggregates() 
     # 1 complete over (3 - 1 benign) = 0.5 — the benign run leaves the rate.
     assert result["success_rate"] == 0.5
     assert result["runs_by_day"] == [{"date": str(now.date()), "count": 3, "success": 1, "failed": 1}]
+
+
+async def test_get_run_stats_postgres_with_account_id_applies_membership_scope() -> None:
+    """A viewer read bounds every stats statement by the account's memberships."""
+    session = _make_session("postgresql")
+    captured: list = []
+    now = datetime.now(UTC)
+    day_row = MagicMock(day=now.date(), run_count=1, success=1, failed=0, benign_count=0, avg_duration=100.0)
+    overall_row = MagicMock(p50=100.0, p95=100.0, p99=100.0, avg_duration=100.0)
+    session.execute = AsyncMock(
+        side_effect=_postgres_execute(
+            captured,
+            day_rows=[day_row],
+            overall_row=overall_row,
+            failure_rows=[],
+        )
+    )
+
+    result = await get_run_stats(session, "30d", account_id=uuid.uuid4())
+
+    assert result["total_runs"] == 1
+    assert len(captured) == 3
+    for stmt in captured:
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        # The stamped run owner takes precedence over the pipeline owner, and the
+        # team-private arm is a membership subquery rather than a plain team match.
+        assert "coalesce(runs.owner_team_id, pipelines.owner_team_id) IS NULL" in sql
+        assert "team_memberships" in sql
+
+
+async def test_get_run_stats_generic_with_account_id_applies_membership_scope() -> None:
+    """The generic fallback filters team-private runs by the viewer's memberships."""
+    session = _make_session("sqlite")
+    res = MagicMock()
+    res.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=res)
+
+    result = await get_run_stats(session, "30d", account_id=uuid.uuid4())
+
+    assert result["total_runs"] == 0
+    stmt = session.execute.await_args.args[0]
+    sql = str(stmt.compile(dialect=sqlite.dialect()))
+    assert "coalesce(runs.owner_team_id, pipelines.owner_team_id) IS NULL" in sql
+    assert "team_memberships" in sql
+
+
+async def test_get_run_heatmap_without_account_id_omits_membership_scope() -> None:
+    """An unscoped (non-viewer) heatmap read carries no membership predicate."""
+    session = _make_session("sqlite")
+    res = MagicMock()
+    res.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=res)
+
+    result = await get_run_heatmap(session, 2026)
+
+    assert not result
+    stmt = session.execute.await_args.args[0]
+    sql = str(stmt.compile(dialect=sqlite.dialect()))
+    assert "team_memberships" not in sql
+    assert "pipelines.deleted_at IS NULL" in sql
+
+
+async def test_get_run_heatmap_with_account_id_applies_membership_scope() -> None:
+    """A viewer heatmap read carries the same account-team clamp as run stats."""
+    session = _make_session("sqlite")
+    now = datetime(2026, 3, 4, 12, tzinfo=UTC)
+    res = MagicMock()
+    res.scalars.return_value.all.return_value = [
+        _run(status="complete", created_at=now, completed_at=now, started_at=now),
+        _run(status="failed", created_at=now, completed_at=now, started_at=now, error_code="boom"),
+    ]
+    session.execute = AsyncMock(return_value=res)
+
+    result = await get_run_heatmap(session, 2026, account_id=uuid.uuid4())
+
+    assert result == [{"date": "2026-03-04", "count": 2}]
+    stmt = session.execute.await_args.args[0]
+    sql = str(stmt.compile(dialect=sqlite.dialect()))
+    assert "coalesce(runs.owner_team_id, pipelines.owner_team_id) IS NULL" in sql
+    assert "team_memberships" in sql
