@@ -12,13 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.db.crud import parameter_schema, pipeline_folder, schema_folder, tier_catalog, view
+from modulo.db.crud import parameter_schema, pipeline_folder, schema_folder, tier_catalog
 from modulo.db.crud.base import PageResult
 from modulo.db.models.parameter_schema import ParameterSchema
 from modulo.db.models.pipeline_folder import PipelineFolder
 from modulo.db.models.schema import SchemaFolder
 from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
-from modulo.db.models.view import SavedView
 
 ORG = uuid.uuid4()
 ACCOUNT = uuid.uuid4()
@@ -179,29 +178,6 @@ async def test_parameter_schema_crud_all_paths() -> None:
     )
     delete_db = session(result(scalar=0), result(scalar=0), result(one=schema))
     assert await parameter_schema.delete_schema(delete_db, schema.id) is True
-
-
-@pytest.mark.asyncio
-async def test_view_crud_all_paths() -> None:
-    created = await view.create_view(session(), org_id=ORG, name="v", view_type="run_list", account_id=ACCOUNT)
-    assert isinstance(created, SavedView)
-    assert not created.filters
-    assert await view.get_view(session(result(one=created)), created.id) is created
-    assert await view.get_view(session(result(one=created)), created.id, include_deleted=True) is created
-
-    first = session(result(scalar=2), result(rows=[created]))
-    page = await view.list_views(first, view_type="run_list", page=1, page_size=1)
-    assert page.total == 2
-    assert page.has_more is True
-    all_page = await view.list_views(
-        session(result(scalar=1), result(rows=[created])), include_deleted=True, page_size=1
-    )
-    assert all_page.items == [created]
-
-    assert await view.update_view(session(result(one=created)), created.id, {"description": "updated"}) is created
-    assert await view.update_view(session(result(one=None)), uuid.uuid4(), {}) is None
-    assert await view.soft_delete_view(session(result(one=created)), created.id) is created
-    assert await view.restore_view(session(result(one=created)), created.id) is created
 
 
 @pytest.mark.asyncio

@@ -123,18 +123,6 @@ export async function setupLocalMockApi(page: Page) {
     if (url.includes('/api/v1/admin/tiers')) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ tiers: [{ tier_id: 'community', label: 'Community', rank: 0 }, { tier_id: 'team', label: 'Team', rank: 1 }, { tier_id: 'enterprise', label: 'Enterprise', rank: 2 }] }) })
     }
-    if (url.includes('/api/v1/views')) {
-      return route.fulfill({
-        status: 200, contentType: 'application/json',
-        body: JSON.stringify({
-          items: [
-            { id: '1', name: 'Active Runs', view_type: 'table', columns: ['name', 'status'], filters: {}, sort_by: 'name', sort_order: 'asc', created_by: 'alice@test.com', created_at: new Date().toISOString() },
-            { id: '2', name: 'Kanban Board', view_type: 'grid', columns: ['name', 'status'], filters: {}, sort_by: 'name', sort_order: 'asc', created_by: 'bob@test.com', created_at: new Date().toISOString() },
-          ],
-          total: 2,
-        }),
-      })
-    }
     if (url.includes('/api/v1/dashboard/summary') && method === 'GET') {
       // DashboardView calls this on mount (with `days=<n>` for a rolling
       // window). serve the same populated body for both shapes — the summary

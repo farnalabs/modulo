@@ -534,7 +534,7 @@ class TestGoldenPins:
     def test_core_flag_tier_contract_pinned(self) -> None:
         registry = FeatureFlagRegistry()
         team_flags = {"sso", "team_rbac", "audit_viewer", "admin_spend_limits", "runtime_config", "rate_limits"}
-        community_flags = {"eval_system", "webhook_trigger", "saved_views", "assistant"}
+        community_flags = {"eval_system", "webhook_trigger", "dashboard_charts", "assistant"}
         for name in team_flags:
             flag = registry.get_flag(name)
             assert flag is not None

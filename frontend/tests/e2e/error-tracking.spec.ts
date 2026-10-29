@@ -7,7 +7,7 @@ test.describe('Error Tracking', { tag: "@regression" }, () => {
     // still render it over the filter bar and intercept the Reset click with
     // "subtree intercepts pointer events". Force it closed before the app boots
     // so it can never cover [data-testid=admin-errors-reset]. Mirrors
-    // json-viewer.spec.ts and view-modes-admin.spec.ts.
+    // json-viewer.spec.ts.
     await page.addInitScript(() => {
       localStorage.setItem('assistant-panel-state', 'closed')
     })

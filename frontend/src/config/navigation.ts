@@ -79,7 +79,6 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   // Sandbox Concurrency surfaces (net -1 sidebar item). Only the profiles
   // tab carries the sidebar_group; the concurrency tab is a child route.
   'admin-runners-profiles': { icon: 'Container', labelKey: 'components.SidebarNav.item_runners' },
-  'admin-views': { icon: 'Eye', labelKey: 'components.SidebarNav.item_saved_views' },
   'admin-errors': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_dashboard' },
   'admin-error-detail': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_dashboard' },
   'admin-notification-delivery': { icon: 'Bell', labelKey: 'components.SidebarNav.item_notification_log' },

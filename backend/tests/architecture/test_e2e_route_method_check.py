@@ -337,10 +337,10 @@ def test_main_reports_setup_error_when_a_required_file_yields_nothing(monkeypatc
 
 def test_second_callback_parameter_method_filter_is_detected() -> None:
     # FAR-1847 round 2: ``page.route(url, async (route, request) => ...)`` is a
-    # real shape (frontend/tests/e2e/view-modes-admin.spec.ts). The Request is
-    # the SECOND parameter, so filtering only on the first silently missed it.
+    # real shape in the e2e suite. The Request is the SECOND parameter, so
+    # filtering only on the first silently missed it.
     source = (
-        "await page.route('**/api/v1/views**', async (route, request) => {\n"
+        "await page.route('**/api/v1/mcp/oauth/clients**', async (route, request) => {\n"
         "  if (request.method() === 'GET') {\n"
         "    await route.fulfill({ status: 200 })\n"
         "  } else if (request.method() === 'POST') {\n"
@@ -352,8 +352,8 @@ def test_second_callback_parameter_method_filter_is_detected() -> None:
     calls = _calls(source)
 
     assert [(call.method, call.path) for call in calls] == [
-        ("GET", "/api/v1/views"),
-        ("POST", "/api/v1/views"),
+        ("GET", "/api/v1/mcp/oauth/clients"),
+        ("POST", "/api/v1/mcp/oauth/clients"),
     ]
     assert all(call.kind == "interceptor" for call in calls)
 
@@ -385,7 +385,7 @@ def test_hoisted_request_object_method_filter_is_detected() -> None:
 def test_reversed_second_callback_parameter_comparison_is_detected() -> None:
     # The reversed form of the second-parameter filter must resolve too.
     source = (
-        "await page.route('**/api/v1/views**', async (route, request) => {\n"
+        "await page.route('**/api/v1/mcp/oauth/clients**', async (route, request) => {\n"
         "  if ('GET' === request.method()) {\n"
         "    return route.fulfill({ status: 200 })\n"
         "  }\n"
@@ -396,7 +396,7 @@ def test_reversed_second_callback_parameter_comparison_is_detected() -> None:
 
     assert len(calls) == 1
     assert calls[0].method == "GET"
-    assert calls[0].path == "/api/v1/views"
+    assert calls[0].path == "/api/v1/mcp/oauth/clients"
 
 
 def test_anchored_regex_route_is_normalised_and_checked() -> None:

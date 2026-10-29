@@ -49,7 +49,7 @@ def _invalid_validation() -> LicenseValidation:
 class TestCommunityTier:
     def test_feature_enabled_community_flag(self) -> None:
         tier = CommunityTier()
-        assert tier.feature_enabled("saved_views") is False
+        assert tier.feature_enabled("dashboard_charts") is False
 
     def test_feature_enabled_team_flag_is_off(self) -> None:
         tier = CommunityTier()
@@ -62,7 +62,7 @@ class TestCommunityTier:
     def test_list_enabled_features_only_returns_active(self) -> None:
         tier = CommunityTier()
         names = {f.name for f in tier.list_enabled_features()}
-        assert "saved_views" not in names
+        assert "dashboard_charts" not in names
         assert "sso" not in names
 
     def test_tier_and_license_flag(self) -> None:
@@ -78,7 +78,7 @@ class TestLicenseKeyTier:
 
     def test_community_flag_still_enabled(self) -> None:
         tier = LicenseKeyTier(_license(features=[]))
-        assert tier.feature_enabled("saved_views") is False
+        assert tier.feature_enabled("dashboard_charts") is False
 
     def test_team_flag_without_license_feature_stays_off(self) -> None:
         tier = LicenseKeyTier(_license(tier="community", features=[]))
@@ -91,7 +91,7 @@ class TestLicenseKeyTier:
     def test_list_enabled_merges_tier_and_license_features(self) -> None:
         tier = LicenseKeyTier(_license(tier="community", features=["sso"]))
         names = {f.name for f in tier.list_enabled_features()}
-        assert "saved_views" not in names
+        assert "dashboard_charts" not in names
         assert "sso" in names
 
     def test_tier_and_license_flag(self) -> None:
@@ -120,15 +120,15 @@ class TestDbPlanContext:
         assert ctx.tier() == "community"
         assert ctx.has_license_key() is True
         assert ctx.feature_enabled("sso") is True
-        assert ctx.feature_enabled("saved_views") is False
+        assert ctx.feature_enabled("dashboard_charts") is False
         names = {f.name for f in ctx.list_enabled_features()}
         assert "sso" in names
-        assert "saved_views" not in names
+        assert "dashboard_charts" not in names
 
     async def test_from_db_without_license_features(self) -> None:
         ctx = await self._context(plan_id="community", has_license_key=False)
         assert ctx.feature_enabled("sso") is False
-        assert ctx.feature_enabled("saved_views") is False
+        assert ctx.feature_enabled("dashboard_charts") is False
 
     async def test_unknown_flag_is_false(self) -> None:
         ctx = await self._context(plan_id="team", has_license_key=True)
@@ -307,7 +307,7 @@ class TestResolveFlag:
     async def test_default_state_when_no_overrides(self) -> None:
         registry = self._registry()
         assert await registry.resolve_flag("sso") is False
-        assert await registry.resolve_flag("saved_views") is False
+        assert await registry.resolve_flag("dashboard_charts") is False
 
     async def test_unknown_flag_is_false(self) -> None:
         registry = self._registry()
@@ -316,7 +316,7 @@ class TestResolveFlag:
     async def test_no_db_calls_without_org_id(self) -> None:
         registry = FeatureFlagRegistry()
         with patch.object(registry, "_get_org_override", new_callable=AsyncMock) as org:
-            assert await registry.resolve_flag("saved_views") is False
+            assert await registry.resolve_flag("dashboard_charts") is False
         org.assert_not_awaited()
 
 
@@ -517,7 +517,7 @@ class TestFeatureFlagRegistryDb:
             patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
         ):
             await registry.load_from_db(session)
-        assert registry.get_flag("saved_views") is not None
+        assert registry.get_flag("dashboard_charts") is not None
         assert registry.get_flag("sso") is not None
 
     async def test_load_from_db_lists_inactive_flags(self) -> None:
