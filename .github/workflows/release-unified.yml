@@ -946,12 +946,14 @@ jobs:
           path: release-artefacts
 
       - name: Verify portable release artefacts
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           for artifact in \
-            "release-artefacts/modulo-${{ inputs.version }}-linux-amd64.tar.gz" \
-            "release-artefacts/modulo-${{ inputs.version }}-windows-amd64.exe" \
-            "release-artefacts/Modulo-${{ inputs.version }}-macos-arm64.dmg" \
+            "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz" \
+            "release-artefacts/modulo-${VERSION}-windows-amd64.exe" \
+            "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg" \
             release-artefacts/SHA256SUMS \
             release-artefacts/RELEASE_MANIFEST.json \
             release-artefacts/RELEASE_MANIFEST.json.sig; do
@@ -1222,9 +1224,11 @@ jobs:
       - name: Assert the exact macOS DMG is present
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          DMG="release-artefacts/Modulo-${{ inputs.version }}-macos-arm64.dmg"
+          DMG="release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
           test -s "$DMG"
           printf 'Attestation subject: %s\n' "$DMG"
 
