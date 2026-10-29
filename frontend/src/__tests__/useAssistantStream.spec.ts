@@ -4,27 +4,10 @@ import { defineComponent, h } from 'vue'
 import { mount } from '@vue/test-utils'
 import { useAssistantStore } from '../composables/useAssistantStore'
 import { useAssistantStream } from '../composables/useAssistantStream'
-import { executeCommandBatch, isPaused } from '../composables/useUiCommandExecutor'
-import { usePlanStore } from '../stores/planStore'
 
 vi.mock('@/lib/api/client', () => ({
   getAccessToken: vi.fn(() => 'mock-token'),
   getAuthHeaders: vi.fn(() => ({ Authorization: 'Bearer mock-token' })),
-}))
-
-vi.mock('../stores/planStore', () => ({
-  usePlanStore: vi.fn(() => ({
-    featureEnabled: vi.fn((name: string) => {
-      if (name === 'assistant_ui_driving') return true
-      return false
-    }),
-  })),
-}))
-
-vi.mock('../composables/useUiCommandExecutor', () => ({
-  executeCommandBatch: vi.fn(() => Promise.resolve([{ name: 'get_url', success: true }])),
-  isPaused: vi.fn(() => false),
-  resumeUiCommands: vi.fn(),
 }))
 
 function createMockSSEStream(events: Array<{ event: string; data: unknown }>): ReadableStream<Uint8Array> {
@@ -99,75 +82,6 @@ describe('useAssistantStream', () => {
       request_id: 'req-1',
       tools: [{ name: 'click', args: { selector: '.delete-btn' } }],
     })
-  })
-
-  it('ui_command_batch event executes commands and POSTs results', async () => {
-    setupStore()
-    let postedBody: any = null
-    global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
-      if (url === '/api/v1/assistant/sessions/session-1/stream') {
-        return Promise.resolve({
-          ok: true,
-          body: createMockSSEStream([
-            { event: 'ui_command_batch', data: { commands: [{ id: 'cmd-1', name: 'get_url', args: {} }] } },
-          ]),
-        })
-      }
-      if (url.includes('/ui-command-results')) {
-        postedBody = JSON.parse(opts?.body || '{}')
-        return Promise.resolve({ ok: true })
-      }
-      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
-    })
-
-    const { connectStream } = useAssistantStream()
-    await connectStream('session-1')
-
-    expect(postedBody).not.toBeNull()
-    expect(postedBody.results).toBeDefined()
-    expect(postedBody.results[0].name).toBe('get_url')
-    expect(postedBody.results[0].success).toBe(true)
-  })
-
-  it('waits for the executor to resume before submitting command results', async () => {
-    setupStore()
-    // Hold the post-execution hold-off open for two polls, then resume.
-    vi.mocked(isPaused).mockReturnValueOnce(true).mockReturnValueOnce(true)
-
-    const posted: any[] = []
-    global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
-      if (url === '/api/v1/assistant/sessions/session-1/stream') {
-        return Promise.resolve({
-          ok: true,
-          body: createMockSSEStream([
-            { event: 'ui_command_batch', data: { commands: [{ id: 'cmd-1', name: 'get_url', args: {} }] } },
-          ]),
-        })
-      }
-      if (url.includes('/ui-command-results')) {
-        posted.push(JSON.parse(opts?.body || '{}'))
-        return Promise.resolve({ ok: true })
-      }
-      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
-    })
-
-    vi.useFakeTimers()
-    const { connectStream } = useAssistantStream()
-    const p = connectStream('session-1')
-
-    // Still inside the first 200 ms hold-off poll: the results must not have
-    // been reported yet, otherwise the hold-off is not actually gating.
-    await vi.advanceTimersByTimeAsync(100)
-    expect(posted).toHaveLength(0)
-
-    // Past both paused polls (2 x 200 ms): the executor has resumed, so the
-    // results are submitted exactly once.
-    await vi.advanceTimersByTimeAsync(1000)
-    await p
-
-    expect(posted).toHaveLength(1)
-    // One probe on entry, plus one per poll tick before the resume is seen.
-    expect(vi.mocked(isPaused)).toHaveBeenCalledTimes(3)
   })
 
   it('turn_separator event appends summary message', async () => {
@@ -421,56 +335,20 @@ describe('useAssistantStream', () => {
     expect(store.isStreaming).toBe(false)
   })
 
-  it('assistant-only mode does not execute ui_command_batch (defense-in-depth)', async () => {
+  it('stops safely on an unsupported ui_command_batch without executing or posting results', async () => {
     setupStore()
-    const postedBatches: any[] = []
-    global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
-      if (url === '/api/v1/assistant/sessions/session-1/stream') {
-        return Promise.resolve({
-          ok: true,
-          body: createMockSSEStream([{ event: 'ui_command_batch', data: { commands: [{ id: 'cmd-1', name: 'click', args: { selector: '.x' } }] } }]),
-        })
-      }
-      if (url.includes('/ui-command-results')) {
-        postedBatches.push(JSON.parse(opts?.body || '{}'))
-        return Promise.resolve({ ok: true })
-      }
-      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
-    })
-
-    const { connectStream } = useAssistantStream()
-    await connectStream('session-1', { excludeUiTools: true })
-
-    expect(executeCommandBatch).not.toHaveBeenCalled()
-    expect(postedBatches.length).toBe(1)
-    expect(postedBatches[0].results).toEqual([])
-  })
-
-  it('skips the command batch when the assistant_ui_driving feature flag is off', async () => {
-    setupStore()
-    vi.mocked(usePlanStore).mockImplementationOnce(() => ({
-      featureEnabled: () => false,
-    }) as any)
-    const postedBatches: any[] = []
-    global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
-      if (url === '/api/v1/assistant/sessions/session-1/stream') {
-        return Promise.resolve({
-          ok: true,
-          body: createMockSSEStream([{ event: 'ui_command_batch', data: { commands: [{ id: 'cmd-1', name: 'click', args: { selector: '.x' } }] } }]),
-        })
-      }
-      if (url.includes('/ui-command-results')) {
-        postedBatches.push(JSON.parse(opts?.body || '{}'))
-        return Promise.resolve({ ok: true })
-      }
-      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: createMockSSEStream([
+        { event: 'ui_command_batch', data: { commands: [{ id: 'cmd-1', name: 'click', args: { selector: '.x' } }] } },
+      ]),
     })
 
     const { connectStream } = useAssistantStream()
     await connectStream('session-1')
 
-    expect(executeCommandBatch).not.toHaveBeenCalled()
-    expect(postedBatches[0].results).toEqual([])
+    expect(useAssistantStore().error).toBe('Unsupported assistant event: ui_command_batch')
+    expect(global.fetch).toHaveBeenCalledTimes(1)
   })
 
   it('reports session-not-found without fetching', async () => {
@@ -591,53 +469,6 @@ describe('useAssistantStream', () => {
     // Only the original user message remains — no assistant/summary noise.
     expect(store.messages).toHaveLength(1)
     expect(store.messages[0].role).toBe('user')
-  })
-
-  it('records the failure when command execution throws', async () => {
-    const store = setupStore()
-    vi.mocked(executeCommandBatch).mockRejectedValueOnce(new Error('cmd exploded'))
-    global.fetch = vi.fn().mockImplementation((url: string) => {
-      if (url === '/api/v1/assistant/sessions/session-1/stream') {
-        return Promise.resolve({
-          ok: true,
-          body: createMockSSEStream([{ event: 'ui_command_batch', data: { commands: [{ id: 'c1', name: 'click', args: {} }] } }]),
-        })
-      }
-      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
-    })
-
-    const { connectStream } = useAssistantStream()
-    await connectStream('session-1')
-
-    expect(store.error).toBe('cmd exploded')
-    expect(store.isExecutingUi).toBe(false)
-  })
-
-  it('retries failed ui-command-result submissions and then reports the failure', async () => {
-    const store = setupStore()
-    let submitCalls = 0
-    vi.useFakeTimers()
-    global.fetch = vi.fn().mockImplementation((url: string) => {
-      if (url === '/api/v1/assistant/sessions/session-1/stream') {
-        return Promise.resolve({
-          ok: true,
-          body: createMockSSEStream([{ event: 'ui_command_batch', data: { commands: [{ id: 'c1', name: 'get_url', args: {} }] } }]),
-        })
-      }
-      if (url.includes('/ui-command-results')) {
-        submitCalls += 1
-        return Promise.resolve({ ok: false, status: 502 })
-      }
-      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
-    })
-
-    const { connectStream } = useAssistantStream()
-    const p = connectStream('session-1')
-    await vi.advanceTimersByTimeAsync(5000)
-    await p
-
-    expect(submitCalls).toBe(3)
-    expect(store.error).toContain('Failed to submit UI command results (502)')
   })
 
   it('omits page_context when no route is set', async () => {

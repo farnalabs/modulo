@@ -1,12 +1,9 @@
 import { getCurrentInstance, ref, onUnmounted } from 'vue'
 import { useAssistantStore } from './useAssistantStore'
 import type { PermissionRequest } from './useAssistantStore'
-import { usePlanStore } from '../stores/planStore'
 import type { PageContext, ChatSession } from '@/types/assistant'
 import { getAuthHeaders } from '@/lib/api/client'
 import { parseSSEStream } from '@/lib/sse'
-import type { UiCommand, UiCommandResult } from './useUiCommandExecutor'
-import { executeCommandBatch, isPaused as isExecutorPaused } from './useUiCommandExecutor'
 
 export interface ToolCallEvent {
   tool_call_id: string
@@ -29,10 +26,6 @@ type StreamEventOutcome = 'proceed' | 'break'
 
 interface AssistantEventContext {
   store: AssistantStoreInstance
-  sessionId: string
-  headers: Record<string, string>
-  controller: AbortController
-  options: StreamOptions
 }
 
 function buildPageContext(pageCtx: PageContext): string | undefined {
@@ -75,71 +68,6 @@ function resolveAbortSummaryText(parsed: unknown): string {
   return ((parsed as { summary?: unknown }).summary ?? 'Action cancelled by user.') as string
 }
 
-/** Hold-off window after UI command execution so pause/abort intent is honoured
- * before the results are reported back to the server. */
-async function waitForExecutorResume(streamSignal: AbortSignal | null | undefined): Promise<void> {
-  const pauseDeadline = Date.now() + 60000
-  while (isExecutorPaused()) {
-    if (Date.now() > pauseDeadline) break
-    if (streamSignal?.aborted) break
-    await new Promise(r => setTimeout(r, 200)) // NOSONAR: pause polling is one tick at a time by design
-  }
-}
-
-async function submitUiCommandResults(ctx: AssistantEventContext, results: UiCommandResult[]): Promise<void> {
-  const { store, sessionId, headers } = ctx
-  const body = JSON.stringify({ results })
-  const maxRetries = 3
-  for (let retries = 0; retries < maxRetries; retries++) {
-    const resp = await fetch(`/api/v1/assistant/sessions/${sessionId}/ui-command-results`, { // NOSONAR: retries must repeat the same submission in order, never concurrently
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body,
-    })
-    if (resp.ok) break
-    if (retries >= maxRetries - 1) {
-      store.error = `Failed to submit UI command results (${resp.status})`
-    } else {
-      await new Promise(r => setTimeout(r, 500 * (retries + 1))) // NOSONAR: retry backoff must run attempt by attempt
-    }
-  }
-}
-
-async function handleUiCommandBatch(ctx: AssistantEventContext, parsed: unknown): Promise<StreamEventOutcome> {
-  const { store, sessionId, headers, controller, options } = ctx
-  const planStore = usePlanStore()
-  // Belt-and-braces: assistant-only mode never executes UI command batches,
-  // and never submits them even if the server (or a text-mode backend
-  // path) somehow emits one.
-  if (options.excludeUiTools || !planStore.featureEnabled('assistant_ui_driving')) {
-    console.warn('[AssistantStream] UI driving disabled — skipping command batch')
-    const body = JSON.stringify({ results: [] })
-    await fetch(`/api/v1/assistant/sessions/${sessionId}/ui-command-results`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
-      body,
-    })
-    return 'proceed'
-  }
-  const commands = ((parsed as { commands?: UiCommand[] }).commands ?? parsed) as UiCommand[]
-  store.isExecutingUi = true
-  store.isPaused = false
-  try {
-    const results = await executeCommandBatch(commands)
-    store.isExecutingUi = false
-    await waitForExecutorResume(controller?.signal)
-    await submitUiCommandResults(ctx, results)
-    return 'proceed'
-  } catch (e) {
-    store.error = e instanceof Error ? e.message : 'UI command execution failed'
-    store.isExecutingUi = false
-    return 'break'
-  }
-}
-
 async function dispatchParsedEvent(
   ctx: AssistantEventContext,
   event: string,
@@ -158,7 +86,8 @@ async function dispatchParsedEvent(
   } else if (event === 'permission_request') {
     store.setPendingPermission(parsed as PermissionRequest)
   } else if (event === 'ui_command_batch') {
-    return await handleUiCommandBatch(ctx, parsed)
+    ctx.store.error = 'Unsupported assistant event: ui_command_batch'
+    return 'break'
   } else if (event === 'turn_separator') {
     store.appendTurnSeparator(resolveTurnSeparatorLabel(parsed))
   } else if (event === 'abort_summary') {
@@ -276,7 +205,7 @@ export function useAssistantStream() {
       }
 
       reader = response.body.getReader()
-      await consumeAssistantStream({ store, sessionId, headers, controller, options }, reader)
+      await consumeAssistantStream({ store }, reader)
     } catch (e: unknown) {
       clearTimeout(timeoutId)
       if (e instanceof Error && e.name === 'AbortError') return
