@@ -876,7 +876,9 @@ async def preview_cron_schedule(
             if principal.org_role == "viewer":
                 trigger_filter.append(account_team_scope_clause(Pipeline.owner_team_id, principal.account_id))
             result = await session.execute(
-                select(Trigger).join(Pipeline, Trigger.pipeline_id == Pipeline.id).where(*trigger_filter)
+                select(Trigger)
+                .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+                .where(*trigger_filter, Pipeline.deleted_at.is_(None))
             )
             trigger = result.scalar_one_or_none()
             if trigger is None:

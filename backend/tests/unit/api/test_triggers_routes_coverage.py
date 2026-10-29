@@ -424,6 +424,26 @@ def test_viewer_cron_preview_query_includes_membership_scope(client: tuple[TestC
     assert "team_memberships" in str(preview_stmt)
 
 
+def test_cron_preview_hides_triggers_on_soft_deleted_pipelines(client: tuple[TestClient, AsyncMock]) -> None:
+    """Preview mirrors list_triggers / list_trigger_events, which filter
+    ``Pipeline.deleted_at IS NULL``; a soft-deleted pipeline's trigger must not
+    be previewable by any role (reviewer note on PR #2552)."""
+    http, session = client
+    session.execute = AsyncMock(return_value=_trigger_result([_make_trigger()]))
+    ctxs = list(_happy_patches())
+    for c in ctxs:
+        c.__enter__()
+    try:
+        resp = http.get(f"/api/v1/triggers/{_TRIGGER_ID}/cron/preview")
+    finally:
+        for c in reversed(ctxs):
+            c.__exit__(None, None, None)
+
+    assert resp.status_code == 200, resp.text
+    preview_stmt = str(session.execute.await_args.args[0])
+    assert "pipelines.deleted_at IS NULL" in preview_stmt
+
+
 # ---------------------------------------------------------------------------
 # PATCH /triggers/{id}/polling
 # ---------------------------------------------------------------------------
