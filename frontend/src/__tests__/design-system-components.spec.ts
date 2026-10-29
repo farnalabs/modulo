@@ -1,5 +1,17 @@
+import { computed, ref } from 'vue'
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
+
+import {
+  arrowFor,
+  classFor,
+  formatDeltaAbs,
+  formatDeltaPct,
+  useDeltaAbsText,
+  useDeltaArrow,
+  useDeltaClass,
+  useDeltaPctText,
+} from '../composables/useDeltaFormatting'
 
 import BaseCard from '../components/ui/BaseCard.vue'
 import CardHeader from '../components/ui/CardHeader.vue'
@@ -8,6 +20,86 @@ import MetricCard from '../components/ui/MetricCard.vue'
 import SummaryCard from '../components/ui/SummaryCard.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
 import StatCard from '../components/StatCard.vue'
+
+describe('useDeltaFormatting', () => {
+  it.each([
+    [2, '▲'],
+    [-2, '▼'],
+    [0, '→'],
+  ] as const)('formats %s as %s', (delta, expected) => {
+    expect(arrowFor(delta)).toBe(expected)
+  })
+
+  it.each([
+    [2, false, 'text-success-text'],
+    [-2, false, 'text-destructive'],
+    [0, false, 'text-muted-foreground'],
+    [2, true, 'text-destructive'],
+    [-2, true, 'text-success-text'],
+    [0, true, 'text-muted-foreground'],
+  ] as const)('maps %s with inverted=%s to %s', (delta, inverted, expected) => {
+    expect(classFor(delta, inverted)).toBe(expected)
+  })
+
+  it.each([
+    [null, ''],
+    [0, '0'],
+    [2, '+2'],
+    [-2, '-2'],
+    [2.56, '+2.6'],
+    [-2.56, '-2.6'],
+  ] as const)('formats absolute delta %s as %s', (delta, expected) => {
+    expect(formatDeltaAbs(delta)).toBe(expected)
+  })
+
+  it.each([
+    [null, false, ''],
+    [16.25, false, '16.3%'],
+    [-16.25, false, '16.3%'],
+    [16.25, true, '+16.3%'],
+    [-16.25, true, '-16.3%'],
+    [0, true, '0.0%'],
+  ] as const)('formats percentage delta %s with includeSign=%s as %s', (delta, includeSign, expected) => {
+    expect(formatDeltaPct(delta, includeSign)).toBe(expected)
+  })
+
+  it('keeps computed wrappers reactive and handles null, inversion, and neutral trends', () => {
+    const delta = ref<number | null>(2)
+    const inverted = ref(false)
+    const neutral = ref(false)
+
+    const absText = useDeltaAbsText(computed(() => delta.value))
+    const pctText = useDeltaPctText(computed(() => delta.value))
+    const arrow = useDeltaArrow(computed(() => delta.value))
+    const className = useDeltaClass(computed(() => delta.value), computed(() => inverted.value), computed(() => neutral.value))
+
+    expect(absText.value).toBe('+2')
+    expect(pctText.value).toBe('2.0%')
+    expect(arrow.value).toBe('▲')
+    expect(className.value).toBe('text-success-text')
+
+    inverted.value = true
+    expect(className.value).toBe('text-destructive')
+
+    neutral.value = true
+    expect(className.value).toBe('text-muted-foreground')
+
+    delta.value = null
+    expect(absText.value).toBe('')
+    expect(pctText.value).toBe('')
+    expect(arrow.value).toBe('')
+    expect(className.value).toBe('')
+  })
+
+  it('supports boolean wrapper options and neutral zero/negative branches', () => {
+    const zero = ref<number | null>(0)
+    const negative = ref<number | null>(-2)
+
+    expect(useDeltaClass(computed(() => zero.value), true, false).value).toBe('text-muted-foreground')
+    expect(useDeltaClass(computed(() => negative.value), false, true).value).toBe('text-muted-foreground')
+    expect(useDeltaClass(computed(() => negative.value), true, false).value).toBe('text-success-text')
+  })
+})
 
 describe('BaseCard', () => {
   it.each([
