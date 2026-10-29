@@ -66,7 +66,7 @@ describe('useAssistantStream', () => {
     return store
   }
 
-  it('permission_request event sets pendingPermission in store', async () => {
+  it('stops safely on an unsupported permission_request without exposing execution controls', async () => {
     const store = setupStore()
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -78,10 +78,8 @@ describe('useAssistantStream', () => {
     const { connectStream } = useAssistantStream()
     await connectStream('session-1')
 
-    expect(store.pendingPermission).toEqual({
-      request_id: 'req-1',
-      tools: [{ name: 'click', args: { selector: '.delete-btn' } }],
-    })
+    expect(store.error).toBe('Unsupported assistant event: permission_request')
+    expect(global.fetch).toHaveBeenCalledTimes(1)
   })
 
   it('turn_separator event appends summary message', async () => {

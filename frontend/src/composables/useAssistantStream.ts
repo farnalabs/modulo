@@ -1,6 +1,5 @@
 import { getCurrentInstance, ref, onUnmounted } from 'vue'
 import { useAssistantStore } from './useAssistantStore'
-import type { PermissionRequest } from './useAssistantStore'
 import type { PageContext, ChatSession } from '@/types/assistant'
 import { getAuthHeaders } from '@/lib/api/client'
 import { parseSSEStream } from '@/lib/sse'
@@ -84,7 +83,8 @@ async function dispatchParsedEvent(
   } else if (event === 'tool_call') {
     store.appendToolCall(parsed as ToolCallEvent)
   } else if (event === 'permission_request') {
-    store.setPendingPermission(parsed as PermissionRequest)
+    store.error = 'Unsupported assistant event: permission_request'
+    return 'break'
   } else if (event === 'ui_command_batch') {
     ctx.store.error = 'Unsupported assistant event: ui_command_batch'
     return 'break'
