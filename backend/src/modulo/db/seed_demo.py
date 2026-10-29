@@ -1838,13 +1838,21 @@ async def _seed_demo_governance_surfaces(
                 if claim is None:
                     raise
                 _log.info("demo_seed.hitl_claim_recovered_after_conflict", extra={"run_number": run_number})
+        # A refresh must never rewrite a fired gate's decision, decided-by,
+        # payload, context, or captured config: HITL claims are durable
+        # provenance, not disposable demo display rows.
+        #
+        # An AWAITING claim (decision IS NULL) is the live review surface, not
+        # frozen evidence: the claim-expiry sweep terminalizes anything past
+        # ``terminalize_at``, so preserving the original stamp would silently
+        # empty the "review required" demo surface ~2 days after the first
+        # seed.  Its deadlines therefore roll forward on every refresh.
+        # DECIDED claims are immutable evidence and keep their original values.
+        elif claim.decision is None:
+            claim.expires_at = now + timedelta(days=2)
+            claim.terminalize_at = now + timedelta(days=2)
+            _log.debug("demo_seed.hitl_claim_deadlines_refreshed", extra={"run_number": run_number})
         else:
-            # HITL claims are durable provenance, not disposable demo display
-            # rows.  A daily refresh must never rewrite a fired gate's decision,
-            # deadline, payload, context, or captured config (including an
-            # awaiting-human claim whose terminalization deadline is in flight).
-            # Existing claims are therefore intentionally left untouched; only a
-            # missing demo claim is created from the current fixture.
             _log.debug("demo_seed.hitl_claim_preserved", extra={"run_number": run_number})
 
     model_specs = (
@@ -2027,8 +2035,9 @@ async def _seed_demo_governance_surfaces(
         ).scalars()
     )
     for index, trigger in enumerate(triggers[:4]):
-        # The event identity is derived from the durable trigger identity and
-        # its deterministic position, never from unspecified SELECT order.
+        # The event is keyed on its durable trigger identity; the loop index
+        # only feeds the deterministic ``raw_hash``/``received_at`` fixture
+        # values, never the event's identity.
         raw_hash = hashlib.sha256(f"demo-trigger-event:{trigger.id}:{index}".encode()).hexdigest()
         result = await session.execute(
             select(TriggerEvent)

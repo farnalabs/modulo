@@ -1219,7 +1219,7 @@ async def demo_daily_refresh(_ctx: dict[str, Any]) -> dict[str, Any]:
     durable provenance on existing HITL claims.
     """
     settings = get_settings()
-    if not getattr(settings, "modulo_demo_enabled", False):
+    if not settings.modulo_demo_enabled:
         return {"status": "disabled"}
     from modulo.db.seed_demo import seed_demo_runtime
 

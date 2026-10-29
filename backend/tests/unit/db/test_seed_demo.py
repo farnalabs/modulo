@@ -1412,27 +1412,34 @@ async def test_seed_converges_ticket_ready_trigger(
     assert any(record.getMessage() == "demo_seed.ticket_ready_trigger_converged" for record in caplog.records)
 
 
-async def test_seed_preserves_hitl_claim_provenance_on_refresh(
+async def test_seed_refreshes_awaiting_hitl_claim_deadlines_on_refresh(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Refresh never rewrites the historical HITL decision or fire snapshot."""
+    """Refresh rolls an awaiting claim's deadlines forward without touching its briefing.
+
+    The awaiting claim is the live "review required" demo surface.  If the daily
+    refresh preserved its original ``terminalize_at`` the claim-expiry sweep
+    would retire it ~2 days after the first seed, silently emptying the surface.
+    Its deadlines must therefore move forward, while the historical briefing and
+    captured gate config stay exactly as they were.
+    """
     await _run_seed(session, monkeypatch, _demo_settings())
     claim = (
         await session.execute(select(HitlClaim).join(Run, Run.id == HitlClaim.run_id).where(Run.run_number == 6))
     ).scalar_one()
-    claim.expires_at = claim.expires_at - timedelta(hours=3)
-    claim.terminalize_at = claim.terminalize_at - timedelta(hours=3)
+    claim.expires_at = claim.expires_at - timedelta(days=3)
+    claim.terminalize_at = claim.terminalize_at - timedelta(days=3)
     claim.context_json = {"description": "historical briefing"}
     claim.gate_config_json = {"label": "Historical gate"}
     await session.commit()
-    original = {
+    stale_expires_at = claim.expires_at
+    stale_terminalize_at = claim.terminalize_at
+    preserved = {
         attr: getattr(claim, attr)
         for attr in (
             "decision",
             "decided_by",
             "decision_at",
-            "expires_at",
-            "terminalize_at",
             "decision_payload",
             "context_json",
             "gate_config_json",
@@ -1442,7 +1449,12 @@ async def test_seed_preserves_hitl_claim_provenance_on_refresh(
     await _run_seed(session, monkeypatch, _demo_settings())
 
     refreshed = (await session.execute(select(HitlClaim).where(HitlClaim.id == claim.id))).scalar_one()
-    assert {attr: getattr(refreshed, attr) for attr in original} == original
+    assert refreshed.decision is None
+    # SQLite returns naive datetimes; strip tzinfo so the comparison holds on
+    # both the SQLite and Postgres test backends.
+    assert refreshed.expires_at.replace(tzinfo=None) > stale_expires_at.replace(tzinfo=None)
+    assert refreshed.terminalize_at.replace(tzinfo=None) > stale_terminalize_at.replace(tzinfo=None)
+    assert {attr: getattr(refreshed, attr) for attr in preserved} == preserved
 
 
 async def test_seed_preserves_decided_hitl_claim_provenance_on_refresh(
