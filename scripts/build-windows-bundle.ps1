@@ -132,6 +132,51 @@ function Resolve-BundleOutputPath {
     return $resolved
 }
 
+function Assert-SafeExistingAncestors {
+    <#
+    .SYNOPSIS
+    Inspect every existing path from the repository root to a candidate output.
+
+    This runs before any output directory is created or deleted. Reparse points
+    are refused even when they resolve beneath the repository, because a later
+    recursive delete or copy must never follow a junction/symlink.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][string]$CandidatePath
+    )
+
+    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $comparison = if ($IsWindows -or $IsMacOS) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $rootFull = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd($separators)
+    $rootPrefix = $rootFull + [IO.Path]::DirectorySeparatorChar
+    $cursor = [IO.Path]::GetFullPath($CandidatePath).TrimEnd($separators)
+    $existing = [System.Collections.Generic.List[string]]::new()
+
+    while ($true) {
+        if (Test-Path -LiteralPath $cursor) {
+            $existing.Add($cursor)
+        }
+        if ($cursor -eq $rootFull) { break }
+        $parent = [IO.Directory]::GetParent($cursor)
+        if ($null -eq $parent) {
+            Fail "refusing OutputDirectory '$CandidatePath': its existing ancestors cannot be traced to the repository root."
+        }
+        $cursor = $parent.FullName.TrimEnd($separators)
+    }
+
+    foreach ($path in $existing | Sort-Object Length) {
+        $item = Get-Item -LiteralPath $path -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            Fail "refusing OutputDirectory '$CandidatePath': existing ancestor '$path' is a reparse point (junction/symlink)."
+        }
+        $resolvedItem = (Resolve-Path -LiteralPath $path -ErrorAction Stop).Path.TrimEnd($separators)
+        if (($resolvedItem -ne $rootFull) -and (-not $resolvedItem.StartsWith($rootPrefix, $comparison))) {
+            Fail "refusing OutputDirectory '$CandidatePath': existing ancestor '$path' resolves outside the repository root."
+        }
+    }
+}
+
 function Assert-RemovableDirectory {
     <#
     .SYNOPSIS
@@ -330,6 +375,8 @@ function Write-CheckReport {
 # 1. Output path guard - runs before anything is written, created or deleted.
 # ---------------------------------------------------------------------------
 $output = Resolve-BundleOutputPath -RepositoryRoot $repoRoot -OutputDirectory $OutputDirectory
+$outputParent = [IO.Directory]::GetParent($output).FullName
+Assert-SafeExistingAncestors -RepositoryRoot $repoRoot -CandidatePath $outputParent
 
 # ---------------------------------------------------------------------------
 # 2. Version and schema

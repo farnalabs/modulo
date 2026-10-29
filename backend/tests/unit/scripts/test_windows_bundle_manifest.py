@@ -138,6 +138,15 @@ def test_check_bundle_cli_reports_scaffolding(tmp_path: Path, capsys: pytest.Cap
     assert captured.err.startswith("error: ")
 
 
+def test_validate_rejects_nested_bundle_build_scaffolding(tmp_path: Path) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    nested = bundle / "postgres" / "bin" / "pyinstaller-work"
+    nested.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="pyinstaller-work"):
+        validate(manifest_path, _SCHEMA, bundle)
+
+
 def test_cli_rejection_prints_one_error_line_without_a_traceback(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -349,6 +358,34 @@ def test_builder_refuses_an_unsafe_output_directory(
     normalised = _plain(combined)
     assert result.returncode != 0
     assert expected_refusal in normalised
+    assert (fake / "keep-me.txt").exists()
+
+
+@pytest.mark.skipif(_PWSH is None, reason="pwsh 7 is required to exercise the bundle builder")
+def test_builder_refuses_reparse_output_ancestor_without_touching_repo(
+    tmp_path: Path,
+) -> None:
+    fake = _fake_repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = fake / "build"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+
+    result = _run_builder(
+        fake / "scripts" / _BUILDER.name,
+        "-OutputDirectory",
+        "build/windows-bundle",
+        "-ValidateOnly",
+        workdir=fake,
+    )
+
+    normalised = _plain(result.stdout + result.stderr)
+    assert result.returncode != 0
+    assert "reparse point" in normalised
+    assert not (outside / "windows-bundle").exists()
     assert (fake / "keep-me.txt").exists()
 
 

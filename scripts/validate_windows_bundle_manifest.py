@@ -85,7 +85,8 @@ def assert_no_scaffolding(bundle_root: Path) -> None:
     root = Path(bundle_root)
     if not root.is_dir():
         raise ValueError(f"bundle root is not a directory: {root}")
-    offenders = [name for name in FORBIDDEN_BUNDLE_ENTRIES if (root / name).exists()]
+    forbidden = {entry.casefold() for entry in FORBIDDEN_BUNDLE_ENTRIES}
+    offenders = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.name.casefold() in forbidden)
     if offenders:
         raise ValueError(f"bundle contains build scaffolding that must not ship: {', '.join(offenders)}")
 

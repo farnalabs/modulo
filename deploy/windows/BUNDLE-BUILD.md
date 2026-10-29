@@ -6,9 +6,10 @@ the installer, and it does not make the bundle a supported Windows runtime.
 
 > **Current state: fail-closed.** The launcher refuses Windows until FAR-2229
 > lands, so the manifest records `runtime_support.status = "unsupported"`. A full
-> build also fails if PyInstaller is absent from the backend environment or if
-> the packaged launcher cannot run `version`. Only `-ValidateOnly` is expected to
-> pass today.
+> build also fails if PyInstaller is absent from the backend environment or if the
+> packaged launcher cannot run `version`. `-ValidateOnly` is the supported validation
+> mode, but it also fails closed when required toolchain or native inputs are missing;
+> it is not expected to pass on every machine.
 
 ## Prerequisites
 
