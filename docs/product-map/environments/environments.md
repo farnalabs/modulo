@@ -6,8 +6,11 @@ code:
   - backend/src/modulo/api/routes/environment_profiles.py
   - backend/src/modulo/api/routes/pipelines.py
   - backend/src/modulo/db/crud/environment_profile.py
+  - backend/src/modulo/db/models/environment_profile.py
   - backend/src/modulo/db/crud/pipeline_snapshot.py
   - backend/src/modulo/db/migrations/versions/0289_pipelines_environment_profile.py
+  - backend/src/modulo/db/migrations/versions/0338_environment_profile_max_node_seconds.py
+  - backend/src/modulo/core/graph_validator/__init__.py
   - backend/src/modulo/core/runtime_provider
   - backend/src/modulo/core/team_visibility.py
   - backend/src/modulo/core/bundled_runner/runner_dispatch.py
@@ -32,6 +35,7 @@ unit-tests:
   - backend/tests/integration/test_dispatch_team_scope_backstop.py
   - backend/tests/integration/test_environment_profile_scope_rls_guard.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
+  - frontend/src/__tests__/environment-profiles/EnvironmentProfileForm.spec.ts
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
 depends-on:
@@ -77,6 +81,26 @@ into the Runners page as redirects.)
       naming the missing capability (e.g. `egress:github.com`) when the profile does
       not cover every capability the agent requires
       (`backend/tests/unit/graph_validator/test_environment_capabilities.py`)
+- [x] A profile carries a provider wall-clock capability (FAR-1359):
+      `max_node_seconds` (default 3300, wire-bounded 60..604800) is persisted on
+      the profile (migration 0338) and exposed read-only in the create/edit form
+      (`envprofile-form-max-node-seconds`); the GraphValidator refuses a profile
+      whose capability exceeds the run transport ceiling
+      (`ENV_PROFILE_WALL_CLOCK_EXCEEDS_RUN_CEILING`) and refuses any
+      `sandbox_agent` node whose `timeout_seconds` exceeds
+      `min(profile.max_node_seconds, saq_run_timeout)`
+      (`SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP`), so a save can never bind a node
+      budget the environment cannot honour. At dispatch the same effective cap
+      is re-validated by `validate_e2b_dispatch_timeout`, replacing the E2B
+      3300-second provisioning default; an unbound pipeline keeps that E2B
+      default. A non-integer `timeout_seconds` still raises the existing
+      `SANDBOX_TIMEOUT_INVALID` issue and is never compared against the cap
+      (`backend/src/modulo/api/routes/environment_profiles.py`,
+      `backend/src/modulo/core/graph_validator/__init__.py`,
+      `backend/src/modulo/core/pipeline_engine/node_runner.py`,
+      `backend/src/modulo/core/bundled_runner/runner_dispatch.py`;
+      `test_environment_capabilities.py`, `test_dispatch_route.py`,
+      `EnvironmentProfileForm.spec.ts`)
 - [x] Profiles resolve against the RuntimeProviderHub by capabilities / provider hint;
       local is the default provider (only `local_docker` auto-registers and stays
       authoritative when no provider hint is set), and `e2b` resolves when the profile
@@ -199,6 +223,17 @@ into the Runners page as redirects.)
   actual agent graph inside the workspace before release.
 
 ## QA History
+- 2026-10-29: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1359 sub-surface (environment-profile wall-clock limits, PR #2553). The
+  PR registered the form's `envprofile-form-max-node-seconds` testid in the
+  manifest `elements:` inventory but neither product-map layer described the
+  shipped capability itself, so `max_node_seconds`, the save-time
+  `SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP` /
+  `ENV_PROFILE_WALL_CLOCK_EXCEEDS_RUN_CEILING` refusals and the dispatch-time
+  effective-cap re-validation were invisible to the feature graph and to
+  Assistant's `search_documentation` indexer. Added the checked behaviour line,
+  the model / migration `0338` / graph-validator / dispatch code citations and
+  the form-spec citation. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-09: **Improve Architecture product-map walk** – reconciled the two
   product-map layers for the environment-profile binding follow-ups. The
   FAR-1614 post-merge polish sweep (PR #1455) added the FAR-1598 (dispatch-time
