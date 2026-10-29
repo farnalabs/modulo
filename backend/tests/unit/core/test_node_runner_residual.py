@@ -1960,9 +1960,8 @@ async def test_connector_node_query_success_completes():
         set_connector_hub(None)
 
 
-async def test_connector_node_connector_raise_fails_node(monkeypatch: pytest.MonkeyPatch):
+async def test_connector_node_connector_raise_returns_failure_envelope(monkeypatch: pytest.MonkeyPatch):
     from modulo.core.pipeline_engine.decorator import set_connector_hub
-    from modulo.core.pipeline_engine.errors import ConnectorNodeFailedError
 
     class _FailingConnector:
         async def query(self, q: Any) -> Any:
@@ -1973,15 +1972,106 @@ async def test_connector_node_connector_raise_fails_node(monkeypatch: pytest.Mon
     monkeypatch.setattr(nr, "_resolve_connector_write_outcome", outcome)
     try:
         fn = make_connector_fn(_connector_node_def())
-        with pytest.raises(ConnectorNodeFailedError) as exc_info:
+        with pytest.raises(nr.ConnectorNodeFailedError) as exc_info:
             await fn({"run_context": {"input": {}}})
-        assert "boom" in str(exc_info.value)
-        # QA Fix 1: the raised error is classified by the SINGLE authority even
+        result = exc_info.value.envelope
+        assert result["artifacts"][0]["status"] == "failed"
+        assert result["artifacts"][0]["error"] == "boom"
+        assert result["artifacts"][0]["error_code"] == "connector.failed"
+        assert result["connector_failure"] is True
+        # The raised connector error is classified by the SINGLE authority even
         # for a query op (the resolution is fail-open with no session factory).
         outcome.assert_awaited_once()
         assert isinstance(outcome.await_args.kwargs["exception"], RuntimeError)
     finally:
         set_connector_hub(None)
+
+
+async def test_connector_node_write_reported_failure_returns_failed_artifact(monkeypatch: pytest.MonkeyPatch):
+    from modulo.core.pipeline_engine.decorator import set_connector_hub
+
+    class _ReportedFailureConnector:
+        async def write(self, payload: Any) -> Any:
+            return {"exit_code": 1, "stderr": "command failed"}
+
+        def write_reported_failure(self, result: Any) -> bool:
+            return True
+
+    node_def = _connector_node_def()
+    node_def["connector_binding"]["operation"] = "write"
+    set_connector_hub(_StubHub(connector=_ReportedFailureConnector()))
+    monkeypatch.setattr(nr, "_resolve_connector_write_outcome", AsyncMock())
+    try:
+        fn = make_connector_fn(node_def)
+        result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+    finally:
+        set_connector_hub(None)
+
+    assert result["artifacts"][0]["status"] == "failed"
+    assert result["artifacts"][0]["output"]["exit_code"] == 1
+    assert result["artifacts"][0]["error_code"] == "connector.failed"
+    assert result["connector_failure"] is True
+
+
+async def test_connector_node_reported_failure_uses_secret_guard_reason(monkeypatch: pytest.MonkeyPatch):
+    from modulo.core.pipeline_engine.decorator import set_connector_hub
+
+    class _ReportedFailureConnector:
+        async def write(self, payload: Any) -> Any:
+            return {"secret": object()}
+
+        def write_reported_failure(self, result: Any) -> bool:
+            return True
+
+    guard_block = {"artifacts": [{"error": "scope.violation: secret-object"}]}
+    node_def = _connector_node_def()
+    node_def["connector_binding"]["operation"] = "write"
+    set_connector_hub(_StubHub(connector=_ReportedFailureConnector()))
+    monkeypatch.setattr(nr, "_resolve_connector_write_outcome", AsyncMock())
+    monkeypatch.setattr(nr, "_guard_connector_secret_output", lambda result, node_id: guard_block)
+    try:
+        fn = make_connector_fn(node_def)
+        result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+    finally:
+        set_connector_hub(None)
+
+    assert result["artifacts"][0]["error"] == "scope.violation: secret-object"
+    assert result["artifacts"][0]["output"] is None
+    assert result["artifacts"][0]["error_code"] == "connector.failed"
+    assert result["connector_failure"] is True
+
+
+async def test_connector_node_dispatch_raise_uses_side_effect_unknown(monkeypatch: pytest.MonkeyPatch):
+    from modulo.core.pipeline_engine.decorator import set_connector_hub
+
+    class _RaisingDispatchConnector(_DispatchStubConnector):
+        async def trigger_run(
+            self,
+            pipeline_id: str = "",
+            branch: str = "",
+            variables: dict[str, str] | None = None,
+        ) -> Any:
+            raise RuntimeError("dispatch exploded")
+
+    node_def = _dispatch_node_def()
+    node_def["connector_binding"]["dispatch_action"] = "trigger_run"
+    set_connector_hub(_StubHub(connector=_RaisingDispatchConnector()))
+    resolve = AsyncMock()
+    monkeypatch.setattr(nr, "_resolve_connector_write_outcome", resolve)
+    try:
+        fn = make_connector_fn(node_def)
+        with pytest.raises(nr.ConnectorNodeFailedError) as exc_info:
+            await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+    finally:
+        set_connector_hub(None)
+
+    result = exc_info.value.envelope
+    assert result["artifacts"][0]["status"] == "failed"
+    assert result["artifacts"][0]["error"] == "dispatch exploded"
+    assert result["artifacts"][0]["error_code"] == "connector.side_effect_unknown"
+    assert result["connector_failure"] is True
+    resolve.assert_awaited_once()
+    assert isinstance(resolve.await_args.kwargs["exception"], RuntimeError)
 
 
 async def test_connector_node_write_success_stamps_and_completes(monkeypatch: pytest.MonkeyPatch):
@@ -2004,9 +2094,8 @@ async def test_connector_node_write_success_stamps_and_completes(monkeypatch: py
         set_connector_hub(None)
 
 
-async def test_connector_node_write_raise_resolves_ambiguous(monkeypatch: pytest.MonkeyPatch):
+async def test_connector_node_write_raise_returns_failure_envelope(monkeypatch: pytest.MonkeyPatch):
     from modulo.core.pipeline_engine.decorator import set_connector_hub
-    from modulo.core.pipeline_engine.errors import ConnectorNodeFailedError
 
     class _RaisingConnector:
         async def write(self, payload: Any) -> Any:
@@ -2019,9 +2108,13 @@ async def test_connector_node_write_raise_resolves_ambiguous(monkeypatch: pytest
     monkeypatch.setattr(nr, "_resolve_connector_write_outcome", resolve)
     try:
         fn = make_connector_fn(node_def)
-        with pytest.raises(ConnectorNodeFailedError) as exc_info:
+        with pytest.raises(nr.ConnectorNodeFailedError) as exc_info:
             await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
-        assert "write exploded" in str(exc_info.value)
+        result = exc_info.value.envelope
+        assert result["artifacts"][0]["status"] == "failed"
+        assert result["artifacts"][0]["error"] == "write exploded"
+        assert result["artifacts"][0]["error_code"] == "connector.side_effect_unknown"
+        assert result["connector_failure"] is True
         resolve.assert_awaited_once()
         assert isinstance(resolve.await_args.kwargs["exception"], RuntimeError)
     finally:

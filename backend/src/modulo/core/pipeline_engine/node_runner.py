@@ -122,6 +122,8 @@ from modulo.core.node_output_split import (
 from modulo.core.pipeline_engine.ancestor_refs import collect_injected_refs
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.error_codes import (
+    _CODE_CONNECTOR_FAILED,
+    _CODE_CONNECTOR_UNKNOWN,
     _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED,
     sanitize_error_text,
 )
@@ -412,6 +414,22 @@ class SupersededNodeError(Exception):
     ``superseded`` failure (a token-guarded no-op if a successor already owns
     the run) — never a completed run with zero work.
     """
+
+
+class ConnectorNodeFailedError(Exception):
+    """Raised after a connector action fails and its typed envelope is built.
+
+    The envelope remains attached to the exception so the executor can persist
+    the observed connector failure after the P5 retry/edge/compensation wrapper
+    has made its decision. ``cause`` preserves the original failure class for
+    retry classification.
+    """
+
+    def __init__(self, *, node_id: str, envelope: dict[str, Any], cause: BaseException) -> None:
+        self.node_id = node_id
+        self.envelope = envelope
+        self.cause = cause
+        super().__init__(str(cause))
 
 
 class ScriptModeError(Exception):
@@ -7451,13 +7469,14 @@ async def _connector_action_failure(
     connector: Any,
     state: dict[str, Any],
     node_id: str,
+    op: str,
     resource: str,
     filters: dict[str, Any],
     data: dict[str, Any],
     intent_active: bool,
     exc: Exception,
 ) -> NoReturn:
-    """QA Fix 1: classify a RAISED connector error, then raise ConnectorNodeFailedError.
+    """Classify a RAISED connector error and return a failure envelope.
 
     The raised connector error is classified by the SINGLE authority
     (``_resolve_connector_write_outcome``) as AMBIGUOUS — a raise cannot tell
@@ -7466,9 +7485,9 @@ async def _connector_action_failure(
     fail_closed suppresses the re-fire ("possible silent miss"), fail_open
     re-fires (unchanged). No no-delivery evidence is persisted for a raise.
 
-    Then raises ``ConnectorNodeFailedError`` to propagate the failure to the
-    executor, which terminalizes the run with ``connector.side_effect_unknown``
-    (FAR-2090).
+    The envelope is attached to a raised ``ConnectorNodeFailedError`` rather
+    than returned. This preserves the P5 retry/edge/compensation wrapper and
+    lets the executor recover the typed envelope at finalization (FAR-2090).
     """
     await _connector_write_outcome_for_state(
         session_factory,
@@ -7482,9 +7501,21 @@ async def _connector_action_failure(
         intent_active=intent_active,
         exception=exc,
     )
-    from modulo.core.pipeline_engine.errors import ConnectorNodeFailedError
-
-    raise ConnectorNodeFailedError(node_id, str(exc))
+    error_code = _CODE_CONNECTOR_FAILED if op not in {"write", "dispatch"} else _CODE_CONNECTOR_UNKNOWN
+    envelope = {
+        "artifacts": [
+            {
+                "node_id": node_id,
+                "status": "failed",
+                "error": str(exc),
+                "error_code": error_code,
+                "output": None,
+            }
+        ],
+        "connector_failure": True,
+        "error_code": error_code,
+    }
+    raise ConnectorNodeFailedError(node_id=node_id, envelope=envelope, cause=exc) from exc
 
 
 async def _connector_success_phase(
@@ -7515,6 +7546,7 @@ async def _connector_success_phase(
     envelope on violation, else ``None``.
     """
     if op == "write":
+        reported_failure = _connector_write_reported_failure(connector, result)
         await _connector_write_outcome_for_state(
             session_factory,
             connector,
@@ -7526,6 +7558,26 @@ async def _connector_success_phase(
             result=result,
             intent_active=intent_active,
         )
+        if reported_failure:
+            guard_block = _guard_connector_secret_output(result, node_id)
+            failure_reason = "Connector reported operation failure"
+            guarded_output = result
+            if guard_block is not None:
+                failure_reason = str(guard_block["artifacts"][0]["error"])
+                guarded_output = None
+            return {
+                "artifacts": [
+                    {
+                        "node_id": node_id,
+                        "status": "failed",
+                        "error": failure_reason,
+                        "error_code": _CODE_CONNECTOR_FAILED,
+                        "output": guarded_output,
+                    }
+                ],
+                "connector_failure": True,
+                "error_code": _CODE_CONNECTOR_FAILED,
+            }
     return _guard_connector_secret_output(result, node_id)
 
 
@@ -7628,10 +7680,11 @@ async def _connector_invoke_phase(
 ) -> tuple[bool, Any]:
     """Run the connector action (+ optional dispatch wait).
 
-    Returns ``(True, result)`` on success, or ``(False, failure_envelope)`` when
-    the action raised. A ``DispatchWaitTimeoutError`` propagates (terminal and
-    typed — the job is already fired, so it must never be retried).
+    Returns ``(True, result)`` on success. A raised connector action is
+    re-raised after its typed envelope is attached, so the P5 wrapper can apply
+    retry, edge-retry, or compensation semantics.
     """
+
     try:
         result = await _run_connector_action(connector, op, resource, filters, data, dispatch_action=dispatch_action)
         if op == "dispatch" and dispatch_action == "trigger_run" and await_completion:
@@ -7651,12 +7704,14 @@ async def _connector_invoke_phase(
             connector,
             state,
             node_id,
+            op,
             resource,
             filters,
             data,
             intent_active,
             exc,
         )
+        raise AssertionError("_connector_action_failure must raise") from exc  # pragma: no cover
 
 
 async def _run_connector_node(

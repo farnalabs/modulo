@@ -35,6 +35,7 @@ dmypy.json
 .coverage
 .coverage.*
 coverage.xml
+coverage_report.html
 htmlcov/
 test-results/
 .hypothesis/
