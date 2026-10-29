@@ -93,7 +93,7 @@ Caught at HTTP request deserialisation – blocks the API call with a 422 respon
 
 | Code | Severity | Rule |
 |---|---|---|
-| `node_type` validation | Error | `node_type` must be one of: `agent`, `manual`, `composite`, `sandbox_agent`, `router`, `hitl`, `join`, `dispatch` |
+| `node_type` validation | Error | `node_type` must be one of: `agent`, `manual`, `composite`, `sandbox_agent`, `router`, `hitl`, `join`, `dispatch`, `connector` |
 | `agent_commands` / `agent_prompt` / `script_command` | Error | Sandbox agent nodes are `mode`-driven (`mode` is `"llm"` or `"script"`). In `script` mode a non-empty `script_command` is required; in the default `llm` mode both a non-empty `agent_commands` list and a non-empty `agent_prompt` are required. Setting `agent_commands` and `script_command` together is rejected as mutually exclusive. Note the graph node field is `agent_commands` (a list, joined at run time); `agent_command` is not a node field |
 | `template_id` | Error | Sandbox agent nodes require a `template_id` (e.g. `"opencode"`) |
 | `timeout_seconds` | Error | Per-node timeout must be between 60 and 604800 seconds if set |
@@ -102,17 +102,21 @@ Caught at HTTP request deserialisation – blocks the API call with a 422 respon
 | `connector_binding` (dispatch) | Error | Dispatch nodes (`node_type: dispatch`, FAR-1141) require a `connector_binding` (the CI-runner dispatch target) and cannot reference an `agent_id` |
 | `operation` (dispatch) | Error | A dispatch node's `connector_binding.operation` must be `dispatch` (omitting it inherits the engine fallback; an explicit `query`/`write` is rejected). The binding `type` must implement the CI-runner operations (`trigger_run` / `get_run_status` / `get_run_logs` / `list_runs`); `dispatch_action` selects one (default `trigger_run`) |
 | `await_completion` / `wait_timeout` | Error | Dispatch-only fields: `await_completion=True` and any `wait_timeout` on a non-`dispatch` node are rejected. `await_completion=True` additionally requires `dispatch_action='trigger_run'`; `wait_timeout` (> 0, <= 3600) requires `await_completion=True` |
+| `connector_binding` (connector) | Error | Connector nodes (`node_type: connector`, FAR-2089) are a query/write node whose whole job is its `connector_binding`: a missing binding is rejected (without one the engine would fall through to the LLM node factory and run the node as an agent), and an `agent_id` is rejected (the node has no LLM step, so the reference would be dead configuration) |
+| `resource` (connector) | Error | A `connector` node whose binding operation is not `dispatch` requires a non-empty `connector_binding.resource`; without one the connector is called with an empty resource and fails at run time |
+| sandbox-only fields | Error | `agent_commands`, `commands_concatenation_string` (any value other than the default `" && "`), `model_class`, `read_only`, `git_credentials`, `single_pr_per_run`, `egress_policy` and `egress_allowlist` are sandbox-only: setting them on any other node type is rejected rather than stored as a declared-but-unread field (FAR-212 / FAR-1273 / FAR-1743 / FAR-1846) |
+| graph size | Error | A graph may hold at most 500 nodes and 1000 edges |
+| duplicate IDs / edge paths | Error | Node IDs must be unique, edge IDs must be unique, and two edges may not share the same `(source_node_id, target_node_id, edge_type)` path |
 
 ### Layer 2: MCP Tool (`update_pipeline_graph`)
 
-Caught before the graph is persisted via the MCP interface. Returns structured errors in the MCP response.
+Caught before the graph is persisted via the MCP interface. Returns structured errors in the MCP response. The tool re-validates the submitted payload against the Layer 1 Pydantic contract (`PipelineGraphUpdate`), so every Layer 1 rule applies here too, then adds the checks below that a raw-dict write could otherwise skip.
 
 | Code | Severity | Rule |
 |---|---|---|
-| Duplicate node IDs | Error | Node IDs must be unique across the graph |
-| Duplicate edge IDs | Error | Edge IDs must be unique across the graph |
-| `agent_commands` (MCP) | Error | Sandbox agent nodes require a non-empty `agent_commands` list (and a non-empty `agent_prompt`) in the default `llm` mode, or a non-empty `script_command` in `script` mode |
-| `template_id` (MCP) | Error | Sandbox agent nodes require a `template_id` |
+| `agent_commands` / `agent_prompt` / `script_command` (MCP) | Error | The shared mode-aware sandbox gate over the raw node dicts: `llm` mode requires `agent_commands` plus `agent_prompt`, `script` mode requires `script_command`, the two are mutually exclusive, the joined command must be Jinja-renderable, and the managed-inputs config must be valid |
+| `HITL_REVIEW_DESCRIPTION_REQUIRED` (MCP) | Error | A node-level `hitl_config` or edge-level `hitl_review_config` has no human-authored description of at least 20 characters. Node-level gate config is an unvalidated dict on this surface, so the check is applied explicitly (FAR-613) |
+| `connector_type` (MCP, dispatch) | Error | The bound instance's own `connector_type_id` must implement the CI-runner operations (`trigger_run` / `get_run_status` / `get_run_logs` / `list_runs`). The Layer 1 contract only inspects the caller-declared `connector_binding.type`, so the MCP write resolves the instance row too and fails closed on a type it cannot prove dispatch-capable (FAR-1141) |
 
 ### Layer 3: GraphValidator (`core/graph_validator/`)
 
@@ -151,6 +155,7 @@ Runs on-save (via the REST API's `PUT /{pipeline_id}/graph` endpoint) and pre-ru
 | `SANDBOX_TIMEOUT_BOUNDS` | Warning | `timeout_seconds` outside recommended 60-604800s range |
 | `SANDBOX_TIMEOUT_INVALID` | Warning | `timeout_seconds` is not a valid integer |
 | `SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP` | Error | `timeout_seconds` exceeds the E2B 1-hour sandbox cap; use `<= 3300` for provisioning headroom (FAR-511) |
+| `SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP` | Error | `timeout_seconds` exceeds the bound `EnvironmentProfile`'s `max_node_seconds` capability (capped at the run transport ceiling). Only raised when the snapshot binds an environment profile |
 | `SANDBOX_HEREDOC_TERMINATOR_IN_LIST_ITEM` | Error | an `agent_commands` list item ends with a heredoc terminator; list items are joined with the concatenation operator and the terminator would be corrupted – use a single `agent_command` or base64-embed the script body (FAR-664) |
 | `SANDBOX_STALL_TIMEOUT_INVALID` | Warning | `stall_timeout_seconds` is not a positive number |
 | `SANDBOX_STALL_TIMEOUT_GT_TIMEOUT` | Warning | `stall_timeout_seconds` exceeds `timeout_seconds` |
@@ -195,6 +200,7 @@ Runs on-save (via the REST API's `PUT /{pipeline_id}/graph` endpoint) and pre-ru
 | `MODEL_BACKEND_UNHEALTHY` | Error | A pinned model backend has a recorded `last_health_check_error` |
 | `ENV_PROFILE_NOT_FOUND` | Error | The snapshot's `environment_profile_id` does not resolve to an existing `EnvironmentProfile` |
 | `ENV_MISSING_CAPABILITIES` | Error | An agent requires capabilities the bound `EnvironmentProfile` does not declare |
+| `ENV_PROFILE_WALL_CLOCK_EXCEEDS_RUN_CEILING` | Error | The bound `EnvironmentProfile`'s `max_node_seconds` (default 3300) exceeds the run transport ceiling (`SAQ_RUN_TIMEOUT`, default 7200s), so a node allowed by the profile could outlive the run |
 
 **Schema compatibility and run input**
 
