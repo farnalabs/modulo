@@ -19,6 +19,9 @@ code:
   - backend/src/modulo/db/models/run_attempt.py
   - backend/src/modulo/db/crud/run_attempts.py
   - backend/src/modulo/db/migrations/versions/0329_run_attempts.py
+  - backend/src/modulo/db/crud/run_node_outputs.py
+  - backend/src/modulo/db/models/run_node_outputs.py
+  - backend/src/modulo/db/migrations/versions/0337_per_node_completion.py
   - backend/src/modulo/core/pipeline_engine/executor.py
   - frontend/src/components/runs/RunAttemptHistory.vue
   - backend/src/modulo/core/line_diff.py
@@ -42,6 +45,8 @@ unit-tests:
   - backend/tests/unit/db/crud/test_run_attempts.py
   - backend/tests/unit/db/test_migration_0329_run_attempts.py
   - backend/tests/unit/core/test_far2078_attempt_instrumentation.py
+  - backend/tests/unit/core/test_per_node_completion.py
+  - backend/tests/unit/db/test_migration_0337_per_node_completion.py
   - frontend/src/__tests__/RunAttemptHistory.spec.ts
 bdd:
   - backend/tests/bdd/features/errors
@@ -238,6 +243,25 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       (`core/pipeline_execution.py`, `db/models/run.py`,
       `test_watchdog_firing_record_writer.py`,
       `test_pipeline_execution_watchdog_retry.py`)
+- [x] The node-deadline watchdog gates re-dispatch on durable forward progress
+      (FAR-2050): every node family's completion writes
+      `run_node_outputs.completed_at` exactly once at the single
+      `_on_node_completed` chokepoint, on the node's claim-token-derived attempt
+      row (migration 0337 adds the nullable column), and `_fail_overdue_node`
+      consults `has_completed_nodes_in_attempt()` BEFORE the retry policy. An
+      attempt with no completed node terminal-fails `node_deadline_exceeded`
+      without re-dispatch; an attempt that completed at least one node still
+      needs the pipeline's `retry_policy` to cover `timeout`. The probe counts
+      only the CURRENT attempt (a superseded attempt's completions never
+      count); a missing claim token or a probe failure is fail-CLOSED
+      (terminal-fail, never a blind re-dispatch). The completion write is
+      best-effort - a failed write is logged and swallowed, so its absence can
+      only veto a re-dispatch, never fail a node. The gate is unconditional and
+      has no configuration (`core/pipeline_execution.py`,
+      `db/crud/run_node_outputs.py`, `db/models/run_node_outputs.py`,
+      migration `0337_per_node_completion`, `docs/troubleshooting.md`;
+      `test_per_node_completion.py`, `test_pipeline_execution_watchdog_retry.py`,
+      `test_migration_0337_per_node_completion.py`)
 - [x] A run is refused for a pipeline that may not run (FAR-1528, extended by
       FAR-1530): `create_run` raises `PipelineNotRunnableError` when the
       pipeline is archived, soft-deleted OR paused (`run_enabled=false` - the
@@ -346,6 +370,20 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 ## QA History
 
+- 2026-10-29: **Improve Architecture product-map walk** – closed the untracked
+  FAR-2050 sub-surface. The durable per-node completion record and the
+  deadline re-dispatch gate shipped in PR #2283 with a single
+  `docs/troubleshooting.md` section but no home in either product-map layer,
+  so the new `run_node_outputs.completed_at` contract, the completion writer /
+  reader, the no-forward-progress terminal-fail rule and the fail-closed probe
+  were invisible to the feature graph and to Assistant's
+  `search_documentation` indexer. Added the checked behaviour line, the
+  `db/crud/run_node_outputs.py` / `db/models/run_node_outputs.py` / migration
+  `0337` code citations and the `test_per_node_completion.py` /
+  `test_migration_0337_per_node_completion.py` test citations. It sits beside
+  the FAR-1463 firing-record behaviour, which it complements: FAR-1463 records
+  that the watchdog fired, FAR-2050 decides whether the fire may re-dispatch.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-25: **Improve Architecture product-map walk** – closed the untracked
   FAR-2078 per-attempt execution history surface. It shipped in three slices
   (storage `#2238`, read API `#2265`, run-detail view `#2291`) with registered
