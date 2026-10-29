@@ -114,7 +114,7 @@
     </div>
 
     <template v-else>
-      <div class="overflow-hidden rounded-lg border bg-card shadow-sm">
+      <div class="overflow-x-auto rounded-lg border bg-card shadow-sm">
         <table class="w-full">
           <thead>
             <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
@@ -122,7 +122,7 @@
               <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.result') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.timestamp') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.run') }}</th>
-              <th class="px-4 py-3">{{ $t('views.SettingsGuardrailsView.pipeline') }}</th>
+              <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.pipeline') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsNotificationLogView.error_detail') }}</th>
               <th class="px-4 py-3">{{ $t('views.SettingsTriggerEventLogView.trigger_id') }}</th>
             </tr>
@@ -157,19 +157,28 @@
                 </router-link>
                 <span v-else class="text-muted-foreground/50">&mdash;</span>
               </td>
-              <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground" :title="event.error_detail ?? undefined">
-                {{ event.error_detail || '—' }}
-              </td>
-              <td class="px-4 py-3">
+              <!-- FAR-2226: this cell must stay in the same column as the
+                   "Pipeline" header above. A deleted/archived pipeline keeps
+                   its name (history) but loses the editor link. -->
+              <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground" :title="event.pipeline_name ?? undefined">
                 <router-link
-                  v-if="event.pipeline_id && event.pipeline_name"
+                  v-if="event.pipeline_id && event.pipeline_name && !event.pipeline_deleted"
                   :to="`/pipelines/${event.pipeline_id}/editor`"
                   class="text-primary-text hover:underline"
                   :data-testid="`settings-trigger-event-log-pipeline-${event.pipeline_id}`"
                 >
                   {{ event.pipeline_name }}
                 </router-link>
+                <span
+                  v-else-if="event.pipeline_name"
+                  :data-testid="`settings-trigger-event-log-pipeline-deleted-${event.pipeline_id}`"
+                >
+                  {{ event.pipeline_name }}
+                </span>
                 <span v-else class="text-muted-foreground/50">&mdash;</span>
+              </td>
+              <td class="max-w-xs truncate px-4 py-3 text-sm text-muted-foreground" :title="event.error_detail ?? undefined">
+                {{ event.error_detail || '—' }}
               </td>
               <td class="px-4 py-3 font-mono text-xs text-muted-foreground/70">
                 {{ shortId(event.trigger_id) }}

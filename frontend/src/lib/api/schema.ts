@@ -22212,6 +22212,11 @@ export interface components {
             pipeline_id?: string | null;
             /** Pipeline Name */
             pipeline_name?: string | null;
+            /**
+             * Pipeline Deleted
+             * @default false
+             */
+            pipeline_deleted: boolean;
             /** Error Detail */
             error_detail?: string | null;
         };
