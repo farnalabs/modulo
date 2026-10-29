@@ -1683,6 +1683,7 @@ async def _seed_demo_triggers(
         trigger = Trigger(
             organisation_id=org.id,
             pipeline_id=pr_pipeline.id,
+            name="PR opened",
             trigger_type="webhook",
             active=True,
             config_json=webhook_config,
@@ -1715,6 +1716,7 @@ async def _seed_demo_triggers(
         trigger = Trigger(
             organisation_id=org.id,
             pipeline_id=rn_pipeline.id,
+            name="Weekly release notes",
             trigger_type="cron",
             active=True,
             cron_expression="0 9 * * 1",
