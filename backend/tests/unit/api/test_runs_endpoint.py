@@ -3230,6 +3230,23 @@ class TestGetRunEventsLifecycle:
 class TestListRunsObservability:
     """GET /api/v1/runs — active-run observability fields on each item."""
 
+    def test_viewer_list_passes_account_scope(self, client: TestClient, mock_session) -> None:
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+            username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+        )
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+        )
+        page = MagicMock(items=[], total=0, page=1, page_size=20, next_cursor=None, has_more=False)
+        with (
+            patch("modulo.api.routes.runs.db_list_runs", new_callable=AsyncMock, return_value=page) as list_runs,
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get("/api/v1/runs")
+
+        assert resp.status_code == 200
+        assert list_runs.await_args.kwargs["account_id"] == _USER_ID
+
     def test_list_items_include_observability_fields(self, client: TestClient, mock_session) -> None:
         run = _make_run(status="running")
         run.heartbeat_at = datetime.now(UTC)

@@ -11,14 +11,34 @@ that path without a database.
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlalchemy.sql.elements import False_
+
 from modulo.db.crud.team_scope import (
     BlindPipelineScope,
+    account_team_scope_clause,
     pipeline_team_scope_team_blind,
     pipelines_binding_connector,
 )
+from modulo.db.models.pipeline import Pipeline
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000f1")
+
+
+def test_account_team_scope_clause_missing_account_is_fail_closed() -> None:
+    """An absent viewer account renders an always-false predicate, never an unscoped read."""
+    clause = account_team_scope_clause(Pipeline.owner_team_id, None)
+
+    assert isinstance(clause, False_)
+
+
+def test_account_team_scope_clause_allows_org_rows_and_membership_rows() -> None:
+    account_id = uuid.uuid4()
+    sql = str(account_team_scope_clause(Pipeline.owner_team_id, account_id))
+
+    assert "owner_team_id IS NULL" in sql
+    assert "team_memberships" in sql
+    assert "account_id" in sql
 
 
 async def test_pipelines_binding_connector_returns_the_prefilter_rows() -> None:
