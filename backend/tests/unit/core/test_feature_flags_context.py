@@ -485,9 +485,9 @@ class TestOverrideFromEntitySessionSemantics:
 
     async def test_org_override_false_on_default_on_flag_resolves_false(self) -> None:
         result = await self._resolve(
-            "eval_system",
+            "dashboard_charts",
             "settings_json",
-            {"eval_system": False},
+            {"dashboard_charts": False},
         )
         assert result is False
 
