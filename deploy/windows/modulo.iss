@@ -3,7 +3,7 @@
 ;
 ; Required ISPP defines:
 ;   VERSION_NUM - release version
-;   BUNDLE_ARCH - amd64 or arm64
+;   BUNDLE_ARCH - amd64 (the only supported installer architecture)
 ;   BUNDLE_DIR  - extracted native Windows bundle root
 ; Optional ISPP define:
 ;   MODULO_URL  - local URL opened by the post-install checkbox
@@ -28,6 +28,10 @@
 #endif
 #ifndef MODULO_URL
   #define MODULO_URL "http://127.0.0.1:8000"
+#endif
+
+#if BUNDLE_ARCH != "amd64"
+  #error Unsupported BUNDLE_ARCH: only amd64 Windows installers are supported
 #endif
 
 #ifexist "{#BUNDLE_DIR}\modulo.exe"
@@ -82,7 +86,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; from turning a missing runtime into a partial installation.
 Source: "{#BUNDLE_DIR}\modulo.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BUNDLE_DIR}\modulo-runtime.json"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "modulo.exe;modulo-runtime.json"
+Source: "{#BUNDLE_DIR}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "modulo.exe,modulo-runtime.json"
 
 [Icons]
 Name: "{group}\Modulo"; Filename: "{app}\modulo.exe"; WorkingDir: "{app}"

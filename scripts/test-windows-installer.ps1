@@ -16,7 +16,7 @@ param(
     [string]$Version = "0.3.323",
 
     [Parameter(Mandatory = $false)]
-    [ValidateSet("amd64", "arm64")]
+    [ValidateSet("amd64")]
     [string]$Arch = "amd64"
 )
 
@@ -37,10 +37,14 @@ if (-not $isccPath) {
 }
 
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("modulo-installer-contract-" + [guid]::NewGuid().ToString("N"))
-$missingBundle = Join-Path $tempRoot "missing"
+$missingExeBundle = Join-Path $tempRoot "missing-exe"
+$missingMarkerBundle = Join-Path $tempRoot "missing-marker"
 $validBundle = Join-Path $tempRoot "valid"
 $outputDir = Join-Path $tempRoot "output"
-New-Item -ItemType Directory -Path $missingBundle, $validBundle, $outputDir | Out-Null
+New-Item -ItemType Directory -Path $missingExeBundle, $missingMarkerBundle, $validBundle, $outputDir | Out-Null
+
+[System.IO.File]::WriteAllText((Join-Path $missingExeBundle "modulo-runtime.json"), '{"contract":"native-windows-v1"}')
+[System.IO.File]::WriteAllText((Join-Path $missingMarkerBundle "modulo.exe"), "placeholder")
 
 function Invoke-Iscc([string]$bundleDir, [string]$outputName) {
     $arguments = @(
@@ -53,8 +57,10 @@ function Invoke-Iscc([string]$bundleDir, [string]$outputName) {
         "/DMODULO_URL=http://127.0.0.1:8000",
         $issPath
     )
-    & $isccPath @arguments
-    return $LASTEXITCODE
+    $compilerOutput = & $isccPath @arguments 2>&1
+    $exitCode = [int]$LASTEXITCODE
+    $compilerOutput | ForEach-Object { Write-Host $_ }
+    return $exitCode
 }
 
 try {
@@ -62,11 +68,18 @@ try {
     Write-Host "Inno Setup: $isccPath"
     Write-Host "Installer source: $issPath"
 
-    Write-Host "Checking that an incomplete bundle fails compilation..."
-    $missingExit = Invoke-Iscc $missingBundle "missing-contract"
-    Write-Host "Missing bundle compile exit code: $missingExit"
-    if ($missingExit -eq 0) {
-        throw "Installer compiled despite missing modulo.exe and modulo-runtime.json."
+    Write-Host "Checking that a bundle missing modulo.exe fails compilation..."
+    $missingExeExit = Invoke-Iscc $missingExeBundle "missing-exe-contract"
+    Write-Host "Missing modulo.exe compile exit code: $missingExeExit"
+    if ($missingExeExit -eq 0) {
+        throw "Installer compiled despite missing modulo.exe."
+    }
+
+    Write-Host "Checking that a bundle missing modulo-runtime.json fails compilation..."
+    $missingMarkerExit = Invoke-Iscc $missingMarkerBundle "missing-marker-contract"
+    Write-Host "Missing modulo-runtime.json compile exit code: $missingMarkerExit"
+    if ($missingMarkerExit -eq 0) {
+        throw "Installer compiled despite missing modulo-runtime.json."
     }
 
     # Inno Setup validates source presence, not PE semantics. This deliberately
