@@ -162,6 +162,7 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # authenticated last, leaking cross-tenant data.
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import (
+    INTERNAL_FLAGS,
     RETIRED_INTERNAL_FLAGS,
     get_registry,
     resolve_mcp_human_linked_hitl_authority,
@@ -10223,6 +10224,7 @@ async def list_feature_flags() -> dict[str, Any]:
                 if isinstance(raw_overrides, dict):
                     org_overrides = {k: bool(v) for k, v in raw_overrides.items()}
 
+        internal_flags_visible = _mcp_internal_lifecycle_map_access()
         return {
             "license": {
                 "tier": registry.current_tier,
@@ -10239,6 +10241,7 @@ async def list_feature_flags() -> dict[str, Any]:
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
+                if internal_flags_visible or f.name not in INTERNAL_FLAGS
             ],
             "would_activate": [
                 {
@@ -10249,6 +10252,7 @@ async def list_feature_flags() -> dict[str, Any]:
                 }
                 for f in registry.tier_gap_flags()
                 if f.name not in org_overrides
+                if internal_flags_visible or f.name not in INTERNAL_FLAGS
             ],
         }
     except MCPAuthorizationError as exc:

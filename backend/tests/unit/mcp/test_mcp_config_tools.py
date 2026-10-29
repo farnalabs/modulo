@@ -12,6 +12,7 @@ from modulo.api.mcp_server import (
     get_available_features,
     get_integration_status,
     get_org_config,
+    list_feature_flags,
     list_housekeeping,
     perform_housekeeping,
     search_documentation,
@@ -428,6 +429,80 @@ class TestSystemMapsInternalFlagMCP:
 
         assert result["feature_count"] == 0
         assert "system_maps" not in result["results"]
+
+
+# ---------------------------------------------------------------------------
+# list_feature_flags
+# ---------------------------------------------------------------------------
+
+
+class TestListFeatureFlagsVisibility(AuthContext):
+    @pytest.mark.parametrize("internal_access", [False, True])
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_settings")
+    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    async def test_system_maps_is_visible_only_to_internal_callers(
+        self,
+        mock_get_org: AsyncMock,
+        mock_resolve_plan: AsyncMock,
+        mock_registry: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+        internal_access: bool,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_key_grants, _ctx_role
+
+        org = MagicMock(settings_json={})
+        mock_get_org.return_value = org
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        mock_resolve_plan.return_value = plan_ctx
+
+        unrelated_flag = FeatureFlag(
+            name="schema_version_history",
+            description="Snapshot diff + rollback",
+            tier="team",
+            currently_active=False,
+        )
+        system_maps_flag = FeatureFlag(
+            name="system_maps",
+            description="Beta System Maps",
+            tier="community",
+            currently_active=False,
+        )
+        registry = MagicMock(
+            current_tier="community",
+            has_license_key=False,
+        )
+        registry.list_flags.return_value = [unrelated_flag, system_maps_flag]
+        registry.tier_gap_flags.return_value = [unrelated_flag, system_maps_flag]
+        mock_registry.return_value = registry
+        mock_session.return_value = make_session_context(make_session_scope())
+        settings = MagicMock(modulo_license_key="", modulo_dev_mode=True)
+        mock_get_settings.return_value = settings
+
+        _ctx_role.set("operator")
+        _ctx_is_system_admin.set(True)
+        grants = {"resource.read_only"}
+        if internal_access:
+            grants.add("library.search.in_dev")
+        _ctx_key_grants.set(frozenset(grants))
+        try:
+            result = await list_feature_flags()
+        finally:
+            _ctx_is_system_admin.set(False)
+            _ctx_key_grants.set(None)
+
+        assert "error" not in result
+        names = {flag["name"] for flag in result["flags"]}
+        assert "schema_version_history" in names
+        assert ("system_maps" in names) is internal_access
+        gap_names = {flag["name"] for flag in result["would_activate"]}
+        assert ("system_maps" in gap_names) is internal_access
 
 
 # ---------------------------------------------------------------------------
