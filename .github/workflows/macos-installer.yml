@@ -80,6 +80,19 @@ jobs:
             echo 'Dry-run validated the native arm64 build contract only. No artifact was created or published.'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Set up Node + pnpm (pinned frontend toolchain)
+        if: ${{ inputs.mode != 'dry-run' }}
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.28.8
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        if: ${{ inputs.mode != 'dry-run' }}
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
       - name: Set up uv
         if: ${{ inputs.mode != 'dry-run' }}
         uses: astral-sh/setup-uv@v5
@@ -126,25 +139,35 @@ jobs:
           CERT="$RUNNER_TEMP/modulo-developer-id.p12"
           IDENTITY_PEM_PATH="$RUNNER_TEMP/modulo-signing-identity.pem"
           NOTARY_KEY="$RUNNER_TEMP/modulo-notary.p8"
-          MOUNT="$RUNNER_TEMP/modulo-mount"
-          DATA="$RUNNER_TEMP/modulo-native-smoke-data"
-          REDIS_PID="$DATA/redis.pid"
+           MOUNT="$RUNNER_TEMP/modulo-mount"
+           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
+          OWNED_PIDS="$DATA/owned-pids"
           cleanup() {
             status="${1:-$?}"
             set +e
             launchctl unload -w "$HOME/Library/LaunchAgents/run.modulo.launcher.plist" >/dev/null 2>&1 || true
-             if [[ -s "$REDIS_PID" ]]; then
-               redis_pid="$(cat "$REDIS_PID")"
-               kill "$redis_pid" >/dev/null 2>&1 || true
-               for _attempt in 1 2 3 4 5; do
-                 kill -0 "$redis_pid" >/dev/null 2>&1 || break
-                 sleep 1
-               done
-               if kill -0 "$redis_pid" >/dev/null 2>&1; then
-                 echo "::error::cleanup could not stop owned Redis process $redis_pid" >&2
-                 [[ "$status" -eq 0 ]] && status=1
-               fi
-             fi
+            if [[ -s "$OWNED_PIDS" ]]; then
+              while IFS= read -r owned_pid; do
+                [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
+                kill -TERM "$owned_pid" >/dev/null 2>&1 || true
+              done < "$OWNED_PIDS"
+              for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+                still_running=0
+                while IFS= read -r owned_pid; do
+                  [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
+                  if kill -0 "$owned_pid" >/dev/null 2>&1; then still_running=1; fi
+                done < "$OWNED_PIDS"
+                [[ "$still_running" -eq 0 ]] && break
+                sleep 1
+              done
+              while IFS= read -r owned_pid; do
+                [[ "$owned_pid" =~ ^[0-9]+$ ]] || continue
+                if kill -0 "$owned_pid" >/dev/null 2>&1; then
+                  echo "::error::cleanup could not stop owned Modulo child PID $owned_pid" >&2
+                  [[ "$status" -eq 0 ]] && status=1
+                fi
+              done < "$OWNED_PIDS"
+            fi
              detach_status=1
              for _attempt in 1 2 3; do
                if hdiutil detach "$MOUNT" >/dev/null 2>&1; then
@@ -245,24 +268,50 @@ jobs:
            done
            [[ -n "$API_PORT" ]] || { echo '::error::native launcher never wrote state.json' >&2; exit 1; }
            curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" >/dev/null
+           curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/" | grep -q '<div id="app">'
            SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '/pid =/ {print $3; exit}')"
            [[ "$SERVICE_PID" =~ ^[0-9]+$ ]] || { echo '::error::LaunchAgent has no numeric service PID' >&2; exit 1; }
            SERVICE_BINARY="$(ps -p "$SERVICE_PID" -o command= | awk '{print $1}')"
            [[ "$SERVICE_BINARY" == "$INSTALL_ROOT"/*/Contents/MacOS/modulo ]] || { echo "::error::unexpected service binary: $SERVICE_BINARY" >&2; exit 1; }
-           file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64'
-           if "$MOUNTED_APP/Contents/MacOS/modulo" start --data-dir "$DATA/failure" --bin-dir "$DATA/missing-bin" >/dev/null 2>&1; then
+            file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64'
+            collect_children() {
+              local parent="$1" child
+              printf '%s\n' "$parent" >> "$OWNED_PIDS"
+              while IFS= read -r child; do
+                [[ "$child" =~ ^[0-9]+$ ]] || continue
+                collect_children "$child"
+              done < <(pgrep -P "$parent" || true)
+            }
+            : > "$OWNED_PIDS"
+            collect_children "$SERVICE_PID"
+            grep -qE '^[0-9]+$' "$OWNED_PIDS" || { echo '::error::could not record owned LaunchAgent process tree' >&2; exit 1; }
+            INSTALLED_APP="$INSTALL_ROOT/Modulo-${VERSION_NUM}.app"
+           if "$INSTALLED_APP/Contents/MacOS/modulo" start --data-dir "$DATA/failure" --bin-dir "$DATA/missing-bin" >"$DATA/invalid-bin.stderr" 2>&1; then
              echo '::error::invalid bundled-binary path unexpectedly allowed launcher startup' >&2
              exit 1
            fi
-           launchctl unload -w "$PLIST"
+            grep -Eiq 'bundled binaries not found|missing:.*(initdb|postgres|redis-server)' "$DATA/invalid-bin.stderr" || {
+              echo '::error::invalid bundled-binary smoke failed for an unexpected reason' >&2
+              cat "$DATA/invalid-bin.stderr" >&2
+              exit 1
+            }
+            launchctl unload -w "$PLIST"
            if launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
              echo '::error::LaunchAgent remained loaded after unload' >&2
              exit 1
            fi
-           if pgrep -f "$INSTALL_ROOT/.*/Contents/MacOS/modulo" >/dev/null 2>&1; then
-             echo '::error::owned Modulo process remained after unload' >&2
-             exit 1
-           fi
+            if launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
+              echo '::error::LaunchAgent remained loaded after cleanup' >&2
+              exit 1
+            fi
+            if pgrep -f "$INSTALL_ROOT/.*/Contents/MacOS/modulo" >/dev/null 2>&1; then
+              echo '::error::owned Modulo process remained after unload' >&2
+              exit 1
+            fi
+            if pgrep -f "$DATA/pgdata" >/dev/null 2>&1 || pgrep -f "$DATA/.*redis" >/dev/null 2>&1; then
+              echo '::error::owned PostgreSQL or Redis process remained after unload' >&2
+              exit 1
+            fi
 
 
       - name: Upload real macOS installer
