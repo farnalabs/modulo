@@ -25,9 +25,11 @@ status: covered
 Assistant is the in-app AI assistant (PRD §8.23). The user-facing surface
 (`/api/v1/assistant/sessions*`, `/assistant`) provides persistent multi-turn sessions with SSE
 streaming, message CRUD, and navigation tool resolution (ADR 007 / ADR 011).
-Browser UI driving (click/fill/select/press/extract) was removed in FAR-2232; navigation
-(`navigate`, `go_back`, `get_url`, `get_manifest`) remains and is resolved server-side
-against the app manifest. The admin surface (`/api/v1/admin/assistant`,
+Browser UI driving (click/fill/select/press/extract) was removed in FAR-2232, and the
+browser-action navigation tools (`navigate`, `go_back`, `get_url`) are gone too: the
+assistant no longer claims to move the user's browser. Only the read-only `get_manifest`
+tool remains, resolved server-side against the app manifest and echoed with its own
+tool name. The admin surface (`/api/v1/admin/assistant`,
 `/admin/assistant`, `/settings/assistant`) manages org-level assistant config (provider,
 model, system prompt, access list), reusable org/user skills, and context sources.
 Access control restricts who may use Assistant (explicit user/role allow-list; admins and
@@ -42,9 +44,9 @@ listed org roles always granted).
       `POST` appends a user message
 - [x] Streaming: `POST /api/v1/assistant/sessions/{id}/stream` returns an SSE stream of the
       LLM response for the session history
-- [x] Assistant resolves navigation tool calls (`navigate`, `go_back`, `get_url`,
-      `get_manifest`) locally against the app manifest and reports them as `tool_call`
-      SSE events
+- [x] Assistant resolves read-only `get_manifest` tool calls locally against the app
+      manifest and reports them as `tool_call` SSE events under the called tool's name
+      (no browser-action tools are advertised)
 - [x] Admin config: `GET/PUT /api/v1/admin/assistant/config` reads and updates the
       assistant's provider/model/prompt/access settings with feature-flag + org
       scoping; `GET /available-providers` lists selectable providers

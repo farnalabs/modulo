@@ -7,8 +7,8 @@ tests assert on the real behaviour of the ``exclude_navigation_tools`` flag:
 
 * tool assembly is gated (``include_navigation=False``) when the flag is set;
 * the text-mode fallback (``include_ui_tools_text``) is disabled in every mode;
-* navigation tool calls are resolved locally against the app manifest and
-  reported as ``tool_call`` events with ``tool_name="get_manifest"``.
+* manifest tool calls are resolved locally against the app manifest and
+  reported as ``tool_call`` events whose ``tool_name`` echoes the called tool.
 """
 
 from __future__ import annotations
@@ -249,7 +249,7 @@ async def test_text_mode_backend_never_includes_browser_tools_text(exclude_navig
 
 
 @pytest.mark.asyncio
-async def test_navigate_call_is_resolved_locally_as_manifest_result() -> None:
+async def test_get_manifest_call_is_resolved_locally_as_manifest_result() -> None:
     manifest_mock = MagicMock(
         return_value={
             "routes": {"/admin/pipelines": {"name": "Pipelines", "testid": "pipelines-view", "type": "page"}},
@@ -257,7 +257,7 @@ async def test_navigate_call_is_resolved_locally_as_manifest_result() -> None:
             "sidebar_groups": {},
         }
     )
-    backend = _Backend([_tool_call("navigate", "nav-1", 0)])
+    backend = _Backend([_tool_call("get_manifest", "nav-1", 0)])
     events = await _run_stream(
         exclude_navigation_tools=False,
         backend=backend,

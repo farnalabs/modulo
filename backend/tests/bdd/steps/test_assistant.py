@@ -1650,9 +1650,29 @@ def _run_navigation_engine(ctx: dict, tool_calls: list[dict[str, Any]]) -> dict[
     return harness
 
 
+@when("the assistant builds its navigation tool definitions")
+def build_navigation_tool_definitions(ctx) -> None:
+    from modulo.api.routes import assistant as assistant_routes
+
+    ctx["nav_tool_names"] = sorted(assistant_routes.NAV_TOOL_NAMES)
+
+
+@then(parsers.parse('the navigation tool list is exactly "{expected}"'))
+def navigation_tool_list_is_exactly(ctx, expected: str) -> None:
+    assert ctx["nav_tool_names"] == [expected]
+
+
 @when(parsers.parse('the LLM emits a "{tool_name}" tool call with path "{path}"'))
 def llm_emits_navigation_call(tool_name: str, ctx, path: str) -> None:
+    ctx["emitted_tool_name"] = tool_name
     tool_call = {"id": str(uuid.uuid4()), "name": tool_name, "args": {"path": path}}
+    _run_navigation_engine(ctx, [tool_call])
+
+
+@when(parsers.parse('the LLM emits a "{tool_name}" tool call with no path'))
+def llm_emits_navigation_call_without_path(tool_name: str, ctx) -> None:
+    ctx["emitted_tool_name"] = tool_name
+    tool_call = {"id": str(uuid.uuid4()), "name": tool_name, "args": {}}
     _run_navigation_engine(ctx, [tool_call])
 
 
@@ -1662,7 +1682,7 @@ def backend_yields_navigation_tool_call(ctx) -> None:
     events = [_sse_payload(event) for event in harness["events"] if "event: tool_call" in event]
     assert len(events) == 1, f"expected one tool_call event, got {events}"
     assert events[0]["success"] is True
-    assert events[0]["tool_name"] == "get_manifest"
+    assert events[0]["tool_name"] == ctx["emitted_tool_name"]
 
 
 @then("the navigation result carries the route details")
@@ -1673,3 +1693,14 @@ def navigation_result_carries_route(ctx) -> None:
     result = results[0]["result"]
     assert "route" in result
     assert "elements" in result
+
+
+@then("the navigation result carries the full manifest")
+def navigation_result_carries_full_manifest(ctx) -> None:
+    harness = ctx["nav_engine"]
+    results = harness["tool_results"]
+    assert len(results) == 1
+    result = results[0]["result"]
+    assert "routes" in result
+    assert "elements" in result
+    assert "sidebar_groups" in result

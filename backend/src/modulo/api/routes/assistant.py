@@ -76,15 +76,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/assistant", tags=["assistant"])
 
 _NAV_TOOLS: dict[str, dict[str, Any]] = {
-    "navigate": {
-        "description": "Navigate to a Modulo page by route path.",
-        "parameters": {"path": {"type": "string", "description": "Route path to navigate to."}},
-    },
-    "go_back": {"description": "Navigate back to the previous page.", "parameters": {}},
-    "get_url": {"description": "Get current page URL and route name.", "parameters": {}},
     "get_manifest": {
-        "description": "Get the structured app manifest, optionally filtered by route path.",
-        "parameters": {"path": {"type": "string", "description": "Optional route path."}},
+        "description": (
+            "Resolve Modulo route details from the app manifest. Provide a route path to "
+            "get one page's route and element details, or omit it to get the whole app map. "
+            "Read-only: this does not move the user's browser."
+        ),
+        "parameters": {"path": {"type": "string", "description": "Optional route path to resolve."}},
     },
 }
 NAV_TOOL_NAMES: frozenset[str] = frozenset(_NAV_TOOLS)
@@ -644,7 +642,7 @@ async def _finalise_stream_assistant_message(
 async def _run_manifest_calls(
     manifest_calls: list[dict[str, Any]],
 ) -> AsyncGenerator[dict[str, Any], None]:
-    """Resolve navigation manifest tool calls locally."""
+    """Resolve manifest tool calls locally (read-only; never drives the browser)."""
     from modulo.core.manifest import get_manifest
 
     manifest = get_manifest()
@@ -671,7 +669,7 @@ async def _run_manifest_calls(
             }
         yield {
             "tool_call_id": tool_call["id"],
-            "tool_name": "get_manifest",
+            "tool_name": tool_call["name"],
             "success": True,
             "result": result,
         }
