@@ -20,6 +20,7 @@ from tests.unit.reports.helpers import (
     has_predicate,
     make_cost_report_mock,
     report_firing_env,
+    select_returns,
 )
 
 
@@ -173,9 +174,7 @@ async def test_due_report_executes_and_transitions_schedule(
     expected_next: datetime.datetime | None,
 ) -> None:
     report = make_cost_report_mock(schedule_type=schedule_type)
-    selected = MagicMock()
-    selected.scalar_one_or_none.return_value = report
-    session = MockSession([selected, MagicMock()])
+    session = MockSession([select_returns(report), MagicMock()])
     generator = AsyncMock(return_value={"items": [], "period": "daily", "group_by": "team", "format": "csv"})
     formatter = MagicMock(return_value={"subject": "Cost", "body_html": "<p />", "body_text": "cost"})
     deliverer = AsyncMock(return_value=[{"type": "email", "status": "delivered", "recipient_count": 1}])
@@ -213,9 +212,7 @@ async def test_due_report_executes_and_transitions_schedule(
 
 async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
     report = make_cost_report_mock(schedule_type="one_time")
-    selected = MagicMock()
-    selected.scalar_one_or_none.return_value = report
-    session = MockSession([selected])
+    session = MockSession([select_returns(report)])
     generator = AsyncMock(return_value={"items": [], "period": "daily", "group_by": "team", "format": "csv"})
     deliverer = AsyncMock(side_effect=RuntimeError("SMTP unavailable"))
 

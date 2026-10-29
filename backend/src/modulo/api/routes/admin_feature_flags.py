@@ -21,13 +21,14 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
-from modulo.api.constants import PERM_SYSTEM_CONFIG_MANAGE
+from modulo.api.constants import PERM_SYSTEM_CONFIG_MANAGE, SYSTEM_MAPS_FLAG
 from modulo.api.db_error_handling import (
     handle_db_errors,
     raise_lock_timeout_conflict_if,
     raise_session_contract_error,
 )
 from modulo.api.dependencies import (
+    _require_internal_system_maps_access,
     get_db_session,
     require_in_dev_operator,
     require_system_permission,
@@ -37,6 +38,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.feature_flags import (
+    INTERNAL_FLAGS,
     RETIRED_INTERNAL_FLAGS,
     FeatureFlagRegistry,
     feature_overrides_from_settings,
@@ -151,12 +153,26 @@ async def _invalidate_cache(settings: Settings, org_id: str | uuid.UUID) -> None
         redis = Redis.from_url(
             settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
         )
-        await redis.delete(f"feature-flags:{org_id}")
+        await redis.delete(f"feature-flags:{org_id}:public", f"feature-flags:{org_id}:internal")
     except Exception:
         logger.warning("feature-flags.cache_invalidate_failed", exc_info=True)
     finally:
         if redis is not None:
             await redis.aclose()
+
+
+def _feature_flag_cache_key(
+    org_id: str | uuid.UUID | None,
+    *,
+    internal_system_maps_access: bool,
+) -> str:
+    """Build the cache key scoped to the caller's flag-visibility class.
+
+    The visibility gate is part of the key so an internal response can never be
+    served to an ordinary caller (and vice versa).
+    """
+    visibility = "internal" if internal_system_maps_access else "public"
+    return f"feature-flags:{org_id}:{visibility}"
 
 
 async def _read_org_overrides(session: AsyncSession, org_id: uuid.UUID) -> dict[str, bool]:
@@ -198,14 +214,14 @@ async def _write_org_override(session: AsyncSession, org_id: uuid.UUID, flag_nam
         await update_org_settings_patch(session, org_id, {"feature_overrides": overrides})
 
 
-def _reject_retired_internal_flag_for_ordinary_caller(
+def _require_internal_flag_access_if_needed(
     flag_name: str,
     current_user: AuthenticatedPrincipal,
     *,
     settings: Settings,
 ) -> None:
-    """Hide retired internal flags except through the retained internal gate."""
-    if flag_name not in RETIRED_INTERNAL_FLAGS:
+    """Enforce the appropriate internal gate for a flag-specific REST path."""
+    if flag_name not in RETIRED_INTERNAL_FLAGS and flag_name not in INTERNAL_FLAGS:
         return
     principal = TenantPrincipal(
         username=current_user.username,
@@ -217,12 +233,46 @@ def _reject_retired_internal_flag_for_ordinary_caller(
         client_kind=current_user.client_kind,
         key_grants=current_user.key_grants,
     )
-    require_in_dev_operator(
-        principal,
-        "library.search.in_dev",
-        require_dev_mode=True,
-        settings=settings,
+    if flag_name == SYSTEM_MAPS_FLAG:
+        _require_internal_system_maps_access(principal, settings=settings)
+    else:
+        require_in_dev_operator(
+            principal,
+            "library.search.in_dev",
+            require_dev_mode=True,
+            settings=settings,
+        )
+
+
+def _internal_system_maps_access(
+    current_user: AuthenticatedPrincipal,
+    settings: Settings,
+) -> bool:
+    """Return whether the caller may see the internal System Maps flag."""
+    principal = TenantPrincipal(
+        username=current_user.username,
+        organisation_id=current_user.organisation_id,
+        account_id=current_user.account_id,
+        org_role=current_user.org_role or "",
+        is_system_admin=current_user.is_system_admin,
+        via_api_key=current_user.via_api_key,
+        client_kind=current_user.client_kind,
+        key_grants=current_user.key_grants,
     )
+    try:
+        _require_internal_system_maps_access(principal, settings=settings)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            return False
+        raise
+    return True
+
+
+def _flag_visible_to_caller(flag_name: str, *, internal_system_maps_access: bool) -> bool:
+    """Return whether ``flag_name`` belongs in this caller's flag catalogue."""
+    if flag_name == SYSTEM_MAPS_FLAG:
+        return internal_system_maps_access
+    return flag_name not in RETIRED_INTERNAL_FLAGS
 
 
 def _enforce_team_tier_gate(
@@ -271,6 +321,7 @@ async def _apply_org_flag_override(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_MSG_ORG_ID_REQUIRED,
         )
+    _require_internal_flag_access_if_needed(flag_name, current_user, settings=settings)
     registry = await _build_registry(settings, session, current_user)
     if flag_name in RETIRED_INTERNAL_FLAGS:
         raise HTTPException(
@@ -349,13 +400,18 @@ async def list_feature_flags(
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> Response | dict[str, Any]:
-    # Attempt Redis cache read
+    internal_system_maps_access = _internal_system_maps_access(current_user, settings)
+    # Attempt Redis cache read. The visibility gate is part of the cache key so
+    # an internal response can never be served to an ordinary caller.
     redis: Redis | None = None
     try:
         redis = Redis.from_url(
             settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
         )
-        cache_key = f"feature-flags:{current_user.organisation_id}"
+        cache_key = _feature_flag_cache_key(
+            current_user.organisation_id,
+            internal_system_maps_access=internal_system_maps_access,
+        )
         cached = await redis.get(cache_key)
         if cached:
             return cast("dict[str, Any]", json.loads(cached))
@@ -367,6 +423,7 @@ async def list_feature_flags(
 
     try:
         registry = await _build_registry(settings, session, current_user)
+        internal_system_maps_access = _internal_system_maps_access(current_user, settings)
 
         # Apply the org's per-flag overrides to the payload so an org-level
         # enable (admin Feature Flags UI) takes effect app-wide — the whole app
@@ -398,7 +455,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
-                if f.name not in RETIRED_INTERNAL_FLAGS
+                if _flag_visible_to_caller(f.name, internal_system_maps_access=internal_system_maps_access)
             ],
             "would_activate": [
                 {
@@ -408,7 +465,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.tier_gap_flags()
-                if f.name not in RETIRED_INTERNAL_FLAGS
+                if _flag_visible_to_caller(f.name, internal_system_maps_access=internal_system_maps_access)
                 if f.name not in org_overrides
             ],
         }
@@ -418,7 +475,10 @@ async def list_feature_flags(
             redis = Redis.from_url(
                 settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
             )
-            cache_key = f"feature-flags:{current_user.organisation_id}"
+            cache_key = _feature_flag_cache_key(
+                current_user.organisation_id,
+                internal_system_maps_access=internal_system_maps_access,
+            )
             await redis.setex(cache_key, 60, json.dumps(response_data, default=str))
         except Exception:
             logger.warning("feature-flags.cache_write_failed", exc_info=True)
@@ -474,6 +534,7 @@ async def get_feature_flag(
     current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
 ) -> Response | dict[str, Any]:
     try:
+        _require_internal_flag_access_if_needed(flag_name, current_user, settings=settings)
         registry = await _build_registry(settings, session, current_user)
         if flag_name in RETIRED_INTERNAL_FLAGS:
             raise HTTPException(
@@ -637,7 +698,7 @@ async def get_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    _reject_retired_internal_flag_for_ordinary_caller(flag_name, current_user, settings=settings)
+    _require_internal_flag_access_if_needed(flag_name, current_user, settings=settings)
     if current_user.organisation_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -770,7 +831,7 @@ async def clear_org_flag_override(
     current_user: AuthenticatedPrincipal = require_system_permission(PERM_SYSTEM_CONFIG_MANAGE),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
-    _reject_retired_internal_flag_for_ordinary_caller(flag_name, current_user, settings=settings)
+    _require_internal_flag_access_if_needed(flag_name, current_user, settings=settings)
     if current_user.organisation_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -52,6 +52,13 @@ class ModelBackendBase(ABC):
         """Return an async iterator that yields token chunks."""
 ```
 
+`supports_native_structured_output` is a per-instance flag, and the hub can
+force it off: for the providers in `_NO_NATIVE_STRUCTURED_OUTPUT_PROVIDERS`
+(`ollama`, `llamacpp`, `localai`, `tgi`, `vllm`) `_build_backend` sets it to
+`False` after construction, because those servers either reject or silently
+strip OpenAI-style `response_format` JSON schema (FAR-898). A backend in that
+set therefore cannot opt in from its class body.
+
 ## Supported providers
 
 The following backends ship built-in (each in `modulo.model_backends`):
@@ -128,6 +135,69 @@ async def health_check(self) -> HealthResult:
     except Exception as exc:  # noqa: BLE001
         return HealthResult(ok=False, detail=str(exc))
 ```
+
+## Gateway-outage classification
+
+`ModelBackendBase` carries one error-classification contract that a concrete
+backend's `invoke()` / `stream()` should route SDK failures through. It exists
+because the run error mapper derives a run's `error_code` from the *exception
+type name*, so an unclassified upstream 5xx is indistinguishable from a bad API
+key:
+
+```python
+class ModelBackendBase(ABC):
+    _status_error_types: ClassVar[tuple[type[Exception], ...]] = ()
+
+    def _gateway_error_context(self) -> str:
+        """Provider-specific context appended to an outage message."""
+
+    def _classify_gateway_error(self, exc: Exception) -> Exception:
+        """HTTP 4xx/429 pass through; 5xx and connection failures become
+        ProviderUnavailableError."""
+```
+
+Set `_status_error_types` to your SDK's status-error class (for example
+`AnthropicBackend` declares `(AnthropicStatusError,)`) and wrap the provider
+call:
+
+```python
+try:
+    response = await self._client.messages.create(...)
+except Exception as exc:  # noqa: BLE001
+    raise self._classify_gateway_error(exc) from exc
+```
+
+`HTTP 4xx` and `429` are re-raised unchanged because they are actionable as-is;
+`5xx` and connection failures become `ProviderUnavailableError`, which keeps a
+gateway outage distinct from a genuinely bad credential. Override
+`_gateway_error_context()` to append the endpoint host to the message.
+
+## Custom endpoint (`base_url`)
+
+An operator-supplied endpoint lives in the credential dict
+(`creds["base_url"]`), never in a model parameter (FAR-2046).
+`core/model_backend_hub/` exports `supports_custom_base_url(provider)` as the
+single source of truth for which providers honour one, and the API rejects a
+`base_url` for any other provider with
+`base_url_not_supported_for_provider` instead of storing a value it would
+ignore.
+
+Where the value lands depends on the provider:
+
+- The OpenAI-compatible path forwards it as the client `base_url`.
+- The adapters that expose it under a provider-specific constructor argument
+  are `anthropic` (`anthropic_api_url`), `cohere` and `gemini` (`base_url`) and
+  `mistral` (`endpoint`); `_CUSTOM_ENDPOINT_KWARGS` is the only place that
+  mapping lives.
+- Providers with their own endpoint semantics (`azure_openai`, `bedrock`,
+  `vertexai`, `watsonx`) cannot consume it. A stored value for one of them is
+  logged and dropped, never applied to the wrong host; a missing
+  `_CUSTOM_ENDPOINT_KWARGS` entry for a new adapter fails loudly with
+  `KeyError`.
+
+A `base_url` left in `default_params` is the pre-FAR-2046 location and is still
+honoured, but it is popped from the splat before construction so it can never
+collide with an adapter's explicit endpoint argument.
 
 ## Configuration
 

@@ -20,6 +20,7 @@ import socket
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 from modulo.api.routes.health import _check_database, _check_redis
 from modulo.settings import get_settings
@@ -37,7 +38,7 @@ def _unlistened_loopback_port() -> int:
 
 class TestCapInfraHealth:
     async def test_database_health_ok_against_real_postgres(self, migrated_db_url: str) -> None:
-        engine = create_async_engine(migrated_db_url)
+        engine = create_async_engine(migrated_db_url, poolclass=NullPool)
         try:
             async with engine.connect() as conn:
                 result = await conn.execute(text("SELECT 1"))

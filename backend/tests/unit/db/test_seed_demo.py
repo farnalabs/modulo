@@ -41,6 +41,8 @@ from modulo.db.crud.run_node_outputs import read_run_node_outputs_raw, replace_r
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.base import Base
+from modulo.db.models.eval import Eval
+from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.org_membership import OrgMembership
@@ -79,6 +81,8 @@ _SEED_TABLES = {
     "agents",
     "triggers",
     "run_daily_facts",
+    "evals",
+    "eval_results",
     # FAR-1248: first-class graph edges, per-node run traces, lifecycle map.
     "pipeline_edges",
     "run_node_outputs",
@@ -172,9 +176,11 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert await _count(session, PipelineSnapshot) == 4
     # FAR-977: 20 runs spread over 14 days.
     assert await _count(session, Run) == 20
-    # FAR-977: team + membership.
-    assert await _count(session, Team) == 1
-    assert await _count(session, TeamMembership) == 1
+    # Demo showcase: three team-owned breakdown rows and memberships.
+    assert await _count(session, Team) == 3
+    assert await _count(session, TeamMembership) == 3
+    assert await _count(session, Eval) == 2
+    assert await _count(session, EvalResult) == 11
     # FAR-977: 2 agents; FAR-1248: + Implementer, PR Risk Scorer, PR Opener,
     # Docs Maintainer (every seeded agent node binds an agent).
     assert await _count(session, Agent) == 6
@@ -207,6 +213,13 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert "failed" in statuses
     assert "awaiting_human" in statuses
 
+    # Demo showcase: every run is owned by one of the three teams, rotating
+    # deterministically so the dashboard per-team breakdown carries real data.
+    # Dropping the owner_team_id assignment in seed_demo.py must fail this.
+    teams = list((await session.execute(select(Team))).scalars())
+    assert all(run.owner_team_id is not None for run in runs), "every seeded run must be team-owned"
+    assert {run.owner_team_id for run in runs} == {team.id for team in teams}
+
     # FAR-977: awaiting_human daily-fact parity — non-terminal runs must NOT
     # fabricate completed_at / duration_ms.  Deleting the is_terminal gating in
     # seed_demo.py must cause these assertions to fail.
@@ -233,6 +246,36 @@ async def test_seed_creates_demo_entities(session: AsyncSession, monkeypatch: py
     assert terminal_fact.duration_ms == int(
         (terminal_run.completed_at - terminal_run.started_at).total_seconds() * 1000
     )
+
+
+async def test_seed_demo_eval_results_anchor_to_most_recent_runs(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Synthetic eval results must land on each pipeline's most-recent runs.
+
+    The dashboard eval rate is a rolling window on ``evaluated_at``, so results
+    anchored to the oldest runs age out of the cards immediately.  Pinning the
+    exact run-number sets below fails if ``_seed_demo_evals`` reverts to an
+    ascending slice — the ``EvalResult == 11`` count alone stays invariant under
+    that regression.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+
+    async def eval_run_numbers(eval_name: str) -> set[int]:
+        result = await session.execute(
+            select(Run.run_number)
+            .join(EvalResult, EvalResult.run_id == Run.id)
+            .join(Eval, Eval.id == EvalResult.eval_id)
+            .where(Eval.name == eval_name)
+        )
+        return set(result.scalars())
+
+    # PR Review Triage has 9 runs; only the newest 6 (_DEMO_EVAL_RESULT_RUN_LIMIT)
+    # receive a result.  An ascending slice would pick {3, 4, 6, 7, 10, 13}.
+    assert await eval_run_numbers("Review completeness") == {20, 19, 16, 13, 10, 7}
+    # The governance pipeline has 5 runs — fewer than the limit — so all of them
+    # are evaluated.
+    assert await eval_run_numbers("PR risk quality") == {1, 2, 9, 12, 17}
 
 
 async def test_seed_is_idempotent(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -369,6 +412,10 @@ async def test_seed_scopes_entities_to_demo_org_with_second_org_present(
     team_memberships = list((await session.execute(select(TeamMembership))).scalars())
     assert team_memberships, "seed must create demo team membership"
     assert {tm.organisation_id for tm in team_memberships} == {demo_org.id}
+    # The DB trigger caps a team role at the account's org role; the demo user
+    # is a read-only viewer, so every seeded team membership must be viewer or
+    # the real seed aborts with 'Team role ... exceeds org role' (FAR-535).
+    assert {tm.role for tm in team_memberships} == {"viewer"}
 
     daily_facts = list((await session.execute(select(RunDailyFact))).scalars())
     assert daily_facts, "seed must create run daily facts"
@@ -695,6 +742,8 @@ async def test_seed_handles_multiple_soft_deleted_demo_slug_orgs(
         pytest.param(Trigger, Trigger, id="trigger"),
         pytest.param(Team, Team, id="team"),
         pytest.param(TeamMembership, TeamMembership, id="team-membership"),
+        pytest.param(Eval, Eval, id="eval"),
+        pytest.param(EvalResult, EvalResult, id="eval-result"),
     ],
 )
 async def test_seed_sample_data_inserts_recover_after_conflict(
@@ -728,7 +777,20 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
     assert await _count(session, count_model) == counts_before
 
 
-@pytest.mark.parametrize("entity", [Schema, SchemaVersion, Pipeline, PipelineSnapshot, Run, Agent, Team])
+@pytest.mark.parametrize(
+    "entity",
+    [
+        pytest.param(Schema, id="schema"),
+        pytest.param(SchemaVersion, id="schema-version"),
+        pytest.param(Pipeline, id="pipeline"),
+        pytest.param(PipelineSnapshot, id="snapshot"),
+        pytest.param(Run, id="run"),
+        pytest.param(Agent, id="agent"),
+        pytest.param(Team, id="team"),
+        pytest.param(Eval, id="eval"),
+        pytest.param(EvalResult, id="eval-result"),
+    ],
+)
 async def test_seed_reraises_when_recovery_finds_no_winner(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch, entity: type
 ) -> None:
@@ -1177,7 +1239,7 @@ async def test_seed_converges_trigger_config_json(session: AsyncSession, monkeyp
     """Trigger config_json is converged to the current spec."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
-    pr_webhook = select(Trigger).where(Trigger.trigger_type == "webhook", Trigger.name.is_(None))
+    pr_webhook = select(Trigger).where(Trigger.trigger_type == "webhook", Trigger.name == "PR opened")
     webhook_trigger = (await session.execute(pr_webhook)).scalar_one()
     webhook_trigger.config_json = {"stale": True}
     await session.commit()
@@ -1578,7 +1640,10 @@ async def test_seed_team_membership_integrity_error_is_swallowed(
     try:
         with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
             # Delete the team membership so the seed tries to re-create it.
-            membership = (await session.execute(select(TeamMembership))).scalar_one()
+            membership = (
+                (await session.execute(select(TeamMembership).order_by(TeamMembership.team_id))).scalars().first()
+            )
+            assert membership is not None
             await session.delete(membership)
             await session.commit()
 

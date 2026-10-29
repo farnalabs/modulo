@@ -21,7 +21,7 @@
 # Bases are pinned. The Gatus tag was verified against the Docker Hub tags API
 # for twinproduction/gatus: v5.37.0 published 2026-09-24 (newest at the time;
 # `stable`/`latest` deliberately unused - they float).
-FROM twinproduction/gatus:v5.37.0 AS upstream
+FROM twinproduction/gatus:v5.38.0 AS upstream
 
 FROM alpine:3.24
 

@@ -57,6 +57,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from modulo.api.constants import SYSTEM_MAPS_FLAG
 from modulo.api.db_error_handling import (
     _MSG_LOCK_TIMEOUT,
     raise_session_contract_error,
@@ -88,6 +89,7 @@ from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
 from modulo.api.routes.triggers import (
     _encrypt_trigger_config_secrets,
+    _require_unique_trigger_name,
     _streak_status_for,
     _validate_connector_instance_team_scope,
     _validate_trigger_config_keys,
@@ -123,7 +125,12 @@ from modulo.auth.oauth import (
     oauth_grant_set,
     scopes_required_role,
 )
-from modulo.auth.permissions import _clamp_role, grants_permit, set_authz_enforce
+from modulo.auth.permissions import (
+    SYSTEM_MAPS_ACCESS_PERMISSION,
+    _clamp_role,
+    grants_permit,
+    set_authz_enforce,
+)
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.analytics.builder import (
     AnalyticsDimension,
@@ -162,6 +169,7 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # authenticated last, leaking cross-tenant data.
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import (
+    INTERNAL_FLAGS,
     RETIRED_INTERNAL_FLAGS,
     get_registry,
     resolve_mcp_human_linked_hitl_authority,
@@ -570,6 +578,43 @@ def _mcp_internal_lifecycle_map_access() -> bool:
 def _require_mcp_internal_lifecycle_map_access() -> None:
     if not _mcp_internal_lifecycle_map_access():
         raise MCPAuthorizationError("Lifecycle map tools are restricted to internal operators")
+
+
+def _mcp_internal_system_maps_access() -> bool:
+    """Return whether the MCP caller has the internal system maps grant.
+
+    The grant leg goes through ``grants_permit`` — the same live resolver the
+    REST gate reaches via ``require_in_dev_operator`` -> ``_enforce_key_grant``
+    -> ``assert_grant``. Membership is never tested by hand: ``grants_permit``
+    re-reads ``is_delegable`` on every call, so marking the permission
+    non-delegable revokes it from already-minted grant-bearing credentials
+    without a second code change. ``grants is None`` (JWTs, legacy keys) does
+    not narrow, matching REST.
+    """
+    if not getattr(get_settings(), "modulo_dev_mode", True):
+        return False
+    role = _ctx_role_val()
+    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
+        _ctx_key_grants.get(None), SYSTEM_MAPS_ACCESS_PERMISSION
+    )
+
+
+def _mcp_flag_visible(
+    flag_name: str,
+    *,
+    internal_lifecycle_access: bool,
+    internal_system_maps_access: bool,
+) -> bool:
+    """Return whether the MCP caller may see ``flag_name`` in a flag listing.
+
+    Internal flags are hidden from ordinary callers; each internal namespace
+    has its own gate (System Maps grant vs the retained lifecycle-map grant).
+    """
+    if flag_name not in INTERNAL_FLAGS:
+        return True
+    if flag_name == SYSTEM_MAPS_FLAG:
+        return internal_system_maps_access
+    return flag_name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access
 
 
 def _ctx_team_id_val() -> uuid.UUID | None:
@@ -7693,7 +7738,7 @@ async def list_trigger_events(
 @mcp.tool(
     description="List triggers configured for the organisation with cursor-based pagination. "
     "Optionally filter by pipeline_id. Returns trigger metadata "
-    "including type, active status, and cron schedule.",
+    "including name, type, active status, and cron schedule.",
 )
 @_RETRY_DB
 async def list_triggers(
@@ -7736,6 +7781,7 @@ async def list_triggers(
                 {
                     "id": str(t.id),
                     "pipeline_id": str(t.pipeline_id),
+                    "name": t.name,
                     "trigger_type": t.trigger_type,
                     "active": t.active,
                     "max_concurrent_runs": t.max_concurrent_runs,
@@ -8118,9 +8164,18 @@ async def _validate_ongoing_trigger_create(
     return datetime.now(UTC), None
 
 
+def _normalise_trigger_name(name: Any) -> tuple[str, dict[str, Any] | None]:
+    """FAR-2227: strip and validate a trigger name (1..255 chars); returns (name, error)."""
+    cleaned = name.strip() if isinstance(name, str) else ""
+    if not cleaned or len(cleaned) > 255:
+        return cleaned, {"error": "validation", "field": "name", "detail": "name is required (1-255 characters)"}
+    return cleaned, None
+
+
 def _build_trigger_record(
     org_id: uuid.UUID,
     pid: uuid.UUID,
+    name: str,
     trigger_type: str,
     active: bool,
     max_concurrent_runs: int,
@@ -8142,6 +8197,7 @@ def _build_trigger_record(
     trigger = Trigger(
         organisation_id=org_id,
         pipeline_id=pid,
+        name=name,
         trigger_type=trigger_type,
         active=active,
         max_concurrent_runs=max_concurrent_runs,
@@ -8164,6 +8220,7 @@ def _build_trigger_record(
 
 async def _create_trigger_impl(
     pipeline_id: str,
+    name: str,
     trigger_type: str,
     active: bool,
     cron_expression: str | None,
@@ -8180,6 +8237,9 @@ async def _create_trigger_impl(
     pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
     if input_err:
         return input_err
+    clean_name, name_err = _normalise_trigger_name(name)
+    if name_err:
+        return name_err
     try:
         _validate_trigger_config_keys(config_json)
     except FastAPIHTTPException as exc:
@@ -8195,6 +8255,10 @@ async def _create_trigger_impl(
         owner_team_id, gate_denial = await _pipeline_team_gate(s, pid)
         if gate_denial:
             return gate_denial
+        try:
+            await _require_unique_trigger_name(s, pid, clean_name)
+        except FastAPIHTTPException as exc:
+            return {"error": "conflict", "field": "name", "detail": exc.detail}
         # FAR-1595: a connector reference named at create time is
         # team-validated against the owning pipeline before the trigger can
         # ever poll it (the fire job reads the row team-blind). This is the
@@ -8219,6 +8283,7 @@ async def _create_trigger_impl(
         trigger, build_err = _build_trigger_record(
             org_id,
             pid,
+            clean_name,
             trigger_type,
             active,
             max_concurrent_runs,
@@ -8241,6 +8306,7 @@ async def _create_trigger_impl(
     return {
         "id": str(trigger.id),
         "pipeline_id": str(trigger.pipeline_id),
+        "name": trigger.name,
         "trigger_type": trigger.trigger_type,
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
@@ -8250,11 +8316,14 @@ async def _create_trigger_impl(
     }
 
 
-@mcp.tool(description="Create a new trigger for a pipeline.")
+@mcp.tool(
+    description="Create a new trigger for a pipeline. `name` is required (1-255 chars) and must be unique per pipeline."
+)
 @mcp_audited("trigger_created", "trigger", fail_closed=False)
 @_RETRY_DB
 async def create_trigger(
     pipeline_id: str,
+    name: str,
     trigger_type: str = "manual",
     active: bool = True,
     cron_expression: str | None = None,
@@ -8265,6 +8334,7 @@ async def create_trigger(
     try:
         return await _create_trigger_impl(
             pipeline_id,
+            name,
             trigger_type,
             active,
             cron_expression,
@@ -8296,6 +8366,7 @@ def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> di
     return {
         "id": str(trigger.id),
         "pipeline_id": str(trigger.pipeline_id),
+        "name": trigger.name,
         "trigger_type": trigger.trigger_type,
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
@@ -8567,6 +8638,56 @@ def _recompute_ongoing_next_fire(
             trigger.next_fire_at = datetime.now(UTC)
 
 
+async def _rename_trigger_in_session(s: AsyncSession, trigger: Any, name: str | None) -> dict[str, Any] | None:
+    """Apply a requested rename inside the update session; returns a conflict envelope or None."""
+    if name is not None and name != trigger.name:
+        # Validated BEFORE mutation: a clean early return commits.
+        try:
+            await _require_unique_trigger_name(s, trigger.pipeline_id, name, exclude_id=trigger.id)
+        except FastAPIHTTPException as exc:
+            return {"error": "conflict", "field": "name", "detail": exc.detail}
+        trigger.name = name
+    return None
+
+
+async def _validate_trigger_update_config(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    trigger: Any,
+    owner_team_id: uuid.UUID | None,
+    config_json: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Validate a write-time config merge before mutation; returns an error envelope or None."""
+    if config_json is None:
+        return None
+    # FAR-1735: validate the SAME recursive masked merge the write path uses
+    # (REST parity) — a shallow merge would judge a different shape than
+    # `_merge_trigger_config_json` persists.
+    merged_config = merge_masked_config_json(trigger.config_json or {}, config_json)
+    try:
+        _validate_trigger_config_keys(merged_config, context="merged config_json")
+    except FastAPIHTTPException as exc:
+        return {"error": "validation", "detail": exc.detail}
+    # FAR-1595: a NEW connector reference written through the general update
+    # path is team-validated too — same shared gate REST's PUT calls, so MCP is
+    # not a bypass around it. Judged on the MERGED config and against the
+    # PREVIOUS value (an unchanged reference is not re-judged), all BEFORE the
+    # ORM object is mutated: a clean early return from `_session` COMMITS.
+    try:
+        await _validate_connector_instance_team_scope(
+            s,
+            org_id=org_id,
+            pipeline_owner_team_id=owner_team_id,
+            config=merged_config,
+            previous_connector_instance_id=(trigger.config_json or {}).get("connector_instance_id"),
+        )
+    except FastAPIHTTPException as exc:
+        from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
+
+        return {"error": CONNECTOR_TEAM_MISMATCH, "detail": str(exc.detail)}
+    return None
+
+
 async def _update_trigger_txn(
     org_id: uuid.UUID,
     tid: uuid.UUID,
@@ -8578,6 +8699,7 @@ async def _update_trigger_txn(
     daily_spend_limit: float | None,
     clear_daily_spend_limit: bool,
     config_json: dict[str, Any] | None,
+    name: str | None = None,
 ) -> tuple[Any, int, dict[str, Any], bool] | dict[str, Any]:
     """Run the trigger update inside its own session (validate-then-mutate).
 
@@ -8624,34 +8746,12 @@ async def _update_trigger_txn(
         # `_session()` wraps the body in `s.begin()`, so a clean early
         # return COMMITS — validating after mutation would persist an
         # invalid merged config while reporting a validation error.
-        if config_json is not None:
-            # FAR-1735: validate the SAME recursive masked merge the write
-            # path uses (REST parity) — the shallow merge here previously
-            # judged a different shape than `_merge_trigger_config_json`
-            # persisted.
-            merged_config = merge_masked_config_json(trigger.config_json or {}, config_json)
-            try:
-                _validate_trigger_config_keys(merged_config, context="merged config_json")
-            except FastAPIHTTPException as exc:
-                return {"error": "validation", "detail": exc.detail}
-            # FAR-1595: a NEW connector reference written through the general
-            # update path is team-validated too — same shared gate REST's PUT
-            # calls, so MCP is not a bypass around it. Judged on the MERGED
-            # config and against the PREVIOUS value (an unchanged reference is
-            # not re-judged), all BEFORE the ORM object is mutated: a clean
-            # early return from ``_session`` COMMITS.
-            try:
-                await _validate_connector_instance_team_scope(
-                    s,
-                    org_id=org_id,
-                    pipeline_owner_team_id=owner_team_id,
-                    config=merged_config,
-                    previous_connector_instance_id=(trigger.config_json or {}).get("connector_instance_id"),
-                )
-            except FastAPIHTTPException as exc:
-                from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
-
-                return {"error": CONNECTOR_TEAM_MISMATCH, "detail": str(exc.detail)}
+        config_err = await _validate_trigger_update_config(s, org_id, trigger, owner_team_id, config_json)
+        if config_err is not None:
+            return config_err
+        rename_err = await _rename_trigger_in_session(s, trigger, name)
+        if rename_err is not None:
+            return rename_err
         await _apply_trigger_field_updates(
             s,
             trigger,
@@ -8683,7 +8783,7 @@ async def _update_trigger_txn(
 
 @mcp.tool(
     description="Update an existing trigger's configuration. "
-    "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
+    "Mirrors PUT /api/v1/triggers/{id}. Pass name to rename (unique per pipeline). Setting cron_expression or "
     "cron_timezone is only valid for cron triggers.",
 )
 @mcp_audited("trigger_updated", "trigger", fail_closed=False)
@@ -8697,11 +8797,17 @@ async def update_trigger(
     daily_spend_limit: float | None = None,
     clear_daily_spend_limit: bool = False,
     config_json: dict[str, Any] | None = None,
+    name: str | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("update_trigger")
+        clean_name: str | None = None
+        if name is not None:
+            clean_name, name_err = _normalise_trigger_name(name)
+            if name_err:
+                return name_err
 
         org_id = _ctx_org_id_val()
         tid, input_err = _validate_trigger_update_inputs(trigger_id, max_concurrent_runs, daily_spend_limit)
@@ -8720,6 +8826,7 @@ async def update_trigger(
             daily_spend_limit=daily_spend_limit,
             clear_daily_spend_limit=clear_daily_spend_limit,
             config_json=config_json,
+            name=clean_name,
         )
         if isinstance(outcome, dict):
             return outcome
@@ -10325,6 +10432,8 @@ async def list_feature_flags() -> dict[str, Any]:
                 if isinstance(raw_overrides, dict):
                     org_overrides = {k: bool(v) for k, v in raw_overrides.items()}
 
+        internal_lifecycle_access = _mcp_internal_lifecycle_map_access()
+        internal_system_maps_access = _mcp_internal_system_maps_access()
         return {
             "license": {
                 "tier": registry.current_tier,
@@ -10341,6 +10450,11 @@ async def list_feature_flags() -> dict[str, Any]:
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
+                if _mcp_flag_visible(
+                    f.name,
+                    internal_lifecycle_access=internal_lifecycle_access,
+                    internal_system_maps_access=internal_system_maps_access,
+                )
             ],
             "would_activate": [
                 {
@@ -10351,6 +10465,11 @@ async def list_feature_flags() -> dict[str, Any]:
                 }
                 for f in registry.tier_gap_flags()
                 if f.name not in org_overrides
+                if _mcp_flag_visible(
+                    f.name,
+                    internal_lifecycle_access=internal_lifecycle_access,
+                    internal_system_maps_access=internal_system_maps_access,
+                )
             ],
         }
     except MCPAuthorizationError as exc:
@@ -11424,10 +11543,16 @@ async def get_available_features() -> dict[str, Any]:
             plan_ctx = await resolve_plan_context(settings, s, org)
 
         current_tier = plan_ctx.tier()
+        internal_lifecycle_access = _mcp_internal_lifecycle_map_access()
+        internal_system_maps_access = _mcp_internal_system_maps_access()
         all_flags = [
             flag
             for flag in plan_ctx.list_enabled_features()
-            if flag.name not in RETIRED_INTERNAL_FLAGS or _mcp_internal_lifecycle_map_access()
+            if _mcp_flag_visible(
+                flag.name,
+                internal_lifecycle_access=internal_lifecycle_access,
+                internal_system_maps_access=internal_system_maps_access,
+            )
         ]
 
         lines = ["| Feature | Required Tier | Available |", "|---------|---------------|-----------|"]

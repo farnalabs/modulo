@@ -86,9 +86,35 @@
 
 set -euo pipefail
 
-DISPATCH_URL="${DISPATCH_URL:?dispatch_with_retry: DISPATCH_URL is required}"
+# A missing URL or secret is a CONFIGURATION failure, and the usual cause is
+# that GitHub withholds Actions secrets from `dependabot[bot]` PRs (they need
+# Dependabot secrets). Hand the caller a result file naming it, so the PR
+# comment says "secret missing" rather than "HTTP unknown, check the HMAC
+# secret". Same exit-1 contract as the `:?` checks below.
+for REQUIRED_VAR in DISPATCH_URL DISPATCH_SECRET; do
+  if [[ -z "${!REQUIRED_VAR:-}" ]]; then
+    echo "dispatch_with_retry: ${REQUIRED_VAR} is required" >&2
+    echo "::error::${DISPATCH_LABEL:-webhook} dispatch not attempted: ${REQUIRED_VAR} is empty (secret not available to this run, e.g. a dependabot PR)."
+    if [[ -n "${DISPATCH_RESULT_FILE:-}" ]]; then
+      {
+        printf 'DISPATCH_LAST_HTTP=%q
+' "none"
+        printf 'DISPATCH_LAST_CLASS=%q
+' "config"
+        printf 'DISPATCH_LAST_DETAIL=%q
+' "${REQUIRED_VAR} is empty"
+        printf 'DISPATCH_ATTEMPTS=%q
+' "0"
+        printf 'DISPATCH_BUDGET_ELAPSED=%q
+' "0"
+        printf 'DISPATCH_DELIVERED=%q
+' "false"
+      } > "${DISPATCH_RESULT_FILE}"
+    fi
+    exit 1
+  fi
+done
 DISPATCH_BODY="${DISPATCH_BODY:?dispatch_with_retry: DISPATCH_BODY is required}"
-DISPATCH_SECRET="${DISPATCH_SECRET:?dispatch_with_retry: DISPATCH_SECRET is required}"
 DISPATCH_LABEL="${DISPATCH_LABEL:-webhook}"
 DISPATCH_ACCEPT_ANY_2XX="${DISPATCH_ACCEPT_ANY_2XX:-0}"
 DISPATCH_DUP_400_IS_OK="${DISPATCH_DUP_400_IS_OK:-1}"

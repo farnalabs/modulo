@@ -754,6 +754,24 @@ def _check_sandbox_timeout_e2b_cap(node: dict[str, Any], nid: str, result: Valid
         )
 
 
+def _check_sandbox_timeout_cap(node: dict[str, Any], nid: str, result: ValidationResult, max_node_seconds: int) -> None:
+    """Reject a node timeout above the selected environment capability."""
+    timeout = node.get("timeout_seconds")
+    if timeout is None:
+        return
+    try:
+        t = int(timeout) if not isinstance(timeout, int) else timeout
+    except (ValueError, TypeError):
+        return
+    if t > max_node_seconds:
+        result.error(
+            "SANDBOX_TIMEOUT_EXCEEDS_PROFILE_CAP",
+            f"Sandbox agent node '{nid}' timeout_seconds {t} exceeds the selected environment "
+            f"profile capability max_node_seconds={max_node_seconds}",
+            node_id=nid,
+        )
+
+
 _HEREDOC_OPENER_RE = re.compile(r"<<-?\s*['\"]?([A-Za-z_]\w*)['\"]?", re.ASCII)
 
 
@@ -1675,6 +1693,7 @@ class GraphValidator:
             result,
             pipeline_name=pipeline_name,
             unverified_registry_ok=True,
+            environment_profile_id=environment_profile_id,
         )
         self._check_node_idempotent(graph_json, result)
         self._check_failure_and_retry(graph_json, result)
@@ -1767,7 +1786,11 @@ class GraphValidator:
         # rule: defaults are strict — the SNAPSHOT's bake (or model_class) is
         # the only legitimate source; the live registry is never consulted
         # here (mint is the only resolution seam — replay determinism).
-        self._check_sandbox_agent_config(snapshot.graph_json, result)
+        self._check_sandbox_agent_config(
+            snapshot.graph_json,
+            result,
+            environment_profile_id=snapshot.environment_profile_id,
+        )
 
         # Node idempotency flag check (FAR-295).
         self._check_node_idempotent(snapshot.graph_json, result)
@@ -3004,15 +3027,39 @@ class GraphValidator:
                 if parsed is not None:
                     agent_ids.add(parsed)
 
-        if not agent_ids:
-            return
-
-        rows = (await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars().all()
+        rows = (
+            (await session.execute(select(Agent).where(Agent.id.in_(agent_ids)))).scalars().all() if agent_ids else []
+        )
 
         profile_caps: set[str] = set(profile.capabilities_json or [])
 
+        max_node_seconds = int(profile.max_node_seconds)
+        transport_cap = settings.get_settings().saq_run_timeout
+        if max_node_seconds > transport_cap:
+            result.error(
+                "ENV_PROFILE_WALL_CLOCK_EXCEEDS_RUN_CEILING",
+                f"Environment profile {environment_profile_id} max_node_seconds={max_node_seconds} "
+                f"exceeds the run transport ceiling of {transport_cap}s",
+            )
+        self._check_profile_wall_clock_capability(profile, graph_json, result, transport_cap=transport_cap)
+
         for agent in rows:
             _check_agent_capabilities(agent, profile, profile_caps, result)
+
+    @staticmethod
+    def _check_profile_wall_clock_capability(
+        profile: EnvironmentProfile,
+        graph_json: dict[str, Any],
+        result: ValidationResult,
+        *,
+        transport_cap: int,
+    ) -> None:
+        """Apply the selected profile's node wall-clock capability."""
+        max_node_seconds = min(int(profile.max_node_seconds), transport_cap)
+        for node in graph_json.get("nodes", []):
+            if node.get("node_type") != "sandbox_agent":
+                continue
+            _check_sandbox_timeout_cap(node, _string_or_default(node.get("id")), result, max_node_seconds)
 
     # ------------------------------------------------------------------
     # Node categories
@@ -3354,6 +3401,7 @@ class GraphValidator:
         *,
         pipeline_name: str | None = None,
         unverified_registry_ok: bool = False,
+        environment_profile_id: uuid.UUID | None = None,
     ) -> None:
         """Validate sandbox_agent node configurations.
 
@@ -3408,7 +3456,8 @@ class GraphValidator:
             )
             _check_sandbox_template(node, nid, result)
             _check_sandbox_timeout(node, nid, result)
-            _check_sandbox_timeout_e2b_cap(node, nid, result)
+            if environment_profile_id is None:
+                _check_sandbox_timeout_e2b_cap(node, nid, result)
             _check_sandbox_heredoc_list_item(node, nid, result)
             _check_sandbox_stall_timeout(node, nid, result)
             _check_sandbox_context_files(node, nid, result)

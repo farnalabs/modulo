@@ -532,8 +532,11 @@ async def test_licence_clear_path_uses_delete_keys_and_keeps_siblings(
         account_id=uuid.uuid4(),
         org_role="admin",
     )
-    handler_session = factory()
-    await admin_remove_org_license(org_id, principal, handler_session, get_settings())
+    # Close the handler session: a bare ``factory()`` session holds a checked-out
+    # asyncpg connection that ``db_engine.dispose()`` cannot reap (NullPool), so
+    # garbage collection later surfaces it as a PytestUnraisableExceptionWarning.
+    async with factory() as handler_session:
+        await admin_remove_org_license(org_id, principal, handler_session, get_settings())
 
     settings = await _read_settings(db_engine, org_id)
     assert "license_key" not in settings, f"the clear must remove the key on a real engine: {settings!r}"
@@ -596,10 +599,10 @@ async def test_licence_set_path_patches_only_license_key(
         account_id=uuid.uuid4(),
         org_role="admin",
     )
-    handler_session = factory()
-    await admin_set_org_license(
-        org_id, SetOrgLicenseRequest(license_key="new.key"), principal, handler_session, get_settings()
-    )
+    async with factory() as handler_session:
+        await admin_set_org_license(
+            org_id, SetOrgLicenseRequest(license_key="new.key"), principal, handler_session, get_settings()
+        )
 
     settings = await _read_settings(db_engine, org_id)
     assert settings.get("license_key") == "new.key", f"the set must land on a real engine: {settings!r}"
@@ -777,15 +780,15 @@ async def test_product_analytics_concurrent_subfield_writers_both_survive(
         org = await real_get_org(session, oid)
         if not fired["done"]:
             fired["done"] = True
-            admin_session = factory()
-            await update_product_analytics_level(LevelUpdateRequest(level="all"), principal, admin_session)
+            async with factory() as admin_session:
+                await update_product_analytics_level(LevelUpdateRequest(level="all"), principal, admin_session)
         return org
 
     monkeypatch.setattr(pa_module, "_get_org_or_404", _interleaving_get_org)
 
     # Writer 1: real consent handler (dismiss changes ONLY prompted*).
-    consent_session = factory()
-    response = await post_consent(ConsentRequest(action="dismiss"), principal, consent_session)
+    async with factory() as consent_session:
+        response = await post_consent(ConsentRequest(action="dismiss"), principal, consent_session)
     assert response.prompted == "dismissed", f"handler must complete: {response!r}"
     assert fired["done"], "the interleaved admin writer must have run inside the window"
     # QA F8: the response must reflect the POST-write state, not the pre-read.
@@ -870,8 +873,8 @@ async def test_consent_decline_purges_seeded_staged_rows_end_to_end(
         "the seed must land before the purge assertion can be non-vacuous"
     )
 
-    session = factory()
-    response = await post_consent(ConsentRequest(action="decline"), principal, session)
+    async with factory() as session:
+        response = await post_consent(ConsentRequest(action="decline"), principal, session)
 
     assert response.level == "off", f"declining consent must land level=off: {response!r}"
     remaining = await _staged_row_count(db_engine, org_id)
@@ -953,12 +956,12 @@ async def test_post_consent_lock_timeout_is_409_not_500(
     principal = TenantPrincipal(username="w", organisation_id=org_id, account_id=uuid.uuid4(), org_role="admin")
 
     holder = await _hold_org_row_lock(factory, org_id)
-    session = factory()
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await post_consent(ConsentRequest(action="accept"), principal, session)
-        assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
-        assert "another change is in progress" in str(exc_info.value.detail)
+        async with factory() as session:
+            with pytest.raises(HTTPException) as exc_info:
+                await post_consent(ConsentRequest(action="accept"), principal, session)
+            assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
+            assert "another change is in progress" in str(exc_info.value.detail)
     finally:
         await holder.rollback()
         await holder.close()
@@ -1003,14 +1006,14 @@ async def test_admin_set_org_license_lock_timeout_is_409_not_503(
     )
 
     holder = await _hold_org_row_lock(factory, org_id)
-    session = factory()
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await admin_set_org_license(
-                org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings()
-            )
-        assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
-        assert "another change is in progress" in str(exc_info.value.detail)
+        async with factory() as session:
+            with pytest.raises(HTTPException) as exc_info:
+                await admin_set_org_license(
+                    org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings()
+                )
+            assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
+            assert "another change is in progress" in str(exc_info.value.detail)
     finally:
         await holder.rollback()
         await holder.close()
@@ -1041,14 +1044,14 @@ async def test_admin_sandbox_concurrency_lock_timeout_is_409(
     principal = TenantPrincipal(username="a", organisation_id=org_id, account_id=uuid.uuid4(), org_role="admin")
 
     holder = await _hold_org_row_lock(factory, org_id)
-    session = factory()
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await admin_update_sandbox_concurrency(
-                UpdateSandboxConcurrencyRequest(sandbox_concurrency_limit=3), principal, session
-            )
-        assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
-        assert "another change is in progress" in str(exc_info.value.detail)
+        async with factory() as session:
+            with pytest.raises(HTTPException) as exc_info:
+                await admin_update_sandbox_concurrency(
+                    UpdateSandboxConcurrencyRequest(sandbox_concurrency_limit=3), principal, session
+                )
+            assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
+            assert "another change is in progress" in str(exc_info.value.detail)
     finally:
         await holder.rollback()
         await holder.close()
@@ -1088,22 +1091,22 @@ async def test_genuine_db_outage_stays_503_on_the_admin_orgs_boundary(
         org_role="admin",
     )
 
-    session = factory()
-    real_execute = session.execute
-    calls = {"n": 0}
+    async with factory() as session:
+        real_execute = session.execute
+        calls = {"n": 0}
 
-    async def _fail_on_patch(statement: object, *args: object, **kwargs: object) -> object:
-        calls["n"] += 1
-        if "UPDATE organisations" in str(statement):
-            raise OperationalError(str(statement), {}, Exception("server closed the connection unexpectedly"))
-        return await real_execute(statement, *args, **kwargs)
+        async def _fail_on_patch(statement: object, *args: object, **kwargs: object) -> object:
+            calls["n"] += 1
+            if "UPDATE organisations" in str(statement):
+                raise OperationalError(str(statement), {}, Exception("server closed the connection unexpectedly"))
+            return await real_execute(statement, *args, **kwargs)
 
-    monkeypatch.setattr(session, "execute", _fail_on_patch)
-    with pytest.raises(HTTPException) as exc_info:
-        await admin_set_org_license(
-            org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings()
-        )
-    assert exc_info.value.status_code == 503, f"a genuine outage must stay 503, got {exc_info.value}"
+        monkeypatch.setattr(session, "execute", _fail_on_patch)
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_set_org_license(
+                org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings()
+            )
+        assert exc_info.value.status_code == 503, f"a genuine outage must stay 503, got {exc_info.value}"
 
 
 # ---------------------------------------------------------------------------

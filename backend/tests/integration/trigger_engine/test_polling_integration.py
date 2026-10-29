@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from modulo.connectors.base import ConnectorResult
 from modulo.core.trigger_engine.polling import _fire_polling_trigger
@@ -151,11 +152,11 @@ async def polling_trigger(seeded_db: AsyncSession) -> dict[str, Any]:
     )
     await seeded_db.execute(
         text(
-            "INSERT INTO triggers (id, organisation_id, pipeline_id, "
+            "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
             "trigger_type, active, max_concurrent_runs, config_json, "
             "account_id, cron_expression, cron_timezone, "
             "last_fired_at, next_fire_at) "
-            "VALUES (:id, :oid, :pid, 'polling', true, 5, "
+            "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'polling', true, 5, "
             "(:config)::json, :uid, NULL, NULL, NULL, "
             "NOW() - INTERVAL '1 minute') "
             "ON CONFLICT (id) DO UPDATE SET trigger_type='polling', active=true, "
@@ -249,7 +250,7 @@ async def test_polling_trigger_happy_path(
     run_id = uuid.UUID(result["run_id"])
 
     # Query the DB to verify the run exists
-    engine = create_async_engine(db_url)
+    engine = create_async_engine(db_url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, _ORG_ID)
@@ -316,7 +317,7 @@ async def test_polling_trigger_no_match(
     assert "run_id" not in result
 
     # Verify no run was created and a no_match event was logged
-    engine = create_async_engine(db_url)
+    engine = create_async_engine(db_url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, _ORG_ID)
@@ -347,7 +348,7 @@ async def test_polling_trigger_concurrency_limit(
     """Verify max_concurrent_runs is respected."""
 
     # Set max_concurrent_runs to 2 and create 2 already-active runs
-    engine = create_async_engine(db_url)
+    engine = create_async_engine(db_url, poolclass=NullPool)
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session, session.begin():
@@ -400,7 +401,7 @@ async def test_polling_trigger_concurrency_limit(
     assert result["active_runs"] == 2
 
     # Verify a concurrency_limit_reached event was logged (separate engine/session)
-    engine2 = create_async_engine(db_url)
+    engine2 = create_async_engine(db_url, poolclass=NullPool)
     try:
         factory2 = async_sessionmaker(engine2, expire_on_commit=False)
         async with factory2() as session, session.begin():
@@ -450,7 +451,7 @@ async def test_polling_trigger_inactive(
     """Verify inactive trigger is skipped."""
 
     # Deactivate the trigger
-    engine = create_async_engine(db_url)
+    engine = create_async_engine(db_url, poolclass=NullPool)
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session, session.begin():

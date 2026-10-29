@@ -569,7 +569,7 @@ class TestTriggerTeamGate:
         token = _token(org, trigger_non_member_user, "operator")
         resp = await team_gate_client.post(
             f"/api/v1/pipelines/{team_private_pipeline}/triggers",
-            json={"trigger_type": "manual"},
+            json={"trigger_type": "manual", "name": f"gate-{uuid.uuid4().hex[:8]}"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
@@ -586,7 +586,7 @@ class TestTriggerTeamGate:
         token = _token(org, trigger_non_member_user, "operator")
         resp = await team_gate_client.post(
             f"/api/v1/pipelines/{team_private_pipeline}/triggers",
-            json={"trigger_type": "manual"},
+            json={"trigger_type": "manual", "name": f"gate-{uuid.uuid4().hex[:8]}"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 404
@@ -630,7 +630,7 @@ class TestTriggerTeamGate:
         token = _token(org, trigger_member_user, "operator")
         created = await team_gate_client.post(
             f"/api/v1/pipelines/{team_private_pipeline}/triggers",
-            json={"trigger_type": "manual"},
+            json={"trigger_type": "manual", "name": f"gate-{uuid.uuid4().hex[:8]}"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert created.status_code == 201, f"Seed create failed: {created.status_code}: {created.text}"
@@ -671,7 +671,7 @@ class TestTriggerTeamGate:
         admin_token = _token(org, admin_user, "admin")
         created = await team_gate_client.post(
             f"/api/v1/pipelines/{team_private_pipeline}/triggers",
-            json={"trigger_type": "manual"},
+            json={"trigger_type": "manual", "name": f"gate-{uuid.uuid4().hex[:8]}"},
             headers={"Authorization": f"Bearer {admin_token}"},
         )
         assert created.status_code == 201, f"Seed create failed: {created.status_code}: {created.text}"
@@ -716,7 +716,7 @@ class TestTriggerTeamGate:
         token = _token(org, trigger_member_user, "operator")
         resp = await team_gate_client.post(
             f"/api/v1/pipelines/{team_private_pipeline}/triggers",
-            json={"trigger_type": "manual"},
+            json={"trigger_type": "manual", "name": f"gate-{uuid.uuid4().hex[:8]}"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
@@ -733,7 +733,7 @@ class TestTriggerTeamGate:
         token = _token(org, trigger_member_user, "operator")
         created = await team_gate_client.post(
             f"/api/v1/pipelines/{team_private_pipeline}/triggers",
-            json={"trigger_type": "manual"},
+            json={"trigger_type": "manual", "name": f"gate-{uuid.uuid4().hex[:8]}"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert created.status_code == 201, f"Seed create failed: {created.status_code}: {created.text}"
@@ -758,7 +758,7 @@ class TestTriggerTeamGate:
         token = _token(org, trigger_member_user, "operator")
         created = await team_gate_client.post(
             f"/api/v1/pipelines/{team_private_pipeline}/triggers",
-            json={"trigger_type": "manual"},
+            json={"trigger_type": "manual", "name": f"gate-{uuid.uuid4().hex[:8]}"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert created.status_code == 201, f"Seed create failed: {created.status_code}: {created.text}"
@@ -781,7 +781,7 @@ class TestTriggerTeamGate:
         token = _token(org, admin_user, "admin")
         resp = await team_gate_client.post(
             f"/api/v1/pipelines/{team_private_pipeline}/triggers",
-            json={"trigger_type": "manual"},
+            json={"trigger_type": "manual", "name": f"gate-{uuid.uuid4().hex[:8]}"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
@@ -797,7 +797,7 @@ class TestTriggerTeamGate:
         token = _token(org, trigger_non_member_user, "operator")
         resp = await team_gate_client.post(
             f"/api/v1/pipelines/{org_visible_pipeline}/triggers",
-            json={"trigger_type": "manual"},
+            json={"trigger_type": "manual", "name": f"gate-{uuid.uuid4().hex[:8]}"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"

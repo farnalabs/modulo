@@ -15,7 +15,9 @@ Creates (idempotently, NO Alembic migrations):
   hierarchy viewer < runner < operator < admin is the enforcement boundary for
   every route via ``require_permission``; the seed also forces the role BACK to
   viewer if it drifted, and forces ``is_system_admin`` off),
-* a ``Demo Engineering`` team with the demo user as a viewer member,
+* three demo teams (Demo Engineering, Demo Platform, Demo Governance) with the
+  demo user as a ``viewer`` member of each — team roles are capped by the org
+  role, so a viewer org member can never hold an elevated team role,
 * 5 published schemas with realistic JSON Schema definitions (Demo Intake,
   Demo Report, GitHub Pull Request, Linear Issue, Release Notes),
 * 4 named pipelines with multi-node graphs (PR Review & Triage, Release
@@ -82,6 +84,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from modulo.core.demo import DEMO_ORG_ROLE, DEMO_ORG_SLUG, demo_login_config
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
+from modulo.db.models.eval import Eval
+from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.models.org_membership import OrgMembership
@@ -570,6 +574,11 @@ _DEMO_RUN_SPECS: list[tuple[int, str, str, str, int, float, int, int]] = [
 ]
 
 _DEMO_FAILURE_DETAIL = "Demo sample failure — no real work was performed."
+
+# How many of each pipeline's most-recent runs receive a synthetic demo eval
+# result.  Named so the seed and the test arithmetic move together when
+# ``_DEMO_RUN_SPECS`` changes.
+_DEMO_EVAL_RESULT_RUN_LIMIT = 6
 
 
 @dataclass(frozen=True)
@@ -1104,6 +1113,8 @@ async def _seed_demo_pipeline_and_runs(
     org: Organisation,
     account: Account,
     agent_ids: Mapping[str, uuid.UUID] | None = None,
+    *,
+    teams: list[Team],
 ) -> dict[str, tuple[Pipeline, PipelineSnapshot]]:
     """Seed all demo pipelines (graph + edges + snapshot) and their runs.
 
@@ -1125,7 +1136,8 @@ async def _seed_demo_pipeline_and_runs(
 
     specs_by_name = {spec.name: spec for spec in _DEMO_PIPELINES}
     for run_spec in _DEMO_RUN_SPECS:
-        await _seed_demo_run(session, org, account, run_spec, pipeline_lookup, specs_by_name)
+        await _seed_demo_run(session, org, account, run_spec, pipeline_lookup, specs_by_name, teams=teams)
+
     return pipeline_lookup
 
 
@@ -1246,6 +1258,8 @@ async def _seed_demo_run(
     run_spec: tuple[int, str, str, str, int, float, int, int],
     pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
     specs_by_name: Mapping[str, _PipelineSpec],
+    *,
+    teams: list[Team],
 ) -> None:
     """Create or converge one deterministic demo run (fixed run_number).
 
@@ -1274,7 +1288,7 @@ async def _seed_demo_run(
         completed=completed,
         trace=trace,
     )
-
+    desired["owner_team_id"] = teams[(run_number - 1) % len(teams)].id
     if run is not None:
         # Converge display fields on existing runs (never touch identity).
         _converge_demo_run(run, desired, run_number)
@@ -1468,6 +1482,174 @@ async def _seed_demo_agents(session: AsyncSession, org: Organisation, account: A
     return agent_ids
 
 
+async def _find_demo_eval(
+    session: AsyncSession,
+    org: Organisation,
+    pipeline: Pipeline,
+    label: str,
+) -> Eval | None:
+    """The existing demo eval for ``(pipeline, name)``, or None.
+
+    ``evals`` carries no unique key on the ``(organisation_id, pipeline_id,
+    name)`` natural tuple, so a concurrent boot can leave more than one match;
+    take a deterministic first row instead of raising ``MultipleResultsFound``.
+    """
+    result = await session.execute(
+        select(Eval)
+        .where(Eval.organisation_id == org.id, Eval.pipeline_id == pipeline.id, Eval.name == label)
+        .order_by(Eval.id)
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def _get_or_create_demo_eval(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline: Pipeline,
+    label: str,
+) -> Eval:
+    """Return the demo eval definition for *pipeline*, creating it once if absent.
+
+    Race-safe: the insert runs in a savepoint with ``IntegrityError`` recovery,
+    matching every other seed write in this file, so a concurrent boot that
+    committed the matching row only rolls back this insert.
+    """
+    evaluation = await _find_demo_eval(session, org, pipeline, label)
+    if evaluation is not None:
+        return evaluation
+    evaluation = Eval(
+        organisation_id=org.id,
+        pipeline_id=pipeline.id,
+        account_id=account.id,
+        name=label,
+        eval_type="model_judge",
+        config_json={"description": "Demo evaluation result; no live provider was called."},
+        pass_threshold=Decimal("0.75"),
+    )
+    try:
+        async with session.begin_nested():
+            session.add(evaluation)
+            await session.flush()
+    except IntegrityError:
+        adopted = await _find_demo_eval(session, org, pipeline, label)
+        if adopted is None:
+            raise
+        _log.info("demo_seed.eval_recovered_after_conflict", extra={"eval_name": label})
+        return adopted
+    _log.info("demo_seed.eval_created", extra={"eval_name": label})
+    return evaluation
+
+
+def _demo_eval_passed(run: Run) -> bool:
+    """Deterministic synthetic verdict for one demo run."""
+    return run.status == "complete" and run.run_number % 3 != 0  # nosemgrep: raw-status-complete
+
+
+async def _find_demo_eval_result(
+    session: AsyncSession,
+    org: Organisation,
+    evaluation: Eval,
+    run: Run,
+) -> EvalResult | None:
+    """The existing demo eval result for ``(eval, run)``, or None.
+
+    ``eval_results`` carries no unique key on the ``(organisation_id,
+    eval_id, run_id)`` tuple, so a concurrent boot can leave more than one
+    match; take a deterministic first row instead of raising
+    ``MultipleResultsFound``.
+    """
+    result = await session.execute(
+        select(EvalResult)
+        .where(
+            EvalResult.organisation_id == org.id,
+            EvalResult.eval_id == evaluation.id,
+            EvalResult.run_id == run.id,
+        )
+        .order_by(EvalResult.id)
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def _ensure_demo_eval_result(
+    session: AsyncSession,
+    org: Organisation,
+    evaluation: Eval,
+    run: Run,
+    index: int,
+) -> None:
+    """Create the demo eval result for *run* unless it already exists.
+
+    Race-safe: savepoint + ``IntegrityError`` recovery, matching every other
+    seed write in this file.
+    """
+    if await _find_demo_eval_result(session, org, evaluation, run) is not None:
+        return
+    passed = _demo_eval_passed(run)
+    eval_result = EvalResult(
+        organisation_id=org.id,
+        eval_id=evaluation.id,
+        run_id=run.id,
+        node_id=None,
+        eval_definition_version=evaluation.version,
+        passed=passed,
+        outcome="pass" if passed else "fail",
+        score=0.91 if passed else 0.62,
+        judge_result_json={"source": "demo_seed", "sample": True, "eval_index": index},
+        detail="Synthetic read-only demo evaluation result.",
+        observed=True,
+        evaluated_at=run.completed_at or run.started_at or datetime.now(UTC),
+        resolution="accepted" if passed else "pending",
+    )
+    try:
+        async with session.begin_nested():
+            session.add(eval_result)
+            await session.flush()
+    except IntegrityError:
+        if await _find_demo_eval_result(session, org, evaluation, run) is None:
+            raise
+        _log.info(
+            "demo_seed.eval_result_recovered_after_conflict",
+            extra={"eval_name": evaluation.name, "run_number": run.run_number},
+        )
+
+
+async def _seed_demo_evals(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+) -> None:
+    """Seed durable eval definitions and recent results for dashboard consumers.
+
+    The most-recent ``_DEMO_EVAL_RESULT_RUN_LIMIT`` runs of each pipeline get a
+    synthetic result: the dashboard eval rate is a rolling window on
+    ``evaluated_at``, so anchoring results to the oldest runs would age them
+    out of the cards immediately.
+    """
+    for index, (pipeline_name, label) in enumerate(
+        ((DEMO_PIPELINE_NAME, "PR risk quality"), (PR_REVIEW_PIPELINE_NAME, "Review completeness")),
+        start=1,
+    ):
+        pipeline, _ = pipeline_lookup[pipeline_name]
+        evaluation = await _get_or_create_demo_eval(session, org, account, pipeline, label)
+        runs = list(
+            (
+                await session.execute(
+                    select(Run)
+                    .where(Run.organisation_id == org.id, Run.pipeline_id == pipeline.id)
+                    .order_by(Run.run_number.desc())
+                    .limit(_DEMO_EVAL_RESULT_RUN_LIMIT)
+                )
+            ).scalars()
+        )
+        for run in runs:
+            await _ensure_demo_eval_result(session, org, evaluation, run, index)
+    await session.flush()
+
+
 async def _seed_demo_triggers(
     session: AsyncSession,
     org: Organisation,
@@ -1501,6 +1683,7 @@ async def _seed_demo_triggers(
         trigger = Trigger(
             organisation_id=org.id,
             pipeline_id=pr_pipeline.id,
+            name="PR opened",
             trigger_type="webhook",
             active=True,
             config_json=webhook_config,
@@ -1533,6 +1716,7 @@ async def _seed_demo_triggers(
         trigger = Trigger(
             organisation_id=org.id,
             pipeline_id=rn_pipeline.id,
+            name="Weekly release notes",
             trigger_type="cron",
             active=True,
             cron_expression="0 9 * * 1",
@@ -1972,22 +2156,33 @@ async def _seed_demo_membership(session: AsyncSession, account: Account, org: Or
         )
 
 
-_DEMO_TEAM_NAME = "Demo Engineering"
+_DEMO_TEAM_SPECS = (
+    ("Demo Engineering", "Builds and reviews the demo delivery pipelines."),
+    ("Demo Platform", "Owns the release and documentation automation."),
+    ("Demo Governance", "Approves high-risk changes and monitors outcomes."),
+)
 
 
-async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Account) -> None:
-    """Idempotent Demo Engineering team + demo user as viewer member.
+async def _get_or_create_demo_team(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    name: str,
+    description: str,
+) -> Team:
+    """Return the demo team for *name*, creating it race-safely if absent.
 
-    Race-safe: savepoint + IntegrityError recovery on the (org, name) unique
-    key, matching the existing seed pattern.
+    Race-safe: the insert runs in a savepoint keyed on the (org, name) unique
+    constraint, so a concurrent boot that already committed only rolls back
+    this insert.
     """
-    result = await session.execute(select(Team).where(Team.organisation_id == org.id, Team.name == _DEMO_TEAM_NAME))
+    result = await session.execute(select(Team).where(Team.organisation_id == org.id, Team.name == name))
     team = result.scalar_one_or_none()
     if team is None:
         team = Team(
             organisation_id=org.id,
-            name=_DEMO_TEAM_NAME,
-            description="Demo team for the /demo visitor experience.",
+            name=name,
+            description=description,
             account_id=account.id,
             notification_endpoints=[],
             settings={},
@@ -1997,24 +2192,29 @@ async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Acc
                 session.add(team)
                 await session.flush()
         except IntegrityError:
-            result = await session.execute(
-                select(Team).where(Team.organisation_id == org.id, Team.name == _DEMO_TEAM_NAME)
-            )
+            result = await session.execute(select(Team).where(Team.organisation_id == org.id, Team.name == name))
             team = result.scalar_one_or_none()
             if team is None:
                 raise
-            _log.info("demo_seed.team_recovered_after_conflict", extra={"org_id": str(org.id)})
+            _log.info("demo_seed.team_recovered_after_conflict", extra={"team_name": name})
         else:
             _log.info("demo_seed.team_created", extra={"team_id": str(team.id)})
+    return team
 
-    # Team membership for the demo user.
+
+async def _ensure_demo_team_membership(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    team: Team,
+    role: str,
+) -> None:
+    """Ensure the demo user is a member of *team* with *role*."""
     member_result = await session.execute(
-        select(TeamMembership).where(
-            TeamMembership.team_id == team.id,
-            TeamMembership.account_id == account.id,
-        )
+        select(TeamMembership).where(TeamMembership.team_id == team.id, TeamMembership.account_id == account.id)
     )
-    if member_result.scalar_one_or_none() is None:
+    membership = member_result.scalar_one_or_none()
+    if membership is None:
         try:
             async with session.begin_nested():
                 session.add(
@@ -2022,14 +2222,33 @@ async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Acc
                         team_id=team.id,
                         account_id=account.id,
                         organisation_id=org.id,
-                        role="viewer",
+                        role=role,
                     )
                 )
                 await session.flush()
         except IntegrityError:
             _log.info("demo_seed.team_membership_recovered_after_conflict", extra={"team_id": str(team.id)})
-        else:
-            _log.info("demo_seed.team_membership_created", extra={"team_id": str(team.id)})
+    elif membership.role != role:
+        membership.role = role
+
+
+async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Account) -> list[Team]:
+    """Idempotently seed the three demo teams and memberships.
+
+    Every membership is granted ``DEMO_ORG_ROLE``: the database enforces the
+    team-role cap (team role must not exceed the account's org role), and the
+    demo account is a read-only ``viewer`` at org level. An elevated team role
+    (e.g. ``operator``) is rejected by ``check_team_privilege_cap`` and aborts
+    the seed.
+    """
+    teams: list[Team] = []
+    for name, description in _DEMO_TEAM_SPECS:
+        team = await _get_or_create_demo_team(session, org, account, name, description)
+        if team.description != description:
+            team.description = description
+        await _ensure_demo_team_membership(session, org, account, team, DEMO_ORG_ROLE)
+        teams.append(team)
+    return teams
 
 
 async def _find_demo_schema(session: AsyncSession, org: Organisation, name: str) -> Schema | None:
@@ -2242,12 +2461,13 @@ async def seed_demo(session: AsyncSession) -> str | None:
     # Postgres RLS admits them (mirrors seed_cost_components_for_org).
     await set_rls_org(session, org.id)
     await set_rls_execution_context(session)
-    await _seed_demo_team(session, org, account)
+    teams = await _seed_demo_team(session, org, account)
     await _seed_demo_schemas(session, org, account)
     agent_ids = await _seed_demo_agents(session, org, account)
     # Pipelines (graph + edges + snapshot) + runs (with node-level traces) +
     # daily facts; returns the lookup used by the trigger seed.
-    pipeline_lookup = await _seed_demo_pipeline_and_runs(session, org, account, agent_ids)
+    pipeline_lookup = await _seed_demo_pipeline_and_runs(session, org, account, agent_ids, teams=teams)
+    await _seed_demo_evals(session, org, account, pipeline_lookup)
     await _seed_demo_triggers(session, org, account, pipeline_lookup)
 
     return f"org={DEMO_ORG_SLUG} user={email}"

@@ -203,8 +203,12 @@ async def test_for_update_lock_serialises_the_preferences_write(
     org_id, account_a, _account_b = two_accounts
     maker = _session_factory(db_engine)
 
-    session1 = maker()
-    async with session1.begin():
+    # Open the session through the sessionmaker so it is CLOSED on exit:
+    # ``session1.begin()`` alone ends the transaction but leaves the session
+    # holding its checked-out asyncpg connection for good. That leak surfaces
+    # later as an unclosed-connection PytestUnraisableExceptionWarning (which the
+    # deploy gate escalates to an error) attributed to an unrelated test's setup.
+    async with maker() as session1, session1.begin():
         await set_rls_org(session1, org_id)
         await set_hitl_email_preference(session1, account_a, default=True)
         # Lock held. A second connection must now be refused.

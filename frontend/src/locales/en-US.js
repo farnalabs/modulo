@@ -758,8 +758,10 @@ export default {
       "image_placeholder_unresolvable": "Release placeholder image \u2014 this is the shipped placeholder and cannot be pulled. Set your own agent image to use this profile.",
       "image_invalid_reference": "This is not a valid image reference \u2014 check the registry host, repository name and digest.",
       "image_mutable_tag_warning": "Mutable tag \u2014 pin the image by digest (name{'@'}algorithm:digest, e.g. sha256:\u2026, sha384:\u2026 or sha512:\u2026) so the registry cannot swap it under you. Warning only; you can still save.",
-      "capabilities": "Capabilities",
-      "network_policy": "Network Policy",
+       "capabilities": "Capabilities",
+       "max_node_seconds": "Maximum node wall-clock seconds (read-only capability)",
+       "network_policy": "Network Policy",
+
       "select_network_policy": "Select network policy",
       "outbound_full_egress": "Outbound (full egress)",
       "none_isolated": "None (isolated)",
@@ -1882,7 +1884,13 @@ export default {
       "eval_pass_rate_label": "Eval pass rate",
       "no_eval_data_yet": "No eval data yet",
       "overview_of_your_organisations_pipelines_and_runs": "Overview of your organisation's pipelines and runs",
+      "token_spend_24h": "Token Spend (24h)",
+      "token_spend_3d": "Token Spend (3d)",
       "token_spend_7d": "Token Spend (7d)",
+      "token_spend_30d": "Token Spend (30d)",
+      "token_spend_90d": "Token Spend (90d)",
+      "token_spend_all_time": "Token Spend (all time)",
+      "total_evals_all_time": "total evals (all time)",
       "total_evals": "total evals",
       "days_tracked": "days tracked",
       "team_breakdown": "Team Breakdown",
@@ -1919,6 +1927,7 @@ export default {
       "trend_30d": "30d",
       "trend_90d": "90d",
       "trend_all_time": "All time",
+      "trend_all_time_legacy_7d": "All-time summary · last 7d trend",
       "no_prior_data": "No prior period data",
       "invalid_dashboard_data": "Received invalid dashboard data from server.",
       "invalid_trends_data": "Received invalid trends data from server.",
@@ -2768,6 +2777,12 @@ export default {
       "no_limit": "No limit",
       "saving": "Saving...",
       "save": "Save",
+      "no_teams_found": "No teams found.",
+      "inherit_org_limit": "Inherit org limit",
+      "form_control": "Form control",
+      "no_value": "—",
+      "failed_to_load": "Failed to load: {detail}",
+      "failed_to_save": "Failed to save: {detail}",
       "ceiling_updated": "Ceilings updated."
     },
     "CostComponentsView": {
@@ -3926,6 +3941,10 @@ export default {
       "create_trigger": "Create Trigger",
       "no_triggers_configured": "No triggers configured",
       "no_triggers_configured_description": "Create a trigger to automatically start pipeline runs on a schedule, webhook, or other event.",
+      "name": "Name",
+      "name_placeholder": "e.g. Nightly release notes",
+      "please_enter_a_name": "Please enter a name for the trigger.",
+      "name_too_long": "The trigger name must be 255 characters or fewer.",
       "pipeline": "Pipeline",
       "type": "Type",
       "status": "Status",
@@ -5279,6 +5298,7 @@ export default {
     }
   },
   "common": {
+    "na": "n/a",
     "email": "Email",
     "password": "Password",
     "sign_in": "Sign in",
@@ -5458,6 +5478,7 @@ export default {
     "run": { "superseded": "Run superseded", "no_progress": "Run made no progress" },
     "queue": { "expired": "Queue wait expired" },
     "connector": {
+      "failed": "Connector failed",
       "invalid_key": "Invalid connector key",
       "permission": "Connector permission denied",
       "rate_limit": "Connector rate limited",
@@ -5541,10 +5562,12 @@ export default {
     "run": { "superseded": "This run was superseded by a newer run." },
     "queue": { "expired": "The run waited in the capacity queue past this pipeline's queue timeout and was dropped before it started. It was superseded, not failed." },
     "connector": {
+      "failed": "The connector reported that its operation failed.",
       "invalid_key": "The connector key is invalid or missing.",
       "permission": "The connector does not have permission to access the resource.",
       "rate_limit": "The connector hit an API rate limit.",
-      "network": "A network error occurred while calling the connector."
+      "network": "A network error occurred while calling the connector.",
+      "side_effect_unknown": "The connector write was cancelled mid-send or raised an error; upstream side-effect state is unknown."
     },
     "capacity": {
       "org": "The organisation has reached its maximum concurrent run limit.",

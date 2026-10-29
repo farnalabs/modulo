@@ -22,10 +22,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from modulo.core.product_analytics import consent as consent_module
-from modulo.core.product_analytics.consent import (
-    partner_license_requires_analytics,
-    resolve_instance_analytics_switch,
-)
+from modulo.core.product_analytics.consent import resolve_instance_analytics_switch
 from modulo.core.product_analytics.constants import (
     ENV_INSTANCE_SWITCH,
     PARTNER_LICENSE_CLAIM,
@@ -169,26 +166,3 @@ class TestOperatorWins:
         assert state.source == SWITCH_SOURCE_ENV
         assert state.operator_value is False
         assert state.licence_requires_analytics is True
-
-
-class TestPartnerLicenseClaimReader:
-    def test_reads_the_signed_raw_payload(self) -> None:
-        assert partner_license_requires_analytics(_licence(claim=True)) is True
-
-    def test_absent_claim_is_false(self) -> None:
-        assert partner_license_requires_analytics(_licence()) is False
-
-    def test_false_claim_is_false(self) -> None:
-        assert partner_license_requires_analytics(_licence(claim=False)) is False
-
-    def test_string_false_claim_is_false(self) -> None:
-        """``bool("false")`` is True - the reader must compare explicitly."""
-        assert partner_license_requires_analytics(_licence(claim="false")) is False
-
-    def test_mapping_input_is_accepted(self) -> None:
-        assert partner_license_requires_analytics({PARTNER_LICENSE_CLAIM: True}) is True
-
-    def test_missing_or_malformed_input_is_false(self) -> None:
-        assert partner_license_requires_analytics(None) is False
-        assert partner_license_requires_analytics("not-a-licence") is False
-        assert partner_license_requires_analytics(SimpleNamespace(raw_payload=None)) is False

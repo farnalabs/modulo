@@ -10,6 +10,7 @@ const apiState = vi.hoisted(() => ({
   limitsOverride: undefined as Record<string, unknown> | null | undefined,
   costsOverride: undefined as Record<string, unknown> | null | undefined,
   ceilingError: undefined as Record<string, unknown> | undefined,
+  ceilingReject: undefined as Error | undefined,
 }))
 
 vi.mock('../lib/api/client', () => ({
@@ -47,6 +48,9 @@ vi.mock('../lib/api/client', () => ({
         })
       }
        if (path === '/api/v1/admin/costs/ceiling') {
+         if (apiState.ceilingReject) {
+           return Promise.reject(apiState.ceilingReject)
+         }
          return Promise.resolve({ data: apiState.ceiling, error: apiState.ceilingError })
        }
 
@@ -159,6 +163,20 @@ describe('AdminSpendLimitsView', () => {
     wrapper.unmount()
   })
 
+  it('renders the org limit input for both an existing limit and no limit', async () => {
+    const existing = await mountWithFeatures()
+    const existingInput = existing.findComponent({ name: 'InputText' })
+    expect(existingInput.props('modelValue')).toBe('100')
+    existing.unmount()
+
+    apiState.limitsOverride = { org_daily_limit_usd: null, teams: [] }
+    const absent = await mountWithFeatures()
+    const absentInput = absent.findComponent({ name: 'InputText' })
+    expect(absentInput.props('modelValue')).toBe('')
+    expect(absentInput.find('input').attributes('placeholder')).toBe('No limit')
+    absent.unmount()
+  })
+
   it('marks an org total above the daily limit as over budget', async () => {
     apiState.orgLimit = 10
     const wrapper = await mountWithFeatures()
@@ -181,6 +199,11 @@ describe('AdminSpendLimitsView', () => {
 
     wrapper.unmount()
     apiState.ceilingError = undefined
+    apiState.ceilingReject = new Error('ceiling read crash')
+    const thrownWrapper = await mountWithFeatures()
+    expect(thrownWrapper.text()).toContain('Failed to load: ceiling read crash')
+    thrownWrapper.unmount()
+    apiState.ceilingReject = undefined
     apiState.ceiling = { max_run_cost: null, spend_ceiling: null, remaining_budget_usd: null }
     const successWrapper = await mountWithFeatures()
     const apiPut = (await import('../lib/api/client')).api.PUT as ReturnType<typeof vi.fn>
@@ -188,6 +211,16 @@ describe('AdminSpendLimitsView', () => {
     await successWrapper.find('[data-testid="admin-spend-limits-ceiling-save"]').trigger('click')
     await flushPromises()
     expect(successWrapper.text()).toContain('Ceilings updated.')
+
+    apiPut.mockResolvedValueOnce({ data: null, error: { detail: 'ceiling denied' } })
+    await successWrapper.find('[data-testid="admin-spend-limits-ceiling-save"]').trigger('click')
+    await flushPromises()
+    expect(successWrapper.text()).toContain('Failed to save: ceiling denied')
+
+    apiPut.mockRejectedValueOnce(new Error('ceiling network crash'))
+    await successWrapper.find('[data-testid="admin-spend-limits-ceiling-save"]').trigger('click')
+    await flushPromises()
+    expect(successWrapper.text()).toContain('Failed to save: ceiling network crash')
     successWrapper.unmount()
   })
 
@@ -226,5 +259,22 @@ describe('AdminSpendLimitsView', () => {
     await save.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('org offline')
+  })
+
+  it('updates org limit value and handles empty or null input', async () => {
+    const wrapper = await mountWithFeatures()
+    const input = wrapper.findComponent<any>('[data-testid="admin-spend-limits-org-limit"]')
+    expect(input.exists()).toBe(true)
+
+    const vm = wrapper.vm as unknown as { orgLimit: number | null }
+
+    await input.vm.$emit('update:modelValue', '250')
+    expect(vm.orgLimit).toBe(250)
+
+    await input.vm.$emit('update:modelValue', '')
+    expect(vm.orgLimit).toBe(null)
+
+    await input.vm.$emit('update:modelValue', null)
+    expect(vm.orgLimit).toBe(null)
   })
 })

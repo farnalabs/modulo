@@ -19153,6 +19153,12 @@ export interface components {
             image_ref?: string | null;
             /** Capabilities */
             capabilities?: string[];
+            /**
+             * Max Node Seconds
+             * @description Provider wall-clock capability; read-only for operators
+             * @default 3300
+             */
+            max_node_seconds: number;
             /** Config Json */
             config_json?: {
                 [key: string]: unknown;
@@ -19271,6 +19277,8 @@ export interface components {
             image_ref?: string | null;
             /** Capabilities */
             capabilities: string[];
+            /** Max Node Seconds */
+            max_node_seconds: number;
             /** Config Json */
             config_json: {
                 [key: string]: unknown;
@@ -19315,6 +19323,8 @@ export interface components {
             image_ref?: string | null;
             /** Capabilities */
             capabilities?: string[] | null;
+            /** Max Node Seconds */
+            max_node_seconds?: number | null;
             /** Config Json */
             config_json?: {
                 [key: string]: unknown;
@@ -22157,7 +22167,7 @@ export interface components {
             /** Trigger Type */
             trigger_type: string;
             /** Name */
-            name?: string | null;
+            name: string;
             /**
              * Active
              * @default true
@@ -22256,6 +22266,8 @@ export interface components {
         };
         /** TriggerUpdate */
         TriggerUpdate: {
+            /** Name */
+            name?: string | null;
             /** Active */
             active?: boolean | null;
             /** Max Concurrent Runs */

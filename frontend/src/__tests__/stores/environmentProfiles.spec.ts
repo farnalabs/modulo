@@ -50,6 +50,7 @@ const profile = (overrides: Partial<EnvironmentProfile> = {}): EnvironmentProfil
   provider_type: 'e2b',
   image_ref: 'modulo/sandbox:latest',
   capabilities: ['code_exec', 'browser'],
+  max_node_seconds: 3300,
   network_policy: 'isolated',
   initialisation_strategy: 'lazy',
   persistence_policy: 'ephemeral',
@@ -156,13 +157,14 @@ describe('useEnvironmentProfilesStore', () => {
     fetchMock.mockResolvedValue(okJsonResponse(profile({ id: 'env-new', name: 'New' })))
     const store = useEnvironmentProfilesStore()
 
-    await store.createProfile({ name: 'New', provider_type: 'e2b', network_policy: 'outbound', initialisation_strategy: 'git_clone', persistence_policy: 'ephemeral', visibility: 'org' })
+    await store.createProfile({ name: 'New', provider_type: 'e2b', max_node_seconds: 3300, network_policy: 'outbound', initialisation_strategy: 'git_clone', persistence_policy: 'ephemeral', visibility: 'org' })
 
     const [, init] = fetchMock.mock.calls[0]
-    expect(init).toMatchObject({ method: 'POST', body: JSON.stringify({ name: 'New', provider_type: 'e2b', network_policy: 'outbound', initialisation_strategy: 'git_clone', persistence_policy: 'ephemeral', visibility: 'org' }) })
+    expect(init).toMatchObject({ method: 'POST', body: JSON.stringify({ name: 'New', provider_type: 'e2b', max_node_seconds: 3300, network_policy: 'outbound', initialisation_strategy: 'git_clone', persistence_policy: 'ephemeral', visibility: 'org' }) })
     expect(store.profiles).toHaveLength(1)
     expect(store.profiles[0].id).toBe('env-new')
     expect(store.profiles[0].name).toBe('New')
+    expect(store.profiles[0].max_node_seconds).toBe(3300)
     expect(store.isSaving).toBe(false)
   })
 
@@ -186,6 +188,7 @@ describe('useEnvironmentProfilesStore', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/environment-profiles/env-1', expect.objectContaining({ method: 'PUT' }))
     expect(store.profiles).toHaveLength(1)
     expect(store.profiles[0].name).toBe('Renamed')
+    expect(store.profiles[0].max_node_seconds).toBe(3300)
     expect(store.isSaving).toBe(false)
   })
 

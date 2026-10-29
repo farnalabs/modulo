@@ -1406,7 +1406,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'dev'", specifier = ">=2.31.0" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17,<0.18" },
-    { name = "saq", extras = ["web"], specifier = "==0.26.4" },
+    { name = "saq", extras = ["web"], specifier = "==0.26.5" },
     { name = "schemathesis", marker = "extra == 'dev'", specifier = ">=3.30.0" },
     { name = "semgrep", marker = "extra == 'dev'", specifier = ">=1.70.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
@@ -5438,14 +5438,14 @@ wheels = [
 
 [[package]]
 name = "saq"
-version = "0.26.4"
+version = "0.26.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "croniter" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/b3/38c164b8766e6ac92e9faf961f4dd1103580227edbd95da18f08c07233de/saq-0.26.4.tar.gz", hash = "sha256:e29a3c8b7df722c28f6b8db9566571fc0bbdb32d0fcccbaa3af9517f46a6011c", size = 75417, upload-time = "2026-05-21T15:00:55.144Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2b/c1/22381822245402fbff14a990e76a6a8373312e26bf0fdaaba81db27f45c6/saq-0.26.5.tar.gz", hash = "sha256:75e8664ca1351f46a400d28d0441612be4feb6c51ab206cdfad9dc06fcb42acc", size = 79129, upload-time = "2026-10-29T03:38:20.069Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/82/cf178bee890a1b7e17950c778c752b7dc342c93f254bc3143a4375378a52/saq-0.26.4-py3-none-any.whl", hash = "sha256:7a1f81ae2a95b6c34b170bc9b8cf84423052d9612f62cf0ec426c1fd27e35b2c", size = 63222, upload-time = "2026-05-21T15:00:53.503Z" },
+    { url = "https://files.pythonhosted.org/packages/34/48/e43331d49a341b977d5574783f0e6d54dbcef0a62593c8d7c9948ce1b6c0/saq-0.26.5-py3-none-any.whl", hash = "sha256:7305d3fadedd7aaceebe36b9d298377f322385e38187b8869ba49b73e4e07693", size = 64696, upload-time = "2026-10-29T03:38:18.898Z" },
 ]
 
 [package.optional-dependencies]

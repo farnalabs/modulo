@@ -61,6 +61,7 @@ from modulo.core.runtime_provider import (
     egress_tier_for_provider_type,
 )
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
+from modulo.settings import MAX_NODE_TIMEOUT_SECONDS
 from modulo.util import validate_workspace_network
 
 if TYPE_CHECKING:
@@ -71,7 +72,7 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-_E2B_MAX_TIMEOUT_SECONDS = 3300  # GraphValidator parity bound (ADR 029)
+_E2B_MAX_TIMEOUT_SECONDS = MAX_NODE_TIMEOUT_SECONDS
 _OUTPUT_JSON_PATH = "/home/user/output.json"
 _INPUT_JSON_PATH = "/home/user/input.json"
 _PROMPT_PATH = "/home/user/prompt.md"
@@ -469,19 +470,21 @@ async def resolve_sandbox_dispatch_route(
     raise SandboxDispatchUnboundError(f"Environment profile provider_type '{provider_type}' is not dispatchable.")
 
 
-def validate_e2b_dispatch_timeout(sandbox_timeout: Any) -> None:
-    """Loud validation for out-of-range legacy E2B timeout values (D4, no clamp)."""
+def validate_e2b_dispatch_timeout(sandbox_timeout: Any, *, max_timeout_seconds: int | None = None) -> None:
+    """Loud validation for the active profile/transport timeout cap (no clamp)."""
     if sandbox_timeout is None:
         return
     try:
         timeout_value = int(sandbox_timeout)
     except (TypeError, ValueError):
         return
-    if timeout_value > _E2B_MAX_TIMEOUT_SECONDS:
+    cap = _E2B_MAX_TIMEOUT_SECONDS if max_timeout_seconds is None else int(max_timeout_seconds)
+    if timeout_value > cap:
+        cap_name = "E2B provisioning" if max_timeout_seconds is None else "selected environment profile"
         raise SandboxDispatchTimeoutValidationError(
-            f"sandbox_agent timeout_seconds={timeout_value} exceeds the E2B provisioning cap "
-            f"(loud validation, GraphValidator parity at <={_E2B_MAX_TIMEOUT_SECONDS}) — adjust "
-            "the node configuration instead of relying on a silent clamp."
+            f"sandbox_agent timeout_seconds={timeout_value} exceeds the {cap_name} cap "
+            f"(loud validation, effective cap <= {cap}) — adjust the node configuration "
+            "instead of relying on a silent clamp."
         )
 
 

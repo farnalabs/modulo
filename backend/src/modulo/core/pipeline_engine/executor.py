@@ -94,6 +94,8 @@ from modulo.core.pipeline_engine.decorator import (
     set_model_backend_hub,
 )
 from modulo.core.pipeline_engine.error_codes import (
+    _CODE_CONNECTOR_FAILED,
+    _CODE_CONNECTOR_UNKNOWN,
     _CODE_HARNESS_RETRY_BUDGET_EXHAUSTED,
     _CODE_SANDBOX_AGENT_FAILED,
     _CODE_SANDBOX_NO_OUTPUT_JSON,
@@ -129,6 +131,7 @@ from modulo.core.pipeline_engine.model_backend_errors import (
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import (
     MODULO_SYNTHETIC_FAILURE_MARKER,
+    ConnectorNodeFailedError,
     OutputSchemaValidationError,
     SandboxNodeFailedError,
     SandboxTierRefusedError,
@@ -1427,6 +1430,132 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     return reason
 
 
+def _connector_artifact_matches(
+    artifact: Any,
+    *,
+    marked: bool,
+    expected_node_id: str | None,
+) -> bool:
+    """Return whether an artifact is a trusted connector failure."""
+    if not isinstance(artifact, dict) or artifact.get("status") != "failed":
+        return False
+    if marked:
+        return True
+    artifact_node_id = artifact.get("node_id")
+    if expected_node_id is not None:
+        return artifact_node_id == expected_node_id
+    return isinstance(artifact_node_id, str) and bool(artifact_node_id)
+
+
+def _connector_failure_artifact_reason(
+    node_output: dict[str, Any],
+    expected_node_id: str | None = None,
+) -> str | None:
+    """Return the first failure reason from a runner-stamped connector output's artifacts."""
+    artifacts = node_output.get("artifacts")
+    if not isinstance(artifacts, list):
+        return None
+    marked = node_output.get("connector_failure") is True
+    for artifact in artifacts:
+        if not _connector_artifact_matches(
+            artifact,
+            marked=marked,
+            expected_node_id=expected_node_id,
+        ):
+            continue
+        error = artifact.get("error")
+        return error if isinstance(error, str) and error else "Connector reported failure"
+    return None
+
+
+def _connector_artifact_error_code(artifacts: Any) -> str | None:
+    """Return the first non-empty code from a failed connector artifact."""
+    if not isinstance(artifacts, list):
+        return None
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("status") != "failed":
+            continue
+        code = artifact.get("error_code")
+        if isinstance(code, str) and code:
+            return code
+    return None
+
+
+def _node_output_connector_error_code(node_output: Any) -> str:
+    """Return the error code for a connector failure envelope."""
+    if not isinstance(node_output, dict):
+        return _CODE_CONNECTOR_FAILED
+    code = node_output.get("error_code")
+    if isinstance(code, str) and code:
+        return code
+    return _connector_artifact_error_code(node_output.get("artifacts")) or _CODE_CONNECTOR_FAILED
+
+
+def _node_output_connector_failure(
+    node_output: Any,
+    node_type: str | None = None,
+    expected_node_id: str | None = None,
+) -> str | None:
+    """Return a connector/dispatch failure reason from a captured envelope."""
+    if not isinstance(node_output, dict):
+        return None
+    marked = node_output.get("connector_failure") is True
+    if not marked and node_type not in {"connector", "dispatch"}:
+        return None
+    return _connector_failure_artifact_reason(node_output, expected_node_id=expected_node_id) or (
+        "Connector reported failure" if marked else None
+    )
+
+
+def _connector_failure_views(
+    node_id: str,
+    completed_node_outputs: dict[str, Any],
+    stored_node_outputs: dict[str, Any],
+    stored_node_telemetry: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return captured connector envelopes for one node, in precedence order."""
+    views: list[dict[str, Any]] = []
+    completed = completed_node_outputs.get(node_id)
+    if isinstance(completed, dict):
+        views.append(completed)
+    stored = node_telemetry(stored_node_telemetry, stored_node_outputs, node_id)
+    if isinstance(stored, dict):
+        views.append(stored)
+    return views
+
+
+def _connector_failure_for_node(
+    node_id: str,
+    node_type_map: dict[str, str],
+    completed_node_outputs: dict[str, Any],
+    stored_node_outputs: dict[str, Any],
+    stored_node_telemetry: dict[str, Any],
+) -> tuple[str, str] | None:
+    """Return ``(reason, code)`` for a captured connector failure, if present."""
+    node_type = node_type_map.get(node_id)
+    if node_type not in {"connector", "dispatch"}:
+        return None
+    for view in _connector_failure_views(node_id, completed_node_outputs, stored_node_outputs, stored_node_telemetry):
+        reason = _node_output_connector_failure(view, node_type, expected_node_id=node_id)
+        if reason is not None:
+            return reason, _node_output_connector_error_code(view)
+    return None
+
+
+def _record_connector_failure(
+    state: _StreamState,
+    ctx: _StreamContext,
+    node_id: str,
+    output: dict[str, Any],
+) -> None:
+    """Latch a connector failure observed in a completed node envelope."""
+    node_type = ctx.node_type_map.get(node_id) if ctx.node_type_map else None
+    reason = _node_output_connector_failure(output, node_type, expected_node_id=node_id)
+    if reason is not None:
+        state.connector_failure_reason = reason
+        state.connector_failure_code = _node_output_connector_error_code(output)
+
+
 def _node_output_sandbox_session_lost(node_output: Any) -> str | None:
     """Return a reason string when a captured node output carries the FAR-227
     session-lost marker.
@@ -1948,6 +2077,8 @@ class _StreamState:
     # (agent_status=failed OR outcome=failed) — A1 elevation (agent-failure UX,
     # phase 1): such a run must NEVER land 'complete'.
     agent_failure_reason: str | None = None
+    connector_failure_reason: str | None = None
+    connector_failure_code: str | None = None
     # FAR-227: set when a captured sandbox-agent node output carries the
     # sandbox-session-lost marker (the E2B wrapper's fallback echo — a dead
     # opencode session). Routes to retryable ``sandbox.no_output_json``.
@@ -1991,6 +2122,37 @@ class _StreamContext:
     node_type_map: dict[str, str] | None
 
 
+def _try_agent_failure_elevation(
+    broker: RunEventBroker,
+    run_id: uuid.UUID,
+    agent_failure_reason: str,
+    usage: dict[str, Any] | None,
+) -> tuple[str, str | None, str | None, dict[str, Any] | None] | None:
+    """Attempt agent failure elevation (A1); return terminal tuple or None.
+
+    Fail-open: any error logs a warning and returns None so the caller
+    continues to the next terminalization check (stall).
+    """
+    try:
+        from modulo.settings import get_settings
+
+        if get_settings().modulo_agent_failure_elevation_enabled:
+            return _terminal_failure(
+                broker,
+                "failed",
+                _ERROR_CODE_AGENT_FAILED,
+                _sanitize_detail(agent_failure_reason, limit=5000),
+                usage,
+            )
+    except Exception:
+        _log.warning(
+            "agent_failure_elevation.failed_open",
+            extra={"run_id": str(run_id), "detail": agent_failure_reason},
+            exc_info=True,
+        )
+    return None
+
+
 def _stream_terminal_reason(
     state: _StreamState,
     broker: RunEventBroker,
@@ -2028,29 +2190,19 @@ def _stream_terminal_reason(
             _sanitize_detail(state.session_lost_reason, limit=5000),
             usage,
         )
+    if state.connector_failure_reason and not state.stall_reason:
+        code = state.connector_failure_code or _CODE_CONNECTOR_FAILED
+        return _terminal_failure(
+            broker,
+            "failed",
+            code,
+            _sanitize_detail(state.connector_failure_reason, limit=5000),
+            usage,
+        )
     if state.agent_failure_reason and not state.stall_reason:
-        # A1 elevation (agent-failure UX, phase 1, §15.4): a node that
-        # self-reported failure must NEVER land the run 'complete'.
-        # Fail-open — any elevation computation error logs a warning and falls
-        # back to today's path (§2.3.6). If the node also stalled, the stall
-        # terminalization below wins (existing behaviour).
-        try:
-            from modulo.settings import get_settings
-
-            if get_settings().modulo_agent_failure_elevation_enabled:
-                return _terminal_failure(
-                    broker,
-                    "failed",
-                    _ERROR_CODE_AGENT_FAILED,
-                    _sanitize_detail(state.agent_failure_reason, limit=5000),
-                    usage,
-                )
-        except Exception:
-            _log.warning(
-                "agent_failure_elevation.failed_open",
-                extra={"run_id": str(run_id), "detail": state.agent_failure_reason},
-                exc_info=True,
-            )
+        agent_failure_result = _try_agent_failure_elevation(broker, run_id, state.agent_failure_reason, usage)
+        if agent_failure_result is not None:
+            return agent_failure_result
     if state.stall_reason:
         return _terminal_failure(
             broker,
@@ -5394,6 +5546,44 @@ class PipelineExecutor:
         """
         return view.get("status") == "failed" and view.get(MODULO_SYNTHETIC_FAILURE_MARKER) is True
 
+    def _downgrade_connector_failures(
+        self,
+        *,
+        final_status: str,
+        error_code: str | None,
+        error_detail: str | None,
+        completed_node_outputs: dict[str, Any],
+        node_type_map: dict[str, str],
+        stored_node_outputs: dict[str, Any] | None = None,
+        stored_node_telemetry: dict[str, Any] | None = None,
+    ) -> tuple[str, str | None, str | None]:
+        """Downgrade an explicit connector failure envelope before finalization."""
+        if final_status != "complete":
+            return final_status, error_code, error_detail
+        stored_outputs = stored_node_outputs or {}
+        stored_telemetry = stored_node_telemetry or {}
+        node_ids = set(completed_node_outputs) | set(stored_outputs) | set(stored_telemetry)
+        failures = [
+            _connector_failure_for_node(
+                node_id,
+                node_type_map,
+                completed_node_outputs,
+                stored_outputs,
+                stored_telemetry,
+            )
+            for node_id in node_ids
+        ]
+        observed = [failure for failure in failures if failure is not None]
+        if not observed:
+            return final_status, error_code, error_detail
+        details = sorted({reason for reason, _ in observed})
+        chosen_code = (
+            _CODE_CONNECTOR_UNKNOWN
+            if any(code == _CODE_CONNECTOR_UNKNOWN for _, code in observed)
+            else _CODE_CONNECTOR_FAILED
+        )
+        return "failed", chosen_code, "; ".join(details)
+
     def _downgrade_masked_sandbox_failures(
         self,
         *,
@@ -5723,6 +5913,15 @@ class PipelineExecutor:
             stored_node_outputs, stored_node_telemetry = await self._load_stored_node_columns(
                 run_id=run_id, org_id=org_id
             )
+        final_status, error_code, error_detail = self._downgrade_connector_failures(
+            final_status=final_status,
+            error_code=error_code,
+            error_detail=error_detail,
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+            stored_node_outputs=stored_node_outputs,
+            stored_node_telemetry=stored_node_telemetry,
+        )
         final_status, error_code, error_detail = self._downgrade_masked_sandbox_failures(
             run_id=run_id,
             final_status=final_status,
@@ -8359,6 +8558,7 @@ class PipelineExecutor:
             state.stall_reason = stall_reason
         if agent_failure:
             state.agent_failure_reason = agent_failure
+        _record_connector_failure(state, ctx, name, output)
         if session_lost:
             state.session_lost_reason = session_lost
             state.session_lost_retained_text = session_lost_text
@@ -8462,6 +8662,17 @@ class PipelineExecutor:
             broker.publish("run_cancelled", {})
             self._log_accumulation_state(run_id, state.segments_completed, state.node_token_usage)
             return "cancelled", None, None, node_token_usage
+        if isinstance(exc, ConnectorNodeFailedError):
+            # Preserve the typed connector envelope when P5 has no retry or
+            # compensation route left to resolve the failure.
+            envelope = exc.envelope
+            return _terminal_failure(
+                broker,
+                "failed",
+                envelope.get("error_code", _CODE_CONNECTOR_FAILED),
+                _sanitize_detail(str(exc.cause), limit=None),
+                node_token_usage,
+            )
         if isinstance(exc, CompensationFailedError):
             # FAR-402 P5 (§E): a watched node's compensation target itself failed.
             # The node wrapper wrapped the watched-node terminal failure into a
@@ -8590,6 +8801,8 @@ class PipelineExecutor:
         broker = ctx.broker
         run_id = ctx.run_id
         node_token_usage = state.node_token_usage or None
+        if isinstance(exc, ConnectorNodeFailedError) and ctx.completed_node_outputs is not None:
+            ctx.completed_node_outputs[exc.node_id] = exc.envelope
         if isinstance(exc, GraphInterrupt):
             interrupts = exc.args[0] if exc.args else []
             return await self._handle_graph_interrupt(interrupts, state, ctx)

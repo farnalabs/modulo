@@ -483,6 +483,10 @@ async def test_seed_demo_proceeds_when_multi_org_enabled() -> None:
                 new_callable=AsyncMock,
             ),
             patch(
+                "modulo.db.seed_demo._seed_demo_evals",
+                new_callable=AsyncMock,
+            ),
+            patch(
                 "modulo.db.seed_demo._seed_demo_triggers",
                 new_callable=AsyncMock,
             ),

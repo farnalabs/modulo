@@ -1,26 +1,32 @@
 <template>
-  <div class="card p-4" :class="props.class">
-    <div v-if="$slots.header" class="mb-4 flex items-center justify-between">
-      <div>
-        <h2 class="text-base font-semibold">{{ title }}</h2>
-        <p v-if="description" class="text-sm text-muted-foreground">{{ description }}</p>
-      </div>
+  <DataCard
+    :title="title"
+    :description="description"
+    heading-level="h2"
+    :title-class="titleClass"
+    :description-class="descriptionClass"
+    :data-testid="dataTestId"
+    :card-class="props.class"
+    variant="bordered"
+    padding="md"
+  >
+    <template #headerActions>
       <slot name="header" />
-    </div>
-    <template v-else>
-      <h2 class="mb-3 text-base font-semibold" :class="titleClass">{{ title }}</h2>
-      <p v-if="description" class="mb-4 text-sm" :class="descriptionClass || 'text-muted-foreground'">{{ description }}</p>
     </template>
+
     <slot />
-  </div>
+  </DataCard>
 </template>
 
 <script setup lang="ts">
+import DataCard from '../ui/DataCard.vue'
+
 const props = defineProps<{
   title: string
   description?: string
   class?: string
   titleClass?: string
   descriptionClass?: string
+  dataTestId?: string
 }>()
 </script>

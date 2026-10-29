@@ -56,6 +56,7 @@ class CreateEnvironmentProfileOptions(TypedDict, total=False):
     description: str | None
     image_ref: str | None
     capabilities: list[str] | None
+    max_node_seconds: int
     config_json: dict[str, Any] | None
     network_policy: str
     initialisation_strategy: str
@@ -78,6 +79,7 @@ async def create_environment_profile(
     description = options.get("description")
     image_ref = options.get("image_ref")
     capabilities = options.get("capabilities")
+    max_node_seconds = options.get("max_node_seconds", 3300)
     config_json = options.get("config_json")
     network_policy = options.get("network_policy", "outbound")
     initialisation_strategy = options.get("initialisation_strategy", "git_clone")
@@ -98,6 +100,7 @@ async def create_environment_profile(
         provider_type=provider_type,
         image_ref=image_ref,
         capabilities_json=capabilities or [],
+        max_node_seconds=max_node_seconds,
         config_json=config_json or {},
         network_policy=network_policy,
         initialisation_strategy=initialisation_strategy,

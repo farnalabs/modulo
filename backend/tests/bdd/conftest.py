@@ -256,6 +256,19 @@ async def _system_session_override() -> AsyncGenerator[AsyncMock, None]:
     yield make_mock_system_session()
 
 
+def stub_no_duplicate_trigger(mock_session: AsyncMock) -> None:
+    """Model a name-uniqueness probe that finds no live row.
+
+    FAR-2227 made ``name`` mandatory and every trigger create/rename now runs a
+    duplicate ``(pipeline_id, name)`` existence check that reads ``.first()``.
+    The default ``.first`` double returns a truthy ``MagicMock`` (an ORM row
+    stand-in for other readers), which would make EVERY create look like a
+    duplicate and turn the intended 201/422 into a 409. Scenarios that create a
+    trigger with a fresh name call this first.
+    """
+    mock_session.execute.return_value.first = MagicMock(return_value=None)
+
+
 def make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p = MagicMock()
     p.id = kwargs.get("id", uuid.uuid4())
