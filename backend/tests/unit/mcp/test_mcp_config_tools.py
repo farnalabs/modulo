@@ -3,15 +3,18 @@ search_documentation / list_housekeeping / perform_housekeeping MCP tools."""
 
 import logging
 from datetime import UTC, datetime
+from http import HTTPStatus
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from modulo.api.mcp_server import (
     get_available_features,
     get_integration_status,
     get_org_config,
+    list_feature_flags,
     list_housekeeping,
     perform_housekeeping,
     search_documentation,
@@ -21,7 +24,7 @@ from modulo.core.feature_flags import FeatureFlag
 from modulo.core.housekeeping import Candidate, CategoryResult, Scanner
 from modulo.db.models.secret import Secret
 from tests.unit.api.mock_session import make_session_scope
-from tests.unit.mcp.helpers import AuthContext, make_session_context
+from tests.unit.mcp.helpers import ORG_ID, USER_ID, AuthContext, make_session_context
 
 
 def _make_config(*, key: str, value: object) -> MagicMock:
@@ -297,6 +300,286 @@ class TestGetAvailableFeaturesSuccess(AuthContext):
 
         assert result["feature_count"] == 1
         assert "| lifecycle_map_journeys | community | yes |" in result["results"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-2202: system_maps internal feature flag in get_available_features
+# ---------------------------------------------------------------------------
+
+
+class TestSystemMapsInternalFlagMCP:
+    """system_maps is an internal-only flag that must be hidden from ordinary
+    callers and visible only to internal dev-mode operators with the in-dev grant.
+    """
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_settings")
+    @patch("modulo.core.feature_flags.resolve_plan_context")
+    @patch("modulo.db.crud.organisation.get_organisation")
+    async def test_ordinary_caller_cannot_see_system_maps(
+        self,
+        mock_get_org: AsyncMock,
+        mock_resolve: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """Ordinary caller (no dev-mode, no in-dev grant) cannot see system_maps."""
+        from modulo.api.mcp_server import _ctx_org_id
+
+        _ctx_org_id.set(make_session_scope().org_id)
+        mock_get_settings.return_value = MagicMock(modulo_dev_mode=False)
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        plan_ctx.list_enabled_features.return_value = [
+            FeatureFlag(name="mcp_server", description="MCP", tier="community", currently_active=True),
+            FeatureFlag(name="webhook_trigger", description="Webhook", tier="community", currently_active=True),
+            FeatureFlag(name="sso", description="SSO", tier="team", currently_active=False),
+            FeatureFlag(
+                name="system_maps",
+                description="Beta System Maps (Delivery System Maps)",
+                tier="community",
+                currently_active=True,
+            ),
+        ]
+        mock_resolve.return_value = plan_ctx
+        mock_session.return_value = make_session_context(make_session_scope())
+
+        result = await get_available_features()
+
+        assert result["feature_count"] == 3  # mcp_server, webhook_trigger, sso (no system_maps)
+        assert "system_maps" not in result["results"]
+        assert "| mcp_server | community | yes |" in result["results"]
+        assert "| sso | team | no |" in result["results"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_settings")
+    @patch("modulo.core.feature_flags.resolve_plan_context")
+    @patch("modulo.db.crud.organisation.get_organisation")
+    async def test_internal_caller_can_see_system_maps(
+        self,
+        mock_get_org: AsyncMock,
+        mock_resolve: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """Internal dev-mode operator with the dedicated grant can see system_maps."""
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_org_id, _ctx_role
+
+        _ctx_org_id.set(make_session_scope().org_id)
+        _ctx_role.set("operator")
+        mock_get_settings.return_value = MagicMock(modulo_dev_mode=True)
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        plan_ctx.list_enabled_features.return_value = [
+            FeatureFlag(
+                name="system_maps",
+                description="Beta System Maps (Delivery System Maps)",
+                tier="community",
+                currently_active=True,
+            ),
+        ]
+        mock_resolve.return_value = plan_ctx
+        mock_session.return_value = make_session_context(make_session_scope())
+        _ctx_key_grants.set(frozenset({"system_maps_access"}))
+        try:
+            result = await get_available_features()
+        finally:
+            _ctx_key_grants.set(None)
+
+        assert result["feature_count"] == 1
+        assert "| system_maps | community | yes |" in result["results"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_settings")
+    @patch("modulo.core.feature_flags.resolve_plan_context")
+    @patch("modulo.db.crud.organisation.get_organisation")
+    async def test_dev_mode_without_grant_cannot_see_system_maps(
+        self,
+        mock_get_org: AsyncMock,
+        mock_resolve: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """Dev-mode enabled but no dedicated grant cannot see system_maps."""
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_org_id
+
+        _ctx_org_id.set(make_session_scope().org_id)
+        mock_get_settings.return_value = MagicMock(modulo_dev_mode=True)
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        plan_ctx.list_enabled_features.return_value = [
+            FeatureFlag(
+                name="system_maps",
+                description="Beta System Maps (Delivery System Maps)",
+                tier="community",
+                currently_active=True,
+            ),
+        ]
+        mock_resolve.return_value = plan_ctx
+        mock_session.return_value = make_session_context(make_session_scope())
+        _ctx_key_grants.set(frozenset({"library.search.in_dev"}))  # lifecycle-map grant is not enough
+        try:
+            result = await get_available_features()
+        finally:
+            _ctx_key_grants.set(None)
+
+        assert result["feature_count"] == 0
+        assert "system_maps" not in result["results"]
+
+
+class TestSystemMapsAccessUsesSharedGrantCheck:
+    """FAR-2230: the MCP gate resolves grants through ``grants_permit``.
+
+    The retired hand-rolled check (``grants is None or "system_maps_access" in
+    grants``) only tested membership, so it would keep honouring an
+    already-minted grant after the key was marked non-delegable. The shared
+    resolver re-reads ``is_delegable`` live on every call — the same leg the
+    REST gate reaches via ``require_in_dev_operator`` -> ``assert_grant``.
+    """
+
+    def _access(self, *, role: str, grants: frozenset[str] | None) -> bool:
+        from modulo.api.mcp_server import _ctx_key_grants, _ctx_role, _mcp_internal_system_maps_access
+
+        with patch("modulo.api.mcp_server.get_settings", return_value=MagicMock(modulo_dev_mode=True)):
+            _ctx_role.set(role)
+            _ctx_key_grants.set(grants)
+            try:
+                return _mcp_internal_system_maps_access()
+            finally:
+                _ctx_role.set(None)
+                _ctx_key_grants.set(None)
+
+    def test_granted_operator_is_allowed(self) -> None:
+        assert self._access(role="operator", grants=frozenset({"system_maps_access"})) is True
+
+    def test_grant_bearing_key_without_the_grant_is_denied(self) -> None:
+        assert self._access(role="operator", grants=frozenset({"library.search.in_dev"})) is False
+
+    def test_ungranted_jwt_caller_keeps_role_behaviour(self) -> None:
+        assert self._access(role="operator", grants=None) is True
+
+    def test_non_delegable_grant_is_denied_like_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-delegable marking revokes an already-minted grant, as REST does."""
+        from modulo.api.dependencies import require_in_dev_operator
+        from modulo.auth import permissions as permissions_module
+        from modulo.auth.jwt import TenantPrincipal
+
+        monkeypatch.setattr(
+            permissions_module,
+            "NON_DELEGABLE_PERMISSIONS",
+            permissions_module.NON_DELEGABLE_PERMISSIONS | {"system_maps_access"},
+        )
+        grants = frozenset({"system_maps_access"})
+
+        assert self._access(role="operator", grants=grants) is False
+
+        principal = TenantPrincipal(
+            username="testuser",
+            organisation_id=ORG_ID,
+            account_id=USER_ID,
+            org_role="operator",
+            key_grants=grants,
+        )
+        with pytest.raises(HTTPException) as excinfo:
+            require_in_dev_operator(
+                principal,
+                "system_maps_access",
+                require_dev_mode=True,
+                settings=MagicMock(modulo_dev_mode=True),
+            )
+        assert excinfo.value.status_code == HTTPStatus.FORBIDDEN
+
+    def test_non_delegable_does_not_narrow_ungranted_caller(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No grant set (JWTs, legacy keys) does not narrow — identical to REST."""
+        from modulo.auth import permissions as permissions_module
+
+        monkeypatch.setattr(
+            permissions_module,
+            "NON_DELEGABLE_PERMISSIONS",
+            permissions_module.NON_DELEGABLE_PERMISSIONS | {"system_maps_access"},
+        )
+
+        assert self._access(role="operator", grants=None) is True
+
+
+# ---------------------------------------------------------------------------
+# list_feature_flags
+# ---------------------------------------------------------------------------
+
+
+class TestListFeatureFlagsVisibility(AuthContext):
+    @pytest.mark.parametrize("internal_access", [False, True])
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_settings")
+    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    async def test_system_maps_is_visible_only_to_internal_callers(
+        self,
+        mock_get_org: AsyncMock,
+        mock_resolve_plan: AsyncMock,
+        mock_registry: AsyncMock,
+        mock_get_settings: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+        internal_access: bool,
+    ) -> None:
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_key_grants, _ctx_role
+
+        org = MagicMock(settings_json={})
+        mock_get_org.return_value = org
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        mock_resolve_plan.return_value = plan_ctx
+
+        unrelated_flag = FeatureFlag(
+            name="schema_version_history",
+            description="Snapshot diff + rollback",
+            tier="team",
+            currently_active=False,
+        )
+        system_maps_flag = FeatureFlag(
+            name="system_maps",
+            description="Beta System Maps",
+            tier="community",
+            currently_active=False,
+        )
+        registry = MagicMock(
+            current_tier="community",
+            has_license_key=False,
+        )
+        registry.list_flags.return_value = [unrelated_flag, system_maps_flag]
+        registry.tier_gap_flags.return_value = [unrelated_flag, system_maps_flag]
+        mock_registry.return_value = registry
+        mock_session.return_value = make_session_context(make_session_scope())
+        settings = MagicMock(modulo_license_key="", modulo_dev_mode=True)
+        mock_get_settings.return_value = settings
+
+        _ctx_role.set("operator")
+        _ctx_is_system_admin.set(True)
+        grants = {"resource.read_only"}
+        if internal_access:
+            grants.add("system_maps_access")
+        _ctx_key_grants.set(frozenset(grants))
+        try:
+            result = await list_feature_flags()
+        finally:
+            _ctx_is_system_admin.set(False)
+            _ctx_key_grants.set(None)
+
+        assert "error" not in result
+        names = {flag["name"] for flag in result["flags"]}
+        assert "schema_version_history" in names
+        assert ("system_maps" in names) is internal_access
+        gap_names = {flag["name"] for flag in result["would_activate"]}
+        assert ("system_maps" in gap_names) is internal_access
 
 
 # ---------------------------------------------------------------------------

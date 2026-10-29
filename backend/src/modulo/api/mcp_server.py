@@ -57,6 +57,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from modulo.api.constants import SYSTEM_MAPS_FLAG
 from modulo.api.db_error_handling import (
     _MSG_LOCK_TIMEOUT,
     raise_session_contract_error,
@@ -124,7 +125,12 @@ from modulo.auth.oauth import (
     oauth_grant_set,
     scopes_required_role,
 )
-from modulo.auth.permissions import _clamp_role, grants_permit, set_authz_enforce
+from modulo.auth.permissions import (
+    SYSTEM_MAPS_ACCESS_PERMISSION,
+    _clamp_role,
+    grants_permit,
+    set_authz_enforce,
+)
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.analytics.builder import (
     AnalyticsDimension,
@@ -163,6 +169,7 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # authenticated last, leaking cross-tenant data.
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import (
+    INTERNAL_FLAGS,
     RETIRED_INTERNAL_FLAGS,
     get_registry,
     resolve_mcp_human_linked_hitl_authority,
@@ -571,6 +578,43 @@ def _mcp_internal_lifecycle_map_access() -> bool:
 def _require_mcp_internal_lifecycle_map_access() -> None:
     if not _mcp_internal_lifecycle_map_access():
         raise MCPAuthorizationError("Lifecycle map tools are restricted to internal operators")
+
+
+def _mcp_internal_system_maps_access() -> bool:
+    """Return whether the MCP caller has the internal system maps grant.
+
+    The grant leg goes through ``grants_permit`` — the same live resolver the
+    REST gate reaches via ``require_in_dev_operator`` -> ``_enforce_key_grant``
+    -> ``assert_grant``. Membership is never tested by hand: ``grants_permit``
+    re-reads ``is_delegable`` on every call, so marking the permission
+    non-delegable revokes it from already-minted grant-bearing credentials
+    without a second code change. ``grants is None`` (JWTs, legacy keys) does
+    not narrow, matching REST.
+    """
+    if not getattr(get_settings(), "modulo_dev_mode", True):
+        return False
+    role = _ctx_role_val()
+    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
+        _ctx_key_grants.get(None), SYSTEM_MAPS_ACCESS_PERMISSION
+    )
+
+
+def _mcp_flag_visible(
+    flag_name: str,
+    *,
+    internal_lifecycle_access: bool,
+    internal_system_maps_access: bool,
+) -> bool:
+    """Return whether the MCP caller may see ``flag_name`` in a flag listing.
+
+    Internal flags are hidden from ordinary callers; each internal namespace
+    has its own gate (System Maps grant vs the retained lifecycle-map grant).
+    """
+    if flag_name not in INTERNAL_FLAGS:
+        return True
+    if flag_name == SYSTEM_MAPS_FLAG:
+        return internal_system_maps_access
+    return flag_name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access
 
 
 def _ctx_team_id_val() -> uuid.UUID | None:
@@ -10275,6 +10319,8 @@ async def list_feature_flags() -> dict[str, Any]:
                 if isinstance(raw_overrides, dict):
                     org_overrides = {k: bool(v) for k, v in raw_overrides.items()}
 
+        internal_lifecycle_access = _mcp_internal_lifecycle_map_access()
+        internal_system_maps_access = _mcp_internal_system_maps_access()
         return {
             "license": {
                 "tier": registry.current_tier,
@@ -10291,6 +10337,11 @@ async def list_feature_flags() -> dict[str, Any]:
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
+                if _mcp_flag_visible(
+                    f.name,
+                    internal_lifecycle_access=internal_lifecycle_access,
+                    internal_system_maps_access=internal_system_maps_access,
+                )
             ],
             "would_activate": [
                 {
@@ -10301,6 +10352,11 @@ async def list_feature_flags() -> dict[str, Any]:
                 }
                 for f in registry.tier_gap_flags()
                 if f.name not in org_overrides
+                if _mcp_flag_visible(
+                    f.name,
+                    internal_lifecycle_access=internal_lifecycle_access,
+                    internal_system_maps_access=internal_system_maps_access,
+                )
             ],
         }
     except MCPAuthorizationError as exc:
@@ -11374,10 +11430,16 @@ async def get_available_features() -> dict[str, Any]:
             plan_ctx = await resolve_plan_context(settings, s, org)
 
         current_tier = plan_ctx.tier()
+        internal_lifecycle_access = _mcp_internal_lifecycle_map_access()
+        internal_system_maps_access = _mcp_internal_system_maps_access()
         all_flags = [
             flag
             for flag in plan_ctx.list_enabled_features()
-            if flag.name not in RETIRED_INTERNAL_FLAGS or _mcp_internal_lifecycle_map_access()
+            if _mcp_flag_visible(
+                flag.name,
+                internal_lifecycle_access=internal_lifecycle_access,
+                internal_system_maps_access=internal_system_maps_access,
+            )
         ]
 
         lines = ["| Feature | Required Tier | Available |", "|---------|---------------|-----------|"]
