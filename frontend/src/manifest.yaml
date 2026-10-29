@@ -3093,6 +3093,15 @@ elements:
       - testid: analytics-empty-state
         type: element
         dynamic_testid: false
+      - testid: analytics-overview-chart
+        type: element
+        dynamic_testid: false
+      - testid: analytics-details
+        type: element
+        dynamic_testid: false
+      - testid: analytics-capacity-details
+        type: element
+        dynamic_testid: false
       - testid: analytics-table
         type: element
         dynamic_testid: false
