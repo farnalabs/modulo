@@ -412,6 +412,10 @@ async def test_seed_scopes_entities_to_demo_org_with_second_org_present(
     team_memberships = list((await session.execute(select(TeamMembership))).scalars())
     assert team_memberships, "seed must create demo team membership"
     assert {tm.organisation_id for tm in team_memberships} == {demo_org.id}
+    # The DB trigger caps a team role at the account's org role; the demo user
+    # is a read-only viewer, so every seeded team membership must be viewer or
+    # the real seed aborts with 'Team role ... exceeds org role' (FAR-535).
+    assert {tm.role for tm in team_memberships} == {"viewer"}
 
     daily_facts = list((await session.execute(select(RunDailyFact))).scalars())
     assert daily_facts, "seed must create run daily facts"

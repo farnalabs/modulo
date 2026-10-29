@@ -15,7 +15,9 @@ Creates (idempotently, NO Alembic migrations):
   hierarchy viewer < runner < operator < admin is the enforcement boundary for
   every route via ``require_permission``; the seed also forces the role BACK to
   viewer if it drifted, and forces ``is_system_admin`` off),
-* a ``Demo Engineering`` team with the demo user as a viewer member,
+* three demo teams (Demo Engineering, Demo Platform, Demo Governance) with the
+  demo user as a ``viewer`` member of each — team roles are capped by the org
+  role, so a viewer org member can never hold an elevated team role,
 * 5 published schemas with realistic JSON Schema definitions (Demo Intake,
   Demo Report, GitHub Pull Request, Linear Issue, Release Notes),
 * 4 named pipelines with multi-node graphs (PR Review & Triage, Release
@@ -2152,10 +2154,6 @@ async def _seed_demo_membership(session: AsyncSession, account: Account, org: Or
         )
 
 
-# The demo account is a read-only org viewer (ADR 047), and
-# ``check_team_privilege_cap`` rejects a team role that exceeds the account's
-# org role, so every demo team membership is seeded at DEMO_ORG_ROLE. Do not
-# give these specs a higher role: the real seed would fail on Postgres.
 _DEMO_TEAM_SPECS = (
     ("Demo Engineering", "Builds and reviews the demo delivery pipelines."),
     ("Demo Platform", "Owns the release and documentation automation."),
@@ -2235,9 +2233,11 @@ async def _ensure_demo_team_membership(
 async def _seed_demo_team(session: AsyncSession, org: Organisation, account: Account) -> list[Team]:
     """Idempotently seed the three demo teams and memberships.
 
-    Team memberships are seeded at ``DEMO_ORG_ROLE`` because a team role may
-    never exceed the account's org role (ADR 047,
-    ``check_team_privilege_cap``); the demo account is a read-only viewer.
+    Every membership is granted ``DEMO_ORG_ROLE``: the database enforces the
+    team-role cap (team role must not exceed the account's org role), and the
+    demo account is a read-only ``viewer`` at org level. An elevated team role
+    (e.g. ``operator``) is rejected by ``check_team_privilege_cap`` and aborts
+    the seed.
     """
     teams: list[Team] = []
     for name, description in _DEMO_TEAM_SPECS:
