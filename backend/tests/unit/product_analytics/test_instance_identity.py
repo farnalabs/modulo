@@ -149,8 +149,8 @@ class TestInstanceIdentity:
         assert session.flush.called
 
     @pytest.mark.asyncio
-    async def test_instance_id_idempotent(self):
-        """Calling twice with existing data returns the same ID."""
+    async def test_instance_id_idempotent_across_calls(self):
+        """Two calls against stored data return the same identity, minting nothing."""
         existing_id = str(uuid.uuid4())
         existing_secret = "a" * 64
         session = _make_mock_session(
@@ -160,9 +160,14 @@ class TestInstanceIdentity:
             }
         )
 
-        instance_id, secret = await get_or_create_instance_identity(session)
-        assert str(instance_id) == existing_id
-        assert secret == existing_secret
+        first_id, first_secret = await get_or_create_instance_identity(session)
+        second_id, second_secret = await get_or_create_instance_identity(session)
+
+        assert str(first_id) == str(second_id)
+        assert str(second_id) == existing_id
+        assert first_secret == second_secret
+        assert second_secret == existing_secret
+        assert session.flush.call_count == 0
 
     @pytest.mark.asyncio
     async def test_get_instance_id_returns_none_when_missing(self):
@@ -186,6 +191,14 @@ class TestInstanceIdentity:
         session = _make_mock_session()
         result = await get_secret_exists(session)
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_get_secret_exists_true_after_minting(self):
+        """Once a secret is stored, get_secret_exists reports it without revealing it."""
+        session = _make_mock_session()
+        await get_or_create_instance_identity(session)
+
+        assert await get_secret_exists(session) is True
 
     @pytest.mark.asyncio
     async def test_rotate_secret_generates_new(self):

@@ -125,63 +125,44 @@ class TestSchemaVersion:
 # --- Consent filtering ---
 
 
-class TestGetConsentingOrgs:
-    @pytest.mark.asyncio
-    async def test_filters_to_level_all(self) -> None:
-        org_id_1 = "11111111-1111-1111-1111-111111111111"
-        org_id_2 = "22222222-2222-2222-2222-222222222222"
-        org_id_3 = "33333333-3333-3333-3333-333333333333"
+def _org(org_id: str, settings_json: object) -> MagicMock:
+    return MagicMock(id=org_id, settings_json=settings_json)
 
+
+async def _run_get_consenting_orgs(rows: list[MagicMock]) -> list[dict[str, object]]:
+    """Run ``_get_consenting_orgs`` against a mock session yielding ``rows``."""
+    mock_result = MagicMock()
+    mock_result.__iter__ = MagicMock(return_value=iter(rows))
+    mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    return await _get_consenting_orgs(mock_session)
+
+
+class TestGetConsentingOrgs:
+    """Consent is the dump loop's ONLY per-org filter.
+
+    FAR-2063 deleted the old partner "degrade to Community" branch. It was
+    unreachable behind the consent guard, so these tests assert the filter the
+    code actually runs - no mocked predicate - and pin the signature so the
+    enforcement argument cannot return.
+    """
+
+    @pytest.mark.asyncio
+    async def test_keeps_only_level_all_orgs(self) -> None:
+        org_id_1 = "11111111-1111-1111-1111-111111111111"
         rows = [
-            MagicMock(
-                id=org_id_1,
-                settings_json={"product_analytics": {"level": "all", "level_changed_at": "2026-08-15"}},
-            ),
-            MagicMock(
-                id=org_id_2,
-                settings_json={"product_analytics": {"level": "off"}},
-            ),
-            MagicMock(
-                id=org_id_3,
-                settings_json={},
-            ),
+            _org(org_id_1, {"product_analytics": {"level": "all", "level_changed_at": "2026-08-15"}}),
+            _org("22222222-2222-2222-2222-222222222222", {"product_analytics": {"level": "off"}}),
+            _org("33333333-3333-3333-3333-333333333333", {}),
         ]
 
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
-
-        result = await _get_consenting_orgs(mock_session)
-        assert len(result) == 1
-        assert result[0]["id"] == org_id_1
+        result = await _run_get_consenting_orgs(rows)
+        assert [org["id"] for org in result] == [org_id_1]
         assert result[0]["level_changed_at"] == date(2026, 8, 15)
 
     @pytest.mark.asyncio
     async def test_empty_when_no_orgs(self) -> None:
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter([]))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
-
-        result = await _get_consenting_orgs(mock_session)
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_parses_date_string(self) -> None:
-        rows = [
-            MagicMock(
-                id="aaaa-1111",
-                settings_json={"product_analytics": {"level": "all", "level_changed_at": "2026-07-01"}},
-            ),
-        ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
-
-        result = await _get_consenting_orgs(mock_session)
-        assert result[0]["level_changed_at"] == date(2026, 7, 1)
+        assert not await _run_get_consenting_orgs([])
 
     @pytest.mark.asyncio
     async def test_parses_full_iso_datetime_level_changed_at(self) -> None:
@@ -195,97 +176,53 @@ class TestGetConsentingOrgs:
         stored = apply_consent_action(default_consent_state(), "accept", now=datetime(2026, 8, 15, 10, 30, tzinfo=UTC))[
             "level_changed_at"
         ]
-        rows = [
-            MagicMock(
-                id="dddd-4444",
-                settings_json={"product_analytics": {"level": "all", "level_changed_at": stored}},
-            ),
-        ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        rows = [_org("dddd-4444", {"product_analytics": {"level": "all", "level_changed_at": stored}})]
 
-        result = await _get_consenting_orgs(mock_session)
+        result = await _run_get_consenting_orgs(rows)
         assert result[0]["level_changed_at"] == date(2026, 8, 15)
 
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            ({"level": "all", "level_changed_at": "2026-07-01"}, date(2026, 7, 1)),
+            ({"level": "all", "level_changed_at": date(2026, 1, 1)}, date(2026, 1, 1)),
+            ({"level": "all", "level_changed_at": None}, None),
+            ({"level": "all"}, None),
+        ],
+        ids=["iso-date-string", "date-object", "explicit-none", "absent"],
+    )
     @pytest.mark.asyncio
-    async def test_handles_none_level_changed_at(self) -> None:
-        rows = [
-            MagicMock(
-                id="bbbb-2222",
-                settings_json={"product_analytics": {"level": "all"}},
-            ),
-        ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
+    async def test_level_changed_at_normalised_to_date(self, block: dict[str, object], expected: date | None) -> None:
+        rows = [_org("bbbb-2222", {"product_analytics": block})]
 
-        result = await _get_consenting_orgs(mock_session)
-        assert len(result) == 1
-        assert result[0]["level_changed_at"] is None
+        result = await _run_get_consenting_orgs(rows)
+        assert [org["level_changed_at"] for org in result] == [expected]
 
+    @pytest.mark.parametrize(
+        "settings_json",
+        [
+            {"product_analytics": {"level": "off"}},
+            {},
+            {"other_key": True},
+            None,
+            ["not", "a", "dict"],
+        ],
+        ids=["level-off", "no-consent-block", "no-product-analytics-key", "settings-none", "non-dict-settings"],
+    )
     @pytest.mark.asyncio
-    async def test_skips_orgs_with_level_off(self) -> None:
-        rows = [
-            MagicMock(
-                id="cccc-3333",
-                settings_json={"product_analytics": {"level": "off"}},
-            ),
-        ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
-
-        result = await _get_consenting_orgs(mock_session)
-        assert result == []
-
-
-class TestGetConsentingOrgsIsConsentOnly:
-    """The dump loop is deliberately dumb: consent is its ONLY per-org filter.
-
-    FAR-2063 deleted the old partner "degrade to Community" branch. It was
-    unreachable behind the consent guard (only ``all`` rows reached it, while
-    the degrade predicate required a level that is not ``all``), so CI had been
-    asserting a branch that could not execute. These tests assert the filter the
-    code actually runs - no mocked predicate - and pin the signature so the
-    enforcement argument cannot return.
-    """
+    async def test_skips_non_consenting_or_malformed_settings(self, settings_json: object) -> None:
+        assert not await _run_get_consenting_orgs([_org("cccc-3333", settings_json)])
 
     @pytest.mark.asyncio
-    async def test_consenting_org_is_kept(self) -> None:
+    async def test_malformed_row_does_not_drop_a_consenting_sibling(self) -> None:
+        """A malformed (non-dict) ``settings_json`` is skipped, not a dump crash."""
         rows = [
-            MagicMock(
-                id="ffff-6666",
-                settings_json={"product_analytics": {"level": "all"}},
-            ),
+            _org("org-bad", ["not", "a", "dict"]),
+            _org("org-good", {"product_analytics": {"level": "all"}}),
         ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
 
-        result = await _get_consenting_orgs(mock_session)
-        assert len(result) == 1
-        assert result[0]["id"] == "ffff-6666"
-
-    @pytest.mark.asyncio
-    async def test_non_consenting_org_is_dropped(self) -> None:
-        rows = [
-            MagicMock(
-                id="gggg-7777",
-                settings_json={"product_analytics": {"level": "off"}},
-            ),
-        ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
-
-        result = await _get_consenting_orgs(mock_session)
-        assert result == []
+        result = await _run_get_consenting_orgs(rows)
+        assert [org["id"] for org in result] == ["org-good"]
 
     def test_takes_only_a_session(self) -> None:
         params = list(inspect.signature(_get_consenting_orgs).parameters)
@@ -1849,66 +1786,6 @@ class TestGetOrCreateSystemConfig:
 
 
 # --- _get_consenting_orgs edge cases ---
-
-
-class TestGetConsentingOrgsExtended:
-    @pytest.mark.asyncio
-    async def test_settings_json_none(self) -> None:
-        rows = [
-            MagicMock(id="org-1", settings_json=None),
-        ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session)
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_skips_non_dict_settings_without_raising(self) -> None:
-        """A malformed (non-dict) ``settings_json`` is skipped, not a dump crash."""
-        rows = [
-            MagicMock(id="org-bad", settings_json=["not", "a", "dict"]),
-            MagicMock(
-                id="org-good",
-                settings_json={"product_analytics": {"level": "all"}},
-            ),
-        ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session)
-        assert len(result) == 1
-        assert result[0]["id"] == "org-good"
-
-    @pytest.mark.asyncio
-    async def test_no_product_analytics_key(self) -> None:
-        rows = [
-            MagicMock(id="org-1", settings_json={"other_key": True}),
-        ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session)
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_level_changed_at_as_date_object(self) -> None:
-        rows = [
-            MagicMock(
-                id="org-1",
-                settings_json={"product_analytics": {"level": "all", "level_changed_at": date(2026, 1, 1)}},
-            ),
-        ]
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(return_value=iter(rows))
-        mock_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
-        mock_session.execute = AsyncMock(return_value=mock_result)
-        result = await _get_consenting_orgs(mock_session)
-        assert len(result) == 1
-        assert result[0]["level_changed_at"] == date(2026, 1, 1)
 
 
 # --- _count_entities ---

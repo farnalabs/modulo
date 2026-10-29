@@ -253,7 +253,16 @@ class TestBoundedConcurrency:
         )
         questions = [_noul(f"q{index}") for index in range(5)]
 
-        await _judge(backend, questions, max_concurrency=2)
+        # Generous deadlines: this test pins bounded concurrency, not timing. The
+        # 0.05s work per question must finish well inside the default 2s deadline
+        # even when a loaded CI worker (xdist + coverage) starves the event loop.
+        await _judge(
+            backend,
+            questions,
+            max_concurrency=2,
+            per_question_seconds=30.0,
+            per_definition_seconds=30.0,
+        )
 
         assert backend.max_in_flight == 2
 
