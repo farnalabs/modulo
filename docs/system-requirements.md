@@ -63,8 +63,8 @@ actually ship - do not widen these rows until the packaging tickets land):
 
 | OS | glibc | Status |
 |----|-------|--------|
-| Debian 13+ | 2.41 | Supported |
-| Ubuntu 26.04+ | 2.41+ | Supported |
+| Debian 13+ | 2.41 | Supported target envelope; native installer not currently installable |
+| Ubuntu 26.04+ | 2.41+ | Supported target envelope; native installer not currently installable |
 | Ubuntu 24.04 and earlier | 2.39 and below | Not supported (below the bundled service-binary floor) |
 | macOS | - | Not installable yet (implementation record FAR-678, validation FAR-2196) |
 | Windows | - | Not installable yet (implementation record FAR-679, validation FAR-2197) |
