@@ -86,12 +86,14 @@ def test_d_innocent_after_collateral():
 """
 
 
-def _run_scratch_suite(tmp_path: Path, *extra_args: str, **extra_env: str) -> subprocess.CompletedProcess[str]:
-    rootdir = tmp_path / "scratch"
-    rootdir.mkdir()
-    (rootdir / "conftest.py").write_text(_CONFTEST, encoding="utf-8")
-    (rootdir / "test_leaks.py").write_text(_TEST_MODULE, encoding="utf-8")
+def _write_scratch_tree(rootdir: Path, suite_dir: Path) -> None:
+    """Write the scratch suite's conftest and leak module into *suite_dir*."""
+    suite_dir.mkdir(parents=True, exist_ok=True)
+    (suite_dir / "conftest.py").write_text(_CONFTEST, encoding="utf-8")
+    (suite_dir / "test_leaks.py").write_text(_TEST_MODULE, encoding="utf-8")
 
+
+def _run_pytest(rootdir: Path, target: str, *extra_args: str, **extra_env: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(BACKEND), env.get("PYTHONPATH")]))
     env.pop("MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS", None)
@@ -102,7 +104,7 @@ def _run_scratch_suite(tmp_path: Path, *extra_args: str, **extra_env: str) -> su
             sys.executable,
             "-m",
             "pytest",
-            "test_leaks.py",
+            target,
             "-q",
             "--tb=short",
             "-p",
@@ -118,6 +120,13 @@ def _run_scratch_suite(tmp_path: Path, *extra_args: str, **extra_env: str) -> su
         timeout=120,
         check=False,
     )
+
+
+def _run_scratch_suite(tmp_path: Path, *extra_args: str, **extra_env: str) -> subprocess.CompletedProcess[str]:
+    rootdir = tmp_path / "scratch"
+    rootdir.mkdir()
+    _write_scratch_tree(rootdir, rootdir)
+    return _run_pytest(rootdir, "test_leaks.py", *extra_args, **extra_env)
 
 
 def test_asyncpg_leak_is_attributed_and_quarantined(tmp_path: Path) -> None:
@@ -164,6 +173,29 @@ def test_leak_summary_renders_under_xdist(tmp_path: Path) -> None:
     send back; without that propagation this section is empty in CI.
     """
     result = _run_scratch_suite(tmp_path, "-n", "2")
+
+    output = result.stdout + result.stderr
+    assert "Integration suite — unclosed asyncpg connections detected" in output, output
+    assert "test_a_leaks_asyncpg_connection" in output, output
+    assert "unclosed asyncpg connection" in output, output
+
+
+def test_leak_summary_renders_under_xdist_from_ci_layout(tmp_path: Path) -> None:
+    """Pin the CI layout: conftest in a subdirectory, invoked by its path.
+
+    The deploy gate and ``main-integration`` run ``pytest tests/integration/ -n 2``
+    from ``backend/``, so the hook lives in ``tests/integration/conftest.py`` — not
+    the rootdir conftest the other pins use. pytest only registers a directory
+    conftest on the CONTROLLER for paths named on the command line, so that is
+    the layout which must be pinned: if it regresses, the workers still collect
+    the leaks, but the controller's terminal summary renders nothing and every
+    leak is silent in CI again.
+    """
+    rootdir = tmp_path / "ci_layout"
+    rootdir.mkdir()
+    _write_scratch_tree(rootdir, rootdir / "tests" / "integration")
+
+    result = _run_pytest(rootdir, "tests/integration", "-n", "2")
 
     output = result.stdout + result.stderr
     assert "Integration suite — unclosed asyncpg connections detected" in output, output
