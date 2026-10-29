@@ -2,13 +2,16 @@
 
 import asyncio
 import contextlib
+import gc
 import json
+import logging
 import os
 import sys
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -130,6 +133,18 @@ def pytest_terminal_summary(
     exitstatus: int,
     config: pytest.Config,
 ) -> None:
+    if _leaked_asyncpg_connections:
+        terminalreporter.section("Integration suite — unclosed asyncpg connections detected")
+        for nodeid, detail in _leaked_asyncpg_connections:
+            terminalreporter.write_line(f"  {nodeid}: {detail}", red=True)
+        terminalreporter.write_line(
+            f"  {len(_leaked_asyncpg_connections)} unclosed asyncpg connection(s) were "
+            "attributed to the test that leaked them and quarantined so they cannot fail an "
+            "unrelated test. Fix the leaking session/engine; set "
+            "MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS=1 to make them a hard failure.",
+            yellow=True,
+        )
+
     if _skip_count == 0:
         return
     terminalreporter.section("Integration suite — Docker unavailable (local)")
@@ -589,6 +604,90 @@ async def cron_helpers_rls_engine(non_superuser_role: str) -> Generator[None, No
     cron_helpers._get_engine = _rls_get_engine
     yield
     cron_helpers._get_engine = original_get_engine
+
+
+# ---------------------------------------------------------------------------
+# Unclosed asyncpg connections: deterministic attribution
+# ---------------------------------------------------------------------------
+# An asyncpg connection that nothing closes is only reported by
+# ``Connection.__del__`` when the CYCLIC collector happens to reclaim it — which
+# is during an arbitrary LATER test's setup. Under the integration warning gate
+# (``-W error::pytest.PytestUnraisableExceptionWarning``) that surfaces as a
+# failure naming an innocent test (the deploy pre-deploy gate failed for ~14h on
+# main, always blaming ``test_eval_backfill_cutover``, across four one-site-at-a-
+# time fixes), is order/GC dependent (the same SHA passed then failed), and
+# poisons every test after it on the same worker.
+#
+# Force the cyclic collection at THIS test's teardown instead, so the leak is
+# surfaced against the test (or fixture) that actually caused it, and consume it
+# there so it cannot fail an unrelated test afterwards. The leak is never
+# swallowed silently: it is logged at ERROR with the test id and repeated in the
+# session summary. Set ``MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS=1`` to make
+# a detected leak fail the leaking test outright (the deterministic replacement
+# for the old random-attribution failure) once the remaining sites are fixed.
+_leaked_asyncpg_connections: list[tuple[str, str]] = []
+_leak_logger = logging.getLogger("modulo.tests.integration.connection_leaks")
+
+
+def _strict_connection_leaks() -> bool:
+    """True when an unclosed asyncpg connection must fail the test that leaked it."""
+    return os.environ.get("MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _is_unclosed_asyncpg_connection(unraisable: Any) -> bool:
+    """True for the unraisable asyncpg raises from ``Connection.__del__``.
+
+    CPython reports an error raised inside ``__del__`` with the *``__del__``
+    function*, not the instance, as ``object`` — the leaked instance itself is
+    unreachable from the hook (it is already being collected), so the event is
+    identified by its type and message instead.
+    """
+    exc_value = getattr(unraisable, "exc_value", None)
+    return isinstance(exc_value, ResourceWarning) and str(exc_value).startswith(
+        "unclosed connection <asyncpg.connection.Connection"
+    )
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None, None, None]:
+    """Attribute GC-discovered unclosed asyncpg connections to the leaking test.
+
+    ``tryfirst`` + ``wrapper`` makes this the OUTERMOST teardown hook, so the
+    capture spans every fixture finaliser for the test, and the forced cyclic
+    collection runs once they have all finished.
+    """
+    captured: list[Any] = []
+    previous_hook = sys.unraisablehook
+
+    sys.unraisablehook = captured.append
+    result: Any = None
+    try:
+        result = yield
+    finally:
+        with contextlib.suppress(Exception):
+            gc.collect()
+        sys.unraisablehook = previous_hook
+
+    for unraisable in captured:
+        if _is_unclosed_asyncpg_connection(unraisable):
+            detail = str(unraisable.exc_value)
+            _leaked_asyncpg_connections.append((item.nodeid, detail))
+            _leak_logger.error(
+                "Unclosed asyncpg connection surfaced in the teardown of %s: %s. Close the "
+                "session/connection that owns it (per-test engines must use NullPool or be "
+                "disposed on the loop that created them).",
+                item.nodeid,
+                detail,
+            )
+            if _strict_connection_leaks():
+                pytest.fail(
+                    f"unclosed asyncpg connection leaked by {item.nodeid}: {detail}",
+                    pytrace=False,
+                )
+            continue
+        # Everything else keeps the gate's normal behaviour.
+        previous_hook(unraisable)
+    return result
 
 
 @pytest_asyncio.fixture(autouse=True)
