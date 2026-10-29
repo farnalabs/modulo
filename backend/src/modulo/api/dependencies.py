@@ -239,9 +239,6 @@ def require_in_dev_operator(
 
 _SYSTEM_MAPS_INTERNAL_PERMISSION = "system_maps_access"
 
-# Exported for future System Maps REST route modules.
-__all__ = ["_require_internal_system_maps_access"]
-
 
 def _require_internal_system_maps_access(
     principal: TenantPrincipal = Depends(get_current_tenant_user_or_api_key),
@@ -254,35 +251,12 @@ def _require_internal_system_maps_access(
     an explicit grant-set keep the role-based behaviour; grant-bearing keys must
     carry the dedicated System Maps grant.
     """
-    if not getattr(settings, "modulo_dev_mode", True):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This internal feature requires developer mode",
-        )
-    try:
-        assert_org_role(principal.org_role, "operator", _SYSTEM_MAPS_INTERNAL_PERMISSION, kill_switch_eligible=False)
-    except PermissionDenied as exc:
-        logger.warning(
-            _CODE_PERMISSION_DENIED,
-            extra={
-                "permission": _SYSTEM_MAPS_INTERNAL_PERMISSION,
-                "required": "operator",
-                "actual": principal.org_role,
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Permission '{_SYSTEM_MAPS_INTERNAL_PERMISSION}' requires 'operator' role",
-        ) from exc
-    if principal.key_grants is not None and _SYSTEM_MAPS_INTERNAL_PERMISSION not in principal.key_grants:
-        logger.warning(
-            _CODE_PERMISSION_DENIED,
-            extra={"permission": _SYSTEM_MAPS_INTERNAL_PERMISSION, "reason": "not_granted"},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Permission '{_SYSTEM_MAPS_INTERNAL_PERMISSION}' is not granted to this API key",
-        )
+    require_in_dev_operator(
+        principal,
+        _SYSTEM_MAPS_INTERNAL_PERMISSION,
+        require_dev_mode=True,
+        settings=settings,
+    )
     return principal
 
 

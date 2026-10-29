@@ -49,6 +49,8 @@ from modulo.db.crud.organisation import get_organisation, update_org_settings_pa
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
+_FLAG_SYSTEM_MAPS = "system_maps"
+
 _AUDIT_EVENT_FLAG_OVERRIDE_SET = "feature_flag_override_set"
 _AUDIT_EVENT_FLAG_OVERRIDE_CLEARED = "feature_flag_override_cleared"
 _AUDIT_LOG_KEY = "feature_flags.audit_append_failed"
@@ -219,7 +221,7 @@ def _require_internal_flag_access_if_needed(
         client_kind=current_user.client_kind,
         key_grants=current_user.key_grants,
     )
-    if flag_name in INTERNAL_FLAGS:
+    if flag_name == _FLAG_SYSTEM_MAPS:
         _require_internal_system_maps_access(principal, settings=settings)
     else:
         require_in_dev_operator(
@@ -432,8 +434,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
-                if f.name not in RETIRED_INTERNAL_FLAGS
-                and (f.name not in INTERNAL_FLAGS or internal_system_maps_access)
+                if f.name not in RETIRED_INTERNAL_FLAGS and (f.name != _FLAG_SYSTEM_MAPS or internal_system_maps_access)
             ],
             "would_activate": [
                 {
@@ -443,8 +444,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.tier_gap_flags()
-                if f.name not in RETIRED_INTERNAL_FLAGS
-                and (f.name not in INTERNAL_FLAGS or internal_system_maps_access)
+                if f.name not in RETIRED_INTERNAL_FLAGS and (f.name != _FLAG_SYSTEM_MAPS or internal_system_maps_access)
                 if f.name not in org_overrides
             ],
         }

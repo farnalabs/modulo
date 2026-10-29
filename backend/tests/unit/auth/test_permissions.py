@@ -11,6 +11,7 @@ from modulo.auth.permissions import (
     PermissionConfigurationError,
     PermissionDenied,
     assert_org_role,
+    is_delegable,
     resolve_required,
 )
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
@@ -99,6 +100,17 @@ class TestResolveRequired:
         for low_role in ("operator", "runner", "viewer"):
             with pytest.raises(PermissionDenied):
                 assert_org_role(low_role, "admin", "guardrail.manage")
+
+    def test_system_maps_access_registered_operator_level(self) -> None:
+        """FAR-2230: ``system_maps_access`` is a registered operator-level key
+        and is delegable to API keys."""
+        assert PERMISSIONS["system_maps_access"] == "operator"
+        assert resolve_required("system_maps_access") == "operator"
+        assert is_delegable("system_maps_access") is True
+        assert assert_org_role("operator", "operator", "system_maps_access") is None
+        for low_role in ("runner", "viewer"):
+            with pytest.raises(PermissionDenied):
+                assert_org_role(low_role, "operator", "system_maps_access")
 
     def test_unknown_key_raises_configuration_error(self) -> None:
         with pytest.raises(PermissionConfigurationError):

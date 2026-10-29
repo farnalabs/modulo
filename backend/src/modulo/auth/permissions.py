@@ -105,6 +105,7 @@ PERMISSIONS: dict[str, str] = {
     "connector.list.in_dev": "operator",
     "model_backend.list.in_dev": "operator",
     "library.search.in_dev": "operator",
+    "system_maps_access": "operator",
     # secrets
     "secret.manage": "operator",
     # triggers

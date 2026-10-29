@@ -147,7 +147,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id="00000000-0000-0000-0000-000000000002",
         org_role="admin",
         is_system_admin=True,
-        key_grants=frozenset({"system_maps_access"}),
+        key_grants=frozenset({"library.search.in_dev", "system_maps_access"}),
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -162,8 +162,8 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 @pytest.fixture
 def ordinary_internal_flag_client() -> Generator[TestClient, None, None]:
-    """System-config caller without the internal System Maps contract."""
-    app.dependency_overrides[get_settings] = _make_settings
+    """Caller with library.search.in_dev grant only (no system_maps_access)."""
+    app.dependency_overrides[get_settings] = _make_internal_settings
     app.dependency_overrides[get_plan_context] = lambda: MagicMock()
     app.dependency_overrides[get_db_session] = lambda: MagicMock()
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
@@ -942,7 +942,10 @@ def _org_with_overrides(**overrides: bool) -> MagicMock:
 class TestOrgOverrideCacheInvalidation:
     _ORG_ID = "00000000-0000-0000-0000-000000000001"
 
-    def test_set_retired_internal_override_returns_404_without_writing(self, client: TestClient) -> None:
+    def test_set_retired_internal_override_returns_404_without_writing(
+        self, ordinary_internal_flag_client: TestClient
+    ) -> None:
+        """Caller with library.search.in_dev passes internal gate and receives 404 for retired flag."""
         with (
             patch(
                 "modulo.api.routes.admin_feature_flags._build_registry",
@@ -953,12 +956,21 @@ class TestOrgOverrideCacheInvalidation:
                 new_callable=AsyncMock,
             ) as write_override,
         ):
-            resp = client.put(
+            resp = ordinary_internal_flag_client.put(
                 "/api/v1/admin/feature-flags/lifecycle_map_journeys/org-override",
                 json={"enabled": True},
             )
         assert resp.status_code == 404
         write_override.assert_not_awaited()
+
+    def test_set_retired_internal_override_is_denied_for_system_maps_caller(self, internal_client: TestClient) -> None:
+        """Caller with system_maps_access cannot set lifecycle_map_journeys override."""
+        response = internal_client.put(
+            "/api/v1/admin/feature-flags/lifecycle_map_journeys/org-override",
+            json={"enabled": True},
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Permission 'library.search.in_dev' is not granted to this API key"
 
     def test_set_system_maps_override_is_denied_for_ordinary_caller(
         self, ordinary_internal_flag_client: TestClient
@@ -1090,27 +1102,28 @@ class TestOrgOverrideRoundTrip:
         assert response.status_code == 200
         assert response.json()["override"] is True
 
-    def test_get_retired_internal_override_is_denied_without_reading(
-        self, ordinary_internal_flag_client: TestClient
-    ) -> None:
+    def test_get_retired_internal_override_is_denied_without_reading(self, internal_client: TestClient) -> None:
+        """Caller with system_maps_access cannot read lifecycle_map_journeys override."""
         with patch(
             "modulo.api.routes.admin_feature_flags.get_organisation",
             new_callable=AsyncMock,
         ) as get_org:
-            response = ordinary_internal_flag_client.get(
+            response = internal_client.get(
                 "/api/v1/admin/feature-flags/lifecycle_map_journeys/org-override",
             )
         assert response.status_code == 403
+        assert response.json()["detail"] == "Permission 'library.search.in_dev' is not granted to this API key"
         get_org.assert_not_awaited()
 
-    def test_internal_caller_can_read_retired_override(self, internal_client: TestClient) -> None:
+    def test_internal_caller_can_read_retired_override(self, ordinary_internal_flag_client: TestClient) -> None:
+        """Caller with library.search.in_dev can read lifecycle_map_journeys override."""
         org = _org_with_overrides(lifecycle_map_journeys=True)
         with patch(
             "modulo.api.routes.admin_feature_flags.get_organisation",
             new_callable=AsyncMock,
             return_value=org,
         ):
-            response = internal_client.get(
+            response = ordinary_internal_flag_client.get(
                 "/api/v1/admin/feature-flags/lifecycle_map_journeys/org-override",
             )
         assert response.status_code == 200
@@ -1203,9 +1216,8 @@ class TestRetiredOrgOverrideAccess:
         assert response.status_code == 200
         assert response.json()["override"] is None
 
-    def test_clear_retired_internal_override_is_denied_without_mutating(
-        self, ordinary_internal_flag_client: TestClient
-    ) -> None:
+    def test_clear_retired_internal_override_is_denied_without_mutating(self, internal_client: TestClient) -> None:
+        """Caller with system_maps_access cannot clear lifecycle_map_journeys override."""
         with (
             patch(
                 "modulo.api.routes.admin_feature_flags.get_organisation",
@@ -1216,14 +1228,16 @@ class TestRetiredOrgOverrideAccess:
                 new_callable=AsyncMock,
             ) as update_settings,
         ):
-            response = ordinary_internal_flag_client.delete(
+            response = internal_client.delete(
                 "/api/v1/admin/feature-flags/lifecycle_map_journeys/org-override",
             )
         assert response.status_code == 403
+        assert response.json()["detail"] == "Permission 'library.search.in_dev' is not granted to this API key"
         get_org.assert_not_awaited()
         update_settings.assert_not_awaited()
 
-    def test_internal_caller_can_clear_retired_override(self, internal_client: TestClient) -> None:
+    def test_internal_caller_can_clear_retired_override(self, ordinary_internal_flag_client: TestClient) -> None:
+        """Caller with library.search.in_dev can clear lifecycle_map_journeys override."""
         org = _org_with_overrides(lifecycle_map_journeys=True)
         redis_mock = AsyncMock()
         with (
@@ -1242,7 +1256,7 @@ class TestRetiredOrgOverrideAccess:
                 return_value=redis_mock,
             ),
         ):
-            response = internal_client.delete(
+            response = ordinary_internal_flag_client.delete(
                 "/api/v1/admin/feature-flags/lifecycle_map_journeys/org-override",
             )
         assert response.status_code == 200
