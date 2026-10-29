@@ -72,6 +72,8 @@ from modulo.db.crud.last_admin_guard import (
     LastAdminLockoutUnavailableError,
     assert_not_last_admin,
 )
+from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_org_deletion  # noqa: F401
+from modulo.db.crud.org_deletion import request_org_deletion as _request_org_deletion  # noqa: F401
 from modulo.db.crud.org_membership import create_membership, get_membership_by_account_and_org
 from modulo.db.crud.organisation import get_organisation, update_org_settings_patch, update_organisation
 from modulo.db.crud.pipeline_snapshot import (
@@ -179,6 +181,16 @@ def _require_admin(current_user: TenantPrincipal, action: str) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Only admin users can {action}",
         )
+
+
+def _reject_active_org_deletion(
+    _current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
+) -> NoReturn:
+    """Reject tenant-scoped deletion before any database work begins."""
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}",
+    )
 
 
 _MSG_SERVICE_ACCOUNT_MANAGED_ELSEWHERE = (

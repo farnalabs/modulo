@@ -377,7 +377,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Request Org Deletion */
+        /**
+         * Reject tenant-scoped organisation deletion requests
+         * @description This tenant-scoped route is permanently disabled. Organisation deletion must be performed through the system-admin cross-organisation endpoint.
+         */
         post: operations["request_org_deletion_api_v1_admin_org_deletion_request_post"];
         delete?: never;
         options?: never;
@@ -394,7 +397,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Confirm Org Deletion */
+        /**
+         * Reject tenant-scoped organisation deletion confirmations
+         * @description This tenant-scoped route is permanently disabled. Organisation deletion must be performed through the system-admin cross-organisation endpoint.
+         */
         post: operations["confirm_org_deletion_api_v1_admin_org_deletion_confirm_post"];
         delete?: never;
         options?: never;
@@ -24081,7 +24087,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            202: {
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -24116,7 +24122,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

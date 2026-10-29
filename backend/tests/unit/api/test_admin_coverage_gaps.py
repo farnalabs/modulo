@@ -995,7 +995,6 @@ _ACTIVE_ORG_DELETION_REFUSED = (
     "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
 )
 
-
 @pytest.mark.parametrize(("exc", "_expected"), _DB_ERROR_PARAMS)
 def test_request_org_deletion_refuses_before_any_db_access(
     api: tuple[TestClient, AsyncMock],
