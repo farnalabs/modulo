@@ -73,7 +73,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, cast
+from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -125,6 +125,9 @@ DOCS_MAINTAINER_AGENT_NAME = "Docs Maintainer"
 # snapshot graph_json, run_node_outputs and node_token_usage, and convergence
 # relies on the same spec producing the same ids on every boot.
 _DEMO_ID_NAMESPACE = uuid.UUID("6f1c2a9e-4b7d-5e3a-9c81-0d2e4f6a8b1c")
+
+# Shared label for the demo HITL review surface (S1192: avoid duplicated literals).
+_HUMAN_REVIEW_LABEL = "Human review"
 
 
 def demo_node_id(pipeline_name: str, node_key: str) -> str:
@@ -245,13 +248,13 @@ _GOVERNANCE_PIPELINE = _PipelineSpec(
         ),
         _NodeSpec(
             key="review",
-            label="Human review",
+            label=_HUMAN_REVIEW_LABEL,
             description="Risky changes (risk > 0.50) wait here for a human approval.",
             x=680,
             y=60,
             node_type="hitl",
             hitl_config={
-                "label": "Human review",
+                "label": _HUMAN_REVIEW_LABEL,
                 "description": (
                     "The PR risk level scored above 0.50: a human must review and approve the change "
                     "before the PR is opened."
@@ -1772,21 +1775,26 @@ _TICKET_READY_CONFIG: dict[str, Any] = {
 
 
 _DEMO_REVIEW_CONFIG: dict[str, Any] = {
-    "label": "Human review",
+    "label": _HUMAN_REVIEW_LABEL,
     "description": "Review the demo change before the governance pipeline continues.",
     "claim_expiry_minutes": 60,
     "human_only": True,
 }
 
 
-async def _seed_demo_governance_surfaces(
+async def _seed_demo_hitl_claims(
     session: AsyncSession,
     org: Organisation,
     account: Account,
     pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+    now: datetime,
 ) -> None:
-    """Seed the durable review, notification, integration and trigger surfaces."""
-    now = datetime.now(UTC)
+    """Seed HITL claims for the governance pipeline runs.
+
+    AWAITING claims (decision IS NULL) are the live review surface — their
+    deadlines roll forward on every refresh. DECIDED claims are immutable
+    provenance evidence and keep their original values.
+    """
     _governance_pipeline, _snapshot = pipeline_lookup[DEMO_PIPELINE_NAME]
     governance_nodes = {node.key: demo_node_id(DEMO_PIPELINE_NAME, node.key) for node in _GOVERNANCE_PIPELINE.nodes}
     review_id = f"hitl_review_{governance_nodes['review']}_{governance_nodes['open_pr']}"
@@ -1855,6 +1863,13 @@ async def _seed_demo_governance_surfaces(
         else:
             _log.debug("demo_seed.hitl_claim_preserved", extra={"run_number": run_number})
 
+
+async def _seed_demo_model_backends(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+) -> None:
+    """Seed demo model backends (idempotent by (organisation, name))."""
     model_specs = (
         ("Demo Stub Fast", "Demo Stub Fast", "custom", "demo-stub-fast"),
         ("Demo Stub Accurate", "Demo Stub Accurate", "custom", "demo-stub-accurate"),
@@ -1890,7 +1905,7 @@ async def _seed_demo_governance_surfaces(
                 recovered = await session.execute(
                     select(ModelBackend).where(ModelBackend.organisation_id == org.id, ModelBackend.name == name)
                 )
-                recovered_backend = cast(ModelBackend | None, recovered.scalar_one_or_none())
+                recovered_backend = recovered.scalar_one_or_none()
                 if recovered_backend is None:
                     raise
                 backend = recovered_backend
@@ -1914,6 +1929,13 @@ async def _seed_demo_governance_surfaces(
                 if getattr(backend, attr) != value:
                     setattr(backend, attr, value)
 
+
+async def _seed_demo_connectors(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+) -> None:
+    """Seed demo connector instances (idempotent by (organisation, name))."""
     connector_specs = (
         ("Demo GitHub (read-only)", "github"),
         ("Demo Linear (read-only)", "linear"),
@@ -1950,7 +1972,7 @@ async def _seed_demo_governance_surfaces(
                         ConnectorInstance.name == name,
                     )
                 )
-                recovered_connector = cast(ConnectorInstance | None, recovered.scalar_one_or_none())
+                recovered_connector = recovered.scalar_one_or_none()
                 if recovered_connector is None:
                     raise
                 connector = recovered_connector
@@ -1972,6 +1994,13 @@ async def _seed_demo_governance_surfaces(
                 if getattr(connector, attr) != value:
                     setattr(connector, attr, value)
 
+
+async def _seed_demo_notifications(
+    session: AsyncSession,
+    org: Organisation,
+    now: datetime,
+) -> None:
+    """Seed demo notifications (idempotent by (organisation, category))."""
     notifications = (
         ("hitl_review_required", "Review required", "A demo governance run is waiting for human review.", "warning"),
         ("spend_threshold", "Spend threshold warning", "Demo spend is approaching its sample budget.", "warning"),
@@ -2012,7 +2041,7 @@ async def _seed_demo_governance_surfaces(
                         Notification.category == category,
                     )
                 )
-                recovered_notification = cast(Notification | None, recovered.scalar_one_or_none())
+                recovered_notification = recovered.scalar_one_or_none()
                 if recovered_notification is None:
                     raise
                 notification = recovered_notification
@@ -2025,6 +2054,18 @@ async def _seed_demo_governance_surfaces(
                 if getattr(notification, attr) != value:
                     setattr(notification, attr, value)
 
+
+async def _seed_demo_trigger_events(
+    session: AsyncSession,
+    org: Organisation,
+    now: datetime,
+) -> None:
+    """Seed demo trigger events (idempotent by trigger identity).
+
+    The event is keyed on its durable trigger identity; the loop index
+    only feeds the deterministic ``raw_hash``/``received_at`` fixture
+    values, never the event's identity.
+    """
     triggers = list(
         (
             await session.execute(
@@ -2077,6 +2118,21 @@ async def _seed_demo_governance_surfaces(
         # trigger association, timestamp, payload identity, or validation result
         # when trigger query ordering changes; only the missing-row path above is
         # allowed to create a new deterministic event.
+
+
+async def _seed_demo_governance_surfaces(
+    session: AsyncSession,
+    org: Organisation,
+    account: Account,
+    pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
+) -> None:
+    """Seed the durable review, notification, integration and trigger surfaces."""
+    now = datetime.now(UTC)
+    await _seed_demo_hitl_claims(session, org, account, pipeline_lookup, now)
+    await _seed_demo_model_backends(session, org, account)
+    await _seed_demo_connectors(session, org, account)
+    await _seed_demo_notifications(session, org, now)
+    await _seed_demo_trigger_events(session, org, now)
 
 
 async def _seed_ticket_ready_trigger(
