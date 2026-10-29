@@ -15,8 +15,8 @@
       </component>
       <p
         v-if="description"
-        class="mt-1 text-sm text-muted-foreground"
-        :class="descriptionClass"
+        class="mt-1 text-sm"
+        :class="descriptionClass || 'text-muted-foreground'"
       >
         {{ description }}
       </p>

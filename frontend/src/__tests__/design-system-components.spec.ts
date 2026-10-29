@@ -218,6 +218,17 @@ describe('CardHeader and DataCard', () => {
     expect(actionOnly.find('.card-header').exists()).toBe(true)
   })
 
+  it('uses custom description styling instead of the default muted class', () => {
+    const custom = mount(CardHeader, {
+      props: { description: 'Custom description', descriptionClass: 'text-destructive' },
+    })
+    const defaultDescription = mount(CardHeader, { props: { description: 'Default description' } })
+
+    expect(custom.find('p').classes()).toContain('text-destructive')
+    expect(custom.find('p').classes()).not.toContain('text-muted-foreground')
+    expect(defaultDescription.find('p').classes()).toContain('text-muted-foreground')
+  })
+
   it('passes header styling and test id through DataCard', () => {
     const wrapper = mount(DataCard, {
       props: {
