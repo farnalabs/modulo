@@ -68,8 +68,11 @@ jobs:
         run: |
           set -euo pipefail
           test -x scripts/macos/build-native-bundle.sh
+          test -x scripts/macos/install.sh
           shellcheck scripts/macos/build-native-bundle.sh
+          shellcheck scripts/macos/install.sh
           bash -n scripts/macos/build-native-bundle.sh
+          bash -n scripts/macos/install.sh
           grep -q 'macos-14' .github/workflows/macos-installer.yml
           {
             echo '## macOS native installer dry-run'
@@ -99,37 +102,53 @@ jobs:
           "$APP/Contents/Resources/bundle/redis/redis-server" --version | grep -E 'v=8\.'
           "$APP/Contents/MacOS/modulo" --help >/dev/null
 
-      - name: Import Developer ID certificate
+      - name: Sign, notarize and smoke-test native installer
         if: ${{ inputs.mode != 'dry-run' }}
         env:
           CERTIFICATE_B64: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$CERTIFICATE_B64" || -z "$CERTIFICATE_PASSWORD" ]]; then
-            echo '::error::Developer ID certificate secrets are required for a real macOS release.'
-            exit 1
-          fi
-          KEYCHAIN="$RUNNER_TEMP/modulo-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
-          CERT="$RUNNER_TEMP/modulo-developer-id.p12"
-          printf '%s' "$CERTIFICATE_B64" | base64 --decode > "$CERT"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 900 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security import "$CERT" -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security list-keychains -d user -s "$KEYCHAIN"
-          security find-identity -v -p codesigning "$KEYCHAIN"
-          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
-          trap 'security delete-keychain "$KEYCHAIN" 2>/dev/null || true; rm -f "$CERT"' EXIT
-
-      - name: Sign nested executables and app
-        if: ${{ inputs.mode != 'dry-run' }}
-        env:
+          NOTARY_KEY_B64: ${{ secrets.MACOS_NOTARY_API_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
           SIGNING_IDENTITY: ${{ vars.MACOS_DEVELOPER_IDENTITY }}
         run: |
           set -euo pipefail
+          [[ -n "$CERTIFICATE_B64" && -n "$CERTIFICATE_PASSWORD" ]] || { echo '::error::Developer ID certificate secrets are required for a real macOS release.'; exit 1; }
+          [[ -n "$NOTARY_KEY_B64" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER" ]] || { echo '::error::Apple notarytool API-key secrets are required for a real macOS release.'; exit 1; }
           [[ -n "$SIGNING_IDENTITY" ]] || { echo '::error::MACOS_DEVELOPER_IDENTITY repository variable is required.'; exit 1; }
+
+          KEYCHAIN="$RUNNER_TEMP/modulo-signing.keychain-db"
+          CERT="$RUNNER_TEMP/modulo-developer-id.p12"
+          IDENTITY_PEM_PATH="$RUNNER_TEMP/modulo-signing-identity.pem"
+          NOTARY_KEY="$RUNNER_TEMP/modulo-notary.p8"
+          MOUNT="$RUNNER_TEMP/modulo-mount"
+          DATA="$RUNNER_TEMP/modulo-native-smoke-data"
+          REDIS_PID="$DATA/redis.pid"
+          cleanup() {
+            set +e
+            launchctl unload -w "$HOME/Library/LaunchAgents/run.modulo.launcher.plist" >/dev/null 2>&1 || true
+            if [[ -s "$REDIS_PID" ]]; then
+              kill "$(cat "$REDIS_PID")" >/dev/null 2>&1 || true
+            fi
+            hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
+            rm -rf "$MOUNT" "$CERT" "$NOTARY_KEY" "$IDENTITY_PEM_PATH" "$DATA" "$RUNNER_TEMP/modulo-install"
+            security delete-keychain "$KEYCHAIN" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          printf '%s' "$CERTIFICATE_B64" | base64 --decode > "$CERT"
+          # Set up an empty keychain password so no generated password is leaked in argv.
+          # OpenSSL consumes the PKCS#12 password on stdin; security then imports
+          # the extracted PEM without any certificate password argument.
+          security create-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          printf '%s\n' "$CERTIFICATE_PASSWORD" | openssl pkcs12 -in "$CERT" -passin stdin -nodes -out "$IDENTITY_PEM_PATH"
+          security import "$IDENTITY_PEM_PATH" -k "$KEYCHAIN" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN" >/dev/null 2>&1 || true
+          security list-keychains -d user -s "$KEYCHAIN"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
           APP="build/Modulo-${VERSION_NUM}.app"
           while IFS= read -r binary; do
             file "$binary" | grep -E 'Mach-O 64-bit executable arm64'
@@ -138,45 +157,42 @@ jobs:
           codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
 
-      - name: Create, sign, notarize and staple DMG
-        if: ${{ inputs.mode != 'dry-run' }}
-        env:
-          NOTARY_KEY_B64: ${{ secrets.MACOS_NOTARY_API_KEY_P8 }}
-          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-          SIGNING_IDENTITY: ${{ vars.MACOS_DEVELOPER_IDENTITY }}
-        run: |
-          set -euo pipefail
-          APP="build/Modulo-${VERSION_NUM}.app"
           DMG="build/Modulo-${VERSION_NUM}-macos-arm64.dmg"
           hdiutil create -volname "Modulo ${VERSION_NUM}" -srcfolder "$APP" -ov -format UDZO "$DMG"
           codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
-          [[ -n "$NOTARY_KEY_B64" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER" ]] || { echo '::error::Apple notarytool API-key secrets are required for a real macOS release.'; exit 1; }
-          NOTARY_KEY="$RUNNER_TEMP/modulo-notary.p8"
           printf '%s' "$NOTARY_KEY_B64" | base64 --decode > "$NOTARY_KEY"
           xcrun notarytool submit "$DMG" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 30m
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
           codesign --verify --verbose=2 "$DMG"
+          spctl --assess --type open --context context:primary-signature "$DMG"
           hdiutil verify "$DMG"
-          rm -f "$NOTARY_KEY"
 
-      - name: Smoke mounted DMG and clean up
-        if: ${{ inputs.mode != 'dry-run' }}
-        run: |
-          set -euo pipefail
-          DMG="build/Modulo-${VERSION_NUM}-macos-arm64.dmg"
-          MOUNT="$RUNNER_TEMP/modulo-mount"
-          cleanup() { hdiutil detach "$MOUNT" >/dev/null 2>&1 || true; rm -rf "$MOUNT"; }
-          trap cleanup EXIT
           mkdir -p "$MOUNT"
           hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -readonly
-          APP="$MOUNT/Modulo-${VERSION_NUM}.app"
-          file "$APP/Contents/MacOS/modulo" | grep -E 'Mach-O 64-bit executable arm64'
-          codesign --verify --deep --strict "$APP"
-          "$APP/Contents/MacOS/modulo" --help >/dev/null
-          "$APP/Contents/Resources/bundle/pg/bin/postgres" --version
-          "$APP/Contents/Resources/bundle/redis/redis-server" --version
+          MOUNTED_APP="$MOUNT/Modulo-${VERSION_NUM}.app"
+          file "$MOUNTED_APP/Contents/MacOS/modulo" | grep -E 'Mach-O 64-bit executable arm64'
+          codesign --verify --deep --strict "$MOUNTED_APP"
+          spctl --assess --type execute "$MOUNTED_APP"
+          "$MOUNTED_APP/Contents/MacOS/modulo" --help >/dev/null
+          PG="$MOUNTED_APP/Contents/Resources/bundle/pg"
+          REDIS="$MOUNTED_APP/Contents/Resources/bundle/redis"
+          DATA="$RUNNER_TEMP/modulo-native-smoke-data"
+          PGDATA="$DATA/postgres"
+          mkdir -p "$DATA"
+          "$PG/bin/initdb" -D "$PGDATA" --no-locale --encoding=UTF8 >/dev/null
+          "$PG/bin/pg_ctl" -D "$PGDATA" -o "-k $DATA" -w start >/dev/null
+          cleanup_pg() { "$PG/bin/pg_ctl" -D "$PGDATA" -m fast -w stop >/dev/null 2>&1 || true; }
+          trap 'cleanup_pg; cleanup' EXIT
+          "$PG/bin/pg_isready" -h "$DATA" >/dev/null
+          "$PG/bin/psql" -h "$DATA" -d postgres -c 'select 1' >/dev/null
+          "$REDIS/redis-server" --daemonize yes --dir "$DATA" --pidfile "$DATA/redis.pid" --logfile "$DATA/redis.log"
+          "$REDIS/redis-cli" ping | grep -qx PONG
+          launchctl list >/dev/null
+          hdiutil detach "$MOUNT" >/dev/null
+          MODULO_INSTALL_ROOT="$RUNNER_TEMP/modulo-install" scripts/macos/install.sh "$PWD/$DMG"
+          launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null
+          launchctl unload -w "$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
 
       - name: Upload real macOS installer
         if: ${{ inputs.mode != 'dry-run' }}

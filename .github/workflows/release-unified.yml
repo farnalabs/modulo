@@ -893,12 +893,20 @@ jobs:
           name: macos-installer-${{ inputs.version }}
           path: release-artefacts
 
-      - name: Assert macOS artifact is real
+      - name: Verify portable release artefacts
         run: |
           set -euo pipefail
-          DMG="release-artefacts/Modulo-${{ inputs.version }}-macos-arm64.dmg"
-          test -s "$DMG"
-          hdiutil verify "$DMG"
+          for artifact in \
+            "release-artefacts/modulo-${{ inputs.version }}-linux-amd64.tar.gz" \
+            "release-artefacts/modulo-${{ inputs.version }}-windows-amd64.exe" \
+            "release-artefacts/Modulo-${{ inputs.version }}-macos-arm64.dmg" \
+            release-artefacts/SHA256SUMS \
+            release-artefacts/RELEASE_MANIFEST.json \
+            release-artefacts/RELEASE_MANIFEST.json.sig; do
+            test -s "$artifact"
+          done
+          (cd release-artefacts && sha256sum --check SHA256SUMS)
+          echo "Portable checksums and signed manifest files are present; macOS DMG container verification runs on macos-14 before upload."
 
       - name: Set up Python 3.12 for OpenAPI dump
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
@@ -1151,6 +1159,22 @@ jobs:
         with:
           name: bundle-artefacts-amd64
           path: release-artefacts
+
+      - name: Download the macOS installer artefact
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-${{ inputs.version }}
+          path: release-artefacts
+
+      - name: Assert the exact macOS DMG is present
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG="release-artefacts/Modulo-${{ inputs.version }}-macos-arm64.dmg"
+          test -s "$DMG"
+          printf 'Attestation subject: %s\n' "$DMG"
 
       - name: Attest the file artefacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
