@@ -200,13 +200,14 @@ jobs:
           write_verdict() {
             # $1 = will this run deploy (YES.../NO...), $2 = reason,
             # $3 = next deploy expected ('' when this run is deploying)
+            local verdict="$1" reason="$2" next_deploy="$3"
             {
-              echo "## Deploy verdict: $1"
+              echo "## Deploy verdict: $verdict"
               echo ""
-              echo "**Will this run deploy?** $1"
-              echo "**Reason:** $2"
-              if [ -n "$3" ]; then
-                echo "**Next deploy expected:** $3"
+              echo "**Will this run deploy?** $verdict"
+              echo "**Reason:** $reason"
+              if [ -n "$next_deploy" ]; then
+                echo "**Next deploy expected:** $next_deploy"
               fi
               echo ""
               echo "_Throttle policy unchanged: ${INTERVAL_HOURS}h interval, in-progress batching, force_deploy and deploy/CI-fix bypasses._"
@@ -522,7 +523,7 @@ jobs:
               AUDIT_OK=1
               break
             fi
-            echo "pnpm audit attempt $attempt failed (likely transient registry network error); retrying in 15s..."
+            echo "pnpm audit attempt $attempt failed (likely transient registry network error); retrying in 15s..." >&2
             sleep 15
           done
           if [ -z "$AUDIT_OK" ]; then
@@ -806,21 +807,24 @@ jobs:
           echo "  security-audit:    ${{ needs.security-audit.result }}"
 
           FAILED=""
-          if [ "${{ needs.backend-lint.result }}" != "success" ]; then
+          SUCCESS_RESULT="success"
+          if [ "${{ needs.backend-lint.result }}" != "$SUCCESS_RESULT" ]; then
             FAILED="$FAILED backend-lint"
           fi
-          if [ "${{ needs.backend-unit.result }}" != "success" ]; then
+          if [ "${{ needs.backend-unit.result }}" != "$SUCCESS_RESULT" ]; then
             FAILED="$FAILED backend-unit"
+
           fi
-          if [ "${{ needs.frontend-checks.result }}" != "success" ]; then
+          if [ "${{ needs.frontend-checks.result }}" != "$SUCCESS_RESULT" ]; then
             FAILED="$FAILED frontend-checks"
           fi
-          if [ "${{ needs.integration-tests.result }}" != "success" ]; then
+          if [ "${{ needs.integration-tests.result }}" != "$SUCCESS_RESULT" ]; then
             FAILED="$FAILED integration-tests"
           fi
-          if [ "${{ needs.security-audit.result }}" != "success" ]; then
+          if [ "${{ needs.security-audit.result }}" != "$SUCCESS_RESULT" ]; then
             FAILED="$FAILED security-audit"
           fi
+
 
           if [ -n "$FAILED" ]; then
             for JOB in $FAILED; do
@@ -898,11 +902,17 @@ jobs:
           # Match both 'failure' and 'cancelled' (job-level timeout produces
           # 'cancelled', not 'failure' — GitHub Actions convention).
           FAILED_STAGES=""
-          [ "${PRE_DEPLOY_RESULT}" = "failure" ] || [ "${PRE_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} pre-deploy-gate"
-          [ "${STAGING_DEPLOY_RESULT}" = "failure" ] || [ "${STAGING_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-staging"
-          [ "${STAGING_E2E_RESULT}" = "failure" ] || [ "${STAGING_E2E_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} staging-e2e"
-          [ "${PROD_DEPLOY_RESULT}" = "failure" ] || [ "${PROD_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-production"
-          [ "${PROD_SMOKE_RESULT}" = "failure" ] || [ "${PROD_SMOKE_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} prod-smoke"
+          FAILED_RESULT="failure"
+          CANCELLED_RESULT="cancelled"
+          is_failed_stage() {
+            local result="$1"
+            [ "$result" = "$FAILED_RESULT" ] || [ "$result" = "$CANCELLED_RESULT" ]
+          }
+          is_failed_stage "$PRE_DEPLOY_RESULT" && FAILED_STAGES="${FAILED_STAGES} pre-deploy-gate"
+          is_failed_stage "$STAGING_DEPLOY_RESULT" && FAILED_STAGES="${FAILED_STAGES} deploy-staging"
+          is_failed_stage "$STAGING_E2E_RESULT" && FAILED_STAGES="${FAILED_STAGES} staging-e2e"
+          is_failed_stage "$PROD_DEPLOY_RESULT" && FAILED_STAGES="${FAILED_STAGES} deploy-production"
+          is_failed_stage "$PROD_SMOKE_RESULT" && FAILED_STAGES="${FAILED_STAGES} prod-smoke"
           FAILED_STAGES="${FAILED_STAGES# }"  # trim leading space
           # FIRST failed stage, in the same canonical order FAILED_STAGES
           # already uses (pre-deploy-gate, deploy-staging, staging-e2e,

@@ -150,6 +150,9 @@ env:
   KUBECTL_VERSION: v1.36.0
   HELM_VERSION: v3.21.4
   KIND_CLUSTER_NAME: modulo-conformance
+  CHANGED_TRUE: "changed=true"
+  CHANGED_FALSE: "changed=false"
+  SUCCESS_RESULT: "success"
 
 permissions:
   contents: read
@@ -212,7 +215,7 @@ jobs:
             fi
           elif [ "$EVENT_NAME" = "push" ]; then
             if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo "$CHANGED_TRUE" >> "$GITHUB_OUTPUT"
               echo "chart=true" >> "$GITHUB_OUTPUT"
               echo "Push without a resolvable before-SHA - running the conformance suite."
               exit 0
@@ -241,7 +244,8 @@ jobs:
             echo "Conformance surface changed:"
             echo "$CHANGED"
           else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+             echo "$CHANGED_FALSE" >> "$GITHUB_OUTPUT"
+
             echo "No runtime-provider / bundled-runner / pipeline-engine / conformance changes - skipping the cluster steps."
           fi
           if [ -n "$CHART" ]; then
@@ -417,11 +421,13 @@ jobs:
             0) CLOUD="eks" ;;
             1) CLOUD="aks" ;;
             2) CLOUD="gke" ;;
+            *) echo "::error::unexpected ISO-week rotation value" >&2; exit 1 ;;
           esac
           case "$CLOUD" in
             eks) SECRET="K8S_CONFORMANCE_EKS_KUBECONFIG" ;;
             aks) SECRET="K8S_CONFORMANCE_AKS_KUBECONFIG" ;;
             gke) SECRET="K8S_CONFORMANCE_GKE_KUBECONFIG" ;;
+            *) echo "::error::unexpected managed cloud '${CLOUD}'" >&2; exit 1 ;;
           esac
           echo "matrix={\"include\":[{\"cloud\":\"$CLOUD\",\"kubeconfig_secret\":\"$SECRET\"}]}" >> "$GITHUB_OUTPUT"
           echo "Managed conformance target this week: ${CLOUD} (ISO week ${WEEK}: week % 3 rotates one cloud per week, all three cycle every three weeks)."
@@ -723,7 +729,7 @@ jobs:
             # Read this run's job list and count it green only when a step
             # named SUITE_STEP_NAME has conclusion=success (i.e. the
             # conformance suite actually executed and passed).
-            if [ "${CONCLUSION}" = "success" ]; then
+            if [ "${CONCLUSION}" = "$SUCCESS_RESULT" ]; then
               # Read the job list only when the answer could change a green
               # statistic: a run older than the current last-green cannot
               # improve it (and neither can an older managed run). The

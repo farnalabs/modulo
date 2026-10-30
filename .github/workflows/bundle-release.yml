@@ -66,11 +66,12 @@ jobs:
 
           case "${pg_compose_major}" in
             '' | *[!0-9]*) echo "::error::could not parse a postgres major version from docker-compose.yml (got '${pg_compose_major}')"; exit 1 ;;
+            *) : ;;
           esac
           case "${redis_compose_major}" in
             '' | *[!0-9]*) echo "::error::could not parse a redis major version from docker-compose.yml (got '${redis_compose_major}')"; exit 1 ;;
+            *) : ;;
           esac
-
           if [ "${PG_MAJOR}" != "${pg_compose_major}" ]; then
             echo "::error::version drift: bundle pins PostgreSQL major ${PG_MAJOR} (scripts/bundle-versions.env) but docker-compose.yml pins major ${pg_compose_major}. Bump both together."
             exit 1
@@ -109,11 +110,12 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/bundle-versions.env
-          case "${{ matrix.arch }}" in
-            amd64) PBS_TARBALL="$PBS_AMD64_TARBALL"; PBS_SHA256="$PBS_CPYTHON_AMD64_SHA256" ;;
-            arm64) PBS_TARBALL="$PBS_ARM64_TARBALL"; PBS_SHA256="$PBS_CPYTHON_ARM64_SHA256" ;;
-            *) echo "::error::unsupported matrix arch: ${{ matrix.arch }}"; exit 1 ;;
-          esac
+           case "${{ matrix.arch }}" in
+             amd64) PBS_TARBALL="$PBS_AMD64_TARBALL"; PBS_SHA256="$PBS_CPYTHON_AMD64_SHA256" ;;
+             arm64) PBS_TARBALL="$PBS_ARM64_TARBALL"; PBS_SHA256="$PBS_CPYTHON_ARM64_SHA256" ;;
+             *) echo "::error::unsupported matrix arch: ${{ matrix.arch }}" >&2; exit 1 ;;
+           esac
+
           VERSION_NUM="${{ inputs.version }}"
           {
             echo "ARCH=${{ matrix.arch }}"
