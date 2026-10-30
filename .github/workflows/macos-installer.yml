@@ -259,7 +259,9 @@ jobs:
           NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
           SIGNING_IDENTITY: ${{ vars.MACOS_DEVELOPER_IDENTITY }}
         run: |
+          # shellcheck disable=SC2016
           set -euo pipefail
+          # Nested bash -c scripts intentionally defer expansion to their child shell.
           [[ -n "$CERTIFICATE_B64" && -n "$CERTIFICATE_PASSWORD" ]] || { echo '::error::Developer ID certificate secrets are required for a real macOS release.'; exit 1; }
           [[ -n "$NOTARY_KEY_B64" && -n "$NOTARY_KEY_ID" && -n "$NOTARY_ISSUER" ]] || { echo '::error::Apple notarytool API-key secrets are required for a real macOS release.'; exit 1; }
           [[ -n "$SIGNING_IDENTITY" ]] || { echo '::error::MACOS_DEVELOPER_IDENTITY repository variable is required.'; exit 1; }
@@ -456,6 +458,32 @@ jobs:
 
             trap 'cleanup "$?"' EXIT
 
+            # Diagnostic capture helpers for every command before post-install smoke assertions.
+            redact_pre_smoke_output() {
+              sed -E 's/(password|token|secret|api[_-]?key|certificate|issuer|key-id)[^[:space:]]*/\1=[REDACTED]/Ig; s#-----BEGIN [^-]+-----#-----BEGIN REDACTED-----#g; s#-----END [^-]+-----#-----END REDACTED-----#g'
+            }
+
+            run_pre_smoke() {
+              local name="$1"; shift
+              local output_file="$DATA/pre-smoke-${name}.log"
+              local exit_code
+              rm -f "$output_file"
+              set +e
+              "$@" >"$output_file" 2>&1
+              exit_code=$?
+              set -e
+              if [[ "$exit_code" -eq 0 ]]; then
+                printf 'pre_smoke: %s=ok (exit=%d)\n' "$name" "$exit_code"
+                return 0
+              fi
+              printf 'pre_smoke: %s=FAILED (exit=%d)\n' "$name" "$exit_code" >&2
+              if [[ -s "$output_file" ]]; then
+                printf 'pre_smoke output: %s\n' "$name" >&2
+                redact_pre_smoke_output < "$output_file" >&2
+              fi
+              return "$exit_code"
+            }
+
             # Diagnostic capture helper for post-install smoke assertions
             run_assertion() {
               local name="$1"; shift
@@ -469,98 +497,123 @@ jobs:
               printf 'assertion: %s=%s (exit=%d)\n' "$name" "$([[ $exit_code -eq 0 ]] && printf ok || printf FAILED)" "$exit_code"
               if [[ -s "$output_file" ]]; then
                 printf 'assertion output: %s\n' "$name"
-                sed -E 's/(password|token|secret|api[_-]?key|certificate)[^[:space:]]*/\1=[REDACTED]/Ig' "$output_file"
+                redact_pre_smoke_output < "$output_file"
               fi
               if [[ $exit_code -ne 0 ]]; then
                 return "$exit_code"
               fi
             }
 
-          printf '%s' "$CERTIFICATE_B64" | base64 --decode > "$CERT"
+          # shellcheck disable=SC2016
+          run_pre_smoke data_directory_create mkdir -p "$DATA"
+          # shellcheck disable=SC2016
+          run_pre_smoke certificate_decode bash -c 'printf "%s" "$1" | base64 --decode > "$2"' bash "$CERTIFICATE_B64" "$CERT"
           # Set up an empty keychain password so no generated password is leaked in argv.
           # OpenSSL consumes the PKCS#12 password on stdin; security then imports
           # the extracted PEM without any certificate password argument.
-          security create-keychain -p "" "$KEYCHAIN"
-          security set-keychain-settings -lut 900 "$KEYCHAIN"
-          security unlock-keychain -p "" "$KEYCHAIN"
-          printf '%s\n' "$CERTIFICATE_PASSWORD" | openssl pkcs12 -in "$CERT" -passin stdin -nodes -out "$IDENTITY_PEM_PATH"
-          security import "$IDENTITY_PEM_PATH" -k "$KEYCHAIN" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN" >/dev/null 2>&1 || true
-          security list-keychains -d user -s "$KEYCHAIN"
-          security find-identity -v -p codesigning "$KEYCHAIN"
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_create security create-keychain -p "" "$KEYCHAIN"
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_settings security set-keychain-settings -lut 900 "$KEYCHAIN"
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_unlock security unlock-keychain -p "" "$KEYCHAIN"
+          # shellcheck disable=SC2016
+          run_pre_smoke identity_pem_extract bash -c 'printf "%s\n" "$1" | openssl pkcs12 -in "$2" -passin stdin -nodes -out "$3"' bash "$CERTIFICATE_PASSWORD" "$CERT" "$IDENTITY_PEM_PATH"
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_import security import "$IDENTITY_PEM_PATH" -k "$KEYCHAIN" -T /usr/bin/codesign
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_partition_list security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN"
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_select security list-keychains -d user -s "$KEYCHAIN"
+          # shellcheck disable=SC2016
+          run_pre_smoke keychain_find_identity security find-identity -v -p codesigning "$KEYCHAIN"
 
           APP="build/Modulo-${VERSION_NUM}.app"
-          while IFS= read -r binary; do
-            file "$binary" | grep -E 'Mach-O 64-bit executable arm64' || exit 1
-            codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$binary"
-          done < <(find "$APP/Contents" -type f -perm -111 -print)
-          codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
-          codesign --verify --deep --strict --verbose=2 "$APP"
+          # shellcheck disable=SC2016
+          run_pre_smoke nested_binary_discovery find "$APP/Contents" -type f -perm -111 -print
+          mapfile -t NESTED_BINARIES < "$DATA/pre-smoke-nested_binary_discovery.log"
+          binary_index=0
+          for binary in "${NESTED_BINARIES[@]}"; do
+            [[ -n "$binary" ]] || continue
+            # shellcheck disable=SC2016
+          run_pre_smoke "nested_binary_file_${binary_index}" bash -c 'file "$1" | grep -E "Mach-O 64-bit executable arm64"' bash "$binary"
+            # shellcheck disable=SC2016
+          run_pre_smoke "nested_binary_codesign_${binary_index}" codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$binary"
+            binary_index=$((binary_index + 1))
+          done
+          # shellcheck disable=SC2016
+          run_pre_smoke app_codesign codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
+          # shellcheck disable=SC2016
+          run_pre_smoke app_codesign_verify codesign --verify --deep --strict --verbose=2 "$APP"
 
           DMG="build/Modulo-${VERSION_NUM}-macos-arm64.dmg"
-          hdiutil create -volname "Modulo ${VERSION_NUM}" -srcfolder "$APP" -ov -format UDZO "$DMG"
-          codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
-          printf '%s' "$NOTARY_KEY_B64" | base64 --decode > "$NOTARY_KEY"
-          xcrun notarytool submit "$DMG" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 30m
-          xcrun stapler staple "$DMG"
-          xcrun stapler validate "$DMG"
-          codesign --verify --verbose=2 "$DMG"
-          spctl --assess --type open --context context:primary-signature "$DMG"
-          hdiutil verify "$DMG"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_create hdiutil create -volname "Modulo ${VERSION_NUM}" -srcfolder "$APP" -ov -format UDZO "$DMG"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_codesign codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
+          # shellcheck disable=SC2016
+          run_pre_smoke notary_key_decode bash -c 'printf "%s" "$1" | base64 --decode > "$2"' bash "$NOTARY_KEY_B64" "$NOTARY_KEY"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_notary_submit xcrun notarytool submit "$DMG" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 30m
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_staple xcrun stapler staple "$DMG"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_staple_validate xcrun stapler validate "$DMG"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_codesign_verify codesign --verify --verbose=2 "$DMG"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_spctl spctl --assess --type open --context context:primary-signature "$DMG"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_verify hdiutil verify "$DMG"
           DMG_WITH_SPACES="$RUNNER_TEMP/Modulo ${VERSION_NUM} macos arm64.dmg"
-          cp "$DMG" "$DMG_WITH_SPACES"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_copy cp "$DMG" "$DMG_WITH_SPACES"
 
-          mkdir -p "$MOUNT"
-          hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -readonly
+          # shellcheck disable=SC2016
+          run_pre_smoke mount_directory_create mkdir -p "$MOUNT"
+          # shellcheck disable=SC2016
+          run_pre_smoke dmg_attach hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -readonly
           MOUNT_ATTACHED=1
           MOUNTED_APP="$MOUNT/Modulo-${VERSION_NUM}.app"
-          file "$MOUNTED_APP/Contents/MacOS/modulo" | grep -E 'Mach-O 64-bit executable arm64'
-          codesign --verify --deep --strict "$MOUNTED_APP"
-          spctl --assess --type execute "$MOUNTED_APP"
-          "$MOUNTED_APP/Contents/MacOS/modulo" --help >/dev/null
           RUNTIME="$MOUNTED_APP/Contents/Resources/bundle/runtime/bin/python3"
-          echo '::group::Verify bundled Python runtime artifact contract'
-          RUNTIME_FILE_OUTPUT="$(file "$RUNTIME")"
-          printf '%s\n' "$RUNTIME_FILE_OUTPUT"
-          [[ "$RUNTIME_FILE_OUTPUT" == *'Mach-O 64-bit executable arm64'* ]] || {
-            echo '::error::bundled Python runtime is not a native arm64 Mach-O executable' >&2
-            exit 1
-          }
-          RUNTIME_LINK_OUTPUT="$(otool -L "$RUNTIME")"
-          printf '%s\n' "$RUNTIME_LINK_OUTPUT"
-          [[ "$RUNTIME_LINK_OUTPUT" == *'/usr/lib/libSystem.B.dylib'* ]] || {
-            echo '::error::bundled Python runtime does not link against libSystem.B.dylib' >&2
-            exit 1
-          }
-          echo '::endgroup::'
-          RUNTIME_VERSION_OUTPUT_RAW="$("$RUNTIME" --version 2>&1)"
-          RUNTIME_VERSION_OUTPUT="$(RUNTIME_VERSION_OUTPUT_RAW="$RUNTIME_VERSION_OUTPUT_RAW" python3 -c 'import os; text = os.environ["RUNTIME_VERSION_OUTPUT_RAW"].rstrip(" \\t\\r\\n"); print(text.replace("\\\\ ", " "), end="")')"
-          RUNTIME_VERSION_CASE='Python\ 3.12.14'
-          RUNTIME_CASE_SEMVER="$(RUNTIME_VERSION_CASE="$RUNTIME_VERSION_CASE" python3 -c 'import os, re; text = os.environ["RUNTIME_VERSION_CASE"].rstrip(" \\t\\r\\n"); text = text.replace("\\ ", " "); match = re.fullmatch(r"Python[ \t]+([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", text); print(match.group(1) if match else "")')"
-          [[ "$RUNTIME_CASE_SEMVER" == '3.12.14' ]] || { printf '::error::Python version parser case test failed: raw=%q extracted=%q\n' "$RUNTIME_VERSION_CASE" "$RUNTIME_CASE_SEMVER" >&2; exit 1; }
-          RUNTIME_SEMVER="$(RUNTIME_VERSION_OUTPUT="$RUNTIME_VERSION_OUTPUT" python3 -c 'import os, re; text = os.environ["RUNTIME_VERSION_OUTPUT"].rstrip(" \\t\\r\\n"); text = text.replace("\\ ", " "); match = re.fullmatch(r"Python[ \t]+([0-9]+\.[0-9]+\.[0-9]+)(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", text); print(match.group(1) if match else "")')"
-          printf 'Bundled Python runtime version raw=%q normalized=%q extracted=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" "$RUNTIME_SEMVER"
-          if [[ -z "$RUNTIME_SEMVER" ]]; then
-            printf '::error::bundled Python runtime did not report a recognizable semantic version; raw=%q normalized=%q extracted=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" "$RUNTIME_SEMVER" >&2
-            exit 1
-          fi
-          if [[ "$RUNTIME_SEMVER" != '3.12.14' ]]; then
-            printf '::error::bundled Python runtime must report exactly Python 3.12.14; raw=%q normalized=%q extracted=%q\n' "$RUNTIME_VERSION_OUTPUT_RAW" "$RUNTIME_VERSION_OUTPUT" "$RUNTIME_SEMVER" >&2
-            exit 1
-          fi
-          DATA="$RUNNER_TEMP/modulo-native-smoke-data"
+          # shellcheck disable=SC2016
+          run_pre_smoke mounted_runtime_contract bash -c '[[ -x "$1" ]]' bash "$RUNTIME"
+          # shellcheck disable=SC2016
+          run_pre_smoke mounted_app_file bash -c 'file "$1" | grep -E "Mach-O 64-bit executable arm64"' bash "$MOUNTED_APP/Contents/MacOS/modulo"
+          # shellcheck disable=SC2016
+          run_pre_smoke mounted_app_codesign codesign --verify --deep --strict "$MOUNTED_APP"
+          # shellcheck disable=SC2016
+          run_pre_smoke mounted_app_spctl spctl --assess --type execute "$MOUNTED_APP"
+          # shellcheck disable=SC2016
+          run_pre_smoke mounted_app_help "$MOUNTED_APP/Contents/MacOS/modulo" --help
+          # shellcheck disable=SC2016
+          run_pre_smoke runtime_file bash -c 'file "$1" | grep -F "Mach-O 64-bit executable arm64"' bash "$RUNTIME"
+          # shellcheck disable=SC2016
+          run_pre_smoke runtime_link bash -c 'otool -L "$1" | grep -F "/usr/lib/libSystem.B.dylib"' bash "$RUNTIME"
+          # shellcheck disable=SC2016
+          run_pre_smoke runtime_version "$RUNTIME" --version
+          # shellcheck disable=SC2016
+          run_pre_smoke runtime_version_parser bash -c '
+            runtime_version_output="$(<"$1")"
+            runtime_version="$(printf "%s" "$runtime_version_output" | python3 -c '\''import sys; print(sys.stdin.read().rstrip(" \\t\\r\\n").replace("\\\\ ", " "), end="")'\'')"
+            runtime_semver="$(printf "%s" "$runtime_version" | python3 -c '\''import re, sys; match = re.fullmatch(r"Python[ \\t]+([0-9]+\\.[0-9]+\\.[0-9]+)(?:\\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", sys.stdin.read().rstrip(" \\t\\r\\n")); print(match.group(1) if match else "")'\'')"
+            printf "runtime version raw=%q normalized=%q extracted=%q\\n" "$runtime_version_output" "$runtime_version" "$runtime_semver"
+            [[ "$runtime_semver" == "3.12.14" ]]
+          ' bash "$DATA/pre-smoke-runtime_version.log"
           PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
-          mkdir -p "$DATA"
-          hdiutil detach "$MOUNT" >/dev/null
-          if hdiutil info | grep -Fq "$MOUNT"; then
-            echo "::error::intentional pre-install detach left owned mount present: $MOUNT" >&2
-            exit 1
-          fi
+          # shellcheck disable=SC2016
+          run_pre_smoke pre_install_detach hdiutil detach "$MOUNT"
+          # shellcheck disable=SC2016
+          run_pre_smoke pre_install_mount_absent bash -c '! hdiutil info | grep -Fq "$1"' bash "$MOUNT"
           MOUNT_ATTACHED=0
+          # shellcheck disable=SC2016
+          run_pre_smoke mount_attached_transition bash -c '[[ "$1" -eq 0 ]]' bash "$MOUNT_ATTACHED"
           echo "pre-install: detached mount: $MOUNT"
           INSTALL_ROOT="$RUNNER_TEMP/modulo install"
 
+
           # Post-install smoke assertions with diagnostic capture
+          # shellcheck disable=SC2016
           run_assertion "install_sh" \
             bash -c 'MODULO_INSTALL_ROOT="$INSTALL_ROOT" MODULO_DATA_DIR="$DATA" scripts/macos/install.sh "$DMG_WITH_SPACES"' || exit 1
 
@@ -568,6 +621,7 @@ jobs:
             launchctl print "gui/$(id -u)/run.modulo.launcher" || exit 1
 
            # State.json / API port / healthz
+           # shellcheck disable=SC2016
            run_assertion "state_json_api_port_healthz" bash -c '
              STATE="$DATA/state.json"
              API_PORT=""
@@ -583,7 +637,7 @@ jobs:
              done
              exit 1
            '
-           API_PORT="$(cat "$DATA/state.json" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["api_port"])' 2>/dev/null || true)"
+           API_PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["api_port"])' "$DATA/state.json" 2>/dev/null || true)"
            [[ -n "$API_PORT" ]] || { echo '::error::native launcher never wrote state.json' >&2; exit 1; }
 
            run_assertion "healthz_endpoint" \
@@ -593,6 +647,7 @@ jobs:
              bash -c 'curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:'"$API_PORT"'/" | grep -q '\''<div id="app">'\''' || exit 1
 
            # Service PID / binary identity
+           # shellcheck disable=SC2016
            run_assertion "service_pid" bash -c '
              SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '\''/pid =/ {print $3; exit}'\'')"
              [[ "$SERVICE_PID" =~ ^[0-9]+$ ]] || exit 1
@@ -600,6 +655,7 @@ jobs:
            ' || exit 1
            SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '/pid =/ {print $3; exit}')"
 
+           # shellcheck disable=SC2016
            run_assertion "service_binary" bash -c '
              SERVICE_BINARY="$(ps -p '"$SERVICE_PID"' -o command= | awk '\''{print $1}'\'')"
              [[ "$SERVICE_BINARY" == '"$INSTALL_ROOT"'/*/Contents/MacOS/modulo ]] || exit 1
@@ -611,6 +667,7 @@ jobs:
              file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64' || exit 1
 
            # Owned PID tree collection
+           # shellcheck disable=SC2016
            run_assertion "owned_pid_tree" bash -c '
              collect_children() {
                local parent="$1" child
@@ -638,10 +695,12 @@ jobs:
            run_assertion "launchctl_unload" \
              launchctl unload -w "$PLIST" || exit 1
 
+           # shellcheck disable=SC2016
            run_assertion "launchagent_gone_after_unload" bash -c '
              ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
            ' || exit 1
 
+           # shellcheck disable=SC2016
            run_assertion "launchagent_gone_after_cleanup" bash -c '
              ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
            ' || exit 1
