@@ -84,29 +84,28 @@ jobs:
           IMAGE_NAMESPACE: ${{ github.repository }}
         run: |
           set -euo pipefail
+          declare -A IMAGE_CONTEXT=(
+            [all-in-one]="."
+            [backend]="backend"
+            [frontend]="frontend"
+            [runner-opencode]="."
+          )
+          declare -A IMAGE_DOCKERFILE=(
+            [all-in-one]="deploy/docker/Dockerfile.all-in-one"
+            [backend]="backend/Dockerfile"
+            [frontend]="frontend/Dockerfile.prod"
+            [runner-opencode]="deploy/docker/runner-opencode.Dockerfile"
+          )
+          declare -A IMAGE_NAME=(
+            [all-in-one]="$IMAGE_NAMESPACE"
+            [backend]="$IMAGE_NAMESPACE/backend"
+            [frontend]="$IMAGE_NAMESPACE/frontend"
+            [runner-opencode]="$IMAGE_NAMESPACE/runner-opencode"
+          )
           for img in all-in-one backend frontend runner-opencode; do
-            case "$img" in
-              all-in-one)
-                context="."
-                dockerfile="deploy/docker/Dockerfile.all-in-one"
-                image_name="$IMAGE_NAMESPACE"
-                ;;
-              backend)
-                context="backend"
-                dockerfile="backend/Dockerfile"
-                image_name="$IMAGE_NAMESPACE/backend"
-                ;;
-              frontend)
-                context="frontend"
-                dockerfile="frontend/Dockerfile.prod"
-                image_name="$IMAGE_NAMESPACE/frontend"
-                ;;
-              runner-opencode)
-                context="."
-                dockerfile="deploy/docker/runner-opencode.Dockerfile"
-                image_name="$IMAGE_NAMESPACE/runner-opencode"
-                ;;
-            esac
+            context="${IMAGE_CONTEXT[$img]}"
+            dockerfile="${IMAGE_DOCKERFILE[$img]}"
+            image_name="${IMAGE_NAME[$img]}"
             echo "Building $img..."
             docker buildx build \
               "$context" \
