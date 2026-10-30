@@ -2487,6 +2487,31 @@ class _RunScope:
     thread_id: str
 
 
+@dataclass(frozen=True)
+class _StreamConfig:
+    """Immutable stream-time configuration for ``_prepare_and_stream``.
+
+    Bundles the variable stream-scoped values so the method takes a single
+    config object instead of many loose parameters (SonarQube S107: too many
+    parameters). A pure refactor — no behaviour, ordering, or state-transition
+    change.
+    """
+
+    snapshot: PipelineSnapshot
+    input_payload: dict[str, Any]
+    variant_config_snapshot: dict[str, Any] | None
+    graph_json: dict[str, Any]
+    eval_defs_by_node: dict[str, list[EvalDefDTO]]
+    node_ids: set[str]
+    completed_node_outputs: dict[str, Any]
+    guard: RunawayGuard
+    node_type_map: dict[str, str]
+    pipeline_node_timeout_seconds: int
+    broker: RunEventBroker
+    pipeline_retry_policy: dict[str, Any] | None = None
+    idempotency_key: Callable[[str, dict[str, Any]], str | None] | None = None
+
+
 def _interrupt_gate_payload(interrupts: Any) -> dict[str, Any]:
     """The gate payload carried by the first LangGraph interrupt (or ``{}``)."""
     first_interrupt = interrupts[0] if interrupts else None
@@ -4978,10 +5003,6 @@ class PipelineExecutor:
         an approval that waits for host-resource capacity is never lost work;
         the HITL pre-check mirrors the same omission — both sites documented).
         """
-        from modulo.core.runner_capacity import (
-            runner_capacity_lock_keys,
-        )
-
         graph_json = (
             await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
         ).scalar_one_or_none()
@@ -4990,55 +5011,74 @@ class PipelineExecutor:
         from modulo.settings import get_settings
 
         if get_settings().runner_capacity_gate_enabled:
-            from modulo.core.runner_capacity import count_active_runner_dispatches_for_decision
-            from modulo.db.sqlstates import sqlstate_of
+            await self._enforce_runner_capacity_at_resume(session, org_id, run_id)
+        else:
+            await self._enforce_legacy_sandbox_capacity_at_resume(session, org_id, run_id)
 
-            cap, host_resource_only = await self._read_runner_cap_converged(session, org_id)
-            if cap is None:
-                return
-            try:
-                # SET LOCAL lock_timeout BEFORE the advisory lock (qa F7): a
-                # crowded per-org lock degrades to SQLSTATE 55P03 — mapped to
-                # the RETRYABLE SandboxCapacityExceededError below — instead
-                # of hanging on deadlock_timeout.
-                lock_timeout_ms = get_settings().runner_capacity_lock_timeout_ms
-                await session.execute(
-                    text("SELECT set_config('lock_timeout', :val, true)"),
-                    {"val": f"{lock_timeout_ms}ms"},
-                )
-                # pg_advisory_xact_lock(k1, k2) over the RESERVED namespace — all
-                # workers/machines for the same org hash to the SAME key;
-                # xact-scoped, released exactly at this transaction's commit /
-                # rollback — never leaked onto a pooled connection.
-                k1, k2 = runner_capacity_lock_keys(org_id)
-                await session.execute(
-                    text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
-                    {"k1": k1, "k2": k2},
-                )
-                active = await count_active_runner_dispatches_for_decision(
-                    session, org_id, exclude_run_id=run_id, host_resource_only=host_resource_only
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                # qa F7: the designed degradation — lock_not_available (what
-                # SET LOCAL lock_timeout actually raises) is a RETRYABLE
-                # capacity denial, matching the dispatch gate's 55P03 →
-                # RunnerCapacityDeniedError mapping (the resume caller maps
-                # SandboxCapacityExceededError to the same ``capacity.org``
-                # house failure). Any OTHER DB error is not a capacity signal
-                # — re-raise.
-                if sqlstate_of(exc) == "55P03":
-                    _log.warning(
-                        "pipeline.runner_resume_lock_degraded",
-                        extra={"org_id": str(org_id), "run_id": str(run_id), "lock_timeout_ms": lock_timeout_ms},
-                        exc_info=True,
-                    )
-                    raise SandboxCapacityExceededError(org_id) from exc
-                raise
-            if active >= cap:
-                raise SandboxCapacityExceededError(org_id)
+    async def _enforce_runner_capacity_at_resume(
+        self,
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> None:
+        """Enforce runner-capacity-gated sandbox limit for a resume (flag-on path)."""
+        from modulo.core.runner_capacity import count_active_runner_dispatches_for_decision, runner_capacity_lock_keys
+        from modulo.db.sqlstates import sqlstate_of
+        from modulo.settings import get_settings
+
+        cap, host_resource_only = await self._read_runner_cap_converged(session, org_id)
+        if cap is None:
             return
+        try:
+            # SET LOCAL lock_timeout BEFORE the advisory lock (qa F7): a
+            # crowded per-org lock degrades to SQLSTATE 55P03 — mapped to
+            # the RETRYABLE SandboxCapacityExceededError below — instead
+            # of hanging on deadlock_timeout.
+            lock_timeout_ms = get_settings().runner_capacity_lock_timeout_ms
+            await session.execute(
+                text("SELECT set_config('lock_timeout', :val, true)"),
+                {"val": f"{lock_timeout_ms}ms"},
+            )
+            # pg_advisory_xact_lock(k1, k2) over the RESERVED namespace — all
+            # workers/machines for the same org hash to the SAME key;
+            # xact-scoped, released exactly at this transaction's commit /
+            # rollback — never leaked onto a pooled connection.
+            k1, k2 = runner_capacity_lock_keys(org_id)
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(:k1, :k2)"),
+                {"k1": k1, "k2": k2},
+            )
+            active = await count_active_runner_dispatches_for_decision(
+                session, org_id, exclude_run_id=run_id, host_resource_only=host_resource_only
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # qa F7: the designed degradation — lock_not_available (what
+            # SET LOCAL lock_timeout actually raises) is a RETRYABLE
+            # capacity denial, matching the dispatch gate's 55P03 →
+            # RunnerCapacityDeniedError mapping (the resume caller maps
+            # SandboxCapacityExceededError to the same ``capacity.org``
+            # house failure). Any OTHER DB error is not a capacity signal
+            # — re-raise.
+            if sqlstate_of(exc) == "55P03":
+                _log.warning(
+                    "pipeline.runner_resume_lock_degraded",
+                    extra={"org_id": str(org_id), "run_id": str(run_id), "lock_timeout_ms": lock_timeout_ms},
+                    exc_info=True,
+                )
+                raise SandboxCapacityExceededError(org_id) from exc
+            raise
+        if active >= cap:
+            raise SandboxCapacityExceededError(org_id)
+
+    async def _enforce_legacy_sandbox_capacity_at_resume(
+        self,
+        session: AsyncSession,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> None:
+        """Enforce legacy sandbox concurrency limit for a resume (flag-off path)."""
         cap = (await get_sandbox_concurrency_limit(session, org_id)).enforced_cap
         if cap is None:
             return
@@ -6298,8 +6338,7 @@ class PipelineExecutor:
                 snapshot_id=snapshot_id,
                 thread_id=thread_id,
             )
-            final_status, error_code, error_detail, node_token_usage = await self._prepare_and_stream(
-                scope=scope,
+            stream_config = _StreamConfig(
                 snapshot=snapshot,
                 input_payload=input_payload,
                 variant_config_snapshot=variant_config_snapshot,
@@ -6313,6 +6352,10 @@ class PipelineExecutor:
                 broker=broker,
                 pipeline_retry_policy=pipeline_retry_policy,
                 idempotency_key=_node_idempotency_key,
+            )
+            final_status, error_code, error_detail, node_token_usage = await self._prepare_and_stream(
+                scope=scope,
+                config=stream_config,
             )
         except asyncio.CancelledError:
             raise
@@ -6963,33 +7006,21 @@ class PipelineExecutor:
         self,
         *,
         scope: _RunScope,
-        snapshot: PipelineSnapshot,
-        input_payload: dict[str, Any],
-        variant_config_snapshot: dict[str, Any] | None,
-        graph_json: dict[str, Any],
-        eval_defs_by_node: dict[str, list[EvalDefDTO]],
-        node_ids: set[str],
-        completed_node_outputs: dict[str, Any],
-        guard: RunawayGuard,
-        node_type_map: dict[str, str],
-        pipeline_node_timeout_seconds: int,
-        broker: RunEventBroker,
-        pipeline_retry_policy: dict[str, Any] | None = None,
-        idempotency_key: Callable[[str, dict[str, Any]], str | None] | None = None,
+        config: _StreamConfig,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
         """Compile (or retrieve) the StateGraph and stream it to completion.
 
         Returns ``(final_status, error_code, error_detail, node_token_usage)``.
-        ``node_ids`` is mutated in place (the caller owns the empty set) so the
-        finalization path sees the same ids the original inline rebinding
+        ``config.node_ids`` is mutated in place (the caller owns the empty set)
+        so the finalization path sees the same ids the original inline rebinding
         produced.
         """
         # FAR-893: enter graph_compile phase.
         _tracker = self._dispatch_phase_tracker
         if _tracker is not None:
             _tracker.enter_phase("graph_compile")
-        # Compile (or retrieve from cache) the StateGraph. ``pipeline_retry_policy``
-        # and ``idempotency_key`` are threaded into the per-node retry/compensation
+        # Compile (or retrieve from cache) the StateGraph. ``config.pipeline_retry_policy``
+        # and ``config.idempotency_key`` are threaded into the per-node retry/compensation
         # wrapper (FAR-402 P5) — the latter is runtime-derived so a cached graph
         # still dedupes against the run's stable identity.
         # FAR-502: the eval defs loaded fresh above (execute()) are baked into
@@ -7002,24 +7033,24 @@ class PipelineExecutor:
             scope.pipeline_id,
             scope.snapshot_id,
             lambda: build_graph_from_json(
-                graph_json,
-                eval_definitions_by_node=eval_defs_by_node,
+                config.graph_json,
+                eval_definitions_by_node=config.eval_defs_by_node,
                 session_factory=self._session_factory,
                 org_id=scope.org_id,
-                pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
-                pipeline_retry_policy=pipeline_retry_policy,
-                node_idempotency_key=idempotency_key,
-                pipeline_stdout_retention_config=snapshot.stdout_retention_config,
+                pipeline_node_timeout_seconds=config.pipeline_node_timeout_seconds,
+                pipeline_retry_policy=config.pipeline_retry_policy,
+                node_idempotency_key=config.idempotency_key,
+                pipeline_stdout_retention_config=config.snapshot.stdout_retention_config,
             ),
-            pipeline_node_timeout_seconds=pipeline_node_timeout_seconds,
+            pipeline_node_timeout_seconds=config.pipeline_node_timeout_seconds,
             graph_struct_hash=struct_hash_with_eval_defs(
-                compute_retry_aware_topology_hash(graph_json, pipeline_retry_policy),
-                eval_defs_by_node,
+                compute_retry_aware_topology_hash(config.graph_json, config.pipeline_retry_policy),
+                config.eval_defs_by_node,
             ),
         )
 
-        initial_state = _seed_state(snapshot, input_payload, variant_config_snapshot)
-        earned_pin = await self._resolve_earned_at_start(scope.pipeline_id, scope.org_id, snapshot)
+        initial_state = _seed_state(config.snapshot, config.input_payload, config.variant_config_snapshot)
+        earned_pin = await self._resolve_earned_at_start(scope.pipeline_id, scope.org_id, config.snapshot)
         if earned_pin is not None:
             initial_state["run_context"][PIPELINE_EARNED_AT_START_KEY] = earned_pin
         initial_state.update(
@@ -7045,9 +7076,9 @@ class PipelineExecutor:
                 "_community_gated_agents": self._community_gated_agents,
             }
         )
-        config: dict[str, Any] = {"configurable": {"thread_id": scope.thread_id}}
-        node_ids.clear()
-        node_ids.update({str(n["id"]) for n in graph_json.get("nodes", [])})
+        config_: dict[str, Any] = {"configurable": {"thread_id": scope.thread_id}}
+        config.node_ids.clear()
+        config.node_ids.update({str(n["id"]) for n in config.graph_json.get("nodes", [])})
         # FAR-369: expose each node's configured ``timeout_seconds`` so the
         # absolute node-deadline watchdog (run_executor_with_watchdog) can hold
         # every node to its own hard deadline. Defaults to the pipeline-level
@@ -7059,9 +7090,11 @@ class PipelineExecutor:
         # ``"timeout_seconds": null`` are the same state: both fall back to the
         # pipeline-level default (see ``_resolved_node_timeouts``).
         self._node_timeouts.clear()
-        self._node_timeouts.update(_resolved_node_timeouts(graph_json, pipeline_node_timeout_seconds))
+        self._node_timeouts.update(_resolved_node_timeouts(config.graph_json, config.pipeline_node_timeout_seconds))
         node_token_budgets: dict[str, int] = {
-            str(n["id"]): n["token_budget"] for n in graph_json.get("nodes", []) if n.get("token_budget") is not None
+            str(n["id"]): n["token_budget"]
+            for n in config.graph_json.get("nodes", [])
+            if n.get("token_budget") is not None
         }
 
         # FAR-215: seed the run-scoped conformance context so every node
@@ -7072,7 +7105,7 @@ class PipelineExecutor:
         set_conformance_ctx(
             self._session_factory,
             scope.org_id,
-            snapshot.environment_profile_id,
+            config.snapshot.environment_profile_id,
             scope.pipeline_id,
             claimed,
             claims_load_failed,
@@ -7105,7 +7138,7 @@ class PipelineExecutor:
         # ``compiled`` is shared via the graph cache, so the checkpointer is
         # explicitly cleared in the non-interactive branch to avoid leaking a
         # previously-attached saver into a batch run of the same snapshot.
-        if self._checkpointer_conn_string and _graph_is_interactive(graph_json):
+        if self._checkpointer_conn_string and _graph_is_interactive(config.graph_json):
             from modulo.settings import get_settings
 
             _settings = get_settings()
@@ -7121,17 +7154,17 @@ class PipelineExecutor:
                 final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                     compiled,
                     initial_state,
-                    config,
-                    node_ids,
-                    broker,
+                    config_,
+                    config.node_ids,
+                    config.broker,
                     scope.run_id,
                     pipeline_id=scope.pipeline_id,
                     org_id=scope.org_id,
-                    completed_node_outputs=completed_node_outputs,
-                    guard=guard,
+                    completed_node_outputs=config.completed_node_outputs,
+                    guard=config.guard,
                     node_token_budgets=node_token_budgets,
-                    eval_definitions_by_node=eval_defs_by_node,
-                    node_type_map=node_type_map,
+                    eval_definitions_by_node=config.eval_defs_by_node,
+                    node_type_map=config.node_type_map,
                 )
         else:
             compiled.checkpointer = None
@@ -7141,17 +7174,17 @@ class PipelineExecutor:
             final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                 compiled,
                 initial_state,
-                config,
-                node_ids,
-                broker,
+                config_,
+                config.node_ids,
+                config.broker,
                 scope.run_id,
                 pipeline_id=scope.pipeline_id,
                 org_id=scope.org_id,
-                completed_node_outputs=completed_node_outputs,
-                guard=guard,
+                completed_node_outputs=config.completed_node_outputs,
+                guard=config.guard,
                 node_token_budgets=node_token_budgets,
-                eval_definitions_by_node=eval_defs_by_node,
-                node_type_map=node_type_map,
+                eval_definitions_by_node=config.eval_defs_by_node,
+                node_type_map=config.node_type_map,
             )
         return final_status, error_code, error_detail, node_token_usage
 
@@ -7490,21 +7523,27 @@ class PipelineExecutor:
             return non_retryable_code, _non_retryable_failure_detail(
                 non_retryable_code, exc, execution_attempt_count, retries
             )
-        error_code = "node_cancelled"
-        if not graph_idempotent and execution_attempt_count < retries:
+
+        # Determine the base error code and detail
+        is_non_idempotent_first_attempt = (not graph_idempotent) and (execution_attempt_count < retries)
+        is_node_cancelled = isinstance(exc, NodeCancelledError)
+
+        if is_non_idempotent_first_attempt:
             # FAR-295: the run was NOT retried because a node in the
             # graph is non-idempotent (idempotent=false) — a retry
             # would re-execute a side-effecting step. Distinguish
             # this from the retries-exhausted message so the run
             # detail readout explains WHY it terminal-failed on the
             # first attempt.
+            error_code = "node_cancelled"
             error_detail = _sanitize_detail(
                 "Sandbox node failed (transient); retry suppressed because a node in the "
                 "graph is non-idempotent (idempotent=false) and re-running could double-execute "
                 "a side effect: " + str(exc),
                 limit=5000,
             )
-        elif isinstance(exc, NodeCancelledError):
+        elif is_node_cancelled:
+            error_code = "node_cancelled"
             error_detail = _sanitize_detail(
                 "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
             )
@@ -7515,6 +7554,7 @@ class PipelineExecutor:
             # cap (5000), not the 500 used for the short
             # NodeCancelledError string, or the kill-reason log tail
             # would be the first thing truncated (FAR-197 review).
+            error_code = "node_cancelled"
             error_detail = _sanitize_detail(
                 "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
             )
@@ -7549,6 +7589,7 @@ class PipelineExecutor:
             _provider_code = classify_provider_error(str(exc))
             if _provider_code is not None:
                 error_code = _provider_code
+
         return error_code, error_detail
 
     async def _read_retry_attempt_state(
@@ -7800,9 +7841,7 @@ class PipelineExecutor:
         # pre-node death.
         # FAR-296 Phase 2: before ANY requeue of a script-mode run, prove
         # no script process could still be alive (stale-claim lease probe).
-        script_retry_probe_ok = True
-        if _graph_has_script_mode(graph_json):
-            script_retry_probe_ok = await self._probe_script_lease(run_id=run_id, org_id=org_id)
+        script_retry_probe_ok = await self._probe_script_lease_for_retry(graph_json, run_id, org_id)
         if _can_retry_after_policy(
             execution_attempt_count,
             retry_budget,
@@ -7810,7 +7849,7 @@ class PipelineExecutor:
             script_retry_probe_ok,
             attempt_consumed_budget=attempt_consumed_budget,
         ):
-            await self._redispatch_after_policy(
+            await self._execute_retry_redispatch(
                 run_id=run_id,
                 org_id=org_id,
                 final_status=final_status,
@@ -7824,6 +7863,55 @@ class PipelineExecutor:
         if not script_retry_probe_ok:
             return self._publish_script_side_effect_unknown(broker, run_id)
         return "none"
+
+    async def _probe_script_lease_for_retry(
+        self,
+        graph_json: dict[str, Any],
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+    ) -> bool:
+        """Probe the script lease for a retry decision (FAR-296 Phase 2).
+
+        Returns ``True`` when the lease probe passes (no stale claim) or when
+        the graph has no script mode. Returns ``False`` when a stale lease is
+        detected, which blocks the retry and forces a terminal
+        ``script.side_effect_unknown`` outcome.
+        """
+        if not _graph_has_script_mode(graph_json):
+            return True
+        return await self._probe_script_lease(run_id=run_id, org_id=org_id)
+
+    async def _execute_retry_redispatch(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        final_status: str,
+        error_code: str | None,
+        execution_attempt_count: int,
+        retry_budget: int,
+        pipeline_retry_policy: dict[str, Any],
+        model_backend_hub: ModelBackendHub | None,
+        connector_hub: Any | None,
+    ) -> NoReturn:
+        """Execute the retry redispatch (fenced reset + backoff + re-raise).
+
+        This helper performs the side effects that must happen before the
+        ``RunRetryPolicyError`` re-raise: the fenced pending-reset, the
+        attempt reset record (on confirmed reset), resource cleanup, the
+        backoff sleep, and the final re-raise. Control never returns.
+        """
+        await self._redispatch_after_policy(
+            run_id=run_id,
+            org_id=org_id,
+            final_status=final_status,
+            error_code=error_code,
+            execution_attempt_count=execution_attempt_count,
+            retry_budget=retry_budget,
+            pipeline_retry_policy=pipeline_retry_policy,
+            model_backend_hub=model_backend_hub,
+            connector_hub=connector_hub,
+        )
 
     async def _run_post_stream_tail(
         self,
