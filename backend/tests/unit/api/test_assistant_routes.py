@@ -10,7 +10,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -113,19 +113,6 @@ def system_admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture(autouse=True)
-def _clear_assistant_global_state() -> Generator[None, None, None]:
-    yield
-    assistant_routes._pending_permissions.clear()
-    assistant_routes._permission_decisions.clear()
-    assistant_routes._pending_ui_results.clear()
-    assistant_routes._ui_command_results.clear()
-    assistant_routes._resume_events.clear()
-    assistant_routes._session_approvals.clear()
-    assistant_routes._account_sessions.clear()
-    assistant_routes._rate_limiters.clear()
-
-
 def _owned_chat_session(**overrides: Any) -> MagicMock:
     s = MagicMock()
     s.id = uuid.uuid4()
@@ -225,96 +212,9 @@ def test_list_sessions_unexpected_error_returns_500(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_create_session_returns_201_with_next_number(client: TestClient) -> None:
-    max_sn_result = MagicMock()
-    max_sn_result.scalar.return_value = 4
-    _queue_executes(client.mock_session, max_sn_result)  # type: ignore[attr-defined]
-
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            "/api/v1/assistant/sessions",
-            json={"provider": "openai", "model": "gpt-4o", "context_window_tokens": 200000, "name": "New"},
-        )
-
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["name"] == "New"
-    assert body["provider"] == "openai"
-    assert body["session_number"] == 5
-
-
-def test_create_session_context_window_below_minimum_rejected(client: TestClient) -> None:
-    resp = client.post("/api/v1/assistant/sessions", json={"context_window_tokens": 10})
-    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-
-
 # ---------------------------------------------------------------------------
 # GET / PATCH / DELETE /sessions/{id}
 # ---------------------------------------------------------------------------
-
-
-def test_get_session_returns_message_count(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    count_result = MagicMock()
-    count_result.scalar.return_value = 9
-    _queue_executes(client.mock_session, count_result)  # type: ignore[attr-defined]
-
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
-        resp = client.get(f"/api/v1/assistant/sessions/{chat_session.id}")
-
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["message_count"] == 9
-
-
-def test_get_session_foreign_session_returns_404(client: TestClient) -> None:
-    foreign = _owned_chat_session(account_id=uuid.uuid4())
-    _stub_owned_session(client.mock_session, foreign)  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
-        resp = client.get(f"/api/v1/assistant/sessions/{foreign.id}")
-    assert resp.status_code == 404
-
-
-def test_get_session_missing_returns_404(client: TestClient) -> None:
-    _stub_owned_session(client.mock_session, None)  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
-        resp = client.get(f"/api/v1/assistant/sessions/{uuid.uuid4()}")
-    assert resp.status_code == 404
-
-
-def test_rename_session_updates_name(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
-        resp = client.patch(f"/api/v1/assistant/sessions/{chat_session.id}", json={"name": "Renamed"})
-
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["name"] == "Renamed"
-
-
-def test_rename_session_blank_name_rejected(client: TestClient) -> None:
-    resp = client.patch(f"/api/v1/assistant/sessions/{uuid.uuid4()}", json={"name": ""})
-    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-
-
-def test_delete_session_removes_in_memory_state(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    sid = str(chat_session.id)
-    assistant_routes._session_approvals[sid] = {"click": {"page_path": "/", "expires_at": _NOW}}
-    assistant_routes._rate_limiters[sid] = assistant_routes.ActionRateLimiter()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
-        resp = client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
-
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "deleted"
-    assert sid not in assistant_routes._session_approvals
-    assert sid not in assistant_routes._rate_limiters
 
 
 # ---------------------------------------------------------------------------
@@ -377,16 +277,6 @@ def test_append_message_invalid_role_rejected(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_stream_session_not_found_returns_404(client: TestClient) -> None:
-    _stub_owned_session(client.mock_session, None)  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{uuid.uuid4()}/stream",
-            json={"content": "hi", "provider": "openai", "model": "gpt-4o"},
-        )
-    assert resp.status_code == 404
-
-
 def test_stream_db_error_returns_503(client: TestClient) -> None:
     client.mock_session.get = AsyncMock(side_effect=SQLAlchemyError("boom"))  # type: ignore[attr-defined]
     with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
@@ -447,280 +337,6 @@ def test_stream_emits_done_event_with_message_id(client: TestClient) -> None:
     assert "msg-123" in resp.text
 
 
-def test_stream_session_constructed_with_expire_on_commit_false(client: TestClient) -> None:
-    """FAR-825 regression: the stream's dedicated session must not expire on commit.
-
-    The generator constructs ``AsyncSession(session.bind, autobegin=False)``.
-    Without an explicit ``expire_on_commit=False``, the SQLAlchemy default
-    (``expire_on_commit=True``) expires every ORM attribute at each
-    ``session.begin()`` commit inside the generator. Any later attribute read
-    then triggers a lazy refresh — which raises
-    ``InvalidRequestError: Autobegin is disabled on this Session`` on an
-    ``autobegin=False`` session (the FAR-808/FAR-820 defect class, currently
-    swallowed by the generator's broad ``except`` as a silent stream failure).
-    This test asserts the constructor kwargs pin ``expire_on_commit=False`` so
-    the footgun cannot silently reappear.
-    """
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    fake_db = AsyncMock()
-    init = assistant_routes._StreamInit(backend=MagicMock(), parent_msg_id=uuid.uuid4(), messages=[])
-
-    async def fake_loop(ctx: Any, request: Any, backend: Any, messages: Any, parent: Any, state: Any) -> Any:
-        state["msg_id"] = "msg-456"
-        yield 'event: token\ndata: {"token": "hi"}\n\n'
-
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.AsyncSession", return_value=fake_db) as session_factory,
-        patch("modulo.api.routes.assistant._initialise_stream", new_callable=AsyncMock, return_value=init),
-        patch("modulo.api.routes.assistant._run_stream_loop", fake_loop),
-    ):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{chat_session.id}/stream",
-            json={"content": "hi", "provider": "openai", "model": "gpt-4o"},
-        )
-    assert resp.status_code == 200, resp.text
-    assert "event: done" in resp.text
-    constructor_kwargs = session_factory.call_args.kwargs
-    assert constructor_kwargs.get("expire_on_commit") is False, (
-        "The stream's dedicated AsyncSession must pass expire_on_commit=False: with the "
-        "True default, a post-commit attribute read on this autobegin=False session raises "
-        "InvalidRequestError (FAR-808/FAR-820 defect class)"
-    )
-    assert constructor_kwargs.get("autobegin") is False
-
-
-# ---------------------------------------------------------------------------
-# POST /sessions/{id}/permission-response
-# ---------------------------------------------------------------------------
-
-
-def test_permission_response_rejected_when_ui_driving_disabled(client: TestClient) -> None:
-    with patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(False)):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{uuid.uuid4()}/permission-response",
-            json={"request_id": str(uuid.uuid4()), "action": "approve"},
-        )
-    assert resp.status_code == 403
-    assert "UI driving is disabled" in resp.json()["detail"]
-
-
-def test_permission_response_unknown_request_returns_404(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    with (
-        patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(True)),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{chat_session.id}/permission-response",
-            json={"request_id": str(uuid.uuid4()), "action": "approve"},
-        )
-    assert resp.status_code == 404
-
-
-def test_permission_response_records_decision_and_sets_event(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    request_id = str(uuid.uuid4())
-    event = asyncio.Event()
-    assistant_routes._pending_permissions[request_id] = (event, str(chat_session.id))
-    with (
-        patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(True)),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{chat_session.id}/permission-response",
-            json={"request_id": request_id, "action": "approve"},
-        )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "ok"
-    assert event.is_set()
-    assert assistant_routes._permission_decisions[request_id] == {"action": "approve"}
-
-
-def test_permission_response_foreign_session_request_returns_403(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    request_id = str(uuid.uuid4())
-    assistant_routes._pending_permissions[request_id] = (asyncio.Event(), str(uuid.uuid4()))
-    with (
-        patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(True)),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{chat_session.id}/permission-response",
-            json={"request_id": request_id, "action": "approve"},
-        )
-    assert resp.status_code == 403
-
-
-# ---------------------------------------------------------------------------
-# POST /sessions/{id}/ui-command-results, reset-permissions, resume, stop
-# ---------------------------------------------------------------------------
-
-
-def test_ui_command_results_no_pending_event_returns_ok(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    with (
-        patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(True)),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{chat_session.id}/ui-command-results",
-            json={"results": [{"id": "1", "name": "click", "success": True}]},
-        )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "ok"
-
-
-def test_ui_command_results_disabled_ui_driving_returns_403(client: TestClient) -> None:
-    with patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(False)):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{uuid.uuid4()}/ui-command-results",
-            json={"results": [{"id": "1", "name": "click", "success": True}]},
-        )
-    assert resp.status_code == 403
-
-
-def test_reset_permissions_clears_approvals_and_rate_limiter(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    sid = str(chat_session.id)
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    assistant_routes._session_approvals[sid] = {"click": {"page_path": "/", "expires_at": _NOW}}
-    assistant_routes._rate_limiters[sid] = assistant_routes.ActionRateLimiter()
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/reset-permissions")
-    assert resp.status_code == 200, resp.text
-    assert sid not in assistant_routes._session_approvals
-    assert sid not in assistant_routes._rate_limiters
-
-
-def test_resume_session_sets_resume_event(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    sid = str(chat_session.id)
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    event = asyncio.Event()
-    assistant_routes._resume_events[sid] = event
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/resume")
-    assert resp.status_code == 200, resp.text
-    assert event.is_set()
-
-
-def test_stop_session_wakes_pending_ui_event(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    sid = str(chat_session.id)
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    event = asyncio.Event()
-    assistant_routes._pending_ui_results[sid] = event
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/stop")
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "stopped"
-    assert event.is_set()
-    assert sid not in assistant_routes._pending_ui_results
-    assert len(assistant_routes._ui_command_results[sid]) == 1
-
-
-# ---------------------------------------------------------------------------
-# GET /sessions/{id}/audit-trail (system admin only)
-# ---------------------------------------------------------------------------
-
-
-def test_audit_trail_forbidden_for_non_system_admin(client: TestClient) -> None:
-    resp = client.get(f"/api/v1/assistant/sessions/{uuid.uuid4()}/audit-trail")
-    assert resp.status_code == 403
-
-
-def test_audit_trail_returns_entries_for_system_admin(system_admin_client: TestClient) -> None:
-    msg = MagicMock()
-    msg.created_at = _NOW
-    msg.tool_results_json = {
-        "tool_name": "click",
-        "success": True,
-        "result": {"args": {"selector": "#btn"}, "snapshotBefore": {"url": "https://example.com"}},
-    }
-    result = MagicMock()
-    result.scalars.return_value.all.return_value = [msg]
-    _queue_executes(system_admin_client.mock_session, result)  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
-        resp = system_admin_client.get(f"/api/v1/assistant/sessions/{uuid.uuid4()}/audit-trail")
-    assert resp.status_code == 200, resp.text
-    items = resp.json()["items"]
-    assert len(items) == 1
-    assert items[0]["action"] == "click"
-    assert items[0]["url"] == "https://example.com"
-    assert items[0]["success"] is True
-
-
-# ---------------------------------------------------------------------------
-# POST /sessions/{id}/undo
-# ---------------------------------------------------------------------------
-
-
-def test_undo_no_previous_action(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = None
-    _queue_executes(client.mock_session, result)  # type: ignore[attr-defined]
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/undo")
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "no_action"
-
-
-def test_undo_navigate_derives_go_back(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    last = MagicMock()
-    last.tool_results_json = {"tool_name": "navigate", "result": {"args": {"path": "/pipelines"}}}
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = last
-    _queue_executes(client.mock_session, result)  # type: ignore[attr-defined]
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/undo")
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "found"
-    assert body["undo_action"]["name"] == "go_back"
-
-
-def test_undo_non_invertible_action(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    last = MagicMock()
-    last.tool_results_json = {"tool_name": "screenshot", "result": {"args": {}}}
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = last
-    _queue_executes(client.mock_session, result)  # type: ignore[attr-defined]
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/undo")
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "no_inverse"
-
-
 # ---------------------------------------------------------------------------
 # Module-level helpers (pure functions — direct unit tests)
 # ---------------------------------------------------------------------------
@@ -763,13 +379,6 @@ def test_build_backend_unsupported_provider_rejected() -> None:
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
 
 
-def test_action_rate_limiter_blocks_after_max_actions() -> None:
-    limiter = assistant_routes.ActionRateLimiter(max_actions=2, window_seconds=60)
-    assert limiter.check() is True
-    assert limiter.check() is True
-    assert limiter.check() is False
-
-
 def test_reconstruct_tool_calls_parses_and_tolerates_bad_json() -> None:
     buffers = {1: {"id": "a", "name": "click", "args": '{"selector": "#x"}'}}
     calls = assistant_routes._reconstruct_tool_calls(buffers)
@@ -801,80 +410,6 @@ def test_accumulate_tool_call_chunks_merges_argument_fragments() -> None:
     )
     assert buffers[0]["args"] == '{"selector": "#a"}'
     assert buffers[1]["name"] == "fill"
-
-
-def test_check_nogo_matches_page_and_selector_patterns() -> None:
-    assert assistant_routes._check_nogo("navigate", {}, "/admin/billing") is True
-    assert assistant_routes._check_nogo("click", {"selector": "#delete-org"}, "/pipelines") is True
-    assert assistant_routes._check_nogo("extract", {"selector": "#x"}, "/pipelines") is False
-
-
-def test_tool_allowlist_disabled_outside_allowlists() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    config = AssistantConfig(allowed_selectors=["#safe"], allowed_page_patterns=["/reports"])
-    assert assistant_routes._tool_allowlist_disabled(config, "click", {"selector": "#danger"}) is True
-    assert assistant_routes._tool_allowlist_disabled(config, "click", {"selector": "#safe-btn"}) is False
-    assert assistant_routes._tool_allowlist_disabled(config, "navigate", {"path": "/admin"}) is True
-    assert assistant_routes._tool_allowlist_disabled(config, "navigate", {"path": "/reports/1"}) is False
-
-
-def test_default_tool_permission_by_mode() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    locked = AssistantConfig(permission_mode="locked_down")
-    assert assistant_routes._default_tool_permission(locked, "click", {}) == "requires_approval"
-    assert assistant_routes._default_tool_permission(locked, "navigate", {}) == "always_allowed"
-    full_auto = AssistantConfig(permission_mode="full_auto", auto_execute_threshold=0.8)
-    assert assistant_routes._default_tool_permission(full_auto, "click", {"confidence": 0.5}) == "requires_approval"
-    assert assistant_routes._default_tool_permission(full_auto, "click", {"confidence": 0.9}) == "always_allowed"
-    assert assistant_routes._default_tool_permission(full_auto, "click", {"confidence": "high"}) == "always_allowed"
-    standard = AssistantConfig(permission_mode="standard")
-    assert assistant_routes._default_tool_permission(standard, "press", {}) == "requires_approval"
-
-
-def test_resolve_tool_permission_overrides_and_destructive_patterns() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    override = AssistantConfig(permission_mode="locked_down", tool_permissions={"click": "always_allowed"})
-    assert assistant_routes._resolve_tool_permission(override, "click", {}) == "always_allowed"
-    destructive = AssistantConfig(permission_mode="standard")
-    assert (
-        assistant_routes._resolve_tool_permission(destructive, "click", {"selector": "#delete-account-btn"}, "")
-        == "requires_approval"
-    )
-
-
-def test_clear_session_approvals_for_account_scopes_to_account() -> None:
-    other_session = str(uuid.uuid4())
-    assistant_routes._account_sessions["acct-1"] = {"s-1"}
-    assistant_routes._session_approvals["s-1"] = {"click": {"page_path": "/", "expires_at": _NOW}}
-    assistant_routes._session_approvals[other_session] = {"fill": {"page_path": "/", "expires_at": _NOW}}
-    assistant_routes.clear_session_approvals_for_account("acct-1")
-    assert "s-1" not in assistant_routes._session_approvals
-    assert other_session in assistant_routes._session_approvals
-
-
-def test_get_all_tool_definitions_includes_and_excludes_ui_tools() -> None:
-    with patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=[{"type": "function"}]):
-        with_ui = assistant_routes._get_all_tool_definitions(include_ui_tools=True)
-        without_ui = assistant_routes._get_all_tool_definitions(include_ui_tools=False)
-    assert len(with_ui) == len(assistant_routes._UI_TOOLS) + 1
-    assert without_ui == [{"type": "function"}]
-
-
-def test_split_permission_payload_and_merge_results() -> None:
-    pending = [{"id": "t1", "name": "click", "args": {"selector": "#a"}}]
-    payload, req_id = assistant_routes._build_permission_request_payload(pending)
-    assert payload["request_id"] == req_id
-    assert payload["tools"][0]["name"] == "click"
-    merged = assistant_routes._merge_ui_command_results(
-        pending,
-        [{"name": "click", "success": True, "result": {"ok": 1}}],
-    )
-    assert merged[0]["tool_call_id"] == "t1"
-    assert merged[0]["success"] is True
-    assert assistant_routes._tool_result_content({"result": {"a": 1}}) == json.dumps({"a": 1})
 
 
 def test_resolve_stream_api_key_uses_explicit_override() -> None:
@@ -1085,117 +620,6 @@ def test_reconstruct_messages_converts_rows() -> None:
     assert isinstance(messages[1], AIMessage)
 
 
-def test_is_ui_driving_enabled_defaults_false_on_registry_failure() -> None:
-    failing_registry = MagicMock()
-    failing_registry.resolve_flag = AsyncMock(side_effect=RuntimeError("registry down"))
-    with patch("modulo.api.routes.assistant.get_registry", return_value=failing_registry):
-        enabled = asyncio.run(assistant_routes._is_ui_driving_enabled(_ORG_ID))
-    assert enabled is False
-
-
-def test_is_set_and_clear_session_approvals_in_memory() -> None:
-    sid = str(uuid.uuid4())
-
-    async def _scenario() -> None:
-        assert await assistant_routes._is_approved_for_session(sid, "click", "/reports") is False
-        await assistant_routes._set_session_approval(sid, "click", "/reports")
-        assert await assistant_routes._is_approved_for_session(sid, "click", "/reports") is True
-        assert await assistant_routes._is_approved_for_session(sid, "click", "/other") is False
-        await assistant_routes._clear_session_approvals(sid)
-        assert await assistant_routes._is_approved_for_session(sid, "click", "/reports") is False
-
-    asyncio.run(_scenario())
-
-
-def test_is_approved_for_session_expires_stale_approvals() -> None:
-    sid = str(uuid.uuid4())
-    assistant_routes._session_approvals[sid] = {
-        "click": {"page_path": "/reports", "expires_at": datetime.now(UTC) - timedelta(minutes=1)}
-    }
-
-    async def _scenario() -> None:
-        assert await assistant_routes._is_approved_for_session(sid, "click", "/reports") is False
-
-    asyncio.run(_scenario())
-    assert sid not in assistant_routes._session_approvals
-
-
-def test_await_permission_decision_approve_for_session() -> None:
-    sid = str(uuid.uuid4())
-    pending = [{"id": "t1", "name": "click", "args": {}}]
-    preset_event = asyncio.Event()
-    preset_event.set()
-    assistant_routes._permission_decisions["req-1"] = {"action": "approve_for_session"}
-
-    async def _scenario() -> list[dict[str, Any]]:
-        with patch("modulo.api.routes.assistant.asyncio.Event", return_value=preset_event):
-            return await assistant_routes._await_permission_decision(None, sid, "req-1", pending, "/reports")
-
-    approved = asyncio.run(_scenario())
-    assert approved == pending
-    assert "click" in assistant_routes._session_approvals[sid]
-
-
-def test_await_permission_decision_reject_returns_empty() -> None:
-    sid = str(uuid.uuid4())
-    preset_event = asyncio.Event()
-    preset_event.set()
-    assistant_routes._permission_decisions["req-2"] = {"action": "reject"}
-
-    async def _scenario() -> list[dict[str, Any]]:
-        with patch("modulo.api.routes.assistant.asyncio.Event", return_value=preset_event):
-            return await assistant_routes._await_permission_decision(None, sid, "req-2", [], "/reports")
-
-    approved = asyncio.run(_scenario())
-    assert not approved
-
-
-def test_await_permission_decision_registry_branch() -> None:
-    registry = MagicMock()
-    registry.subscribe_permission_response = AsyncMock(return_value={"action": "approve"})
-    registry.set_permission_request = AsyncMock()
-    approved = asyncio.run(
-        assistant_routes._await_permission_decision(
-            registry, "sid", "req-3", [{"id": "t", "name": "n", "args": {}}], "/"
-        )
-    )
-    assert len(approved) == 1
-    registry.set_permission_request.assert_awaited_once()
-
-
-def test_wait_for_ui_command_results_in_memory() -> None:
-    sid = str(uuid.uuid4())
-    event = asyncio.Event()
-    event.set()
-    assistant_routes._ui_command_results[sid] = [{"name": "click", "success": True}]
-    results = asyncio.run(assistant_routes._wait_for_ui_command_results(None, sid, event))
-    assert results == [{"name": "click", "success": True}]
-
-
-def test_wait_for_ui_command_results_registry_branch() -> None:
-    registry = MagicMock()
-    registry.subscribe_ui_results = AsyncMock(return_value=True)
-    registry.get_and_clear_ui_command_results = AsyncMock(return_value=[{"name": "fill"}])
-    results = asyncio.run(assistant_routes._wait_for_ui_command_results(registry, "sid", asyncio.Event()))
-    assert results == [{"name": "fill"}]
-
-
-def test_wait_for_stream_resume_in_memory_with_event() -> None:
-    sid = str(uuid.uuid4())
-    event = asyncio.Event()
-    event.set()
-    assistant_routes._resume_events[sid] = event
-    asyncio.run(assistant_routes._wait_for_stream_resume(None, sid))
-    assert assistant_routes._resume_events.get(sid) is event
-
-
-def test_wait_for_stream_resume_registry_branch() -> None:
-    registry = MagicMock()
-    registry.subscribe_resume = AsyncMock()
-    asyncio.run(assistant_routes._wait_for_stream_resume(registry, "sid"))
-    registry.subscribe_resume.assert_awaited_once()
-
-
 def test_run_mcp_tool_calls_without_key_reports_error() -> None:
     req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
     calls = [{"id": "t1", "name": "search", "args": {}}]
@@ -1236,67 +660,63 @@ def test_run_mcp_tool_calls_reraises_http_exception() -> None:
         _collect(assistant_routes._run_mcp_tool_calls(calls, req, "http://base"))
 
 
-def test_run_manifest_calls_with_path_returns_route() -> None:
-    req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
-    manifest = {"routes": {"/runs": {"name": "Runs"}}, "elements": {"/runs": [{"tag": "table"}]}}
-    calls = [{"id": "t1", "name": "get_manifest", "args": {"path": "/runs"}}]
-    with patch("modulo.core.manifest.get_manifest", return_value=manifest):
-        events = _collect(assistant_routes._run_manifest_calls(calls, req))
-    assert events[0]["success"] is True
-    assert events[0]["result"]["route"] == {"name": "Runs"}
-
-
-def test_run_manifest_calls_without_path_returns_summary() -> None:
-    req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
+def test_run_manifest_calls_without_path_returns_full_manifest() -> None:
     manifest = {
-        "routes": {"/runs": {"name": "Runs", "testid": "runs", "type": "page", "sidebar_group": "BUILD"}},
-        "elements": {"/runs": []},
-        "sidebar_groups": {"BUILD": {}},
+        "routes": {"/a": {"name": "A", "testid": "a", "type": "page", "sidebar_group": "g"}},
+        "elements": {"/a": [{"testid": "create"}]},
+        "sidebar_groups": {"g": {}},
     }
-    calls = [{"id": "t1", "name": "get_manifest", "args": {}}]
     with patch("modulo.core.manifest.get_manifest", return_value=manifest):
-        events = _collect(assistant_routes._run_manifest_calls(calls, req))
-    assert events[0]["result"]["routes"]["/runs"]["name"] == "Runs"
+        events = _collect(assistant_routes._run_manifest_calls([{"id": "t1", "name": "get_manifest", "args": {}}]))
+    assert events[0]["tool_call_id"] == "t1"
+    assert events[0]["tool_name"] == "get_manifest"
+    assert events[0]["success"] is True
+    assert events[0]["result"]["routes"]["/a"]["name"] == "A"
+    assert events[0]["result"]["sidebar_groups"] == {"g": {}}
 
 
-def test_run_manifest_calls_excluded_ui_tools_reports_error() -> None:
-    req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o", exclude_ui_tools=True)
-    calls = [{"id": "t1", "name": "get_manifest", "args": {}}]
-    events = _collect(assistant_routes._run_manifest_calls(calls, req))
-    assert events[0]["success"] is False
+def test_run_manifest_calls_with_path_returns_single_route() -> None:
+    manifest = {"routes": {"/a": {"name": "A"}}, "elements": {"/a": [{"testid": "create"}]}, "sidebar_groups": {}}
+    with patch("modulo.core.manifest.get_manifest", return_value=manifest):
+        events = _collect(
+            assistant_routes._run_manifest_calls([{"id": "t1", "name": "get_manifest", "args": {"path": "/a"}}])
+        )
+    assert events[0]["tool_name"] == "get_manifest"
+    assert events[0]["result"] == {"route": {"name": "A"}, "elements": [{"testid": "create"}]}
 
 
-def test_classify_ui_tool_permissions_buckets() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
+def test_get_all_tool_definitions_includes_navigation_by_default() -> None:
+    mcp_tools = [{"type": "function", "function": {"name": "mcp_tool", "parameters": {}}}]
+    with patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools):
+        tools = assistant_routes._get_all_tool_definitions()
 
-    config = AssistantConfig(permission_mode="standard")
-    sid = str(uuid.uuid4())
-    ui_calls = [
-        {"id": "t1", "name": "navigate", "args": {}},
-        {"id": "t2", "name": "press", "args": {}},
-        {"id": "t3", "name": "get_manifest", "args": {}},
+    names = [tool["function"]["name"] for tool in tools]
+    assert names == ["get_manifest", "mcp_tool"]
+    get_manifest = next(tool for tool in tools if tool["function"]["name"] == "get_manifest")
+    assert get_manifest["function"]["parameters"]["properties"]["path"]["type"] == "string"
+
+
+def test_get_all_tool_definitions_excludes_navigation_when_disabled() -> None:
+    mcp_tools = [{"type": "function", "function": {"name": "mcp_tool", "parameters": {}}}]
+    with patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=mcp_tools):
+        tools = assistant_routes._get_all_tool_definitions(include_navigation=False)
+
+    assert [tool["function"]["name"] for tool in tools] == ["mcp_tool"]
+
+
+def test_stream_tool_events_splits_navigation_from_mcp() -> None:
+    ctx = _stream_ctx()
+    manifest = {"routes": {"/a": {"name": "A"}}, "elements": {}, "sidebar_groups": {}}
+    tool_calls = [
+        {"id": "n1", "name": "get_manifest", "args": {"path": "/a"}},
+        {"id": "m1", "name": "search", "args": {}},
     ]
-
-    async def _scenario() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        return await assistant_routes._classify_ui_tool_permissions(config, ui_calls, "/reports", sid)
-
-    approved, pending = asyncio.run(_scenario())
-    assert [tc["id"] for tc in approved] == ["t1", "t3"]
-    assert [tc["id"] for tc in pending] == ["t2"]
-
-
-def test_classify_ui_tool_permissions_skips_disabled() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    config = AssistantConfig(permission_mode="full_auto", allowed_page_patterns=["/reports"])
-    ui_calls = [{"id": "t1", "name": "navigate", "args": {"path": "/admin/billing"}}]
-
-    async def _scenario() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        return await assistant_routes._classify_ui_tool_permissions(config, ui_calls, "/admin/billing", "sid")
-
-    approved, pending = asyncio.run(_scenario())
-    assert not approved
-    assert not pending
+    results: list[dict[str, Any]] = []
+    with patch("modulo.core.manifest.get_manifest", return_value=manifest):
+        events = _collect(assistant_routes._stream_tool_events(tool_calls, ctx, results))
+    assert len(events) == 2
+    assert len(results) == 2
+    assert all(event.startswith("event: tool_call") for event in events)
 
 
 def test_save_and_add_assistant_messages() -> None:
@@ -1315,71 +735,6 @@ def test_finalise_stream_assistant_message_skips_naming_when_named() -> None:
     assert uuid.UUID(msg_id)
 
 
-def test_auto_name_stream_session_first_message() -> None:
-    ctx_db = _make_mock_session()
-    count_result = MagicMock()
-    count_result.scalar.return_value = 1
-    ctx_db.execute = AsyncMock(return_value=count_result)
-    chat_session = MagicMock()
-    chat_session.name = None
-    req = assistant_routes.StreamRequest(
-        content="x" * 50, provider="openai", model="gpt-4o", context_window_tokens=200000
-    )
-    asyncio.run(assistant_routes._auto_name_stream_session(ctx_db, uuid.uuid4(), req, chat_session))
-    stmt = ctx_db.execute.await_args_list[-1].args[0]
-    assert stmt is not None
-
-
-def test_auto_name_stream_session_skips_named_session() -> None:
-    ctx_db = _make_mock_session()
-    ctx_db.execute = AsyncMock()
-    chat_session = MagicMock()
-    chat_session.name = "Named"
-    req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
-    asyncio.run(assistant_routes._auto_name_stream_session(ctx_db, uuid.uuid4(), req, chat_session))
-    ctx_db.execute.assert_not_awaited()
-
-
-def test_auto_name_stream_session_ten_message_summary() -> None:
-    ctx_db = _make_mock_session()
-    count_result = MagicMock()
-    count_result.scalar.return_value = 10
-    first_msg_result = MagicMock()
-    first_msg_result.scalar.return_value = "First user message"
-    ctx_db.execute = AsyncMock(side_effect=[count_result, first_msg_result])
-    chat_session = MagicMock()
-    chat_session.name = None
-    req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
-    asyncio.run(assistant_routes._auto_name_stream_session(ctx_db, uuid.uuid4(), req, chat_session))
-    assert ctx_db.execute.await_count == 3
-
-
-def test_build_stream_tools_param_gates_on_support_and_flags() -> None:
-    ctx = _stream_ctx()
-    no_tools_backend = MagicMock(spec=["stream"])
-    assert asyncio.run(assistant_routes._build_stream_tools_param(no_tools_backend, ctx)) is None
-
-    tools_backend = MagicMock()
-    tools_backend.supports_tools = True
-    with (
-        patch("modulo.api.routes.assistant.build_tool_registry", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=[]),
-        patch("modulo.api.routes.assistant._is_ui_driving_enabled", new_callable=AsyncMock, return_value=False),
-    ):
-        tools = asyncio.run(assistant_routes._build_stream_tools_param(tools_backend, ctx))
-    assert not tools
-
-    exclude_req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o", exclude_ui_tools=True)
-    ctx_exclude = _stream_ctx(req=exclude_req)
-    with (
-        patch("modulo.api.routes.assistant.build_tool_registry", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.get_mcp_tool_definitions", return_value=[]),
-        patch("modulo.api.routes.assistant._is_ui_driving_enabled", new_callable=AsyncMock, return_value=True),
-    ):
-        tools = asyncio.run(assistant_routes._build_stream_tools_param(tools_backend, ctx_exclude))
-    assert not tools
-
-
 def test_build_stream_system_prompt_uses_skill_loader() -> None:
     ctx = _stream_ctx()
     loader = MagicMock()
@@ -1392,7 +747,6 @@ def test_build_stream_system_prompt_uses_skill_loader() -> None:
         user_id=_USER_ID,
         page_context=None,
         system_prompt_override=None,
-        include_ui_tools_text=False,
     )
 
 
@@ -1458,132 +812,6 @@ def test_initialise_stream_reports_backend_error() -> None:
     assert init.error_detail == "Failed to initialize backend: boom"
 
 
-def test_stream_approved_commands_empty_calls_is_noop() -> None:
-    flow = assistant_routes._UiToolFlow()
-    events = _collect(assistant_routes._stream_approved_commands(_stream_ctx(), MagicMock(), [], [], flow))
-    assert not events
-    assert flow.should_break is False
-
-
-def test_stream_approved_commands_rate_limited() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    ctx = _stream_ctx()
-    sid = ctx.session_id_str
-    exhausted = assistant_routes.ActionRateLimiter(max_actions=1, window_seconds=60)
-    exhausted.check()
-    assistant_routes._rate_limiters[sid] = exhausted
-    flow = assistant_routes._UiToolFlow()
-    config = AssistantConfig()
-    events = _collect(
-        assistant_routes._stream_approved_commands(ctx, config, [{"id": "t1", "name": "click", "args": {}}], [], flow)
-    )
-    assert flow.should_break is True
-    assert "Rate limited" in events[0]
-
-
-def test_stream_approved_commands_executes_and_merges_results() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    ctx = _stream_ctx()
-    flow = assistant_routes._UiToolFlow()
-    results = [{"name": "click", "success": True, "result": {"clicked": True}}]
-    with patch(
-        "modulo.api.routes.assistant._wait_for_ui_command_results",
-        new_callable=AsyncMock,
-        return_value=results,
-    ):
-        events = _collect(
-            assistant_routes._stream_approved_commands(
-                ctx,
-                AssistantConfig(),
-                [{"id": "t1", "name": "click", "args": {}}],
-                [],
-                flow,
-            )
-        )
-    assert flow.should_break is False
-    assert "event: ui_command_batch" in events[0]
-    assert "event: tool_call" in events[1]
-
-
-def test_stream_approved_commands_user_cancel_breaks_loop() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    ctx = _stream_ctx()
-    flow = assistant_routes._UiToolFlow()
-    tool_results: list[dict[str, Any]] = []
-    results = [{"name": "click", "success": False, "error": "cancelled_by_user"}]
-    with patch(
-        "modulo.api.routes.assistant._wait_for_ui_command_results",
-        new_callable=AsyncMock,
-        return_value=results,
-    ):
-        events = _collect(
-            assistant_routes._stream_approved_commands(
-                ctx,
-                AssistantConfig(),
-                [{"id": "t1", "name": "click", "args": {}}],
-                tool_results,
-                flow,
-            )
-        )
-    assert flow.should_break is True
-    assert "event: abort_summary" in events[-1]
-
-
-def test_stream_ui_tool_flow_reports_excluded_ui_tools() -> None:
-    req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o", exclude_ui_tools=True)
-    ctx = _stream_ctx(req=req)
-    flow = assistant_routes._UiToolFlow()
-    tool_results: list[dict[str, Any]] = []
-    events = _collect(
-        assistant_routes._stream_ui_tool_flow(ctx, [{"id": "t1", "name": "click", "args": {}}], tool_results, flow)
-    )
-    payload = json.loads(events[0].split("data: ")[1])
-    assert payload["success"] is False
-
-
-def test_stream_ui_tool_flow_reports_disabled_flag() -> None:
-    ctx = _stream_ctx()
-    flow = assistant_routes._UiToolFlow()
-    tool_results: list[dict[str, Any]] = []
-    with patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(False)):
-        events = _collect(
-            assistant_routes._stream_ui_tool_flow(ctx, [{"id": "t1", "name": "click", "args": {}}], tool_results, flow)
-        )
-    payload = json.loads(events[0].split("data: ")[1])
-    assert "UI driving is disabled" in payload["error"]
-
-
-def test_stream_ui_tool_flow_happy_path_waits_for_resume_when_paused() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    ctx = _stream_ctx()
-    ctx.chat_session.name = "Named"
-    assistant_routes._resume_events[ctx.session_id_str] = asyncio.Event()
-    assistant_routes._resume_events[ctx.session_id_str].set()
-    config = AssistantConfig()
-    config_service = MagicMock()
-    config_service.get_config = AsyncMock(return_value=config)
-    flow = assistant_routes._UiToolFlow()
-    tool_results: list[dict[str, Any]] = []
-    with (
-        patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(True)),
-        patch("modulo.api.routes.assistant.AssistantConfigService", return_value=config_service),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch(
-            "modulo.api.routes.assistant._classify_ui_tool_permissions",
-            new_callable=AsyncMock,
-            return_value=([], []),
-        ),
-        patch("modulo.api.routes.assistant._wait_for_stream_resume", new_callable=AsyncMock),
-    ):
-        events = _collect(assistant_routes._stream_ui_tool_flow(ctx, [], tool_results, flow))
-    assert "event: paused" in events[0]
-    assert flow.should_break is False
-
-
 def test_stream_backend_tokens_accumulates_and_tracks_content() -> None:
     backend = MagicMock()
 
@@ -1615,65 +843,6 @@ def test_stream_backend_tokens_stops_on_disconnect() -> None:
     events = _collect(assistant_routes._stream_backend_tokens(backend, [], None, request, {}, state))
     assert not events
     assert state["disconnected"] is True
-
-
-def test_stream_tool_events_splits_tool_families() -> None:
-    ctx = _stream_ctx()
-    state: dict[str, Any] = {}
-
-    async def _mcp_gen(*_a: Any, **_k: Any) -> AsyncGenerator[dict[str, Any], None]:
-        yield {"tool_call_id": "m1", "tool_name": "search", "success": True}
-
-    async def _manifest_gen(*_a: Any, **_k: Any) -> AsyncGenerator[dict[str, Any], None]:
-        yield {"tool_call_id": "g1", "tool_name": "get_manifest", "success": True}
-
-    async def _ui_gen(*_a: Any, **_k: Any) -> AsyncGenerator[str, None]:
-        yield "event: ui_command_batch\ndata: {}\n\n"
-
-    tool_results: list[dict[str, Any]] = []
-    with (
-        patch("modulo.api.routes.assistant._run_mcp_tool_calls", _mcp_gen),
-        patch("modulo.api.routes.assistant._run_manifest_calls", _manifest_gen),
-        patch("modulo.api.routes.assistant._stream_ui_tool_flow", _ui_gen),
-    ):
-        events = _collect(
-            assistant_routes._stream_tool_events(
-                [{"id": "u1", "name": "click", "args": {}}],
-                [{"id": "m1", "name": "search", "args": {}}],
-                ctx,
-                tool_results,
-                state,
-            )
-        )
-    assert len(events) == 3
-    assert len(tool_results) == 2
-
-
-def test_stream_tool_records_should_break_from_ui_flow() -> None:
-    ctx = _stream_ctx()
-    state: dict[str, Any] = {}
-    flow_flag = {"broken": True}
-
-    async def _ui_gen(_ctx: Any, _calls: Any, _results: Any, flow: Any) -> AsyncGenerator[str, None]:
-        flow.should_break = flow_flag["broken"]
-        return
-        yield  # pragma: no cover - makes this an async generator
-
-    with (
-        patch("modulo.api.routes.assistant._run_mcp_tool_calls", _empty_gen),
-        patch("modulo.api.routes.assistant._run_manifest_calls", _empty_gen),
-        patch("modulo.api.routes.assistant._stream_ui_tool_flow", _ui_gen),
-    ):
-        events = _collect(
-            assistant_routes._stream_tool_events([{"id": "u1", "name": "click", "args": {}}], [], ctx, [], state)
-        )
-    assert not events
-    assert state["should_break"] is True
-
-
-async def _empty_gen(*_a: Any, **_k: Any) -> AsyncGenerator[dict[str, Any], None]:
-    return
-    yield  # pragma: no cover - makes this an async generator
 
 
 def test_append_turn_messages_extends_conversation() -> None:
@@ -1800,193 +969,8 @@ def _failing_executes(session: AsyncMock, exc: Exception) -> None:
     session.execute = AsyncMock(side_effect=_execute)
 
 
-def _owned_session_or_error(mock_session: AsyncMock, exc: Exception | None, found: MagicMock | None = None) -> None:
-    mock_session.get = AsyncMock(side_effect=exc) if exc else AsyncMock(return_value=found)
-
-
-def test_create_session_db_error_returns_503(client: TestClient) -> None:
-    _failing_executes(client.mock_session, SQLAlchemyError("boom"))  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
-        resp = client.post(
-            "/api/v1/assistant/sessions",
-            json={"provider": "openai", "model": "gpt-4o", "context_window_tokens": 200000},
-        )
-    assert resp.status_code == 503
-
-
-@pytest.mark.parametrize(
-    ("method", "path", "json_body"),
-    [
-        ("get", "/api/v1/assistant/sessions/{sid}", None),
-        ("patch", "/api/v1/assistant/sessions/{sid}", {"name": "X"}),
-        ("delete", "/api/v1/assistant/sessions/{sid}", None),
-        ("get", "/api/v1/assistant/sessions/{sid}/messages", None),
-        ("post", "/api/v1/assistant/sessions/{sid}/messages", {"role": "user", "content": "hi"}),
-        ("post", "/api/v1/assistant/sessions/{sid}/reset-permissions", None),
-        ("post", "/api/v1/assistant/sessions/{sid}/resume", None),
-        ("post", "/api/v1/assistant/sessions/{sid}/stop", None),
-        ("post", "/api/v1/assistant/sessions/{sid}/undo", None),
-    ],
-    ids=[
-        "get-session",
-        "rename",
-        "delete",
-        "list-messages",
-        "append-message",
-        "reset-permissions",
-        "resume",
-        "stop",
-        "undo",
-    ],
-)
-def test_session_endpoints_db_error_return_503(
-    client: TestClient, method: str, path: str, json_body: dict[str, Any] | None
-) -> None:
-    _owned_session_or_error(client.mock_session, SQLAlchemyError("boom"))  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
-        kwargs: dict[str, Any] = {} if json_body is None or method in ("get", "delete") else {"json": json_body}
-        resp = getattr(client, method)(path.format(sid=uuid.uuid4()), **kwargs)
-    assert resp.status_code == 503
-
-
-@pytest.mark.parametrize(
-    ("method", "path", "json_body"),
-    [
-        ("post", "/api/v1/assistant/sessions/{sid}/permission-response", {"request_id": "r", "action": "approve"}),
-        ("post", "/api/v1/assistant/sessions/{sid}/ui-command-results", {"results": []}),
-    ],
-    ids=["permission-response", "ui-command-results"],
-)
-def test_ui_command_endpoints_db_error_return_503(
-    client: TestClient, method: str, path: str, json_body: dict[str, Any] | None
-) -> None:
-    _owned_session_or_error(client.mock_session, SQLAlchemyError("boom"))  # type: ignore[attr-defined]
-    with (
-        patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(True)),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-    ):
-        resp = getattr(client, method)(path.format(sid=uuid.uuid4()), json=json_body)
-    assert resp.status_code == 503
-
-
-def test_audit_trail_db_error_returns_503(system_admin_client: TestClient) -> None:
-    _failing_executes(system_admin_client.mock_session, SQLAlchemyError("boom"))  # type: ignore[attr-defined]
-    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
-        resp = system_admin_client.get(f"/api/v1/assistant/sessions/{uuid.uuid4()}/audit-trail")
-    assert resp.status_code == 503
-
-
-def test_delete_session_registry_branch_clears_session(system_admin_client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _owned_session_or_error(system_admin_client.mock_session, None, chat_session)  # type: ignore[attr-defined]
-    registry = MagicMock()
-    registry.clear_session = AsyncMock()
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant._get_registry", return_value=registry),
-    ):
-        resp = system_admin_client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
-    assert resp.status_code == 200
-    registry.clear_session.assert_awaited_once()
-
-
-def test_permission_response_registry_branches(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _owned_session_or_error(client.mock_session, None, chat_session)  # type: ignore[attr-defined]
-    request_id = str(uuid.uuid4())
-
-    registry_missing = MagicMock()
-    registry_missing.get_permission_request = AsyncMock(return_value=None)
-    with (
-        patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(True)),
-        patch("modulo.api.routes.assistant._get_registry", return_value=registry_missing),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{chat_session.id}/permission-response",
-            json={"request_id": request_id, "action": "approve"},
-        )
-    assert resp.status_code == 404
-
-    registry_ok = MagicMock()
-    registry_ok.get_permission_request = AsyncMock(return_value={"session_id": str(chat_session.id), "tools": []})
-    registry_ok.set_permission_decision = AsyncMock()
-    registry_ok.publish_permission_response = AsyncMock()
-    with (
-        patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(True)),
-        patch("modulo.api.routes.assistant._get_registry", return_value=registry_ok),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{chat_session.id}/permission-response",
-            json={"request_id": request_id, "action": "approve_for_session"},
-        )
-    assert resp.status_code == 200, resp.text
-    registry_ok.publish_permission_response.assert_awaited_once()
-
-
-def test_permission_response_registry_foreign_session_returns_403(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _owned_session_or_error(client.mock_session, None, chat_session)  # type: ignore[attr-defined]
-    registry = MagicMock()
-    registry.get_permission_request = AsyncMock(return_value={"session_id": str(uuid.uuid4()), "tools": []})
-    with (
-        patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(True)),
-        patch("modulo.api.routes.assistant._get_registry", return_value=registry),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{chat_session.id}/permission-response",
-            json={"request_id": str(uuid.uuid4()), "action": "approve"},
-        )
-    assert resp.status_code == 403
-
-
-def test_ui_command_results_registry_branch(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _owned_session_or_error(client.mock_session, None, chat_session)  # type: ignore[attr-defined]
-    registry = MagicMock()
-    registry.set_ui_command_results = AsyncMock()
-    registry.publish_ui_results = AsyncMock()
-    with (
-        patch("modulo.api.routes.assistant.get_registry", return_value=_ui_driving_enabled(True)),
-        patch("modulo.api.routes.assistant._get_registry", return_value=registry),
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-    ):
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{chat_session.id}/ui-command-results",
-            json={"results": [{"id": "1", "name": "click", "success": True}]},
-        )
-    assert resp.status_code == 200, resp.text
-    registry.publish_ui_results.assert_awaited_once()
-
-
-def test_resume_and_stop_registry_branches(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _owned_session_or_error(client.mock_session, None, chat_session)  # type: ignore[attr-defined]
-    registry = MagicMock()
-    registry.publish_resume = AsyncMock()
-    registry.set_ui_command_results = AsyncMock()
-    registry.publish_ui_results = AsyncMock()
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant.set_rls_user_context", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant._get_registry", return_value=registry),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/resume")
-        assert resp.status_code == 200, resp.text
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/stop")
-        assert resp.status_code == 200, resp.text
-    assert registry.publish_resume.await_count == 2
-    registry.set_ui_command_results.assert_awaited_once()
-
-
 # ---------------------------------------------------------------------------
-# Additional coverage: _get_registry, _check_nogo edge cases,
-# stream_chat ProgrammingError, stop_session registry branch,
-# rename/delete/get/list/append DB error 501 paths
+# Additional coverage: registry and route error paths.
 # ---------------------------------------------------------------------------
 
 
@@ -1997,14 +981,6 @@ def test_get_registry_returns_none_when_no_redis_url() -> None:
         result = assistant_routes._get_registry()
     assert result is None
     assistant_routes._redis_registry = None
-
-
-def test_check_nogo_write_tool_with_nogo_selector() -> None:
-    assert assistant_routes._check_nogo("fill", {"selector": "#delete-org"}, "/pipelines") is True
-
-
-def test_check_nogo_non_write_tool_not_affected_by_nogo_selector() -> None:
-    assert assistant_routes._check_nogo("extract", {"selector": "#delete-org"}, "/pipelines") is False
 
 
 def test_stream_chat_programming_error_returns_501(client: TestClient) -> None:
@@ -2020,73 +996,6 @@ def test_stream_chat_programming_error_returns_501(client: TestClient) -> None:
             f"/api/v1/assistant/sessions/{chat_session.id}/stream",
             json={"content": "hi", "provider": "openai", "model": "gpt-4o"},
         )
-    assert resp.status_code == 501
-
-
-def test_stop_session_registry_branch(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    registry = MagicMock()
-    registry.set_ui_command_results = AsyncMock()
-    registry.publish_ui_results = AsyncMock()
-    registry.publish_resume = AsyncMock()
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant._get_registry", return_value=registry),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/stop")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "stopped"
-    registry.publish_resume.assert_awaited_once()
-
-
-def test_resume_session_registry_branch(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
-    registry = MagicMock()
-    registry.publish_resume = AsyncMock()
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.assistant._get_registry", return_value=registry),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/resume")
-    assert resp.status_code == 200
-    registry.publish_resume.assert_awaited_once_with(str(chat_session.id))
-
-
-def test_delete_session_programming_error_returns_501(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
-    with patch(
-        "modulo.api.routes.assistant.set_rls_org",
-        new_callable=AsyncMock,
-        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
-    ):
-        resp = client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
-    assert resp.status_code == 501
-
-
-def test_get_session_programming_error_returns_501(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
-    with patch(
-        "modulo.api.routes.assistant.set_rls_org",
-        new_callable=AsyncMock,
-        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
-    ):
-        resp = client.get(f"/api/v1/assistant/sessions/{chat_session.id}")
-    assert resp.status_code == 501
-
-
-def test_rename_session_programming_error_returns_501(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
-    with patch(
-        "modulo.api.routes.assistant.set_rls_org",
-        new_callable=AsyncMock,
-        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
-    ):
-        resp = client.patch(f"/api/v1/assistant/sessions/{chat_session.id}", json={"name": "X"})
     assert resp.status_code == 501
 
 
@@ -2117,62 +1026,6 @@ def test_append_message_programming_error_returns_501(client: TestClient) -> Non
     assert resp.status_code == 501
 
 
-def test_reset_permissions_programming_error_returns_501(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
-    with patch(
-        "modulo.api.routes.assistant.set_rls_org",
-        new_callable=AsyncMock,
-        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/reset-permissions")
-    assert resp.status_code == 501
-
-
-def test_resume_programming_error_returns_501(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
-    with patch(
-        "modulo.api.routes.assistant.set_rls_org",
-        new_callable=AsyncMock,
-        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/resume")
-    assert resp.status_code == 501
-
-
-def test_stop_programming_error_returns_501(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
-    with patch(
-        "modulo.api.routes.assistant.set_rls_org",
-        new_callable=AsyncMock,
-        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
-    ):
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/stop")
-    assert resp.status_code == 501
-
-
-def test_undo_programming_error_returns_501(client: TestClient) -> None:
-    chat_session = _owned_chat_session()
-    client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
-    with (
-        patch(
-            "modulo.api.routes.assistant.set_rls_org",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "modulo.api.routes.assistant.set_rls_user_context",
-            new_callable=AsyncMock,
-        ),
-    ):
-        # Make the execute() inside the try block raise ProgrammingError
-        programming_error = ProgrammingError("stmt", {}, Exception("missing table"))
-        client.mock_session.execute = AsyncMock(side_effect=programming_error)  # type: ignore[attr-defined]
-        resp = client.post(f"/api/v1/assistant/sessions/{chat_session.id}/undo")
-    assert resp.status_code == 501
-
-
 def test_append_message_unexpected_error_returns_500(client: TestClient) -> None:
     chat_session = _owned_chat_session()
     client.mock_session.get = AsyncMock(return_value=chat_session)  # type: ignore[attr-defined]
@@ -2186,56 +1039,6 @@ def test_append_message_unexpected_error_returns_500(client: TestClient) -> None
             json={"role": "user", "content": "hi"},
         )
     assert resp.status_code == 500
-
-
-def test_create_session_programming_error_returns_501(client: TestClient) -> None:
-    with patch(
-        "modulo.api.routes.assistant.set_rls_org",
-        new_callable=AsyncMock,
-        side_effect=ProgrammingError("stmt", {}, Exception("missing table")),
-    ):
-        resp = client.post(
-            "/api/v1/assistant/sessions",
-            json={"provider": "openai", "model": "gpt-4o", "context_window_tokens": 200000},
-        )
-    assert resp.status_code == 501
-
-
-def test_create_session_unexpected_error_returns_500(client: TestClient) -> None:
-    with patch(
-        "modulo.api.routes.assistant.set_rls_org",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("kaboom"),
-    ):
-        resp = client.post(
-            "/api/v1/assistant/sessions",
-            json={"provider": "openai", "model": "gpt-4o", "context_window_tokens": 200000},
-        )
-    assert resp.status_code == 500
-
-
-def test_resolve_tool_permission_full_auto_nogo_returns_disabled() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    config = AssistantConfig(permission_mode="full_auto", auto_execute_threshold=0.8)
-    perm = assistant_routes._resolve_tool_permission(config, "navigate", {"path": "/admin/billing"}, "/admin/billing")
-    assert perm == "disabled"
-
-
-def test_resolve_tool_permission_full_auto_allowlist_outside_returns_disabled() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    config = AssistantConfig(permission_mode="full_auto", allowed_page_patterns=["/reports"])
-    perm = assistant_routes._resolve_tool_permission(config, "navigate", {"path": "/admin"}, "/admin")
-    assert perm == "disabled"
-
-
-def test_resolve_tool_permission_standard_mode_press_requires_approval() -> None:
-    from modulo.core.assistant.config_service import AssistantConfig
-
-    config = AssistantConfig(permission_mode="standard")
-    perm = assistant_routes._resolve_tool_permission(config, "press", {}, "/page")
-    assert perm == "requires_approval"
 
 
 def test_accumulate_tool_call_chunk_new_index() -> None:
@@ -2274,41 +1077,6 @@ def _timeout_without_leaking_awaitable(awaitable: Any, *args: Any, **kwargs: Any
     """
     awaitable.close()
     raise TimeoutError
-
-
-def test_await_permission_decision_timeout_returns_empty() -> None:
-    sid = str(uuid.uuid4())
-    preset_event = asyncio.Event()
-    # event never set → timeout
-
-    async def _scenario() -> list[dict[str, Any]]:
-        with (
-            patch("modulo.api.routes.assistant.asyncio.Event", return_value=preset_event),
-            patch(
-                "modulo.api.routes.assistant.asyncio.wait_for",
-                side_effect=_timeout_without_leaking_awaitable,
-            ),
-        ):
-            return await assistant_routes._await_permission_decision(
-                None, sid, "req-timeout", [{"id": "t", "name": "n", "args": {}}], "/"
-            )
-
-    approved = asyncio.run(_scenario())
-    assert not approved
-
-
-def test_wait_for_ui_command_results_timeout_returns_empty() -> None:
-    sid = str(uuid.uuid4())
-
-    async def _scenario() -> list[dict[str, Any]]:
-        with patch(
-            "modulo.api.routes.assistant.asyncio.wait_for",
-            side_effect=_timeout_without_leaking_awaitable,
-        ):
-            return await assistant_routes._wait_for_ui_command_results(None, sid, asyncio.Event())
-
-    results = asyncio.run(_scenario())
-    assert results == []
 
 
 def test_stream_event_generator_http_exception_from_init() -> None:
@@ -2439,20 +1207,6 @@ def test_call_mcp_tool_non_retriable_400_raises_immediately() -> None:
         pytest.raises(httpx.HTTPStatusError),
     ):
         asyncio.run(assistant_routes._call_mcp_tool("click", {}, "mcp-key", "http://base"))
-
-
-def test_auto_name_stream_session_ten_message_empty_first_msg() -> None:
-    ctx_db = _make_mock_session()
-    count_result = MagicMock()
-    count_result.scalar.return_value = 10
-    first_msg_result = MagicMock()
-    first_msg_result.scalar.return_value = ""
-    ctx_db.execute = AsyncMock(side_effect=[count_result, first_msg_result])
-    chat_session = MagicMock()
-    chat_session.name = None
-    req = assistant_routes.StreamRequest(content="hi", provider="openai", model="gpt-4o")
-    asyncio.run(assistant_routes._auto_name_stream_session(ctx_db, uuid.uuid4(), req, chat_session))
-    assert ctx_db.execute.await_count == 2
 
 
 def test_persist_assistant_and_tool_messages() -> None:

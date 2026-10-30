@@ -159,13 +159,6 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="team",
     ),
     FeatureFlag(
-        name="assistant_ui_driving",
-        description=(
-            "Assistant browser UI driving — allows Assistant to navigate, click, and fill forms on your behalf."
-        ),
-        tier="community",
-    ),
-    FeatureFlag(
         name="pipeline_delete",
         description="Allow hard-deleting pipelines from the UI",
         tier="team",

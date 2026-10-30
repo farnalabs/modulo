@@ -26,15 +26,6 @@ const mockAssistantConfig = {
   allowed_models: [],
   system_prompt: '',
   additional_guidance: '',
-  permission_mode: 'safe',
-  tool_permissions: {},
-  rate_limit_max_actions: 30,
-  rate_limit_window_seconds: 60,
-  auto_execute_threshold: 0.8,
-  nogo_page_patterns: [],
-  nogo_selector_patterns: [],
-  allowed_selectors: [],
-  allowed_page_patterns: [],
 }
 
 const mockAvailableProviders = {
@@ -334,34 +325,6 @@ describe('AdminAssistantView branches — save error catch blocks', () => {
     wrapper.unmount()
   })
 
-  it('shows toolPermError when saveToolPerms catches', async () => {
-    const { api } = await import('../lib/api/client')
-    vi.mocked(api.PUT).mockRejectedValue(new Error('network'))
-    const wrapper = await mountAssistant()
-
-    const perms = wrapper.find('[data-testid="assistant-tool-permissions"]')
-    const save = perms.findAll('button').find((b) => b.text().includes('Save Tool Permissions'))!
-    await save.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('Failed to save')
-    wrapper.unmount()
-  })
-
-  it('shows safetyError when saveSafetyConfig catches', async () => {
-    const { api } = await import('../lib/api/client')
-    vi.mocked(api.PUT).mockRejectedValue(new Error('network'))
-    const wrapper = await mountAssistant()
-
-    const safety = wrapper.find('[data-testid="assistant-safety-limits"]')
-    const save = safety.findAll('button').find((b) => b.text().includes('Save Safety Config'))!
-    await save.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('Failed to save safety config')
-    wrapper.unmount()
-  })
-
   it('shows skillError when toggleSkillActive catches', async () => {
     const { api } = await import('../lib/api/client')
     vi.mocked(api.PUT).mockRejectedValue(new Error('network'))
@@ -456,20 +419,6 @@ describe('AdminAssistantView branches — save error response paths', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Failed to save guidance')
-    wrapper.unmount()
-  })
-
-  it('shows toolPermError from API error response', async () => {
-    const { api } = await import('../lib/api/client')
-    vi.mocked(api.PUT).mockResolvedValue({ data: null, error: { detail: 'perm_err' } } as any)
-    const wrapper = await mountAssistant()
-
-    const perms = wrapper.find('[data-testid="assistant-tool-permissions"]')
-    const save = perms.findAll('button').find((b) => b.text().includes('Save Tool Permissions'))!
-    await save.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('Failed to save')
     wrapper.unmount()
   })
 })
@@ -586,15 +535,6 @@ describe('AdminAssistantView branches — config hydration with missing fields',
         allowed_models: null,
         system_prompt: null,
         additional_guidance: null,
-        permission_mode: null,
-        tool_permissions: null,
-        rate_limit_max_actions: null,
-        rate_limit_window_seconds: null,
-        auto_execute_threshold: null,
-        nogo_page_patterns: null,
-        nogo_selector_patterns: null,
-        allowed_selectors: null,
-        allowed_page_patterns: null,
       },
     })
     // Should not crash — all fields fallback to defaults
