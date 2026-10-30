@@ -16,12 +16,13 @@ Verification contract (locked by ``tests/unit/launcher/test_manifest.py``):
 * the SIGNATURE is verified first (Ed25519 over the exact manifest bytes);
 * then every listed ARTIFACT's sha256 is verified against the files on disk
   (a missing or tampered artifact is a hard failure);
-* the trust store holds the CURRENT key and the NEXT key — both verify, so
-  releasing under the next key mid-rotation works before consumers update.
+* the current production key is provisioned and verifies; the NEXT slot is
+  reserved and empty. During rotation, both populated slots may verify, so
+  releasing under the next key works before consumers update.
 
 **Key rotation procedure** (recorded per ADR 031 in the distribution ADR):
-the CURRENT and NEXT trust-store keys — both verify, so releasing under the
-next key mid-rotation works before consumers update.
+during rotation, populate the reserved NEXT slot; both populated trust-store
+keys verify until the retired key is removed after the rotation window.
 
 1. Generate the replacement keypair offline; publish its PUBLIC half by
    moving the next key's id/key into the current slot of the trust store
