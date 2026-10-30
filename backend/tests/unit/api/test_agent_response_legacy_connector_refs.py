@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from modulo.api.routes.agents import AgentResponse
 
 
-def _row(connector_type_refs: list[object]) -> SimpleNamespace:
+def _row(connector_type_refs: object) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid.uuid4(),
         organisation_id=uuid.uuid4(),
@@ -48,4 +48,10 @@ def test_bare_string_connector_ref_is_normalised_to_object() -> None:
 def test_object_connector_ref_is_unchanged() -> None:
     ref = {"connector_type": "github", "capabilities": ["create_pr"]}
     resp = AgentResponse.model_validate(_row([ref]))
+    assert resp.connector_type_refs == [ref]
+
+
+def test_non_list_connector_refs_bypass_normalisation() -> None:
+    ref = {"connector_type": "github", "capabilities": []}
+    resp = AgentResponse.model_validate(_row((ref,)))
     assert resp.connector_type_refs == [ref]
