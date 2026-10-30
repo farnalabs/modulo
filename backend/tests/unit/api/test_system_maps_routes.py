@@ -1194,12 +1194,15 @@ def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClien
 
 def test_create_attribution_binding_returns_201(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
+    pipeline_id = uuid.uuid4()
+    node = _node_row()
+    node.pipeline_id = pipeline_id
     harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
-    # The route verifies the referenced pipeline through the session before creating the binding.
-    harness.stub("create_attribution_binding", AsyncMock(return_value=_binding_row()))
+    harness.stub("get_node_by_map_revision_key", AsyncMock(return_value=node))
+    harness.stub("create_attribution_binding", AsyncMock(return_value=_binding_row(pipeline_id=pipeline_id)))
 
     payload = {
-        "pipeline_id": str(uuid.uuid4()),
+        "pipeline_id": str(pipeline_id),
         "trigger_id": str(uuid.uuid4()),
         "node_key": "node-1",
         "binding_kind": "trigger",
@@ -1210,6 +1213,54 @@ def test_create_attribution_binding_returns_201(client: tuple[TestClient, _Harne
     body = resp.json()
     assert body["node_key"] == "node-1"
     assert body["binding_kind"] == "trigger"
+
+
+def test_create_attribution_binding_rejects_pipeline_mismatch(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    node = _node_row()
+    node.pipeline_id = uuid.uuid4()
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_node_by_map_revision_key", AsyncMock(return_value=node))
+
+    response = http.post(
+        f"{_BASE}/{_MAP_ID}/attribution-bindings",
+        json={
+            "pipeline_id": str(uuid.uuid4()),
+            "trigger_id": str(uuid.uuid4()),
+            "node_key": "node-1",
+            "binding_kind": "trigger",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "different pipeline" in response.json()["detail"]
+    harness.repository.create_attribution_binding.assert_not_called()
+
+
+def test_create_action_pipeline_binding_accepts_matching_loop_node(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    action_pipeline_id = uuid.uuid4()
+    node = _node_row(node_type="improvement_loop")
+    loop_config = _loop_config_row(node_key="node-1", action_pipeline_id=action_pipeline_id)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_node_by_map_revision_key", AsyncMock(return_value=node))
+    harness.stub("get_loop_config_by_node_key", AsyncMock(return_value=loop_config))
+    harness.stub(
+        "create_attribution_binding",
+        AsyncMock(return_value=_binding_row(pipeline_id=action_pipeline_id, binding_kind="action_pipeline")),
+    )
+
+    response = http.post(
+        f"{_BASE}/{_MAP_ID}/attribution-bindings",
+        json={"pipeline_id": str(action_pipeline_id), "node_key": "node-1", "binding_kind": "action_pipeline"},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["binding_kind"] == "action_pipeline"
 
 
 def test_create_attribution_binding_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
@@ -1227,12 +1278,14 @@ def test_create_attribution_binding_missing_map_returns_404(client: tuple[TestCl
     assert resp.status_code == 404
 
 
-def test_create_attribution_binding_invalid_pipeline_returns_404(client: tuple[TestClient, _Harness]) -> None:
+def test_create_attribution_binding_rejects_unmatched_node_pipeline(
+    client: tuple[TestClient, _Harness],
+) -> None:
     http, harness = client
+    node = _node_row()
+    node.pipeline_id = uuid.uuid4()
     harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
-    harness.stub(
-        "create_attribution_binding", AsyncMock(side_effect=HTTPException(status_code=404, detail="Pipeline not found"))
-    )
+    harness.stub("get_node_by_map_revision_key", AsyncMock(return_value=node))
 
     payload = {
         "pipeline_id": str(uuid.uuid4()),
@@ -1242,7 +1295,8 @@ def test_create_attribution_binding_invalid_pipeline_returns_404(client: tuple[T
     }
     resp = http.post(f"{_BASE}/{_MAP_ID}/attribution-bindings", json=payload)
 
-    assert resp.status_code == 404
+    assert resp.status_code == 422
+    assert "different pipeline" in resp.json()["detail"]
 
 
 def test_list_attribution_bindings_ignores_include_deleted_and_keeps_live_scope(

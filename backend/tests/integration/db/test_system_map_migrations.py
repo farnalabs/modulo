@@ -3,8 +3,8 @@
 Two layers of proof:
 
 * a real Alembic round-trip against a PRIVATE Postgres database (upgrade from
-  ``0340_drop_assistant_ui_driving_flag_row`` to ``0341_system_maps`` then
-  ``downgrade -1``), so the migration's DDL is exercised exactly as shipped;
+  ``0340_drop_assistant_ui_driving_flag_row`` to ``0343_system_maps_revision_fk``
+  then ``downgrade -3``), so the migration's DDL is exercised exactly as shipped;
 * schema assertions against the session's fully-migrated database, including
   model↔migrated-schema column parity for all eight tables — the check that
   catches a migration drifting behind the ORM.
@@ -48,7 +48,7 @@ pytestmark = pytest.mark.integration
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-MIGRATION_REV = "0342_system_maps_integrity"
+MIGRATION_REV = "0343_system_maps_revision_fk"
 PREV_REV = "0340_drop_assistant_ui_driving_flag_row"
 
 _SYSTEM_MAP_MODELS = (
@@ -149,7 +149,7 @@ async def test_migration_round_trips_against_private_database(private_db_url: st
         for table in _EXPECTED_TABLES:
             assert table in tables, f"Table {table} was not created"
 
-        _run_alembic(private_db_url, "downgrade", "-2")
+        _run_alembic(private_db_url, "downgrade", "-3")
         tables = await _table_names(engine)
         for table in _EXPECTED_TABLES:
             assert table not in tables, f"Table {table} was not dropped"
@@ -196,10 +196,15 @@ class TestSystemMapMigratedSchema:
         async with db_engine.connect() as conn:
             maps_fks = await conn.run_sync(_referred_tables, "system_maps")
             revisions_fks = await conn.run_sync(_referred_tables, "system_map_revisions")
+            revisions = await conn.run_sync(lambda c: inspect(c).get_foreign_keys("system_map_revisions"))
             nodes_fks = await conn.run_sync(_referred_tables, "system_map_nodes")
 
         assert {"organisations", "teams", "accounts", "system_map_revisions"} <= maps_fks
         assert {"organisations", "system_maps"} <= revisions_fks
+        revision_map_fks = [fk for fk in revisions if fk["name"] == "fk_system_map_revisions_map_org"]
+        assert len(revision_map_fks) == 1
+        assert revision_map_fks[0]["constrained_columns"] == ["system_map_id", "organisation_id"]
+        assert revision_map_fks[0]["referred_columns"] == ["id", "organisation_id"]
         assert {
             "organisations",
             "system_map_revisions",

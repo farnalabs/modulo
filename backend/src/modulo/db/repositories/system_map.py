@@ -409,6 +409,32 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_node_by_map_revision_key(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        system_map_id: uuid.UUID,
+        revision_id: uuid.UUID,
+        node_key: str,
+    ) -> SystemMapNode | None:
+        """Get a live node only when its revision belongs to the requested map."""
+        stmt = (
+            select(SystemMapNode)
+            .join(SystemMapRevision, SystemMapRevision.id == SystemMapNode.revision_id)
+            .where(
+                SystemMapNode.revision_id == revision_id,
+                SystemMapRevision.system_map_id == system_map_id,
+                SystemMapNode.node_key == node_key,
+                SystemMapNode.organisation_id == organisation_id,
+                SystemMapRevision.organisation_id == organisation_id,
+                SystemMapNode.deleted_at.is_(None),
+                SystemMapRevision.deleted_at.is_(None),
+            )
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def list_nodes_in_revision(
         self,
         session: AsyncSession,

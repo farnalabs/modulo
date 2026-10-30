@@ -1191,9 +1191,10 @@ async def create_attribution_binding_endpoint(
             )
             if published_revision is None:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System map has no published revision")
-            node = await repository.get_node_by_key(
+            node = await repository.get_node_by_map_revision_key(
                 session,
                 organisation_id=principal.organisation_id,
+                system_map_id=map_id,
                 revision_id=published_revision.id,
                 node_key=req.node_key,
             )
@@ -1202,6 +1203,38 @@ async def create_attribution_binding_endpoint(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Node {req.node_key} does not exist in the published map revision",
                 )
+
+            expected_node_type = "pipeline" if req.binding_kind == "trigger" else "improvement_loop"
+            if node.node_type != expected_node_type:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        f"{req.binding_kind} bindings require a {expected_node_type} node; "
+                        f"node {req.node_key} is {node.node_type}"
+                    ),
+                )
+            if req.binding_kind == "trigger" and node.pipeline_id != req.pipeline_id:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"Node {req.node_key} is bound to a different pipeline",
+                )
+            if req.binding_kind == "action_pipeline":
+                loop_config = await repository.get_loop_config_by_node_key(
+                    session,
+                    organisation_id=principal.organisation_id,
+                    revision_id=published_revision.id,
+                    node_key=req.node_key,
+                )
+                if loop_config is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail=f"Node {req.node_key} has no improvement-loop configuration",
+                    )
+                if loop_config.action_pipeline_id != req.pipeline_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail=f"Node {req.node_key} is configured for a different action pipeline",
+                    )
 
             # Verify pipeline exists and is same org
 

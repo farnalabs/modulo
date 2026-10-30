@@ -55,6 +55,20 @@ class TestSystemMapModels:
         assert revision.content_json == {"nodes": [], "edges": []}
         assert revision.deleted_by is None
 
+    def test_system_map_revision_parent_fk_is_tenant_scoped(self):
+        foreign_keys = [
+            constraint
+            for constraint in SystemMapRevision.__table__.constraints
+            if constraint.name == "fk_system_map_revisions_map_org"
+        ]
+
+        assert len(foreign_keys) == 1
+        assert list(foreign_keys[0].columns.keys()) == ["system_map_id", "organisation_id"]
+        assert [element.target_fullname.rsplit(".", 1)[-1] for element in foreign_keys[0].elements] == [
+            "id",
+            "organisation_id",
+        ]
+
     def test_system_map_node_creation(self):
         org_id = uuid.uuid4()
         revision_id = uuid.uuid4()
