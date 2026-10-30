@@ -99,6 +99,9 @@ class SystemMap(SoftDeleteMixin, OrgScoped):
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete=_ONDELETE_SET_NULL), nullable=True
     )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="SET_NULL"), nullable=True, index=True
+    )
 
     # Composite FK to system_map_revisions (id + organisation_id) is declared in the migration.
     # SQLAlchemy doesn't natively support composite FKs to a non-PK unique constraint,
