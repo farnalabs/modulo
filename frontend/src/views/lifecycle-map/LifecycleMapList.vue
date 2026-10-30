@@ -66,14 +66,16 @@
       </EmptyState>
 
       <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div
+        <DataCard
           v-for="m in pagedMaps"
           :key="m.id"
-          class="card card-hover w-full p-5 text-left cursor-pointer"
+          variant="bordered"
+          padding="none"
+          data-testid="lifecycle-map-list-card"
+          card-class="card-hover w-full p-5 text-left cursor-pointer"
           @click="openMap(m)"
           @keydown.enter.self="openMap(m)"
           @keydown.space.self.prevent="openMap(m)"
-          data-testid="lifecycle-map-list-card"
         >
           <div class="flex items-start justify-between gap-2 mb-2">
             <h2 class="min-w-0">
@@ -121,7 +123,7 @@
             </span>
             <span>{{ $t('views.LifecycleMapList.updated', { date: formatDate(m.updated_at) }) }}</span>
           </div>
-        </div>
+        </DataCard>
       </div>
 
       <div v-if="totalPages > 1 && !store.isLoading" class="flex justify-center items-center gap-2 mt-8">
@@ -221,6 +223,7 @@ import { formatDateShort } from '../../lib/formatDate'
 import { useApi } from '../../composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
 import Select from '../../components/shared/AppSelect.vue'
+import DataCard from '../../components/ui/DataCard.vue'
 
 const router = useRouter()
 const route = useRoute()

@@ -1,14 +1,14 @@
 <template>
-  <section class="space-y-6 rounded-lg border bg-card p-6" data-testid="variant-group-builder">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 class="text-base font-semibold tracking-tight">
-          {{ $t('views.variantCreator.title') }}
-        </h2>
-        <p class="mt-1 text-sm text-muted-foreground">
-          {{ $t('views.variantCreator.subtitle') }}
-        </p>
-      </div>
+  <DataCard
+    :title="$t('views.variantCreator.title')"
+    :description="$t('views.variantCreator.subtitle')"
+    heading-level="h2"
+    variant="bordered"
+    padding="lg"
+    data-testid="variant-group-builder"
+    card-class="space-y-6"
+  >
+    <template #headerActions>
       <Button
         severity="secondary"
         outlined
@@ -18,7 +18,7 @@
       >
         {{ $t('views.variantCreator.cancel') }}
       </Button>
-    </div>
+    </template>
 
     <LoadingSpinner v-if="loading" />
     <ErrorAlert v-else-if="error" :message="error" />
@@ -70,14 +70,16 @@
           </Button>
         </EmptyState>
 
-        <section v-else class="space-y-4 rounded-lg border bg-card p-6">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <h3 class="text-base font-semibold tracking-tight">
-              {{ $t('views.variantCreator.variants_title') }}
-            </h3>
-            <p class="text-xs text-muted-foreground">
-              {{ $t('views.variantCreator.advanced_overrides_note') }}
-            </p>
+        <DataCard
+          v-else
+          :title="$t('views.variantCreator.variants_title')"
+          :description="$t('views.variantCreator.advanced_overrides_note')"
+          heading-level="h3"
+          variant="bordered"
+          padding="lg"
+          card-class="space-y-4"
+        >
+          <template #headerActions>
             <div class="flex items-center gap-3">
               <span class="sr-only" id="variant-builder-headroom-label">{{ $t('views.variantCreator.variants_title') }}</span>
               <output
@@ -98,7 +100,7 @@
                 {{ $t('views.variantCreator.add_variant') }}
               </Button>
             </div>
-          </div>
+          </template>
 
           <div class="overflow-x-auto">
             <table class="w-full text-left text-sm">
@@ -236,7 +238,7 @@
               {{ $t('views.variantCreator.fires_n_runs', { count: variants.length }) }}
             </span>
           </div>
-        </section>
+        </DataCard>
       </template>
 
       <EmptyState
@@ -286,7 +288,7 @@
         </div>
       </template>
     </Dialog>
-  </section>
+  </DataCard>
 </template>
 
 <script setup lang="ts">
@@ -303,6 +305,7 @@ import EmptyState from '../shared/EmptyState.vue'
 import Dialog from 'primevue/dialog'
 import Select from '../shared/AppSelect.vue'
 import { formatApiError } from '../../lib/api/formatError'
+import DataCard from '../ui/DataCard.vue'
 
 const props = defineProps<{
   initialPipelineId?: string | null
