@@ -1,6 +1,9 @@
 <template>
-  <section class="rounded-lg border bg-card p-6 shadow-sm">
-    <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaEditorView.version_history') }}</h2>
+  <DataCard
+    :title="$t('views.SchemaEditorView.version_history')"
+    heading-level="h2"
+    padding="lg"
+  >
     <div v-if="loading" data-testid="schema-editor-versions-loading">
       <output class="sr-only" aria-live="polite">{{ $t('common.loading') }}</output>
       <div class="space-y-2">
@@ -31,10 +34,11 @@
         </button>
       </div>
     </div>
-  </section>
+  </DataCard>
 </template>
 
 <script setup lang="ts">
+import DataCard from '../ui/DataCard.vue'
 import EmptyState from '../shared/EmptyState.vue'
 import SkeletonBlock from '../shared/SkeletonBlock.vue'
 import { formatDateShort } from '../../lib/formatDate'

@@ -1,6 +1,9 @@
 <template>
-  <section class="rounded-lg border bg-card p-6 shadow-sm">
-    <h2 class="mb-4 text-base font-semibold">{{ $t('views.SchemaEditorView.json_preview') }}</h2>
+  <DataCard
+    :title="$t('views.SchemaEditorView.json_preview')"
+    heading-level="h2"
+    padding="lg"
+  >
     <div class="relative">
       <button type="button"
         class="absolute right-2 top-2 rounded p-1 text-muted-foreground hover:bg-accent"
@@ -15,10 +18,11 @@
         data-testid="schema-editor-json-preview"
       >{{ json }}</pre>
     </div>
-  </section>
+  </DataCard>
 </template>
 
 <script setup lang="ts">
+import DataCard from '../ui/DataCard.vue'
 import { Copy } from '@lucide/vue'
 
 defineProps<{
