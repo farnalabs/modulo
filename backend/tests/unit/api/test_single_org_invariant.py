@@ -490,6 +490,10 @@ async def test_seed_demo_proceeds_when_multi_org_enabled() -> None:
                 "modulo.db.seed_demo._seed_demo_triggers",
                 new_callable=AsyncMock,
             ),
+            patch(
+                "modulo.db.seed_demo._seed_demo_governance_surfaces",
+                new_callable=AsyncMock,
+            ),
         ):
             from modulo.db.seed_demo import seed_demo
 

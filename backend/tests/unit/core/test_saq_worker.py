@@ -16,11 +16,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, Self
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import modulo.core.saq_worker as sw
+
+
+def test_system_registration_includes_demo_daily_refresh() -> None:
+    assert sw.demo_daily_refresh in sw._system_functions()
+    assert any(job.function is sw.demo_daily_refresh for job in sw._system_cron_jobs())
 
 
 def _settings(system_url: str = "") -> SimpleNamespace:
@@ -39,6 +44,28 @@ def reset_system_engine(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(sw, "_SYSTEM_ASYNC_ENGINE", None)
     yield
     sw._SYSTEM_ASYNC_ENGINE = None
+
+
+@pytest.mark.asyncio
+async def test_demo_daily_refresh_is_disabled_without_demo_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sw, "get_settings", lambda: SimpleNamespace(modulo_demo_enabled=False))
+    result = await sw.demo_daily_refresh({})
+    assert result == {"status": "disabled"}
+
+
+@pytest.mark.asyncio
+async def test_demo_daily_refresh_runs_seed_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sw,
+        "get_settings",
+        lambda: SimpleNamespace(modulo_demo_enabled=True, modulo_db="sqlite"),
+    )
+    monkeypatch.setattr(sw, "_make_session_factory", MagicMock(return_value=MagicMock()))
+    seed = AsyncMock(return_value="org=demo user=demo@example.com")
+    monkeypatch.setattr("modulo.db.seed_demo.seed_demo_runtime", seed)
+    result = await sw.demo_daily_refresh({})
+    assert result == {"status": "refreshed", "summary": "org=demo user=demo@example.com"}
+    seed.assert_called_once()
 
 
 def test_creates_engine_with_system_url_when_configured(reset_system_engine, monkeypatch: pytest.MonkeyPatch) -> None:
