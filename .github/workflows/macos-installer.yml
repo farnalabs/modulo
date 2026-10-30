@@ -487,7 +487,7 @@ jobs:
 
           APP="build/Modulo-${VERSION_NUM}.app"
           while IFS= read -r binary; do
-            file "$binary" | grep -E 'Mach-O 64-bit executable arm64'
+            file "$binary" | grep -E 'Mach-O 64-bit executable arm64' || exit 1
             codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$binary"
           done < <(find "$APP/Contents" -type f -perm -111 -print)
           codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
@@ -558,10 +558,10 @@ jobs:
 
           # Post-install smoke assertions with diagnostic capture
           run_assertion "install_sh" \
-            bash -c 'MODULO_INSTALL_ROOT="$INSTALL_ROOT" MODULO_DATA_DIR="$DATA" scripts/macos/install.sh "$DMG_WITH_SPACES"'
+            bash -c 'MODULO_INSTALL_ROOT="$INSTALL_ROOT" MODULO_DATA_DIR="$DATA" scripts/macos/install.sh "$DMG_WITH_SPACES"' || exit 1
 
           run_assertion "launchctl_print_post_install" \
-            launchctl print "gui/$(id -u)/run.modulo.launcher"
+            launchctl print "gui/$(id -u)/run.modulo.launcher" || exit 1
 
            # State.json / API port / healthz
            run_assertion "state_json_api_port_healthz" bash -c '
@@ -583,28 +583,28 @@ jobs:
            [[ -n "$API_PORT" ]] || { echo '::error::native launcher never wrote state.json' >&2; exit 1; }
 
            run_assertion "healthz_endpoint" \
-             curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz"
+             curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" || exit 1
 
            run_assertion "spa_root_html" \
-             bash -c 'curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:'"$API_PORT"'/" | grep -q '\''<div id="app">'\'''
+             bash -c 'curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:'"$API_PORT"'/" | grep -q '\''<div id="app">'\''' || exit 1
 
            # Service PID / binary identity
            run_assertion "service_pid" bash -c '
              SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '\''/pid =/ {print $3; exit}'\'')"
              [[ "$SERVICE_PID" =~ ^[0-9]+$ ]] || exit 1
              echo "$SERVICE_PID"
-           '
+           ' || exit 1
            SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '/pid =/ {print $3; exit}')"
 
            run_assertion "service_binary" bash -c '
              SERVICE_BINARY="$(ps -p '"$SERVICE_PID"' -o command= | awk '\''{print $1}'\'')"
              [[ "$SERVICE_BINARY" == '"$INSTALL_ROOT"'/*/Contents/MacOS/modulo ]] || exit 1
              echo "$SERVICE_BINARY"
-           '
+           ' || exit 1
            SERVICE_BINARY="$(ps -p "$SERVICE_PID" -o command= | awk '{print $1}')"
 
            run_assertion "service_binary_macho" \
-             file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64'
+             file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64' || exit 1
 
            # Owned PID tree collection
            run_assertion "owned_pid_tree" bash -c '
@@ -619,7 +619,7 @@ jobs:
              : > "'"$OWNED_PIDS"'"
              collect_children '"$SERVICE_PID"'
              grep -qE "^[0-9]+$" "'"$OWNED_PIDS"'" || exit 1
-           '
+           ' || exit 1
 
            # Invalid bundled binary negative test
            INSTALLED_APP="$INSTALL_ROOT/Modulo-${VERSION_NUM}.app"
@@ -628,27 +628,27 @@ jobs:
                exit 1
              fi
              grep -Eiq "bundled binaries not found|missing:.*(initdb|postgres|redis-server)" "'"$DATA"'/invalid-bin.stderr" || exit 1
-           '
+           ' || exit 1
 
            # Launchctl unload / cleanup path
            run_assertion "launchctl_unload" \
-             launchctl unload -w "$PLIST"
+             launchctl unload -w "$PLIST" || exit 1
 
            run_assertion "launchagent_gone_after_unload" bash -c '
              ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
-           '
+           ' || exit 1
 
            run_assertion "launchagent_gone_after_cleanup" bash -c '
              ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
-           '
+           ' || exit 1
 
            run_assertion "no_owned_modulo_processes" bash -c '
              ! pgrep -f "'"$INSTALL_ROOT"'/.*/Contents/MacOS/modulo" >/dev/null 2>&1
-           '
+           ' || exit 1
 
            run_assertion "no_owned_postgres_redis" bash -c '
              ! pgrep -f "'"$DATA"'/pgdata" >/dev/null 2>&1 && ! pgrep -f "'"$DATA"'/.*redis" >/dev/null 2>&1
-           '
+           ' || exit 1
 
 
       - name: Upload real macOS installer
