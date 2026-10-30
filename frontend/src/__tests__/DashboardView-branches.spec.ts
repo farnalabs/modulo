@@ -60,8 +60,10 @@ import DashboardView from '../views/DashboardView.vue'
 function setupDefaultMocks() {
   mockGet.mockImplementation((url: string) => {
     if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
-    if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
-    return Promise.resolve({ data: null, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
   })
 }
 
@@ -101,6 +103,8 @@ describe('DashboardView branches — cardValue', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -139,6 +143,8 @@ describe('DashboardView branches — cardValue', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -177,6 +183,8 @@ describe('DashboardView branches — cardValue', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -217,6 +225,8 @@ describe('DashboardView branches — evalRateDisplay', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -241,6 +251,8 @@ describe('DashboardView branches — evalRateDisplay', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -270,6 +282,8 @@ describe('DashboardView branches — evalTrend flat', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -292,6 +306,8 @@ describe('DashboardView branches — evalTrend flat', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -329,6 +345,8 @@ describe('DashboardView branches — evalDeltaPctText', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -367,6 +385,8 @@ describe('DashboardView branches — evalDeltaPctText', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -407,6 +427,8 @@ describe('DashboardView branches — spendDeltaPctText', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -449,6 +471,8 @@ describe('DashboardView branches — deltaDirection', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -559,6 +583,8 @@ describe('DashboardView branches — trendData', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -580,6 +606,8 @@ describe('DashboardView branches — trendData', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -640,6 +668,8 @@ describe('DashboardView branches — recent_runs', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -671,6 +701,8 @@ describe('DashboardView branches — recent_runs', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -695,6 +727,8 @@ describe('DashboardView branches — teams', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -725,6 +759,8 @@ describe('DashboardView branches — team expansion', () => {
         return Promise.resolve({ data: teamSummaryData, error: undefined })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
 
@@ -782,6 +818,8 @@ describe('DashboardView branches — error state', () => {
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') return Promise.reject(new Error('Network error'))
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -799,6 +837,8 @@ describe('DashboardView branches — loading skeleton', () => {
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') return dashboardDefer
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -822,6 +862,8 @@ describe('DashboardView branches — eval null display', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -862,6 +904,8 @@ describe('DashboardView branches — evalTrendClass', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -902,6 +946,8 @@ describe('DashboardView branches — spendDeltaClass', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -944,6 +990,8 @@ describe('DashboardView branches — evalDeltaArrow', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -989,6 +1037,8 @@ describe('DashboardView branches — eval trend and team eval display', () => {
       }
       if (url === '/api/v1/dashboard/trends') return Promise.resolve({ data: trendsResponse, error: undefined })
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -1020,6 +1070,8 @@ describe('DashboardView branches — eval trend and team eval display', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
@@ -1042,6 +1094,8 @@ describe('DashboardView branches — eval trend and team eval display', () => {
         })
       }
       if (url === '/api/v1/plan') return Promise.resolve({ data: mockPlanData, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: [] }, error: undefined })
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
     const wrapper = mount(DashboardView)
