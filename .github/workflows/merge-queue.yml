@@ -2716,6 +2716,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CHAIN_DEPTH: ${{ github.event.client_payload.depth || 0 }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_CONTENT_TYPE: "Content-Type: application/json"
         shell: bash
         run: |
           set -euo pipefail
