@@ -3,7 +3,7 @@
     <div class="page-wide">
     <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.AdminNotificationDeliveryLogView.admin_view_of_all_webhook_notification_deliveries')" data-testid="admin-notification-log-title" />
 
-    <div class="rounded-lg border bg-card p-4 shadow-sm">
+    <DataCard variant="bordered" padding="md" elevation="sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div>
           <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.AdminNotificationDeliveryLogView.status') }}</label>
@@ -127,7 +127,7 @@
       >
         {{ retrySuccessMessage }}
       </div>
-    </div>
+    </DataCard>
 
     <LoadingSpinner v-if="loading" />
 
@@ -263,14 +263,14 @@
         </button>
       </div>
 
-      <div v-if="deadLetteredCount > 0" data-testid="admin-notification-log-dlq" class="rounded-lg border bg-card p-4 shadow-sm">
-        <div class="flex items-center justify-between">
-          <div>
-            <h3 class="text-base font-semibold">{{ $t('views.AdminNotificationDeliveryLogView.dead_letter_queue') }}</h3>
-            <p class="text-sm text-muted-foreground">
-              {{ $t('views.AdminNotificationDeliveryLogView.dead_letter_queue_description', { count: deadLetteredCount }, deadLetteredCount) }}
-            </p>
-          </div>
+      <DataCard
+        v-if="deadLetteredCount > 0"
+        data-testid="admin-notification-log-dlq"
+        elevation="sm"
+        :title="$t('views.AdminNotificationDeliveryLogView.dead_letter_queue')"
+        :description="$t('views.AdminNotificationDeliveryLogView.dead_letter_queue_description', { count: deadLetteredCount }, deadLetteredCount)"
+      >
+        <template #headerActions>
           <button
             type="button"
             data-testid="admin-notification-log-dlq-filter"
@@ -279,8 +279,8 @@
           >
             {{ $t('views.AdminNotificationDeliveryLogView.view_dead_lettered') }}
           </button>
-        </div>
-      </div>
+        </template>
+      </DataCard>
     </template>
   </div>
   </FeatureGate>
@@ -297,6 +297,7 @@ import type { components, paths } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { ChevronRight } from '@lucide/vue'
