@@ -144,7 +144,7 @@ class TestUpgrade:
                 )
             )
         _run(sqlite_engine, _load_migration())
-        assert _names(sqlite_engine) == []
+        assert not _names(sqlite_engine)
 
     def test_missing_table_is_a_no_op(self, sqlite_engine: sa.Engine) -> None:
         _run(sqlite_engine, _load_migration())
