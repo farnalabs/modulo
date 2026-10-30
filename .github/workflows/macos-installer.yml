@@ -806,7 +806,11 @@ jobs:
           APP="build/Modulo-${VERSION_NUM}.app"
           # shellcheck disable=SC2016
           run_pre_smoke nested_binary_discovery find "$APP/Contents" -type f -perm -111 -print
-          mapfile -t NESTED_BINARIES < "$DATA/pre-smoke-nested_binary_discovery.log"
+          # macOS ships bash 3.2, which has no `mapfile`/`readarray`.
+          NESTED_BINARIES=()
+          while IFS= read -r nested_binary_line; do
+            [[ -n "$nested_binary_line" ]] && NESTED_BINARIES+=("$nested_binary_line")
+          done < "$DATA/pre-smoke-nested_binary_discovery.log"
           binary_index=0
           for binary in "${NESTED_BINARIES[@]}"; do
             [[ -n "$binary" ]] || continue
