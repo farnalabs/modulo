@@ -814,10 +814,35 @@ jobs:
           binary_index=0
           for binary in "${NESTED_BINARIES[@]}"; do
             [[ -n "$binary" ]] || continue
+            # Classify and sign each existing executable. A bundled runtime may
+            # legitimately ship shell-script wrappers (e.g. python-build-standalone's
+            # bin/pip3); those are not Mach-O and must not be codesigned. Any
+            # wrong-architecture Mach-O, ELF, or unknown executable still fails
+            # closed, so this stays strict without rejecting valid wrappers.
             # shellcheck disable=SC2016
-          run_pre_smoke "nested_binary_file_${binary_index}" bash -c 'file "$1" | grep -E "Mach-O 64-bit executable arm64"' bash "$binary"
-            # shellcheck disable=SC2016
-          run_pre_smoke "nested_binary_codesign_${binary_index}" codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$binary"
+            run_pre_smoke "nested_binary_${binary_index}" bash -c '
+              set -euo pipefail
+              binary="$1"
+              identity="$2"
+              kind="$(file -b "$binary")"
+              case "$kind" in
+                *"Mach-O 64-bit executable arm64"*|*"Mach-O 64-bit bundle arm64"*|*"Mach-O 64-bit dynamically linked shared library arm64"*)
+                  codesign --force --options runtime --timestamp --sign "$identity" "$binary" >/dev/null
+                  printf "signed Mach-O arm64: %s\n" "$binary"
+                  ;;
+                *Mach-O*)
+                  printf "unexpected Mach-O architecture: %s (%s)\n" "$binary" "$kind" >&2
+                  exit 1
+                  ;;
+                *script*|*text*)
+                  printf "skipped non-Mach-O executable: %s (%s)\n" "$binary" "$kind"
+                  ;;
+                *)
+                  printf "unexpected executable type: %s (%s)\n" "$binary" "$kind" >&2
+                  exit 1
+                  ;;
+              esac
+            ' bash "$binary" "$SIGNING_IDENTITY"
             binary_index=$((binary_index + 1))
           done
           # shellcheck disable=SC2016
