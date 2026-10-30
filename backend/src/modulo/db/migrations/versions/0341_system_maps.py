@@ -1,7 +1,7 @@
 """System Maps core tables + attribution bindings + loop admission/reservation (FAR-2236).
 
-Revision ID: 0340_system_maps
-Revises: 0339_triggers_name_not_null
+Revision ID: 0341_system_maps
+Revises: 0340_drop_assistant_ui_driving_flag_row
 Create Date: 2026-10-30
 
 Five core tables:
@@ -35,8 +35,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision: str = "0340_system_maps"
-down_revision: str | None = "0339_triggers_name_not_null"
+revision: str = "0341_system_maps"
+down_revision: str | None = "0340_drop_assistant_ui_driving_flag_row"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

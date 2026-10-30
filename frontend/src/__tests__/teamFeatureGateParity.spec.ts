@@ -8,6 +8,9 @@
  *
  * Known acceptable exceptions — backend-only features with no UI surface:
  *   - scim: SCIM provisioning is API-only (no UI)
+ *   - system_maps: the System Maps database layer (FAR-2236) ships an
+ *     internal preview API gated by ``require_feature("system_maps")`` before
+ *     any UI surface exists; a FeatureGate reference will land with the view.
  */
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -26,7 +29,7 @@ const BACKEND_FEATURE_FLAGS = join(REPO_ROOT, 'backend', 'src', 'modulo', 'core'
  * secret backends are available on every tier and no gate (backend or
  * frontend) references it any more.
  */
-const BACKEND_ONLY_EXCEPTIONS = new Set(['scim'])
+const BACKEND_ONLY_EXCEPTIONS = new Set(['scim', 'system_maps'])
 
 /**
  * Known acceptable exceptions — frontend-gated team features with no backend

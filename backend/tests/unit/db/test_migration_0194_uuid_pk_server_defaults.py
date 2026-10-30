@@ -56,7 +56,7 @@ _EXPECTED_METADATA_COUNT = _EXPECTED_COUNT - len(_NO_ORM_MODEL_UUID_PKS)
 # its id column, same as the tables above.
 # trigger_event_findings (0333_trigger_event_findings, FAR-2028) sets
 # gen_random_uuid() inline on its id column, same as the tables above.
-# The system_map_* tables (0340_system_maps, FAR-2236) set gen_random_uuid()
+# The system_map_* tables (0341_system_maps, FAR-2236) set gen_random_uuid()
 # inline on their id columns too.
 _POST_0194_TABLES = frozenset(
     {

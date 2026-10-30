@@ -3,8 +3,8 @@
 Two layers of proof:
 
 * a real Alembic round-trip against a PRIVATE Postgres database (upgrade from
-  ``0339_triggers_name_not_null`` to ``0340_system_maps`` then ``downgrade -1``),
-  so the migration's DDL is exercised exactly as shipped;
+  ``0340_drop_assistant_ui_driving_flag_row`` to ``0341_system_maps`` then
+  ``downgrade -1``), so the migration's DDL is exercised exactly as shipped;
 * schema assertions against the session's fully-migrated database, including
   model↔migrated-schema column parity for all eight tables — the check that
   catches a migration drifting behind the ORM.
@@ -48,8 +48,8 @@ pytestmark = pytest.mark.integration
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-MIGRATION_REV = "0340_system_maps"
-PREV_REV = "0339_triggers_name_not_null"
+MIGRATION_REV = "0341_system_maps"
+PREV_REV = "0340_drop_assistant_ui_driving_flag_row"
 
 _SYSTEM_MAP_MODELS = (
     SystemMap,
@@ -124,7 +124,7 @@ def _run_alembic(iso_url: str, cmd: str, target: str) -> None:
 
 @pytest_asyncio.fixture
 async def private_db_url(db_url: str) -> AsyncGenerator[str, None]:
-    db_name, iso_url = await _fresh_db(db_url, "m0340")
+    db_name, iso_url = await _fresh_db(db_url, "m0341")
     try:
         yield iso_url
     finally:
@@ -138,7 +138,7 @@ async def _table_names(engine: AsyncEngine) -> set[str]:
 
 @pytest.mark.asyncio
 async def test_migration_round_trips_against_private_database(private_db_url: str) -> None:
-    """Upgrade 0340 creates all eight tables; downgrade removes them again."""
+    """Upgrade 0341 creates all eight tables; downgrade removes them again."""
     engine = create_async_engine(private_db_url, poolclass=NullPool)
     try:
         _run_alembic(private_db_url, "upgrade", PREV_REV)
