@@ -291,19 +291,15 @@ jobs:
               # Stop the LaunchAgent service first (ignore failure if not running)
               launchctl stop "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
 
-              # Then unload the LaunchAgent
-              launchctl unload -w "$HOME/Library/LaunchAgents/run.modulo.launcher.plist" >/dev/null 2>&1
-              unload_status=$?
+              # Use bootout to remove the service from the user domain entirely
+              # This is required because unload -w doesn't work reliably with KeepAlive services
+              launchctl bootout "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
 
-              # Verify it's unloaded
-              if [[ "$unload_status" -eq 0 || "$unload_status" -eq 113 ]]; then
-                if ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
-                  cleanup_result launchagent_unload ok
-                else
-                  cleanup_result launchagent_unload failed "service still loaded after unload"
-                fi
+              # Verify it's gone (should fail if successfully removed)
+              if ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
+                cleanup_result launchagent_unload ok
               else
-                cleanup_result launchagent_unload failed "exit=$unload_status"
+                cleanup_result launchagent_unload failed "service still loaded after bootout"
               fi
 
               owned_processes_ok=1
