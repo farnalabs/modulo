@@ -44,22 +44,6 @@ class AssistantConfig(BaseModel):
     default_context_window: int = 200000
     allowed_providers: list[str] = Field(default_factory=lambda: ["anthropic", "openai", "gemini", "deepseek", "groq"])
     allowed_models: list[str] = Field(default_factory=list)  # empty = all models for allowed providers
-    tool_permissions: dict[str, str] = Field(default_factory=dict)
-    permission_mode: str = "safe"
-    auto_execute_threshold: float = 0.8
-    rate_limit_max_actions: int = 15
-    rate_limit_window_seconds: int = 60
-    allowed_selectors: list[str] = Field(
-        default_factory=list,
-        description=(
-            "If non-empty, Assistant can only interact with elements matching"
-            " these CSS selectors or data-testid prefixes"
-        ),
-    )
-    allowed_page_patterns: list[str] = Field(
-        default_factory=list,
-        description="If non-empty, Assistant can only navigate to pages matching these URL patterns",
-    )
     context_sources: dict[str, str] = Field(
         default_factory=lambda: {
             "page_context": "always_on",
@@ -74,55 +58,6 @@ class AssistantConfig(BaseModel):
 
 
 _CONFIG_KEY_PREFIX = "assistant_config:"
-
-PERMISSION_MODE_PRESETS: dict[str, dict[str, str]] = {
-    "full_auto": dict.fromkeys(
-        [
-            "navigate",
-            "click",
-            "fill",
-            "select",
-            "extract",
-            "extract_all",
-            "get_page_interactables",
-            "wait",
-            "go_back",
-            "get_url",
-            "press",
-            "get_manifest",
-            "undo_last_action",
-        ],
-        "always_allowed",
-    ),
-    "safe": {
-        "press": "requires_approval",
-    },
-    "locked_down": {
-        "navigate": "always_allowed",
-        "extract": "always_allowed",
-        "extract_all": "always_allowed",
-        "get_page_interactables": "always_allowed",
-        "wait": "always_allowed",
-        "get_url": "always_allowed",
-        "get_manifest": "always_allowed",
-        "undo_last_action": "always_allowed",
-        "click": "requires_approval",
-        "fill": "requires_approval",
-        "select": "requires_approval",
-        "go_back": "requires_approval",
-        "press": "requires_approval",
-    },
-}
-
-
-def apply_permission_mode_preset(mode: str, current_overrides: dict[str, str] | None = None) -> dict[str, str]:
-    """Apply a permission mode preset. Overrides are only merged when mode is 'custom'."""
-    if mode not in PERMISSION_MODE_PRESETS:
-        logger.warning("Unknown permission mode '%s', treating as empty preset", mode)
-    preset = dict(PERMISSION_MODE_PRESETS.get(mode, {}))
-    if current_overrides and mode == "custom":
-        preset.update(current_overrides)
-    return preset
 
 
 class AssistantConfigService:

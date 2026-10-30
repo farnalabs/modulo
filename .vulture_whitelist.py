@@ -187,7 +187,6 @@ __all__ = [
     "extract_output_json",
     "reconcile_noop_evidence",
     "get_pricing",
-    "apply_permission_mode_preset",
     "create_local_provider_from_env",
     "runs_settings",
     "staging_runs_settings",

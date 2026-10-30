@@ -747,7 +747,6 @@ def test_build_stream_system_prompt_uses_skill_loader() -> None:
         user_id=_USER_ID,
         page_context=None,
         system_prompt_override=None,
-        include_ui_tools_text=False,
     )
 
 

@@ -6,7 +6,6 @@ Follows the direct-call pattern of ``test_stream_tool_credentials.py``:
 tests assert on the real behaviour of the ``exclude_navigation_tools`` flag:
 
 * tool assembly is gated (``include_navigation=False``) when the flag is set;
-* the text-mode fallback (``include_ui_tools_text``) is disabled in every mode;
 * manifest tool calls are resolved locally against the app manifest and
   reported as ``tool_call`` events whose ``tool_name`` echoes the called tool.
 """
@@ -225,24 +224,6 @@ async def test_exclude_navigation_tools_false_keeps_include_navigation_true() ->
 
 
 # ── text-mode backend fallback ───────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("exclude_navigation_tools", [True, False])
-async def test_text_mode_backend_never_includes_browser_tools_text(exclude_navigation_tools: bool) -> None:
-    build_prompt = AsyncMock(return_value="")
-    backend = _TextBackend([])
-    events = await _run_stream(
-        exclude_navigation_tools=exclude_navigation_tools,
-        backend=backend,
-        loader_build_prompt=build_prompt,
-    )
-    assert build_prompt.await_count == 1
-    assert build_prompt.await_args is not None
-    kwargs = build_prompt.await_args.kwargs
-    assert kwargs["include_ui_tools_text"] is False
-    assert backend.turns == 1
-    assert events[-1][0] == "done"
 
 
 # ── navigation calls resolved locally ────────────────────────────────────

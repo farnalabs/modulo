@@ -17,15 +17,6 @@ const mockAssistantConfig = {
   allowed_models: [],
   system_prompt: '',
   additional_guidance: '',
-  permission_mode: 'safe',
-  tool_permissions: {},
-  rate_limit_max_actions: 30,
-  rate_limit_window_seconds: 60,
-  auto_execute_threshold: 0.8,
-  nogo_page_patterns: [],
-  nogo_selector_patterns: [],
-  allowed_selectors: [],
-  allowed_page_patterns: [],
 }
 
 const mockAvailableProviders = {
@@ -286,84 +277,6 @@ describe('AdminAssistantView — save flows', () => {
 
     const put = vi.mocked((await import('../lib/api/client')).api.PUT).mock.calls[0]
     expect((put[1] as any).body).toEqual({ additional_guidance: 'Always cite sources.' })
-    wrapper.unmount()
-  })
-
-  it('applies the locked-down tool permission preset and saves tool permissions', async () => {
-    const wrapper = await mountAssistant()
-
-    const modeSelect = wrapper.find('[data-testid="assistant-tool-perm-mode"]').findComponent({ name: 'Select' })
-    await (modeSelect.vm as unknown as { $emit: (e: string, v: unknown) => void }).$emit('update:modelValue', 'locked_down')
-    await nextTick()
-
-    // locked-down preset: press/click/fill/select/go_back require approval
-    const perms = (wrapper.vm as unknown as { toolPerms?: Record<string, string> }).toolPerms
-    expect(perms!.navigate).toBe('always_allowed')
-    expect(perms!.press).toBe('requires_approval')
-    expect(perms!.click).toBe('requires_approval')
-
-    const permsSection = wrapper.find('[data-testid="assistant-tool-permissions"]')
-    const save = permsSection.findAll('button').find((b) => b.text().includes('Save Tool Permissions'))
-    await save!.trigger('click')
-    await flushPromises()
-
-    const put = vi.mocked((await import('../lib/api/client')).api.PUT).mock.calls[0]
-    expect((put[1] as any).body.permission_mode).toBe('locked_down')
-    expect((put[1] as any).body.tool_permissions.press).toBe('requires_approval')
-    wrapper.unmount()
-  })
-
-  it('per-tool permission selects are disabled unless the mode is custom', async () => {
-    const wrapper = await mountAssistant()
-
-    const modeSelect = wrapper.find('[data-testid="assistant-tool-perm-mode"]').findComponent({ name: 'Select' })
-    await (modeSelect.vm as unknown as { $emit: (e: string, v: unknown) => void }).$emit('update:modelValue', 'custom')
-    await nextTick()
-
-    const permsSection = wrapper.find('[data-testid="assistant-tool-permissions"]')
-    const toolSelects = permsSection.findAllComponents({ name: 'Select' })
-    expect(toolSelects.length).toBeGreaterThan(0)
-    wrapper.unmount()
-  })
-
-  it('saves the safety config with split pattern lists', async () => {
-    const wrapper = await mountAssistant()
-
-    await wrapper.find('[data-testid="assistant-rate-limit-max-actions"]').setValue('45')
-    await wrapper.find('[data-testid="assistant-rate-limit-window"]').setValue('120')
-    await wrapper.find('[data-testid="assistant-nogo-page-patterns"]').setValue('/admin/*, /billing')
-    await wrapper.find('[data-testid="assistant-allowed-selectors"]').setValue('[data-safe]')
-
-    const safety = wrapper.find('[data-testid="assistant-safety-limits"]')
-    const save = safety.findAll('button').find((b) => b.text().includes('Save Safety Config'))
-    await save!.trigger('click')
-    await flushPromises()
-
-    const put = vi.mocked((await import('../lib/api/client')).api.PUT).mock.calls[0]
-    expect((put[1] as any).body).toEqual({
-      rate_limit_max_actions: 45,
-      rate_limit_window_seconds: 120,
-      auto_execute_threshold: 0.8,
-      nogo_page_patterns: ['/admin/*', '/billing'],
-      nogo_selector_patterns: [],
-      allowed_selectors: ['[data-safe]'],
-      allowed_page_patterns: [],
-    })
-    wrapper.unmount()
-  })
-
-  it('shows a safety-config save failure inline', async () => {
-    const { api } = await import('../lib/api/client')
-    vi.mocked(api.PUT).mockResolvedValue({ data: null, error: { detail: 'safety_rejected' } } as any)
-    const wrapper = await mountAssistant()
-
-    const safety = wrapper.find('[data-testid="assistant-safety-limits"]')
-    const save = safety.findAll('button').find((b) => b.text().includes('Save Safety Config'))
-    await save!.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('Failed to save safety config')
-    expect(wrapper.text()).toContain('safety_rejected')
     wrapper.unmount()
   })
 

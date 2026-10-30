@@ -494,7 +494,6 @@ async def _build_stream_system_prompt(ctx: _StreamContext, supports_tools: bool)
             user_id=ctx.principal.account_id,
             page_context=ctx.req.page_context,
             system_prompt_override=ctx.req.system_prompt,
-            include_ui_tools_text=False,
         )
 
 
