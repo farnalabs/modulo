@@ -23,10 +23,11 @@
       />
 
       <!-- MCP Server Status -->
-      <Card>
-        <template #title>{{ $t('views.SettingsMcpView.mcp_server_status') }}</template>
-        <template #subtitle>{{ $t('views.SettingsMcpView.the_url_clients_use_to_connect_to_the_mcp_server') }}</template>
-        <template #content>
+      <DataCard
+        heading-level="h2"
+        :title="$t('views.SettingsMcpView.mcp_server_status')"
+        :description="$t('views.SettingsMcpView.the_url_clients_use_to_connect_to_the_mcp_server')"
+      >
         <div class="space-y-4">
           <div
             v-if="!publicUrlConfigured"
@@ -52,25 +53,22 @@
               </Badge>
             </div>
           </div>
-          </div>
-        </template>
-      </Card>
+        </div>
+      </DataCard>
 
       <!-- API Key Management -->
-      <Card class="settings-mcp-api-keys-card">
-        <template #header>
-          <div class="flex flex-wrap items-center justify-between gap-3 p-4 pb-0">
-            <div>
-              <div class="text-lg font-semibold">{{ $t('views.SettingsMcpView.api_keys') }}</div>
-              <div class="text-sm text-muted-foreground">{{ $t('views.SettingsMcpView.create_and_manage_api_keys_for_mcp_client_authentication') }}</div>
-            </div>
-            <Button v-if="!apiKeysRestricted" data-testid="settings-mcp-create-key" @click="openCreateKeyDialog">
-              {{ $t('views.SettingsMcpView.create_mcp_api_key') }}
-            </Button>
-          </div>
+      <DataCard
+        card-class="settings-mcp-api-keys-card"
+        heading-level="h2"
+        :title="$t('views.SettingsMcpView.api_keys')"
+        :description="$t('views.SettingsMcpView.create_and_manage_api_keys_for_mcp_client_authentication')"
+      >
+        <template #headerActions>
+          <Button v-if="!apiKeysRestricted" data-testid="settings-mcp-create-key" @click="openCreateKeyDialog">
+            {{ $t('views.SettingsMcpView.create_mcp_api_key') }}
+          </Button>
         </template>
-        <template #content>
-        <div class="p-4 pt-0">
+        <div>
           <div
             v-if="apiKeysRestricted"
             class="rounded-lg border border-muted bg-muted/30 p-4 text-sm text-muted-foreground"
@@ -155,15 +153,15 @@
           </table>
           </div>
           </template>
-          </div>
-        </template>
-      </Card>
+        </div>
+      </DataCard>
 
       <!-- Config Snippets -->
-      <Card>
-        <template #title>{{ $t('views.SettingsMcpView.configuration_snippets') }}</template>
-        <template #subtitle>{{ $t('views.SettingsMcpView.copy_these_snippets_to_configure_mcp_clients') }}</template>
-        <template #content>
+      <DataCard
+        heading-level="h2"
+        :title="$t('views.SettingsMcpView.configuration_snippets')"
+        :description="$t('views.SettingsMcpView.copy_these_snippets_to_configure_mcp_clients')"
+      >
         <div class="space-y-4">
           <div class="flex items-center gap-2">
             <label for="settingsmcpview-client" class="text-sm font-medium whitespace-nowrap">{{ $t('views.SettingsMcpView.client') }}:</label>
@@ -187,8 +185,7 @@
             <Button severity="secondary" outlined size="small" class="mt-2" data-testid="settings-mcp-copy-snippet" @click="copySnippet">{{ $t('views.SettingsMcpView.copy') }}</Button>
           </div>
           </div>
-        </template>
-      </Card>
+      </DataCard>
 
       <!-- Registered OAuth Clients (extracted to McpOauthClientsCard).
            Rendered behind the SAME data gate as every other card: the
@@ -338,7 +335,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Badge from 'primevue/badge'
 import Button from 'primevue/button'
-import Card from 'primevue/card'
+import DataCard from '../components/ui/DataCard.vue'
 import Dialog from 'primevue/dialog'
 import FormDialog from '../components/shared/FormDialog.vue'
 import { usePlanStore } from '../stores/planStore'

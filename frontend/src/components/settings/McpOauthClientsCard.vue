@@ -1,8 +1,9 @@
 <template>
-  <Card>
-    <template #title>{{ $t('views.SettingsMcpView.registered_oauth_clients') }}</template>
-    <template #subtitle>{{ $t('views.SettingsMcpView.mcp_oauth_client_applications_registered_for_token_based_auth') }}</template>
-    <template #content>
+  <DataCard
+    heading-level="h2"
+    :title="$t('views.SettingsMcpView.registered_oauth_clients')"
+    :description="$t('views.SettingsMcpView.mcp_oauth_client_applications_registered_for_token_based_auth')"
+  >
     <div class="space-y-4">
       <div
         v-if="oauthRestricted"
@@ -86,8 +87,7 @@
         </div>
       </template>
       </div>
-    </template>
-  </Card>
+  </DataCard>
 
   <FormDialog
     v-model:open="registerOauthDialogOpen"
@@ -331,7 +331,7 @@ import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
 import type { components } from '../../lib/api/client'
 import Button from 'primevue/button'
-import Card from 'primevue/card'
+import DataCard from '../ui/DataCard.vue'
 import Dialog from 'primevue/dialog'
 import FormDialog from '../shared/FormDialog.vue'
 import { formatDateShort } from '../../lib/formatDate'
