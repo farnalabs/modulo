@@ -15,6 +15,7 @@ sending them hunting for a key mismatch that did not exist.
 
 from __future__ import annotations
 
+import re
 import shlex
 import shutil
 import subprocess
@@ -165,20 +166,60 @@ def test_extracted_argv_rejects_a_wrong_trust_key(signed_manifest: _SignedManife
     assert "Signature Verification Failure" in combined
 
 
+def _run_signature_parser(
+    signature_text: str,
+    tmp_path: Path,
+    *,
+    current_id: str = "modulo-2026-a",
+    next_id: str = "modulo-2026-a-next",
+) -> subprocess.CompletedProcess[str]:
+    source = _INSTALL_SH.read_text(encoding="utf-8")
+    match = re.search(
+        r"signature_fields=\"\$\(python3 .*?<<'PYEOF'\n(?P<body>.*?)\nPYEOF",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None, "install.sh must retain the extracted signature parser"
+    parser_source = match.group("body")
+    signature_file = tmp_path / "signature-parser-fixture.json"
+    try:
+        signature_file.write_text(signature_text, encoding="utf-8")
+        return subprocess.run(  # noqa: S603 - resolved Python interpreter and temporary fixture paths
+            [shutil.which("python3") or "python3", "-", str(signature_file), current_id, next_id],
+            input=parser_source,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    finally:
+        signature_file.unlink(missing_ok=True)
+
+
 @pytest.mark.parametrize(
     "signature_text",
     [
         "{}",
         '{"signature":"' + "0" * 128 + '"}',
         '{"key_id":"modulo-2026-a","signature":"' + "0" * 128 + '","key_id":"rogue"}',
+        '{"key_id":"modulo-2026-a","signature":"not-hex"}',
     ],
 )
-def test_installer_signature_parser_rejects_missing_or_duplicate_key_id(signature_text: str) -> None:
-    source = _INSTALL_SH.read_text(encoding="utf-8")
-    assert "signature file must contain exactly key_id and signature" in source
-    assert "duplicate field" in source
-    assert 'candidate_keys="current next"' not in source
-    assert signature_text != ""  # The cases are intentionally malformed shell inputs.
+def test_installer_signature_parser_executes_rejection_for_malformed_envelopes(
+    signature_text: str, tmp_path: Path
+) -> None:
+    result = _run_signature_parser(signature_text, tmp_path)
+    assert result.returncode != 0
+    output = result.stderr + result.stdout
+    assert output
+
+
+@pytest.mark.parametrize("key_id", ["modulo-2026-a", "modulo-2026-a-next"])
+def test_installer_signature_parser_accepts_current_and_next_key_ids(key_id: str, tmp_path: Path) -> None:
+    signature_text = '{"key_id":"' + key_id + '","signature":"' + "a" * 128 + '"}'
+    result = _run_signature_parser(signature_text, tmp_path)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [key_id, "a" * 128]
 
 
 def test_installer_signature_parser_preserves_explicit_rotation_slots() -> None:

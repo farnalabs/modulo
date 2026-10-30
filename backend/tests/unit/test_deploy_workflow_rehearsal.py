@@ -392,12 +392,13 @@ def test_bundle_release_verifies_generated_signature_before_upload() -> None:
     assert sign_step["env"]["MANIFEST_SIGNING_KEY"] == "${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}"
     assert "verify_signature(payload, signature)" in script
     assert "_KEY_ID_CURRENT" in script
-    assert "failed trust-store verification" in script
+    assert "generated manifest signature failed trust-store verification" in script
+    assert "generated manifest signature did not verify under the expected current key_id" in script
     assert "private_key_hex" in script
     assert "MANIFEST_SIGNING_KEY" not in steps[upload_idx].get("run", "")
 
 
-def test_final_release_manifest_verifies_generated_signature_before_publish() -> None:
+def test_final_release_manifest_verification_step_precedes_github_release() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
     final_names = _step_names(final_steps)
@@ -408,12 +409,25 @@ def test_final_release_manifest_verifies_generated_signature_before_publish() ->
     assert "_KEY_ID_CURRENT" in script
     publish_steps = workflow["jobs"]["publish-release"]["steps"]
     publish_names = _step_names(publish_steps)
-    verify_idx = publish_names.index("Verify portable release artefacts")
+    verify_idx = publish_names.index("Verify final manifest signature against the checked-in trust store")
     publish_idx = publish_names.index("Create GitHub Release with assets")
     verify_script = publish_steps[verify_idx]["run"]
     assert verify_idx < publish_idx
+    assert "read_signature_file" in verify_script
+    assert "verify_release_from_files" in verify_script
+    assert "EXPECTED_KEY_ID" in publish_steps[verify_idx]["env"]
     assert "RELEASE_MANIFEST.json.sig" in verify_script
-    assert "sha256sum --check SHA256SUMS" in verify_script
+    assert "sha256sum --check SHA256SUMS" not in verify_script
+
+
+def test_portable_artifact_presence_check_is_not_signature_gate() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["publish-release"]["steps"]
+    names = _step_names(steps)
+    portable_idx = names.index("Verify portable release artefacts")
+    final_idx = names.index("Verify final manifest signature against the checked-in trust store")
+    assert portable_idx < final_idx
+    assert "verify_release_from_files" not in steps[portable_idx]["run"]
 
 
 def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:

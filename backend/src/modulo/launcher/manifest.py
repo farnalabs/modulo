@@ -21,16 +21,21 @@ Verification contract (locked by ``tests/unit/launcher/test_manifest.py``):
   releasing under the next key works before consumers update.
 
 **Key rotation procedure** (recorded per ADR 031 in the distribution ADR):
-during rotation, populate the reserved NEXT slot; both populated trust-store
-keys verify until the retired key is removed after the rotation window.
+the trust store has a CURRENT slot and a NEXT slot, and both populated slots
+remain accepted during the compatibility window.
 
-1. Generate the replacement keypair offline; publish its PUBLIC half by
-   moving the next key's id/key into the current slot of the trust store
-   (_TRUST_ROWS below). The checked-in module is the distribution point.
-2. Flip release signing to the new key (CI secret ``BUNDLE_MANIFEST_SIGNING_KEY``).
-3. After one full release cycle under the new key, demote the old key to the
-   next slot only if unwanted, then hard-remove it — every consumer older
-   than one cycle stops verifying with it by design.
+1. Generate the replacement keypair offline and add its PUBLIC half to the
+   NEXT slot of both trust-store assemblies (``_TRUST_ROWS`` below and the
+   matching installer constants). Keep the old key in CURRENT.
+2. Ship that overlap so consumers receive the replacement public key while the
+   old CURRENT key is still accepted.
+3. After the overlap is shipped, switch release signing to the replacement key
+   (CI secret ``BUNDLE_MANIFEST_SIGNING_KEY``); releases are now signed with
+   the replacement while CURRENT still names the old key and NEXT names the
+   replacement.
+4. After the compatibility window, promote the replacement to CURRENT in both
+   trust-store assemblies and retire the old key. Do not remove the old key
+   before that window has elapsed.
 
 **PROVISIONING:** the current production key is provisioned in this module;
 the reserved NEXT slot remains empty until the next rotation. The trust store
@@ -95,9 +100,11 @@ PROVISIONING_NOTE = (
     "key as {key_id: (label, ed25519 public hex)} for the current + next slots.\n"
     "  2. scripts/install.sh -> TRUST_KEY_CURRENT_B64 / TRUST_KEY_NEXT_B64: "
     "the same public keys as SPKI-DER base64.\n"
-    "For rotation, generate the replacement keypair offline, place its public "
-    "half in the reserved next slot, release once with both keys trusted, then "
-    "promote it to current and remove the retired key after the rotation window.\n"
+    "For rotation, generate the replacement keypair offline, add its public "
+    "half to NEXT while the old key remains CURRENT, ship that overlap, then "
+    "release under the replacement key. After the compatibility window, promote "
+    "the replacement to CURRENT and retire the old key in both trust-store "
+    "assemblies.\n"
     "The PRIVATE half is the CI secret BUNDLE_MANIFEST_SIGNING_KEY (ed25519 "
     "hex, repo-level Actions secret) - never committed. When the secret is "
     "absent the bundle-release workflow refuses to publish."
