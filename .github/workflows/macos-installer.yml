@@ -55,8 +55,13 @@ on:
         required: true
         default: false
 
+# A manual dispatch is an independent rehearsal, so it gets its own group
+# (run id). Release callers keep the per-version group so a cut/recut for the
+# same version cannot double-publish. Without this, back-to-back manual
+# dispatches collapse into one pending run and the newer one is cancelled
+# before any job executes.
 concurrency:
-  group: macos-installer-${{ inputs.version || github.ref }}
+  group: macos-installer-${{ github.event_name == 'workflow_dispatch' && github.run_id || inputs.version }}
   cancel-in-progress: false
 
 defaults:
@@ -131,7 +136,7 @@ jobs:
   build:
     name: Build and smoke-test macOS arm64 bundle
     needs: normalize-inputs
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       VERSION_NUM: ${{ needs.normalize-inputs.outputs.version }}
@@ -165,7 +170,7 @@ jobs:
           shellcheck scripts/macos/install.sh
           bash -n scripts/macos/build-native-bundle.sh
           bash -n scripts/macos/install.sh
-          grep -q 'macos-14' .github/workflows/macos-installer.yml
+          grep -q 'macos-15' .github/workflows/macos-installer.yml
           {
             echo '## macOS native installer dry-run (contract-only)'
             echo ''
@@ -247,6 +252,25 @@ jobs:
            "$APP/Contents/Resources/bundle/pg/bin/postgres" --version | grep -Eq 'PostgreSQL[)]?[[:space:]]+16[.]'
            "$APP/Contents/Resources/bundle/redis/redis-server" --version | grep -Eq 'v=8[.]'
            "$APP/Contents/MacOS/modulo" --help >/dev/null
+           echo '::group::Verify bundle symlinks stay inside the app'
+           APP_REALPATH="$(cd "$APP" && pwd -P)"
+           while IFS= read -r -d '' link; do
+             target="$(readlink "$link")"
+             if [[ "$target" = /* ]]; then
+               resolved="$target"
+             else
+               resolved="$(dirname "$link")/$target"
+             fi
+             resolved="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$resolved")"
+             case "$resolved/" in
+               "$APP_REALPATH/"*) printf 'bundle symlink: link=%s target=%s resolved=%s\n' "$link" "$target" "$resolved" ;;
+               *)
+                 printf '::error::symlink escapes app bundle: link=%s target=%s resolved=%s\n' "$link" "$target" "$resolved" >&2
+                 exit 1
+                 ;;
+             esac
+           done < <(find "$APP/Contents" -type l -print0)
+           echo '::endgroup::'
 
 
       - name: Sign, notarize and smoke-test native installer
@@ -806,15 +830,79 @@ jobs:
 
           APP="build/Modulo-${VERSION_NUM}.app"
           # shellcheck disable=SC2016
-          run_pre_smoke nested_binary_discovery find "$APP/Contents" -type f -perm -111 -print
-          mapfile -t NESTED_BINARIES < "$DATA/pre-smoke-nested_binary_discovery.log"
+          # Discover only genuine Mach-O files. A bundled Python runtime ships
+          # executable-bit files that are not binaries (empty .py modules, shell
+          # script wrappers such as bin/pip3); those must not be signed or be
+          # required to be Mach-O. Any Mach-O that is not arm64 still fails in
+          # the per-binary check below, so this stays strict.
+          # shellcheck disable=SC2016
+          run_pre_smoke nested_binary_discovery bash -c '
+            set -euo pipefail
+            app="$1"
+            find "$app/Contents" -type f -perm -111 -print0 |
+              while IFS= read -r -d "" candidate; do
+                if file -b "$candidate" | grep -q "Mach-O"; then
+                  printf "%s\n" "$candidate"
+                fi
+              done
+          ' bash "$APP"
+
+          # Negative guard: a foreign binary format (ELF) must never ship inside
+          # a macOS bundle. Scanning only the executable-bit set keeps this
+          # bounded while still catching a mis-packaged Linux binary.
+          # shellcheck disable=SC2016
+          run_pre_smoke foreign_binary_scan bash -c '
+            set -euo pipefail
+            app="$1"
+            found=0
+            while IFS= read -r -d "" candidate; do
+              kind="$(file -b "$candidate")"
+              case "$kind" in
+                *ELF*)
+                  printf "foreign ELF binary inside macOS bundle: %s (%s)\n" "$candidate" "$kind" >&2
+                  found=1
+                  ;;
+              esac
+            done < <(find "$app/Contents" -type f -perm -111 -print0)
+            exit "$found"
+          ' bash "$APP"
+          # macOS ships bash 3.2, which has no `mapfile`/`readarray`.
+          NESTED_BINARIES=()
+          while IFS= read -r nested_binary_line; do
+            [[ -n "$nested_binary_line" ]] && NESTED_BINARIES+=("$nested_binary_line")
+          done < "$DATA/pre-smoke-nested_binary_discovery.log"
           binary_index=0
           for binary in "${NESTED_BINARIES[@]}"; do
             [[ -n "$binary" ]] || continue
+            # Classify and sign each existing executable. A bundled runtime may
+            # legitimately ship shell-script wrappers (e.g. python-build-standalone's
+            # bin/pip3); those are not Mach-O and must not be codesigned. Any
+            # wrong-architecture Mach-O, ELF, or unknown executable still fails
+            # closed, so this stays strict without rejecting valid wrappers.
             # shellcheck disable=SC2016
-          run_pre_smoke "nested_binary_file_${binary_index}" bash -c 'file "$1" | grep -E "Mach-O 64-bit executable arm64"' bash "$binary"
-            # shellcheck disable=SC2016
-          run_pre_smoke "nested_binary_codesign_${binary_index}" codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$binary"
+            run_pre_smoke "nested_binary_${binary_index}" bash -c '
+              set -euo pipefail
+              binary="$1"
+              identity="$2"
+              kind="$(file -b "$binary")"
+              case "$kind" in
+                *"Mach-O 64-bit executable arm64"*|*"Mach-O 64-bit bundle arm64"*|*"Mach-O 64-bit dynamically linked shared library arm64"*)
+                  codesign --force --options runtime --timestamp --sign "$identity" "$binary" >/dev/null
+                  printf "signed Mach-O arm64: %s\n" "$binary"
+                  ;;
+                *Mach-O*)
+                  printf "unexpected Mach-O architecture: %s (%s)\n" "$binary" "$kind" >&2
+                  exit 1
+                  ;;
+                *script*|*text*)
+                  printf "skipped non-Mach-O executable: %s (%s)\n" "$binary" "$kind"
+                  ;;
+                *)
+                  printf "unexpected executable type: %s (%s)\n" "$binary" "$kind" >&2
+                  exit 1
+                  ;;
+              esac
+            ' bash "$binary" "$SIGNING_IDENTITY"
             binary_index=$((binary_index + 1))
           done
           # shellcheck disable=SC2016
@@ -831,8 +919,23 @@ jobs:
           run_pre_smoke notary_key_decode bash -c 'printf "%s" "$1" | tr -d "[:space:]" | base64 -D > "$2"' bash "$NOTARY_KEY_B64" "$NOTARY_KEY"
           # shellcheck disable=SC2016
           run_pre_smoke dmg_notary_submit xcrun notarytool submit "$DMG" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 30m
+          # Apple's notarization ticket can take time to propagate to CloudKit after
+          # notarytool accepts the submission. Run 41127149139 observed "Record not found"
+          # and "Could not find base64 encoded ticket in response" from stapler (exit 65).
+          staple_with_retry() {
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              if xcrun stapler staple "$DMG"; then
+                return 0
+              fi
+              if [[ "$attempt" -lt 6 ]]; then
+                sleep 20
+              fi
+            done
+            return 1
+          }
           # shellcheck disable=SC2016
-          run_pre_smoke dmg_staple xcrun stapler staple "$DMG"
+          run_pre_smoke dmg_staple staple_with_retry
           # shellcheck disable=SC2016
           run_pre_smoke dmg_staple_validate xcrun stapler validate "$DMG"
           # shellcheck disable=SC2016
