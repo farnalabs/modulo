@@ -673,6 +673,12 @@ async def list_triggers(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # The list JOINs Pipeline to filter soft-deleted pipelines (and to
+            # scope viewers). ``rls_team_isolation`` only grants a team-private
+            # pipeline to the membership arm when ``app.user_id``/``app.org_role``
+            # are set, so the user context must accompany the org context or a
+            # team member's own team-private triggers vanish from the list.
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             base_filter = Trigger.organisation_id == principal.organisation_id
             trigger_filter = _trigger_type_and_pipeline_filters(base_filter, pipeline_id, trigger_type)
             if principal.org_role == "viewer":
@@ -868,6 +874,10 @@ async def preview_cron_schedule(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # The preview JOINs Pipeline (soft-deleted filter + viewer scope);
+            # the team-private pipeline stays visible to its members only when
+            # the RLS user context is set alongside the org context.
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             trigger_filter: list[Any] = [
                 Trigger.id == trigger_id,
                 Trigger.organisation_id == principal.organisation_id,
@@ -1957,6 +1967,10 @@ async def list_trigger_events(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # The event read JOINs Pipeline (soft-deleted filter + viewer
+            # scope); a team member needs the RLS user context for the
+            # membership arm to expose their own team-private pipeline.
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             trigger_result = await session.execute(
                 select(Trigger)
                 .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
