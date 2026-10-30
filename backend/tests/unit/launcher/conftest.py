@@ -1,8 +1,8 @@
 """Shared launcher-test key fixtures (FAR-675).
 
-The SHIPPED manifest module fails closed with an EMPTY trust store; these
-fixtures are where the test/CI signing keypairs live instead — private key
-material ships in tests only, never in production code. Tests inject the
+The SHIPPED manifest module carries the provisioned production public key;
+these fixtures are independent test/CI signing keypairs instead — private key
+material ships in tests only, never in production code. Tests inject the test
 store explicitly (``test_trust_store``) or patch the module store for flow
 tests that exercise the full upgrade path (``patched_trust_store``).
 """

@@ -395,12 +395,11 @@ trap 'rm -rf "${tmp}"' EXIT
 # beside the tarball; the SAME trust store verifies (no operator-added keys).
 
 # The embedded ed25519 trust store (SPKI DER, base64) - current + next.
-# FAIL-CLOSED by default: BOTH values are EMPTY until the repo owner
-# provisionally pastes the production public keys (needs-human). The SAME
-# keys must go into backend/src/modulo/launcher/manifest.py (_TRUST_ROWS)
-# - a unit test asserts the two assemblies stay equal (no drift); rotation
-# per ADR 031 Decision 3. Empty values make every signature gate refuse.
-TRUST_KEY_CURRENT_B64=""
+# The current production public key is provisioned; NEXT remains reserved for
+# rotation. The SAME keys must go into backend/src/modulo/launcher/manifest.py
+# (_TRUST_ROWS) - a unit test asserts the two assemblies stay equal (no drift).
+# Rotation follows ADR 031 Decision 3.
+TRUST_KEY_CURRENT_B64="MCowBQYDK2VwAyEAc/fdFIP/8MDfRdcGrpznpoFRlCuOLovHFbXZvrcZtbA="
 TRUST_KEY_NEXT_B64=""
 
 # The store-blessed signing key-ids (must mirror manifest.py's slot ids).
@@ -459,7 +458,7 @@ verify_shipped_manifest() {
   #
   # Preconditions: openssl (>=3.0, ed25519 -rawin), coreutils base64, and
   # python3 (the manifest sha256 extraction below). The trust store is
-  # EMBEDDED and empty-by-default: no operator-added key can ever verify.
+  # EMBEDDED: no operator-added key can ever verify.
   local manifest_file="$1" signature_file="$2" tarball_file="$3" expected_release="$4"
   _openssl_ed25519_check
   command -v base64 >/dev/null 2>&1 || die "coreutils base64 is required to decode the trust-store keys"
@@ -472,16 +471,51 @@ verify_shipped_manifest() {
   key_file="$(mktemp)"
   sig_file="$(mktemp)"
   openssl_log="$(mktemp)"
-  sig_hex="$(sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F]\{128\}\)".*/\1/p' "${signature_file}" | head -n 1)"
-  [[ -n "${sig_hex}" ]] || die "the signature file's 'signature' field is malformed (expected 128 hex chars)"
-  sig_key_id="$(_sig_key_id "${signature_file}")" || sig_key_id=""
+  # Parse the signature envelope with the same strict JSON rules as Python's
+  # verifier.  In particular, reject duplicate keys rather than letting a
+  # permissive grep or JSON parser silently choose one conflicting value.
+  local signature_fields
+  signature_fields="$(python3 - "${signature_file}" "${TRUST_KEY_ID_CURRENT}" "${TRUST_KEY_ID_NEXT}" <<'PYEOF'
+import json
+import re
+import sys
+
+path, current_id, next_id = sys.argv[1:]
+try:
+    def reject_duplicate_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate field: {key}")
+            result[key] = value
+        return result
+
+    with open(path, encoding="utf-8") as handle:
+        signature = json.load(handle, object_pairs_hook=reject_duplicate_keys)
+except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"signature file is unreadable or malformed: {exc}")
+
+if not isinstance(signature, dict) or set(signature) != {"key_id", "signature"}:
+    raise SystemExit("signature file must contain exactly key_id and signature")
+key_id = signature["key_id"]
+sig_hex = signature["signature"]
+if not isinstance(key_id, str) or key_id not in {current_id, next_id}:
+    raise SystemExit(f"signature key_id is missing or not embedded: {key_id!r}")
+if not isinstance(sig_hex, str) or re.fullmatch(r"[0-9a-fA-F]{128}", sig_hex) is None:
+    raise SystemExit("signature field is malformed (expected 128 hex characters)")
+print(key_id)
+print(sig_hex)
+PYEOF
+  )" || die "cannot parse the signed manifest signature: ${signature_fields}"
+  mapfile -t signature_parts <<< "${signature_fields}"
+  [[ "${#signature_parts[@]}" -eq 2 && -n "${signature_parts[0]}" && -n "${signature_parts[1]}" ]] || die \
+    "cannot parse the signed manifest signature: expected exactly one key_id and one signature"
+  sig_key_id="${signature_parts[0]}"
+  sig_hex="${signature_parts[1]}"
   case "${sig_key_id}" in
-    "") # key_id unparsable: try both embedded store keys (never unknown ones)
-      candidate_keys="current next"
-      ;;
     "${TRUST_KEY_ID_CURRENT}") candidate_keys="current" ;;
     "${TRUST_KEY_ID_NEXT}") candidate_keys="next" ;;
-    *) die "unknown signing key-id '${sig_key_id}' - not in the embedded current+next trust store; refusing"
+    *) die "unknown signing key-id '${sig_key_id}' - not in the embedded current+next trust store; refusing" ;;
   esac
   hex_to_bin "${sig_hex}" > "${sig_file}"
   for slot in ${candidate_keys}; do
