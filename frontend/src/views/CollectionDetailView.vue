@@ -134,128 +134,129 @@
         <h3 class="text-sm font-medium">
           {{ $t('views.CollectionDetail.installs_title') }}
         </h3>
-         <DataCard
-           v-for="install in installs"
-           :key="install.install_id"
-           padding="md"
-           card-class="space-y-3"
-         >
-          <div class="flex items-center justify-between">
-            <div class="text-sm">
-              <span class="font-medium">v{{ install.collection_version || '?' }}</span>
-              <span class="ml-2 text-muted-foreground">
-                {{ $t('views.CollectionDetail.install_status', { status: install.status }) }}
-              </span>
-            </div>
-            <div class="flex items-center gap-2">
-              <span
-                v-if="install.community_sourced"
-                class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-              >
-                {{ $t('views.CollectionDetail.community_sourced') }}
-              </span>
-              <span
-                v-if="install.agents_granted"
-                class="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300"
-              >
-                {{ $t('views.CollectionDetail.agents_granted') }}
-              </span>
-              <Button
-                v-if="install.community_sourced && !install.agents_granted"
-                size="small"
-                :disabled="granting === install.install_id"
-                data-testid="collection-grant-agents"
-                @click="grantAgents(install.install_id)"
-              >
-                {{
-                  granting === install.install_id
-                    ? $t('views.CollectionDetail.granting')
-                    : $t('views.CollectionDetail.grant_agents')
-                }}
-              </Button>
-              <!-- FAR-759: update-available surfacing + operator-initiated upgrade -->
-              <span
-                v-if="install.update_available"
-                class="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
-                data-testid="collection-update-available"
-              >
-                {{
-                  $t('views.CollectionDetail.update_available', {
-                    version: install.available_version || '?',
-                  })
-                }}
-              </span>
-              <Button
-                v-if="install.update_available"
-                size="small"
-                :disabled="upgrading === install.install_id"
-                data-testid="collection-upgrade"
-                @click="upgrade(install.install_id)"
-              >
-                {{
-                  upgrading === install.install_id
-                    ? $t('views.CollectionDetail.upgrading')
-                    : $t('views.CollectionDetail.upgrade')
-                }}
-              </Button>
-            </div>
-          </div>
-
-          <!-- Connector checklist (FAR-762/764) -->
-          <div
-            v-if="install.connector_checklist && install.connector_checklist.length > 0"
-            class="space-y-2"
-          >
-            <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              {{ $t('views.CollectionDetail.connector_checklist') }}
-            </h4>
-            <div
-              v-for="(entry, ci) in install.connector_checklist"
-              :key="ci"
-              class="flex items-center justify-between rounded border px-3 py-2 text-sm"
-            >
-              <div class="flex items-center gap-2">
-                <span
-                  class="inline-block h-2 w-2 rounded-full"
-                  :class="
-                    entry.status === 'configured+bound'
-                      ? 'bg-green-500'
-                      : entry.status === 'configured'
-                        ? 'bg-yellow-500'
-                        : 'bg-red-500'
-                  "
-                />
-                <span class="font-mono text-xs">{{ entry.connector_type_id }}</span>
+        <DataCard
+          v-for="install in installs"
+          :key="install.install_id"
+          padding="md"
+        >
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="text-sm">
+                <span class="font-medium">v{{ install.collection_version || '?' }}</span>
+                <span class="ml-2 text-muted-foreground">
+                  {{ $t('views.CollectionDetail.install_status', { status: install.status }) }}
+                </span>
               </div>
               <div class="flex items-center gap-2">
-                <span class="text-xs text-muted-foreground">{{ entry.status }}</span>
-                <Button
-                  v-if="entry.status !== 'configured+bound'"
-                  as="router-link"
-                  :to="`/admin/connectors`"
-                  size="small"
-                  variant="ghost"
-                  class="text-xs"
-                  data-testid="collection-create-connector"
+                <span
+                  v-if="install.community_sourced"
+                  class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
                 >
-                  {{ $t('views.CollectionDetail.create_connector') }}
+                  {{ $t('views.CollectionDetail.community_sourced') }}
+                </span>
+                <span
+                  v-if="install.agents_granted"
+                  class="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300"
+                >
+                  {{ $t('views.CollectionDetail.agents_granted') }}
+                </span>
+                <Button
+                  v-if="install.community_sourced && !install.agents_granted"
+                  size="small"
+                  :disabled="granting === install.install_id"
+                  data-testid="collection-grant-agents"
+                  @click="grantAgents(install.install_id)"
+                >
+                  {{
+                    granting === install.install_id
+                      ? $t('views.CollectionDetail.granting')
+                      : $t('views.CollectionDetail.grant_agents')
+                  }}
+                </Button>
+                <!-- FAR-759: update-available surfacing + operator-initiated upgrade -->
+                <span
+                  v-if="install.update_available"
+                  class="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                  data-testid="collection-update-available"
+                >
+                  {{
+                    $t('views.CollectionDetail.update_available', {
+                      version: install.available_version || '?',
+                    })
+                  }}
+                </span>
+                <Button
+                  v-if="install.update_available"
+                  size="small"
+                  :disabled="upgrading === install.install_id"
+                  data-testid="collection-upgrade"
+                  @click="upgrade(install.install_id)"
+                >
+                  {{
+                    upgrading === install.install_id
+                      ? $t('views.CollectionDetail.upgrading')
+                      : $t('views.CollectionDetail.upgrade')
+                  }}
                 </Button>
               </div>
             </div>
-          </div>
 
-          <!-- Runnability -->
-          <div v-if="install.runnable" class="text-xs text-green-600 dark:text-green-400">
-            {{ $t('views.CollectionDetail.runnable') }}
+            <!-- Connector checklist (FAR-762/764) -->
+            <div
+              v-if="install.connector_checklist && install.connector_checklist.length > 0"
+              class="space-y-2"
+            >
+              <h4 class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                {{ $t('views.CollectionDetail.connector_checklist') }}
+              </h4>
+              <div
+                v-for="(entry, ci) in install.connector_checklist"
+                :key="ci"
+                class="flex items-center justify-between rounded border px-3 py-2 text-sm"
+              >
+                <div class="flex items-center gap-2">
+                  <span
+                    class="inline-block h-2 w-2 rounded-full"
+                    :class="
+                      entry.status === 'configured+bound'
+                        ? 'bg-green-500'
+                        : entry.status === 'configured'
+                          ? 'bg-yellow-500'
+                          : 'bg-red-500'
+                    "
+                  />
+                  <span class="font-mono text-xs">{{ entry.connector_type_id }}</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted-foreground">{{ entry.status }}</span>
+                  <Button
+                    v-if="entry.status !== 'configured+bound'"
+                    as="router-link"
+                    :to="`/admin/connectors`"
+                    size="small"
+                    variant="ghost"
+                    class="text-xs"
+                    data-testid="collection-create-connector"
+                  >
+                    {{ $t('views.CollectionDetail.create_connector') }}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Runnability -->
+            <div v-if="install.runnable" class="text-xs text-green-600 dark:text-green-400">
+              {{ $t('views.CollectionDetail.runnable') }}
+            </div>
+            <div v-else class="text-xs text-muted-foreground">
+              {{ $t('views.CollectionDetail.not_runnable') }}
+            </div>
           </div>
-          <div v-else class="text-xs text-muted-foreground">
-            {{ $t('views.CollectionDetail.not_runnable') }}
-          </div>
-         </DataCard>
-       </div>
-     </div>
-   </div>
- </template>
+        </DataCard>
+      </div>
+    </div>
+  </div>
+</template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'

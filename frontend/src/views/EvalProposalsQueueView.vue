@@ -34,13 +34,13 @@
       />
 
       <div v-else class="space-y-4">
-         <DataCard
-           v-for="p in proposals"
-           :key="p.id"
-           padding="lg"
-           elevation="sm"
-           :data-testid="'proposal-card-' + p.id"
-         >
+        <DataCard
+          v-for="p in proposals"
+          :key="p.id"
+          padding="lg"
+          elevation="sm"
+          :data-testid="'proposal-card-' + p.id"
+        >
           <div class="flex items-start justify-between gap-4">
             <div class="min-w-0 flex-1 space-y-3">
               <div class="flex flex-wrap items-center gap-2">
@@ -105,9 +105,9 @@
           >
             {{ actionMessages[p.id].text }}
           </div>
-         </DataCard>
-       </div>
-     </template>
+        </DataCard>
+      </div>
+    </template>
 
     <Dialog
       v-model:visible="publishDialogVisible"
