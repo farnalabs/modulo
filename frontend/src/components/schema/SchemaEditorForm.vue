@@ -4,6 +4,7 @@
       :title="$t('views.SchemaEditorView.schema_details')"
       heading-level="h2"
       padding="lg"
+      elevation="sm"
     >
       <div class="space-y-4">
         <div>
@@ -43,6 +44,7 @@
       :title="$t('views.SchemaEditorView.fields')"
       heading-level="h2"
       padding="lg"
+      elevation="sm"
     >
       <template #headerActions>
         <Button size="small" data-testid="schema-editor-add-field" @click="addField">

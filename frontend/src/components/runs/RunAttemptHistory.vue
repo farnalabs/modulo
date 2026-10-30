@@ -15,6 +15,7 @@
     title-class="text-base font-semibold tracking-tight"
     description-class="text-xs text-muted-foreground"
     padding="lg"
+    elevation="sm"
   >
     <p v-if="loading" data-testid="run-attempt-history-loading" class="mt-3 text-sm text-muted-foreground">
       {{ $t('components.RunAttemptHistory.loading') }}

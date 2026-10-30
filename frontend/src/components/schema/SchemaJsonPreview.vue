@@ -3,6 +3,7 @@
     :title="$t('views.SchemaEditorView.json_preview')"
     heading-level="h2"
     padding="lg"
+    elevation="sm"
   >
     <div class="relative">
       <button type="button"

@@ -259,6 +259,7 @@ async function detectPlaceholders() {
       heading-level="h4"
       title-class="text-sm font-medium"
       padding="md"
+      elevation="sm"
     >
       <div class="space-y-3">
         <div>

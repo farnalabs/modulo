@@ -3,6 +3,7 @@
     :title="$t('views.SchemaEditorView.version_history')"
     heading-level="h2"
     padding="lg"
+    elevation="sm"
   >
     <div v-if="loading" data-testid="schema-editor-versions-loading">
       <output class="sr-only" aria-live="polite">{{ $t('common.loading') }}</output>
