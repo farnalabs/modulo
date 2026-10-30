@@ -193,20 +193,61 @@ def test_release_identity_step_passes_gh_token_to_its_gh_api_calls() -> None:
     assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
 
 
-def test_release_reusable_installer_calls_declare_required_permissions() -> None:
+#: Caller job id -> called reusable workflow, relative to the repo root.
+_INSTALLER_CALLS = (
+    ("windows-installer", "./.github/workflows/windows-installer.yml"),
+    ("macos-installer", "./.github/workflows/macos-installer.yml"),
+)
+
+#: GitHub permission levels, weakest to strongest. ``none`` declares no access.
+_PERMISSION_RANK = {"none": 0, "read": 1, "write": 2}
+
+
+def _declared_permissions(workflow: dict[str, Any]) -> dict[str, str]:
+    """Every permission a reusable workflow declares, at its strongest level.
+
+    A caller cannot elevate permissions across a reusable-workflow boundary, so
+    it must grant at least what the called workflow declares. The declaration
+    has two layers and both count: the workflow-level default (inherited by
+    jobs that do not override it) and each job's own ``permissions`` block.
+    """
+    blocks: list[dict[str, str]] = [workflow.get("permissions") or {}]
+    blocks.extend(job.get("permissions") or {} for job in workflow.get("jobs", {}).values())
+
+    declared: dict[str, str] = {}
+    for block in blocks:
+        for permission, level in block.items():
+            current = declared.get(permission)
+            if current is None or _PERMISSION_RANK[level] > _PERMISSION_RANK[current]:
+                declared[permission] = level
+    return {permission: level for permission, level in declared.items() if _PERMISSION_RANK[level] > 0}
+
+
+def test_release_installer_callers_grant_permissions_their_jobs_require() -> None:
+    """Every installer caller must grant >= what its called workflow declares.
+
+    A hardcoded expected-permissions dict only pins today's values; this parses
+    the called workflow so the gate fails if EITHER side moves out of step —
+    a caller under-granting, or a newly added job declaring a permission the
+    caller never granted (the failure a real cut/recut surfaces, not a dry-run).
+    """
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
 
-    windows = workflow["jobs"]["windows-installer"]
-    assert windows["uses"] == "./.github/workflows/windows-installer.yml"
-    assert windows["permissions"] == {
-        "contents": "write",
-        "id-token": "write",
-        "attestations": "write",
-    }
+    for caller_job_id, called_relative_path in _INSTALLER_CALLS:
+        caller = workflow["jobs"][caller_job_id]
+        assert caller["uses"] == called_relative_path, f"{caller_job_id} calls an unexpected workflow"
 
-    macos = workflow["jobs"]["macos-installer"]
-    assert macos["uses"] == "./.github/workflows/macos-installer.yml"
-    assert macos["permissions"] == {"contents": "read"}
+        called = yaml.safe_load((REPO_ROOT / called_relative_path).read_text(encoding="utf-8"))
+        granted = caller.get("permissions") or {}
+
+        for permission, required_level in sorted(_declared_permissions(called).items()):
+            assert permission in granted, (
+                f"{caller_job_id} does not grant '{permission}', which {called_relative_path} declares"
+            )
+            assert _PERMISSION_RANK[granted[permission]] >= _PERMISSION_RANK[required_level], (
+                f"{caller_job_id} grants '{permission}: {granted[permission]}' but "
+                f"{called_relative_path} declares '{permission}: {required_level}'"
+            )
 
 
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
