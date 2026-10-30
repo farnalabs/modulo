@@ -281,12 +281,18 @@ jobs:
               printf '::error::smoke data path is an unexpected symlink: path=%q\n' "$DATA" >&2
               return 1
             fi
-            if [[ -e "$DATA" && ! -d "$DATA" ]]; then
+             if [[ -e "$DATA" ]]; then
+               if [[ -d "$DATA" ]]; then
+                 :
+               else
+
               printf '::error::smoke data path is not a directory: path=%q\n' "$DATA" >&2
-              stat -f '%Sp %Su:%Sg' "$DATA" >&2
-              return 1
-            fi
-            if [[ ! -d "$DATA" ]]; then
+                 stat -f '%Sp %Su:%Sg' "$DATA" >&2
+                 return 1
+               fi
+             fi
+             if [[ ! -d "$DATA" ]]; then
+
               if ! mkdir_error="$(mkdir -p "$DATA" 2>&1)"; then
                 printf '::error::could not create smoke data directory: path=%q error=%s\n' "$DATA" "$mkdir_error" >&2
                 return 1

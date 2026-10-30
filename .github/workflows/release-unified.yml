@@ -536,12 +536,17 @@ jobs:
                 dockerfile="frontend/Dockerfile.prod"
                 image_name="$IMAGE_NAMESPACE/frontend"
                 ;;
-              runner-opencode)
-                context="."
-                dockerfile="deploy/docker/runner-opencode.Dockerfile"
-                image_name="$IMAGE_NAMESPACE/runner-opencode"
-                ;;
-            esac
+               runner-opencode)
+                 context="."
+                 dockerfile="deploy/docker/runner-opencode.Dockerfile"
+                 image_name="$IMAGE_NAMESPACE/runner-opencode"
+                 ;;
+               *)
+                 echo "::error::unsupported image key: $img"
+                 exit 1
+                 ;;
+             esac
+
 
             echo "Building and pushing $img with tag $TAG..."
 
@@ -569,21 +574,31 @@ jobs:
               frontend)
                 docker run --rm --entrypoint nginx "$IMAGE" -t
                 ;;
-              runner-opencode)
-                docker run --rm --entrypoint opencode "$IMAGE" --version
-                ;;
-            esac
+               runner-opencode)
+                 docker run --rm --entrypoint opencode "$IMAGE" --version
+                 ;;
+               *)
+                 echo "::error::unsupported image key during smoke check: $img"
+                 exit 1
+                 ;;
+             esac
+
           done
 
-          # Resolve the immutable manifest digest for every published image.
-          # The tag is only a lookup key; attestations target these digests.
-          for img in all-in-one backend frontend runner-opencode; do
-            case "$img" in
-              all-in-one) image_name="$IMAGE_NAMESPACE"; output_name=all_in_one_digest ;;
-              backend) image_name="$IMAGE_NAMESPACE/backend"; output_name=backend_digest ;;
-              frontend) image_name="$IMAGE_NAMESPACE/frontend"; output_name=frontend_digest ;;
-              runner-opencode) image_name="$IMAGE_NAMESPACE/runner-opencode"; output_name=runner_opencode_digest ;;
-            esac
+           # Resolve the immutable manifest digest for every published image.
+           # The tag is only a lookup key; attestations target these digests.
+           for img in all-in-one backend frontend runner-opencode; do
+             case "$img" in
+               all-in-one) image_name="$IMAGE_NAMESPACE"; output_name=all_in_one_digest ;;
+               backend) image_name="$IMAGE_NAMESPACE/backend"; output_name=backend_digest ;;
+               frontend) image_name="$IMAGE_NAMESPACE/frontend"; output_name=frontend_digest ;;
+               runner-opencode) image_name="$IMAGE_NAMESPACE/runner-opencode"; output_name=runner_opencode_digest ;;
+               *)
+                 echo "::error::unsupported image key during digest lookup: $img"
+                 exit 1
+                 ;;
+             esac
+
             digest="$(docker buildx imagetools inspect "ghcr.io/$image_name:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')"
             if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "::error::missing or invalid digest for ghcr.io/$image_name:$TAG: $digest"
@@ -665,12 +680,17 @@ jobs:
               frontend)
                 image_name="$IMAGE_NAMESPACE/frontend"
                 ;;
-              runner-opencode)
-                image_name="$IMAGE_NAMESPACE/runner-opencode"
-                ;;
-            esac
+               runner-opencode)
+                 image_name="$IMAGE_NAMESPACE/runner-opencode"
+                 ;;
+               *)
+                 echo "::error::unsupported image key during retag: $img"
+                 exit 1
+                 ;;
+             esac
 
-            echo "Retagging $img ($RC_TAG -> $VERSION_NUM, latest)..."
+             echo "Retagging $img ($RC_TAG -> $VERSION_NUM, latest)..."
+
             if docker buildx imagetools create \
                 --tag "ghcr.io/$image_name:$VERSION_NUM" \
                 --tag "ghcr.io/$image_name:latest" \
@@ -694,7 +714,12 @@ jobs:
               backend) image_name="$IMAGE_NAMESPACE/backend"; output_name=backend_digest ;;
               frontend) image_name="$IMAGE_NAMESPACE/frontend"; output_name=frontend_digest ;;
               runner-opencode) image_name="$IMAGE_NAMESPACE/runner-opencode"; output_name=runner_opencode_digest ;;
+              *)
+                echo "::error::unsupported image key during digest lookup: $img"
+                exit 1
+                ;;
             esac
+
             digest="$(docker buildx imagetools inspect "ghcr.io/$image_name:$VERSION_NUM" --format '{{json .Manifest.Digest}}' | tr -d '"')"
             if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "::error::missing or invalid digest for ghcr.io/$image_name:$VERSION_NUM: $digest"
@@ -1367,8 +1392,13 @@ jobs:
               "$IMAGE_NAMESPACE") digest="$ALL_IN_ONE_DIGEST" ;;
               "$IMAGE_NAMESPACE/backend") digest="$BACKEND_DIGEST" ;;
               "$IMAGE_NAMESPACE/frontend") digest="$FRONTEND_DIGEST" ;;
-              "$IMAGE_NAMESPACE/runner-opencode") digest="$RUNNER_OPENCODE_DIGEST" ;;
-            esac
+               "$IMAGE_NAMESPACE/runner-opencode") digest="$RUNNER_OPENCODE_DIGEST" ;;
+               *)
+                 echo "::error::unsupported attestation image: $image_name"
+                 exit 1
+                 ;;
+             esac
+
             subject="ghcr.io/$image_name@$digest"
             echo "Verifying attestation for $subject"
             gh attestation verify "$subject" --repo "${{ github.repository }}"
