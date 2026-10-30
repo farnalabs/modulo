@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 #
-# Modulo native installer (Linux) — single-install distribution, P1a.
+# Modulo native installer (Linux only) — single-install distribution, P1a.
+# macOS arm64 uses scripts/macos/install.sh and the signed .dmg artifact.
 # Spec: ADR 031 (single-install native distribution); this ticket: FAR-670.
 #        + pre-upgrade upgrade path (FAR-672).
-# macOS service/data seams exist, but no signed native Darwin artifact is
-# published yet; this installer fails closed on Darwin rather than implying one.
+# macOS service/data seams are implemented separately in scripts/macos/; this
+# Linux installer intentionally refuses Darwin rather than selecting the wrong
+# artifact or implying that the Linux bundle is portable to macOS.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
@@ -298,8 +300,9 @@ resolve_latest_tag() {
 preflight() {
   case "$(uname -s)" in
     Linux) OS="linux" ;;
-    Darwin) die "macOS native artifact is not yet published; the macOS service/data/launcher seam is present, but no complete signed and notarized Darwin bundle is available yet." ;;
-    *) die "this installer supports Linux. macOS native artifact is not yet published; Windows installers come later — see ADR 031." ;;
+     Darwin) die "this Linux installer cannot install the macOS arm64 artifact; use scripts/macos/install.sh with the signed .dmg." ;;
+     *) die "this installer supports Linux only. Use the platform-specific macOS installer on Darwin; Windows installers are not supported yet — see ADR 031." ;;
+
   esac
   command -v curl >/dev/null 2>&1 || die "curl is required (install it, e.g. 'apt install curl')"
   command -v tar >/dev/null 2>&1 || die "tar is required (install it, e.g. 'apt install tar')"

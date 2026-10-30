@@ -13,9 +13,9 @@ name: "Release: Unified Pipeline"
 #
 # The bundle is built by the reusable `.github/workflows/bundle-release.yml`
 # workflow (FAR-670/FAR-675), never by a second in-repo implementation: the
-# single source of truth for the tarball, SHA256SUMS and signed manifest is that
-# workflow, and this one only orchestrates it, pushes the bundle-v* tag and
-# creates the GitHub Release from the artefacts it uploads.
+# Linux bundle construction remains in bundle-release.yml. The final cross-platform
+# SHA256SUMS and signed manifest are generated here only after the macOS DMG exists,
+# then this workflow pushes the bundle-v* tag and creates the GitHub Release.
 
 on:
   workflow_dispatch:
@@ -844,7 +844,7 @@ jobs:
   # Build macOS installer (cut and recut)
   # ---------------------------------------------------------------------------
   macos-installer:
-    name: Validate macOS installer prerequisite
+    name: Build and notarize macOS installer
     needs: [release, bundle]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     uses: ./.github/workflows/macos-installer.yml
@@ -857,13 +857,77 @@ jobs:
 
 
   # ---------------------------------------------------------------------------
-  # Create the GitHub Release from the bundle artefacts (cut and recut)
+  # Final cross-platform manifest (cut and recut)
+  # ---------------------------------------------------------------------------
+  final-release-manifest:
+    name: Generate final cross-platform release manifest
+    needs: [release, bundle, windows-installer, macos-installer]
+    if: inputs.mode == 'cut' || inputs.mode == 'recut'
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.rc_tag }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bundle-artefacts-amd64
+          path: release-artefacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-installer-${{ inputs.version }}
+          path: release-artefacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-${{ inputs.version }}
+          path: release-artefacts
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Build final signed manifest after every platform artifact
+        env:
+          MANIFEST_SIGNING_KEY: ${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [[ -n "$MANIFEST_SIGNING_KEY" ]] || { echo '::error::manifest signing key is required'; exit 1; }
+          cd release-artefacts
+          sha256sum "modulo-${VERSION}-linux-amd64.tar.gz" "modulo-${VERSION}-windows-amd64.exe" "Modulo-${VERSION}-macos-arm64.dmg" > SHA256SUMS
+          cd ..
+          uv run --no-project --no-sync --no-build python - <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, "backend/src")
+          from modulo.launcher import manifest as m
+          root = Path("release-artefacts")
+          version = os.environ["VERSION"]
+          names = [f"modulo-{version}-linux-amd64.tar.gz", f"modulo-{version}-windows-amd64.exe", f"Modulo-{version}-macos-arm64.dmg"]
+          body = m.build_release_manifest(release=f"bundle-v{version}", platform="multi-platform", generated_at=os.environ.get("GITHUB_SHA", ""), components={"linux": "amd64", "windows": "amd64", "macos": "arm64"}, artifacts=[{"name": n, "sha256": hashlib.sha256((root / n).read_bytes()).hexdigest(), "version": version} for n in names])
+          payload = json.dumps(body, indent=2, sort_keys=True).encode()
+          sig = m.sign_release_bytes(payload, key_id=m._KEY_ID_CURRENT, private_key_hex=os.environ["MANIFEST_SIGNING_KEY"])
+          (root / "RELEASE_MANIFEST.json").write_bytes(payload)
+          (root / "RELEASE_MANIFEST.json.sig").write_text(json.dumps(sig), encoding="utf-8")
+          print("final manifest covers: " + ", ".join(names))
+          PY
+          (cd release-artefacts && sha256sum --check SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: final-release-artefacts-${{ inputs.version }}
+          path: release-artefacts
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Create the GitHub Release from the final cross-platform artefacts
   # ---------------------------------------------------------------------------
   publish-release:
     name: Create GitHub Release
-    # Do not publish the bundle-v* tag until its tarball has a provenance
-    # attestation; native-release-smoke is fail-closed on that attestation.
-    needs: [release, bundle, attest-artefacts, windows-installer, macos-installer]
+    needs: [release, final-release-manifest, attest-artefacts, windows-installer, macos-installer]
+    # Do not publish until the final signed manifest covers the macOS DMG.
+
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
@@ -875,23 +939,28 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.release.outputs.rc_tag }}
 
-      - name: Download bundle artefacts
+      - name: Download final cross-platform release artefacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: bundle-artefacts-amd64
+          name: final-release-artefacts-${{ inputs.version }}
           path: release-artefacts
 
-      - name: Download Windows installer artefact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: windows-installer-${{ inputs.version }}
-          path: release-artefacts
-
-      - name: Download macOS installer artefact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: macos-installer-${{ inputs.version }}
-          path: release-artefacts
+      - name: Verify portable release artefacts
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          for artifact in \
+            "release-artefacts/modulo-${VERSION}-linux-amd64.tar.gz" \
+            "release-artefacts/modulo-${VERSION}-windows-amd64.exe" \
+            "release-artefacts/Modulo-${VERSION}-macos-arm64.dmg" \
+            release-artefacts/SHA256SUMS \
+            release-artefacts/RELEASE_MANIFEST.json \
+            release-artefacts/RELEASE_MANIFEST.json.sig; do
+            test -s "$artifact"
+          done
+          (cd release-artefacts && sha256sum --check SHA256SUMS)
+          echo "Final signed manifest and SHA256SUMS cover Linux, Windows and macOS arm64 artifacts."
 
       - name: Set up Python 3.12 for OpenAPI dump
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
@@ -1121,10 +1190,10 @@ jobs:
   # ---------------------------------------------------------------------------
   attest-artefacts:
     name: Attest released artefacts
-    needs: [produce-sbom, bundle, release]
+    needs: [produce-sbom, final-release-manifest, release]
     # The bundle is available for cut/recut; promote still attests the SBOM
     # without waiting on the intentionally skipped bundle job.
-    if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.bundle.result == 'success')
+    if: always() && inputs.mode != 'dry-run' && needs.produce-sbom.result == 'success' && (inputs.mode == 'promote' || needs.final-release-manifest.result == 'success')
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
     permissions:
@@ -1138,12 +1207,30 @@ jobs:
           name: sbom-cyclonedx
           path: release-artefacts
 
-      - name: Download the published bundle artefact
+      - name: Download the final cross-platform release artefact
         if: inputs.mode == 'cut' || inputs.mode == 'recut'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: bundle-artefacts-amd64
+          name: final-release-artefacts-${{ inputs.version }}
           path: release-artefacts
+
+      - name: Download the macOS installer artefact
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-installer-${{ inputs.version }}
+          path: release-artefacts
+
+      - name: Assert the exact macOS DMG is present
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          DMG="release-artefacts/Modulo-${VERSION}-macos-arm64.dmg"
+          test -s "$DMG"
+          printf 'Attestation subject: %s\n' "$DMG"
 
       - name: Attest the file artefacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

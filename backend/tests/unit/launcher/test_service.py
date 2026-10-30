@@ -390,6 +390,7 @@ def test_darwin_install_round_trip(darwin_only: None, tmp_path: Path) -> None:
         runner=runner,
         unit_path=unit_path,
         executable=executable,
+        data_dir=tmp_path / "data",
     )
     assert result.unit_path == unit_path
     assert result.enabled is True
@@ -401,6 +402,13 @@ def test_darwin_install_round_trip(darwin_only: None, tmp_path: Path) -> None:
     assert str(executable) in content
     assert ["launchctl", "unload", str(unit_path)] in [list(argv) for argv in runner.calls]
     assert ["launchctl", "load", "-w", str(unit_path)] in [list(argv) for argv in runner.calls]
+
+
+def test_render_launchd_plist_includes_data_dir_when_provided(tmp_path: Path) -> None:
+    import plistlib
+
+    plist = plistlib.loads(render_launchd_plist(tmp_path / "modulo", data_dir=tmp_path / "data").encode("utf-8"))
+    assert plist["ProgramArguments"] == [str(tmp_path / "modulo"), "start", "--data-dir", str(tmp_path / "data")]
 
 
 def test_darwin_install_load_failure(darwin_only: None, tmp_path: Path) -> None:

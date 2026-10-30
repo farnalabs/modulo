@@ -1,45 +1,40 @@
 # System Requirements
 
-Supported platforms, minimum resources, and database backends for running Modulo in production. Docker Compose on Linux is the production server path. Native installers for Linux, macOS and Windows are all in the Alpha release scope.
+Supported platforms, minimum resources, and database backends for running Modulo in production. Modulo v1 supports Linux hosts and the native macOS arm64 single-install artifact.
 
 ---
 
 ## Supported Platforms
 
-Linux is the production server host, deployed with Docker Compose. The native
-single-install is the workstation and evaluation path (ADR 031 Decision 11):
-Linux-first, and still in progress, because it cannot complete an install yet
-(FAR-2213). Native macOS and Windows installs are in the Alpha scope; FAR-678
-and FAR-679 record the implementation, with native validation tracked in
-FAR-2196 (macOS) and FAR-2197 (Windows). Per-platform status changes faster
-than this page, so read those tickets rather than this paragraph.
+Modulo v1 targets Linux hosts and Apple Silicon macOS for the native single-install
+artifact. Windows remains out of scope for v1.
 
-### Platform support matrix
+### Platform support matrix (v1)
 
-This matrix covers where Modulo can run. The **server host** is the machine a
-production deployment runs on; the **workstation / evaluation** path is the
-native install on an individual machine (see Development / Evaluation below).
+This matrix is about the **server host** for a production or evaluation
+deployment, not about developer workstations (see Development / Evaluation
+below).
 
-| Host platform | Status |
-|---------------|--------|
-| **Linux (server host)** | Supported, via Docker Compose. The native single-install is Linux-first but still in progress: it cannot complete an install yet (FAR-2213). |
-| **macOS (workstation / evaluation)** | Native install in Alpha scope: implementation record FAR-678, validation FAR-2196. Not installable yet. |
-| **Windows (workstation / evaluation)** | Native install in Alpha scope: implementation record FAR-679, validation FAR-2197. Not installable yet. |
+| Server host platform | v1 status |
+|----------------------|-----------|
+| **Linux** | Supported (native single-install and container paths) |
+| **macOS arm64** | Supported native single-install host (signed/notarized `.dmg`, macos-14 validation) |
+| **Windows** | Not a supported v1 server host: no native installer, no Windows release artifact |
 
 Docker Desktop (see Development / Evaluation below) is a developer
 convenience on macOS and Windows: it runs the Linux containers inside a Linux
 VM, so the deployed stack is still Linux. It is not a supported production
 host.
 
-**Native installer status:** per-platform state is recorded on the tickets
-named above rather than restated here, because it changes faster than this
-page. Two things are durable: the native single-install is the workstation and
-evaluation path while Docker Compose is the server path (ADR 031 Decision 11),
-and the native install cannot complete from a clean clone yet (FAR-2213).
+macOS arm64 is a native release target. The signed and notarized `.dmg` is built
+on `macos-14` with the pinned native runtime and is validated separately from the
+Linux bundle. It requires Apple Silicon; x64/Rosetta is not supported. The
+macOS installer's trust boundary is Apple Developer ID signing/notarization and
+stapling, verified with `codesign`, `spctl` and `hdiutil verify`; it does not
+consume the Linux signed release manifest. Windows remains out of scope for v1.
 
-A Windows-hosted production deployment therefore means Windows Server running
-the Linux stack in a VM or container host, not native Windows binaries. Docker
-Compose remains the production server path on every platform.
+A Windows-hosted deployment therefore means Windows Server running the Linux
+stack in a VM or container host, not native Windows binaries.
 
 ### Install paths
 
@@ -63,11 +58,11 @@ actually ship - do not widen these rows until the packaging tickets land):
 
 | OS | glibc | Status |
 |----|-------|--------|
-| Debian 13+ | 2.41 | Supported target envelope; native installer not currently installable |
-| Ubuntu 26.04+ | 2.41+ | Supported target envelope; native installer not currently installable |
+| Debian 13+ | 2.41 | Supported |
+| Ubuntu 26.04+ | 2.41+ | Supported |
 | Ubuntu 24.04 and earlier | 2.39 and below | Not supported (below the bundled service-binary floor) |
-| macOS | - | Not installable yet (implementation record FAR-678, validation FAR-2196) |
-| Windows | - | Not installable yet (implementation record FAR-679, validation FAR-2197) |
+| macOS arm64 | Apple Silicon | Supported native `.dmg`; x64/Rosetta is not supported |
+| Windows | - | Out of scope for v1 (post-v1: P3, ADR 031) |
 
 The hard requirement is **glibc 2.41 or newer**. The bundled PostgreSQL 16 and
 Redis 8 binaries are extracted from Debian 13 (trixie) packages, and the venv's
@@ -81,10 +76,9 @@ supported native-install target.
 
 | Architecture | Status |
 |--------------|--------|
-| linux-amd64 (x86_64) | Supported target; the only architecture `bundle-release.yml` builds (no `bundle-v*` release published yet) |
+| linux-amd64 (x86_64) | Supported |
 | linux-arm64 | Planned (pins exist; no artifact published yet) |
-| macOS arm64 / x64 | Alpha scope, not installable yet (implementation record FAR-678, validation FAR-2196) |
-| Windows amd64 | Alpha scope, not installable yet (implementation record FAR-679, validation FAR-2197) |
+| macOS arm64 | Supported native artifact; Apple Silicon only |
 
 `linux-arm64` is not installable yet: the bundle build matrix carries only
 `amd64`, so no `linux-arm64` tarball is published even though the arm64 pins
