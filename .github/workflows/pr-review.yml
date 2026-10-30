@@ -120,8 +120,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          READY_FALSE: "ready=false"
           # Event/input contexts are mapped through the step env block
           # (S7630): GitHub expressions inside a run block are interpolated
+
           # before the shell parses the script, so untrusted head-branch or
           # input content could break out into code execution. Via env: they
           # are data, never code. Output keys and semantics are unchanged.
@@ -150,7 +152,7 @@ jobs:
             # is ready. Until then the workflow_run completion path reviews it
             # exactly as it did before this change.
             if [ "$PR_DRAFT_EVENT" = "true" ]; then
-              echo "ready=false" >> "$GITHUB_OUTPUT"
+              echo "$READY_FALSE" >> "$GITHUB_OUTPUT"
               echo "::notice::PR #${PR_NUMBER_EVENT} is a draft — the early review waits for ready_for_review (the CI-completion path still reviews it)."
               exit 0
             fi
@@ -158,7 +160,7 @@ jobs:
             HEAD_SHA="${HEAD_SHA_EVENT}"
             HEAD_BRANCH="${HEAD_BRANCH_EVENT}"
             if [ -z "$PR_NUM" ] || [ -z "$HEAD_SHA" ]; then
-              echo "ready=false" >> "$GITHUB_OUTPUT"
+              echo "$READY_FALSE" >> "$GITHUB_OUTPUT"
               echo "::error::${EVENT_NAME} carried no pull_request.number / head.sha — no review dispatch."
               exit 0
             fi
@@ -172,7 +174,7 @@ jobs:
             if [ -z "$PR_NUM" ]; then
               # Not a PR CI run (push to main, workflow_dispatch of ci.yml, or
               # the PR was merged in the meantime) — nothing to review.
-              echo "ready=false" >> "$GITHUB_OUTPUT"
+              echo "$READY_FALSE" >> "$GITHUB_OUTPUT"
               echo "::notice::CI completion for ${HEAD_SHA} (${WORKFLOW_RUN_HEAD_BRANCH}) maps to no open PR — no review dispatch."
               exit 0
             fi
@@ -184,7 +186,7 @@ jobs:
             # webhook idempotency coalesce any double dispatch.
             CURRENT_SHA=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '.head.sha' 2>/dev/null || echo "")
             if [ -n "$CURRENT_SHA" ] && [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
-              echo "ready=false" >> "$GITHUB_OUTPUT"
+              echo "$READY_FALSE" >> "$GITHUB_OUTPUT"
               echo "::notice::CI completed for ${HEAD_SHA} but PR #${PR_NUM} head is now ${CURRENT_SHA} — superseded run, no review dispatch."
               exit 0
             fi
@@ -213,9 +215,12 @@ jobs:
             LABELS=$(gh api "repos/${REPO}/pulls/${PR_NUM}" --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
             case ",${LABELS}," in
               *,manual-delivery,*)
-                echo "ready=false" >> "$GITHUB_OUTPUT"
+                echo "$READY_FALSE" >> "$GITHUB_OUTPUT"
                 echo "::notice::PR #${PR_NUM} carries the manual-delivery label — no automatic review dispatch."
                 exit 0
+                ;;
+              *)
+                :
                 ;;
             esac
           fi
