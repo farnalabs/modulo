@@ -1412,6 +1412,37 @@ def test_system_map_create_schema_rejects_invalid_node_type() -> None:
         )
 
 
+def test_system_map_schemas_reject_vocabulary_substrings() -> None:
+    from pydantic import ValidationError
+
+    from modulo.api.schemas.system_maps import (
+        AttributionBindingCreate,
+        SystemMapNodeCreate,
+        SystemMapRelationshipCreate,
+    )
+
+    with pytest.raises(ValidationError):
+        SystemMapNodeCreate(
+            node_key="test",
+            node_type="not-an-agent-actually",  # type: ignore[arg-type]
+            display_name="Test",
+        )
+
+    with pytest.raises(ValidationError):
+        SystemMapRelationshipCreate(
+            source_node_key="a",
+            target_node_key="b",
+            relationship_type="testflowend",  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValidationError):
+        AttributionBindingCreate(
+            pipeline_id=uuid.uuid4(),
+            node_key="node-1",
+            binding_kind="pretriggersuffix",  # type: ignore[arg-type]
+        )
+
+
 def test_system_map_revision_create_schema_validates_loop_config() -> None:
     from modulo.api.schemas.system_maps import SystemMapLoopConfigCreate, SystemMapNodeCreate, SystemMapRevisionCreate
 
