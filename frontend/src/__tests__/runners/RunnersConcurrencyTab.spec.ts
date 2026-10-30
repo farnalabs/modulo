@@ -27,6 +27,7 @@ const baseStatus: RunnersStatus = {
   aggregate_state: 'healthy',
   probe_interval_seconds: 60,
   staleness_threshold_seconds: 120,
+  engine_configured: true,
   machines: [],
   profiles: [],
   concurrency: {

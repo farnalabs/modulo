@@ -8,6 +8,7 @@ function makeStatus(overrides: Partial<RunnersStatus> = {}): RunnersStatus {
     aggregate_state: 'healthy',
     probe_interval_seconds: 60,
     staleness_threshold_seconds: 120,
+    engine_configured: true,
     machines: [
       {
         machine_id: 'machine-1',
@@ -86,6 +87,40 @@ describe('RunnerStatusStrip', () => {
     expect(wrapper.find('[data-testid="runner-status-strip-state"]').text()).toBe(
       'not enabled on this deployment',
     )
+  })
+
+  it('renders a neutral "not available" state, not a red error, when no Docker engine is configured', () => {
+    const status = makeStatus({
+      engine_configured: false,
+      aggregate_state: 'engine_unreachable',
+      machines: [
+        {
+          machine_id: 'machine-1',
+          state: 'engine_unreachable',
+          engine_reachable: false,
+          images_present: null,
+          probed_at: new Date().toISOString(),
+          age_seconds: 15,
+          engine_info: {},
+          image_checks: {},
+          probe_error: 'Cannot connect to the Docker daemon',
+        },
+      ],
+    })
+    const wrapper = mount(RunnerStatusStrip, { props: { status } })
+    const strip = wrapper.find('[data-testid="runner-status-strip"]')
+    expect(wrapper.find('[data-testid="runner-status-strip-state"]').text()).toBe(
+      'Docker runner not available on this deployment',
+    )
+    expect(strip.classes()).not.toContain('text-destructive-text')
+    expect(wrapper.text()).not.toContain('Cannot connect')
+  })
+
+  it('keeps the red engine-unreachable error for a configured engine that is failing', () => {
+    const status = makeStatus({ engine_configured: true, aggregate_state: 'engine_unreachable' })
+    const wrapper = mount(RunnerStatusStrip, { props: { status } })
+    expect(wrapper.find('[data-testid="runner-status-strip-state"]').text()).toBe('⚠ engine unreachable')
+    expect(wrapper.find('[data-testid="runner-status-strip"]').classes()).toContain('text-destructive-text')
   })
 
   it('renders the engine-unreachable warning with the probe error detail', () => {

@@ -164,6 +164,31 @@ def _resolve_docker_host() -> str | None:
     return os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
 
 
+def docker_engine_configured() -> bool:
+    """True when this deployment has a Docker engine endpoint it could reach.
+
+    FAR-2239: a deployment with no engine at all (e.g. the Fly app: no
+    ``MODULO_DOCKER_HOST``/``DOCKER_HOST`` and no local socket) is *not
+    configured* for the Bundled Runner, which is a different thing from a
+    configured engine that is failing. The Runners page uses this to show a
+    neutral "not available" state instead of a red "engine unreachable".
+
+    The answer must agree with the orphan sweep's engine-less decision, so it
+    delegates to :func:`runner_reconciler.docker_endpoint_skip_reason` rather
+    than re-implementing endpoint detection: that mirrors aiodocker's FULL host
+    resolution chain (``MODULO_DOCKER_HOST``/``DOCKER_HOST``, ``DOCKER_CONTEXT``
+    / ``~/.docker/config.json``, then the auto-detected local sockets checked
+    with ``is_socket()``). A weaker copy here would report "not configured" for
+    a deployment whose engine is reachable via a Docker context or an
+    alternative socket path, masking a healthy engine as unavailable.
+    """
+    # Imported lazily to keep this module's import graph free of the
+    # reconciler's (it is only needed on the request path).
+    from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
+
+    return docker_endpoint_skip_reason() is None
+
+
 class _EngineBoundary:
     """Docker engine boundary for the probe (aiodocker, same env resolution)."""
 

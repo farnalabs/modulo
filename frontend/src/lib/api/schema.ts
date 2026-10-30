@@ -20544,6 +20544,11 @@ export interface components {
              * @enum {string}
              */
             aggregate_state: "healthy" | "engine_unreachable" | "image_not_pulled" | "stale";
+            /**
+             * Engine Configured
+             * @default true
+             */
+            engine_configured: boolean;
             /** Probe Interval Seconds */
             probe_interval_seconds: number;
             /** Staleness Threshold Seconds */
