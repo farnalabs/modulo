@@ -854,14 +854,11 @@ jobs:
     name: Build and notarize macOS installer
     needs: [release, bundle]
     if: inputs.mode == 'cut' || inputs.mode == 'recut'
-    # The reusable workflow declares the installer jobs' signing/attestation
-    # permissions. Permissions cannot be elevated across a reusable-workflow
-    # boundary, so grant the caller the maximum the called workflow can
-    # request — a narrower grant fails the run the moment a job needs more.
+    # macOS currently declares only contents: read. The structural test derives
+    # this from the called workflow and forces a caller update if macOS ever
+    # adds an attest/OIDC job that requires a stronger permission.
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
     uses: ./.github/workflows/macos-installer.yml
     with:
       version: ${{ inputs.version }}
