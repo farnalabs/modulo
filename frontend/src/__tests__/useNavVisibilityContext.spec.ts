@@ -40,6 +40,11 @@ vi.mock('../lib/api/client', () => ({
 
 vi.mock('../lib/jwt', () => ({
   decodeJwtPayload: () => jwtClaims.value,
+  principalSubject: (token: string | null | undefined) => {
+    if (!token) return null
+    const sub = jwtClaims.value.sub
+    return typeof sub === 'string' && sub.length > 0 ? sub : null
+  },
 }))
 
 /** A nav item gated ONLY by a permission — the shape `/analytics` uses. */

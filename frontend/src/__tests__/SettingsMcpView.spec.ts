@@ -82,6 +82,7 @@ vi.mock('../lib/api/client', () => ({
 // let individual tests override it.
 vi.mock('../lib/jwt', () => ({
   decodeJwtPayload: vi.fn(() => ({ org_role: 'admin' })),
+  principalSubject: () => null,
 }))
 
 import { api } from '../lib/api/client'
