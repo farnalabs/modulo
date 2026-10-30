@@ -12096,6 +12096,78 @@ export interface components {
             /** Allowed Models */
             allowed_models?: string[] | null;
         };
+        /** AssistantMessageListResponse */
+        AssistantMessageListResponse: {
+            /** Items */
+            items: components["schemas"]["AssistantMessageResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** AssistantMessageResponse */
+        AssistantMessageResponse: {
+            /** Id */
+            id: string;
+            /** Session Id */
+            session_id: string;
+            /** Role */
+            role: string;
+            /** Content */
+            content: string | null;
+            /** Tool Calls Json */
+            tool_calls_json: {
+                [key: string]: unknown;
+            } | null;
+            /** Tool Results Json */
+            tool_results_json: {
+                [key: string]: unknown;
+            } | null;
+            /** Token Count */
+            token_count: number | null;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Created At */
+            created_at: string | null;
+        };
+        /** AssistantSessionListResponse */
+        AssistantSessionListResponse: {
+            /** Items */
+            items: components["schemas"]["AssistantSessionResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** AssistantSessionResponse */
+        AssistantSessionResponse: {
+            /** Id */
+            id: string;
+            /** Account Id */
+            account_id: string;
+            /** Name */
+            name: string | null;
+            /** Session Number */
+            session_number: number;
+            /** Provider */
+            provider: string | null;
+            /** Model */
+            model: string | null;
+            /** Context Window Tokens */
+            context_window_tokens: number;
+            /** System Prompt Hash */
+            system_prompt_hash: string | null;
+            /** Message Count */
+            message_count: number;
+            /** Created At */
+            created_at: string | null;
+            /** Updated At */
+            updated_at: string | null;
+        };
         /** AutomationSuggestion */
         AutomationSuggestion: {
             /** Stage */
@@ -14111,6 +14183,13 @@ export interface components {
         DeleteOAuthClientResponse: {
             /** Deleted */
             deleted: boolean;
+        };
+        /** DeletedAssistantSessionResponse */
+        DeletedAssistantSessionResponse: {
+            /** Status */
+            status: string;
+            /** Id */
+            id: string;
         };
         /** DeletionRequestResponse */
         DeletionRequestResponse: {
@@ -46892,9 +46971,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantSessionListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -46929,9 +47006,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantSessionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -46964,9 +47039,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantSessionResponse"];
                 };
             };
             /** @description Session not found */
@@ -47006,9 +47079,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["DeletedAssistantSessionResponse"];
                 };
             };
             /** @description Session not found */
@@ -47052,9 +47123,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantSessionResponse"];
                 };
             };
             /** @description Session not found */
@@ -47096,9 +47165,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantMessageListResponse"];
                 };
             };
             /** @description Session not found */
@@ -47142,9 +47209,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantMessageResponse"];
                 };
             };
             /** @description Session not found */

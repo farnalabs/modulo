@@ -924,11 +924,10 @@ async def grantable_permissions_endpoint(
     )
 
 
-@router.get("/mcp-config")
+@router.get("/mcp-config", dependencies=[Depends(get_current_tenant_user)])
 @handle_db_errors("api_keys.mcp_config_endpoint")
 async def mcp_config_endpoint(
     settings: Settings = Depends(get_settings),
-    _: str = Depends(get_current_tenant_user),
 ) -> McpConfigResponse:
     """Return the MCP server URL and config snippet for Claude Desktop / Cursor."""
     try:

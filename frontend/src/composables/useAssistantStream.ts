@@ -67,11 +67,11 @@ function resolveAbortSummaryText(parsed: unknown): string {
   return ((parsed as { summary?: unknown }).summary ?? 'Action cancelled by user.') as string
 }
 
-async function dispatchParsedEvent(
+function dispatchParsedEvent(
   ctx: AssistantEventContext,
   event: string,
   parsed: unknown,
-): Promise<StreamEventOutcome> {
+): StreamEventOutcome {
   const { store } = ctx
   if (event === 'token' && (parsed as { token?: unknown }).token) {
     store.appendToken((parsed as { token: string }).token)
@@ -98,14 +98,14 @@ async function dispatchParsedEvent(
   return 'proceed'
 }
 
-async function handleAssistantSseEvent(
+function handleAssistantSseEvent(
   ctx: AssistantEventContext,
   event: string,
   data: string,
-): Promise<StreamEventOutcome> {
+): StreamEventOutcome {
   try {
     const parsed = JSON.parse(data)
-    return await dispatchParsedEvent(ctx, event, parsed)
+    return dispatchParsedEvent(ctx, event, parsed)
   } catch {
     if (event === 'token' && data.trim()) {
       ctx.store.appendToken(data)
@@ -119,7 +119,7 @@ async function consumeAssistantStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): Promise<void> {
   for await (const { event, data } of parseSSEStream(reader)) {
-    const outcome = await handleAssistantSseEvent(ctx, event, data)
+    const outcome = handleAssistantSseEvent(ctx, event, data)
     if (outcome === 'break') break
   }
 }

@@ -217,6 +217,53 @@ def test_list_sessions_unexpected_error_returns_500(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_get_session_returns_serialised_session(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
+    count_result = MagicMock()
+    count_result.scalar.return_value = 4
+    _queue_executes(client.mock_session, count_result)  # type: ignore[attr-defined]
+
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+        resp = client.get(f"/api/v1/assistant/sessions/{chat_session.id}")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] == str(chat_session.id)
+    assert body["name"] == "My Session"
+    assert body["message_count"] == 4
+
+
+def test_rename_session_returns_serialised_session(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
+
+    with patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock):
+        resp = client.patch(
+            f"/api/v1/assistant/sessions/{chat_session.id}",
+            json={"name": "Renamed"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] == str(chat_session.id)
+    assert body["name"] == "Renamed"
+
+
+def test_delete_session_returns_deleted_status(client: TestClient) -> None:
+    chat_session = _owned_chat_session()
+    _stub_owned_session(client.mock_session, chat_session)  # type: ignore[attr-defined]
+
+    with (
+        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.assistant._get_registry", return_value=None),
+    ):
+        resp = client.delete(f"/api/v1/assistant/sessions/{chat_session.id}")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "deleted", "id": str(chat_session.id)}
+
+
 # ---------------------------------------------------------------------------
 # GET / POST /sessions/{id}/messages
 # ---------------------------------------------------------------------------
