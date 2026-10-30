@@ -1,10 +1,11 @@
 <template>
-  <section class="card p-4" data-testid="dashboard-system-overview" aria-live="polite">
-    <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 class="text-base font-semibold">{{ $t('views.DashboardView.system_overview') }}</h2>
-        <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.DashboardView.system_overview_description') }}</p>
-      </div>
+  <SectionCard
+    :title="$t('views.DashboardView.system_overview')"
+    :description="$t('views.DashboardView.system_overview_description')"
+    data-testid="dashboard-system-overview"
+    aria-live="polite"
+  >
+    <template #header>
       <button
         type="button"
         disabled
@@ -14,13 +15,14 @@
       >
         {{ $t('views.DashboardView.discover_my_system') }}
       </button>
-    </div>
+    </template>
 
     <SystemMapDraftReview />
-  </section>
+  </SectionCard>
 </template>
 
 <script setup lang="ts">
+import SectionCard from '../shared/SectionCard.vue'
 import SystemMapDraftReview from '../system-maps/SystemMapDraftReview.vue'
 import { useSystemMapsStore } from '../../stores/systemMaps'
 

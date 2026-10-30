@@ -15,4 +15,13 @@ describe('DashboardSystemOverview', () => {
     expect(wrapper.get('[data-testid="dashboard-system-discover"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="system-map-draft-review"]').text()).toContain('No discovery request was made')
   })
+
+  it('renders through the shared SectionCard with a live region', () => {
+    setActivePinia(createPinia())
+    const wrapper = mount(DashboardSystemOverview, { global: { plugins: [i18n] } })
+
+    const card = wrapper.get('[data-testid="dashboard-system-overview"]')
+    expect(card.attributes('aria-live')).toBe('polite')
+    expect(card.get('h2').text()).toContain('System Overview')
+  })
 })
