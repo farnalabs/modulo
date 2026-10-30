@@ -1782,6 +1782,133 @@ _DEMO_REVIEW_CONFIG: dict[str, Any] = {
 }
 
 
+_MODEL_BACKEND_CONVERGED_ATTRS: tuple[str, ...] = (
+    "display_name",
+    "provider",
+    "model_id",
+    "default_params",
+    "cost_tracking",
+    "status",
+    "visibility",
+)
+
+_CONNECTOR_CONVERGED_ATTRS: tuple[str, ...] = (
+    "connector_type_id",
+    "config_json",
+    "allowed_operations",
+    "status",
+    "visibility",
+)
+
+
+def _converge_fixture_attributes(row: Any, values: Mapping[str, Any], attrs: tuple[str, ...]) -> None:
+    """Apply demo-owned values to ``row`` only where it has drifted."""
+    for attr in attrs:
+        value = values[attr]
+        if getattr(row, attr) != value:
+            setattr(row, attr, value)
+
+
+async def _insert_fixture_or_adopt(
+    session: AsyncSession,
+    entity: Any,
+    recover_stmt: Any,
+    *,
+    conflict_event: str,
+    created_event: str | None,
+    log_extra: dict[str, Any],
+) -> Any:
+    """Insert a deterministic-id fixture, adopting the winner of a race.
+
+    A concurrent refresh can commit the same deterministic primary key between
+    our existence check and our insert. The savepoint rolls back only the losing
+    insert, then the winner is re-read and adopted. When the winner vanished too
+    (a second refresh deleted it in the gap), the original ``IntegrityError`` is
+    surfaced rather than continuing with a missing row.
+    """
+    try:
+        async with session.begin_nested():
+            session.add(entity)
+            await session.flush()
+    except IntegrityError:
+        recovered = (await session.execute(recover_stmt)).scalar_one_or_none()
+        if recovered is None:
+            raise
+        _log.info(conflict_event, extra=log_extra)
+        return recovered
+    if created_event is not None:
+        _log.info(created_event, extra=log_extra)
+    return entity
+
+
+@dataclass(frozen=True)
+class _ReviewRowSpec:
+    """One demo HITL claim: the governance run plus its gate decision."""
+
+    run_number: int
+    review_id: str
+    decision: str | None
+    decided_by: uuid.UUID | None
+    reason: str | None
+
+
+async def _converge_demo_hitl_claim(
+    session: AsyncSession,
+    org: Organisation,
+    run: Run,
+    review: _ReviewRowSpec,
+    now: datetime,
+) -> None:
+    """Create, adopt or refresh one demo HITL claim.
+
+    A newly inserted claim takes the deterministic defaults. A refresh must never
+    rewrite a fired gate's decision, decided-by, payload, context, or captured
+    config: HITL claims are durable provenance, not disposable demo display rows.
+
+    An AWAITING claim (decision IS NULL) is the live review surface, not frozen
+    evidence: the claim-expiry sweep terminalizes anything past
+    ``terminalize_at``, so preserving the original stamp would silently empty the
+    "review required" demo surface ~2 days after the first seed. Its deadlines
+    therefore roll forward on every refresh. DECIDED claims are immutable
+    evidence and keep their original values.
+    """
+    recover_stmt = select(HitlClaim).where(HitlClaim.run_id == run.id, HitlClaim.review_id == review.review_id)
+    claim = (await session.execute(recover_stmt)).scalar_one_or_none()
+    if claim is None:
+        await _insert_fixture_or_adopt(
+            session,
+            HitlClaim(
+                organisation_id=org.id,
+                run_id=run.id,
+                required_team_id=None,
+                review_id=review.review_id,
+                account_id=None,
+                claimed_at=None,
+                claim_token=None,
+                pipeline_id=run.pipeline_id,
+                expires_at=now + timedelta(days=2),
+                decision=review.decision,
+                decided_by=review.decided_by,
+                decision_at=now - timedelta(hours=2) if review.decision else None,
+                decision_payload={"reason": review.reason} if review.reason else None,
+                context_json={"description": _DEMO_REVIEW_CONFIG["description"], "source": "demo_seed"},
+                gate_config_json=dict(_DEMO_REVIEW_CONFIG),
+                terminalize_at=now + timedelta(days=2),
+            ),
+            recover_stmt,
+            conflict_event="demo_seed.hitl_claim_recovered_after_conflict",
+            created_event=None,
+            log_extra={"run_number": review.run_number},
+        )
+        return
+    if claim.decision is None:
+        claim.expires_at = now + timedelta(days=2)
+        claim.terminalize_at = now + timedelta(days=2)
+        _log.debug("demo_seed.hitl_claim_deadlines_refreshed", extra={"run_number": review.run_number})
+    else:
+        _log.debug("demo_seed.hitl_claim_preserved", extra={"run_number": review.run_number})
+
+
 async def _seed_demo_hitl_claims(
     session: AsyncSession,
     org: Organisation,
@@ -1789,79 +1916,20 @@ async def _seed_demo_hitl_claims(
     pipeline_lookup: Mapping[str, tuple[Pipeline, PipelineSnapshot]],
     now: datetime,
 ) -> None:
-    """Seed HITL claims for the governance pipeline runs.
-
-    AWAITING claims (decision IS NULL) are the live review surface — their
-    deadlines roll forward on every refresh. DECIDED claims are immutable
-    provenance evidence and keep their original values.
-    """
+    """Seed HITL claims for the governance pipeline runs."""
     _governance_pipeline, _snapshot = pipeline_lookup[DEMO_PIPELINE_NAME]
     governance_nodes = {node.key: demo_node_id(DEMO_PIPELINE_NAME, node.key) for node in _GOVERNANCE_PIPELINE.nodes}
     review_id = f"hitl_review_{governance_nodes['review']}_{governance_nodes['open_pr']}"
     review_rows = (
-        (6, review_id, None, None, None),
-        (9, review_id, "approved", account.id, "Demo approval: risk review passed."),
-        (17, review_id, "rejected", account.id, "Demo rejection: inspect the risky change again."),
+        _ReviewRowSpec(6, review_id, None, None, None),
+        _ReviewRowSpec(9, review_id, "approved", account.id, "Demo approval: risk review passed."),
+        _ReviewRowSpec(17, review_id, "rejected", account.id, "Demo rejection: inspect the risky change again."),
     )
-    for run_number, current_review_id, decision, decided_by, reason in review_rows:
-        run = await _find_demo_run(session, org, run_number)
+    for review in review_rows:
+        run = await _find_demo_run(session, org, review.run_number)
         if run is None:
             continue
-        result = await session.execute(
-            select(HitlClaim).where(HitlClaim.run_id == run.id, HitlClaim.review_id == current_review_id)
-        )
-        claim = result.scalar_one_or_none()
-        desired_context = {"description": _DEMO_REVIEW_CONFIG["description"], "source": "demo_seed"}
-        desired = {
-            "pipeline_id": run.pipeline_id,
-            "expires_at": now + timedelta(days=2),
-            "decision": decision,
-            "decided_by": decided_by,
-            "decision_at": now - timedelta(hours=2) if decision else None,
-            "decision_payload": {"reason": reason} if reason else None,
-            "context_json": desired_context,
-            "gate_config_json": dict(_DEMO_REVIEW_CONFIG),
-            "terminalize_at": now + timedelta(days=2),
-        }
-        if claim is None:
-            claim = HitlClaim(
-                organisation_id=org.id,
-                run_id=run.id,
-                required_team_id=None,
-                review_id=current_review_id,
-                account_id=None,
-                claimed_at=None,
-                claim_token=None,
-                **desired,
-            )
-            try:
-                async with session.begin_nested():
-                    session.add(claim)
-                    await session.flush()
-            except IntegrityError:
-                recovered = await session.execute(
-                    select(HitlClaim).where(HitlClaim.run_id == run.id, HitlClaim.review_id == current_review_id)
-                )
-                claim = recovered.scalar_one_or_none()
-                if claim is None:
-                    raise
-                _log.info("demo_seed.hitl_claim_recovered_after_conflict", extra={"run_number": run_number})
-        # A refresh must never rewrite a fired gate's decision, decided-by,
-        # payload, context, or captured config: HITL claims are durable
-        # provenance, not disposable demo display rows.
-        #
-        # An AWAITING claim (decision IS NULL) is the live review surface, not
-        # frozen evidence: the claim-expiry sweep terminalizes anything past
-        # ``terminalize_at``, so preserving the original stamp would silently
-        # empty the "review required" demo surface ~2 days after the first
-        # seed.  Its deadlines therefore roll forward on every refresh.
-        # DECIDED claims are immutable evidence and keep their original values.
-        elif claim.decision is None:
-            claim.expires_at = now + timedelta(days=2)
-            claim.terminalize_at = now + timedelta(days=2)
-            _log.debug("demo_seed.hitl_claim_deadlines_refreshed", extra={"run_number": run_number})
-        else:
-            _log.debug("demo_seed.hitl_claim_preserved", extra={"run_number": run_number})
+        await _converge_demo_hitl_claim(session, org, run, review, now)
 
 
 async def _seed_demo_model_backends(
@@ -1875,10 +1943,8 @@ async def _seed_demo_model_backends(
         ("Demo Stub Accurate", "Demo Stub Accurate", "custom", "demo-stub-accurate"),
     )
     for name, display_name, provider, model_id in model_specs:
-        backend_result = await session.execute(
-            select(ModelBackend).where(ModelBackend.organisation_id == org.id, ModelBackend.name == name)
-        )
-        backend_row = backend_result.scalar_one_or_none()
+        recover_stmt = select(ModelBackend).where(ModelBackend.organisation_id == org.id, ModelBackend.name == name)
+        existing = (await session.execute(recover_stmt)).scalar_one_or_none()
         values = {
             "display_name": display_name,
             "provider": provider,
@@ -1890,44 +1956,24 @@ async def _seed_demo_model_backends(
             "visibility": "org",
             "account_id": account.id,
         }
-        if backend_row is None:
-            backend = ModelBackend(
+        if existing is not None:
+            # Credentials and account ownership are provenance, not fixture display
+            # data.  Preserve them while converging the demo-owned configuration.
+            _converge_fixture_attributes(existing, values, _MODEL_BACKEND_CONVERGED_ATTRS)
+            continue
+        await _insert_fixture_or_adopt(
+            session,
+            ModelBackend(
                 id=demo_fixture_id(org.id, f"model-backend:{name}"),
                 organisation_id=org.id,
                 name=name,
                 **values,
-            )
-            try:
-                async with session.begin_nested():
-                    session.add(backend)
-                    await session.flush()
-            except IntegrityError:
-                recovered = await session.execute(
-                    select(ModelBackend).where(ModelBackend.organisation_id == org.id, ModelBackend.name == name)
-                )
-                recovered_backend = recovered.scalar_one_or_none()
-                if recovered_backend is None:
-                    raise
-                backend = recovered_backend
-                _log.info("demo_seed.model_backend_recovered_after_conflict", extra={"model_backend_name": name})
-            else:
-                _log.info("demo_seed.model_backend_created", extra={"model_backend_name": name})
-        else:
-            backend = backend_row
-            # Credentials and account ownership are provenance, not fixture display
-            # data.  Preserve them while converging the demo-owned configuration.
-            for attr in (
-                "display_name",
-                "provider",
-                "model_id",
-                "default_params",
-                "cost_tracking",
-                "status",
-                "visibility",
-            ):
-                value = values[attr]
-                if getattr(backend, attr) != value:
-                    setattr(backend, attr, value)
+            ),
+            recover_stmt,
+            conflict_event="demo_seed.model_backend_recovered_after_conflict",
+            created_event="demo_seed.model_backend_created",
+            log_extra={"model_backend_name": name},
+        )
 
 
 async def _seed_demo_connectors(
@@ -1941,10 +1987,10 @@ async def _seed_demo_connectors(
         ("Demo Linear (read-only)", "linear"),
     )
     for name, connector_type_id in connector_specs:
-        connector_result = await session.execute(
-            select(ConnectorInstance).where(ConnectorInstance.organisation_id == org.id, ConnectorInstance.name == name)
+        recover_stmt = select(ConnectorInstance).where(
+            ConnectorInstance.organisation_id == org.id, ConnectorInstance.name == name
         )
-        connector_row = connector_result.scalar_one_or_none()
+        existing = (await session.execute(recover_stmt)).scalar_one_or_none()
         values = {
             "connector_type_id": connector_type_id,
             "credentials_ciphertext": b"demo-read-only",
@@ -1954,45 +2000,24 @@ async def _seed_demo_connectors(
             "visibility": "org",
             "account_id": account.id,
         }
-        if connector_row is None:
-            connector = ConnectorInstance(
+        if existing is not None:
+            # Credentials and account ownership are provenance, not fixture display
+            # data. Preserve them while converging the demo-owned configuration.
+            _converge_fixture_attributes(existing, values, _CONNECTOR_CONVERGED_ATTRS)
+            continue
+        await _insert_fixture_or_adopt(
+            session,
+            ConnectorInstance(
                 id=demo_fixture_id(org.id, f"connector:{name}"),
                 organisation_id=org.id,
                 name=name,
                 **values,
-            )
-            try:
-                async with session.begin_nested():
-                    session.add(connector)
-                    await session.flush()
-            except IntegrityError:
-                recovered = await session.execute(
-                    select(ConnectorInstance).where(
-                        ConnectorInstance.organisation_id == org.id,
-                        ConnectorInstance.name == name,
-                    )
-                )
-                recovered_connector = recovered.scalar_one_or_none()
-                if recovered_connector is None:
-                    raise
-                connector = recovered_connector
-                _log.info("demo_seed.connector_recovered_after_conflict", extra={"connector_name": name})
-            else:
-                _log.info("demo_seed.connector_created", extra={"connector_name": name})
-        else:
-            connector = connector_row
-            # Credentials and account ownership are provenance, not fixture display
-            # data. Preserve them while converging the demo-owned configuration.
-            for attr in (
-                "connector_type_id",
-                "config_json",
-                "allowed_operations",
-                "status",
-                "visibility",
-            ):
-                value = values[attr]
-                if getattr(connector, attr) != value:
-                    setattr(connector, attr, value)
+            ),
+            recover_stmt,
+            conflict_event="demo_seed.connector_recovered_after_conflict",
+            created_event="demo_seed.connector_created",
+            log_extra={"connector_name": name},
+        )
 
 
 async def _seed_demo_notifications(
@@ -2008,10 +2033,10 @@ async def _seed_demo_notifications(
         ("run_failed", "Run failed", "A demo sample run failed without performing real work.", "error"),
     )
     for category, title, body, level in notifications:
-        notification_result = await session.execute(
-            select(Notification).where(Notification.organisation_id == org.id, Notification.category == category)
+        recover_stmt = select(Notification).where(
+            Notification.organisation_id == org.id, Notification.category == category
         )
-        notification_row = notification_result.scalar_one_or_none()
+        existing = (await session.execute(recover_stmt)).scalar_one_or_none()
         values = {
             "scope": "org",
             "target_user_id": None,
@@ -2023,36 +2048,56 @@ async def _seed_demo_notifications(
             "dismissible_at_scope": True,
             "expires_at": now + timedelta(days=3),
         }
-        if notification_row is None:
-            notification = Notification(
+        if existing is not None:
+            _converge_fixture_attributes(existing, values, tuple(values))
+            continue
+        await _insert_fixture_or_adopt(
+            session,
+            Notification(
                 id=demo_fixture_id(org.id, f"notification:{category}"),
                 organisation_id=org.id,
                 category=category,
                 **values,
-            )
-            try:
-                async with session.begin_nested():
-                    session.add(notification)
-                    await session.flush()
-            except IntegrityError:
-                recovered = await session.execute(
-                    select(Notification).where(
-                        Notification.organisation_id == org.id,
-                        Notification.category == category,
-                    )
-                )
-                recovered_notification = recovered.scalar_one_or_none()
-                if recovered_notification is None:
-                    raise
-                notification = recovered_notification
-                _log.info("demo_seed.notification_recovered_after_conflict", extra={"category": category})
+            ),
+            recover_stmt,
+            conflict_event="demo_seed.notification_recovered_after_conflict",
+            created_event="demo_seed.notification_created",
+            log_extra={"category": category},
+        )
+
+
+async def _insert_demo_trigger_event(
+    session: AsyncSession,
+    org: Organisation,
+    trigger: Trigger,
+    index: int,
+    now: datetime,
+) -> None:
+    """Insert one deterministic demo trigger event, swallowing a lost race."""
+    raw_hash = hashlib.sha256(f"demo-trigger-event:{trigger.id}:{index}".encode()).hexdigest()
+    event_kwargs = {
+        "id": demo_trigger_event_id(org.id, trigger.id),
+        "organisation_id": org.id,
+        "raw_payload_hash": raw_hash,
+        "trigger_id": trigger.id,
+        "trigger_type": trigger.trigger_type,
+        "received_at": now - timedelta(hours=index + 1),
+        "run_id": None,
+        "error_detail": None,
+    }
+    try:
+        async with session.begin_nested():
+            # Keep each vocabulary value a literal at the constructor so
+            # the TriggerEvent write-vocabulary architecture guard can
+            # statically verify it against VALIDATION_RESULT_VALUES.
+            if index % 2 == 0:
+                new_event = TriggerEvent(validation_result="accepted", **event_kwargs)
             else:
-                _log.info("demo_seed.notification_created", extra={"category": category})
-        else:
-            notification = notification_row
-            for attr, value in values.items():
-                if getattr(notification, attr) != value:
-                    setattr(notification, attr, value)
+                new_event = TriggerEvent(validation_result="passed", **event_kwargs)
+            session.add(new_event)
+            await session.flush()
+    except IntegrityError:
+        _log.info("demo_seed.trigger_event_recovered_after_conflict", extra={"trigger_id": str(trigger.id)})
 
 
 async def _seed_demo_trigger_events(
@@ -2076,48 +2121,24 @@ async def _seed_demo_trigger_events(
         ).scalars()
     )
     for index, trigger in enumerate(triggers[:4]):
-        # The event is keyed on its durable trigger identity; the loop index
-        # only feeds the deterministic ``raw_hash``/``received_at`` fixture
-        # values, never the event's identity.
-        raw_hash = hashlib.sha256(f"demo-trigger-event:{trigger.id}:{index}".encode()).hexdigest()
-        result = await session.execute(
-            select(TriggerEvent)
-            .where(TriggerEvent.organisation_id == org.id, TriggerEvent.trigger_id == trigger.id)
-            .order_by(TriggerEvent.received_at, TriggerEvent.id)
-            .limit(1)
+        existing = (
+            (
+                await session.execute(
+                    select(TriggerEvent)
+                    .where(TriggerEvent.organisation_id == org.id, TriggerEvent.trigger_id == trigger.id)
+                    .order_by(TriggerEvent.received_at, TriggerEvent.id)
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
         )
-        event = result.scalars().first()
-        values = {
-            "trigger_id": trigger.id,
-            "trigger_type": trigger.trigger_type,
-            "received_at": now - timedelta(hours=index + 1),
-            "run_id": None,
-            "error_detail": None,
-        }
-        if event is None:
-            event_kwargs = {
-                "id": demo_trigger_event_id(org.id, trigger.id),
-                "organisation_id": org.id,
-                "raw_payload_hash": raw_hash,
-                **values,
-            }
-            try:
-                async with session.begin_nested():
-                    # Keep each vocabulary value a literal at the constructor so
-                    # the TriggerEvent write-vocabulary architecture guard can
-                    # statically verify it against VALIDATION_RESULT_VALUES.
-                    if index % 2 == 0:
-                        new_event = TriggerEvent(validation_result="accepted", **event_kwargs)
-                    else:
-                        new_event = TriggerEvent(validation_result="passed", **event_kwargs)
-                    session.add(new_event)
-                    await session.flush()
-            except IntegrityError:
-                _log.info("demo_seed.trigger_event_recovered_after_conflict", extra={"trigger_id": str(trigger.id)})
-        # Existing event rows are historical demo evidence. Do not rewrite their
-        # trigger association, timestamp, payload identity, or validation result
-        # when trigger query ordering changes; only the missing-row path above is
-        # allowed to create a new deterministic event.
+        if existing is not None:
+            # Existing event rows are historical demo evidence. Do not rewrite
+            # their trigger association, timestamp, payload identity, or
+            # validation result when trigger query ordering changes.
+            continue
+        await _insert_demo_trigger_event(session, org, trigger, index, now)
 
 
 async def _seed_demo_governance_surfaces(

@@ -27,7 +27,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -404,6 +404,90 @@ async def test_seed_fixture_primary_key_conflict_adopts_existing_row(
     assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
     assert await _count(session, entity) == counts_before
     assert any(record.getMessage() == recovery_message for record in caplog.records)
+
+
+async def test_seed_hitl_claim_recovers_after_conflict(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A concurrent HITL claim insert is adopted by its deterministic identity.
+
+    The awaiting/deapproved/approved claims are inserted one by one; hiding the
+    first existence check and forcing its flush into a unique violation drives
+    the savepoint recovery path inside the HITL claim seeder.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    counts_before = await _count(session, HitlClaim)
+    hide = _HideCheckOnce(session, HitlClaim)
+    flaky = _FlakyFlush(session, HitlClaim)
+    hide.install()
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            caplog.clear()
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+        hide.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, HitlClaim) == counts_before
+    assert any(record.getMessage() == "demo_seed.hitl_claim_recovered_after_conflict" for record in caplog.records)
+
+
+async def test_seed_hitl_claims_skip_runs_missing_from_the_seed(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A governance run absent from the seed is skipped, not fatal.
+
+    The HITL seeder looks up each governance run by number; a refresh whose
+    run row has not been created yet must skip that claim rather than raise.
+    """
+    await _run_seed(session, monkeypatch, _demo_settings())
+    org = (await session.execute(select(Organisation).where(Organisation.slug == DEMO_ORG_SLUG))).scalar_one()
+    account = (await session.execute(select(Account))).scalar_one()
+    pipeline = (
+        await session.execute(select(Pipeline).where(Pipeline.name == seed_demo_module.DEMO_PIPELINE_NAME))
+    ).scalar_one()
+    snapshot = (
+        await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == pipeline.id))
+    ).scalar_one()
+    claims_before = await _count(session, HitlClaim)
+
+    async def _missing_run(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(seed_demo_module, "_find_demo_run", _missing_run)
+    await seed_demo_module._seed_demo_hitl_claims(
+        session,
+        org,
+        account,
+        {seed_demo_module.DEMO_PIPELINE_NAME: (pipeline, snapshot)},
+        datetime.now(UTC),
+    )
+
+    assert await _count(session, HitlClaim) == claims_before
+
+
+async def test_seed_trigger_event_recovers_after_conflict(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A lost trigger-event insert race is logged and swallowed."""
+    await _run_seed(session, monkeypatch, _demo_settings())
+    await session.execute(delete(TriggerEvent))
+    await session.commit()
+
+    flaky = _FlakyFlush(session, TriggerEvent)
+    flaky.install()
+    try:
+        with caplog.at_level(logging.INFO, logger="modulo.db.seed_demo"):
+            caplog.clear()
+            summary = await _run_seed(session, monkeypatch, _demo_settings())
+    finally:
+        flaky.uninstall()
+
+    assert summary == f"org={DEMO_ORG_SLUG} user={_DEMO_EMAIL}"
+    assert await _count(session, TriggerEvent) == 0
+    assert any(record.getMessage() == "demo_seed.trigger_event_recovered_after_conflict" for record in caplog.records)
 
 
 async def test_seed_restamps_password_on_rotation(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -876,6 +960,9 @@ async def test_seed_sample_data_inserts_recover_after_conflict(
         pytest.param(Team, id="team"),
         pytest.param(Eval, id="eval"),
         pytest.param(EvalResult, id="eval-result"),
+        pytest.param(ModelBackend, id="model-backend"),
+        pytest.param(ConnectorInstance, id="connector-instance"),
+        pytest.param(Notification, id="notification"),
     ],
 )
 async def test_seed_reraises_when_recovery_finds_no_winner(
@@ -1319,6 +1406,8 @@ async def test_seed_preserves_governance_surface_provenance_on_refresh(
     ).scalar_one()
     backend.credentials_ciphertext = b"operator-managed-backend-secret"
     connector.credentials_ciphertext = b"operator-managed-connector-secret"
+    backend.display_name = "stale backend display"
+    connector.status = "disabled"
     notification.title = "stale title"
     await session.commit()
 
@@ -1335,6 +1424,8 @@ async def test_seed_preserves_governance_surface_provenance_on_refresh(
     ).scalar_one()
     assert refreshed_backend.credentials_ciphertext == b"operator-managed-backend-secret"
     assert refreshed_connector.credentials_ciphertext == b"operator-managed-connector-secret"
+    assert refreshed_backend.display_name == "Demo Stub Fast"
+    assert refreshed_connector.status == "active"
     assert refreshed_backend.account_id == backend.account_id
     assert refreshed_connector.account_id == connector.account_id
     assert refreshed_notification.title == "Run completed"
