@@ -468,7 +468,7 @@ jobs:
               else
                 printf 'assertion: %s=FAILED (exit=%d)\n' "$name" "$exit_code" >&2
                 [[ -n "$stdout_stderr" ]] && printf '  stdout/stderr: %s\n' "$stdout_stderr" >&2
-                return 1
+                exit 1
               fi
             }
 
