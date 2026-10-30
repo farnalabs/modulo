@@ -294,8 +294,8 @@ jobs:
               # Stop the LaunchAgent service (ignore failure if not running)
               launchctl stop "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
 
-              # Remove the service from the user domain entirely
-              launchctl bootout "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
+              # Unload the LaunchAgent and disable it persistently
+              launchctl unload -w "$PLIST" 2>/dev/null || true
 
               # Remove the plist file to prevent future loads
               PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
