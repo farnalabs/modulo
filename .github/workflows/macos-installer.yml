@@ -532,6 +532,35 @@ jobs:
               sed -E 's/(password|token|secret|api[_-]?key|certificate|issuer|key-id)[^[:space:]]*/\1=[REDACTED]/Ig; s#-----BEGIN [^-]+-----#-----BEGIN REDACTED-----#g; s#-----END [^-]+-----#-----END REDACTED-----#g'
             }
 
+            # Keep OpenSSL's ordinary error words visible. The generic smoke
+            # redactor is intentionally broader and can consume useful text
+            # such as "certificate" from an OpenSSL diagnostic.
+            redact_pkcs12_stderr() {
+              awk '
+                /-----BEGIN [^-]+-----/ {
+                  if (!in_pem) print "-----BEGIN REDACTED-----"
+                  in_pem = 1
+                  next
+                }
+                in_pem && /-----END [^-]+-----/ {
+                  print "-----END REDACTED-----"
+                  in_pem = 0
+                  next
+                }
+                in_pem { next }
+                { print }
+                END {
+                  if (in_pem) print "-----END REDACTED-----"
+                }
+              ' \
+                | sed -E \
+                  -e 's#/(private/)?tmp/[^[:space:]]*#[TEMP_PATH]#g' \
+                  -e 's#/var/folders/[^[:space:]]*#[TEMP_PATH]#g' \
+                  -e 's#/(Users|private/var)/[^[:space:]]*(tmp|_temp|TemporaryItems)[^[:space:]]*#[TEMP_PATH]#Ig' \
+                  -e 's#([[:alnum:]_.-]*(password|token|secret|api[_-]?key|passphrase|credential)[[:space:]]*=[[:space:]]*)[^[:space:]]+#\1[REDACTED]#Ig' \
+                | awk 'NR <= 10 { remaining = 500 - used; if (remaining <= 0) exit; line = substr($0, 1, remaining); print line; used += length(line) + 1 }'
+            }
+
             run_pre_smoke() {
               local name="$1"; shift
               local output_file="$DATA/pre-smoke-${name}.log"
@@ -541,6 +570,7 @@ jobs:
               "$@" >"$output_file" 2>&1
               exit_code=$?
               set -e
+              printf 'run_pre_smoke: %s command_exit=%d\n' "$name" "$exit_code"
               if [[ "$exit_code" -eq 0 ]]; then
                 printf 'pre_smoke: %s=ok (exit=%d)\n' "$name" "$exit_code"
                 return 0
@@ -576,19 +606,189 @@ jobs:
           # shellcheck disable=SC2016
           run_pre_smoke data_directory_create prepare_data_directory
           run_pre_smoke owned_pid_file_prepare prepare_owned_pid_file
+          # The vault normally stores the PKCS#12 as base64 text, but accept a
+          # PEM value too. Keep the secret in files/stdin rather than passing it
+          # as an argument, and avoid a pipeline so macOS base64 failures cannot
+          # be hidden by a later command's exit status.
           # shellcheck disable=SC2016
-          run_pre_smoke certificate_decode bash -c 'printf "%s" "$1" | base64 --decode > "$2"' bash "$CERTIFICATE_B64" "$CERT"
+          run_pre_smoke certificate_decode bash -c '
+            set -euo pipefail
+            certificate_path="$1"
+            raw_path="${certificate_path}.raw"
+            normalized_path="${certificate_path}.normalized"
+            temporary_path="${certificate_path}.decode"
+            rm -f "$raw_path" "$normalized_path" "$temporary_path" "$certificate_path"
+            printf "%s" "${CERTIFICATE_B64:-}" > "$raw_path"
+            raw_byte_count="$(LC_ALL=C wc -c < "$raw_path" | tr -d "[:space:]")"
+            printf "certificate decode: raw_bytes=%s\\n" "$raw_byte_count"
+            if [[ "$raw_byte_count" -eq 0 ]]; then
+              printf "certificate decode: input_class=empty exit=1 class=empty-input\\n" >&2
+              rm -f "$raw_path"
+              exit 1
+            fi
+            if LC_ALL=C head -c 11 "$raw_path" | LC_ALL=C grep -Fqx -- "-----BEGIN "; then
+              cp "$raw_path" "$temporary_path"
+              input_class=pem
+            else
+              LC_ALL=C tr -d "\\r\\n \\t" < "$raw_path" > "$normalized_path"
+              if ! base64 -D < "$normalized_path" > "$temporary_path"; then
+                printf "certificate decode: input_class=base64 exit=1 class=invalid-base64\\n" >&2
+                rm -f "$raw_path" "$normalized_path" "$temporary_path"
+                exit 1
+              fi
+              input_class=base64
+            fi
+            rm -f "$raw_path" "$normalized_path"
+            if [[ ! -s "$temporary_path" ]]; then
+              printf "certificate decode: input_class=%s exit=1 class=empty-output\\n" "$input_class" >&2
+              rm -f "$temporary_path"
+              exit 1
+            fi
+            byte_length="$(LC_ALL=C wc -c < "$temporary_path" | tr -d "[:space:]")"
+            header_bytes="$(od -An -tx1 -N8 "$temporary_path" | tr -d "[:space:]")"
+            if [[ "$input_class" == pem ]]; then
+              header_class=pem
+            elif [[ "$header_bytes" == 30* ]]; then
+              header_class=asn1-der
+            else
+              header_class=unknown
+            fi
+            printf "certificate decode: input_class=%s bytes=%s header=%s\\n" "$input_class" "$byte_length" "$header_class"
+            if [[ "$header_class" == unknown ]]; then
+              printf "certificate decode: exit=1 class=unknown-header\\n" >&2
+              rm -f "$temporary_path"
+              exit 1
+            fi
+            mv "$temporary_path" "$certificate_path"
+          ' bash "$CERT"
           # Set up an empty keychain password so no generated password is leaked in argv.
-          # OpenSSL consumes the PKCS#12 password on stdin; security then imports
-          # the extracted PEM without any certificate password argument.
+          # OpenSSL consumes the PKCS#12 password from the child environment;
+          # this keeps the real vault-backed password out of argv and logs.
+          # The extracted PEM is then imported without any certificate password
+          # argument. OpenSSL 3 may need its legacy provider for older PKCS#12
+          # encryption, but retry only when its diagnostic identifies that case.
+          # The password is deliberately preserved byte-for-byte: vault values may
+          # contain meaningful whitespace, so this workflow does not trim or decode it.
+          [[ -n "$CERTIFICATE_PASSWORD" ]] || { echo '::error::certificate password is required for identity PEM extraction' >&2; exit 1; }
+          export CERTIFICATE_PASSWORD
+          P12_SCRIPT="$DATA/extract-p12.sh"
+          cat > "$P12_SCRIPT" <<'P12_SCRIPT'
+           #!/usr/bin/env bash
+           set -euo pipefail
+
+           CERT="$1"
+           OUTPUT="$2"
+           ERROR_FILE="${OUTPUT}.openssl.stderr"
+           VALIDATION_ERROR_FILE="${OUTPUT}.openssl-validation.stderr"
+           PASSWORD_LENGTH="$(LC_ALL=C printf '%s' "${CERTIFICATE_PASSWORD-}" | wc -c | tr -d '[:space:]')"
+
+           [[ -n "${CERTIFICATE_PASSWORD:-}" ]] || {
+             printf 'openssl pkcs12 diagnostic: attempt=validation exit=1 class=missing-password\n' >&2
+             exit 1
+           }
+           printf 'openssl pkcs12 diagnostic: password_bytes=%s\n' "$PASSWORD_LENGTH"
+           [[ -s "$CERT" ]] || {
+             printf 'openssl pkcs12 diagnostic: attempt=input-validation exit=1 class=empty-input\n' >&2
+             exit 1
+           }
+
+           validate_input() {
+             local validation_exit structure_seen
+             rm -f "$VALIDATION_ERROR_FILE"
+             set +e
+             openssl pkcs12 -info -nokeys -in "$CERT" -passin env:CERTIFICATE_PASSWORD \
+               >/dev/null 2>"$VALIDATION_ERROR_FILE"
+             validation_exit=$?
+             set -e
+             if [[ "$validation_exit" -ne 0 ]]; then
+               printf 'openssl pkcs12 diagnostic: attempt=input-validation exit=%d class=invalid-input\n' "$validation_exit" >&2
+               return "$validation_exit"
+             fi
+             structure_seen=0
+             if grep -Eiq 'certificate bag|shrouded keybag|key bag' "$VALIDATION_ERROR_FILE"; then
+               structure_seen=1
+             fi
+             if [[ "$structure_seen" -ne 1 ]]; then
+               printf 'openssl pkcs12 diagnostic: attempt=input-validation exit=1 class=missing-structure\n' >&2
+               return 1
+             fi
+             printf 'openssl pkcs12 diagnostic: attempt=input-validation exit=0 class=ok\n'
+           }
+
+           classify_error() {
+             if grep -Eiq 'legacy provider|unsupported.*(legacy|algorithm|cipher)|unknown cipher|inner_evp_generic_fetch|rc2-[0-9]+-cbc' "$ERROR_FILE"; then
+               printf 'legacy-algorithm'
+             else
+               printf 'non-legacy-failure'
+             fi
+           }
+
+           run_openssl() {
+             local attempt="$1"
+             shift
+             local exit_code error_class temporary_output
+             temporary_output="${OUTPUT}.tmp-${attempt}"
+             rm -f "$OUTPUT" "$ERROR_FILE" "$temporary_output"
+             set +e
+             openssl pkcs12 "$@" -out "$temporary_output" 2>"$ERROR_FILE"
+             exit_code=$?
+             set -e
+             if [[ "$exit_code" -ne 0 ]]; then
+               error_class="$(classify_error)"
+               printf 'openssl pkcs12 diagnostic: attempt=%s exit=%d class=%s\n' "$attempt" "$exit_code" "$error_class" >&2
+               rm -f "$temporary_output"
+               return "$exit_code"
+             fi
+             if [[ ! -s "$temporary_output" ]]; then
+               printf 'openssl pkcs12 diagnostic: attempt=%s exit=0 class=empty-output\n' "$attempt" >&2
+               rm -f "$temporary_output"
+               return 1
+             fi
+             mv "$temporary_output" "$OUTPUT"
+             printf 'openssl pkcs12 diagnostic: attempt=%s exit=0 class=ok\n' "$attempt"
+           }
+
+           validate_input
+           if run_openssl normal -in "$CERT" -passin env:CERTIFICATE_PASSWORD -nodes; then
+             mode=normal
+           else
+             if [[ "$(classify_error)" == legacy-algorithm ]]; then
+               if run_openssl legacy -legacy -in "$CERT" -passin env:CERTIFICATE_PASSWORD -nodes; then
+                 mode=legacy
+               else
+                 rm -f "$OUTPUT"
+                 exit 1
+               fi
+             else
+               rm -f "$OUTPUT"
+               exit 1
+             fi
+           fi
+
+           if [[ ! -s "$OUTPUT" ]]; then
+             printf 'openssl pkcs12 diagnostic: class=empty-output\n' >&2
+             rm -f "$OUTPUT"
+             exit 1
+           fi
+
+           rm -f "$ERROR_FILE" "$VALIDATION_ERROR_FILE"
+           printf 'openssl pkcs12 extraction: mode=%s status=ok\n' "$mode"
+          P12_SCRIPT
+          chmod 700 "$P12_SCRIPT"
+          export CERTIFICATE_PASSWORD
+          run_pre_smoke identity_pem_extract bash "$P12_SCRIPT" "$CERT" "$IDENTITY_PEM_PATH"
+
           # shellcheck disable=SC2016
           run_pre_smoke keychain_create security create-keychain -p "" "$KEYCHAIN"
+
           # shellcheck disable=SC2016
           run_pre_smoke keychain_settings security set-keychain-settings -lut 900 "$KEYCHAIN"
           # shellcheck disable=SC2016
           run_pre_smoke keychain_unlock security unlock-keychain -p "" "$KEYCHAIN"
+          # Validate both private-key and certificate material without printing either.
+          # Do not add a password fallback: the real PKCS#12 is password-protected.
           # shellcheck disable=SC2016
-          run_pre_smoke identity_pem_extract bash -c 'printf "%s\n" "$1" | openssl pkcs12 -in "$2" -passin stdin -nodes -out "$3"' bash "$CERTIFICATE_PASSWORD" "$CERT" "$IDENTITY_PEM_PATH"
+          run_pre_smoke identity_pem_validate bash -c 'grep -Eq "^-----BEGIN (ENCRYPTED )?PRIVATE KEY-----$" "$1" && openssl pkey -in "$1" -noout && openssl x509 -in "$1" -noout' bash "$IDENTITY_PEM_PATH"
           # shellcheck disable=SC2016
           run_pre_smoke keychain_import security import "$IDENTITY_PEM_PATH" -k "$KEYCHAIN" -T /usr/bin/codesign
           # shellcheck disable=SC2016
@@ -622,7 +822,7 @@ jobs:
           # shellcheck disable=SC2016
           run_pre_smoke dmg_codesign codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
           # shellcheck disable=SC2016
-          run_pre_smoke notary_key_decode bash -c 'printf "%s" "$1" | base64 --decode > "$2"' bash "$NOTARY_KEY_B64" "$NOTARY_KEY"
+          run_pre_smoke notary_key_decode bash -c 'printf "%s" "$1" | tr -d "[:space:]" | base64 -D > "$2"' bash "$NOTARY_KEY_B64" "$NOTARY_KEY"
           # shellcheck disable=SC2016
           run_pre_smoke dmg_notary_submit xcrun notarytool submit "$DMG" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 30m
           # shellcheck disable=SC2016
