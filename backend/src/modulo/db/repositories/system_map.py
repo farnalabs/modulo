@@ -1172,31 +1172,49 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         """
         errors: list[str] = []
 
-        # 1. Acyclicity check on 'flow' edges
+        # 1. Resolve every relationship endpoint against this revision's live nodes.
+        nodes = await self.list_nodes_in_revision(session, organisation_id=organisation_id, revision_id=revision_id)
+        node_keys = {node.node_key for node in nodes}
         relationships = await self.list_relationships_in_revision(
             session, organisation_id=organisation_id, revision_id=revision_id
         )
         flow_edges = [r for r in relationships if r.relationship_type == "flow"]
+        for relationship in relationships:
+            missing = sorted(
+                {key for key in (relationship.source_node_key, relationship.target_node_key) if key not in node_keys}
+            )
+            if missing:
+                errors.append(f"Relationship {relationship.id} references missing node(s): {', '.join(missing)}")
         if not self._is_acyclic(flow_edges):
             errors.append("Revision contains cycles in 'flow' relationships")
 
         # 2. Loop config completeness
-        nodes = await self.list_nodes_in_revision(session, organisation_id=organisation_id, revision_id=revision_id)
         loop_nodes = [n for n in nodes if n.node_type == "improvement_loop"]
+        loop_configs = await self.list_loop_configs_in_revision(
+            session, organisation_id=organisation_id, revision_id=revision_id
+        )
+        loop_config_keys = [loop.node_key for loop in loop_configs]
+        if len(loop_config_keys) != len(set(loop_config_keys)):
+            errors.append("Loop configs contain duplicate node keys")
+        for loop_config in loop_configs:
+            if loop_config.node_key not in node_keys:
+                errors.append(f"Loop config references missing node '{loop_config.node_key}'")
+            elif next(node for node in nodes if node.node_key == loop_config.node_key).node_type != "improvement_loop":
+                errors.append(f"Loop config '{loop_config.node_key}' does not target an improvement_loop node")
         for loop_node in loop_nodes:
-            loop_config = await self.get_loop_config_by_node_key(
+            node_loop_config: SystemMapLoopConfig | None = await self.get_loop_config_by_node_key(
                 session, organisation_id=organisation_id, revision_id=revision_id, node_key=loop_node.node_key
             )
-            if not loop_config:
+            if not node_loop_config:
                 errors.append(f"Improvement loop node '{loop_node.node_key}' missing loop config")
             else:
                 required = (
-                    ("target_signal", loop_config.target_signal),
-                    ("observation_window_seconds", loop_config.observation_window_seconds),
-                    ("action_pipeline_id", loop_config.action_pipeline_id),
-                    ("budget_limit_usd", loop_config.budget_limit_usd),
-                    ("cooldown_seconds", loop_config.cooldown_seconds),
-                    ("outcome_metric", loop_config.outcome_metric),
+                    ("target_signal", node_loop_config.target_signal),
+                    ("observation_window_seconds", node_loop_config.observation_window_seconds),
+                    ("action_pipeline_id", node_loop_config.action_pipeline_id),
+                    ("budget_limit_usd", node_loop_config.budget_limit_usd),
+                    ("cooldown_seconds", node_loop_config.cooldown_seconds),
+                    ("outcome_metric", node_loop_config.outcome_metric),
                 )
                 missing = [
                     name for name, value in required if value is None or (isinstance(value, str) and not value.strip())
@@ -1205,9 +1223,6 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
                     errors.append(f"Loop config for '{loop_node.node_key}' is incomplete: missing {', '.join(missing)}")
 
         # 3. Validate every node and loop foreign-key binding, including team scope.
-        loop_configs = await self.list_loop_configs_in_revision(
-            session, organisation_id=organisation_id, revision_id=revision_id
-        )
         binding_errors = await self.validate_bindings(
             session,
             organisation_id=organisation_id,

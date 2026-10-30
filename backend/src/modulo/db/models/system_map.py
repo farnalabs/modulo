@@ -22,6 +22,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -134,14 +135,15 @@ class SystemMapRevision(SoftDeleteMixin, OrgScoped):
         CheckConstraint(f"status IN ({_revision_status_sql})", name="ck_system_map_revisions_status"),
         UniqueConstraint("system_map_id", "revision_number", name="uq_system_map_revisions_map_number"),
         UniqueConstraint("id", "organisation_id", name="uq_system_map_revisions_id_organisation_id"),
+        ForeignKeyConstraint(
+            ["system_map_id", "organisation_id"],
+            ["system_maps.id", "system_maps.organisation_id"],
+            ondelete=_ONDELETE_CASCADE,
+            name="fk_system_map_revisions_map_org",
+        ),
     )
 
-    system_map_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(),
-        ForeignKey("system_maps.id", ondelete=_ONDELETE_CASCADE),
-        nullable=False,
-        index=True,
-    )
+    system_map_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="draft")
     content_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
@@ -173,14 +175,16 @@ class SystemMapNode(SoftDeleteMixin, OrgScoped):
     __table_args__ = (
         CheckConstraint(f"node_type IN ({_node_type_sql})", name="ck_system_map_nodes_type"),
         UniqueConstraint("revision_id", "node_key", name="uq_system_map_nodes_revision_key"),
+        UniqueConstraint("id", "organisation_id", name="uq_system_map_nodes_id_organisation_id"),
+        ForeignKeyConstraint(
+            ["revision_id", "organisation_id"],
+            ["system_map_revisions.id", "system_map_revisions.organisation_id"],
+            ondelete=_ONDELETE_CASCADE,
+            name="fk_system_map_nodes_revision_org",
+        ),
     )
 
-    revision_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(),
-        ForeignKey("system_map_revisions.id", ondelete=_ONDELETE_CASCADE),
-        nullable=False,
-        index=True,
-    )
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     node_key: Mapped[str] = mapped_column(String(100), nullable=False)
     node_type: Mapped[str] = mapped_column(String(50), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -217,14 +221,16 @@ class SystemMapRelationship(SoftDeleteMixin, OrgScoped):
             "relationship_type",
             name="uq_system_map_relationships_rev_src_tgt_type",
         ),
+        UniqueConstraint("id", "organisation_id", name="uq_system_map_relationships_id_organisation_id"),
+        ForeignKeyConstraint(
+            ["revision_id", "organisation_id"],
+            ["system_map_revisions.id", "system_map_revisions.organisation_id"],
+            ondelete=_ONDELETE_CASCADE,
+            name="fk_system_map_relationships_revision_org",
+        ),
     )
 
-    revision_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(),
-        ForeignKey("system_map_revisions.id", ondelete=_ONDELETE_CASCADE),
-        nullable=False,
-        index=True,
-    )
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     source_node_key: Mapped[str] = mapped_column(String(100), nullable=False)
     target_node_key: Mapped[str] = mapped_column(String(100), nullable=False)
     relationship_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -243,14 +249,16 @@ class SystemMapLoopConfig(SoftDeleteMixin, OrgScoped):
         CheckConstraint("observation_window_seconds > 0", name="ck_loop_configs_obs_window"),
         CheckConstraint("budget_limit_usd >= 0", name="ck_loop_configs_budget"),
         CheckConstraint("cooldown_seconds >= 0", name="ck_loop_configs_cooldown"),
+        UniqueConstraint("id", "organisation_id", name="uq_system_map_loop_configs_id_organisation_id"),
+        ForeignKeyConstraint(
+            ["revision_id", "organisation_id"],
+            ["system_map_revisions.id", "system_map_revisions.organisation_id"],
+            ondelete=_ONDELETE_CASCADE,
+            name="fk_system_map_loop_configs_revision_org",
+        ),
     )
 
-    revision_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(),
-        ForeignKey("system_map_revisions.id", ondelete=_ONDELETE_CASCADE),
-        nullable=False,
-        index=True,
-    )
+    revision_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     node_key: Mapped[str] = mapped_column(String(100), nullable=False)
     target_signal: Mapped[str] = mapped_column(String(100), nullable=False)
     observation_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -282,6 +290,36 @@ class SystemMapAttributionBinding(SoftDeleteMixin, OrgScoped):
     __tablename__ = "system_map_attribution_bindings"
     __table_args__ = (
         CheckConstraint(f"binding_kind IN ({_binding_kind_sql})", name="ck_system_map_attribution_bindings_kind"),
+        CheckConstraint(
+            "(binding_kind = 'trigger' AND trigger_id IS NOT NULL) "
+            "OR (binding_kind = 'action_pipeline' AND trigger_id IS NULL)",
+            name="ck_system_map_attribution_bindings_trigger_semantics",
+        ),
+        UniqueConstraint("id", "organisation_id", name="uq_system_map_attribution_bindings_id_organisation_id"),
+        Index(
+            "uq_attr_binding_trigger_per_pipeline_node",
+            "organisation_id",
+            "pipeline_id",
+            "node_key",
+            unique=True,
+            postgresql_where=text("binding_kind = 'trigger' AND deleted_at IS NULL"),
+            sqlite_where=text("binding_kind = 'trigger' AND deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_attr_binding_action_per_pipeline_node",
+            "organisation_id",
+            "pipeline_id",
+            "node_key",
+            unique=True,
+            postgresql_where=text("binding_kind = 'action_pipeline' AND deleted_at IS NULL"),
+            sqlite_where=text("binding_kind = 'action_pipeline' AND deleted_at IS NULL"),
+        ),
+        ForeignKeyConstraint(
+            ["system_map_id", "organisation_id"],
+            ["system_maps.id", "system_maps.organisation_id"],
+            ondelete=_ONDELETE_CASCADE,
+            name="fk_system_map_attribution_bindings_map_org",
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
@@ -290,9 +328,7 @@ class SystemMapAttributionBinding(SoftDeleteMixin, OrgScoped):
     trigger_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("triggers.id", ondelete=_ONDELETE_CASCADE), index=True
     )
-    system_map_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("system_maps.id", ondelete=_ONDELETE_CASCADE), nullable=False, index=True
-    )
+    system_map_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     node_key: Mapped[str] = mapped_column(String(100), nullable=False)
     binding_kind: Mapped[str] = mapped_column(String(30), nullable=False)
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(
@@ -309,14 +345,16 @@ class SystemMapLoopAdmissionAttempt(SoftDeleteMixin, OrgScoped):
     __table_args__ = (
         CheckConstraint(f"status IN ({_admission_status_sql})", name="ck_loop_admission_attempts_status"),
         UniqueConstraint("loop_config_id", "idempotency_key", name="uq_loop_admission_attempts_config_key"),
+        UniqueConstraint("id", "organisation_id", name="uq_system_map_loop_admission_attempts_id_organisation_id"),
+        ForeignKeyConstraint(
+            ["loop_config_id", "organisation_id"],
+            ["system_map_loop_configs.id", "system_map_loop_configs.organisation_id"],
+            ondelete=_ONDELETE_CASCADE,
+            name="fk_system_map_loop_admission_attempts_config_org",
+        ),
     )
 
-    loop_config_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(),
-        ForeignKey("system_map_loop_configs.id", ondelete=_ONDELETE_CASCADE),
-        nullable=False,
-        index=True,
-    )
+    loop_config_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(
@@ -331,14 +369,16 @@ class SystemMapLoopReservation(SoftDeleteMixin, OrgScoped):
     __table_args__ = (
         CheckConstraint(f"status IN ({_reservation_status_sql})", name="ck_loop_reservations_status"),
         UniqueConstraint("loop_config_id", "idempotency_key", name="uq_loop_reservations_config_key"),
+        UniqueConstraint("id", "organisation_id", name="uq_system_map_loop_reservations_id_organisation_id"),
+        ForeignKeyConstraint(
+            ["loop_config_id", "organisation_id"],
+            ["system_map_loop_configs.id", "system_map_loop_configs.organisation_id"],
+            ondelete=_ONDELETE_CASCADE,
+            name="fk_system_map_loop_reservations_config_org",
+        ),
     )
 
-    loop_config_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(),
-        ForeignKey("system_map_loop_configs.id", ondelete=_ONDELETE_CASCADE),
-        nullable=False,
-        index=True,
-    )
+    loop_config_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     run_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     reserved_at: Mapped[datetime] = mapped_column(

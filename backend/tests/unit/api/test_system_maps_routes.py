@@ -812,7 +812,12 @@ def test_create_revision_returns_201(client: tuple[TestClient, _Harness]) -> Non
                 "eval_id": None,
                 "position_x": "1.50",
                 "position_y": "2.25",
-            }
+            },
+            {
+                "node_key": "loop-1",
+                "node_type": "improvement_loop",
+                "display_name": "Loop 1",
+            },
         ],
         "relationships": [],
         "loop_configs": [
@@ -869,6 +874,89 @@ def test_create_revision_rejects_invalid_bindings(client: tuple[TestClient, _Har
     assert response.status_code == 422
     assert "Invalid System Map binding" in response.json()["detail"]
     harness.repository.create_revision.assert_not_called()
+
+
+def test_create_revision_rejects_dangling_relationship_endpoint(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+
+    response = http.post(
+        f"{_BASE}/{_MAP_ID}/revisions",
+        json={
+            "nodes": [{"node_key": "node-1", "node_type": "pipeline", "display_name": "Node 1"}],
+            "relationships": [
+                {
+                    "source_node_key": "node-1",
+                    "target_node_key": "missing",
+                    "relationship_type": "flow",
+                }
+            ],
+            "loop_configs": [],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "missing" in response.json()["detail"]
+    harness.repository.create_revision.assert_not_called()
+
+
+def test_create_revision_rejects_loop_config_for_non_loop_node(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+
+    response = http.post(
+        f"{_BASE}/{_MAP_ID}/revisions",
+        json={
+            "nodes": [{"node_key": "node-1", "node_type": "pipeline", "display_name": "Node 1"}],
+            "relationships": [],
+            "loop_configs": [
+                {
+                    "node_key": "node-1",
+                    "target_signal": "error_rate",
+                    "observation_window_seconds": 300,
+                    "action_pipeline_id": str(uuid.uuid4()),
+                    "budget_limit_usd": "10.00",
+                    "cooldown_seconds": 60,
+                    "outcome_metric": "success_rate",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "improvement_loop" in response.json()["detail"]
+    harness.repository.create_revision.assert_not_called()
+
+
+def test_create_attribution_binding_requires_trigger_id(client: tuple[TestClient, _Harness]) -> None:
+    http, _harness = client
+
+    response = http.post(
+        f"{_BASE}/{_MAP_ID}/attribution-bindings",
+        json={"pipeline_id": str(uuid.uuid4()), "node_key": "node-1", "binding_kind": "trigger"},
+    )
+
+    assert response.status_code == 422
+    assert "trigger_id" in response.json()["detail"]
+
+
+def test_create_attribution_binding_rejects_trigger_id_for_action_pipeline(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, _harness = client
+
+    response = http.post(
+        f"{_BASE}/{_MAP_ID}/attribution-bindings",
+        json={
+            "pipeline_id": str(uuid.uuid4()),
+            "trigger_id": str(uuid.uuid4()),
+            "node_key": "node-1",
+            "binding_kind": "action_pipeline",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "cannot include trigger_id" in response.json()["detail"]
 
 
 def test_create_revision_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
@@ -1112,6 +1200,7 @@ def test_create_attribution_binding_returns_201(client: tuple[TestClient, _Harne
 
     payload = {
         "pipeline_id": str(uuid.uuid4()),
+        "trigger_id": str(uuid.uuid4()),
         "node_key": "node-1",
         "binding_kind": "trigger",
     }
@@ -1129,6 +1218,7 @@ def test_create_attribution_binding_missing_map_returns_404(client: tuple[TestCl
 
     payload = {
         "pipeline_id": str(uuid.uuid4()),
+        "trigger_id": str(uuid.uuid4()),
         "node_key": "node-1",
         "binding_kind": "trigger",
     }
@@ -1146,6 +1236,7 @@ def test_create_attribution_binding_invalid_pipeline_returns_404(client: tuple[T
 
     payload = {
         "pipeline_id": str(uuid.uuid4()),
+        "trigger_id": str(uuid.uuid4()),
         "node_key": "node-1",
         "binding_kind": "trigger",
     }
@@ -1231,7 +1322,12 @@ _ENDPOINT_PAYLOADS = {
     "create_binding": (
         "POST",
         f"{_BASE}/{_MAP_ID}/attribution-bindings",
-        {"pipeline_id": str(uuid.uuid4()), "node_key": "n1", "binding_kind": "trigger"},
+        {
+            "pipeline_id": str(uuid.uuid4()),
+            "trigger_id": str(uuid.uuid4()),
+            "node_key": "n1",
+            "binding_kind": "trigger",
+        },
         "get_map_by_id",
     ),
     "list_bindings": ("GET", f"{_BASE}/{_MAP_ID}/attribution-bindings", None, "get_map_by_id"),
@@ -1317,10 +1413,10 @@ def test_system_map_create_schema_rejects_invalid_node_type() -> None:
 
 
 def test_system_map_revision_create_schema_validates_loop_config() -> None:
-    from modulo.api.schemas.system_maps import SystemMapLoopConfigCreate, SystemMapRevisionCreate
+    from modulo.api.schemas.system_maps import SystemMapLoopConfigCreate, SystemMapNodeCreate, SystemMapRevisionCreate
 
     rev = SystemMapRevisionCreate(
-        nodes=[],
+        nodes=[SystemMapNodeCreate(node_key="loop-1", node_type="improvement_loop", display_name="Loop 1")],
         relationships=[],
         loop_configs=[
             SystemMapLoopConfigCreate(

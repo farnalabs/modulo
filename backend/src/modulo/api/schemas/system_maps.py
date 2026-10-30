@@ -9,7 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ─── Centralised vocabularies (mirror ORM CHECK constraints) ───
 
@@ -58,6 +58,42 @@ class SystemMapRevisionCreate(BaseModel):
     loop_configs: list["SystemMapLoopConfigCreate"] = Field(default_factory=list)
     notes: str = Field(default="", max_length=4000)
 
+    @model_validator(mode="after")
+    def validate_graph_references(self) -> "SystemMapRevisionCreate":
+        node_keys = [node.node_key for node in self.nodes]
+        node_key_set = set(node_keys)
+        if len(node_keys) != len(node_key_set):
+            raise ValueError("node_key values must be unique within a revision")
+        relationship_keys = {
+            (rel.source_node_key, rel.target_node_key, rel.relationship_type) for rel in self.relationships
+        }
+        if len(relationship_keys) != len(self.relationships):
+            raise ValueError("relationships must be unique within a revision")
+        missing_relationship_nodes = sorted(
+            {
+                key
+                for rel in self.relationships
+                for key in (rel.source_node_key, rel.target_node_key)
+                if key not in node_key_set
+            }
+        )
+        if missing_relationship_nodes:
+            raise ValueError(f"relationships reference missing nodes: {', '.join(missing_relationship_nodes)}")
+        loop_keys = [loop.node_key for loop in self.loop_configs]
+        if len(loop_keys) != len(set(loop_keys)):
+            raise ValueError("loop_configs must be unique by node_key within a revision")
+        missing_loop_nodes = sorted(key for key in loop_keys if key not in node_key_set)
+        if missing_loop_nodes:
+            raise ValueError(f"loop_configs reference missing nodes: {', '.join(missing_loop_nodes)}")
+        wrong_loop_types = sorted(
+            loop.node_key
+            for loop in self.loop_configs
+            if next(node for node in self.nodes if node.node_key == loop.node_key).node_type != "improvement_loop"
+        )
+        if wrong_loop_types:
+            raise ValueError(f"loop_configs require improvement_loop nodes: {', '.join(wrong_loop_types)}")
+        return self
+
 
 class SystemMapNodeCreate(BaseModel):
     node_key: str = Field(min_length=1, max_length=100)
@@ -94,6 +130,14 @@ class AttributionBindingCreate(BaseModel):
     trigger_id: uuid.UUID | None = None
     node_key: str = Field(min_length=1, max_length=100)
     binding_kind: str = Field(pattern="|".join(VALID_BINDING_KINDS))
+
+    @model_validator(mode="after")
+    def validate_trigger_semantics(self) -> "AttributionBindingCreate":
+        if self.binding_kind == "trigger" and self.trigger_id is None:
+            raise ValueError("trigger bindings require trigger_id")
+        if self.binding_kind == "action_pipeline" and self.trigger_id is not None:
+            raise ValueError("action_pipeline bindings cannot include trigger_id")
+        return self
 
 
 # ─── Response models ───

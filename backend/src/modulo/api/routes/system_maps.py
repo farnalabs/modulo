@@ -1186,7 +1186,25 @@ async def create_attribution_binding_endpoint(
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
+            published_revision = await repository.get_published_revision(
+                session, organisation_id=principal.organisation_id, system_map_id=map_id
+            )
+            if published_revision is None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System map has no published revision")
+            node = await repository.get_node_by_key(
+                session,
+                organisation_id=principal.organisation_id,
+                revision_id=published_revision.id,
+                node_key=req.node_key,
+            )
+            if node is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"Node {req.node_key} does not exist in the published map revision",
+                )
+
             # Verify pipeline exists and is same org
+
             pipeline_stmt = select(Pipeline).where(
                 Pipeline.id == req.pipeline_id,
                 Pipeline.organisation_id == principal.organisation_id,

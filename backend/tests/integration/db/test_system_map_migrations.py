@@ -48,7 +48,7 @@ pytestmark = pytest.mark.integration
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-MIGRATION_REV = "0341_system_maps"
+MIGRATION_REV = "0342_system_maps_integrity"
 PREV_REV = "0340_drop_assistant_ui_driving_flag_row"
 
 _SYSTEM_MAP_MODELS = (
@@ -138,7 +138,7 @@ async def _table_names(engine: AsyncEngine) -> set[str]:
 
 @pytest.mark.asyncio
 async def test_migration_round_trips_against_private_database(private_db_url: str) -> None:
-    """Upgrade 0341 creates all eight tables; downgrade removes them again."""
+    """Upgrade 0342 creates all eight tables and integrity constraints; downgrade removes them again."""
     engine = create_async_engine(private_db_url, poolclass=NullPool)
     try:
         _run_alembic(private_db_url, "upgrade", PREV_REV)
@@ -149,7 +149,7 @@ async def test_migration_round_trips_against_private_database(private_db_url: st
         for table in _EXPECTED_TABLES:
             assert table in tables, f"Table {table} was not created"
 
-        _run_alembic(private_db_url, "downgrade", "-1")
+        _run_alembic(private_db_url, "downgrade", "-2")
         tables = await _table_names(engine)
         for table in _EXPECTED_TABLES:
             assert table not in tables, f"Table {table} was not dropped"
@@ -381,7 +381,7 @@ class TestSystemMapModelRoundTrip:
             pipeline_id=pipeline_id,
             system_map_id=map_obj.id,
             node_key="node_1",
-            binding_kind="trigger",
+            binding_kind="action_pipeline",
         )
         db_session.add_all([node, relationship, binding])
         await db_session.flush()
