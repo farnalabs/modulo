@@ -882,6 +882,35 @@ async def test_handle_webhook_success_with_hmac() -> None:
     assert run is run_mock
 
 
+async def test_handle_webhook_github_signature_verified_skips_modulo_checks() -> None:
+    """FAR-2241: a delivery the route already authenticated via
+    ``X-Hub-Signature-256`` carries no Modulo timestamp/HMAC, so the engine must
+    skip those checks (rather than reject a missing timestamp) and still fire."""
+    trigger = _make_trigger(hmac_secret="test-secret")
+    session = _make_session(trigger=trigger, active_run_count=0)
+
+    run_mock = MagicMock()
+    run_mock.id = uuid.uuid4()
+
+    with (
+        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
+        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+    ):
+        run, _, _ = await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=None,
+            modulo_timestamp=None,
+            snapshot_id=_SNAP,
+            github_signature_verified=True,
+        )
+
+    assert run is run_mock
+
+
 async def test_handle_webhook_verifies_hmac_after_secret_resync() -> None:
     """After a webhook secret is re-synced, HMAC verification must use the
     CURRENT secret: a signature bound to the previous secret is rejected while

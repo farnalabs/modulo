@@ -5,6 +5,9 @@ URL: POST /api/v1/triggers/{trigger_id}/webhook
 
 Auth: HMAC-SHA256 via X-Modulo-Webhook-Secret header (configured per trigger).
       X-Modulo-Timestamp header is required; validated within ±300s window.
+      Alternatively (FAR-2241), with no Modulo header present, GitHub's
+      X-Hub-Signature-256 (sha256=<hmac of raw body>) is accepted; no timestamp,
+      so no replay window beyond payload dedup. Modulo headers always win.
       Triggers with no hmac_secret accept unauthenticated requests.
 
 All delivery attempts are logged as TriggerEvent rows regardless of outcome.
@@ -83,6 +86,7 @@ from modulo.core.trigger_engine import (  # noqa: F401
     _verify_hmac,
     _verify_timestamp,
     sha256_hex,
+    verify_github_signature,
     verify_hmac,
     verify_timestamp,
 )
@@ -213,8 +217,16 @@ async def _verify_webhook_auth(
     raw_body: bytes,
     hmac_signature: str | None,
     modulo_timestamp: str,
-) -> None:
+    github_signature: str | None = None,
+) -> bool:
     """Route-level timestamp + HMAC validation for an incoming webhook.
+
+    FAR-2241: ``github_signature`` is the ``X-Hub-Signature-256`` header value,
+    passed ONLY when the request carries no Modulo header (the caller decides;
+    the Modulo path always wins). It is verified over the exact raw body with
+    the trigger's ``hmac_secret``; there is no timestamp, so no replay window
+    (payload dedup still applies downstream). Returns True when the delivery
+    authenticated via the GitHub scheme, so the engine skips its Modulo checks.
 
     Belt-and-braces ahead of the engine's own check. Only triggers configured
     with an ``hmac_secret`` are validated here — HMAC-less triggers accept
@@ -265,6 +277,11 @@ async def _verify_webhook_auth(
             # verify the sender's signature against the ciphertext blob.
             _log.exception("webhooks.hmac_secret_undecryptable trigger=%s", trigger_id)
             raise
+    if hmac_secret is not None and github_signature is not None:
+        if not verify_github_signature(raw_body, hmac_secret, github_signature):
+            raise HmacValidationError
+        bind_audit_actor_source(request, "signature_verified")
+        return True
     if hmac_secret is not None:
         ts = verify_timestamp(modulo_timestamp)
         if not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
@@ -279,6 +296,7 @@ async def _verify_webhook_auth(
             trigger_id,
             org_id,
         )
+    return False
 
 
 # FAR-1863: the refused-delivery outcome recorded when a webhook delivery hits
@@ -828,6 +846,7 @@ async def _receive_webhook_intake(
     hmac_signature: str | None,
     modulo_timestamp: str,
     state: _WebhookState,
+    github_signature: str | None = None,
 ) -> None:
     """The receive route's in-transaction intake (bootstrap → auth → engine)."""
     # Bootstrap via the shared system-session helper (FAR-523): the trigger
@@ -851,7 +870,7 @@ async def _receive_webhook_intake(
     # the same typed errors). Ordered after the bootstrap and BEFORE the
     # snapshot/dedup work so an unauthenticated delivery never touches
     # pipeline_snapshots or webhook_dedup_hashes.
-    await _verify_webhook_auth(
+    github_verified = await _verify_webhook_auth(
         request=request,
         trigger_id=trigger_id,
         trigger=trigger,
@@ -860,6 +879,7 @@ async def _receive_webhook_intake(
         raw_body=raw_body,
         hmac_signature=hmac_signature,
         modulo_timestamp=modulo_timestamp,
+        github_signature=github_signature,
     )
 
     try:
@@ -888,6 +908,7 @@ async def _receive_webhook_intake(
             hmac_signature=hmac_signature,
             modulo_timestamp=modulo_timestamp,
             snapshot_id=snapshot.id,
+            github_signature_verified=github_verified,
         )
     except TriggersPausedError:
         # Safe event write: an orphan trigger whose org row was HARD-deleted
@@ -1444,6 +1465,10 @@ async def receive_webhook(
 
     Requires X-Modulo-Timestamp header (Unix seconds, ±300s window).
     Requires X-Modulo-Webhook-Secret header if trigger has hmac_secret configured.
+    Alternatively, when no Modulo header is sent, GitHub's ``X-Hub-Signature-256``
+    (``sha256=`` HMAC-SHA256 of the raw body keyed by the trigger's hmac_secret) is
+    accepted. That scheme carries no timestamp, so it has no replay window; payload
+    dedup bounds replays. If any Modulo header is present, the Modulo scheme is used.
 
     ADR 047 exempt-channel: this route is CSRF-exempt via the audited
     ``/api/v1/triggers/`` prefix and exempt from the org-role sweep because it
@@ -1457,6 +1482,10 @@ async def receive_webhook(
     """
     raw_body = await request.body()
     hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
+    modulo_header_present = hmac_signature is not None or request.headers.get("X-Modulo-Timestamp") is not None
+    # FAR-2241: GitHub's scheme is used only when NO Modulo header is present;
+    # if any is, the Modulo path wins and never falls back to the weaker one.
+    github_signature = None if modulo_header_present else request.headers.get("X-Hub-Signature-256")
     modulo_timestamp = request.headers.get("X-Modulo-Timestamp") or str(int(time.time()))
     raw_payload = await _parse_webhook_body(request)
     _require_system_engine(_CODE_WEBHOOKS_RECEIVE_WEBHOOK)
@@ -1475,6 +1504,7 @@ async def receive_webhook(
                 hmac_signature=hmac_signature,
                 modulo_timestamp=modulo_timestamp,
                 state=state,
+                github_signature=github_signature,
             )
     except (
         TriggerNotFoundError,
