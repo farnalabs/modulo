@@ -2631,10 +2631,7 @@ async def request_org_deletion(
     capability on ``DELETE /api/v1/admin/orgs/{org_id}``. The ``audited()``
     dependency still records each refused attempt.
     """
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail=_MSG_ACTIVE_ORG_DELETION_REFUSED,
-    )
+    _reject_active_org_deletion()
 
 
 class ConfirmDeletionRequest(BaseModel):
@@ -2664,10 +2661,7 @@ async def confirm_org_deletion(
     contract is unchanged, but no deletion is ever attempted: the only org this
     route can confirm is the active one, and that is never deletable here.
     """
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail=_MSG_ACTIVE_ORG_DELETION_REFUSED,
-    )
+    _reject_active_org_deletion()
 
 
 class CancelDeletionResponse(BaseModel):
@@ -2785,10 +2779,7 @@ async def delete_org_immediate(
     This route always targets the caller's active organisation, so even a
     system admin must use the explicit cross-organisation route instead.
     """
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail=_MSG_ACTIVE_ORG_DELETION_REFUSED,
-    )
+    _reject_active_org_deletion()
 
 
 # ── Eval Dashboard ──────────────────────────────────────────────────────
