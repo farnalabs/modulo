@@ -315,6 +315,57 @@ def test_delete_org_unexpected_error_500(api: tuple[TestClient, AsyncMock], monk
     assert resp.status_code == 500
 
 
+def test_delete_org_refuses_the_callers_own_org_409(
+    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A system admin cannot delete the organisation they are signed in to:
+    deletion must always be a cross-organisation operation."""
+    client, _ = api
+    get_organisation = AsyncMock(return_value=_org(_ORG_ID))
+    delete_organisation = AsyncMock(return_value=True)
+    monkeypatch.setattr(admin_orgs, "get_organisation", get_organisation)
+    monkeypatch.setattr(admin_orgs, "delete_organisation", delete_organisation)
+
+    resp = client.delete(f"/api/v1/admin/orgs/{_ORG_ID}")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "You cannot delete the organisation you are signed in to"
+    get_organisation.assert_not_awaited()
+    delete_organisation.assert_not_awaited()
+
+
+@pytest.mark.parametrize("reserved_org_id", [SYSTEM_ORG_ID, MODULO_REGISTRY_ORG_ID], ids=["system", "registry"])
+def test_delete_org_refuses_reserved_infrastructure_orgs_404(
+    api: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+    reserved_org_id: uuid.UUID,
+) -> None:
+    """The nil-UUID error-ingest and modulo-library registry sentinels are
+    infrastructure, not tenants: they must never be deletable."""
+    client, _ = api
+    # Sign the caller into a normal tenant so the reserved check is the guard
+    # under test (MODULO_REGISTRY_ORG_ID happens to share the fixture's default
+    # caller org id, which would otherwise hit the self-delete 409 first).
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="sysadmin",
+        organisation_id=_TARGET_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+        is_system_admin=True,
+    )
+    get_organisation = AsyncMock(return_value=_org(reserved_org_id))
+    delete_organisation = AsyncMock(return_value=True)
+    monkeypatch.setattr(admin_orgs, "get_organisation", get_organisation)
+    monkeypatch.setattr(admin_orgs, "delete_organisation", delete_organisation)
+
+    resp = client.delete(f"/api/v1/admin/orgs/{reserved_org_id}")
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Organisation not found"
+    get_organisation.assert_not_awaited()
+    delete_organisation.assert_not_awaited()
+
+
 # ── POST /{org_id}/users (extra branches) ──
 
 

@@ -991,31 +991,42 @@ def test_billing_overview_unexpected_error_503(
 
 # ── Org deletion family ──
 
+_ACTIVE_ORG_DELETION_REFUSED = (
+    "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
+)
 
-@pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_request_org_deletion_error_mapping(
+
+@pytest.mark.parametrize(("exc", "_expected"), _DB_ERROR_PARAMS)
+def test_request_org_deletion_refuses_before_any_db_access(
     api: tuple[TestClient, AsyncMock],
     monkeypatch: pytest.MonkeyPatch,
     exc: Exception,
-    expected: int,
+    _expected: int,
 ) -> None:
+    """The route is DB-free: a CRUD failure can never surface as its old 4xx/5xx."""
     client, _ = api
-    monkeypatch.setattr("modulo.db.crud.org_deletion.request_org_deletion", AsyncMock(side_effect=exc))
+    request_deletion = AsyncMock(side_effect=exc)
+    monkeypatch.setattr("modulo.db.crud.org_deletion.request_org_deletion", request_deletion)
     resp = client.post("/api/v1/admin/org/deletion-request")
-    assert resp.status_code == expected
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == _ACTIVE_ORG_DELETION_REFUSED
+    request_deletion.assert_not_awaited()
 
 
-@pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_confirm_org_deletion_error_mapping(
+@pytest.mark.parametrize(("exc", "_expected"), _DB_ERROR_PARAMS)
+def test_confirm_org_deletion_refuses_before_any_db_access(
     api: tuple[TestClient, AsyncMock],
     monkeypatch: pytest.MonkeyPatch,
     exc: Exception,
-    expected: int,
+    _expected: int,
 ) -> None:
     client, _ = api
-    monkeypatch.setattr("modulo.db.crud.org_deletion.confirm_org_deletion", AsyncMock(side_effect=exc))
+    confirm_deletion = AsyncMock(side_effect=exc)
+    monkeypatch.setattr("modulo.db.crud.org_deletion.confirm_org_deletion", confirm_deletion)
     resp = client.post("/api/v1/admin/org/deletion-confirm", json={"token": "tok"})
-    assert resp.status_code == expected
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == _ACTIVE_ORG_DELETION_REFUSED
+    confirm_deletion.assert_not_awaited()
 
 
 def test_cancel_org_deletion_success(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1070,35 +1081,16 @@ def test_export_org_data_error_mapping(
     assert resp.status_code == expected
 
 
-def test_delete_org_immediate_success(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_delete_org_immediate_is_forbidden(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
-    monkeypatch.setattr(
-        "modulo.db.crud.org_deletion.request_org_deletion",
-        AsyncMock(return_value={"token": "tok", "export": {}}),
-    )
-    monkeypatch.setattr(
-        "modulo.db.crud.org_deletion.confirm_org_deletion",
-        AsyncMock(return_value={"deleted_organisation_id": str(_ORG_ID), "hard_deleted_runs": 2}),
-    )
-    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", AsyncMock())
-    resp = client.delete("/api/v1/admin/org")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["deleted_organisation_id"] == str(_ORG_ID)
-    assert data["hard_deleted_runs"] == 2
+    request_deletion = AsyncMock()
+    monkeypatch.setattr("modulo.db.crud.org_deletion.request_org_deletion", request_deletion)
 
-
-@pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_delete_org_immediate_error_mapping(
-    api: tuple[TestClient, AsyncMock],
-    monkeypatch: pytest.MonkeyPatch,
-    exc: Exception,
-    expected: int,
-) -> None:
-    client, _ = api
-    monkeypatch.setattr("modulo.db.crud.org_deletion.request_org_deletion", AsyncMock(side_effect=exc))
     resp = client.delete("/api/v1/admin/org")
-    assert resp.status_code == expected
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == _ACTIVE_ORG_DELETION_REFUSED
+    request_deletion.assert_not_awaited()
 
 
 # ── Eval dashboard / regressions / OKR ──

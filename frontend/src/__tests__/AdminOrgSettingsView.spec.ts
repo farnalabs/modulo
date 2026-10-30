@@ -106,23 +106,10 @@ vi.mock('../lib/api/client', () => ({
     POST: vi.fn(),
     PUT: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
     PATCH: vi.fn(),
-    DELETE: vi.fn().mockResolvedValue({
-      data: { message: 'Organisation has been permanently deleted.', deleted_organisation_id: '00000000-0000-0000-0000-000000000001', hard_deleted_runs: 0 },
-      error: undefined,
-    }),
+    DELETE: vi.fn(),
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
-
-const mockPush = vi.fn()
-vi.mock('vue-router', async () => {
-  const actual = await vi.importActual('vue-router')
-  return {
-    ...actual as any,
-    useRouter: () => ({ push: mockPush }),
-    useRoute: () => ({ path: '/admin/org' }),
-  }
-})
 
 import AdminOrgSettingsView from '../views/AdminOrgSettingsView.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -145,7 +132,7 @@ async function mountView() {
 describe('AdminOrgSettingsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockPush.mockClear()
+
     communityState.enabled = true
     communityState.error = undefined
     communityState.reject = false
@@ -191,9 +178,6 @@ describe('AdminOrgSettingsView', () => {
     return wrapper
   }
 
-  // The delete FormDialog is a PrimeVue Dialog, teleported to document.body,
-  // so its confirm button has to be queried from the document rather than the
-  // wrapper. attachTo keeps the trigger inside the live DOM tree.
   async function mountAttachedView() {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -205,21 +189,6 @@ describe('AdminOrgSettingsView', () => {
     })
     await flushPromises()
     return wrapper
-  }
-
-  async function openDeleteDialog(wrapper: Awaited<ReturnType<typeof mountAttachedView>>) {
-    await wrapper.find('[data-testid="org-delete-open"]').trigger('click')
-    await nextTick()
-    const input = document.querySelector('input[data-testid="org-delete-confirm-input"]') as HTMLInputElement
-    expect(input).not.toBeNull()
-    input.value = 'Test Org'
-    input.dispatchEvent(new Event('input'))
-    await nextTick()
-    const confirmBtn = Array.from(document.querySelectorAll('button')).find(
-      button => button.textContent?.includes('Permanently Delete'),
-    ) as HTMLButtonElement
-    expect(confirmBtn).toBeTruthy()
-    return confirmBtn
   }
 
   function windowPutBodies(): unknown[] {
@@ -389,7 +358,6 @@ describe('AdminOrgSettingsView', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="org-hitl-review-window-error"]').text()).toContain('window rejected')
-    expect(mockPush).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -438,7 +406,7 @@ describe('AdminOrgSettingsView', () => {
     // moved out, the rest of the page did not.
     const disabled = wrapper.find('[data-testid="feature-gate-disabled"]')
     expect(disabled.find('[data-testid="community-objects-toggle"]').exists()).toBe(true)
-    expect(disabled.text()).toContain('Delete Organisation')
+    expect(disabled.text()).not.toContain('Delete Organisation')
 
     // Interactive end to end: type, save, and the API is called with the
     // converted seconds payload.
@@ -494,7 +462,6 @@ describe('AdminOrgSettingsView', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="org-hitl-review-window-error"]').text()).toContain('network down')
-    expect(mockPush).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -669,10 +636,10 @@ describe('AdminOrgSettingsView', () => {
     wrapper.unmount()
   })
 
-  it('renders the delete organisation section', async () => {
+  it('does not render an organisation delete action', async () => {
     const wrapper = await mountView()
-    expect(wrapper.text()).toContain('Delete Organisation')
-    expect(wrapper.text()).toContain('Permanently delete')
+    expect(wrapper.find('[data-testid="org-delete-open"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Permanently Delete')
   })
 
   it('shows org ID in the info section', async () => {
@@ -699,82 +666,10 @@ describe('AdminOrgSettingsView', () => {
     wrapper.unmount()
   })
 
-  it('enables delete confirm button when correct org name is typed', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    const store = usePlanStore()
-    store.$patch({ features: { team_rbac: true }, currentTier: 'team' })
-    const wrapper = mount(AdminOrgSettingsView, {
-      global: { plugins: [pinia], stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
-      attachTo: document.body,
-    })
-    for (let i = 0; i < 10; i++) {
-      await nextTick()
-    }
-
-    const deleteBtn = wrapper.findAll('button').filter(b => b.text().includes('Delete Organisation'))
-    expect(deleteBtn.length).toBeGreaterThan(0)
-    await deleteBtn[0].trigger('click')
-    await nextTick()
-
-    const input = document.querySelector('input[data-testid="org-delete-confirm-input"]') as HTMLInputElement
-    expect(input).not.toBeNull()
-
-    input.value = 'Wrong Name'
-    input.dispatchEvent(new Event('input'))
-    await nextTick()
-
-    const confirmBtn = Array.from(document.querySelectorAll('button')).find(button => button.textContent?.includes('Permanently Delete')) as HTMLButtonElement
-    expect(confirmBtn.disabled).toBe(true)
-
-    input.value = 'Test Org'
-    input.dispatchEvent(new Event('input'))
-    await nextTick()
-
-    expect(confirmBtn.disabled).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('deletes the organisation and redirects to the login page', async () => {
+  it('does not expose the removed delete confirmation flow', async () => {
     const wrapper = await mountAttachedView()
-    const confirmBtn = await openDeleteDialog(wrapper)
-    confirmBtn.click()
-    await flushPromises()
-
-    expect(api.DELETE).toHaveBeenCalledWith('/api/v1/admin/org')
-    expect(mockPush).toHaveBeenCalledWith('/login')
-
-    wrapper.unmount()
-    document.body.innerHTML = ''
-  })
-
-  it('reports a delete failure carried in the response without redirecting', async () => {
-    vi.mocked(api.DELETE).mockResolvedValueOnce({
-      data: undefined,
-      error: { detail: 'org is locked' },
-    } as any)
-    const wrapper = await mountAttachedView()
-    const confirmBtn = await openDeleteDialog(wrapper)
-    confirmBtn.click()
-    await flushPromises()
-
-    expect(document.body.textContent).toContain('Failed to delete org: org is locked')
-    expect(mockPush).not.toHaveBeenCalled()
-
-    wrapper.unmount()
-    document.body.innerHTML = ''
-  })
-
-  it('reports a delete failure that throws without redirecting', async () => {
-    vi.mocked(api.DELETE).mockRejectedValueOnce(new Error('network down'))
-    const wrapper = await mountAttachedView()
-    const confirmBtn = await openDeleteDialog(wrapper)
-    confirmBtn.click()
-    await flushPromises()
-
-    expect(document.body.textContent).toContain('Failed to delete org: network down')
-    expect(mockPush).not.toHaveBeenCalled()
-
+    expect(wrapper.find('[data-testid="org-delete-confirm-input"]').exists()).toBe(false)
+    expect(api.DELETE).not.toHaveBeenCalled()
     wrapper.unmount()
     document.body.innerHTML = ''
   })

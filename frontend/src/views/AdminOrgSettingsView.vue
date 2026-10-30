@@ -278,57 +278,8 @@
         </div>
         <div v-if="communityObjectsError" class="mt-2 text-xs text-destructive">{{ communityObjectsError }}</div>
       </SectionCard>
-
-      <!-- Delete Organization -->
-      <SectionCard
-        :title="$t('views.AdminOrgSettingsView.delete_org')"
-        :description="$t('views.AdminOrgSettingsView.delete_org_description')"
-        class="border-destructive/30"
-        title-class="text-destructive"
-        description-class="text-destructive-text"
-      >
-        <Button
-          type="button"
-          severity="danger"
-          class="h-8 px-2.5"
-          data-testid="org-delete-open"
-          @click="deleteDialogOpen = true"
-        >
-          {{ $t('views.AdminOrgSettingsView.delete_org') }}
-        </Button>
-      </SectionCard>
       </div>
     </template>
-
-    <FormDialog
-      :open="deleteDialogOpen"
-      @update:open="deleteDialogOpen = false"
-      :title="$t('views.AdminOrgSettingsView.delete_org')"
-      :description="$t('views.AdminOrgSettingsView.delete_org_description')"
-      :confirmText="$t('views.AdminOrgSettingsView.permanently_delete')"
-      :confirmDisabled="confirmName !== orgInfo.name || deleting"
-      :loading="deleting"
-      @confirm="confirmDelete"
-    >
-      <p class="text-sm text-muted-foreground">
-        {{ $t('views.AdminOrgSettingsView.delete_confirm_body', { name: orgInfo.name }) }}
-        <br /><br />
-        <span class="font-semibold text-destructive">{{ $t('views.AdminOrgSettingsView.this_action_cannot_be_undone') }}</span>
-      </p>
-      <div class="space-y-3">
-        <label for="org-delete-confirm-input" class="text-sm text-muted-foreground">
-          {{ $t('views.AdminOrgSettingsView.delete_confirm_label', { name: orgInfo.name }) }}
-        </label>
-        <input
-          id="org-delete-confirm-input"
-          v-model="confirmName"
-          :placeholder="orgInfo.name"
-          class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-destructive/50"
-          data-testid="org-delete-confirm-input"
-        />
-        <p v-if="deleteError" class="text-sm text-destructive">{{ deleteError }}</p>
-      </div>
-    </FormDialog>
     </FeatureGate>
   </div>
 </template>
@@ -337,14 +288,12 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
 import { ref, computed, reactive } from 'vue'
-import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import FormDialog from '../components/shared/FormDialog.vue'
 import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
 import ProductAnalyticsSettings from '../components/product-analytics/ProductAnalyticsSettings.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -354,7 +303,6 @@ import { formatApiError } from '../lib/api/formatError'
 import { formatDateShort, formatDateFilename } from '../lib/formatDate'
 
 const planStore = usePlanStore()
-const router = useRouter()
 const { t } = useI18n()
 
 const { data: orgData, loading, error: loadError, load: loadData } = useDataFetch(
@@ -407,11 +355,6 @@ const exportData = reactive({
   exportedAt: '',
 })
 const exportError = ref<string | null>(null)
-
-const deleteDialogOpen = ref(false)
-const confirmName = ref('')
-const deleting = ref(false)
-const deleteError = ref<string | null>(null)
 
 const communityObjectsEnabled = ref(true)
 const communityObjectsSaving = ref(false)
@@ -692,29 +635,6 @@ function resetExport() {
   exportStatus.value = 'idle'
   exportData.raw = null
   exportData.exportedAt = ''
-}
-
-async function confirmDelete() {
-  if (confirmName.value !== orgInfo.value.name) return
-  deleting.value = true
-  deleteError.value = null
-  try {
-    const resp = await api.DELETE('/api/v1/admin/org')
-    if (resp.error) {
-      deleteError.value = t('views.AdminOrgSettingsView.delete_failed', {
-        error: formatApiError(resp.error),
-      })
-      deleting.value = false
-      return
-    }
-    deleteDialogOpen.value = false
-    router.push('/login')
-  } catch (e: unknown) {
-    deleteError.value = t('views.AdminOrgSettingsView.delete_failed', {
-      error: formatApiError(e),
-    })
-    deleting.value = false
-  }
 }
 
 planStore.fetchPlan()

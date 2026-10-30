@@ -24,7 +24,6 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _NOW = datetime(2025, 6, 1, tzinfo=UTC)
 _TOKEN = "test-deletion-token-1234567890abcdef"
-_TOKEN_EXPIRES = "2025-06-02T00:00:00+00:00"
 _EXPORT = {
     "organisation": [
         {
@@ -45,6 +44,9 @@ _EXPORT = {
     "exported_at": "2025-06-01T12:00:00+00:00",
 }
 _OTHER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000099")
+_ACTIVE_ORG_DELETION_REFUSED = (
+    "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
+)
 
 
 def _make_settings() -> Settings:
@@ -615,27 +617,22 @@ class TestUpdateUserDeactivationRevocation:
 class TestDeletionRequest:
     URL = "/api/v1/admin/org/deletion-request"
 
-    def test_admin_requests_deletion_returns_202(self, client: TestClient) -> None:
-        crud_result = {
-            "token": _TOKEN,
-            "token_expires_at": _TOKEN_EXPIRES,
-            "export": _EXPORT,
-        }
-        with (
-            patch(
-                "modulo.db.crud.org_deletion.request_org_deletion",
-                return_value=crud_result,
-            ),
-            patch("modulo.core.audit_logger.append_audit_event"),
-            patch("modulo.api.routes.admin.set_rls_org"),
-        ):
-            resp = client.post(self.URL)
-        assert resp.status_code == 202
-        data = resp.json()
-        assert data["token"] == _TOKEN
-        assert data["token_expires_at"] == _TOKEN_EXPIRES
-        assert data["export_summary"]["organisation"] == "Test Org"
-        assert data["export_summary"]["user_count"] == 1
+    def test_admin_requests_deletion_is_refused_403(self, client: TestClient) -> None:
+        resp = client.post(self.URL)
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _ACTIVE_ORG_DELETION_REFUSED
+
+    def test_system_admin_requests_deletion_is_refused_403(self, client: TestClient) -> None:
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="sysadmin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        resp = client.post(self.URL)
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _ACTIVE_ORG_DELETION_REFUSED
 
     def test_operator_returns_403(self, operator_client: TestClient) -> None:
         resp = operator_client.post(self.URL)
@@ -645,52 +642,39 @@ class TestDeletionRequest:
         resp = unauth_client.post(self.URL)
         assert resp.status_code in (401, 403)
 
-    def test_already_deleted_returns_409(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.org_deletion.request_org_deletion",
-                side_effect=ValueError("Organisation is already deleted"),
-            ),
-            patch("modulo.core.audit_logger.append_audit_event"),
-            patch("modulo.api.routes.admin.set_rls_org"),
-        ):
+    def test_refused_request_never_reaches_deletion_crud(self, client: TestClient) -> None:
+        """The former 409 paths (already deleted / not found) are unreachable:
+        the refusal fires before any CRUD call, so a raising CRUD cannot leak
+        through as a 409."""
+        with patch(
+            "modulo.db.crud.org_deletion.request_org_deletion",
+            new_callable=AsyncMock,
+            side_effect=ValueError("Organisation is already deleted"),
+        ) as request_deletion:
             resp = client.post(self.URL)
-        assert resp.status_code == 409
-
-    def test_org_not_found_returns_409(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.org_deletion.request_org_deletion",
-                side_effect=ValueError("Organisation not found"),
-            ),
-            patch("modulo.core.audit_logger.append_audit_event"),
-            patch("modulo.api.routes.admin.set_rls_org"),
-        ):
-            resp = client.post(self.URL)
-        assert resp.status_code == 409
+        assert resp.status_code == 403
+        request_deletion.assert_not_awaited()
 
 
 class TestDeletionConfirm:
     URL = "/api/v1/admin/org/deletion-confirm"
 
-    def test_admin_confirms_deletion_returns_200(self, client: TestClient) -> None:
-        crud_result = {
-            "deleted_organisation_id": str(_ORG_ID),
-            "hard_deleted_runs": 5,
-        }
-        with (
-            patch(
-                "modulo.db.crud.org_deletion.confirm_org_deletion",
-                return_value=crud_result,
-            ),
-            patch("modulo.api.routes.admin.set_rls_org"),
-        ):
-            resp = client.post(self.URL, json={"token": _TOKEN})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["deleted_organisation_id"] == str(_ORG_ID)
-        assert data["hard_deleted_runs"] == 5
-        assert "permanently deleted" in data["message"]
+    def test_admin_confirms_deletion_is_refused_403(self, client: TestClient) -> None:
+        resp = client.post(self.URL, json={"token": _TOKEN})
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _ACTIVE_ORG_DELETION_REFUSED
+
+    def test_system_admin_confirms_deletion_is_refused_403(self, client: TestClient) -> None:
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="sysadmin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        resp = client.post(self.URL, json={"token": _TOKEN})
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == _ACTIVE_ORG_DELETION_REFUSED
 
     def test_operator_returns_403(self, operator_client: TestClient) -> None:
         resp = operator_client.post(self.URL, json={"token": _TOKEN})
@@ -700,38 +684,37 @@ class TestDeletionConfirm:
         resp = unauth_client.post(self.URL, json={"token": _TOKEN})
         assert resp.status_code in (401, 403)
 
-    def test_invalid_token_returns_409(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.org_deletion.confirm_org_deletion",
-                side_effect=ValueError("Invalid deletion token"),
-            ),
-            patch("modulo.api.routes.admin.set_rls_org"),
-        ):
+    def test_invalid_token_never_reaches_deletion_crud(self, client: TestClient) -> None:
+        """An invalid token can no longer produce a 409: confirmation is
+        refused before the token is ever looked at."""
+        with patch(
+            "modulo.db.crud.org_deletion.confirm_org_deletion",
+            new_callable=AsyncMock,
+            side_effect=ValueError("Invalid deletion token"),
+        ) as confirm_deletion:
             resp = client.post(self.URL, json={"token": "wrong"})
-        assert resp.status_code == 409
+        assert resp.status_code == 403
+        confirm_deletion.assert_not_awaited()
 
-    def test_expired_token_returns_409(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.org_deletion.confirm_org_deletion",
-                side_effect=ValueError("Deletion token has expired"),
-            ),
-            patch("modulo.api.routes.admin.set_rls_org"),
-        ):
+    def test_expired_token_never_reaches_deletion_crud(self, client: TestClient) -> None:
+        with patch(
+            "modulo.db.crud.org_deletion.confirm_org_deletion",
+            new_callable=AsyncMock,
+            side_effect=ValueError("Deletion token has expired"),
+        ) as confirm_deletion:
             resp = client.post(self.URL, json={"token": _TOKEN})
-        assert resp.status_code == 409
+        assert resp.status_code == 403
+        confirm_deletion.assert_not_awaited()
 
-    def test_org_not_found_returns_409(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.org_deletion.confirm_org_deletion",
-                side_effect=ValueError("Organisation not found"),
-            ),
-            patch("modulo.api.routes.admin.set_rls_org"),
-        ):
+    def test_org_not_found_never_reaches_deletion_crud(self, client: TestClient) -> None:
+        with patch(
+            "modulo.db.crud.org_deletion.confirm_org_deletion",
+            new_callable=AsyncMock,
+            side_effect=ValueError("Organisation not found"),
+        ) as confirm_deletion:
             resp = client.post(self.URL, json={"token": _TOKEN})
-        assert resp.status_code == 409
+        assert resp.status_code == 403
+        confirm_deletion.assert_not_awaited()
 
 
 class TestOrgExport:
@@ -775,34 +758,24 @@ class TestOrgExport:
 class TestDeleteOrgImmediate:
     URL = "/api/v1/admin/org"
 
-    def test_admin_deletes_org_returns_200(self, client: TestClient) -> None:
-        request_result = {
-            "token": _TOKEN,
-            "token_expires_at": _TOKEN_EXPIRES,
-            "export": _EXPORT,
-        }
-        confirm_result = {
-            "deleted_organisation_id": str(_ORG_ID),
-            "hard_deleted_runs": 0,
-        }
-        with (
-            patch(
-                "modulo.db.crud.org_deletion.request_org_deletion",
-                return_value=request_result,
-            ),
-            patch(
-                "modulo.db.crud.org_deletion.confirm_org_deletion",
-                return_value=confirm_result,
-            ),
-            patch("modulo.core.audit_logger.append_audit_event"),
-            patch("modulo.api.routes.admin.set_rls_org"),
-        ):
-            resp = client.delete(self.URL)
-        assert resp.status_code == 200
+    def test_admin_deletes_org_returns_403(self, client: TestClient) -> None:
+        resp = client.delete(self.URL)
+        assert resp.status_code == 403
         data = resp.json()
-        assert data["deleted_organisation_id"] == str(_ORG_ID)
-        assert data["hard_deleted_runs"] == 0
-        assert "permanently deleted" in data["message"]
+        assert data["detail"] == _ACTIVE_ORG_DELETION_REFUSED
+
+    def test_system_admin_deletes_org_returns_403(self, client: TestClient) -> None:
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="sysadmin",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+            is_system_admin=True,
+        )
+        resp = client.delete(self.URL)
+        assert resp.status_code == 403
+        data = resp.json()
+        assert data["detail"] == _ACTIVE_ORG_DELETION_REFUSED
 
     def test_operator_returns_403(self, operator_client: TestClient) -> None:
         resp = operator_client.delete(self.URL)
@@ -811,30 +784,6 @@ class TestDeleteOrgImmediate:
     def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.delete(self.URL)
         assert resp.status_code in (401, 403)
-
-    def test_org_not_found_returns_409(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.org_deletion.request_org_deletion",
-                side_effect=ValueError("Organisation not found"),
-            ),
-            patch("modulo.core.audit_logger.append_audit_event"),
-            patch("modulo.api.routes.admin.set_rls_org"),
-        ):
-            resp = client.delete(self.URL)
-        assert resp.status_code == 409
-
-    def test_already_deleted_returns_409(self, client: TestClient) -> None:
-        with (
-            patch(
-                "modulo.db.crud.org_deletion.request_org_deletion",
-                side_effect=ValueError("Organisation is already deleted"),
-            ),
-            patch("modulo.core.audit_logger.append_audit_event"),
-            patch("modulo.api.routes.admin.set_rls_org"),
-        ):
-            resp = client.delete(self.URL)
-        assert resp.status_code == 409
 
 
 class TestAdminListTeamsOwnedResourceCount:

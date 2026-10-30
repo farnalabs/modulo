@@ -56,18 +56,27 @@ authorization cleanup.
       `admin | operator | runner | viewer`, `joined_at`, `deactivated_at`
 - [x] System-admin org CRUD (`/api/v1/admin/orgs`): create/list, create user in org,
       delete org - 403 for non-system-admins, 409 on slug collision / duplicate
-      membership, 422 on invalid slug/role/weak password, 404 when missing
+      membership, 422 on invalid slug/role/weak password, 404 when missing. Deletion
+      is cross-organisation only: the caller's own organisation is refused with 409
+      and the reserved infrastructure orgs (nil-UUID error ingest, modulo-library
+      registry) with 404, both before any delete (`api/routes/admin_orgs.py`)
 - [x] Self-service org profile (`/api/v1/admin/org`): get/update name/logo, regenerate
       API key - admin role gate → 403
-- [x] Org deletion workflow: `deletion-request` (202 + token + export bundle),
-      `deletion-confirm` (within 24h), `deletion-cancel`, `export`, immediate `DELETE` -
-      token single-use, audit event on request, terminal runs batch-deleted before FK cascade
-- [x] Org-lifecycle evidence survives the hard delete (FAR-1517): because the
-      `audit_events` chain is FK-cascaded from the org, request / confirm /
-      cancel / immediate-delete mirror their events into the org-independent
-      `system_audit_events` ledger inside the deleting transaction (plain
-      `org_id`, no FK, no RLS tenant column, append-only triggers), so a failed
-      append aborts the destructive act and the record outlives the org
+- [x] Self-service organisation deletion is refused (FAR-2225): the only
+      organisation these routes can address is the caller's active one, so
+      `POST /api/v1/admin/org/deletion-request`, `POST
+      /api/v1/admin/org/deletion-confirm` and `DELETE /api/v1/admin/org` all return
+      403 - naming the system-admin cross-organisation route in the detail - before
+      any token validation or database work. `PATCH
+      /api/v1/admin/org/deletion-cancel` (a harmless safety valve) and `GET
+      /api/v1/admin/org/export` remain functional
+- [x] Org-lifecycle evidence survives a hard delete (FAR-1517): because the
+      `audit_events` chain is FK-cascaded from the org, the writers that can still
+      delete or cancel - `PATCH /api/v1/admin/org/deletion-cancel` and the
+      system-admin `DELETE /api/v1/admin/orgs/{org_id}` - mirror their events into
+      the org-independent `system_audit_events` ledger inside the transaction
+      (plain `org_id`, no FK, no RLS tenant column, append-only triggers), so a
+      failed append aborts the destructive act and the record outlives the org
       (`core/system_audit_logger.py`,
       `tests/integration/test_system_audit_org_deletion.py`)
 - [x] RLS tenant isolation: org-scoped tables carry `organisation_id`, `SET LOCAL
@@ -88,6 +97,13 @@ authorization cleanup.
 
 ## QA History
 
+- 2026-10-29: **FAR-2225 self-deletion fix** - recorded the rule that the
+  organisation the caller is signed in to can never be deleted: the three
+  self-service delete routes refuse with 403 before any token or DB work, the
+  cross-organisation system-admin route refuses the caller's own org (409) and
+  reserved orgs (404), and only `deletion-cancel` and the cross-org delete still
+  write the FAR-1517 durable ledger. Corrected the previous "token + 202" and
+  "immediate DELETE succeeds" wording, which no longer matched the handlers.
 - 2026-10-06: **Improve Architecture product-map walk** - tracked the FAR-1517
   org-lifecycle durable audit ledger: the deletion workflow now mirrors its
   events into the org-independent `system_audit_events` table before the org
