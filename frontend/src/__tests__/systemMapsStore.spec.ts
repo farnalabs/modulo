@@ -203,6 +203,33 @@ describe('useSystemMapsStore access', () => {
     expect(store.accessLoaded).toBe(true)
   })
 
+  it('does not let a previous principal re-enable access after a token replacement', async () => {
+    configureAuthorizedAccess()
+    let resolveOldRequest: ((value: unknown) => void) | undefined
+    mockGet.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldRequest = resolve
+        }),
+    )
+    const store = useSystemMapsStore()
+
+    const oldRequest = store.fetchAccess()
+    await vi.waitFor(() => expect(mockGet).toHaveBeenCalledTimes(1))
+
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-2'))
+    mockIsOperator.value = false
+    mockPlanStore.userPermissions = []
+    await store.fetchAccess()
+
+    resolveOldRequest?.({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+    await oldRequest
+
+    expect(store.systemMapsEnabled).toBe(false)
+    expect(store.error).toBeNull()
+    expect(store.accessLoaded).toBe(true)
+  })
+
   it('resets access state when reset is called', async () => {
     configureAuthorizedAccess()
     mockGet.mockResolvedValue({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
