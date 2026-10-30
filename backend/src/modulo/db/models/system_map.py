@@ -133,6 +133,7 @@ class SystemMapRevision(SoftDeleteMixin, OrgScoped):
     __table_args__ = (
         CheckConstraint(f"status IN ({_revision_status_sql})", name="ck_system_map_revisions_status"),
         UniqueConstraint("system_map_id", "revision_number", name="uq_system_map_revisions_map_number"),
+        UniqueConstraint("id", "organisation_id", name="uq_system_map_revisions_id_organisation_id"),
     )
 
     system_map_id: Mapped[uuid.UUID] = mapped_column(

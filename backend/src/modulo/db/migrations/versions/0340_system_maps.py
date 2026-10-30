@@ -198,6 +198,7 @@ def _create_tables() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.CheckConstraint("status IN ('draft', 'published', 'archived')", name="ck_system_map_revisions_status"),
         sa.UniqueConstraint("system_map_id", "revision_number", name="uq_system_map_revisions_map_number"),
+        sa.UniqueConstraint("id", "organisation_id", name="uq_system_map_revisions_id_organisation_id"),
     )
 
     # Composite FK system_maps.published_revision_id -> system_map_revisions.
