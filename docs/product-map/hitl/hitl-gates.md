@@ -74,7 +74,8 @@ may decide.
 - [x] A run reaching a HITL review edge creates a `HitlClaim` and pauses in
       `awaiting_human`
 - [x] Pending-gate queues: `GET /api/v1/runs/{run_id}/hitl/pending` (per run)
-      and `GET /api/v1/hitl/pending` (org-wide), gated by the `hitl.list`
+      and `GET /api/v1/hitl/pending` (org-wide; viewer team-clamped, see below),
+      gated by the `hitl.list`
       permission. The org-wide queue joins `runs` and lists only undecided
       gates whose run is in `awaiting_human`, `claimed`, or `hitl_parked` status
       – undecided
@@ -83,6 +84,22 @@ may decide.
       actionable-status filter. The review UI renders a gate held by another
       session as read-only (claimed by \<user\> at \<time\>) and shows
       approve/reject only to the session holding that gate's claim token
+- [x] HITL reads are viewer-level and team-membership bounded (PR #2552):
+      `hitl.list` floors at `viewer`, but `hitl_claims` carries only the org-level
+      RLS policy, so every REST list (per-run pending, org pending, org reviews) and
+      the MCP `list_pending_hitl` / `list_hitl_reviews` / `get_hitl_review` (and the
+      `modulo://runs/{run_id}/hitl/{review_id}` resource) apply
+      `account_team_scope_clause(COALESCE(runs.owner_team_id,
+      pipelines.owner_team_id), account_id)` for a viewer. Org-level rows stay
+      visible; a team-private run's gates are visible only to a member of the owning
+      team. `GET /runs/{run_id}/hitl/pending` answers 404, never a
+      200-with-empty-gates cross-team existence oracle, for a run outside that
+      boundary, and an MCP viewer read with no resolved account fails closed
+      (`McpAuthContextError`) instead of degrading to an org-wide read
+      (`backend/src/modulo/api/routes/hitl.py`,
+      `backend/src/modulo/core/hitl_manager/__init__.py`,
+      `backend/tests/unit/api/test_hitl_routes_coverage.py`,
+      `backend/tests/unit/mcp/test_team_scope_enforcement.py`)
 - [x] Claim is atomic – `claim()` issues a short-lived (15-minute) JWT
       `claim_token` scoped to run + gate + client; expired/invalid claim
       tokens are rejected. The three claim conflicts each return 409 with a
