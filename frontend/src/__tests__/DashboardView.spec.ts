@@ -171,6 +171,51 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('Idle')
   })
 
+  it('does not fetch System Maps from a stale cached flag before the fresh plan settles', async () => {
+    localStorage.setItem(
+      'modulo_feature_flags_cache_v1:unknown',
+      JSON.stringify({ v: 1, flags: { system_maps: true } }),
+    )
+    let resolvePlan: ((value: unknown) => void) | undefined
+    const planRequest = new Promise((resolve) => { resolvePlan = resolve })
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/plan') return planRequest
+      if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+      throw new Error(`unexpected API request: ${url}`)
+    })
+
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect(mockGet).not.toHaveBeenCalledWith('/api/v1/system-maps', expect.anything())
+
+    resolvePlan?.({
+      data: { ...mockPlanData, flags: [{ name: 'system_maps', currently_active: false }] },
+      error: undefined,
+    })
+    await flushPromises()
+    expect(mockGet).not.toHaveBeenCalledWith('/api/v1/system-maps', expect.anything())
+    wrapper.unmount()
+  })
+
+  it('fetches System Maps after a fresh plan positively enables the flag', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/plan') {
+        return Promise.resolve({
+          data: { ...mockPlanData, flags: [{ name: 'system_maps', currently_active: true }] },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+      if (url === '/api/v1/system-maps') return Promise.resolve({ data: { items: [], total: 0, page: 1, page_size: 100 }, error: undefined })
+      throw new Error(`unexpected API request: ${url}`)
+    })
+
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/system-maps', expect.anything())
+    wrapper.unmount()
+  })
+
   it('renders eval pass rate card', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()

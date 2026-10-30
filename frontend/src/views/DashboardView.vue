@@ -35,7 +35,10 @@
     <!-- Full-page error -->
     <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="dashboardStore.fetchSummary" />
     <template v-else-if="summary">
-      <DashboardSystemOverview v-if="planStore.featureEnabled('system_maps')" class="mb-4" />
+      <DashboardSystemOverview
+        v-if="planStore.loaded && planStore.featureEnabled('system_maps')"
+        class="mb-4"
+      />
       <!-- Row 1: Summary stat cards -->
       <div :class="['grid gap-4 sm:grid-cols-2 lg:grid-cols-4 transition-opacity duration-200', periodRefreshing ? 'opacity-60' : 'opacity-100']">
         <StatCard :label="$t('views.DashboardView.pipelines')" :value="cardValue(summary.period?.metrics?.active_pipelines?.current, summary.active_pipelines)" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :neutral-trend="true">
@@ -504,8 +507,8 @@ onMounted(async () => {
     ...(selectedWindow.value == null ? [] : [dashboardStore.fetchTrends(selectedWindow.value)]),
     loadCurrency(),
   ];
-  if (!planStore.currentTier || planStore.currentTier === 'community') {
-    promises.push(planStore.fetchPlan());
+  if (!planStore.loaded) {
+    promises.push(planStore.fetchPlan())
   }
   await Promise.all(promises);
 })
