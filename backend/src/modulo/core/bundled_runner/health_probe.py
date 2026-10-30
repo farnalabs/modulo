@@ -44,7 +44,9 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
+from pathlib import Path
 from typing import Any, Literal
 
 from aiohttp import ClientTimeout
@@ -162,6 +164,29 @@ def _resolve_docker_host() -> str | None:
     # first (the filtered socket-proxy), then DOCKER_HOST, else None (the
     # engine's local socket).
     return os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
+
+
+#: Default local Docker socket on POSIX hosts.
+_DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
+
+
+def docker_engine_configured() -> bool:
+    """True when this deployment has a Docker engine endpoint it could reach.
+
+    FAR-2239: a deployment with no engine at all (e.g. the Fly app: no
+    ``MODULO_DOCKER_HOST``/``DOCKER_HOST`` and no local socket) is *not
+    configured* for the Bundled Runner, which is a different thing from a
+    configured engine that is failing. The Runners page uses this to show a
+    neutral "not available" state instead of a red "engine unreachable".
+
+    On Windows the default endpoint is a named pipe that cannot be checked
+    portably, so it is assumed configured (a real failure then stays loud).
+    """
+    if _resolve_docker_host():
+        return True
+    if sys.platform == "win32":
+        return True
+    return Path(_DEFAULT_DOCKER_SOCKET).exists()
 
 
 class _EngineBoundary:

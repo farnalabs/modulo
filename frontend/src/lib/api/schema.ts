@@ -20461,6 +20461,12 @@ export interface components {
              * @enum {string}
              */
             aggregate_state: "healthy" | "engine_unreachable" | "image_not_pulled" | "stale";
+            /**
+             * Engine Configured
+             * @description False when this deployment has no Docker engine endpoint at all (no ``MODULO_DOCKER_HOST``/``DOCKER_HOST`` and no local socket). The UI shows a neutral "not available" state instead of "engine unreachable" (FAR-2239); a configured-but-failing engine keeps ``True``.
+             * @default true
+             */
+            engine_configured: boolean;
             /** Probe Interval Seconds */
             probe_interval_seconds: number;
             /** Staleness Threshold Seconds */

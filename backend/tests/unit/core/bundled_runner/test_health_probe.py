@@ -22,6 +22,7 @@ from modulo.core.bundled_runner.health_probe import (
     _EngineBoundary,
     aggregate_image_presence,
     aggregate_strip_state,
+    docker_engine_configured,
     run_runner_health_probe,
     scrub_url_credentials,
     strip_state_for_row,
@@ -808,3 +809,24 @@ async def test_multiple_org_infra_errors_keep_the_first_and_count_each() -> None
     assert excinfo.value is first_error
     assert len(log_exceptions) == 2
     assert all("runner_probe.org_infra_failed" in message for message in log_exceptions)
+
+
+def test_engine_configured_when_docker_host_env_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MODULO_DOCKER_HOST", "tcp://socket-proxy:2375")
+    assert docker_engine_configured() is True
+
+
+def test_engine_not_configured_without_env_or_local_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.setattr("modulo.core.bundled_runner.health_probe.sys.platform", "linux")
+    monkeypatch.setattr("modulo.core.bundled_runner.health_probe.Path.exists", lambda _p: False)
+    assert docker_engine_configured() is False
+
+
+def test_engine_configured_when_local_socket_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MODULO_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.setattr("modulo.core.bundled_runner.health_probe.sys.platform", "linux")
+    monkeypatch.setattr("modulo.core.bundled_runner.health_probe.Path.exists", lambda _p: True)
+    assert docker_engine_configured() is True

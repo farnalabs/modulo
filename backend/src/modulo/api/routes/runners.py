@@ -48,6 +48,7 @@ from modulo.core.bundled_runner.health_probe import (
     PER_CONTAINER_MEM_MB,
     StripState,
     aggregate_strip_state,
+    docker_engine_configured,
     strip_state_for_row,
 )
 from modulo.db.crud.environment_profile import (
@@ -145,6 +146,11 @@ class ProfileHealthResponse(BaseModel):
 
 class RunnersStatusResponse(BaseModel):
     aggregate_state: StripState
+    #: False when this deployment has no Docker engine endpoint at all (no
+    #: ``MODULO_DOCKER_HOST``/``DOCKER_HOST`` and no local socket). The UI
+    #: shows a neutral "not available" state instead of "engine unreachable"
+    #: (FAR-2239); a configured-but-failing engine keeps ``True``.
+    engine_configured: bool = True
     probe_interval_seconds: int
     staleness_threshold_seconds: int
     machines: list[MachineProbeResponse] = Field(default_factory=list)
@@ -339,6 +345,7 @@ async def get_runners_status(
 
     return RunnersStatusResponse(
         aggregate_state=aggregate,
+        engine_configured=docker_engine_configured(),
         probe_interval_seconds=PROBE_INTERVAL_SECONDS,
         staleness_threshold_seconds=PROBE_STALENESS_THRESHOLD_SECONDS,
         machines=machines,

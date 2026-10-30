@@ -16,6 +16,7 @@ const status = (state: string | null, detail: string | null = 'preflight detail'
   aggregate_state: 'healthy' as const,
   probe_interval_seconds: 60,
   staleness_threshold_seconds: 300,
+  engine_configured: true,
   concurrency: {
     sandbox_concurrency_limit: null,
     is_default: true,
