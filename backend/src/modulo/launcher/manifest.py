@@ -22,20 +22,31 @@ Verification contract (locked by ``tests/unit/launcher/test_manifest.py``):
 
 **Key rotation procedure** (recorded per ADR 031 in the distribution ADR):
 the trust store has a CURRENT slot and a NEXT slot, and both populated slots
-remain accepted during the compatibility window.
+remain accepted during the compatibility window. The release workflows always
+sign with :data:`_KEY_ID_CURRENT`; they must never be changed to sign with a
+literal replacement id.
 
-1. Generate the replacement keypair offline and add its PUBLIC half to the
-   NEXT slot of both trust-store assemblies (``_TRUST_ROWS`` below and the
-   matching installer constants). Keep the old key in CURRENT.
+1. Generate the replacement keypair offline and choose a new key id. Add its
+   PUBLIC half to the NEXT slot of both trust-store assemblies (``_TRUST_ROWS``
+   below and the matching installer constants). Keep the old key in CURRENT.
 2. Ship that overlap so consumers receive the replacement public key while the
-   old CURRENT key is still accepted.
-3. After the overlap is shipped, switch release signing to the replacement key
-   (CI secret ``BUNDLE_MANIFEST_SIGNING_KEY``); releases are now signed with
-   the replacement while CURRENT still names the old key and NEXT names the
-   replacement.
-4. After the compatibility window, promote the replacement to CURRENT in both
-   trust-store assemblies and retire the old key. Do not remove the old key
-   before that window has elapsed.
+   old CURRENT key is still accepted. Do not change the signing secret yet.
+3. For the promotion release, make one coordinated change before producing any
+   artifact: move the old public key to NEXT under its old key id, move the new
+   public key to CURRENT under its new key id, update the checked-in current-key
+   id and installer trust-store values, replace the CI secret
+   ``BUNDLE_MANIFEST_SIGNING_KEY`` with the matching new private key, and update
+   the workflow's expected-key-id contract to the new current id. The checked-in
+   trust store, current id, signing secret, and workflow expectation are one
+   atomic rotation set. The first release after that change is signed through
+   ``_KEY_ID_CURRENT`` and therefore carries the new id.
+4. Verify the promotion release before publishing it. Existing releases still
+   verify through the old key in NEXT; the new release verifies through the new
+   key in CURRENT. Merely changing the secret while CURRENT remains the old key
+   is invalid: it creates a mismatched envelope and must not be used as a
+   rotation step.
+5. After the compatibility window, remove the old key from NEXT in both
+   trust-store assemblies. Do not retire it before that window has elapsed.
 
 **PROVISIONING:** the current production key is provisioned in this module;
 the reserved NEXT slot remains empty until the next rotation. The trust store
@@ -100,11 +111,16 @@ PROVISIONING_NOTE = (
     "key as {key_id: (label, ed25519 public hex)} for the current + next slots.\n"
     "  2. scripts/install.sh -> TRUST_KEY_CURRENT_B64 / TRUST_KEY_NEXT_B64: "
     "the same public keys as SPKI-DER base64.\n"
-    "For rotation, generate the replacement keypair offline, add its public "
-    "half to NEXT while the old key remains CURRENT, ship that overlap, then "
-    "release under the replacement key. After the compatibility window, promote "
-    "the replacement to CURRENT and retire the old key in both trust-store "
-    "assemblies.\n"
+    "For rotation, generate the replacement keypair offline and add its public "
+    "half to NEXT while the old key remains CURRENT; ship that overlap without "
+    "changing the secret. Before the promotion release, atomically move the old "
+    "public key to NEXT under its old id, move the replacement to CURRENT under "
+    "its new id, update the checked-in current id and installer trust values, "
+    "replace the BUNDLE_MANIFEST_SIGNING_KEY secret, and update the workflow's "
+    "expected-key-id contract. Release signing always derives its id from "
+    "_KEY_ID_CURRENT. After the compatibility window, retire the old key from "
+    "NEXT in both trust-store assemblies. Merely changing the secret while "
+    "CURRENT remains the old key creates a mismatched envelope and is invalid.\n"
     "The PRIVATE half is the CI secret BUNDLE_MANIFEST_SIGNING_KEY (ed25519 "
     "hex, repo-level Actions secret) - never committed. When the secret is "
     "absent the bundle-release workflow refuses to publish."

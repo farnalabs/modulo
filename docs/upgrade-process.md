@@ -103,12 +103,23 @@ reserved and remains empty in both trust-store assemblies:
 
 No `bundle-v*` release has been published yet, so this does not claim that a
 signed bundle is already available or that the installer is currently usable.
-When rotation begins, provision the replacement public key in the reserved
-next slot, release once while both keys are trusted, then promote it to
-current and remove the retired key after the rotation window. Keep the
-private signing key in the GitHub Actions secret only; never commit private
-key material. These are manual, keys-in-vault operations tracked as
-needs-human.
+When rotation begins, use this two-stage protocol; do not change only the
+secret. First, provision the replacement public key under a new key id in the
+reserved NEXT slot and ship that overlap while the old key remains in CURRENT.
+For the promotion release, make one coordinated change before producing any
+artifact: move the old public key to NEXT under its old id, move the replacement
+public key to CURRENT under its new id, update the checked-in trust store and
+current-key id (in both the verifier and installer), replace the
+``BUNDLE_MANIFEST_SIGNING_KEY`` GitHub Actions secret with the matching new
+private key, and update the release workflow's expected-key-id contract to the
+new current id. Release signing always derives the envelope key id from the
+checked-in CURRENT slot. Verify that promotion release before publishing it:
+old releases continue to verify via NEXT and the new release verifies via
+CURRENT. Merely changing the secret while CURRENT remains the old key creates
+a mismatched envelope and is invalid. After the compatibility window, remove
+the old key from NEXT in both trust-store assemblies. Keep private signing key
+material in the GitHub Actions secret only; never commit it. These are manual,
+keys-in-vault operations tracked as needs-human.
 
 
 ### Docker Compose

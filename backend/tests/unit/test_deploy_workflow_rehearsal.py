@@ -21,6 +21,7 @@ DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 BUNDLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "bundle-release.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 NATIVE_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml"
+MANIFEST_SOURCE = REPO_ROOT / "backend" / "src" / "modulo" / "launcher" / "manifest.py"
 
 _REHEARSAL_STEP_NAME = "Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)"
 _REAL_STEP_NAME = "Pre-deploy migrations (one-off machine)"
@@ -378,6 +379,26 @@ def test_release_sh_passes_rehearsal_env_through() -> None:
     release_sh = (REPO_ROOT / "deploy" / "fly" / "release.sh").read_text(encoding="utf-8")
     assert "unset " not in release_sh, "release.sh must not unset env vars (would strip ALEMBIC_REHEARSAL)"
     assert "alembic upgrade heads" in release_sh
+
+
+def test_release_signing_derives_key_id_from_current_slot() -> None:
+    manifest_source = MANIFEST_SOURCE.read_text(encoding="utf-8")
+    current_match = re.search(r'_KEY_ID_CURRENT = "(?P<key_id>[^"]+)"', manifest_source)
+    assert current_match is not None
+    current_key_id = current_match.group("key_id")
+
+    for workflow_path in (BUNDLE_WORKFLOW, RELEASE_WORKFLOW):
+        workflow_text = workflow_path.read_text(encoding="utf-8")
+        assert "key_id=manifest_module._KEY_ID_CURRENT" in workflow_text or "key_id=m._KEY_ID_CURRENT" in workflow_text
+    release_workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    verify_steps = release_workflow["jobs"]["publish-release"]["steps"]
+    verify_name = "Verify final manifest signature against the checked-in trust store"
+    verify_step = verify_steps[_step_names(verify_steps).index(verify_name)]
+    assert verify_step["env"]["EXPECTED_KEY_ID"] == current_key_id
+
+    assert "The release workflows always\nsign with :data:`_KEY_ID_CURRENT`" in manifest_source
+    assert "literal replacement id" in manifest_source
+    assert "Merely changing the secret while CURRENT remains the old key" in manifest_source
 
 
 def test_bundle_release_verifies_generated_signature_before_upload() -> None:
