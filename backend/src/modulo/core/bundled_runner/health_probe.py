@@ -44,9 +44,7 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 import time
-from pathlib import Path
 from typing import Any, Literal
 
 from aiohttp import ClientTimeout
@@ -166,10 +164,6 @@ def _resolve_docker_host() -> str | None:
     return os.environ.get("MODULO_DOCKER_HOST") or os.environ.get("DOCKER_HOST")
 
 
-#: Default local Docker socket on POSIX hosts.
-_DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
-
-
 def docker_engine_configured() -> bool:
     """True when this deployment has a Docker engine endpoint it could reach.
 
@@ -179,14 +173,20 @@ def docker_engine_configured() -> bool:
     configured engine that is failing. The Runners page uses this to show a
     neutral "not available" state instead of a red "engine unreachable".
 
-    On Windows the default endpoint is a named pipe that cannot be checked
-    portably, so it is assumed configured (a real failure then stays loud).
+    The answer must agree with the orphan sweep's engine-less decision, so it
+    delegates to :func:`runner_reconciler.docker_endpoint_skip_reason` rather
+    than re-implementing endpoint detection: that mirrors aiodocker's FULL host
+    resolution chain (``MODULO_DOCKER_HOST``/``DOCKER_HOST``, ``DOCKER_CONTEXT``
+    / ``~/.docker/config.json``, then the auto-detected local sockets checked
+    with ``is_socket()``). A weaker copy here would report "not configured" for
+    a deployment whose engine is reachable via a Docker context or an
+    alternative socket path, masking a healthy engine as unavailable.
     """
-    if _resolve_docker_host():
-        return True
-    if sys.platform == "win32":
-        return True
-    return Path(_DEFAULT_DOCKER_SOCKET).exists()
+    # Imported lazily to keep this module's import graph free of the
+    # reconciler's (it is only needed on the request path).
+    from modulo.core.bundled_runner.runner_reconciler import docker_endpoint_skip_reason
+
+    return docker_endpoint_skip_reason() is None
 
 
 class _EngineBoundary:
