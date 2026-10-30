@@ -865,7 +865,7 @@ class TestTriggerReadTeamVisibility:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-        assert resp.json()["items"] == [], "the trigger row must resolve (no events seeded)"
+        assert not resp.json()["items"], "the trigger row must resolve (no events seeded)"
 
     @pytest.mark.usefixtures("_add_trigger_member_to_team")
     @pytest.mark.asyncio
