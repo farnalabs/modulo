@@ -193,6 +193,22 @@ def test_release_identity_step_passes_gh_token_to_its_gh_api_calls() -> None:
     assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
 
 
+def test_release_reusable_installer_calls_declare_required_permissions() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+
+    windows = workflow["jobs"]["windows-installer"]
+    assert windows["uses"] == "./.github/workflows/windows-installer.yml"
+    assert windows["permissions"] == {
+        "contents": "write",
+        "id-token": "write",
+        "attestations": "write",
+    }
+
+    macos = workflow["jobs"]["macos-installer"]
+    assert macos["uses"] == "./.github/workflows/macos-installer.yml"
+    assert macos["permissions"] == {"contents": "read"}
+
+
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["attest-artefacts"]
