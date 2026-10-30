@@ -26,6 +26,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import grants_permit
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.audit_coverage import audited
+from modulo.core.connector_refs import connector_ref_type_id
 from modulo.core.feature_flags import get_registry
 from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
@@ -1491,7 +1492,7 @@ async def _resolve_bundle_connectors(
     connector_instance_map: dict[str, str] = {}
     for agent in bundle.get("agents", []):
         for ref in agent.get("connector_type_refs", []):
-            ctid = ref.get("connector_type_id", ref.get("type", ""))
+            ctid = connector_ref_type_id(ref)
             if ctid and ctid not in seen_connector_types:
                 seen_connector_types.add(ctid)
                 result = await resolve_connector_type(session, principal.organisation_id, ctid)
