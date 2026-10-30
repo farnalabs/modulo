@@ -358,6 +358,42 @@ def test_release_sh_passes_rehearsal_env_through() -> None:
     assert "alembic upgrade heads" in release_sh
 
 
+def test_bundle_release_verifies_generated_signature_before_upload() -> None:
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "bundle-release.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["bundle"]["steps"]
+    names = _step_names(steps)
+    sign_idx = names.index("Generate and sign the SIGNED release manifest")
+    upload_idx = names.index("Upload bundle artefacts as workflow outputs")
+    sign_step = steps[sign_idx]
+    script = sign_step["run"]
+    assert sign_idx < upload_idx
+    assert sign_step["env"]["MANIFEST_SIGNING_KEY"] == "${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}"
+    assert "verify_signature(payload, signature)" in script
+    assert "_KEY_ID_CURRENT" in script
+    assert "failed trust-store verification" in script
+    assert "private_key_hex" in script
+    assert "MANIFEST_SIGNING_KEY" not in steps[upload_idx].get("run", "")
+
+
+def test_final_release_manifest_verifies_generated_signature_before_publish() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
+    final_names = _step_names(final_steps)
+    build_idx = final_names.index("Build final signed manifest after every platform artifact")
+    script = final_steps[build_idx]["run"]
+    assert final_steps[build_idx]["env"]["MANIFEST_SIGNING_KEY"] == "${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}"
+    assert "verify_signature(payload, sig)" in script
+    assert "_KEY_ID_CURRENT" in script
+    publish_steps = workflow["jobs"]["publish-release"]["steps"]
+    publish_names = _step_names(publish_steps)
+    verify_idx = publish_names.index("Verify portable release artefacts")
+    publish_idx = publish_names.index("Create GitHub Release with assets")
+    verify_script = publish_steps[verify_idx]["run"]
+    assert verify_idx < publish_idx
+    assert "RELEASE_MANIFEST.json.sig" in verify_script
+    assert "sha256sum --check SHA256SUMS" in verify_script
+
+
 def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:
     """Deploy must be dispatched from ``main``, not the RC tag.
 

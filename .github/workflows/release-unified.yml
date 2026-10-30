@@ -907,10 +907,27 @@ jobs:
           names = [f"modulo-{version}-linux-amd64.tar.gz", f"modulo-{version}-windows-amd64.exe", f"Modulo-{version}-macos-arm64.dmg"]
           body = m.build_release_manifest(release=f"bundle-v{version}", platform="multi-platform", generated_at=os.environ.get("GITHUB_SHA", ""), components={"linux": "amd64", "windows": "amd64", "macos": "arm64"}, artifacts=[{"name": n, "sha256": hashlib.sha256((root / n).read_bytes()).hexdigest(), "version": version} for n in names])
           payload = json.dumps(body, indent=2, sort_keys=True).encode()
-          sig = m.sign_release_bytes(payload, key_id=m._KEY_ID_CURRENT, private_key_hex=os.environ["MANIFEST_SIGNING_KEY"])
-          (root / "RELEASE_MANIFEST.json").write_bytes(payload)
-          (root / "RELEASE_MANIFEST.json.sig").write_text(json.dumps(sig), encoding="utf-8")
-          print("final manifest covers: " + ", ".join(names))
+           signing_key = os.environ["MANIFEST_SIGNING_KEY"]
+           if len(signing_key) != 64:
+               raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must be exactly 32-byte Ed25519 private-key hex")
+           try:
+               int(signing_key, 16)
+           except ValueError as exc:
+               raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must contain only hexadecimal characters") from exc
+           sig = m.sign_release_bytes(payload, key_id=m._KEY_ID_CURRENT, private_key_hex=signing_key)
+           if sig["key_id"] != m._KEY_ID_CURRENT:
+               raise SystemExit("generated manifest signature used an unexpected key_id")
+           try:
+               verified_key_id = m.verify_signature(payload, sig)
+           except m.ManifestSecurityError as exc:
+               raise SystemExit(f"generated manifest signature failed trust-store verification: {exc}") from exc
+           if verified_key_id != m._KEY_ID_CURRENT:
+               raise SystemExit("generated manifest signature did not verify under the expected current key_id")
+           print(f"final manifest signature verified under expected key_id {verified_key_id}")
+           (root / "RELEASE_MANIFEST.json").write_bytes(payload)
+           (root / "RELEASE_MANIFEST.json.sig").write_text(json.dumps(sig), encoding="utf-8")
+           print("final manifest covers: " + ", ".join(names))
+
           PY
           (cd release-artefacts && sha256sum --check SHA256SUMS)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -976,9 +993,44 @@ jobs:
         working-directory: backend
         run: uv sync --frozen  # NOSONAR
 
+      - name: Verify final manifest signature against the checked-in trust store
+        working-directory: backend
+        env:
+          EXPECTED_KEY_ID: modulo-2026-a
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          uv run --no-build --no-sync python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "src")
+          from modulo.launcher import manifest as m
+
+          root = Path("../release-artefacts")
+          signature = m.read_signature_file(root / "RELEASE_MANIFEST.json.sig")
+          expected_key_id = os.environ["EXPECTED_KEY_ID"]
+          if signature["key_id"] != expected_key_id:
+              raise SystemExit(
+                  f"final manifest signature key_id {signature['key_id']!r} does not match expected {expected_key_id!r}"
+              )
+          verified_manifest = m.verify_release_from_files(
+              manifest_path=root / "RELEASE_MANIFEST.json",
+              signature_path=root / "RELEASE_MANIFEST.json.sig",
+              artifacts_root=root,
+          )
+          if verified_manifest.release != f"bundle-v{os.environ['VERSION']}":
+              raise SystemExit(
+                  f"final manifest release is {verified_manifest.release!r}, not the requested version"
+              )
+          print(f"final manifest signature verified under checked-in key_id {signature['key_id']}")
+          PY
+
       - name: Dump OpenAPI schema from backend
         working-directory: backend
         env:
+
           DATABASE_URL: "sqlite+aiosqlite:///./modulo-gen-test.db"
           SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

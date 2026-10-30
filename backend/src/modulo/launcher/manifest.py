@@ -198,15 +198,17 @@ def verify_signature(
     store = trust_store if trust_store is not None else _load_trust_store()
     if not store:
         raise ManifestSecurityError(_NO_PROVISIONED_KEYS_MESSAGE)
-    if not isinstance(signature, dict) or {"key_id", "signature"} - set(signature):
-        raise ManifestSecurityError("signature must be an object with key_id and signature")
-    key_id = str(signature["key_id"])
+    if not isinstance(signature, dict) or set(signature) != {"key_id", "signature"}:
+        raise ManifestSecurityError("signature must be an object with exactly key_id and signature")
+    key_id = signature["key_id"]
+    sig_text = signature["signature"]
+    if not isinstance(key_id, str) or not isinstance(sig_text, str):
+        raise ManifestSecurityError("signature key_id and signature must be strings")
     public_key = store.get(key_id)
     if public_key is None:
         raise ManifestSecurityError(
             f"unknown signing key-id '{key_id}' — not in the current+next trust store; refusing"
         )
-    sig_text = str(signature["signature"])
     if len(sig_text) != 128:
         raise ManifestSecurityError("ed25519 signatures are 128 hex characters")
     try:
@@ -337,14 +339,25 @@ def sign_release_bytes(payload: bytes, *, key_id: str, private_key_hex: str) -> 
     return {"key_id": key_id, "signature": raw_sig.hex()}
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    body: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in body:
+            raise ValueError(f"duplicate field: {key}")
+        body[key] = value
+    return body
+
+
 def read_signature_file(path: Path) -> dict[str, Any]:
-    """Parse + shape-check a .sig file."""
+    """Parse + strict-shape-check a .sig file."""
     try:
-        body = json.loads(path.read_text(encoding="utf-8"))
+        body = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
     except (OSError, ValueError) as exc:
         raise ManifestSecurityError(f"signature file {path} unreadable/garbled: {exc}") from exc
-    if not isinstance(body, dict) or {"key_id", "signature"} - set(body):
-        raise ManifestSecurityError(f"signature file {path} must carry key_id and signature")
+    if not isinstance(body, dict) or set(body) != {"key_id", "signature"}:
+        raise ManifestSecurityError(f"signature file {path} must carry exactly key_id and signature")
+    if not isinstance(body["key_id"], str) or not isinstance(body["signature"], str):
+        raise ManifestSecurityError(f"signature file {path} key_id and signature must be strings")
     return body
 
 

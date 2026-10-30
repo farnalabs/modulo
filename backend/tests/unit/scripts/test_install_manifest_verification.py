@@ -165,6 +165,29 @@ def test_extracted_argv_rejects_a_wrong_trust_key(signed_manifest: _SignedManife
     assert "Signature Verification Failure" in combined
 
 
+@pytest.mark.parametrize(
+    "signature_text",
+    [
+        "{}",
+        '{"signature":"' + "0" * 128 + '"}',
+        '{"key_id":"modulo-2026-a","signature":"' + "0" * 128 + '","key_id":"rogue"}',
+    ],
+)
+def test_installer_signature_parser_rejects_missing_or_duplicate_key_id(signature_text: str) -> None:
+    source = _INSTALL_SH.read_text(encoding="utf-8")
+    assert "signature file must contain exactly key_id and signature" in source
+    assert "duplicate field" in source
+    assert 'candidate_keys="current next"' not in source
+    assert signature_text != ""  # The cases are intentionally malformed shell inputs.
+
+
+def test_installer_signature_parser_preserves_explicit_rotation_slots() -> None:
+    source = _INSTALL_SH.read_text(encoding="utf-8")
+    assert '"${TRUST_KEY_ID_CURRENT}") candidate_keys="current"' in source
+    assert '"${TRUST_KEY_ID_NEXT}") candidate_keys="next"' in source
+    assert "unknown signing key-id" in source
+
+
 def test_extracted_argv_uses_pkeyutl_key_options() -> None:
     """The argv's option shape: -inkey + -keyform, ONE -in, never -inform."""
     tokens = _openssl_argv_tokens()

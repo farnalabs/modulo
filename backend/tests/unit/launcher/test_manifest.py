@@ -165,11 +165,18 @@ def test_unknown_key_id_refuses(tmp_path: Path, test_trust_store: dict, test_sig
         verify_signature(payload, misplaced, trust_store=test_trust_store)
 
 
-def test_malformed_signature_file_refuses(tmp_path: Path) -> None:
-    garbled = tmp_path / "not-a-sig"
-    garbled.write_text("{ no key_id }", encoding="utf-8")
-    with pytest.raises(ManifestSecurityError, match="garbled"):
-        read_signature_file(garbled)
+@pytest.mark.parametrize(
+    ("contents", "pattern"),
+    [
+        ('{"signature":"' + "0" * 128 + '"}', "exactly key_id and signature"),
+        ('{"key_id":"modulo-2026-a","signature":"' + "0" * 128 + '","key_id":"rogue"}', "duplicate field"),
+    ],
+)
+def test_malformed_signature_file_refuses(tmp_path: Path, contents: str, pattern: str) -> None:
+    malformed = tmp_path / "not-a-sig"
+    malformed.write_text(contents, encoding="utf-8")
+    with pytest.raises(ManifestSecurityError, match=re.escape(pattern)):
+        read_signature_file(malformed)
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -247,6 +254,9 @@ def test_manifest_payload_refusal_matrix(
 
 SIGNATURE_REFUSALS = [
     ("not-a-dict", lambda sig: ["nope"], "signature must be an object"),
+    ("extra-field", lambda sig: {**sig, "extra": True}, "exactly key_id and signature"),
+    ("wrong-key-type", lambda sig: {**sig, "key_id": 1}, "key_id and signature must be strings"),
+    ("wrong-signature-type", lambda sig: {**sig, "signature": 1}, "key_id and signature must be strings"),
     ("wrong-length", lambda sig: {**sig, "signature": "ab" * 20}, "128 hex characters"),
     ("not-hex", lambda sig: {**sig, "signature": "z" * 128}, "signature is not valid hex"),
 ]
@@ -604,6 +614,13 @@ def test_installer_embedded_store_matches_trust_rows() -> None:
             f"install.sh's embedded '{slot}' key differs from _TRUST_ROWS[{key_id}] — the two "
             "trust-store assemblies MUST carry the SAME public keys (both from one provisioning)"
         )
+
+
+def test_install_sh_requires_explicit_key_id_and_signature_shape() -> None:
+    install_source = _INSTALL_SH_PATH.read_text(encoding="utf-8")
+    assert 'candidate_keys="current next"' not in install_source
+    assert "signature file must contain exactly key_id and signature" in install_source
+    assert "duplicate field" in install_source
 
 
 def test_sign_roundtrips_through_installersh_sig_extraction(
