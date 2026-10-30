@@ -4,13 +4,7 @@ import { useStorage } from '@vueuse/core'
 import { api, type components } from '@/lib/api/client'
 import { formatApiError } from '@/lib/api/formatError'
 import { toDate } from '@/lib/formatDate'
-import { pauseUiCommands, resumeUiCommands } from './useUiCommandExecutor'
 import type { ChatSession, ChatMessage, PageContext, ToolResult } from '@/types/assistant'
-
-export interface PermissionRequest {
-  request_id: string
-  tools: Array<{ name: string; args: Record<string, unknown>; nogo?: boolean }>
-}
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200000
 
@@ -47,9 +41,6 @@ export const useAssistantStore = defineStore('assistant', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
   const sessionsLoading = ref(false)
-  const pendingPermission = ref<PermissionRequest | null>(null)
-  const isExecutingUi = ref(false)
-  const isPaused = ref(false)
   const requestRename = ref(0)
   const skillsVersion = ref(0)
 
@@ -244,56 +235,6 @@ export const useAssistantStore = defineStore('assistant', () => {
     }
   }
 
-  function setPendingPermission(req: PermissionRequest | null) {
-    pendingPermission.value = req
-  }
-
-  async function approvePermission(requestId: string, action: 'approve' | 'reject' | 'approve_for_session') {
-    if (!activeSessionId.value) {
-      error.value = "Cannot approve permission: no active session"
-      return;
-    }
-    error.value = null
-    try {
-      const resp = await api.POST('/api/v1/assistant/sessions/{session_id}/permission-response', {
-        params: { path: { session_id: activeSessionId.value } },
-        body: { request_id: requestId, action },
-      })
-      if (resp.error) {
-        error.value = extractErrorMessage(resp.error)
-      }
-      pendingPermission.value = null
-    } catch (e) {
-      error.value = extractErrorMessage(e)
-      pendingPermission.value = null
-    }
-  }
-
-  async function resetSessionPermissions() {
-    if (!activeSessionId.value) return
-    error.value = null
-    try {
-      const resp = await api.POST('/api/v1/assistant/sessions/{session_id}/reset-permissions', {
-        params: { path: { session_id: activeSessionId.value } },
-      })
-      if (resp.error) {
-        error.value = extractErrorMessage(resp.error)
-      }
-    } catch (e) {
-      error.value = extractErrorMessage(e)
-    }
-  }
-
-  function pauseAssistant() {
-    isPaused.value = true
-    pauseUiCommands()
-  }
-
-  function resumeAssistant() {
-    isPaused.value = false
-    resumeUiCommands()
-  }
-
   function appendSystemMessage(content: string) {
     messages.value.push(createMessage('summary', content, {
       session_id: activeSessionId.value ?? '',
@@ -342,9 +283,6 @@ export const useAssistantStore = defineStore('assistant', () => {
     loading,
     error,
     sessionsLoading,
-    pendingPermission,
-    isExecutingUi,
-    isPaused,
     requestRename,
     triggerRename,
     skillsVersion,
@@ -367,11 +305,6 @@ export const useAssistantStore = defineStore('assistant', () => {
     appendToken,
     appendToolCall,
     removeLastUserMessage,
-    setPendingPermission,
-    approvePermission,
-    resetSessionPermissions,
-    pauseAssistant,
-    resumeAssistant,
     appendSystemMessage,
     appendTurnSeparator,
   }
