@@ -23,6 +23,7 @@ from modulo.api.dependencies import (
     get_db_session,
     get_or_create_engine,
     get_or_create_session_factory,
+    require_feature,
     require_permission,
 )
 from modulo.api.schemas.system_maps import (
@@ -84,6 +85,7 @@ _MSG_MAP_CONFLICTS_EXISTING = "System map conflicts with an existing resource"
 _MSG_REVISION_CONFLICTS_EXISTING = "Revision conflicts with an existing resource"
 
 _INTERNAL_SYSTEM_MAP_PERMISSION = "system_maps_access"
+_require_system_maps_feature = require_feature("system_maps")
 
 _log = logging.getLogger(__name__)
 
@@ -105,7 +107,7 @@ async def _get_repo() -> SystemMapRepository:
 router = APIRouter(
     prefix="/api/v1/system-maps",
     tags=["system_maps"],
-    dependencies=[Depends(_require_internal_system_maps_access)],
+    dependencies=[Depends(_require_internal_system_maps_access), _require_system_maps_feature],
 )
 
 

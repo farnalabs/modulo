@@ -197,25 +197,21 @@ def _binding_row(
 
 
 class _Harness:
-    """Test harness that patches the SystemMapRepository methods."""
+    """Test harness that supplies a repository mock to the route dependency."""
 
     def __init__(self) -> None:
+        self.repository = MagicMock(spec=SystemMapRepository)
         self._stubs: dict[str, AsyncMock] = {}
 
     def stub(self, method: str, mock: AsyncMock) -> None:
         self._stubs[method] = mock
-        setattr(SystemMapRepository, method, mock)
-        SystemMapRepository._test_session = MagicMock()
+        setattr(self.repository, method, mock)
 
     def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        for method in self._stubs:
-            if hasattr(SystemMapRepository, method):
-                delattr(SystemMapRepository, method)
-        if hasattr(SystemMapRepository, "_test_session"):
-            delattr(SystemMapRepository, "_test_session")
+        self._stubs.clear()
 
 
 def _install_overrides(
@@ -225,7 +221,7 @@ def _install_overrides(
     dev_mode: bool = True,
 ) -> None:
     """Install FastAPI dependency overrides for testing."""
-    from modulo.api.dependencies import get_current_tenant_user, get_db_session, get_settings, require_permission
+    from modulo.api.dependencies import get_current_tenant_user, get_db_session, get_settings
     from modulo.auth.dependencies import get_current_tenant_user_or_api_key
     from modulo.settings import Settings
 
@@ -239,11 +235,25 @@ def _install_overrides(
         client_kind="test",
     )
 
-    session = AsyncMock()
-    begin_cm = AsyncMock()
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
+    begin_cm = MagicMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    nested_cm = MagicMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    execute_result = MagicMock()
+    execute_result.scalar_one.return_value = 1
+    execute_result.scalar_one_or_none.return_value = MagicMock(
+        id=uuid.uuid4(), organisation_id=_ORG_ID, deleted_at=None
+    )
+    session.execute = AsyncMock(return_value=execute_result)
     session.info = {}
     session.add = MagicMock()
     bind = MagicMock()
@@ -268,8 +278,7 @@ def _install_overrides(
     app.dependency_overrides[get_settings] = lambda: settings
     from modulo.api.routes.system_maps import get_repo
 
-    app.dependency_overrides[get_repo] = lambda: SystemMapRepository.__new__(SystemMapRepository)
-    app.dependency_overrides[require_permission] = lambda _permission: lambda: principal
+    app.dependency_overrides[get_repo] = lambda: harness.repository
     # Override the internal system maps access gate
     from modulo.api.routes.system_maps import _require_internal_system_maps_access
 
@@ -280,15 +289,19 @@ def _install_overrides(
         return principal
 
     app.dependency_overrides[_require_internal_system_maps_access] = _mock_require_internal_system_maps_access
+    from modulo.api.routes.system_maps import _require_system_maps_feature
 
-    # Override require_permission to always return the principal
-    def _mock_require_permission(permission: str):
-        async def _check() -> TenantPrincipal:
-            return principal
+    async def _mock_system_maps_feature() -> None:
+        return None
 
-        return _check
+    app.dependency_overrides[_require_system_maps_feature.dependency] = _mock_system_maps_feature
 
-    app.dependency_overrides[require_permission] = _mock_require_permission
+    # Override the tagged permission dependencies generated at import time.
+    for route in app.routes:
+        if getattr(route, "path", "").startswith(_BASE):
+            for dependency in route.dependant.dependencies:
+                if getattr(dependency.call, "__name__", "") == "_check":
+                    app.dependency_overrides[dependency.call] = lambda: principal
 
 
 # ─── Pytest fixtures ───
@@ -339,7 +352,7 @@ def test_ordinary_caller_denied_403() -> None:
 
 
 def test_internal_caller_without_grant_denied_403() -> None:
-    """Internal caller (operator role) without grant is denied 403."""
+    """Grant-bearing operator keys without the dedicated grant are denied 403."""
     from modulo.api.dependencies import _require_internal_system_maps_access
     from modulo.auth.jwt import TenantPrincipal
     from modulo.settings import Settings
@@ -353,22 +366,22 @@ def test_internal_caller_without_grant_denied_403() -> None:
         database_url="postgresql+asyncpg://test:test@localhost/test",
     )
 
-    # Operator without grant-set (key_grants=None) - should pass role check
-    # but key_grants is None so _enforce_key_grant is no-op
     principal = TenantPrincipal(
         username="operator",
         organisation_id=_ORG_ID,
         account_id=_USER_ID,
         org_role="operator",
         is_system_admin=False,
-        via_api_key=False,
+        via_api_key=True,
         client_kind="test",
+        key_grants=frozenset(["pipeline.list"]),
     )
 
-    # This should pass since key_grants is None (legacy key/JWT)
-    # The gate checks role first, then grant-set
-    result = _require_internal_system_maps_access(principal, settings=settings)
-    assert result is principal
+    with pytest.raises(HTTPException) as exc_info:
+        _require_internal_system_maps_access(principal, settings=settings)
+
+    assert exc_info.value.status_code == 403
+    assert "system_maps_access" in exc_info.value.detail
 
 
 def test_internal_caller_with_grant_can_access() -> None:
@@ -394,7 +407,7 @@ def test_internal_caller_with_grant_can_access() -> None:
         is_system_admin=False,
         via_api_key=True,
         client_kind="test",
-        key_grants=["system_maps_access"],
+        key_grants=frozenset(["system_maps_access"]),
     )
 
     # Should not raise
@@ -609,6 +622,7 @@ def test_get_revision_returns_200(client: tuple[TestClient, _Harness]) -> None:
 def test_get_revision_with_graph_returns_detail(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row()))
     harness.stub(
         "get_full_revision_graph",
         AsyncMock(
@@ -910,12 +924,7 @@ def test_overview_detects_missing_loop_config_bottleneck(client: tuple[TestClien
 def test_create_attribution_binding_returns_201(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
-    # Pipeline existence check
-    pipeline_mock = MagicMock()
-    pipeline_mock.id = uuid.uuid4()
-    pipeline_mock.organisation_id = _ORG_ID
-    pipeline_mock.deleted_at = None
-    # We need to mock the session.execute for the pipeline check
+    # The route verifies the referenced pipeline through the session before creating the binding.
     harness.stub("create_attribution_binding", AsyncMock(return_value=_binding_row()))
 
     payload = {
