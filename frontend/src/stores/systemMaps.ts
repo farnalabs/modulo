@@ -1,7 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api, getAccessToken } from '../lib/api/client'
-import { principalSubject } from '../lib/jwt'
 import { withTimeout } from '../lib/asyncUtils'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { usePlanStore } from './planStore'
@@ -26,7 +25,10 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const accessLoaded = ref(false)
   const systemMapsEnabled = ref(false)
   let accessPromise: Promise<void> | null = null
-  let accessPrincipalSub: string | null = null
+  // A subject is stable across token refreshes, including refreshes that carry
+  // demoted roles or capabilities. Cache against the complete token value so
+  // every access-token change revalidates the authorization decision.
+  let accessTokenKey: string | null = null
 
   const planStore = usePlanStore()
   const { isOperator, isSystemAdmin } = useCurrentUser()
@@ -47,7 +49,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     accessLoaded.value = false
     systemMapsEnabled.value = false
     accessPromise = null
-    accessPrincipalSub = principalSubject(getAccessToken())
+    accessTokenKey = getAccessToken()
   }
 
   /**
@@ -56,9 +58,9 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
    * unexpected response settles to disabled and never reuses a stale value.
    */
   async function fetchAccess(): Promise<void> {
-    const principalSub = principalSubject(getAccessToken())
-    if (principalSub !== accessPrincipalSub) reset()
-    accessPrincipalSub = principalSub
+    const currentAccessToken = getAccessToken()
+    if (currentAccessToken !== accessTokenKey) reset()
+    accessTokenKey = currentAccessToken
     if (accessLoaded.value) return
     if (accessPromise) return accessPromise
 

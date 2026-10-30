@@ -25,8 +25,8 @@ vi.mock('../composables/useCurrentUser', () => ({
 
 import { useSystemMapsStore } from '../stores/systemMaps'
 
-function jwtFor(sub: string): string {
-  const payload = btoa(JSON.stringify({ sub }))
+function jwtFor(sub: string, claims: Record<string, unknown> = {}): string {
+  const payload = btoa(JSON.stringify({ sub, ...claims }))
   return `header.${payload}.signature`
 }
 
@@ -127,6 +127,24 @@ describe('useSystemMapsStore access', () => {
     await store.fetchAccess()
 
     expect(mockGet).toHaveBeenCalledTimes(2)
+    expect(store.systemMapsEnabled).toBe(false)
+  })
+
+  it('revalidates when the same subject receives a demoted token', async () => {
+    configureAuthorizedAccess()
+    mockGet.mockResolvedValue({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+    const store = useSystemMapsStore()
+
+    await store.fetchAccess()
+    expect(store.systemMapsEnabled).toBe(true)
+
+    mockGetAccessToken.mockReturnValue(jwtFor('operator-1', { org_role: 'viewer' }))
+    mockIsOperator.value = false
+    mockPlanStore.userPermissions = []
+    await store.fetchAccess()
+
+    expect(mockGet).toHaveBeenCalledTimes(1)
+    expect(store.accessLoaded).toBe(true)
     expect(store.systemMapsEnabled).toBe(false)
   })
 
