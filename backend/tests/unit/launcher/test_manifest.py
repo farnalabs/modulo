@@ -285,6 +285,50 @@ def test_manifest_signature_refusal_matrix(
         verify_manifest(payload, sig, trust_store=test_trust_store)
 
 
+@pytest.mark.parametrize(
+    ("signature", "pattern"),
+    [
+        ({"key_id": _KEY_ID_CURRENT}, "exactly key_id and signature"),
+        ({"key_id": _KEY_ID_CURRENT, "signature": "0" * 128, "extra": True}, "exactly key_id and signature"),
+        ({"key_id": 123, "signature": "0" * 128}, "key_id and signature must be strings"),
+        ({"key_id": _KEY_ID_CURRENT, "signature": 123}, "key_id and signature must be strings"),
+    ],
+    ids=["missing-signature", "extra-field", "non-string-key-id", "non-string-signature"],
+)
+def test_manifest_signature_envelope_rejects_invalid_shapes(
+    signature: Any, pattern: str, test_trust_store: dict
+) -> None:
+    payload = json.dumps(_manifest_body(artifact_count=1), indent=2, sort_keys=True).encode("utf-8")
+    with pytest.raises(ManifestSecurityError, match=re.escape(pattern)):
+        verify_signature(payload, signature, trust_store=test_trust_store)
+
+
+@pytest.mark.parametrize(
+    ("contents", "pattern"),
+    [
+        (
+            '{"key_id":"modulo-2026-a","key_id":"modulo-2026-a-next","signature":"' + "0" * 128 + '"}',
+            "duplicate field: key_id",
+        ),
+        (
+            '{"key_id":"modulo-2026-a","signature":"' + "0" * 128 + '","extra":true}',
+            "exactly key_id and signature",
+        ),
+        (
+            '{"key_id":123,"signature":"' + "0" * 128 + '"}',
+            "key_id and signature must be strings",
+        ),
+        ('{"key_id":"modulo-2026-a","signature":123}', "key_id and signature must be strings"),
+    ],
+    ids=["duplicate-key", "extra-field", "non-string-key-id", "non-string-signature"],
+)
+def test_signature_file_rejects_invalid_envelopes(tmp_path: Path, contents: str, pattern: str) -> None:
+    signature_path = tmp_path / manifest_module.SIGNATURE_NAME
+    signature_path.write_text(contents, encoding="utf-8")
+    with pytest.raises(ManifestSecurityError, match=re.escape(pattern)):
+        read_signature_file(signature_path)
+
+
 def test_missing_artifact_refuses(tmp_path: Path, test_trust_store: dict, test_signing_keys: dict) -> None:
     body = _manifest_body(artifact_count=2)
     manifest_path, signature_path = _write_release_files(
