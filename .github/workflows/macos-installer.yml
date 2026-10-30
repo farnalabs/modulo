@@ -273,8 +273,72 @@ jobs:
           MOUNT="$RUNNER_TEMP/modulo-mount"
           MOUNT_ATTACHED=0
           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
+
+          prepare_data_directory() {
+            local data_uid data_mode mkdir_error current_uid
+            current_uid="$(id -u)"
+            if [[ -L "$DATA" ]]; then
+              printf '::error::smoke data path is an unexpected symlink: path=%q\n' "$DATA" >&2
+              return 1
+            fi
+            if [[ -e "$DATA" && ! -d "$DATA" ]]; then
+              printf '::error::smoke data path is not a directory: path=%q\n' "$DATA" >&2
+              stat -f '%Sp %Su:%Sg' "$DATA" >&2
+              return 1
+            fi
+            if [[ ! -d "$DATA" ]]; then
+              if ! mkdir_error="$(mkdir -p "$DATA" 2>&1)"; then
+                printf '::error::could not create smoke data directory: path=%q error=%s\n' "$DATA" "$mkdir_error" >&2
+                return 1
+              fi
+            fi
+            if [[ -L "$DATA" ]]; then
+              printf '::error::smoke data path became a symlink during setup: path=%q\n' "$DATA" >&2
+              return 1
+            fi
+            data_uid="$(stat -f '%u' "$DATA" 2>&1)" || {
+              printf '::error::could not inspect smoke data directory ownership: path=%q error=%s\n' "$DATA" "$data_uid" >&2
+              return 1
+            }
+            data_mode="$(stat -f '%Sp' "$DATA" 2>&1)" || {
+              printf '::error::could not inspect smoke data directory permissions: path=%q error=%s\n' "$DATA" "$data_mode" >&2
+              return 1
+            }
+            if [[ "$data_uid" != "$current_uid" ]]; then
+              printf '::error::smoke data directory has foreign ownership: path=%q owner_uid=%s expected_uid=%s mode=%s\n' "$DATA" "$data_uid" "$current_uid" "$data_mode" >&2
+              stat -f '%Sp %Su:%Sg' "$DATA" >&2
+              return 1
+            fi
+            if [[ ! -w "$DATA" ]]; then
+              printf '::error::smoke data directory is not writable: path=%q owner_uid=%s expected_uid=%s mode=%s\n' "$DATA" "$data_uid" "$current_uid" "$data_mode" >&2
+              stat -f '%Sp %Su:%Sg' "$DATA" >&2
+              return 1
+            fi
+          }
+
+          prepare_data_directory
+
+          prepare_owned_pid_file() {
+            local owned_pids="$DATA/owned-pids"
+            if [[ -L "$owned_pids" ]]; then
+              printf '::error::owned PID path is an unexpected symlink: path=%q\n' "$owned_pids" >&2
+              return 1
+            fi
+            if [[ -e "$owned_pids" && ! -f "$owned_pids" ]]; then
+              printf '::error::owned PID path is not a regular file: path=%q\n' "$owned_pids" >&2
+              stat -f '%Sp %Su:%Sg' "$owned_pids" >&2
+              return 1
+            fi
+            if ! : > "$owned_pids"; then
+              printf '::error::could not initialize owned PID file: path=%q\n' "$owned_pids" >&2
+              return 1
+            fi
+          }
+
           OWNED_PIDS="$DATA/owned-pids"
-           cleanup() {
+
+          cleanup() {
+
               local original_status="${1:-0}"
               local final_status="$original_status"
               set +e
@@ -409,9 +473,14 @@ jobs:
                 fi
               fi
 
-              rm -rf "$MOUNT" "$CERT" "$NOTARY_KEY" "$IDENTITY_PEM_PATH" "$DATA" "$RUNNER_TEMP/modulo-install"
+              rm -rf "$MOUNT" "$CERT" "$NOTARY_KEY" "$IDENTITY_PEM_PATH" "$RUNNER_TEMP/modulo-install"
               rm_status=$?
-              if [[ "$rm_status" -ne 0 ]]; then
+              if [[ -L "$DATA" || -L "$OWNED_PIDS" ]]; then
+                echo "::error::cleanup refused to remove unexpected symlink under smoke data path: data=$DATA owned_pids=$OWNED_PIDS" >&2
+                cleanup_result temporary_paths failed "unexpected symlink; data directory preserved"
+              elif ! rm -rf "$DATA"; then
+                cleanup_result temporary_paths failed "data directory removal failed"
+              elif [[ "$rm_status" -ne 0 ]]; then
                 cleanup_result temporary_paths failed "rm exit=$rm_status"
               elif [[ -e "$MOUNT" || -e "$CERT" || -e "$NOTARY_KEY" || -e "$IDENTITY_PEM_PATH" || -e "$DATA" || -e "$RUNNER_TEMP/modulo-install" ]]; then
                 cleanup_result temporary_paths failed "path remains on disk"
@@ -505,7 +574,8 @@ jobs:
             }
 
           # shellcheck disable=SC2016
-          run_pre_smoke data_directory_create mkdir -p "$DATA"
+          run_pre_smoke data_directory_create prepare_data_directory
+          run_pre_smoke owned_pid_file_prepare prepare_owned_pid_file
           # shellcheck disable=SC2016
           run_pre_smoke certificate_decode bash -c 'printf "%s" "$1" | base64 --decode > "$2"' bash "$CERTIFICATE_B64" "$CERT"
           # Set up an empty keychain password so no generated password is leaked in argv.
