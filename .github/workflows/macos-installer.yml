@@ -913,8 +913,23 @@ jobs:
           run_pre_smoke notary_key_decode bash -c 'printf "%s" "$1" | tr -d "[:space:]" | base64 -D > "$2"' bash "$NOTARY_KEY_B64" "$NOTARY_KEY"
           # shellcheck disable=SC2016
           run_pre_smoke dmg_notary_submit xcrun notarytool submit "$DMG" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 30m
+          # Apple's notarization ticket can take time to propagate to CloudKit after
+          # notarytool accepts the submission. Run 41127149139 observed "Record not found"
+          # and "Could not find base64 encoded ticket in response" from stapler (exit 65).
+          staple_with_retry() {
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              if xcrun stapler staple "$DMG"; then
+                return 0
+              fi
+              if [[ "$attempt" -lt 6 ]]; then
+                sleep 20
+              fi
+            done
+            return 1
+          }
           # shellcheck disable=SC2016
-          run_pre_smoke dmg_staple xcrun stapler staple "$DMG"
+          run_pre_smoke dmg_staple staple_with_retry
           # shellcheck disable=SC2016
           run_pre_smoke dmg_staple_validate xcrun stapler validate "$DMG"
           # shellcheck disable=SC2016
