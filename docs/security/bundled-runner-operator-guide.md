@@ -58,6 +58,10 @@ for self-builders):
 docker compose -f deploy/compose/runner.yml --profile runner build bundled-runner
 ```
 
+The runner Dockerfile runs `opencode-ai`'s normal npm postinstall so the native
+Linux binary is included in the image. Do not add `--ignore-scripts` to that
+install: the image may build without the executable and fail only at dispatch.
+
 Pin-advance process: the GHCR publish job (GA item) bumps `OPENCODE_VERSION`
 (current minor + N-1 support window), scans (trivy/grype fail high/critical
 with a documented time-boxed CVE-allowlist), runs container-structure-test,

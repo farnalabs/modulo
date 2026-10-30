@@ -68,8 +68,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # script is a downloaded artifact and MUST NOT be executed (SonarCloud S5038:
 # executing downloaded artifacts without verification). Instead the official
 # NodeSource signing key + apt source are added directly, so no downloaded
-# script ever runs inside the build. npm installs with --ignore-scripts so no
-# lifecycle scripts from the published tarball run.
+# script ever runs inside the build. opencode-ai's normal postinstall runs so
+# its native Linux binary is installed in the image.
 RUN curl --proto '=https' --tlsv1.2 -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
         | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
@@ -77,7 +77,7 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL https://deb.nodesource.com/gpgkey/node
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g --ignore-scripts "opencode-ai@${OPENCODE_VERSION}" \
+    && npm install -g "opencode-ai@${OPENCODE_VERSION}" \
     && groupadd -g 1001 runner && useradd -m -u 1001 -g runner -s /bin/bash runner
 
 # Non-root user (ADR 029 workspace hardening): uid 1001, writable session dirs
