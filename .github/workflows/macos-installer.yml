@@ -805,7 +805,42 @@ jobs:
 
           APP="build/Modulo-${VERSION_NUM}.app"
           # shellcheck disable=SC2016
-          run_pre_smoke nested_binary_discovery find "$APP/Contents" -type f -perm -111 -print
+          # Discover only genuine Mach-O files. A bundled Python runtime ships
+          # executable-bit files that are not binaries (empty .py modules, shell
+          # script wrappers such as bin/pip3); those must not be signed or be
+          # required to be Mach-O. Any Mach-O that is not arm64 still fails in
+          # the per-binary check below, so this stays strict.
+          # shellcheck disable=SC2016
+          run_pre_smoke nested_binary_discovery bash -c '
+            set -euo pipefail
+            app="$1"
+            find "$app/Contents" -type f -perm -111 -print0 |
+              while IFS= read -r -d "" candidate; do
+                if file -b "$candidate" | grep -q "Mach-O"; then
+                  printf "%s\n" "$candidate"
+                fi
+              done
+          ' bash "$APP"
+
+          # Negative guard: a foreign binary format (ELF) must never ship inside
+          # a macOS bundle. Scanning only the executable-bit set keeps this
+          # bounded while still catching a mis-packaged Linux binary.
+          # shellcheck disable=SC2016
+          run_pre_smoke foreign_binary_scan bash -c '
+            set -euo pipefail
+            app="$1"
+            found=0
+            while IFS= read -r -d "" candidate; do
+              kind="$(file -b "$candidate")"
+              case "$kind" in
+                *ELF*)
+                  printf "foreign ELF binary inside macOS bundle: %s (%s)\n" "$candidate" "$kind" >&2
+                  found=1
+                  ;;
+              esac
+            done < <(find "$app/Contents" -type f -perm -111 -print0)
+            exit "$found"
+          ' bash "$APP"
           # macOS ships bash 3.2, which has no `mapfile`/`readarray`.
           NESTED_BINARIES=()
           while IFS= read -r nested_binary_line; do
