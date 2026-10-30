@@ -46,7 +46,11 @@ New-Item -ItemType Directory -Path $missingExeBundle, $missingMarkerBundle, $val
 [System.IO.File]::WriteAllText((Join-Path $missingExeBundle "modulo-runtime.json"), '{"contract":"native-windows-v1"}')
 [System.IO.File]::WriteAllText((Join-Path $missingMarkerBundle "modulo.exe"), "placeholder")
 
-function Invoke-Iscc([string]$bundleDir, [string]$outputName) {
+function Invoke-Iscc {
+    param(
+        [string]$bundleDir,
+        [string]$outputName
+    )
     $arguments = @(
         "/Qp",
         "/O$outputDir",

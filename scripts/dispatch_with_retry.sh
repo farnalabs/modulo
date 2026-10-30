@@ -131,7 +131,8 @@ classify_http() {
   # the 202-only contract falls through as terminal: the webhook contract is
   # 202, so a bare 200 means something other than the app answered and the
   # dispatch must not be recorded as delivered.
-  case "$1" in
+  local http_code="$1"
+  case "$http_code" in
     429) printf 'capacity\n' ;;
     000|502|503|504) printf 'transient\n' ;;
     *) printf 'terminal\n' ;;
@@ -141,15 +142,17 @@ classify_http() {
 parse_retry_after() {
   # Whole seconds from a Retry-After value, or empty when absent or
   # unparseable. Never emits a negative value.
-  case "$1" in
+  local retry_after="$1"
+  case "$retry_after" in
     '') return 0 ;;
     *[!0-9]*) ;;
-    *) printf '%s\n' "$1"; return 0 ;;
+    *) printf '%s\n' "$retry_after"; return 0 ;;
   esac
-  RETRY_EPOCH=$(date -u -d "$1" +%s 2>/dev/null) || return 0
-  RETRY_NOW=$(date +%s)
-  if [[ "$RETRY_EPOCH" -gt "$RETRY_NOW" ]]; then
-    printf '%s\n' "$((RETRY_EPOCH - RETRY_NOW))"
+  local retry_epoch retry_now
+  retry_epoch=$(date -u -d "$retry_after" +%s 2>/dev/null) || return 0
+  retry_now=$(date +%s)
+  if [[ "$retry_epoch" -gt "$retry_now" ]]; then
+    printf '%s\n' "$((retry_epoch - retry_now))"
   fi
 }
 
@@ -161,17 +164,20 @@ retry_delay() {
   # DISPATCH_MAX_DELAY, jitter added on top). A short Retry-After therefore
   # cannot collapse the backoff into a tight loop that exhausts the attempt cap
   # before the wall-clock budget can bind (see the header).
-  BACKOFF=$(( DISPATCH_BASE_DELAY * (1 << ($1 - 1)) ))
-  if [[ "$BACKOFF" -gt "$DISPATCH_MAX_DELAY" ]]; then BACKOFF="$DISPATCH_MAX_DELAY"; fi
-  BACKOFF=$(( BACKOFF + RANDOM % (DISPATCH_JITTER_MAX + 1) ))
+  local attempt="$1"
+  local retry_after_seconds="$2"
+  local backoff
+  backoff=$(( DISPATCH_BASE_DELAY * (1 << (attempt - 1)) ))
+  if [[ "$backoff" -gt "$DISPATCH_MAX_DELAY" ]]; then backoff="$DISPATCH_MAX_DELAY"; fi
+  backoff=$(( backoff + RANDOM % (DISPATCH_JITTER_MAX + 1) ))
   # Annotated assignment keeps `set -e` from treating an empty/non-numeric
   # value as a failed arithmetic expansion; parse_retry_after only ever emits
   # a non-negative whole number, so `10#` is safe.
-  if [[ -n "$2" ]] && [[ "$((10#$2))" -gt "$BACKOFF" ]]; then
-    printf '%s\n' "$2"
+  if [[ -n "$retry_after_seconds" ]] && [[ "$((10#$retry_after_seconds))" -gt "$backoff" ]]; then
+    printf '%s\n' "$retry_after_seconds"
     return 0
   fi
-  printf '%s\n' "$BACKOFF"
+  printf '%s\n' "$backoff"
 }
 
 HEADER_FILE=$(mktemp)
