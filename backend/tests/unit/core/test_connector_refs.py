@@ -25,6 +25,17 @@ from modulo.core.workflow_import_export import _build_v2_requires
         (None, ""),
         (5, ""),
     ],
+    ids=[
+        "plain-string",
+        "connector-type-id-key",
+        "connector-type-key-with-capabilities",
+        "legacy-type-key",
+        "connector-type-id-wins",
+        "connector-type-none",
+        "empty-dict",
+        "none",
+        "non-string",
+    ],
 )
 def test_connector_ref_type_id(ref: Any, expected: str) -> None:
     assert connector_ref_type_id(ref) == expected
