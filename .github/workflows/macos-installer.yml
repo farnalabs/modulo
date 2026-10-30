@@ -288,12 +288,18 @@ jobs:
                 printf '\n'
               }
 
-              # Stop the LaunchAgent service first (ignore failure if not running)
+              # Disable the LaunchAgent job first (prevents KeepAlive from restarting)
+              launchctl disable "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
+
+              # Stop the LaunchAgent service (ignore failure if not running)
               launchctl stop "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
 
-              # Use bootout to remove the service from the user domain entirely
-              # This is required because unload -w doesn't work reliably with KeepAlive services
+              # Remove the service from the user domain entirely
               launchctl bootout "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
+
+              # Remove the plist file to prevent future loads
+              PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
+              rm -f "$PLIST" 2>/dev/null || true
 
               # Verify it's gone (should fail if successfully removed)
               if ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
