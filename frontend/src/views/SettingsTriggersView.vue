@@ -23,7 +23,7 @@
       </p>
     </div>
 
-    <div v-if="isOrgAdmin" class="mb-4 rounded-lg border bg-card p-4">
+    <DataCard v-if="isOrgAdmin" variant="bordered" padding="md" card-class="mb-4">
       <div class="flex items-center justify-between">
         <div class="pr-4">
           <p class="text-sm font-medium">{{ $t('views.SettingsTriggersView.pause_all_triggers') }}</p>
@@ -41,7 +41,7 @@
       >
         {{ pauseError }}
       </p>
-    </div>
+    </DataCard>
 
     <!-- STATE-3 (ux-conformance): a determinate-shaped table skeleton, not an
          indeterminate spinner — the column count and headers are known up front,
@@ -67,7 +67,7 @@
     </div>
 
     <template v-else>
-      <div class="overflow-x-auto rounded-lg border bg-card shadow-sm">
+      <DataCard variant="bordered" padding="none" elevation="sm" card-class="overflow-x-auto">
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
             <tr>
@@ -203,7 +203,7 @@
             </template>
           </tbody>
         </table>
-      </div>
+      </DataCard>
     </template>
 
     <FormDialog
@@ -539,6 +539,7 @@ import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FormDialog from '../components/shared/FormDialog.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import TableActions from '../components/shared/TableActions.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import { usePlanStore } from '../stores/planStore'
