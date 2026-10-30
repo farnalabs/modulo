@@ -134,11 +134,12 @@
         <h3 class="text-sm font-medium">
           {{ $t('views.CollectionDetail.installs_title') }}
         </h3>
-        <div
-          v-for="install in installs"
-          :key="install.install_id"
-          class="rounded-lg border bg-card p-4 space-y-3"
-        >
+         <DataCard
+           v-for="install in installs"
+           :key="install.install_id"
+           padding="md"
+           card-class="space-y-3"
+         >
           <div class="flex items-center justify-between">
             <div class="text-sm">
               <span class="font-medium">v{{ install.collection_version || '?' }}</span>
@@ -250,11 +251,11 @@
           <div v-else class="text-xs text-muted-foreground">
             {{ $t('views.CollectionDetail.not_runnable') }}
           </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</template>
+         </DataCard>
+       </div>
+     </div>
+   </div>
+ </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
@@ -263,6 +264,7 @@ import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import PageHeader from '../components/shared/PageHeader.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 

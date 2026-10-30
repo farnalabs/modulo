@@ -71,125 +71,126 @@
         :title="$t('views.FeedbackInboxView.no_feedback_yet')"
         :description="$t('views.FeedbackInboxView.all_feedback_records_have_been_resolved_or_no_evaluations_ha')"
       />
-      <div v-else class="space-y-2">
-        <div
-          v-for="record in records"
-          :key="record.id"
-          class="rounded-lg border bg-card shadow-sm"
-        >
-          <button
-            type="button"
-            data-testid="feedback-inbox-toggle-expand"
-            class="flex w-full items-center gap-4 rounded-lg p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            :class="{ 'border-b': expandedId === record.id }"
-            :aria-expanded="expandedId === record.id"
-            @click="toggleExpand(record.id)"
-          >
-            <ChevronRight
-              class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
-              :class="{ 'rotate-90': expandedId === record.id }"
-              aria-hidden="true"
-            />
-            <span :class="statusBadgeClass(record.feedback_status)" class="capitalize">
-              {{ statusLabel(record.feedback_status) }}
-            </span>
-            <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm font-medium" v-tooltip.top="record.pipeline_name || '—'">{{ record.pipeline_name || '—' }}</span>
-            </span>
-            <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm text-muted-foreground" v-tooltip.top="record.rejection_reason || '-'">{{ record.rejection_reason || '-' }}</span>
-            </span>
-            <span class="flex-shrink-0 text-xs text-muted-foreground">
-              {{ formatDate(record.created_at) }}
-            </span>
-            <span class="inline-flex flex-shrink-0 items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-              {{ record.feedback_handler_type ? handlerTypeLabel(record.feedback_handler_type) : '—' }}
-            </span>
-          </button>
-          <div v-if="expandedId === record.id" class="border-t p-4">
-            <div
-              v-if="detailLoading[record.id]"
-              class="space-y-2 p-4"
-              aria-busy="true"
-              :aria-label="$t('views.FeedbackInboxView.loading_detail')"
-              data-testid="feedback-inbox-detail-loading"
-            >
-              <SkeletonBlock height-class="h-4 w-56" />
-              <SkeletonBlock height-class="h-24 w-full" />
-              <SkeletonBlock height-class="h-3 w-40" />
-            </div>
-            <ErrorAlert
-              v-else-if="detailError[record.id]"
-              :message="detailError[record.id]"
-              :on-retry="() => loadDetail(record.id)"
-              role="alert"
-            />
-            <template v-else-if="detailMap[record.id]">
-              <div class="space-y-6">
-                <div>
-                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.rejection_reason_heading') }}</h3>
-                  <p class="text-sm">{{ detailMap[record.id].rejection_reason || $t('views.FeedbackInboxView.no_rejection_reason') }}</p>
-                </div>
-                <div>
-                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.rejected_output') }}</h3>
-                  <JsonViewer :data="detailMap[record.id].rejected_output ?? null" :show-toolbar="true" :max-height="'16rem'" />
-                </div>
-                <div v-if="detailMap[record.id].correction_proposal">
-                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.correction_proposal') }}</h3>
-                  <JsonViewer :data="detailMap[record.id].correction_proposal ?? null" :show-toolbar="true" :max-height="'12rem'" />
-                </div>
-                <div v-if="detailMap[record.id].feedback_status === 'pending' || detailMap[record.id].feedback_status === 'routing'">
-                  <Button :disabled="triggering[record.id]" data-testid="feedback-inbox-trigger-correction" @click="triggerCorrection(record.id)">
-                    {{ triggering[record.id] ? $t('views.FeedbackInboxView.triggering') : $t('views.FeedbackInboxView.trigger_correction_run') }}
-                  </Button>
-                </div>
-                <div>
-                  <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.annotation_heading') }}</h3>
-                  <textarea
-                    v-model="annotations[record.id]"
-                    rows="3"
-                    maxlength="2000"
-                    :aria-label="$t('views.FeedbackInboxView.annotation_heading')"
-                    data-testid="feedback-inbox-annotation"
-                    class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    :placeholder="$t('views.FeedbackInboxView.add_your_review_annotation')"
-                  />
-                  <div class="mt-2 flex items-center gap-2">
-                    <Button :disabled="savingAnnotation[record.id]" data-testid="feedback-inbox-save-annotation" @click="saveAnnotation(record.id)">
-                      {{ savingAnnotation[record.id] ? $t('views.FeedbackInboxView.saving') : $t('views.FeedbackInboxView.save_annotation') }}
-                    </Button>
-                    <button
-                      type="button"
-                      :disabled="savingAnnotation[record.id]"
-                      data-testid="feedback-inbox-mark-resolved"
-                      class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      @click="resolveRecord(record.id)"
-                    >
-                      {{ $t('views.FeedbackInboxView.mark_resolved') }}
-                    </button>
-                    <button
-                      type="button"
-                      :disabled="dismissLoading[record.id]"
-                      data-testid="feedback-inbox-dismiss"
-                      class="rounded-lg border border-destructive/50 bg-background px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      @click="dismissRecord(record.id)"
-                    >
-                      {{ dismissLoading[record.id] ? $t('views.FeedbackInboxView.dismissing') : $t('views.FeedbackInboxView.dismiss') }}
-                    </button>
-                    <output v-if="annotationMessage[record.id]" aria-live="polite" aria-labelledby="feedback-inbox-annotation-label" class="text-sm" :class="annotationMessage[record.id]?.type === 'error' ? 'text-destructive' : 'text-success-text'">
-                      <span class="sr-only" id="feedback-inbox-annotation-label">{{ $t('views.FeedbackInboxView.aria_annotation') }}</span>
-                      {{ annotationMessage[record.id]?.text }}
-                    </output>
-                  </div>
-                </div>
-              </div>
-            </template>
-          </div>
-        </div>
-      </div>
-    </template>
-  </div>
-</template>
+       <div v-else class="space-y-2">
+         <DataCard
+           v-for="record in records"
+           :key="record.id"
+           padding="none"
+           elevation="sm"
+         >
+           <button
+             type="button"
+             data-testid="feedback-inbox-toggle-expand"
+             class="flex w-full items-center gap-4 rounded-lg p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+             :class="{ 'border-b': expandedId === record.id }"
+             :aria-expanded="expandedId === record.id"
+             @click="toggleExpand(record.id)"
+           >
+             <ChevronRight
+               class="h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform"
+               :class="{ 'rotate-90': expandedId === record.id }"
+               aria-hidden="true"
+             />
+             <span :class="statusBadgeClass(record.feedback_status)" class="capitalize">
+               {{ statusLabel(record.feedback_status) }}
+             </span>
+             <span class="min-w-0 flex-1">
+               <span class="block truncate text-sm font-medium" v-tooltip.top="record.pipeline_name || '—'">{{ record.pipeline_name || '—' }}</span>
+             </span>
+             <span class="min-w-0 flex-1">
+               <span class="block truncate text-sm text-muted-foreground" v-tooltip.top="record.rejection_reason || '-'">{{ record.rejection_reason || '-' }}</span>
+             </span>
+             <span class="flex-shrink-0 text-xs text-muted-foreground">
+               {{ formatDate(record.created_at) }}
+             </span>
+             <span class="inline-flex flex-shrink-0 items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+               {{ record.feedback_handler_type ? handlerTypeLabel(record.feedback_handler_type) : '—' }}
+             </span>
+           </button>
+           <div v-if="expandedId === record.id" class="border-t p-4">
+             <div
+               v-if="detailLoading[record.id]"
+               class="space-y-2 p-4"
+               aria-busy="true"
+               :aria-label="$t('views.FeedbackInboxView.loading_detail')"
+               data-testid="feedback-inbox-detail-loading"
+             >
+               <SkeletonBlock height-class="h-4 w-56" />
+               <SkeletonBlock height-class="h-24 w-full" />
+               <SkeletonBlock height-class="h-3 w-40" />
+             </div>
+             <ErrorAlert
+               v-else-if="detailError[record.id]"
+               :message="detailError[record.id]"
+               :on-retry="() => loadDetail(record.id)"
+               role="alert"
+             />
+             <template v-else-if="detailMap[record.id]">
+               <div class="space-y-6">
+                 <div>
+                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.rejection_reason_heading') }}</h3>
+                   <p class="text-sm">{{ detailMap[record.id].rejection_reason || $t('views.FeedbackInboxView.no_rejection_reason') }}</p>
+                 </div>
+                 <div>
+                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.rejected_output') }}</h3>
+                   <JsonViewer :data="detailMap[record.id].rejected_output ?? null" :show-toolbar="true" :max-height="'16rem'" />
+                 </div>
+                 <div v-if="detailMap[record.id].correction_proposal">
+                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.correction_proposal') }}</h3>
+                   <JsonViewer :data="detailMap[record.id].correction_proposal ?? null" :show-toolbar="true" :max-height="'12rem'" />
+                 </div>
+                 <div v-if="detailMap[record.id].feedback_status === 'pending' || detailMap[record.id].feedback_status === 'routing'">
+                   <Button :disabled="triggering[record.id]" data-testid="feedback-inbox-trigger-correction" @click="triggerCorrection(record.id)">
+                     {{ triggering[record.id] ? $t('views.FeedbackInboxView.triggering') : $t('views.FeedbackInboxView.trigger_correction_run') }}
+                   </Button>
+                 </div>
+                 <div>
+                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.annotation_heading') }}</h3>
+                   <textarea
+                     v-model="annotations[record.id]"
+                     rows="3"
+                     maxlength="2000"
+                     :aria-label="$t('views.FeedbackInboxView.annotation_heading')"
+                     data-testid="feedback-inbox-annotation"
+                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                     :placeholder="$t('views.FeedbackInboxView.add_your_review_annotation')"
+                   />
+                   <div class="mt-2 flex items-center gap-2">
+                     <Button :disabled="savingAnnotation[record.id]" data-testid="feedback-inbox-save-annotation" @click="saveAnnotation(record.id)">
+                       {{ savingAnnotation[record.id] ? $t('views.FeedbackInboxView.saving') : $t('views.FeedbackInboxView.save_annotation') }}
+                     </Button>
+                     <button
+                       type="button"
+                       :disabled="savingAnnotation[record.id]"
+                       data-testid="feedback-inbox-mark-resolved"
+                       class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                       @click="resolveRecord(record.id)"
+                     >
+                       {{ $t('views.FeedbackInboxView.mark_resolved') }}
+                     </button>
+                     <button
+                       type="button"
+                       :disabled="dismissLoading[record.id]"
+                       data-testid="feedback-inbox-dismiss"
+                       class="rounded-lg border border-destructive/50 bg-background px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                       @click="dismissRecord(record.id)"
+                     >
+                       {{ dismissLoading[record.id] ? $t('views.FeedbackInboxView.dismissing') : $t('views.FeedbackInboxView.dismiss') }}
+                     </button>
+                     <output v-if="annotationMessage[record.id]" aria-live="polite" aria-labelledby="feedback-inbox-annotation-label" class="text-sm" :class="annotationMessage[record.id]?.type === 'error' ? 'text-destructive' : 'text-success-text'">
+                       <span class="sr-only" id="feedback-inbox-annotation-label">{{ $t('views.FeedbackInboxView.aria_annotation') }}</span>
+                       {{ annotationMessage[record.id]?.text }}
+                     </output>
+                   </div>
+                 </div>
+               </div>
+             </template>
+           </div>
+         </DataCard>
+       </div>
+     </template>
+   </div>
+ </template>
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -205,6 +206,7 @@ import Select from '../components/shared/AppSelect.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { formatDateShortWithTime } from '../lib/formatDate'
 import { ChevronRight } from '@lucide/vue'
 
