@@ -673,6 +673,10 @@ async def list_triggers(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # The Pipeline join below is gated by ``rls_team_isolation``, whose
+            # membership/admin arms need app.user_id/app.org_role; set_rls_org
+            # alone leaves them empty and hides team-private pipelines.
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             base_filter = Trigger.organisation_id == principal.organisation_id
             trigger_filter = _trigger_type_and_pipeline_filters(base_filter, pipeline_id, trigger_type)
             if principal.org_role == "viewer":
@@ -868,6 +872,9 @@ async def preview_cron_schedule(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # The Pipeline join is gated by ``rls_team_isolation``; the
+            # membership/admin arms need the user RLS context alongside the org.
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             trigger_filter: list[Any] = [
                 Trigger.id == trigger_id,
                 Trigger.organisation_id == principal.organisation_id,
@@ -1957,6 +1964,9 @@ async def list_trigger_events(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            # The join to Pipeline is gated by ``rls_team_isolation``; the
+            # membership/admin arms need app.user_id/app.org_role set too.
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
             trigger_result = await session.execute(
                 select(Trigger)
                 .join(Pipeline, Trigger.pipeline_id == Pipeline.id)
