@@ -25,6 +25,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const accessLoaded = ref(false)
   const systemMapsEnabled = ref(false)
   let accessPromise: Promise<void> | null = null
+  let accessGeneration = 0
   // A subject is stable across token refreshes, including refreshes that carry
   // demoted roles or capabilities. Cache against the complete token value so
   // every access-token change revalidates the authorization decision.
@@ -41,6 +42,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const hasDraft = computed(() => draft.value !== null)
 
   function reset(): void {
+    accessGeneration += 1
     loaded.value = false
     loading.value = false
     error.value = null
@@ -50,6 +52,10 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     systemMapsEnabled.value = false
     accessPromise = null
     accessTokenKey = getAccessToken()
+  }
+
+  function isCurrentAccessRequest(generation: number, token: string | null): boolean {
+    return generation === accessGeneration && token === getAccessToken() && token === accessTokenKey
   }
 
   /**
@@ -64,15 +70,19 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     if (accessLoaded.value) return
     if (accessPromise) return accessPromise
 
-    accessPromise = resolveAccess()
+    const requestGeneration = accessGeneration
+    const requestToken = currentAccessToken
+    const requestPromise = resolveAccess(requestGeneration, requestToken)
+    accessPromise = requestPromise
     try {
-      await accessPromise
+      await requestPromise
     } finally {
-      accessPromise = null
+      if (accessPromise === requestPromise) accessPromise = null
     }
   }
 
-  async function resolveAccess(): Promise<void> {
+  async function resolveAccess(requestGeneration: number, requestToken: string | null): Promise<void> {
+    const isCurrent = (): boolean => isCurrentAccessRequest(requestGeneration, requestToken)
     loading.value = true
     error.value = null
     systemMapsEnabled.value = false
@@ -94,15 +104,21 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
         'Internal feature flags request',
       )
       const flags = (response.data as InternalFeatureFlagsPayload | undefined)?.flags
-      systemMapsEnabled.value =
-        Array.isArray(flags) &&
-        flags.some((flag) => flag.name === 'system_maps' && flag.currently_active === true)
+      if (isCurrent()) {
+        systemMapsEnabled.value =
+          Array.isArray(flags) &&
+          flags.some((flag) => flag.name === 'system_maps' && flag.currently_active === true)
+      }
     } catch (err: unknown) {
-      error.value = err instanceof Error ? err.message : 'Internal feature flags request failed'
-      systemMapsEnabled.value = false
+      if (isCurrent()) {
+        error.value = err instanceof Error ? err.message : 'Internal feature flags request failed'
+        systemMapsEnabled.value = false
+      }
     } finally {
-      accessLoaded.value = true
-      loading.value = false
+      if (isCurrent()) {
+        accessLoaded.value = true
+        loading.value = false
+      }
     }
   }
 
