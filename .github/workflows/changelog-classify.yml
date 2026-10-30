@@ -240,7 +240,7 @@ jobs:
             --jq '.id'
           echo "fast-lane check run created: conclusion=$CONCLUSION on $HEAD_SHA"
 
-# --- changelog gate (FAR-1155 evaluation; FAR-1738 verdict upsert) ---
+      # --- changelog gate (FAR-1155 evaluation; FAR-1738 verdict upsert) ---
       #
       # The evaluation logic below is unchanged from FAR-1155; what changed is
       # HOW the verdict is published (see the header's FAR-1738 section). The
@@ -499,7 +499,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          MANAGED_LABELS: '["db: migrations","risk: high","area: backend","area: frontend","area: ci","area: docs"]'
         run: |
           set -euo pipefail
 

@@ -622,12 +622,15 @@ jobs:
           LINEAR_API_URL: "https://api.linear.app/graphql"
           LINEAR_TEAM_ID: "ae855baf-6439-4980-97fb-38da80129485"
           CONTENT_TYPE: "Content-Type: application/json"
-          AUTH_HEADER: "Authorization: $LINEAR_API_KEY"
         run: |
           if [ -z "$LINEAR_API_KEY" ]; then
             echo "LINEAR_API_KEY not set - skipping ticket (workflow failure still alerts via GitHub)."
             exit 0
           fi
+          # GitHub Actions does not shell-expand env: values, so the auth header
+          # must be built inside the shell (an env: "Authorization: $LINEAR_API_KEY"
+          # would reach curl literally and fail every Linear call).
+          AUTH_HEADER="Authorization: $LINEAR_API_KEY"
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
           # Static condition titles (no run-specific figures) — the title IS
