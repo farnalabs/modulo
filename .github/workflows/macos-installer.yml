@@ -55,8 +55,13 @@ on:
         required: true
         default: false
 
+# A manual dispatch is an independent rehearsal, so it gets its own group
+# (run id). Release callers keep the per-version group so a cut/recut for the
+# same version cannot double-publish. Without this, back-to-back manual
+# dispatches collapse into one pending run and the newer one is cancelled
+# before any job executes.
 concurrency:
-  group: macos-installer-${{ inputs.version || github.ref }}
+  group: macos-installer-${{ github.event_name == 'workflow_dispatch' && github.run_id || inputs.version }}
   cancel-in-progress: false
 
 defaults:
