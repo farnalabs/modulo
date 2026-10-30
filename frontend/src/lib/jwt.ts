@@ -25,3 +25,15 @@ export function decodeJwtPayload(token: string | null | undefined): Record<strin
     return null
   }
 }
+
+/**
+ * The subject (`sub` claim) a token belongs to. `null` = no token / opaque
+ * token. Used to tell a ROTATED token for the same person (a refresh — same
+ * sub, keep the resolved state) from a different principal (reset), because a
+ * same-SPA login can replace the token without ever passing through `null`.
+ */
+export function principalSubject(token: string | null | undefined): string | null {
+  if (!token) return null
+  const sub = decodeJwtPayload(token)?.sub
+  return typeof sub === 'string' && sub.length > 0 ? sub : null
+}

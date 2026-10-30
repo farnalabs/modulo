@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api, getAccessToken } from '../lib/api/client'
-import { decodeJwtPayload } from '../lib/jwt'
+import { principalSubject } from '../lib/jwt'
 import { withTimeout } from '../lib/asyncUtils'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { usePlanStore } from './planStore'
@@ -38,13 +38,6 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   )
   const hasDraft = computed(() => draft.value !== null)
 
-  function currentPrincipalSub(): string | null {
-    const token = getAccessToken()
-    if (!token) return null
-    const sub = decodeJwtPayload(token)?.sub
-    return typeof sub === 'string' && sub.length > 0 ? sub : null
-  }
-
   function reset(): void {
     loaded.value = false
     loading.value = false
@@ -54,7 +47,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     accessLoaded.value = false
     systemMapsEnabled.value = false
     accessPromise = null
-    accessPrincipalSub = currentPrincipalSub()
+    accessPrincipalSub = principalSubject(getAccessToken())
   }
 
   /**
@@ -63,7 +56,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
    * unexpected response settles to disabled and never reuses a stale value.
    */
   async function fetchAccess(): Promise<void> {
-    const principalSub = currentPrincipalSub()
+    const principalSub = principalSubject(getAccessToken())
     if (principalSub !== accessPrincipalSub) reset()
     accessPrincipalSub = principalSub
     if (accessLoaded.value) return
