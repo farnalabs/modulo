@@ -526,6 +526,23 @@ def test_create_system_map_returns_201(client: tuple[TestClient, _Harness]) -> N
     assert body["visibility"] == "org"
 
 
+def test_create_system_map_runs_owner_team_validation(
+    client: tuple[TestClient, _Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    http, harness = client
+    validate_owner_team = AsyncMock(
+        side_effect=HTTPException(status_code=404, detail="Team not found in this organisation")
+    )
+    monkeypatch.setattr("modulo.api.routes.system_maps.validate_owner_team_for_create", validate_owner_team)
+    harness.stub("create_map", AsyncMock(return_value=_map_row()))
+
+    response = http.post(_BASE, json={"name": "Map", "owner_team_id": str(_TEAM_ID)})
+
+    assert response.status_code == 404
+    validate_owner_team.assert_awaited_once()
+    harness.repository.create_map.assert_not_awaited()
+
+
 def test_create_system_map_rejects_empty_name(client: tuple[TestClient, _Harness]) -> None:
     http, _harness = client
 

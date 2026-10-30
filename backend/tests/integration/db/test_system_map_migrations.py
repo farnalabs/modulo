@@ -48,7 +48,7 @@ pytestmark = pytest.mark.integration
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-MIGRATION_REV = "0343_system_maps_revision_fk"
+MIGRATION_REV = "0344_system_maps_tenant_integrity"
 PREV_REV = "0340_drop_assistant_ui_driving_flag_row"
 
 _SYSTEM_MAP_MODELS = (
@@ -83,6 +83,10 @@ def _unique_names(conn: Connection, table: str) -> set[str]:
 
 def _referred_tables(conn: Connection, table: str) -> set[str]:
     return {name for fk in inspect(conn).get_foreign_keys(table) if (name := fk["referred_table"]) is not None}
+
+
+def _foreign_keys(conn: Connection, table: str) -> list[dict[str, Any]]:
+    return inspect(conn).get_foreign_keys(table)
 
 
 def _alembic_config(db_url: str) -> Config:
@@ -149,7 +153,7 @@ async def test_migration_round_trips_against_private_database(private_db_url: st
         for table in _EXPECTED_TABLES:
             assert table in tables, f"Table {table} was not created"
 
-        _run_alembic(private_db_url, "downgrade", "-3")
+        _run_alembic(private_db_url, "downgrade", "-4")
         tables = await _table_names(engine)
         for table in _EXPECTED_TABLES:
             assert table not in tables, f"Table {table} was not dropped"
@@ -213,6 +217,42 @@ class TestSystemMapMigratedSchema:
             "teams",
             "evals",
         } <= nodes_fks
+
+    @pytest.mark.asyncio
+    @pytest.mark.asyncio
+    async def test_owner_team_trigger_enforces_same_live_organisation(self, db_engine: AsyncEngine) -> None:
+        async with db_engine.connect() as conn:
+            triggers = await conn.execute(
+                text("SELECT tgname FROM pg_trigger WHERE tgrelid = 'system_maps'::regclass AND NOT tgisinternal")
+            )
+            trigger_names = {row[0] for row in triggers}
+        assert "trg_system_maps_owner_team_tenant" in trigger_names
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("table", "constraint_name"),
+        [
+            ("system_map_revisions", "fk_system_map_revisions_map_org"),
+            ("system_map_nodes", "fk_system_map_nodes_revision"),
+            ("system_map_relationships", "fk_system_map_relationships_revision"),
+            ("system_map_loop_configs", "fk_system_map_loop_configs_revision"),
+            ("system_map_attribution_bindings", "fk_system_map_attribution_bindings_map"),
+            ("system_map_loop_admission_attempts", "fk_system_map_loop_admission_attempts_config"),
+            ("system_map_loop_reservations", "fk_system_map_loop_reservations_config"),
+        ],
+    )
+    async def test_migrated_composite_fk_matches_model(
+        self, db_engine: AsyncEngine, table: str, constraint_name: str
+    ) -> None:
+        model = next(model for model in _SYSTEM_MAP_MODELS if model.__tablename__ == table)
+        model_constraint = next(item for item in model.__table__.constraints if item.name == constraint_name)
+        expected_constrained = list(model_constraint.columns.keys())
+        expected_referred = [element.target_fullname.rsplit(".", 1)[-1] for element in model_constraint.elements]
+        async with db_engine.connect() as conn:
+            fks = await conn.run_sync(_foreign_keys, table)
+        actual = next(fk for fk in fks if fk["name"] == constraint_name)
+        assert actual["constrained_columns"] == expected_constrained
+        assert actual["referred_columns"] == expected_referred
 
     @pytest.mark.asyncio
     async def test_migration_creates_check_constraints(self, db_engine: AsyncEngine) -> None:

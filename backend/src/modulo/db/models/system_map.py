@@ -152,19 +152,33 @@ class SystemMapRevision(SoftDeleteMixin, OrgScoped):
         Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
 
-    system_map: Mapped[SystemMap] = relationship(back_populates="revisions")
+    system_map: Mapped[SystemMap] = relationship(
+        back_populates="revisions",
+        primaryjoin="and_(SystemMapRevision.system_map_id==SystemMap.id, "
+        "SystemMapRevision.organisation_id==SystemMap.organisation_id)",
+        foreign_keys="[SystemMapRevision.system_map_id, SystemMapRevision.organisation_id]",
+    )
     nodes: Mapped[list["SystemMapNode"]] = relationship(
         back_populates="revision",
+        primaryjoin="and_(SystemMapNode.revision_id==SystemMapRevision.id, "
+        "SystemMapNode.organisation_id==SystemMapRevision.organisation_id)",
+        foreign_keys="[SystemMapNode.revision_id, SystemMapNode.organisation_id]",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
     relationships: Mapped[list["SystemMapRelationship"]] = relationship(
         back_populates="revision",
+        primaryjoin="and_(SystemMapRelationship.revision_id==SystemMapRevision.id, "
+        "SystemMapRelationship.organisation_id==SystemMapRevision.organisation_id)",
+        foreign_keys="[SystemMapRelationship.revision_id, SystemMapRelationship.organisation_id]",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
     loop_configs: Mapped[list["SystemMapLoopConfig"]] = relationship(
         back_populates="revision",
+        primaryjoin="and_(SystemMapLoopConfig.revision_id==SystemMapRevision.id, "
+        "SystemMapLoopConfig.organisation_id==SystemMapRevision.organisation_id)",
+        foreign_keys="[SystemMapLoopConfig.revision_id, SystemMapLoopConfig.organisation_id]",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
@@ -180,7 +194,7 @@ class SystemMapNode(SoftDeleteMixin, OrgScoped):
             ["revision_id", "organisation_id"],
             ["system_map_revisions.id", "system_map_revisions.organisation_id"],
             ondelete=_ONDELETE_CASCADE,
-            name="fk_system_map_nodes_revision_org",
+            name="fk_system_map_nodes_revision",
         ),
     )
 
@@ -207,7 +221,12 @@ class SystemMapNode(SoftDeleteMixin, OrgScoped):
         Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
 
-    revision: Mapped[SystemMapRevision] = relationship(back_populates="nodes")
+    revision: Mapped[SystemMapRevision] = relationship(
+        back_populates="nodes",
+        primaryjoin="and_(SystemMapNode.revision_id==SystemMapRevision.id, "
+        "SystemMapNode.organisation_id==SystemMapRevision.organisation_id)",
+        foreign_keys="[SystemMapNode.revision_id, SystemMapNode.organisation_id]",
+    )
 
 
 class SystemMapRelationship(SoftDeleteMixin, OrgScoped):
@@ -226,7 +245,7 @@ class SystemMapRelationship(SoftDeleteMixin, OrgScoped):
             ["revision_id", "organisation_id"],
             ["system_map_revisions.id", "system_map_revisions.organisation_id"],
             ondelete=_ONDELETE_CASCADE,
-            name="fk_system_map_relationships_revision_org",
+            name="fk_system_map_relationships_revision",
         ),
     )
 
@@ -239,7 +258,12 @@ class SystemMapRelationship(SoftDeleteMixin, OrgScoped):
         Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
 
-    revision: Mapped[SystemMapRevision] = relationship(back_populates="relationships")
+    revision: Mapped[SystemMapRevision] = relationship(
+        back_populates="relationships",
+        primaryjoin="and_(SystemMapRelationship.revision_id==SystemMapRevision.id, "
+        "SystemMapRelationship.organisation_id==SystemMapRevision.organisation_id)",
+        foreign_keys="[SystemMapRelationship.revision_id, SystemMapRelationship.organisation_id]",
+    )
 
 
 class SystemMapLoopConfig(SoftDeleteMixin, OrgScoped):
@@ -254,7 +278,7 @@ class SystemMapLoopConfig(SoftDeleteMixin, OrgScoped):
             ["revision_id", "organisation_id"],
             ["system_map_revisions.id", "system_map_revisions.organisation_id"],
             ondelete=_ONDELETE_CASCADE,
-            name="fk_system_map_loop_configs_revision_org",
+            name="fk_system_map_loop_configs_revision",
         ),
     )
 
@@ -272,7 +296,12 @@ class SystemMapLoopConfig(SoftDeleteMixin, OrgScoped):
         Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
 
-    revision: Mapped[SystemMapRevision] = relationship(back_populates="loop_configs")
+    revision: Mapped[SystemMapRevision] = relationship(
+        back_populates="loop_configs",
+        primaryjoin="and_(SystemMapLoopConfig.revision_id==SystemMapRevision.id, "
+        "SystemMapLoopConfig.organisation_id==SystemMapRevision.organisation_id)",
+        foreign_keys="[SystemMapLoopConfig.revision_id, SystemMapLoopConfig.organisation_id]",
+    )
     action_pipeline: Mapped["Pipeline"] = relationship(foreign_keys=[action_pipeline_id])
     admission_attempts: Mapped[list["SystemMapLoopAdmissionAttempt"]] = relationship(
         back_populates="loop_config",
@@ -318,7 +347,7 @@ class SystemMapAttributionBinding(SoftDeleteMixin, OrgScoped):
             ["system_map_id", "organisation_id"],
             ["system_maps.id", "system_maps.organisation_id"],
             ondelete=_ONDELETE_CASCADE,
-            name="fk_system_map_attribution_bindings_map_org",
+            name="fk_system_map_attribution_bindings_map",
         ),
     )
 
@@ -350,7 +379,7 @@ class SystemMapLoopAdmissionAttempt(SoftDeleteMixin, OrgScoped):
             ["loop_config_id", "organisation_id"],
             ["system_map_loop_configs.id", "system_map_loop_configs.organisation_id"],
             ondelete=_ONDELETE_CASCADE,
-            name="fk_system_map_loop_admission_attempts_config_org",
+            name="fk_system_map_loop_admission_attempts_config",
         ),
     )
 
@@ -374,7 +403,7 @@ class SystemMapLoopReservation(SoftDeleteMixin, OrgScoped):
             ["loop_config_id", "organisation_id"],
             ["system_map_loop_configs.id", "system_map_loop_configs.organisation_id"],
             ondelete=_ONDELETE_CASCADE,
-            name="fk_system_map_loop_reservations_config_org",
+            name="fk_system_map_loop_reservations_config",
         ),
     )
 

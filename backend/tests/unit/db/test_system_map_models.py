@@ -55,19 +55,42 @@ class TestSystemMapModels:
         assert revision.content_json == {"nodes": [], "edges": []}
         assert revision.deleted_by is None
 
-    def test_system_map_revision_parent_fk_is_tenant_scoped(self):
-        foreign_keys = [
-            constraint
-            for constraint in SystemMapRevision.__table__.constraints
-            if constraint.name == "fk_system_map_revisions_map_org"
-        ]
+    @staticmethod
+    def _constraint_shape(model: type, name: str) -> tuple[list[str], list[str]]:
+        constraint = next(item for item in model.__table__.constraints if item.name == name)
+        return (
+            list(constraint.columns.keys()),
+            [element.target_fullname.rsplit(".", 1)[-1] for element in constraint.elements],
+        )
 
-        assert len(foreign_keys) == 1
-        assert list(foreign_keys[0].columns.keys()) == ["system_map_id", "organisation_id"]
-        assert [element.target_fullname.rsplit(".", 1)[-1] for element in foreign_keys[0].elements] == [
-            "id",
+    def test_system_map_revision_parent_fk_is_tenant_scoped(self):
+        assert self._constraint_shape(SystemMapRevision, "fk_system_map_revisions_map_org") == (
+            ["system_map_id", "organisation_id"],
+            ["id", "organisation_id"],
+        )
+
+    def test_child_revision_fks_match_tenant_safe_constraint_shapes(self):
+        expected = (
+            (SystemMapNode, "fk_system_map_nodes_revision"),
+            (SystemMapRelationship, "fk_system_map_relationships_revision"),
+            (SystemMapLoopConfig, "fk_system_map_loop_configs_revision"),
+        )
+        for model, constraint_name in expected:
+            assert self._constraint_shape(model, constraint_name) == (
+                ["revision_id", "organisation_id"],
+                ["id", "organisation_id"],
+            )
+
+    def test_revision_relationships_use_composite_tenant_keys(self):
+        assert {column.name for column in SystemMapRevision.system_map.property._calculated_foreign_keys} == {
+            "system_map_id",
             "organisation_id",
-        ]
+        }
+        for relationship in (SystemMapRevision.nodes, SystemMapRevision.relationships, SystemMapRevision.loop_configs):
+            assert {column.name for column in relationship.property._calculated_foreign_keys} == {
+                "revision_id",
+                "organisation_id",
+            }
 
     def test_system_map_node_creation(self):
         org_id = uuid.uuid4()
