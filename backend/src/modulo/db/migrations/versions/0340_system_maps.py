@@ -99,9 +99,11 @@ _ENABLE_RLS_STATEMENTS: tuple[str, ...] = tuple(
 ) + tuple(_ALTER_TABLE_PREFIX + table + '" FORCE ROW LEVEL SECURITY' for table in _ORG_SCOPED_TABLES)
 
 _CREATE_POLICY_STATEMENTS: tuple[str, ...] = tuple(
-    'CREATE POLICY rls_team_isolation ON "' + table + '" USING (' + _TEAM_POLICY + ")" for table in _TEAM_SCOPED_TABLES
+    'CREATE POLICY rls_team_isolation ON "' + table + '" USING (' + _TEAM_POLICY + ") WITH CHECK (" + _TEAM_POLICY + ")"
+    for table in _TEAM_SCOPED_TABLES
 ) + tuple(
-    'CREATE POLICY rls_org_isolation ON "' + table + '" USING (' + _ORG_POLICY + ")" for table in _ORG_ONLY_TABLES
+    'CREATE POLICY rls_org_isolation ON "' + table + '" USING (' + _ORG_POLICY + ") WITH CHECK (" + _ORG_POLICY + ")"
+    for table in _ORG_ONLY_TABLES
 )
 
 _DROP_POLICY_STATEMENTS: tuple[str, ...] = (

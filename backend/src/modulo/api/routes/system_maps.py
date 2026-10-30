@@ -46,6 +46,7 @@ from modulo.api.schemas.system_maps import (
     SystemMapRevisionResponse,
     SystemMapUpdate,
 )
+from modulo.api.team_scope import validate_owner_team_for_create
 from modulo.auth.dependencies import get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -54,6 +55,7 @@ from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.system_map import (
     SystemMap,
 )
+from modulo.db.models.trigger import Trigger
 from modulo.db.repositories.system_map import SystemMapRepository
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
@@ -242,6 +244,7 @@ async def create_system_map_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            await validate_owner_team_for_create(session, principal, req.owner_team_id)
 
             system_map = await repository.create_map(
                 session,
@@ -598,6 +601,28 @@ async def create_system_map_revision_endpoint(
             if not system_map:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
+            binding_errors = await repository.validate_bindings(
+                session,
+                organisation_id=principal.organisation_id,
+                account_id=principal.account_id,
+                org_role=principal.org_role,
+                node_bindings=[
+                    {
+                        "pipeline_id": node.pipeline_id,
+                        "connector_instance_id": node.connector_instance_id,
+                        "owner_team_id": node.owner_team_id,
+                        "eval_id": node.eval_id,
+                    }
+                    for node in req.nodes
+                ],
+                action_pipeline_ids=[loop.action_pipeline_id for loop in req.loop_configs],
+            )
+            if binding_errors:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail={"message": "Invalid System Map binding", "errors": binding_errors},
+                )
+
             # Get next revision number
             existing_revisions = await repository.list_revisions(
                 session,
@@ -751,7 +776,11 @@ async def publish_system_map_revision_endpoint(
 
             # Validate before publishing
             is_valid, errors = await repository.validate_publish(
-                session, organisation_id=principal.organisation_id, revision_id=rev_id
+                session,
+                organisation_id=principal.organisation_id,
+                revision_id=rev_id,
+                account_id=principal.account_id,
+                org_role=principal.org_role,
             )
             validation_errors = [
                 {"code": "VALIDATION_ERROR", "message": err, "node_key": None, "relationship_id": None}
@@ -1173,10 +1202,9 @@ async def create_attribution_binding_endpoint(
 
             # Verify trigger if provided
             if req.trigger_id:
-                from modulo.db.models.trigger import Trigger
-
                 trigger_stmt = select(Trigger).where(
                     Trigger.id == req.trigger_id,
+                    Trigger.pipeline_id == req.pipeline_id,
                     Trigger.organisation_id == principal.organisation_id,
                     Trigger.deleted_at.is_(None),
                 )

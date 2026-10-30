@@ -793,6 +793,7 @@ def test_create_revision_returns_201(client: tuple[TestClient, _Harness]) -> Non
     harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
     harness.stub("list_revisions", AsyncMock(return_value=[]))
     harness.stub("create_revision", AsyncMock(return_value=_revision_row()))
+    harness.stub("validate_bindings", AsyncMock(return_value=[]))
     harness.stub("create_node", AsyncMock(return_value=_node_row()))
     harness.stub("create_relationship", AsyncMock(return_value=_relationship_row()))
     harness.stub("create_loop_config", AsyncMock(return_value=_loop_config_row()))
@@ -841,6 +842,35 @@ def test_create_revision_returns_201(client: tuple[TestClient, _Harness]) -> Non
     assert content["loop_configs"][0]["budget_limit_usd"] == "10.50"
 
 
+def test_create_revision_rejects_invalid_bindings(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub(
+        "validate_bindings",
+        AsyncMock(return_value=["Pipeline does not exist in this organisation"]),
+    )
+
+    response = http.post(
+        f"{_BASE}/{_MAP_ID}/revisions",
+        json={
+            "nodes": [
+                {
+                    "node_key": "node-1",
+                    "node_type": "pipeline",
+                    "display_name": "Node 1",
+                    "pipeline_id": str(uuid.uuid4()),
+                }
+            ],
+            "relationships": [],
+            "loop_configs": [],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Invalid System Map binding" in response.json()["detail"]
+    harness.repository.create_revision.assert_not_called()
+
+
 def test_create_revision_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     harness.stub("get_map_by_id", AsyncMock(return_value=None))
@@ -867,6 +897,20 @@ def test_publish_revision_returns_200_on_success(client: tuple[TestClient, _Harn
     body = resp.json()
     assert body["revision"]["status"] == "published"
     assert not body["validation_errors"]
+
+
+def test_publish_revision_passes_principal_to_binding_validation(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row()))
+    validate_publish = AsyncMock(return_value=(False, ["invalid binding"]))
+    harness.stub("validate_publish", validate_publish)
+
+    response = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/publish")
+
+    assert response.status_code == 200
+    assert validate_publish.await_args.kwargs["account_id"] == _USER_ID
+    assert validate_publish.await_args.kwargs["org_role"] == "operator"
 
 
 def test_publish_revision_returns_validation_errors(client: tuple[TestClient, _Harness]) -> None:

@@ -14,6 +14,9 @@ from sqlalchemy import Select, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.eval import Eval
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.system_map import (
     SystemMap,
     SystemMapAttributionBinding,
@@ -24,6 +27,8 @@ from modulo.db.models.system_map import (
     SystemMapRelationship,
     SystemMapRevision,
 )
+from modulo.db.models.team import Team
+from modulo.db.models.team_membership import TeamMembership
 from modulo.db.repositories.base import BaseRepository
 from modulo.db.soft_delete import include_soft_deleted
 
@@ -1002,12 +1007,160 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
 
     # ─── Validation Helpers ───
 
+    async def _validate_team_binding(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        account_id: uuid.UUID | None,
+        org_role: str | None,
+        team_id: uuid.UUID,
+        visibility: str | None = "team",
+    ) -> str | None:
+        """Return an error when a team binding is foreign or caller-ineligible."""
+        team_result = await session.execute(
+            select(Team.id).where(
+                Team.id == team_id,
+                Team.organisation_id == organisation_id,
+                Team.deleted_at.is_(None),
+            )
+        )
+        if team_result.first() is None:
+            return f"Team {team_id} does not exist in this organisation"
+        if org_role != "admin":
+            membership_result = await session.execute(
+                select(TeamMembership.id).where(
+                    TeamMembership.account_id == account_id,
+                    TeamMembership.team_id == team_id,
+                )
+            )
+            if account_id is None or membership_result.first() is None:
+                return f"Team {team_id} is not available to this caller"
+        return None
+
+    async def validate_bindings(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        account_id: uuid.UUID | None,
+        org_role: str | None,
+        node_bindings: Sequence[dict[str, uuid.UUID | None]],
+        action_pipeline_ids: Sequence[uuid.UUID],
+    ) -> list[str]:
+        """Validate all draft foreign keys and team ownership boundaries."""
+        errors: list[str] = []
+        pipeline_ids = {value for binding in node_bindings for value in (binding.get("pipeline_id"),) if value}
+        pipeline_ids.update(action_pipeline_ids)
+        if pipeline_ids:
+            result = await session.execute(
+                select(Pipeline).where(
+                    Pipeline.id.in_(pipeline_ids),
+                    Pipeline.organisation_id == organisation_id,
+                    Pipeline.deleted_at.is_(None),
+                )
+            )
+            pipelines = {item.id: item for item in result.scalars().all()}
+            errors.extend(
+                f"Pipeline {item} does not exist in this organisation" for item in pipeline_ids - pipelines.keys()
+            )
+            for pipeline in pipelines.values():
+                if pipeline.visibility == "team" and pipeline.owner_team_id:
+                    error = await self._validate_team_binding(
+                        session,
+                        organisation_id=organisation_id,
+                        account_id=account_id,
+                        org_role=org_role,
+                        team_id=pipeline.owner_team_id,
+                    )
+                    if error:
+                        errors.append(f"Pipeline {pipeline.id} is not available to this caller")
+        connector_ids = {
+            binding["connector_instance_id"] for binding in node_bindings if binding.get("connector_instance_id")
+        }
+        if connector_ids:
+            result = await session.execute(
+                select(ConnectorInstance).where(
+                    ConnectorInstance.id.in_(connector_ids),
+                    ConnectorInstance.organisation_id == organisation_id,
+                    ConnectorInstance.deleted_at.is_(None),
+                )
+            )
+            connectors = {item.id: item for item in result.scalars().all()}
+            errors.extend(
+                f"connector_instance_id {item} does not exist in this organisation"
+                for item in connector_ids - connectors.keys()
+            )
+            for connector in connectors.values():
+                if connector.visibility == "team" and connector.owner_team_id:
+                    error = await self._validate_team_binding(
+                        session,
+                        organisation_id=organisation_id,
+                        account_id=account_id,
+                        org_role=org_role,
+                        team_id=connector.owner_team_id,
+                    )
+                    if error:
+                        errors.append(f"Connector {connector.id} is not available to this caller")
+
+        eval_ids = {binding["eval_id"] for binding in node_bindings if binding.get("eval_id")}
+        if eval_ids:
+            result = await session.execute(
+                select(Eval.id, Eval.pipeline_id).where(
+                    Eval.id.in_(eval_ids),
+                    Eval.organisation_id == organisation_id,
+                    Eval.deleted_at.is_(None),
+                )
+            )
+            evals = {item.id: item.pipeline_id for item in result}
+            errors.extend(f"eval_id {item} does not exist in this organisation" for item in eval_ids - evals.keys())
+            eval_pipeline_ids = set(evals.values())
+            result = await session.execute(
+                select(Pipeline).where(
+                    Pipeline.id.in_(eval_pipeline_ids),
+                    Pipeline.organisation_id == organisation_id,
+                    Pipeline.deleted_at.is_(None),
+                )
+            )
+            eval_pipelines = {item.id: item for item in result.scalars().all()}
+            errors.extend(
+                f"Eval {evaluation_id} references a pipeline outside this organisation"
+                for evaluation_id, pipeline_id in evals.items()
+                if pipeline_id not in eval_pipelines
+            )
+            for pipeline in eval_pipelines.values():
+                if pipeline.visibility == "team" and pipeline.owner_team_id:
+                    error = await self._validate_team_binding(
+                        session,
+                        organisation_id=organisation_id,
+                        account_id=account_id,
+                        org_role=org_role,
+                        team_id=pipeline.owner_team_id,
+                    )
+                    if error:
+                        errors.append(f"Eval pipeline {pipeline.id} is not available to this caller")
+        for binding in node_bindings:
+            team_id = binding.get("owner_team_id")
+            if team_id:
+                error = await self._validate_team_binding(
+                    session,
+                    organisation_id=organisation_id,
+                    account_id=account_id,
+                    org_role=org_role,
+                    team_id=team_id,
+                )
+                if error:
+                    errors.append(error)
+        return errors
+
     async def validate_publish(
         self,
         session: AsyncSession,
         *,
         organisation_id: uuid.UUID,
         revision_id: uuid.UUID,
+        account_id: uuid.UUID | None = None,
+        org_role: str | None = None,
     ) -> tuple[bool, list[str]]:
         """Validate a revision before publishing.
 
@@ -1051,25 +1204,27 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
                 if missing:
                     errors.append(f"Loop config for '{loop_node.node_key}' is incomplete: missing {', '.join(missing)}")
 
-        # 3. Pipeline binding resolution
-        for node in nodes:
-            if node.pipeline_id:
-                # Check pipeline exists and is same org
-                from modulo.db.models.pipeline import Pipeline
-
-                stmt = select(Pipeline).where(
-                    Pipeline.id == node.pipeline_id,
-                    Pipeline.organisation_id == organisation_id,
-                    Pipeline.deleted_at.is_(None),
-                )
-                result = await session.execute(stmt)
-                pipeline = result.scalar_one_or_none()
-                if not pipeline:
-                    msg = (
-                        f"Node '{node.node_key}' references pipeline {node.pipeline_id} "
-                        "which does not exist or is not in the same organisation"
-                    )
-                    errors.append(msg)
+        # 3. Validate every node and loop foreign-key binding, including team scope.
+        loop_configs = await self.list_loop_configs_in_revision(
+            session, organisation_id=organisation_id, revision_id=revision_id
+        )
+        binding_errors = await self.validate_bindings(
+            session,
+            organisation_id=organisation_id,
+            account_id=account_id,
+            org_role=org_role,
+            node_bindings=[
+                {
+                    "pipeline_id": node.pipeline_id,
+                    "connector_instance_id": node.connector_instance_id,
+                    "owner_team_id": node.owner_team_id,
+                    "eval_id": node.eval_id,
+                }
+                for node in nodes
+            ],
+            action_pipeline_ids=[loop.action_pipeline_id for loop in loop_configs],
+        )
+        errors.extend(binding_errors)
 
         return len(errors) == 0, errors
 
