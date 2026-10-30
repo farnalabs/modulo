@@ -65,6 +65,7 @@ def _make_key() -> MagicMock:
     k.lookup_prefix = "abcd1234"
     k.created_at = _NOW
     k.team_id = None
+    k.expires_at = None
     # FAR-620: the caller scope is stamped on real rows; serialisation guard
     # falls back to 'org' for a non-str scope.
     k.scope = "org"

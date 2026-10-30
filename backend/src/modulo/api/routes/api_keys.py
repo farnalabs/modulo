@@ -165,6 +165,16 @@ class ApiKeyRevokeResponse(BaseModel):
     revoked: bool
 
 
+class ApiKeyUpdatedResponse(BaseModel):
+    id: str
+    name: str
+    role: str
+    team_id: str | None
+    expires_at: str | None
+
+    model_config = {"from_attributes": False}
+
+
 class McpConfigResponse(BaseModel):
     mcp_url: str
     config_snippet: dict[str, Any]
@@ -785,7 +795,7 @@ async def update_api_key_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("api_key.revoke"),
     settings: Settings = Depends(get_settings),
-) -> dict[str, Any]:
+) -> ApiKeyUpdatedResponse:
     _validate_update_payload(req)
     name = _resolve_update_name(req)
     team_id = await _resolve_update_team_id(req, settings, session, principal)
@@ -793,13 +803,13 @@ async def update_api_key_endpoint(
     key = await _apply_key_update(session, key_id, principal, req.role, name, team_id, expires_at)
     if key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
-    return {
-        "id": str(key.id),
-        "name": key.name,
-        "role": key.role,
-        "team_id": str(key.team_id) if key.team_id else None,
-        "expires_at": key.expires_at.isoformat() if key.expires_at else None,
-    }
+    return ApiKeyUpdatedResponse(
+        id=str(key.id),
+        name=key.name,
+        role=key.role,
+        team_id=str(key.team_id) if key.team_id else None,
+        expires_at=key.expires_at.isoformat() if key.expires_at else None,
+    )
 
 
 # FAR-1472 exemption: already audited in this handler — it appends its own richer
