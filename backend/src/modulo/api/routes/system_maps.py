@@ -951,6 +951,7 @@ async def delete_system_map_revision_endpoint(
                 )
 
             revision.deleted_at = datetime.now(UTC)
+            revision.deleted_by = principal.account_id
             await session.flush()
 
             await _record_audit(
@@ -1333,7 +1334,10 @@ async def delete_attribution_binding_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_SYSTEM_MAP_NOT_FOUND)
 
             deleted = await repository.delete_attribution_binding(
-                session, organisation_id=principal.organisation_id, binding_id=binding_id
+                session,
+                organisation_id=principal.organisation_id,
+                binding_id=binding_id,
+                deleted_by=principal.account_id,
             )
             if deleted:
                 await _record_audit(

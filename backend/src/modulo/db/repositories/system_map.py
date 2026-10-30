@@ -456,12 +456,14 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         *,
         organisation_id: uuid.UUID,
         node_id: uuid.UUID,
+        deleted_by: uuid.UUID | None = None,
     ) -> bool:
         """Soft-delete a node."""
         node = await self.get_node_by_id(session, organisation_id=organisation_id, node_id=node_id)
         if not node:
             return False
         node.deleted_at = datetime.now(UTC)
+        node.deleted_by = deleted_by
         await session.flush()
         return True
 
@@ -518,6 +520,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         *,
         organisation_id: uuid.UUID,
         relationship_id: uuid.UUID,
+        deleted_by: uuid.UUID | None = None,
     ) -> bool:
         """Soft-delete a relationship."""
         stmt = select(SystemMapRelationship).where(
@@ -529,6 +532,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         if not rel:
             return False
         rel.deleted_at = datetime.now(UTC)
+        rel.deleted_by = deleted_by
         await session.flush()
         return True
 
@@ -741,6 +745,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         *,
         organisation_id: uuid.UUID,
         binding_id: uuid.UUID,
+        deleted_by: uuid.UUID | None = None,
     ) -> bool:
         """Soft-delete an attribution binding."""
         binding = await self.get_attribution_binding_by_id(
@@ -749,6 +754,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         if not binding:
             return False
         binding.deleted_at = datetime.now(UTC)
+        binding.deleted_by = deleted_by
         await session.flush()
         return True
 

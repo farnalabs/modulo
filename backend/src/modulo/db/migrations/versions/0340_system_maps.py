@@ -192,6 +192,7 @@ def _create_tables() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deleted_by", sa.Uuid(), nullable=True),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["system_map_id"], [_TABLE_SYSTEM_MAPS + ".id"], ondelete="CASCADE"),
@@ -233,6 +234,7 @@ def _create_tables() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deleted_by", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["revision_id"], [_TABLE_SYSTEM_MAP_REVISIONS + ".id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["pipeline_id"], ["pipelines.id"], ondelete=_SET_NULL),
@@ -260,6 +262,7 @@ def _create_tables() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deleted_by", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["revision_id"], [_TABLE_SYSTEM_MAP_REVISIONS + ".id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -292,6 +295,7 @@ def _create_tables() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deleted_by", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["revision_id"], [_TABLE_SYSTEM_MAP_REVISIONS + ".id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["action_pipeline_id"], ["pipelines.id"], ondelete="RESTRICT"),
@@ -315,6 +319,7 @@ def _create_tables() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deleted_by", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["pipeline_id"], ["pipelines.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["trigger_id"], ["triggers.id"], ondelete="CASCADE"),
@@ -337,6 +342,7 @@ def _create_tables() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deleted_by", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["loop_config_id"], [_TABLE_SYSTEM_MAP_LOOP_CONFIGS + ".id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -365,6 +371,7 @@ def _create_tables() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deleted_by", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["loop_config_id"], [_TABLE_SYSTEM_MAP_LOOP_CONFIGS + ".id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -374,6 +381,18 @@ def _create_tables() -> None:
         ),
         sa.UniqueConstraint("loop_config_id", "idempotency_key", name="uq_loop_reservations_config_key"),
     )
+
+    for table in _ORG_SCOPED_TABLES:
+        if table == _TABLE_SYSTEM_MAPS:
+            continue
+        op.create_foreign_key(
+            "fk_" + table + "_deleted_by",
+            table,
+            "accounts",
+            ["deleted_by"],
+            ["id"],
+            ondelete=_SET_NULL,
+        )
 
 
 def _create_indexes() -> None:
@@ -394,6 +413,7 @@ def _create_indexes() -> None:
     op.create_index("ix_system_map_revisions_organisation_id", _TABLE_SYSTEM_MAP_REVISIONS, ["organisation_id"])
     op.create_index("ix_system_map_revisions_system_map_id", _TABLE_SYSTEM_MAP_REVISIONS, ["system_map_id"])
     op.create_index("ix_system_map_revisions_status", _TABLE_SYSTEM_MAP_REVISIONS, ["status"])
+    op.create_index("ix_system_map_revisions_deleted_by", _TABLE_SYSTEM_MAP_REVISIONS, ["deleted_by"])
 
     # system_map_nodes
     op.create_index("ix_system_map_nodes_organisation_id", _TABLE_SYSTEM_MAP_NODES, ["organisation_id"])
@@ -401,10 +421,12 @@ def _create_indexes() -> None:
     op.create_index("ix_system_map_nodes_pipeline_id", _TABLE_SYSTEM_MAP_NODES, ["pipeline_id"])
     op.create_index("ix_system_map_nodes_connector_instance_id", _TABLE_SYSTEM_MAP_NODES, ["connector_instance_id"])
     op.create_index("ix_system_map_nodes_eval_id", _TABLE_SYSTEM_MAP_NODES, ["eval_id"])
+    op.create_index("ix_system_map_nodes_deleted_by", _TABLE_SYSTEM_MAP_NODES, ["deleted_by"])
 
     # system_map_relationships
     op.create_index("ix_system_map_relationships_organisation_id", _TABLE_SYSTEM_MAP_RELATIONSHIPS, ["organisation_id"])
     op.create_index("ix_system_map_relationships_revision_id", _TABLE_SYSTEM_MAP_RELATIONSHIPS, ["revision_id"])
+    op.create_index("ix_system_map_relationships_deleted_by", _TABLE_SYSTEM_MAP_RELATIONSHIPS, ["deleted_by"])
 
     # system_map_loop_configs
     op.create_index("ix_system_map_loop_configs_organisation_id", _TABLE_SYSTEM_MAP_LOOP_CONFIGS, ["organisation_id"])
@@ -412,6 +434,7 @@ def _create_indexes() -> None:
     op.create_index(
         "ix_system_map_loop_configs_action_pipeline_id", _TABLE_SYSTEM_MAP_LOOP_CONFIGS, ["action_pipeline_id"]
     )
+    op.create_index("ix_system_map_loop_configs_deleted_by", _TABLE_SYSTEM_MAP_LOOP_CONFIGS, ["deleted_by"])
 
     # system_map_attribution_bindings
     op.create_index(
@@ -433,6 +456,11 @@ def _create_indexes() -> None:
         "ix_system_map_attribution_bindings_system_map_id",
         _TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS,
         ["system_map_id"],
+    )
+    op.create_index(
+        "ix_system_map_attribution_bindings_deleted_by",
+        _TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS,
+        ["deleted_by"],
     )
     # Partial unique: one trigger binding per (org, pipeline_id, node_key)
     op.execute(
@@ -458,6 +486,11 @@ def _create_indexes() -> None:
         _TABLE_SYSTEM_MAP_LOOP_ADMISSION_ATTEMPTS,
         ["loop_config_id"],
     )
+    op.create_index(
+        "ix_loop_admission_attempts_deleted_by",
+        _TABLE_SYSTEM_MAP_LOOP_ADMISSION_ATTEMPTS,
+        ["deleted_by"],
+    )
 
     # system_map_loop_reservations
     op.create_index(
@@ -479,6 +512,11 @@ def _create_indexes() -> None:
         "ix_loop_reservations_cooldown_until",
         _TABLE_SYSTEM_MAP_LOOP_RESERVATIONS,
         ["cooldown_until"],
+    )
+    op.create_index(
+        "ix_loop_reservations_deleted_by",
+        _TABLE_SYSTEM_MAP_LOOP_RESERVATIONS,
+        ["deleted_by"],
     )
 
 
@@ -535,37 +573,45 @@ def downgrade() -> None:
             op.execute(statement)
 
     # Drop indexes in reverse order
+    op.drop_index("ix_loop_reservations_deleted_by", table_name=_TABLE_SYSTEM_MAP_LOOP_RESERVATIONS)
     op.drop_index("ix_loop_reservations_cooldown_until", table_name=_TABLE_SYSTEM_MAP_LOOP_RESERVATIONS)
     op.drop_index("ix_loop_reservations_run_id", table_name=_TABLE_SYSTEM_MAP_LOOP_RESERVATIONS)
     op.drop_index("ix_loop_reservations_loop_config_id", table_name=_TABLE_SYSTEM_MAP_LOOP_RESERVATIONS)
     op.drop_index("ix_loop_reservations_organisation_id", table_name=_TABLE_SYSTEM_MAP_LOOP_RESERVATIONS)
 
+    op.drop_index("ix_loop_admission_attempts_deleted_by", table_name=_TABLE_SYSTEM_MAP_LOOP_ADMISSION_ATTEMPTS)
     op.drop_index("ix_loop_admission_attempts_loop_config_id", table_name=_TABLE_SYSTEM_MAP_LOOP_ADMISSION_ATTEMPTS)
     op.drop_index("ix_loop_admission_attempts_organisation_id", table_name=_TABLE_SYSTEM_MAP_LOOP_ADMISSION_ATTEMPTS)
 
     op.drop_index("ix_system_map_attribution_bindings_system_map_id", table_name=_TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS)
     op.drop_index("ix_system_map_attribution_bindings_trigger_id", table_name=_TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS)
     op.drop_index("ix_system_map_attribution_bindings_pipeline_id", table_name=_TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS)
+    op.drop_index("ix_system_map_attribution_bindings_deleted_by", table_name=_TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS)
     op.drop_index(
         "ix_system_map_attribution_bindings_organisation_id", table_name=_TABLE_SYSTEM_MAP_ATTRIBUTION_BINDINGS
     )
+
     # Drop partial unique indexes
     op.execute("DROP INDEX IF EXISTS uq_attr_binding_action_per_pipeline_node")
     op.execute("DROP INDEX IF EXISTS uq_attr_binding_trigger_per_pipeline_node")
 
+    op.drop_index("ix_system_map_loop_configs_deleted_by", table_name=_TABLE_SYSTEM_MAP_LOOP_CONFIGS)
     op.drop_index("ix_system_map_loop_configs_action_pipeline_id", table_name=_TABLE_SYSTEM_MAP_LOOP_CONFIGS)
     op.drop_index("ix_system_map_loop_configs_revision_id", table_name=_TABLE_SYSTEM_MAP_LOOP_CONFIGS)
     op.drop_index("ix_system_map_loop_configs_organisation_id", table_name=_TABLE_SYSTEM_MAP_LOOP_CONFIGS)
 
+    op.drop_index("ix_system_map_relationships_deleted_by", table_name=_TABLE_SYSTEM_MAP_RELATIONSHIPS)
     op.drop_index("ix_system_map_relationships_revision_id", table_name=_TABLE_SYSTEM_MAP_RELATIONSHIPS)
     op.drop_index("ix_system_map_relationships_organisation_id", table_name=_TABLE_SYSTEM_MAP_RELATIONSHIPS)
 
+    op.drop_index("ix_system_map_nodes_deleted_by", table_name=_TABLE_SYSTEM_MAP_NODES)
     op.drop_index("ix_system_map_nodes_eval_id", table_name=_TABLE_SYSTEM_MAP_NODES)
     op.drop_index("ix_system_map_nodes_connector_instance_id", table_name=_TABLE_SYSTEM_MAP_NODES)
     op.drop_index("ix_system_map_nodes_pipeline_id", table_name=_TABLE_SYSTEM_MAP_NODES)
     op.drop_index("ix_system_map_nodes_revision_id", table_name=_TABLE_SYSTEM_MAP_NODES)
     op.drop_index("ix_system_map_nodes_organisation_id", table_name=_TABLE_SYSTEM_MAP_NODES)
 
+    op.drop_index("ix_system_map_revisions_deleted_by", table_name=_TABLE_SYSTEM_MAP_REVISIONS)
     op.drop_index("ix_system_map_revisions_status", table_name=_TABLE_SYSTEM_MAP_REVISIONS)
     op.drop_index("ix_system_map_revisions_system_map_id", table_name=_TABLE_SYSTEM_MAP_REVISIONS)
     op.drop_index("ix_system_map_revisions_organisation_id", table_name=_TABLE_SYSTEM_MAP_REVISIONS)
@@ -576,6 +622,10 @@ def downgrade() -> None:
     op.drop_index("ix_system_maps_owner_team_id", table_name=_TABLE_SYSTEM_MAPS)
     op.drop_index("ix_system_maps_organisation_id", table_name=_TABLE_SYSTEM_MAPS)
     op.execute("DROP INDEX IF EXISTS uq_system_maps_org_default_live")
+
+    for table in reversed(_ORG_SCOPED_TABLES):
+        if table != _TABLE_SYSTEM_MAPS:
+            op.drop_constraint("fk_" + table + "_deleted_by", table, type_="foreignkey")
 
     # The composite FK is a forward reference to system_map_revisions, so it
     # must be dropped before that table (which system_maps depends on).

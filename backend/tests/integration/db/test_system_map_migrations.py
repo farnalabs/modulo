@@ -187,6 +187,7 @@ class TestSystemMapMigratedSchema:
             "ix_system_map_revisions_organisation_id",
             "ix_system_map_revisions_system_map_id",
             "ix_system_map_revisions_status",
+            "ix_system_map_revisions_deleted_by",
         ):
             assert name in revisions_indexes, f"Index {name} not found on system_map_revisions"
 
@@ -340,12 +341,14 @@ class TestSystemMapModelRoundTrip:
         assert loaded_map.name == "Round Trip Map"
         assert loaded_map.visibility == "org"
         assert loaded_map.account_id == graph_parents.account_id
+        assert loaded_map.deleted_by is None
 
         loaded_revision = (
             await db_session.execute(select(SystemMapRevision).where(SystemMapRevision.id == revision.id))
         ).scalar_one()
         assert loaded_revision.revision_number == 1
         assert loaded_revision.content_json == {"test": "data"}
+        assert loaded_revision.deleted_by is None
 
     @pytest.mark.asyncio
     async def test_node_relationship_and_binding_round_trip(
@@ -386,11 +389,13 @@ class TestSystemMapModelRoundTrip:
         loaded_node = (await db_session.execute(select(SystemMapNode).where(SystemMapNode.id == node.id))).scalar_one()
         assert loaded_node.position_x == Decimal("1.50")
         assert loaded_node.deleted_at is None
+        assert loaded_node.deleted_by is None
 
         loaded_rel = (
             await db_session.execute(select(SystemMapRelationship).where(SystemMapRelationship.id == relationship.id))
         ).scalar_one()
         assert loaded_rel.relationship_type == "flow"
+        assert loaded_rel.deleted_by is None
 
         loaded_binding = (
             await db_session.execute(
@@ -398,6 +403,7 @@ class TestSystemMapModelRoundTrip:
             )
         ).scalar_one()
         assert loaded_binding.system_map_id == map_obj.id
+        assert loaded_binding.deleted_by is None
 
     @pytest.mark.asyncio
     async def test_loop_config_attempt_and_reservation_round_trip(
@@ -410,6 +416,7 @@ class TestSystemMapModelRoundTrip:
             await db_session.execute(select(SystemMapLoopConfig).where(SystemMapLoopConfig.id == loop_config.id))
         ).scalar_one()
         assert loaded_config.budget_limit_usd == Decimal("100.00")
+        assert loaded_config.deleted_by is None
 
         attempt = SystemMapLoopAdmissionAttempt(
             organisation_id=org_id,
@@ -434,6 +441,7 @@ class TestSystemMapModelRoundTrip:
             )
         ).scalar_one()
         assert loaded_attempt.status == "pending"
+        assert loaded_attempt.deleted_by is None
 
         loaded_reservation = (
             await db_session.execute(
@@ -442,3 +450,4 @@ class TestSystemMapModelRoundTrip:
         ).scalar_one()
         assert loaded_reservation.run_id == reservation.run_id
         assert loaded_reservation.status == "active"
+        assert loaded_reservation.deleted_by is None

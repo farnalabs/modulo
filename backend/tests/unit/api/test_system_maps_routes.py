@@ -646,7 +646,97 @@ def test_get_revision_returns_200(client: tuple[TestClient, _Harness]) -> None:
     assert body["status"] == "draft"
 
 
+def test_system_map_graph_serializes_deleted_by_from_real_orm_objects(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    from modulo.db.models.system_map import (
+        SystemMapLoopConfig,
+        SystemMapNode,
+        SystemMapRelationship,
+        SystemMapRevision,
+    )
+
+    deleted_by = uuid.uuid4()
+    revision = SystemMapRevision(
+        id=_REV_ID,
+        organisation_id=_ORG_ID,
+        system_map_id=_MAP_ID,
+        revision_number=1,
+        status="draft",
+        content_json={},
+    )
+    revision.deleted_by = deleted_by
+    revision.created_at = datetime.now(UTC)
+    revision.updated_at = datetime.now(UTC)
+    node = SystemMapNode(
+        id=uuid.uuid4(),
+        organisation_id=_ORG_ID,
+        revision_id=_REV_ID,
+        node_key="node-1",
+        node_type="pipeline",
+        display_name="Node 1",
+        config_json={},
+        position_x=Decimal(0),
+        position_y=Decimal(0),
+    )
+    node.deleted_by = deleted_by
+    node.created_at = datetime.now(UTC)
+    node.updated_at = datetime.now(UTC)
+    relationship = SystemMapRelationship(
+        id=uuid.uuid4(),
+        organisation_id=_ORG_ID,
+        revision_id=_REV_ID,
+        source_node_key="node-1",
+        target_node_key="node-2",
+        relationship_type="flow",
+        config_json={},
+    )
+    relationship.deleted_by = deleted_by
+    relationship.created_at = datetime.now(UTC)
+    relationship.updated_at = datetime.now(UTC)
+    loop_config = SystemMapLoopConfig(
+        id=uuid.uuid4(),
+        organisation_id=_ORG_ID,
+        revision_id=_REV_ID,
+        node_key="loop-1",
+        target_signal="error_rate",
+        observation_window_seconds=300,
+        action_pipeline_id=uuid.uuid4(),
+        budget_limit_usd=Decimal("10.00"),
+        cooldown_seconds=60,
+        outcome_metric="success_rate",
+    )
+    loop_config.deleted_by = deleted_by
+    loop_config.created_at = datetime.now(UTC)
+    loop_config.updated_at = datetime.now(UTC)
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub(
+        "get_revision_by_id",
+        AsyncMock(return_value=revision),
+    )
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": revision,
+                "nodes": [node],
+                "relationships": [relationship],
+                "loop_configs": [loop_config],
+            }
+        ),
+    )
+
+    response = http.get(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}", params={"include_graph": "true"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["revision"]["deleted_by"] == str(deleted_by)
+    assert body["nodes"][0]["deleted_by"] == str(deleted_by)
+    assert body["relationships"][0]["deleted_by"] == str(deleted_by)
+    assert body["loop_configs"][0]["deleted_by"] == str(deleted_by)
+
+
 def test_get_revision_with_graph_returns_detail(client: tuple[TestClient, _Harness]) -> None:
+
     http, harness = client
     harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
     harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row()))

@@ -36,6 +36,7 @@ class TestSystemMapModels:
         assert map_obj.default_map is False
         assert map_obj.visibility == "org"
         assert map_obj.account_id == account_id
+        assert map_obj.deleted_by is None
 
     def test_system_map_revision_creation(self):
         org_id = uuid.uuid4()
@@ -52,6 +53,7 @@ class TestSystemMapModels:
         assert revision.revision_number == 1
         assert revision.status == "draft"
         assert revision.content_json == {"nodes": [], "edges": []}
+        assert revision.deleted_by is None
 
     def test_system_map_node_creation(self):
         org_id = uuid.uuid4()
@@ -75,6 +77,7 @@ class TestSystemMapModels:
         assert node.config_json == {"key": "value"}
         assert node.position_x == Decimal("100.5")
         assert node.position_y == Decimal("200.0")
+        assert node.deleted_by is None
 
     def test_system_map_relationship_creation(self):
         org_id = uuid.uuid4()
@@ -93,6 +96,7 @@ class TestSystemMapModels:
         assert rel.target_node_key == "node_2"
         assert rel.relationship_type == "flow"
         assert rel.config_json == {"label": "data flow"}
+        assert rel.deleted_by is None
 
     def test_system_map_loop_config_creation(self):
         org_id = uuid.uuid4()
@@ -118,6 +122,7 @@ class TestSystemMapModels:
         assert loop_config.budget_limit_usd == Decimal("100.00")
         assert loop_config.cooldown_seconds == 1800
         assert loop_config.outcome_metric == "error_rate"
+        assert loop_config.deleted_by is None
 
     def test_system_map_attribution_binding_creation(self):
         org_id = uuid.uuid4()
@@ -135,6 +140,7 @@ class TestSystemMapModels:
         assert binding.system_map_id == map_id
         assert binding.node_key == "node_1"
         assert binding.binding_kind == "trigger"
+        assert binding.deleted_by is None
 
     def test_system_map_loop_admission_attempt_creation(self):
         org_id = uuid.uuid4()
@@ -149,6 +155,7 @@ class TestSystemMapModels:
         assert attempt.loop_config_id == loop_config_id
         assert attempt.idempotency_key == "idem_key_123"
         assert attempt.status == "pending"
+        assert attempt.deleted_by is None
 
     def test_system_map_loop_reservation_creation(self):
         org_id = uuid.uuid4()
@@ -167,6 +174,7 @@ class TestSystemMapModels:
         assert reservation.run_id == run_id
         assert reservation.idempotency_key == "res_key_456"
         assert reservation.status == "active"
+        assert reservation.deleted_by is None
 
 
 class TestSystemMapModelConstraints:

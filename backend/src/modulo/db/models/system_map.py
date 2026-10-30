@@ -146,6 +146,9 @@ class SystemMapRevision(SoftDeleteMixin, OrgScoped):
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="draft")
     content_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
+    )
 
     system_map: Mapped[SystemMap] = relationship(back_populates="revisions")
     nodes: Mapped[list["SystemMapNode"]] = relationship(
@@ -196,6 +199,9 @@ class SystemMapNode(SoftDeleteMixin, OrgScoped):
     )
     position_x: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, server_default="0")
     position_y: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, server_default="0")
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
+    )
 
     revision: Mapped[SystemMapRevision] = relationship(back_populates="nodes")
 
@@ -223,6 +229,9 @@ class SystemMapRelationship(SoftDeleteMixin, OrgScoped):
     target_node_key: Mapped[str] = mapped_column(String(100), nullable=False)
     relationship_type: Mapped[str] = mapped_column(String(50), nullable=False)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
+    )
 
     revision: Mapped[SystemMapRevision] = relationship(back_populates="relationships")
 
@@ -251,6 +260,9 @@ class SystemMapLoopConfig(SoftDeleteMixin, OrgScoped):
     budget_limit_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     outcome_metric: Mapped[str] = mapped_column(String(100), nullable=False)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
+    )
 
     revision: Mapped[SystemMapRevision] = relationship(back_populates="loop_configs")
     action_pipeline: Mapped["Pipeline"] = relationship(foreign_keys=[action_pipeline_id])
@@ -283,6 +295,9 @@ class SystemMapAttributionBinding(SoftDeleteMixin, OrgScoped):
     )
     node_key: Mapped[str] = mapped_column(String(100), nullable=False)
     binding_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
+    )
 
     system_map: Mapped[SystemMap] = relationship(back_populates="attribution_bindings")
     pipeline: Mapped["Pipeline"] = relationship(foreign_keys=[pipeline_id])
@@ -304,6 +319,9 @@ class SystemMapLoopAdmissionAttempt(SoftDeleteMixin, OrgScoped):
     )
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
+    )
 
     loop_config: Mapped[SystemMapLoopConfig] = relationship(back_populates="admission_attempts")
 
@@ -330,5 +348,8 @@ class SystemMapLoopReservation(SoftDeleteMixin, OrgScoped):
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="active")
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
+    )
 
     loop_config: Mapped[SystemMapLoopConfig] = relationship(back_populates="reservations")
