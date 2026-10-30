@@ -218,6 +218,20 @@ describe('CardHeader and DataCard', () => {
     expect(actionOnly.find('.card-header').exists()).toBe(true)
   })
 
+  it('supports a leading slot and optional divider without changing the default header', () => {
+    const composed = mount(CardHeader, {
+      props: { title: 'Housekeeping', divider: true },
+      slots: { leading: '<input type="checkbox" aria-label="Select" />' },
+    })
+    const plain = mount(CardHeader, { props: { title: 'Plain' } })
+
+    expect(composed.find('input[aria-label="Select"]').exists()).toBe(true)
+    expect(composed.find('.card-header').classes()).toEqual(
+      expect.arrayContaining(['border-b', 'border-border', 'pb-3']),
+    )
+    expect(plain.find('.card-header').classes()).not.toContain('border-b')
+  })
+
   it('uses custom description styling instead of the default muted class', () => {
     const custom = mount(CardHeader, {
       props: { description: 'Custom description', descriptionClass: 'text-destructive' },
@@ -363,21 +377,29 @@ describe('MetricCard', () => {
      })
 
 
-    it.each([
-      [{ value: 50, max: 100, color: 'success' }, 'bg-success'],
-      [{ value: 50, max: 100, color: 'warning' }, 'bg-warning'],
-      [{ value: 50, max: 100, color: 'destructive' }, 'bg-destructive'],
-      [{ value: 50, max: 100, color: 'primary' }, 'bg-primary'],
+     it.each([
+       [{ value: 50, max: 100, color: 'success' }, 'bg-success'],
+       [{ value: 95, max: 100, color: 'success' }, 'bg-success'],
+       [{ value: 100, max: 100, color: 'success' }, 'bg-success'],
+       [{ value: 50, max: 100, color: 'warning' }, 'bg-warning'],
+       [{ value: 95, max: 100, color: 'warning' }, 'bg-warning'],
+       [{ value: 100, max: 100, color: 'warning' }, 'bg-warning'],
+       [{ value: 50, max: 100, color: 'destructive' }, 'bg-destructive'],
+       [{ value: 95, max: 100, color: 'destructive' }, 'bg-destructive'],
+       [{ value: 100, max: 100, color: 'destructive' }, 'bg-destructive'],
+       [{ value: 50, max: 100, color: 'primary' }, 'bg-primary'],
+       [{ value: 95, max: 100, color: 'primary' }, 'bg-primary'],
+       [{ value: 100, max: 100, color: 'primary' }, 'bg-primary'],
        [{ value: 50, max: 100 }, 'bg-primary'],
-       [{ value: 95, max: 100 }, 'bg-warning'],
-       [{ value: 95, max: 100, color: 'primary' }, 'bg-warning'],
+       [{ value: 74, max: 100 }, 'bg-primary'],
+       [{ value: 75, max: 100 }, 'bg-warning'],
+       [{ value: 99, max: 100 }, 'bg-warning'],
+       [{ value: 100, max: 100 }, 'bg-destructive'],
+     ] as const)('maps progress %o to %s', (progress, expectedClass) => {
+        const wrapper = mount(MetricCard, { props: { label: 'Capacity', value: 'Half', progress } })
 
-      [{ value: 80, max: 100, color: 'primary' }, 'bg-amber-500'],
-    ] as const)('maps progress %o to %s', (progress, expectedClass) => {
-      const wrapper = mount(MetricCard, { props: { label: 'Capacity', value: 'Half', progress } })
-
-      expect(wrapper.find('[style]').classes()).toContain(expectedClass)
-    })
+        expect(wrapper.find('[style]').classes()).toContain(expectedClass)
+     })
  })
 
 describe('StatCard', () => {
