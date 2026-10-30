@@ -272,6 +272,8 @@ _CI_FAILURE_COALESCE_WINDOW_SECONDS = 3600  # 1 hour
 # and would mute same-head re-failures for far too long.
 _CI_FAILURE_COALESCE_WINDOW_MAX_SECONDS = 7 * 24 * 60 * 60  # 7 days
 _REPLAY_WINDOW_SECONDS = 300  # ±300s for X-Modulo-Timestamp
+# HMAC signature scheme prefix shared by the Modulo and GitHub header formats.
+_SIGNATURE_PREFIX = "sha256="
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +329,7 @@ def verify_hmac(raw_body: bytes, secret: str, signature_header: str | None, time
     if signature_header is None:
         return False
     payload = f"{timestamp}.".encode() + raw_body if timestamp is not None else raw_body
-    expected = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    expected = _SIGNATURE_PREFIX + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
     # Compare as UTF-8 bytes: ``hmac.compare_digest`` raises ``TypeError`` on str
     # operands containing non-ASCII characters. ``signature_header`` is
     # attacker-controlled and Starlette decodes header bytes as latin-1, so a
@@ -344,9 +346,9 @@ def verify_github_signature(raw_body: bytes, secret: str, signature_header: str 
     no replay window (replays are bounded only by payload dedup). Fails closed on
     a missing header, a missing ``sha256=`` prefix or a non-matching digest.
     """
-    if signature_header is None or not signature_header.startswith("sha256="):
+    if signature_header is None or not signature_header.startswith(_SIGNATURE_PREFIX):
         return False
-    expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    expected = _SIGNATURE_PREFIX + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     # Bytes comparison: attacker-controlled non-ASCII header text must not raise.
     return hmac.compare_digest(expected.encode("utf-8"), signature_header.encode("utf-8"))
 
