@@ -10,7 +10,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Select, select, update
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.system_map import (
@@ -24,14 +25,26 @@ from modulo.db.models.system_map import (
     SystemMapRevision,
 )
 from modulo.db.repositories.base import BaseRepository
+from modulo.db.soft_delete import include_soft_deleted
+
+_UPDATABLE_NODE_FIELDS = frozenset(
+    {
+        "node_key",
+        "node_type",
+        "display_name",
+        "config_json",
+        "pipeline_id",
+        "connector_instance_id",
+        "owner_team_id",
+        "eval_id",
+        "position_x",
+        "position_y",
+    }
+)
 
 
 class SystemMapRepository(BaseRepository):  # vulture: ignore
     """Repository for System Maps entities."""
-
-    def apply_tenant_filter(self, stmt: Select[Any], _org_id: uuid.UUID) -> Select[Any]:
-        """Postgres RLS handles tenant isolation; return statement unchanged."""
-        return stmt
 
     # ─── SystemMap CRUD ───
 
@@ -86,8 +99,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             SystemMap.id == map_id,
             SystemMap.organisation_id == organisation_id,
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMap.deleted_at.is_(None))
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMap.deleted_at.is_(None))
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -110,8 +122,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             .limit(limit)
             .offset(offset)
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMap.deleted_at.is_(None))
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMap.deleted_at.is_(None))
         if visibility:
             stmt = stmt.where(SystemMap.visibility == visibility)
         if owner_team_id:
@@ -213,8 +224,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             SystemMapRevision.id == revision_id,
             SystemMapRevision.organisation_id == organisation_id,
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMapRevision.deleted_at.is_(None))
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapRevision.deleted_at.is_(None))
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -275,8 +285,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             .limit(limit)
             .offset(offset)
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMapRevision.deleted_at.is_(None))
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapRevision.deleted_at.is_(None))
         if status:
             stmt = stmt.where(SystemMapRevision.status == status)
         result = await session.execute(stmt)
@@ -371,8 +380,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             SystemMapNode.id == node_id,
             SystemMapNode.organisation_id == organisation_id,
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMapNode.deleted_at.is_(None))
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapNode.deleted_at.is_(None))
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -411,8 +419,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             )
             .order_by(SystemMapNode.node_key)
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMapNode.deleted_at.is_(None))
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapNode.deleted_at.is_(None))
         result = await session.execute(stmt)
         return result.scalars().all()
 
@@ -424,13 +431,20 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         node_id: uuid.UUID,
         **kwargs: Any,
     ) -> SystemMapNode | None:
-        """Update a node's fields."""
+        """Update a node's fields.
+
+        Unknown keys raise ``ValueError`` instead of being silently discarded:
+        a typo in a caller's kwargs must fail loudly rather than produce a
+        no-op update that looks successful.
+        """
+        unknown = set(kwargs) - _UPDATABLE_NODE_FIELDS
+        if unknown:
+            raise ValueError(f"Unknown SystemMapNode field(s): {', '.join(sorted(unknown))}")
         node = await self.get_node_by_id(session, organisation_id=organisation_id, node_id=node_id)
         if not node:
             return None
         for key, value in kwargs.items():
-            if hasattr(node, key):
-                setattr(node, key, value)
+            setattr(node, key, value)
         await session.flush()
         return node
 
@@ -492,8 +506,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             )
             .order_by(SystemMapRelationship.source_node_key, SystemMapRelationship.target_node_key)
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMapRelationship.deleted_at.is_(None))
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapRelationship.deleted_at.is_(None))
         result = await session.execute(stmt)
         return result.scalars().all()
 
@@ -562,8 +575,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             SystemMapLoopConfig.id == loop_config_id,
             SystemMapLoopConfig.organisation_id == organisation_id,
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMapLoopConfig.deleted_at.is_(None))
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapLoopConfig.deleted_at.is_(None))
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -602,8 +614,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             )
             .order_by(SystemMapLoopConfig.node_key)
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMapLoopConfig.deleted_at.is_(None))
+        stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapLoopConfig.deleted_at.is_(None))
         result = await session.execute(stmt)
         return result.scalars().all()
 
@@ -646,8 +657,11 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             SystemMapAttributionBinding.id == binding_id,
             SystemMapAttributionBinding.organisation_id == organisation_id,
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMapAttributionBinding.deleted_at.is_(None))
+        stmt = (
+            include_soft_deleted(stmt)
+            if include_deleted
+            else stmt.where(SystemMapAttributionBinding.deleted_at.is_(None))
+        )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -664,8 +678,11 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
     ) -> Sequence[SystemMapAttributionBinding]:
         """List attribution bindings with optional filters."""
         stmt = select(SystemMapAttributionBinding).where(SystemMapAttributionBinding.organisation_id == organisation_id)
-        if not include_deleted:
-            stmt = stmt.where(SystemMapAttributionBinding.deleted_at.is_(None))
+        stmt = (
+            include_soft_deleted(stmt)
+            if include_deleted
+            else stmt.where(SystemMapAttributionBinding.deleted_at.is_(None))
+        )
         if pipeline_id:
             stmt = stmt.where(SystemMapAttributionBinding.pipeline_id == pipeline_id)
         if trigger_id:
@@ -744,16 +761,20 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         idempotency_key: str,
         status: str = "pending",
     ) -> SystemMapLoopAdmissionAttempt:
-        """Create or get an admission attempt (idempotent on idempotency_key)."""
-        # Try to find existing
-        existing = await session.execute(
-            select(SystemMapLoopAdmissionAttempt).where(
-                SystemMapLoopAdmissionAttempt.loop_config_id == loop_config_id,
-                SystemMapLoopAdmissionAttempt.idempotency_key == idempotency_key,
-                SystemMapLoopAdmissionAttempt.organisation_id == organisation_id,
-            )
+        """Create or get an admission attempt (idempotent on idempotency_key).
+
+        The fast path reuses an existing row; concurrent creators race on the
+        ``(loop_config_id, idempotency_key)`` unique constraint, so the insert
+        runs in a savepoint and an ``IntegrityError`` re-reads the winner
+        instead of surfacing a 500. A soft-deleted attempt still occupies the
+        unique key, so both reads opt out of the global soft-delete filter.
+        """
+        existing_attempt = await self._get_admission_attempt(
+            session,
+            organisation_id=organisation_id,
+            loop_config_id=loop_config_id,
+            idempotency_key=idempotency_key,
         )
-        existing_attempt = existing.scalar_one_or_none()
         if existing_attempt:
             return existing_attempt
 
@@ -763,9 +784,38 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             idempotency_key=idempotency_key,
             status=status,
         )
-        session.add(attempt)
-        await session.flush()
+        try:
+            async with session.begin_nested():
+                session.add(attempt)
+        except IntegrityError:
+            existing_attempt = await self._get_admission_attempt(
+                session,
+                organisation_id=organisation_id,
+                loop_config_id=loop_config_id,
+                idempotency_key=idempotency_key,
+            )
+            if existing_attempt is None:
+                raise
+            return existing_attempt
         return attempt
+
+    async def _get_admission_attempt(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        loop_config_id: uuid.UUID,
+        idempotency_key: str,
+    ) -> SystemMapLoopAdmissionAttempt | None:
+        stmt = include_soft_deleted(
+            select(SystemMapLoopAdmissionAttempt).where(
+                SystemMapLoopAdmissionAttempt.loop_config_id == loop_config_id,
+                SystemMapLoopAdmissionAttempt.idempotency_key == idempotency_key,
+                SystemMapLoopAdmissionAttempt.organisation_id == organisation_id,
+            )
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def update_admission_attempt_status(
         self,
@@ -801,16 +851,19 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         cooldown_until: datetime,
         status: str = "active",
     ) -> SystemMapLoopReservation:
-        """Create or get a reservation (idempotent on idempotency_key)."""
-        # Try to find existing
-        existing = await session.execute(
-            select(SystemMapLoopReservation).where(
-                SystemMapLoopReservation.loop_config_id == loop_config_id,
-                SystemMapLoopReservation.idempotency_key == idempotency_key,
-                SystemMapLoopReservation.organisation_id == organisation_id,
-            )
+        """Create or get a reservation (idempotent on idempotency_key).
+
+        Concurrent creators race on ``(loop_config_id, idempotency_key)``: the
+        insert is wrapped in a savepoint and an ``IntegrityError`` re-reads the
+        winning row. Soft-deleted reservations still occupy the unique key, so
+        the reads opt out of the global soft-delete filter.
+        """
+        existing_reservation = await self._get_reservation_by_key(
+            session,
+            organisation_id=organisation_id,
+            loop_config_id=loop_config_id,
+            idempotency_key=idempotency_key,
         )
-        existing_reservation = existing.scalar_one_or_none()
         if existing_reservation:
             return existing_reservation
 
@@ -822,9 +875,38 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             cooldown_until=cooldown_until,
             status=status,
         )
-        session.add(reservation)
-        await session.flush()
+        try:
+            async with session.begin_nested():
+                session.add(reservation)
+        except IntegrityError:
+            existing_reservation = await self._get_reservation_by_key(
+                session,
+                organisation_id=organisation_id,
+                loop_config_id=loop_config_id,
+                idempotency_key=idempotency_key,
+            )
+            if existing_reservation is None:
+                raise
+            return existing_reservation
         return reservation
+
+    async def _get_reservation_by_key(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        loop_config_id: uuid.UUID,
+        idempotency_key: str,
+    ) -> SystemMapLoopReservation | None:
+        stmt = include_soft_deleted(
+            select(SystemMapLoopReservation).where(
+                SystemMapLoopReservation.loop_config_id == loop_config_id,
+                SystemMapLoopReservation.idempotency_key == idempotency_key,
+                SystemMapLoopReservation.organisation_id == organisation_id,
+            )
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_reservation_by_id(
         self,
@@ -839,8 +921,9 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             SystemMapLoopReservation.id == reservation_id,
             SystemMapLoopReservation.organisation_id == organisation_id,
         )
-        if not include_deleted:
-            stmt = stmt.where(SystemMapLoopReservation.deleted_at.is_(None))
+        stmt = (
+            include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMapLoopReservation.deleted_at.is_(None))
+        )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -923,7 +1006,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         Returns (is_valid, list_of_errors). Checks:
         1. Acyclicity of 'flow' edges (DFS on revision's relationships).
         2. Loop config completeness: every 'improvement_loop' node must have a
-           system_map_loop_configs row with all 7 params.
+           system_map_loop_configs row with all six required parameters.
         3. Pipeline binding resolution: all referenced pipelines exist and are same-org.
         """
         errors: list[str] = []
@@ -945,18 +1028,20 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             )
             if not loop_config:
                 errors.append(f"Improvement loop node '{loop_node.node_key}' missing loop config")
-            # Verify all 7 required params are present
-            elif not all(
-                [
-                    loop_config.target_signal,
-                    loop_config.observation_window_seconds,
-                    loop_config.action_pipeline_id,
-                    loop_config.budget_limit_usd is not None,
-                    loop_config.cooldown_seconds is not None,
-                    loop_config.outcome_metric,
+            else:
+                required = (
+                    ("target_signal", loop_config.target_signal),
+                    ("observation_window_seconds", loop_config.observation_window_seconds),
+                    ("action_pipeline_id", loop_config.action_pipeline_id),
+                    ("budget_limit_usd", loop_config.budget_limit_usd),
+                    ("cooldown_seconds", loop_config.cooldown_seconds),
+                    ("outcome_metric", loop_config.outcome_metric),
+                )
+                missing = [
+                    name for name, value in required if value is None or (isinstance(value, str) and not value.strip())
                 ]
-            ):
-                errors.append(f"Loop config for '{loop_node.node_key}' is incomplete")
+                if missing:
+                    errors.append(f"Loop config for '{loop_node.node_key}' is incomplete: missing {', '.join(missing)}")
 
         # 3. Pipeline binding resolution
         for node in nodes:
