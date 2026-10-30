@@ -21,6 +21,7 @@ so the profile list stays broadly readable while this capacity read does not
 (FAR-1955). Apply-template requires ``environment_profile.update``.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -343,9 +344,16 @@ async def get_runners_status(
         preflight=_preflight(contract.cap, engine_infos),
     )
 
+    # FAR-2239 audit: docker_engine_configured() resolves the Docker endpoint
+    # synchronously (docker-context config.json read + json parse, local
+    # socket is_socket() checks) — the same FAR-1439/FAR-1771 class the
+    # health checks off-thread. Move it off the event loop; behaviour is
+    # identical, only no longer a potential stall source.
+    engine_configured = await asyncio.to_thread(docker_engine_configured)
+
     return RunnersStatusResponse(
         aggregate_state=aggregate,
-        engine_configured=docker_engine_configured(),
+        engine_configured=engine_configured,
         probe_interval_seconds=PROBE_INTERVAL_SECONDS,
         staleness_threshold_seconds=PROBE_STALENESS_THRESHOLD_SECONDS,
         machines=machines,
