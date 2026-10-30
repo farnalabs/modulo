@@ -139,6 +139,13 @@ rate-limited by the `TriggerEngine`.
       signature and `X-Modulo-Timestamp` freshness (±300s replay window) are
       required – missing/invalid HMAC or stale timestamp → 401, unknown trigger
       → 404, accepted → 202
+- [x] Webhook delivery also accepts GitHub's `X-Hub-Signature-256`
+      (`sha256=` HMAC-SHA256 of the exact raw body, keyed by the trigger's
+      `hmac_secret`) when NO `X-Modulo-*` header is sent, so a native GitHub
+      repo webhook can post straight to a trigger. Mismatch, wrong prefix or
+      non-hex → 401. If any Modulo header is present the Modulo scheme is used
+      with no fallback. GitHub's scheme has no timestamp, so there is no replay
+      window; the payload-hash dedup (400 on repeat) is the only replay bound
 - [x] Flood protection: a duplicate payload hash → 400 and rapid duplicates are
       rate-limited → 429
 - [x] Webhook payload mapping: event filters and field mappings are applied to

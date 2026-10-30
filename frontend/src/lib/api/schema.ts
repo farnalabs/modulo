@@ -5631,6 +5631,10 @@ export interface paths {
          *
          *     Requires X-Modulo-Timestamp header (Unix seconds, ±300s window).
          *     Requires X-Modulo-Webhook-Secret header if trigger has hmac_secret configured.
+         *     Alternatively, when no Modulo header is sent, GitHub's ``X-Hub-Signature-256``
+         *     (``sha256=`` HMAC-SHA256 of the raw body keyed by the trigger's hmac_secret) is
+         *     accepted. That scheme carries no timestamp, so it has no replay window; payload
+         *     dedup bounds replays. If any Modulo header is present, the Modulo scheme is used.
          *
          *     ADR 047 exempt-channel: this route is CSRF-exempt via the audited
          *     ``/api/v1/triggers/`` prefix and exempt from the org-role sweep because it

@@ -10,6 +10,7 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,7 +20,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, create_access_token
-from modulo.core.trigger_engine import TriggerNotFoundError
+from modulo.core.trigger_engine import TriggerNotFoundError, verify_github_signature
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import Settings, get_settings
 from tests.unit.api.conftest import make_system_session_mock
@@ -1858,3 +1859,160 @@ def test_receive_webhook_inactive_trigger_skips_pause_precheck() -> None:
 
     assert resp.status_code == 202
     resume.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-2241: GitHub X-Hub-Signature-256 on trigger webhooks
+# ---------------------------------------------------------------------------
+
+_GH_SECRET = "test-hmac-secret"
+_GH_BODY = b'{"action": "submitted", "review": {"state": "approved"}}'
+
+
+def _gh_signature(body: bytes, secret: str = _GH_SECRET) -> str:
+    return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _modulo_signature(body: bytes, ts: int, secret: str = _GH_SECRET) -> str:
+    return "sha256=" + hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+
+
+def _post_with_secret_trigger(
+    client: TestClient, headers: dict[str, str], body: bytes = _GH_BODY
+) -> tuple[Any, AsyncMock]:
+    """POST to a trigger holding ``_GH_SECRET``; returns (response, handle_webhook mock)."""
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": _GH_SECRET})
+    app_session = _make_mock_session()
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    async def override_app_session() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[get_db_session] = override_app_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.dispatch_run", new=AsyncMock(return_value=("enqueued", "job-id"))),
+            patch("modulo.api.routes.webhooks.set_rls_org", new=AsyncMock()),
+        ):
+            m.return_value = (_make_mock_run(), None, {})
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                content=body,
+                headers={"Content-Type": "application/json", **headers},
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
+    return resp, m
+
+
+def test_github_signature_valid_returns_202_and_marks_engine(client: TestClient) -> None:
+    resp, engine = _post_with_secret_trigger(client, {"X-Hub-Signature-256": _gh_signature(_GH_BODY)})
+
+    assert resp.status_code == 202, resp.text
+    assert engine.call_args.kwargs["github_signature_verified"] is True
+
+
+def test_github_signature_wrong_secret_returns_401(client: TestClient) -> None:
+    resp, engine = _post_with_secret_trigger(
+        client, {"X-Hub-Signature-256": _gh_signature(_GH_BODY, secret="other-secret")}
+    )
+
+    assert resp.status_code == 401
+    engine.assert_not_called()
+
+
+def test_github_signature_over_different_body_returns_401(client: TestClient) -> None:
+    resp, engine = _post_with_secret_trigger(client, {"X-Hub-Signature-256": _gh_signature(b'{"action": "other"}')})
+
+    assert resp.status_code == 401
+    engine.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        hmac.new(_GH_SECRET.encode(), _GH_BODY, hashlib.sha256).hexdigest(),
+        "sha1=" + "ab" * 20,
+        "sha256=",
+        "sha256=not-hex-at-all",
+    ],
+)
+def test_github_signature_malformed_returns_401(client: TestClient, header: str) -> None:
+    resp, engine = _post_with_secret_trigger(client, {"X-Hub-Signature-256": header})
+
+    assert resp.status_code == 401
+    engine.assert_not_called()
+
+
+def test_secret_trigger_with_no_signature_headers_returns_401(client: TestClient) -> None:
+    resp, engine = _post_with_secret_trigger(client, {})
+
+    assert resp.status_code == 401
+    engine.assert_not_called()
+
+
+def test_modulo_header_path_unchanged_for_valid_signature(client: TestClient) -> None:
+    ts = int(time.time())
+    resp, engine = _post_with_secret_trigger(
+        client,
+        {"X-Modulo-Timestamp": str(ts), "X-Modulo-Webhook-Secret": _modulo_signature(_GH_BODY, ts)},
+    )
+
+    assert resp.status_code == 202, resp.text
+    assert engine.call_args.kwargs["github_signature_verified"] is False
+
+
+def test_modulo_headers_win_when_both_present_and_github_signature_valid(client: TestClient) -> None:
+    """A bad Modulo signature is never rescued by a valid GitHub signature."""
+    ts = int(time.time())
+    resp, engine = _post_with_secret_trigger(
+        client,
+        {
+            "X-Modulo-Timestamp": str(ts),
+            "X-Modulo-Webhook-Secret": "sha256=bad",
+            "X-Hub-Signature-256": _gh_signature(_GH_BODY),
+        },
+    )
+
+    assert resp.status_code == 401
+    engine.assert_not_called()
+
+
+def test_modulo_timestamp_alone_does_not_fall_back_to_github_signature(client: TestClient) -> None:
+    resp, engine = _post_with_secret_trigger(
+        client,
+        {"X-Modulo-Timestamp": str(int(time.time())), "X-Hub-Signature-256": _gh_signature(_GH_BODY)},
+    )
+
+    assert resp.status_code == 401
+    engine.assert_not_called()
+
+
+def test_hmacless_trigger_ignores_github_signature_header(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.dispatch_run", new=AsyncMock(return_value=("enqueued", "job-id"))),
+        patch("modulo.api.routes.webhooks.set_rls_org", new=AsyncMock()),
+    ):
+        m.return_value = (_make_mock_run(), None, {})
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Hub-Signature-256": "sha256=garbage"},
+        )
+
+    assert resp.status_code == 202
+    assert m.call_args.kwargs["github_signature_verified"] is False
+
+
+def test_verify_github_signature_non_ascii_header_is_rejected_not_raised() -> None:
+    assert verify_github_signature(_GH_BODY, _GH_SECRET, "sha256=éé") is False
+
+
+def test_verify_github_signature_none_header_is_rejected() -> None:
+    assert verify_github_signature(_GH_BODY, _GH_SECRET, None) is False
