@@ -9,6 +9,7 @@ pre-deploy wiring intact — the same reasoning as the sibling
 
 import importlib.util
 import re
+import textwrap
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,6 +18,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+BUNDLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "bundle-release.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 NATIVE_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml"
 
@@ -43,6 +45,12 @@ def _upload_step_name(suffix: str) -> str:
     return f"Upload migration machine logs ({suffix})"
 
 
+def _python_heredoc(run_script: str, marker: str = "PY") -> str:
+    match = re.search(rf"python - <<'{marker}'\n(?P<body>.*?)\n\s*{marker}", run_script, re.DOTALL)
+    assert match is not None, "expected embedded Python heredoc"
+    return textwrap.dedent(match.group("body"))
+
+
 def _release_validator() -> Any:
     spec = importlib.util.spec_from_file_location(
         "validate_release_tag", REPO_ROOT / "scripts" / "validate_release_tag.py"
@@ -52,6 +60,20 @@ def _release_validator() -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_release_signature_heredocs_compile_as_python() -> None:
+    workflows = ((BUNDLE_WORKFLOW, "PYEOF"), (RELEASE_WORKFLOW, "PY"))
+    for workflow_path, marker in workflows:
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        scripts = [
+            step["run"]
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if "verify_signature" in step.get("run", "") and "MANIFEST_SIGNING_KEY" in step.get("run", "")
+        ]
+        assert len(scripts) == 1, f"expected one signing script in {workflow_path}"
+        compile(_python_heredoc(scripts[0], marker), str(workflow_path), "exec")
 
 
 def test_rehearsal_step_exists_before_real_migrations_per_leg() -> None:
