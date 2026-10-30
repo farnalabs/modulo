@@ -114,6 +114,9 @@ jobs:
     # a review.
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'cancelled'
     runs-on: ubicloud-standard-2
+    env:
+      CI_WORKFLOW: "CI: Fast Validation"
+      REPO: ${{ github.repository }}
     steps:
       - name: Set PR details
         id: pr-details

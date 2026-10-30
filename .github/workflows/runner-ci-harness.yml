@@ -29,6 +29,9 @@ env:
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
   GIT_CONFIG_VALUE_0: "https://github.com/"
+  PYTEST_DOCKER_CMD: "uv run --no-build --no-sync pytest tests/docker/test_bundled_runner_harness.py tests/docker/test_runners_strip_e2e.py tests/docker/test_runner_bundled.py tests/docker/test_watchdog_container.py -m docker --tb=short -q --timeout=600 -W error::pytest.PytestUnraisableExceptionWarning --disable-warnings"
+  COMPOSE_FILE: "deploy/compose/runner-ci.yml"
+  COMPOSE_PROFILE: "runner-ci"
 
 permissions:
   contents: read
@@ -170,7 +173,7 @@ jobs:
           # job (mirrors the Playwright install retry in bdd.yml).
           up_ok=0
           for i in 1 2 3 4 5; do
-            if docker compose -f deploy/compose/runner-ci.yml --profile runner-ci up -d; then
+            if docker compose -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" up -d; then
               up_ok=1
               break
             fi
@@ -180,11 +183,11 @@ jobs:
           done
           if [ "$up_ok" -ne 1 ]; then
             echo "::error::runner-ci compose rig failed to boot after 5 attempts"
-            docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs || true
+            docker compose -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" logs || true
             exit 1
           fi
-          PROXY_PORT="$(docker compose -f deploy/compose/runner-ci.yml --profile runner-ci port docker-socket-proxy 2375 | awk -F: '{print $NF}')"
-          DIND_PORT="$(docker compose -f deploy/compose/runner-ci.yml --profile runner-ci port dind 2375 | awk -F: '{print $NF}')"
+          PROXY_PORT="$(docker compose -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" port docker-socket-proxy 2375 | awk -F: '{print $NF}')"
+          DIND_PORT="$(docker compose -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" port dind 2375 | awk -F: '{print $NF}')"
           echo "PROXY_PORT=${PROXY_PORT}" >> "$GITHUB_ENV"
           echo "DIND_PORT=${DIND_PORT}" >> "$GITHUB_ENV"
           for i in $(seq 1 40); do
@@ -194,7 +197,7 @@ jobs:
             fi
             if [ "$i" = "40" ]; then
               echo "::error::socket-proxy did not become ready"
-              docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs docker-socket-proxy || true
+              docker compose -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" logs docker-socket-proxy || true
               exit 1
             fi
             sleep 2
@@ -206,7 +209,7 @@ jobs:
             fi
             if [ "$i" = "60" ]; then
               echo "::error::dind engine did not become ready"
-              docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs dind || true
+              docker compose -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" logs dind || true
               exit 1
             fi
             sleep 2
@@ -228,8 +231,7 @@ jobs:
           MODULO_RUNNER_HARNESS_PROXY_HOST: "127.0.0.1:${{ env.PROXY_PORT }}"
           MODULO_RUNNER_HARNESS_DIND_HOST: "tcp://127.0.0.1:${{ env.DIND_PORT }}"
           MODULO_RUNNER_HARNESS_NETWORK: "runner-ci-workspace"
-        run: |
-          uv run --no-build --no-sync pytest tests/docker/test_bundled_runner_harness.py tests/docker/test_runners_strip_e2e.py tests/docker/test_runner_bundled.py tests/docker/test_watchdog_container.py -m docker --tb=short -q --timeout=600 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+        run: $PYTEST_DOCKER_CMD
       - name: Proxy log completeness dump (always)
         if: always() && steps.changed.outputs.changed == 'true'
         shell: bash
@@ -237,11 +239,9 @@ jobs:
         # Keep the proxy's per-request log in the job output: a failed
         # completeness assertion names its 403/PR-- lines, and this dump
         # preserves the full request trail for triage.
-        run: |
-          docker compose -f deploy/compose/runner-ci.yml --profile runner-ci logs docker-socket-proxy || true
+        run: docker compose -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" logs docker-socket-proxy || true
       - name: Tear down the compose rig
         if: always() && steps.changed.outputs.changed == 'true'
         shell: bash
         working-directory: .
-        run: |
-          docker compose -f deploy/compose/runner-ci.yml --profile runner-ci down -v --remove-orphans
+        run: docker compose -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" down -v --remove-orphans

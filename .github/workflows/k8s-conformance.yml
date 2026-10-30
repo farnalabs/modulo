@@ -150,6 +150,11 @@ env:
   KUBECTL_VERSION: v1.36.0
   HELM_VERSION: v3.21.4
   KIND_CLUSTER_NAME: modulo-conformance
+  KUBECTL_URL: "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+  HELM_URL: "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+  KIND_URL: "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+  PYTEST_CMD: "uv run --no-build --no-sync pytest tests/conformance/ -m runtime_provider_conformance --tb=short -q --timeout=600 -W error::pytest.PytestUnraisableExceptionWarning --disable-warnings"
+  STAMP_CMD: "date -u +%Y-%m-%dT%H:%M:%SZ"
 
 permissions:
   contents: read
@@ -263,7 +268,7 @@ jobs:
         # either output while the cluster tooling below stays gated on
         # `changed` alone.
         run: |
-          curl -fsSL --proto '=https' --proto-redir '=https' -o helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          curl -fsSL --proto '=https' --proto-redir '=https' -o helm.tgz "$HELM_URL"
           tar -xzf helm.tgz
           sudo mv linux-amd64/helm /usr/local/bin/helm
           rm -rf helm.tgz linux-amd64
@@ -275,9 +280,9 @@ jobs:
         shell: bash
         timeout-minutes: 5
         run: |
-          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kind "$KIND_URL"
           chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
-          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kubectl "$KUBECTL_URL"
           chmod +x ./kubectl && sudo mv ./kubectl /usr/local/bin/kubectl
           kind version
           kubectl version --client=true
@@ -352,7 +357,7 @@ jobs:
         # ``tests/conformance`` is in GATED_SUITE_ROOTS (audited green against
         # kind on 2026-10-23), so the escalation rides along for defence in
         # depth and the architecture gate pins it here.
-        run: uv run --no-build --no-sync pytest tests/conformance/ -m runtime_provider_conformance --tb=short -q --timeout=600 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+        run: $PYTEST_CMD
 
       - name: Cluster diagnostics (evidence dump)
         if: always() && steps.detect.outputs.changed == 'true'
@@ -388,7 +393,7 @@ jobs:
         # refreshes last-green. This stamp is gated on `changed`, so a
         # chart-only green does not write it either.
         run: |
-          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          STAMP="$($STAMP_CMD)"
           {
             echo "## Kubernetes conformance (kind) - green"
             echo ""
@@ -450,7 +455,7 @@ jobs:
         shell: bash
         timeout-minutes: 5
         run: |
-          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          curl -fsSL --proto '=https' --proto-redir '=https' -o ./kubectl "$KUBECTL_URL"
           chmod +x ./kubectl && sudo mv ./kubectl /usr/local/bin/kubectl
           kubectl version --client=true
 
@@ -493,7 +498,7 @@ jobs:
       - name: Run the runtime-provider conformance suite
         shell: bash
         timeout-minutes: 25
-        run: uv run --no-build --no-sync pytest tests/conformance/ -m runtime_provider_conformance --tb=short -q --timeout=600 -W "error::pytest.PytestUnraisableExceptionWarning" --disable-warnings
+        run: $PYTEST_CMD
 
       - name: Cluster diagnostics (evidence dump)
         if: always()
@@ -523,7 +528,7 @@ jobs:
         env:
           CLOUD: ${{ matrix.cloud }}
         run: |
-          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          STAMP="$($STAMP_CMD)"
           {
             echo "## Kubernetes conformance (managed ${CLOUD}) - green"
             echo ""
@@ -546,37 +551,10 @@ jobs:
     if: (github.event_name == 'schedule' && github.event.schedule == '17 5 * * *') || (github.event_name == 'workflow_dispatch' && inputs.job == 'staleness')
     runs-on: ubicloud-standard-2
     timeout-minutes: 10
-    steps:
+steps:
       - name: Compute and publish the last-green dates
         shell: bash
         timeout-minutes: 8
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          WORKFLOW_FILE: k8s-conformance.yml
-          # The two run names produced by this workflow's run-name template
-          # (kept in sync with the template at the top of this file - a rename
-          # must update all three, or scheduled legs classify as unrecognised;
-          # the scan below WARNS loudly when that happens).
-          STALENESS_RUN_NAME: "K8s conformance - cron 17 5 * * *"
-          MANAGED_RUN_NAME: "K8s conformance - cron 0 4 * * 1"
-          # FAR-1620: the exact step name of the conformance suite step -
-          # must match BOTH suite steps in this workflow (`kind` and
-          # `managed`). A run counts green only when a step with this name
-          # has conclusion=success in the run's job list; a path-skipped run
-          # (docs-only push / chart-only PR) has it as conclusion=skipped
-          # and must never refresh last-green.
-          SUITE_STEP_NAME: "Run the runtime-provider conformance suite"
-          # Grace windows (days), overridable via repo variables:
-          #   ANY_GRACE  - the scheduled leg refreshes weekly once the secrets
-          #                are provisioned, so 28d = four missed cycles; before
-          #                that it is refreshed by kind-leg greens (PR runs or
-          #                a manual workflow_dispatch job=kind).
-          #   MANAGED_DARK_GRACE - the weekly cron must produce a run at least
-          #                every ~7d; 14d means GitHub dropped the cron or the
-          #                workflow was edited out from under it.
-          ANY_GRACE: ${{ vars.K8S_CONFORMANCE_STALENESS_GRACE_DAYS || 28 }}
-          MANAGED_DARK_GRACE: ${{ vars.K8S_CONFORMANCE_MANAGED_DARK_GRACE_DAYS || 14 }}
         run: |
           set -euo pipefail
           NOW_TS="$(date -u +%s)"
@@ -593,19 +571,13 @@ jobs:
           MAX_GRACE_DAYS=$(( ANY_GRACE > MANAGED_DARK_GRACE ? ANY_GRACE : MANAGED_DARK_GRACE ))
           CUTOFF_TS=$(( NOW_TS - (MAX_GRACE_DAYS + 1) * 86400 ))
           MAX_PAGES=10
-          # (.conclusion // "pending" keeps every TSV field non-empty: an empty
-          # field would collapse under IFS-whitespace and shift the columns.)
-          # .id rides along (FAR-1620) so each candidate green run's JOB STEPS
-          # can be read - a run-level success alone is NOT proof the suite ran.
-          JQ_RUNS='.workflow_runs[] | [.id, .name, .event, (.conclusion // "pending"), .created_at] | @tsv'
           RUNS_TSV=""
           PAGE=0
           COVERED=false
           while [ "${PAGE}" -lt "${MAX_PAGES}" ]; do
             PAGE=$((PAGE + 1))
             rc=0
-            PAGE_TSV="$(gh api "repos/${REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=100&page=${PAGE}" \
-              --jq "${JQ_RUNS}" 2>&1)" || rc=$?
+            PAGE_TSV="$(gh api "${GH_API_RUNS}" --jq "${JQ_RUNS}" 2>&1)" || rc=$?
             if [ "${rc}" -ne 0 ]; then
               if [ "${PAGE}" -eq 1 ]; then
                 # Fail open WITH a loud warning on API failure (a token/scope
