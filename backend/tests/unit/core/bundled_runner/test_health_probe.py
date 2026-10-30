@@ -300,6 +300,13 @@ def _real_boundary(client: _FakeAioDockerClient) -> _EngineBoundary:
     return boundary
 
 
+@pytest.fixture(autouse=True)
+def _engine_configured() -> Any:
+    """Default to a configured engine so results do not depend on the host."""
+    with patch("modulo.core.bundled_runner.health_probe.docker_engine_configured", return_value=True):
+        yield
+
+
 class TestRunRunnerHealthProbe:
     @pytest.mark.asyncio
     async def test_reachable_engine_upserts_healthy_rows_per_org(self) -> None:
@@ -354,6 +361,42 @@ class TestRunRunnerHealthProbe:
             patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
             patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
             patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=previous)),
+            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
+            patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
+        ):
+            result = await run_runner_health_probe(
+                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
+            )
+        assert result["transitions"] == 1
+        emit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_engine_configured_skips_alert_but_still_records_row(self) -> None:
+        session = _make_session()
+        boundary = _fake_boundary(reachable=False)
+        with (
+            patch("modulo.core.bundled_runner.health_probe.docker_engine_configured", return_value=False),
+            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
+            patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()) as upsert,
+            patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
+        ):
+            result = await run_runner_health_probe(
+                _fake_session_factory(session), machine_id="machine-1", engine_boundary=boundary
+            )
+        assert result["transitions"] == 0
+        emit.assert_not_awaited()
+        assert upsert.await_args.kwargs["engine_reachable"] is False
+
+    @pytest.mark.asyncio
+    async def test_configured_engine_failing_on_first_probe_still_alerts(self) -> None:
+        session = _make_session()
+        boundary = _fake_boundary(reachable=False)
+        with (
+            patch("modulo.db.crud.runner_probe.list_orgs_with_runner_profiles", new=AsyncMock(return_value=[_ORG_ID])),
+            patch("modulo.db.crud.runner_probe.list_org_image_refs", new=AsyncMock(return_value=[])),
+            patch("modulo.db.crud.runner_probe.get_runner_probe_cache", new=AsyncMock(return_value=None)),
             patch("modulo.db.crud.runner_probe.upsert_runner_probe_cache", new=AsyncMock()),
             patch("modulo.core.bundled_runner.health_probe._emit_unreachable_transition", new=AsyncMock()) as emit,
         ):

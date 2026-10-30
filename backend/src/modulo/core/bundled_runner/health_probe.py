@@ -21,7 +21,9 @@ alerts, and an unreachable state that persists re-alerts only after a
 recovery in between. The VERY FIRST probe finding the engine down also
 emits the transition (no previous row defaults to "was reachable") — a
 deployment that boots with a dead engine is alerted once, not silently
-green.
+green. A deployment with NO engine configured (FAR-2242,
+:func:`docker_engine_configured`) never alerts; its probe row is still
+written so the UI state is unchanged.
 
 Tick shape (idle-in-transaction hygiene, qa F15): the engine probe and the
 image inspects run BEFORE any DB transaction is open; the write transaction
@@ -432,7 +434,11 @@ async def _upsert_org_probe(
         engine_info=outcome.engine_info,
         probe_error=outcome.error,
     )
-    if was_reachable and not outcome.reachable:
+    # FAR-2242: no Docker engine configured at all (e.g. the Fly app) is not an
+    # outage — the row above still records the state for the UI, but no
+    # error-dashboard event / admin notification is raised. A configured engine
+    # that is failing still alerts.
+    if was_reachable and not outcome.reachable and docker_engine_configured():
         await _emit_unreachable_transition(session, org_id, identity, outcome.error)
         return True
     return False
