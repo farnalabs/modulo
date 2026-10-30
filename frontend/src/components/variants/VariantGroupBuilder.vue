@@ -6,7 +6,6 @@
     variant="bordered"
     padding="lg"
     data-testid="variant-group-builder"
-    card-class="space-y-6"
   >
     <template #headerActions>
       <Button
@@ -20,9 +19,10 @@
       </Button>
     </template>
 
-    <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="error" :message="error" />
-    <template v-else>
+    <div class="space-y-6">
+      <LoadingSpinner v-if="loading" />
+      <ErrorAlert v-else-if="error" :message="error" />
+      <template v-else>
       <div class="flex flex-wrap items-center gap-4">
         <label class="flex items-center gap-2 text-sm">
           <span class="text-muted-foreground">{{ $t('views.variantCreator.pipeline') }}</span>
@@ -77,7 +77,6 @@
           heading-level="h3"
           variant="bordered"
           padding="lg"
-          card-class="space-y-4"
         >
           <template #headerActions>
             <div class="flex items-center gap-3">
@@ -102,9 +101,10 @@
             </div>
           </template>
 
-          <div class="overflow-x-auto">
-            <table class="w-full text-left text-sm">
-              <thead>
+          <div class="space-y-4">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-sm">
+                <thead>
                 <tr class="border-b text-xs uppercase text-muted-foreground">
                   <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.label') }}</th>
                   <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.snapshot') }}</th>
@@ -112,8 +112,8 @@
                   <th class="py-2 pr-3 font-medium">{{ $t('views.variantCreator.prompt_version') }}</th>
                   <th class="py-2 font-medium text-right">{{ $t('views.variantCreator.actions') }}</th>
                 </tr>
-              </thead>
-              <tbody>
+                </thead>
+                <tbody>
                 <tr
                   v-for="(v, i) in variants"
                   :key="v.id"
@@ -202,11 +202,11 @@
                     </button>
                   </td>
                 </tr>
-              </tbody>
-            </table>
-          </div>
+                </tbody>
+              </table>
+            </div>
 
-          <output
+            <output
             v-if="variants.length < 2"
             data-testid="variant-builder-min-two"
             aria-labelledby="variant-builder-min-two-label"
@@ -223,20 +223,21 @@
             class="mb-3"
           />
 
-          <div class="flex flex-wrap items-center gap-3 pt-2">
-            <Button
-              :disabled="!canFire || firing"
-              data-testid="variant-builder-fire"
-              type="button"
-              class="px-5 py-2"
-              @click="openFireDialog"
-            >
-              <span v-if="firing" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              {{ firing ? $t('views.variantCreator.firing') : $t('views.variantCreator.fire_comparison') }}
-            </Button>
-            <span v-if="canFire" class="text-xs text-muted-foreground">
-              {{ $t('views.variantCreator.fires_n_runs', { count: variants.length }) }}
-            </span>
+            <div class="flex flex-wrap items-center gap-3 pt-2">
+              <Button
+                :disabled="!canFire || firing"
+                data-testid="variant-builder-fire"
+                type="button"
+                class="px-5 py-2"
+                @click="openFireDialog"
+              >
+                <span v-if="firing" class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                {{ firing ? $t('views.variantCreator.firing') : $t('views.variantCreator.fire_comparison') }}
+              </Button>
+              <span v-if="canFire" class="text-xs text-muted-foreground">
+                {{ $t('views.variantCreator.fires_n_runs', { count: variants.length }) }}
+              </span>
+            </div>
           </div>
         </DataCard>
       </template>
@@ -247,6 +248,7 @@
         :description="$t('views.variantCreator.no_pipelines_hint')"
       />
     </template>
+    </div>
 
     <Dialog
       v-if="showFireDialog"
