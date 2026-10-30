@@ -110,6 +110,22 @@ PERMISSIONS: dict[str, str] = {
     "model_backend.list.in_dev": "operator",
     "library.search.in_dev": "operator",
     SYSTEM_MAPS_ACCESS_PERMISSION: "operator",
+    # system_maps
+    "system_map.list": "viewer",
+    "system_map.create": "operator",
+    "system_map.update": "operator",
+    "system_map.delete": "operator",
+    "system_map.revision.create": "operator",
+    "system_map.revision.get": "viewer",
+    "system_map.revision.publish": "operator",
+    "system_map.revision.archive": "operator",
+    "system_map.revision.delete": "operator",
+    "system_map.overview": "viewer",
+    "system_map.node.create": "operator",
+    "system_map.relationship.create": "operator",
+    "system_map.loop_config.create": "operator",
+    "system_map.binding.create": "operator",
+    "system_map.binding.delete": "operator",
     # secrets
     "secret.manage": "operator",
     # triggers

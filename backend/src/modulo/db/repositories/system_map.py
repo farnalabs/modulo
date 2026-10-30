@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.system_map import (
@@ -28,6 +28,10 @@ from modulo.db.repositories.base import BaseRepository
 
 class SystemMapRepository(BaseRepository):  # vulture: ignore
     """Repository for System Maps entities."""
+
+    def apply_tenant_filter(self, stmt: Select[Any], _org_id: uuid.UUID) -> Select[Any]:
+        """Postgres RLS handles tenant isolation; return statement unchanged."""
+        return stmt
 
     # ─── SystemMap CRUD ───
 
