@@ -79,7 +79,6 @@ _CODE_SYSTEM_MAP_BINDING_DELETE = "system_map.binding.delete"
 
 _MSG_SYSTEM_MAP_NOT_FOUND = "System map not found"
 _MSG_REVISION_NOT_FOUND = "Revision not found"
-_MSG_NODE_NOT_FOUND = "Node not found"
 _MSG_RELATIONSHIP_NOT_FOUND = "Relationship not found"
 _MSG_LOOP_CONFIG_NOT_FOUND = "Loop config not found"
 _MSG_BINDING_NOT_FOUND = "Attribution binding not found"
@@ -134,7 +133,7 @@ async def _record_audit(
                 resource_id=resource_id,
                 payload_json=payload_json,
             )
-    except (ProgrammingError, SQLAlchemyError, Exception):
+    except Exception:
         _log.exception(_CODE_SYSTEM_MAPS_AUDIT_FAILED)
 
 
