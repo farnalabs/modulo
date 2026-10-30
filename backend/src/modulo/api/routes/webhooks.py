@@ -582,7 +582,12 @@ async def _verify_replay_auth(
     # over the stored payload (same check as receive_webhook).
     hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
     modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
-    ts = verify_timestamp(modulo_timestamp)
+    # FAR-2251: same rule as receive_webhook - GitHub's scheme is used only
+    # when NO Modulo header is present; otherwise the Modulo path wins.
+    modulo_header_present = hmac_signature is not None or modulo_timestamp is not None
+    github_signature = None if modulo_header_present else request.headers.get("X-Hub-Signature-256")
+    # The GitHub scheme carries no timestamp, so only the Modulo path checks it.
+    ts = verify_timestamp(modulo_timestamp) if github_signature is None else None
     # config_json shape was validated by the shared bootstrap
     # helper (TriggerConfigInvalidError → 400 in the route) — this read
     # runs for authenticated replays too, so the guard cannot be
@@ -614,7 +619,10 @@ async def _verify_replay_auth(
     stored = payload_row.scalar_one_or_none()
     if stored is None:
         raise ReplayNotFoundError(event_id)
-    if not verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
+    if github_signature is not None:
+        if not verify_github_signature(stored.raw_body, hmac_secret, github_signature):
+            raise HmacValidationError
+    elif not verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
         raise HmacValidationError
     # FAR-1516: provenance promotion — the replay authenticated by
     # HMAC over the stored payload.
@@ -1603,7 +1611,9 @@ async def replay_webhook(
     principal (if present) must hold the ``run.trigger`` permission (``runner``
     minimum). An unauthenticated caller must present a valid HMAC signature
     (``X-Modulo-Webhook-Secret`` + ``X-Modulo-Timestamp``) over the stored
-    payload — the same verification ``receive_webhook`` performs.
+    payload — the same verification ``receive_webhook`` performs. FAR-2251:
+    GitHub's ``X-Hub-Signature-256`` over the stored body is also accepted
+    when no Modulo header is present.
     """
     if principal is not None:
         try:

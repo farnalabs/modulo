@@ -5673,7 +5673,9 @@ export interface paths {
          *     principal (if present) must hold the ``run.trigger`` permission (``runner``
          *     minimum). An unauthenticated caller must present a valid HMAC signature
          *     (``X-Modulo-Webhook-Secret`` + ``X-Modulo-Timestamp``) over the stored
-         *     payload — the same verification ``receive_webhook`` performs.
+         *     payload — the same verification ``receive_webhook`` performs. FAR-2251:
+         *     GitHub's ``X-Hub-Signature-256`` over the stored body is also accepted
+         *     when no Modulo header is present.
          */
         post: operations["replay_webhook_api_v1_triggers__trigger_id__webhook_replay__event_id__post"];
         delete?: never;

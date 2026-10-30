@@ -163,6 +163,8 @@ rate-limited by the `TriggerEngine`.
       non-hex → 401. If any Modulo header is present the Modulo scheme is used
       with no fallback. GitHub's scheme has no timestamp, so there is no replay
       window; the payload-hash dedup (400 on repeat) is the only replay bound
+      The replay route (`/webhook/replay/{event_id}`) applies the same rule to an
+      unauthenticated replay, verifying the signature over the STORED body
 - [x] Flood protection: a duplicate payload hash → 400 and rapid duplicates are
       rate-limited → 429
 - [x] Webhook payload mapping: event filters and field mappings are applied to
