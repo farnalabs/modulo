@@ -102,17 +102,22 @@ const progressPercent = computed(() => {
 
 const progressBarClass = computed(() => {
   if (!props.progress) return 'bg-primary'
-  const pct = progressPercent.value
-  const color = props.progress.color ?? 'primary'
-  if (pct >= 100) return 'bg-destructive'
-  if (pct >= 90) return 'bg-warning'
-  if (pct >= 75) return 'bg-amber-500'
-  switch (color) {
-    case 'success': return 'bg-success'
-    case 'warning': return 'bg-warning'
-    case 'destructive': return 'bg-destructive'
-    case 'primary':
-    default: return 'bg-primary'
+
+  // An explicit progress colour is always respected. When no colour is
+  // requested, thresholds provide the default severity treatment.
+  const color = props.progress.color
+  if (color) {
+    switch (color) {
+      case 'success': return 'bg-success'
+      case 'warning': return 'bg-warning'
+      case 'destructive': return 'bg-destructive'
+      case 'primary': return 'bg-primary'
+    }
   }
+
+  const pct = progressPercent.value
+  if (pct >= 100) return 'bg-destructive'
+  if (pct >= 75) return 'bg-warning'
+  return 'bg-primary'
 })
 </script>
