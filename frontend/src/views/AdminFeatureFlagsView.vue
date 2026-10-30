@@ -22,25 +22,26 @@
     </header>
 
     <!-- Dev Mode Toggle -->
-    <div class="mb-6 rounded-lg border bg-card p-4">
-      <div class="flex items-center justify-between">
-        <div>
-          <h3 class="text-sm font-semibold">{{ $t('views.AdminFeatureFlagsView.developer_mode') }}</h3>
-          <p class="text-xs text-muted-foreground">
-            {{ $t('views.AdminFeatureFlagsView.developer_mode_description') }}
-          </p>
-        </div>
+    <DataCard
+      class="mb-6"
+      heading-level="h3"
+      :title="$t('views.AdminFeatureFlagsView.developer_mode')"
+      :description="$t('views.AdminFeatureFlagsView.developer_mode_description')"
+    >
+      <template #headerActions>
         <ToggleSwitch
           :checked="devModeEnabled"
           :label="$t('views.AdminFeatureFlagsView.developer_mode')"
           data-testid="developer-mode-toggle"
           @toggle="toggleDevMode"
         />
-      </div>
-    </div>
+      </template>
+    </DataCard>
 
-    <div class="card p-4">
-      <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminFeatureFlagsView.license_status') }}</h2>
+    <DataCard
+      heading-level="h2"
+      :title="$t('views.AdminFeatureFlagsView.license_status')"
+    >
       <div v-if="loading" aria-hidden="true" class="grid grid-cols-1 gap-4 sm:grid-cols-4">
         <div v-for="i in 4" :key="i">
           <div class="h-3 w-16 rounded bg-muted/50" />
@@ -78,7 +79,7 @@
           </p>
         </div>
       </div>
-    </div>
+    </DataCard>
 
     <div v-if="filteredWouldActivate.length > 0" class="card p-4 border-warning/30">
       <h2 class="mb-2 text-sm font-semibold text-warning-text">{{ $t('views.AdminFeatureFlagsView.would_activate') }}</h2>
@@ -260,6 +261,7 @@ import { formatApiError } from '../lib/api/formatError'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ToggleSwitch from '../components/shared/ToggleSwitch.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import Button from 'primevue/button'
 import { Lock } from '@lucide/vue'
 import FormDialog from '../components/shared/FormDialog.vue'

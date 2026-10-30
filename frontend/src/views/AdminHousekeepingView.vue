@@ -64,34 +64,39 @@
           <p class="mt-1">{{ $t('views.AdminHousekeepingView.scan_incomplete_description', failedCategoryCount) }}</p>
         </div>
 
-        <div class="mb-4 flex items-center gap-4 rounded-lg border bg-card p-3 shadow-sm">
-          <label class="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              :checked="allSelected"
-              :indeterminate.prop="someSelected && !allSelected"
-              data-testid="hk-select-all"
-              @change="toggleSelectAll"
-            />
-            {{ $t('views.AdminHousekeepingView.select_all') }}
-          </label>
-          <span class="text-sm text-muted-foreground">
-            {{ $t('views.AdminHousekeepingView.selected_count', { count: selectedCount, total: totalCount }) }}
-          </span>
-          <span class="text-sm text-muted-foreground">
-            {{ $t('views.AdminHousekeepingView.total_candidates', totalCount) }}
-          </span>
-          <div class="ml-auto">
-            <Button v-if="selectedCount > 0" severity="danger" data-testid="hk-delete-selected" @click="confirmDelete">
-              {{ $t('views.AdminHousekeepingView.delete_selected', { count: selectedCount }) }}
-            </Button>
+        <DataCard class="mb-4" variant="bordered" padding="sm" elevation="sm">
+          <div class="flex items-center gap-4">
+            <label class="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                :checked="allSelected"
+                :indeterminate.prop="someSelected && !allSelected"
+                data-testid="hk-select-all"
+                @change="toggleSelectAll"
+              />
+              {{ $t('views.AdminHousekeepingView.select_all') }}
+            </label>
+            <span class="text-sm text-muted-foreground">
+              {{ $t('views.AdminHousekeepingView.selected_count', { count: selectedCount, total: totalCount }) }}
+            </span>
+            <span class="text-sm text-muted-foreground">
+              {{ $t('views.AdminHousekeepingView.total_candidates', totalCount) }}
+            </span>
+            <div class="ml-auto">
+              <Button v-if="selectedCount > 0" severity="danger" data-testid="hk-delete-selected" @click="confirmDelete">
+                {{ $t('views.AdminHousekeepingView.delete_selected', { count: selectedCount }) }}
+              </Button>
+            </div>
           </div>
-        </div>
+        </DataCard>
 
-        <div
+        <DataCard
           v-for="cat in categories"
           :key="cat.category"
-          class="mb-4 rounded-lg border bg-card shadow-sm"
+          class="mb-4"
+          variant="bordered"
+          padding="none"
+          elevation="sm"
           data-testid="hk-category"
         >
           <div class="flex items-center gap-3 border-b px-4 py-3">
@@ -166,12 +171,15 @@
               {{ cat.category }}
             </span>
           </div>
-        </div>
+        </DataCard>
       </div>
 
-      <div
+      <DataCard
         id="checkpoint-retention"
-        class="mb-4 rounded-lg border bg-card shadow-sm"
+        class="mb-4"
+        variant="bordered"
+        padding="none"
+        elevation="sm"
         data-testid="hk-checkpoint-retention"
       >
         <div class="flex items-center gap-3 border-b px-4 py-3">
@@ -220,7 +228,7 @@
           </span>
           <span v-if="ckptError" class="text-sm text-destructive" data-testid="hk-ckpt-error">{{ ckptError }}</span>
         </div>
-      </div>
+      </DataCard>
 
       <Dialog v-if="showConfirm" :visible="showConfirm" :modal="true" :dismissable-mask="true" data-testid="hk-confirm-dialog" @update:visible="showConfirm = false">
         <template #header>
@@ -261,6 +269,7 @@ import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 
 // FAR-1977: derive the wire types from the generated OpenAPI schema rather
 // than hand-declaring them. A local duplicate silently drifted from the
