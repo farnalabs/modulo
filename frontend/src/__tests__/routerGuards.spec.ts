@@ -310,3 +310,43 @@ describe('enforceRoleTierVisibility', () => {
     expect(result).toBe(true)
   })
 })
+
+describe('/runs/diff private_preview gate (FAR-2248)', () => {
+  function hydratedRunsDiff(): any {
+    const resolved = router.resolve('/runs/diff')
+    const route = {
+      name: resolved.name,
+      matched: resolved.matched,
+      path: resolved.path,
+      meta: {} as Record<string, unknown>,
+    }
+    hydrateManifestMeta(route as never)
+    return route
+  }
+
+  it('hydrates the runs-diff manifest entry as private_preview, not the run-detail entry', () => {
+    const route = hydratedRunsDiff()
+
+    expect(route.name).toBe('runs-diff')
+    expect(route.meta.visibility).toBe('private_preview')
+  })
+
+  it('bounces to the dashboard and names the cause in the console when dev mode is off', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    planStore.devMode = false
+
+    const result = await enforceRoleTierVisibility(hydratedRunsDiff(), adminToken())
+
+    expect(result).toEqual({ name: 'dashboard' })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('runs-diff is a private_preview surface'))
+    warn.mockRestore()
+  })
+
+  it('lets an admin through when dev mode is on', async () => {
+    planStore.devMode = true
+
+    const result = await enforceRoleTierVisibility(hydratedRunsDiff(), adminToken())
+
+    expect(result).toBe(true)
+  })
+})

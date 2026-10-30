@@ -968,6 +968,12 @@ export async function enforceRoleTierVisibility(
     const isPrivateOrDev =
       to.meta?.visibility === 'private_preview' || to.meta?.visibility === 'in_dev'
     if (isPrivateOrDev && !planStore.devMode) {
+      // FAR-2248: a hidden preview surface bounces to the dashboard by design
+      // (FAR-542 MVP cut), but the bounce used to be fully silent and so
+      // indistinguishable from a bug. Name the cause in the console.
+      console.warn(
+        `[router] ${String(to.name)} is a ${String(to.meta?.visibility)} surface and dev mode is off; redirecting to the dashboard`,
+      )
       return { name: 'dashboard' }
     }
   }
