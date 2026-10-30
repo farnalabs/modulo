@@ -139,12 +139,13 @@ classify_http() {
 }
 
 parse_retry_after() {
+  local retry_after=${1-}
   # Whole seconds from a Retry-After value, or empty when absent or
   # unparseable. Never emits a negative value.
-  case "$1" in
+  case "$retry_after" in
     '') return 0 ;;
     *[!0-9]*) ;;
-    *) printf '%s\n' "$1"; return 0 ;;
+    *) printf '%s\n' "$retry_after"; return 0 ;;
   esac
   RETRY_EPOCH=$(date -u -d "$1" +%s 2>/dev/null) || return 0
   RETRY_NOW=$(date +%s)
@@ -154,24 +155,25 @@ parse_retry_after() {
 }
 
 retry_delay() {
-  # $1 = attempt number (1-based), $2 = Retry-After seconds or empty.
-  #
+  local attempt=${1:?attempt number is required}
+  local retry_after=${2-}
+  local backoff
   # Retry-After is a FLOOR, not the schedule: the delay is the larger of the
   # server's value and this attempt's exponential backoff (clamped to
   # DISPATCH_MAX_DELAY, jitter added on top). A short Retry-After therefore
   # cannot collapse the backoff into a tight loop that exhausts the attempt cap
   # before the wall-clock budget can bind (see the header).
-  BACKOFF=$(( DISPATCH_BASE_DELAY * (1 << ($1 - 1)) ))
-  if [[ "$BACKOFF" -gt "$DISPATCH_MAX_DELAY" ]]; then BACKOFF="$DISPATCH_MAX_DELAY"; fi
-  BACKOFF=$(( BACKOFF + RANDOM % (DISPATCH_JITTER_MAX + 1) ))
+  backoff=$(( DISPATCH_BASE_DELAY * (1 << (attempt - 1)) ))
+  if [[ "$backoff" -gt "$DISPATCH_MAX_DELAY" ]]; then backoff="$DISPATCH_MAX_DELAY"; fi
+  backoff=$(( backoff + RANDOM % (DISPATCH_JITTER_MAX + 1) ))
   # Annotated assignment keeps `set -e` from treating an empty/non-numeric
   # value as a failed arithmetic expansion; parse_retry_after only ever emits
   # a non-negative whole number, so `10#` is safe.
-  if [[ -n "$2" ]] && [[ "$((10#$2))" -gt "$BACKOFF" ]]; then
-    printf '%s\n' "$2"
+  if [[ -n "$retry_after" ]] && [[ "$((10#$retry_after))" -gt "$backoff" ]]; then
+    printf '%s\n' "$retry_after"
     return 0
   fi
-  printf '%s\n' "$BACKOFF"
+  printf '%s\n' "$backoff"
 }
 
 HEADER_FILE=$(mktemp)

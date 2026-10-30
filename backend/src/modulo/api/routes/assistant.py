@@ -530,7 +530,7 @@ def _build_stream_backend(req: StreamRequest, api_key: str) -> tuple[ModelBacken
         return None, f"Failed to initialize backend: {exc}"
 
 
-async def _build_stream_system_prompt(ctx: _StreamContext, supports_tools: bool) -> str:
+async def _build_stream_system_prompt(ctx: _StreamContext) -> str:
     async with ctx.db_session.begin():
         await set_rls_org(ctx.db_session, ctx.principal.organisation_id)
         skill_loader = SkillLoader(ctx.db_session)
@@ -809,8 +809,7 @@ async def _initialise_stream(ctx: _StreamContext) -> _StreamInit:
         return _StreamInit(error_detail="Failed to build model backend")
 
     # 3. Construct system prompt from config + skills
-    supports_tools = getattr(backend, "supports_tools", False)
-    system_prompt = await _build_stream_system_prompt(ctx, supports_tools)
+    system_prompt = await _build_stream_system_prompt(ctx)
 
     # 4. Save user message to DB
     parent_msg_id = await _save_stream_user_message(ctx)
@@ -844,7 +843,7 @@ async def _initialise_stream(ctx: _StreamContext) -> _StreamInit:
 # ── Session endpoints ────────────────────────────────────────────────────
 
 
-@router.get("/sessions", status_code=status.HTTP_200_OK, response_model=AssistantSessionListResponse)
+@router.get("/sessions", status_code=status.HTTP_200_OK)
 @handle_db_errors("assistant.list_sessions")
 async def list_sessions(
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -949,7 +948,6 @@ async def _resolve_provider_model(
 @router.post(
     "/sessions",
     status_code=status.HTTP_201_CREATED,
-    response_model=AssistantSessionResponse,
     dependencies=[
         Depends(audited("assistant_session_created", "assistant_session", principal_dep=get_current_tenant_user))
     ],
@@ -1010,7 +1008,6 @@ async def create_session(
 @router.get(
     "/sessions/{session_id}",
     status_code=status.HTTP_200_OK,
-    response_model=AssistantSessionResponse,
     responses={404: {"description": "Session not found"}},
 )
 @handle_db_errors("assistant.get_session")
@@ -1055,7 +1052,6 @@ async def get_session(
 @router.patch(
     "/sessions/{session_id}",
     status_code=status.HTTP_200_OK,
-    response_model=AssistantSessionResponse,
     responses={404: {"description": "Session not found"}},
     dependencies=[
         Depends(audited("assistant_session_renamed", "assistant_session", principal_dep=get_current_tenant_user))
@@ -1103,7 +1099,6 @@ async def rename_session(
 @router.delete(
     "/sessions/{session_id}",
     status_code=status.HTTP_200_OK,
-    response_model=DeletedAssistantSessionResponse,
     responses={404: {"description": "Session not found"}},
     dependencies=[
         Depends(
@@ -1169,7 +1164,6 @@ async def delete_session(
 @router.get(
     "/sessions/{session_id}/messages",
     status_code=status.HTTP_200_OK,
-    response_model=AssistantMessageListResponse,
     responses={404: {"description": "Session not found"}},
 )
 @handle_db_errors("assistant.list_messages")
@@ -1231,7 +1225,6 @@ async def list_messages(
 @router.post(
     "/sessions/{session_id}/messages",
     status_code=status.HTTP_201_CREATED,
-    response_model=AssistantMessageResponse,
     responses={404: {"description": "Session not found"}},
     dependencies=[
         Depends(audited("assistant_message_appended", "assistant_message", principal_dep=get_current_tenant_user))
