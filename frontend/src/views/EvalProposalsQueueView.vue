@@ -34,10 +34,11 @@
       />
 
       <div v-else class="space-y-4">
-        <div
+        <DataCard
           v-for="p in proposals"
           :key="p.id"
-          class="rounded-lg border bg-card p-5 shadow-sm"
+          padding="lg"
+          elevation="sm"
           :data-testid="'proposal-card-' + p.id"
         >
           <div class="flex items-start justify-between gap-4">
@@ -104,7 +105,7 @@
           >
             {{ actionMessages[p.id].text }}
           </div>
-        </div>
+        </DataCard>
       </div>
     </template>
 
@@ -225,6 +226,7 @@ import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import AppSelect from '../components/shared/AppSelect.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { formatDateShortWithTime } from '../lib/formatDate'
 
 
