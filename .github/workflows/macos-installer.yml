@@ -294,19 +294,29 @@ jobs:
               # Stop the LaunchAgent service (ignore failure if not running)
               launchctl stop "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
 
-              # Unload the LaunchAgent and disable it persistently
-              launchctl unload -w "$PLIST" 2>/dev/null || true
+              # Unload the LaunchAgent with retry loop (up to 3 attempts, 1s delay)
+              PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
+              unload_ok=0
+              for _attempt in 1 2 3; do
+                if launchctl unload -w "$PLIST" 2>/dev/null; then
+                  unload_ok=1
+                  break
+                fi
+                sleep 1
+              done
+              if [[ "$unload_ok" -eq 0 ]]; then
+                cleanup_result launchagent_unload failed "unload retries exhausted"
+              else
+                # Verify it's gone (should fail if successfully removed)
+                if ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
+                  cleanup_result launchagent_unload ok
+                else
+                  cleanup_result launchagent_unload failed "service still loaded after unload"
+                fi
+              fi
 
               # Remove the plist file to prevent future loads
-              PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
               rm -f "$PLIST" 2>/dev/null || true
-
-              # Verify it's gone (should fail if successfully removed)
-              if ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
-                cleanup_result launchagent_unload ok
-              else
-                cleanup_result launchagent_unload failed "service still loaded after bootout"
-              fi
 
               owned_processes_ok=1
               if [[ -s "$OWNED_PIDS" ]]; then
