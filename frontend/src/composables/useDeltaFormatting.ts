@@ -43,7 +43,12 @@ export function formatDeltaAbs(delta: number | null): string {
 export function formatDeltaPct(deltaPct: number | null, includeSign = false): string {
   if (deltaPct == null) return ''
   if (includeSign) {
-    const sign = deltaPct > 0 ? '+' : deltaPct < 0 ? '-' : ''
+    let sign = ''
+    if (deltaPct > 0) {
+      sign = '+'
+    } else if (deltaPct < 0) {
+      sign = '-'
+    }
     return `${sign}${Math.abs(deltaPct).toFixed(1)}%`
   }
   return `${Math.abs(deltaPct).toFixed(1)}%`
