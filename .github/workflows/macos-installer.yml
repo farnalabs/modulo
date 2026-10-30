@@ -456,6 +456,22 @@ jobs:
 
             trap 'cleanup "$?"' EXIT
 
+            # Diagnostic capture helper for post-install smoke assertions
+            run_assertion() {
+              local name="$1"; shift
+              local stdout_stderr
+              stdout_stderr="$("$@" 2>&1)"
+              local exit_code=$?
+              if [[ $exit_code -eq 0 ]]; then
+                printf 'assertion: %s=ok\n' "$name"
+                [[ -n "$stdout_stderr" ]] && printf '  stdout/stderr: %s\n' "$stdout_stderr"
+              else
+                printf 'assertion: %s=FAILED (exit=%d)\n' "$name" "$exit_code" >&2
+                [[ -n "$stdout_stderr" ]] && printf '  stdout/stderr: %s\n' "$stdout_stderr" >&2
+                return 1
+              fi
+            }
+
           printf '%s' "$CERTIFICATE_B64" | base64 --decode > "$CERT"
           # Set up an empty keychain password so no generated password is leaked in argv.
           # OpenSSL consumes the PKCS#12 password on stdin; security then imports
@@ -539,66 +555,100 @@ jobs:
           MOUNT_ATTACHED=0
           echo "pre-install: detached mount: $MOUNT"
           INSTALL_ROOT="$RUNNER_TEMP/modulo install"
-          MODULO_INSTALL_ROOT="$INSTALL_ROOT" MODULO_DATA_DIR="$DATA" scripts/macos/install.sh "$DMG_WITH_SPACES"
-          launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null
 
-           STATE="$DATA/state.json"
-           API_PORT=''
-           for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
-             if [[ -s "$STATE" ]]; then
-               API_PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["api_port"])' "$STATE" 2>/dev/null || true)"
-               if [[ -n "$API_PORT" ]] && curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" >/dev/null; then
-                 break
+          # Post-install smoke assertions with diagnostic capture
+          run_assertion "install_sh" \
+            bash -c 'MODULO_INSTALL_ROOT="$INSTALL_ROOT" MODULO_DATA_DIR="$DATA" scripts/macos/install.sh "$DMG_WITH_SPACES"'
+
+          run_assertion "launchctl_print_post_install" \
+            launchctl print "gui/$(id -u)/run.modulo.launcher"
+
+           # State.json / API port / healthz
+           run_assertion "state_json_api_port_healthz" bash -c '
+             STATE="$DATA/state.json"
+             API_PORT=""
+             for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+               if [[ -s "$STATE" ]]; then
+                 API_PORT="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["api_port"])'\'' "$STATE" 2>/dev/null || true)"
+                 if [[ -n "$API_PORT" ]] && curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" >/dev/null; then
+                   echo "$API_PORT"
+                   exit 0
+                 fi
                fi
-             fi
-             sleep 2
-           done
+               sleep 2
+             done
+             exit 1
+           '
+           API_PORT="$(cat "$DATA/state.json" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["api_port"])' 2>/dev/null || true)"
            [[ -n "$API_PORT" ]] || { echo '::error::native launcher never wrote state.json' >&2; exit 1; }
-           curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" >/dev/null
-           curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/" | grep -q '<div id="app">'
+
+           run_assertion "healthz_endpoint" \
+             curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz"
+
+           run_assertion "spa_root_html" \
+             bash -c 'curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:'"$API_PORT"'/" | grep -q '\''<div id="app">'\'''
+
+           # Service PID / binary identity
+           run_assertion "service_pid" bash -c '
+             SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '\''/pid =/ {print $3; exit}'\'')"
+             [[ "$SERVICE_PID" =~ ^[0-9]+$ ]] || exit 1
+             echo "$SERVICE_PID"
+           '
            SERVICE_PID="$(launchctl print "gui/$(id -u)/run.modulo.launcher" | awk '/pid =/ {print $3; exit}')"
-           [[ "$SERVICE_PID" =~ ^[0-9]+$ ]] || { echo '::error::LaunchAgent has no numeric service PID' >&2; exit 1; }
+
+           run_assertion "service_binary" bash -c '
+             SERVICE_BINARY="$(ps -p '"$SERVICE_PID"' -o command= | awk '\''{print $1}'\'')"
+             [[ "$SERVICE_BINARY" == '"$INSTALL_ROOT"'/*/Contents/MacOS/modulo ]] || exit 1
+             echo "$SERVICE_BINARY"
+           '
            SERVICE_BINARY="$(ps -p "$SERVICE_PID" -o command= | awk '{print $1}')"
-           [[ "$SERVICE_BINARY" == "$INSTALL_ROOT"/*/Contents/MacOS/modulo ]] || { echo "::error::unexpected service binary: $SERVICE_BINARY" >&2; exit 1; }
-            file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64'
-            collect_children() {
-              local parent="$1" child
-              printf '%s\n' "$parent" >> "$OWNED_PIDS"
-              while IFS= read -r child; do
-                [[ "$child" =~ ^[0-9]+$ ]] || continue
-                collect_children "$child"
-              done < <(pgrep -P "$parent" || true)
-            }
-            : > "$OWNED_PIDS"
-            collect_children "$SERVICE_PID"
-            grep -qE '^[0-9]+$' "$OWNED_PIDS" || { echo '::error::could not record owned LaunchAgent process tree' >&2; exit 1; }
-            INSTALLED_APP="$INSTALL_ROOT/Modulo-${VERSION_NUM}.app"
-           if "$INSTALLED_APP/Contents/MacOS/modulo" start --data-dir "$DATA/failure" --bin-dir "$DATA/missing-bin" >"$DATA/invalid-bin.stderr" 2>&1; then
-             echo '::error::invalid bundled-binary path unexpectedly allowed launcher startup' >&2
-             exit 1
-           fi
-            grep -Eiq 'bundled binaries not found|missing:.*(initdb|postgres|redis-server)' "$DATA/invalid-bin.stderr" || {
-              echo '::error::invalid bundled-binary smoke failed for an unexpected reason' >&2
-              cat "$DATA/invalid-bin.stderr" >&2
-              exit 1
-            }
-            launchctl unload -w "$PLIST"
-           if launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
-             echo '::error::LaunchAgent remained loaded after unload' >&2
-             exit 1
-           fi
-            if launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1; then
-              echo '::error::LaunchAgent remained loaded after cleanup' >&2
-              exit 1
-            fi
-            if pgrep -f "$INSTALL_ROOT/.*/Contents/MacOS/modulo" >/dev/null 2>&1; then
-              echo '::error::owned Modulo process remained after unload' >&2
-              exit 1
-            fi
-            if pgrep -f "$DATA/pgdata" >/dev/null 2>&1 || pgrep -f "$DATA/.*redis" >/dev/null 2>&1; then
-              echo '::error::owned PostgreSQL or Redis process remained after unload' >&2
-              exit 1
-            fi
+
+           run_assertion "service_binary_macho" \
+             file "$SERVICE_BINARY" | grep -E 'Mach-O 64-bit executable arm64'
+
+           # Owned PID tree collection
+           run_assertion "owned_pid_tree" bash -c '
+             collect_children() {
+               local parent="$1" child
+               printf "%s\n" "$parent" >> "'"$OWNED_PIDS"'"
+               while IFS= read -r child; do
+                 [[ "$child" =~ ^[0-9]+$ ]] || continue
+                 collect_children "$child"
+               done < <(pgrep -P "$parent" || true)
+             }
+             : > "'"$OWNED_PIDS"'"
+             collect_children '"$SERVICE_PID"'
+             grep -qE "^[0-9]+$" "'"$OWNED_PIDS"'" || exit 1
+           '
+
+           # Invalid bundled binary negative test
+           INSTALLED_APP="$INSTALL_ROOT/Modulo-${VERSION_NUM}.app"
+           run_assertion "invalid_bundled_binary_negative" bash -c '
+             if "'"$INSTALLED_APP"'/Contents/MacOS/modulo" start --data-dir "'"$DATA"'/failure" --bin-dir "'"$DATA"'/missing-bin" >"'"$DATA"'/invalid-bin.stderr" 2>&1; then
+               exit 1
+             fi
+             grep -Eiq "bundled binaries not found|missing:.*(initdb|postgres|redis-server)" "'"$DATA"'/invalid-bin.stderr" || exit 1
+           '
+
+           # Launchctl unload / cleanup path
+           run_assertion "launchctl_unload" \
+             launchctl unload -w "$PLIST"
+
+           run_assertion "launchagent_gone_after_unload" bash -c '
+             ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
+           '
+
+           run_assertion "launchagent_gone_after_cleanup" bash -c '
+             ! launchctl print "gui/$(id -u)/run.modulo.launcher" >/dev/null 2>&1
+           '
+
+           run_assertion "no_owned_modulo_processes" bash -c '
+             ! pgrep -f "'"$INSTALL_ROOT"'/.*/Contents/MacOS/modulo" >/dev/null 2>&1
+           '
+
+           run_assertion "no_owned_postgres_redis" bash -c '
+             ! pgrep -f "'"$DATA"'/pgdata" >/dev/null 2>&1 && ! pgrep -f "'"$DATA"'/.*redis" >/dev/null 2>&1
+           '
 
 
       - name: Upload real macOS installer
