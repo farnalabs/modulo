@@ -685,7 +685,8 @@ jobs:
           # Post-install smoke assertions with diagnostic capture
           # shellcheck disable=SC2016
           run_assertion "install_sh" \
-            bash -c 'MODULO_INSTALL_ROOT="$INSTALL_ROOT" MODULO_DATA_DIR="$DATA" scripts/macos/install.sh "$DMG_WITH_SPACES"' || exit 1
+            bash -c 'MODULO_INSTALL_ROOT="$1" MODULO_DATA_DIR="$2" scripts/macos/install.sh "$3"' \
+            bash "$INSTALL_ROOT" "$DATA" "$DMG_WITH_SPACES" || exit 1
 
           run_assertion "launchctl_print_post_install" \
             launchctl print "gui/$(id -u)/run.modulo.launcher" || exit 1
@@ -693,7 +694,7 @@ jobs:
            # State.json / API port / healthz
            # shellcheck disable=SC2016
            run_assertion "state_json_api_port_healthz" bash -c '
-             STATE="$DATA/state.json"
+             STATE="$1/state.json"
              API_PORT=""
              for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
                if [[ -s "$STATE" ]]; then
@@ -706,7 +707,7 @@ jobs:
                sleep 2
              done
              exit 1
-           '
+           ' bash "$DATA"
            API_PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["api_port"])' "$DATA/state.json" 2>/dev/null || true)"
            [[ -n "$API_PORT" ]] || { echo '::error::native launcher never wrote state.json' >&2; exit 1; }
 
