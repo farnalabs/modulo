@@ -121,7 +121,7 @@
           </div>
         </details>
 
-        <div class="overflow-hidden rounded-lg border bg-card">
+        <DataCard padding="none" card-class="overflow-hidden">
           <div class="border-b bg-muted/50 px-4 py-2 text-xs font-medium text-muted-foreground">
             {{ $t('views.AgentOutputDiffView.line_level_diff') }} <span class="ml-2 text-green-500">{{ $t('views.AgentOutputDiffView.plus_added') }}</span> <span class="ml-1 text-red-500">{{ $t('views.AgentOutputDiffView.minus_removed') }}</span>
           </div>
@@ -155,7 +155,7 @@
               </tbody>
             </table>
           </div>
-        </div>
+        </DataCard>
       </div>
     </template>
   </div>
@@ -171,6 +171,7 @@ import { useMutation } from '../composables/useMutation'
 import type { components } from '../lib/api/client'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
