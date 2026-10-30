@@ -2005,7 +2005,13 @@ class TestSeedPrReviewAgent:
         assert "pr" in agent.tags
         assert "github" in agent.tags
         assert agent.content_json["output_schema"] == "pr-review-decision"
-        assert "github" in agent.content_json["connector_type_refs"]
+        github_refs = [
+            ref
+            for ref in agent.content_json["connector_type_refs"]
+            if isinstance(ref, dict) and ref.get("connector_type") == "github"
+        ]
+        assert github_refs, "PR Review Agent must declare a github connector type ref"
+        assert "code_review" in github_refs[0]["capabilities"]
 
     def test_seed_pr_review_agent_prompt_mentions_decision_schema(self) -> None:
         from modulo.core.library_service._seed_data import _MODULO_BY_SLUG
