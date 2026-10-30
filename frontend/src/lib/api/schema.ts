@@ -12021,6 +12021,19 @@ export interface components {
             /** Grants */
             grants?: string[] | null;
         };
+        /** ApiKeyUpdatedResponse */
+        ApiKeyUpdatedResponse: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Role */
+            role: string;
+            /** Team Id */
+            team_id: string | null;
+            /** Expires At */
+            expires_at: string | null;
+        };
         /** AppendMessageRequest */
         AppendMessageRequest: {
             /** Role */
@@ -35978,9 +35991,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ApiKeyUpdatedResponse"];
                 };
             };
             /** @description Validation Error */
