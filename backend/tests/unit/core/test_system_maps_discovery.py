@@ -13,9 +13,10 @@ def test_discovery_is_deterministic_and_marks_every_edge_suggested() -> None:
     second = discover_draft(reversed(sources))
 
     assert first == second
-    assert first.edge_count == 3
+    assert first.edge_count == 2
     assert all(edge["config_json"]["suggested"] is True for edge in first.relationships)
-    assert {edge["relationship_type"] for edge in first.relationships} == {"trigger", "flow", "loop_back"}
+    assert {edge["relationship_type"] for edge in first.relationships} == {"trigger", "flow"}
+    assert first.skipped == ({"source": "p2", "reason": "improvement loop has no supported non-self relationship"},)
 
 
 def test_unsupported_and_ambiguous_sources_are_reported() -> None:

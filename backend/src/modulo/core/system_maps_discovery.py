@@ -136,21 +136,14 @@ def discover_draft(sources: Iterable[DiscoverySource]) -> DiscoveryDraft:
             _relationship(target, _node_key(pipeline), "flow", "pipeline explicitly belongs to folder")
         )
 
-    for pipeline in pipelines:
-        if pipeline.name.startswith("improve-") or pipeline.explicit_system_map_tag:
-            relationships.extend(
-                [
-                    {
-                        "source_node_key": _node_key(pipeline),
-                        "target_node_key": _node_key(pipeline),
-                        "relationship_type": "loop_back",
-                        "config_json": {
-                            "suggested": True,
-                            "reason": "pipeline is explicitly identified as an improvement loop",
-                        },
-                    }
-                ]
-            )
+    skipped.extend(
+        {
+            "source": pipeline.identifier,
+            "reason": "improvement loop has no supported non-self relationship",
+        }
+        for pipeline in pipelines
+        if pipeline.name.startswith("improve-") or pipeline.explicit_system_map_tag
+    )
 
     deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
     for edge in relationships:

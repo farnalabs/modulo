@@ -24,6 +24,7 @@ from modulo.api.schemas.system_maps import (
     SystemMapDiscoverySource,
 )
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.lifecycle_map.validation import normalize_content
 from modulo.core.system_maps_discovery import DiscoverySource, discover_draft
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.pipeline import Pipeline
@@ -134,31 +135,33 @@ async def discover_system_map(
             name=request.name,
             description=request.description,
         )
-        content = {
-            "stages": [
-                {
-                    "id": node["node_key"],
-                    "name": node["display_name"],
-                    "type": "modulo" if node["node_type"] == "pipeline" else "placeholder",
-                    "pipeline_id": node.get("pipeline_id"),
-                    "config_json": node["config_json"],
-                }
-                for node in draft.nodes
-            ],
-            "edges": [
-                {
-                    "id": f"{edge['source_node_key']}->{edge['target_node_key']}:{edge['relationship_type']}",
-                    "source": edge["source_node_key"],
-                    "target": edge["target_node_key"],
-                    "description": edge["relationship_type"],
-                    "config_json": edge["config_json"],
-                }
-                for edge in draft.relationships
-            ],
-            "notes": "System Maps discovery draft; inferred edges are suggestions and are not published.",
-            "discovery_fingerprint": _fingerprint(draft),
-            "discovery": {"warnings": list(draft.warnings), "skipped": list(draft.skipped)},
-        }
+        content = normalize_content(
+            {
+                "stages": [
+                    {
+                        "id": node["node_key"],
+                        "name": node["display_name"],
+                        "type": "modulo" if node["node_type"] == "pipeline" else "placeholder",
+                        "pipeline_id": node.get("pipeline_id"),
+                        "config_json": node["config_json"],
+                    }
+                    for node in draft.nodes
+                ],
+                "edges": [
+                    {
+                        "id": f"{edge['source_node_key']}->{edge['target_node_key']}:{edge['relationship_type']}",
+                        "source": edge["source_node_key"],
+                        "target": edge["target_node_key"],
+                        "description": edge["relationship_type"],
+                        "config_json": edge["config_json"],
+                    }
+                    for edge in draft.relationships
+                ],
+                "notes": "System Maps discovery draft; inferred edges are suggestions and are not published.",
+                "discovery_fingerprint": _fingerprint(draft),
+                "discovery": {"warnings": list(draft.warnings), "skipped": list(draft.skipped)},
+            }
+        )
         map_obj, revision_id = await repository.save_discovery_revision(
             session,
             organisation_id=principal.organisation_id,
