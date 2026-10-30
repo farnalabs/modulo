@@ -252,6 +252,25 @@ jobs:
            "$APP/Contents/Resources/bundle/pg/bin/postgres" --version | grep -Eq 'PostgreSQL[)]?[[:space:]]+16[.]'
            "$APP/Contents/Resources/bundle/redis/redis-server" --version | grep -Eq 'v=8[.]'
            "$APP/Contents/MacOS/modulo" --help >/dev/null
+           echo '::group::Verify bundle symlinks stay inside the app'
+           APP_REALPATH="$(cd "$APP" && pwd -P)"
+           while IFS= read -r -d '' link; do
+             target="$(readlink "$link")"
+             if [[ "$target" = /* ]]; then
+               resolved="$target"
+             else
+               resolved="$(dirname "$link")/$target"
+             fi
+             resolved="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$resolved")"
+             case "$resolved/" in
+               "$APP_REALPATH/"*) printf 'bundle symlink: link=%s target=%s resolved=%s\n' "$link" "$target" "$resolved" ;;
+               *)
+                 printf '::error::symlink escapes app bundle: link=%s target=%s resolved=%s\n' "$link" "$target" "$resolved" >&2
+                 exit 1
+                 ;;
+             esac
+           done < <(find "$APP/Contents" -type l -print0)
+           echo '::endgroup::'
 
 
       - name: Sign, notarize and smoke-test native installer

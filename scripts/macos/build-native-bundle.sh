@@ -85,11 +85,42 @@ done
 mkdir -p "${BUNDLE_ROOT}/frontend-dist"
 cp -a "${ROOT_DIR}/frontend/dist/." "${BUNDLE_ROOT}/frontend-dist/"
 
-uv sync --frozen --no-dev --project "${ROOT_DIR}/backend"
 mkdir -p "${BUNDLE_ROOT}/backend"
 cp -a "${ROOT_DIR}/backend/src" "${BUNDLE_ROOT}/backend/src"
 cp "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock" "${BUNDLE_ROOT}/backend/"
-cp -a "${ROOT_DIR}/backend/.venv" "${BUNDLE_ROOT}/backend/.venv"
+# Build the venv against the bundled interpreter with copies, rather than copying
+# the developer venv. This keeps the signed app relocatable: venv entry points
+# and interpreter links resolve inside the app instead of to build-time paths.
+"${BUNDLE_ROOT}/runtime/bin/python3.12" -m venv --copies "${BUNDLE_ROOT}/backend/.venv"
+uv sync --frozen --no-dev --no-install-project --project "${BUNDLE_ROOT}/backend" --python "${BUNDLE_ROOT}/backend/.venv/bin/python"
+
+assert_no_escaping_symlinks() {
+  local root="$1" link target resolved canonical_root
+  canonical_root="$(cd "$root" && pwd -P)"
+  while IFS= read -r -d '' link; do
+    target="$(readlink "$link")"
+    if [[ "$target" = /* ]]; then
+      resolved="$target"
+    else
+      resolved="$(dirname "$link")/$target"
+    fi
+    resolved="$(python3 - "$resolved" <<'PY'
+import os
+import sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+    case "$resolved/" in
+      "$canonical_root/"*) ;;
+      *)
+        printf '::error::symlink escapes app bundle: link=%s target=%s resolved=%s\n' "$link" "$target" "$resolved" >&2
+        return 1
+        ;;
+    esac
+  done < <(find "${root}/Contents" -type l -print0)
+}
+
+assert_no_escaping_symlinks "$APP_ROOT"
 
 cat > "${BUILD_ROOT}/launcher.c" <<'EOF'
 #include <libproc.h>
