@@ -31,10 +31,10 @@ next key mid-rotation works before consumers update.
    next slot only if unwanted, then hard-remove it — every consumer older
    than one cycle stops verifying with it by design.
 
-**PROVISIONING (needs-human):** this module SHIPS WITH AN EMPTY trust store
-and FAILS CLOSED — no `_TRUST_ROWS` entries means every verification refuses
-(no dev or experimental signing keys ship in the repo or wheel). See
-:const:`PROVISIONING_NOTE` for the exact fill-in targets.
+**PROVISIONING:** the current production key is provisioned in this module;
+the reserved NEXT slot remains empty until the next rotation. The trust store
+contains no dev or experimental signing keys. See :const:`PROVISIONING_NOTE`
+for the rotation procedure and the matching installer trust store.
 
 **--from-file escape hatch:** offline/corporate installs verify against a
 locally provided manifest + signature (:func:`verify_release_from_files`);
@@ -64,44 +64,47 @@ MANIFEST_SCHEMA_VERSION = 1
 _RELEASE = "modulo"
 
 # ---------------------------------------------------------------------------
-# Trust store (FAIL-CLOSED until the owner provisions production keys)
+# Trust store (current production key provisioned; next slot reserved)
 # ---------------------------------------------------------------------------
 
 _KEY_ID_CURRENT = "modulo-2026-a"
 _KEY_ID_NEXT = "modulo-2026-a-next"
 
-# The production trust store is EMPTY at ship time and must be PROVISIONED by
-# the repo owner (needs-human): paste the current + next ed25519 public hex
-# halves here as ``{key_id: (label, public_hex)}`` rows. With an empty store
-# every verification function REFUSES (fail-closed) — the module must never
-# ship a trust store that any key material found in a public repo can satisfy.
-# Test/CI keys are injected explicitly by the test suite (see
-# backend/tests/unit/launcher/conftest.py); signing never reads a key from
-# this module at all.
-_TRUST_ROWS: dict[str, tuple[str, str]] = {}
+# The current production public key is intentionally shipped here. The NEXT
+# slot stays absent until the next rotation; test/CI keys are injected
+# explicitly by the test suite (see backend/tests/unit/launcher/conftest.py).
+# Signing never reads a private key from this module.
+_TRUST_ROWS: dict[str, tuple[str, str]] = {
+    _KEY_ID_CURRENT: (
+        "Modulo production release signing key (2026-A)",
+        "73f7dd1483fff0c0df45d706ae9ce7a68151942b8e2e8bc715b5d9beb719b5b0",
+    ),
+}
 
 _NO_PROVISIONED_KEYS_MESSAGE = (
     "no provisioned production signing keys - refusing to verify (provisioning: see PROVISIONING_NOTE)"
 )
 
 PROVISIONING_NOTE = (
-    "TRUST-STORE PROVISIONING (needs-human, ONE-TIME owner task). The shipped "
-    "trust store is EMPTY and verification FAILS CLOSED until provisioned. "
-    "Exactly two fill-in targets, both carrying the SAME keypair set:\n"
+    "TRUST-STORE PROVISIONING: the current production key is provisioned in "
+    "the shipped trust store under modulo-2026-a; the modulo-2026-a-next slot "
+    "is reserved and currently empty. The two trust-store assemblies must stay "
+    "byte-equal:\n"
     "  1. backend/src/modulo/launcher/manifest.py -> _TRUST_ROWS: one row per "
     "key as {key_id: (label, ed25519 public hex)} for the current + next slots.\n"
     "  2. scripts/install.sh -> TRUST_KEY_CURRENT_B64 / TRUST_KEY_NEXT_B64: "
     "the same public keys as SPKI-DER base64.\n"
+    "For rotation, generate the replacement keypair offline, place its public "
+    "half in the reserved next slot, release once with both keys trusted, then "
+    "promote it to current and remove the retired key after the rotation window.\n"
     "The PRIVATE half is the CI secret BUNDLE_MANIFEST_SIGNING_KEY (ed25519 "
     "hex, repo-level Actions secret) - never committed. When the secret is "
-    "absent the bundle-release workflow refuses to publish (the signing step "
-    "fails loudly on every tagged release). A unit test asserts the Python "
-    "trust rows and install.sh's embedded keys stay byte-equal (no drift)."
+    "absent the bundle-release workflow refuses to publish."
 )
 
 
 def _load_trust_store() -> dict[str, Ed25519PublicKey]:
-    """Build the shipped trust store from _TRUST_ROWS (empty -> fail-closed).
+    """Build the shipped trust store from the provisioned public-key rows.
 
     The caller (verify_signature) refuses on an empty store: verification
     must never be shipped with "no key can pass" silently bridged over.
@@ -187,10 +190,9 @@ def verify_signature(
 ) -> str:
     """Verify Ed25519 over *manifest_payload*; return the verified key's id.
 
-    FAIL-CLOSED: the shipped store holds NO keys until the owner provisions
-    production ones — an empty/falsy store refuses before any signature is
-    touch-checked (see PROVISIONING_NOTE). Tests inject their trust store
-    explicitly via ``trust_store=``.
+    FAIL-CLOSED: an empty/falsy store refuses before any signature is
+    touch-checked (see PROVISIONING_NOTE). Tests inject their independent test
+    trust store explicitly via ``trust_store=``.
     """
     store = trust_store if trust_store is not None else _load_trust_store()
     if not store:

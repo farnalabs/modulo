@@ -395,12 +395,11 @@ trap 'rm -rf "${tmp}"' EXIT
 # beside the tarball; the SAME trust store verifies (no operator-added keys).
 
 # The embedded ed25519 trust store (SPKI DER, base64) - current + next.
-# FAIL-CLOSED by default: BOTH values are EMPTY until the repo owner
-# provisionally pastes the production public keys (needs-human). The SAME
-# keys must go into backend/src/modulo/launcher/manifest.py (_TRUST_ROWS)
-# - a unit test asserts the two assemblies stay equal (no drift); rotation
-# per ADR 031 Decision 3. Empty values make every signature gate refuse.
-TRUST_KEY_CURRENT_B64=""
+# The current production public key is provisioned; NEXT remains reserved for
+# rotation. The SAME keys must go into backend/src/modulo/launcher/manifest.py
+# (_TRUST_ROWS) - a unit test asserts the two assemblies stay equal (no drift).
+# Rotation follows ADR 031 Decision 3.
+TRUST_KEY_CURRENT_B64="MCowBQYDK2VwAyEAc/fdFIP/8MDfRdcGrpznpoFRlCuOLovHFbXZvrcZtbA="
 TRUST_KEY_NEXT_B64=""
 
 # The store-blessed signing key-ids (must mirror manifest.py's slot ids).
@@ -459,7 +458,7 @@ verify_shipped_manifest() {
   #
   # Preconditions: openssl (>=3.0, ed25519 -rawin), coreutils base64, and
   # python3 (the manifest sha256 extraction below). The trust store is
-  # EMBEDDED and empty-by-default: no operator-added key can ever verify.
+  # EMBEDDED: no operator-added key can ever verify.
   local manifest_file="$1" signature_file="$2" tarball_file="$3" expected_release="$4"
   _openssl_ed25519_check
   command -v base64 >/dev/null 2>&1 || die "coreutils base64 is required to decode the trust-store keys"
