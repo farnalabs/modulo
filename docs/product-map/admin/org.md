@@ -50,6 +50,18 @@ kill-switch, authorization enforcement).
       the already-committed override
       (`backend/src/modulo/api/routes/admin_feature_flags.py`,
       `backend/tests/unit/api/test_admin_feature_flags.py`)
+- [x] Internal-only flags stay off the customer-facing catalogue (FAR-2230):
+      `system_maps` (Beta System Maps) is a default-OFF, internal-only flag, so
+      `effective_feature_flags` filters it and the retired internal flags out of
+      plan/customer-facing flag responses. `GET /api/v1/admin/feature-flags` omits
+      it unless the caller is an internal operator with developer mode and the
+      dedicated `system_maps_access` grant, and the toggle route refuses the flag
+      without that grant; the response cache key carries the caller's visibility
+      class so an internal catalogue can never be served to an ordinary caller
+      (`backend/src/modulo/core/feature_flags.py`,
+      `backend/src/modulo/api/routes/admin_feature_flags.py`,
+      `backend/tests/unit/api/test_admin_feature_flags.py`,
+      `backend/tests/unit/core/test_feature_flag_registry.py`)
 - [x] Frontend renders org settings at `/admin/org` with org delete confirmation
       and product-analytics toggle (`frontend/src/manifest.yaml` testids)
 - [x] Self-service org profile (`GET`/`PUT /api/v1/admin/org` in

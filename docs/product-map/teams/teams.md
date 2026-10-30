@@ -94,6 +94,18 @@ org profile, and is the product-map home for user roles.
       (`team_pipeline_visibility.feature`, `view_as_team.feature`)
 - [x] RBAC roles (`admin | operator | runner | viewer`) gate team surfaces
       (`users/roles.feature`, `auth/team_rbac.py`, `test_team_rbac.py`)
+- [x] Viewer reads are bounded by team membership (PR #2552): `run.list`,
+      `trigger.list`, `trigger.events.list` and `hitl.list` floor at `viewer`, and a
+      viewer's list, stats, heatmap, trigger and HITL read paths are clamped to the
+      teams its account belongs to – org-level resources stay shared, a team-private
+      resource is visible only to that team's members (the effective owner is the
+      stamped run owner with the pipeline owner as fallback). Higher org roles keep
+      the org-wide read, while a team-scoped API key stays bounded by its team. The
+      clamp is one shared fail-closed predicate, `account_team_scope_clause` in
+      `db/crud/team_scope.py`
+      (`backend/tests/unit/db/crud/test_team_scope.py`,
+      `backend/tests/unit/mcp/test_team_scope_enforcement.py`,
+      `backend/tests/unit/api/test_triggers_routes_coverage.py`)
 - [x] DB team RLS covers every team-scoped table (FAR-1514):
       `lifecycle_maps`, `eval_datasets` and `eval_suites` joined the five 0124
       tables - migration `0287_team_rls_lifecycle_evals` drops their org-only

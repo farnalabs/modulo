@@ -123,6 +123,23 @@ rate-limited by the `TriggerEngine`.
       restore) with per-type config (webhook / cron / polling / ongoing);
       secret fields are encrypted at rest and never returned
       (`test_trigger_config_secrets`, `test_triggers_endpoint`)
+- [x] Trigger reads are viewer-level and team-bounded (PR #2552): `trigger.list` and
+      `trigger.events.list` floor at `viewer`. A caller whose org role is `viewer`
+      is clamped by `account_team_scope_clause(Pipeline.owner_team_id, account_id)`,
+      so a trigger on an org-level pipeline stays visible while a trigger on a
+      team-private pipeline is visible only to a member of the owning team. The same
+      predicate applies to the list, the cron preview and the event listing, every
+      read joins `pipelines` and excludes soft-deleted pipelines, and higher org
+      roles keep the org-wide read (`backend/src/modulo/api/routes/triggers.py`,
+      `backend/tests/unit/api/test_triggers_routes_coverage.py`)
+- [x] MCP trigger reads carry the same viewer clamp (PR #2552):
+      `get_trigger` loads the trigger with the account-team scope, `list_triggers`
+      and `list_trigger_events` apply the membership clause (with the pipeline join
+      filtered on `deleted_at`), and a viewer read whose account context is unset
+      fails closed with `McpAuthContextError` rather than degrading to an org-wide
+      read (`backend/src/modulo/api/mcp_server.py`,
+      `backend/tests/unit/mcp/test_get_trigger_events.py`,
+      `backend/tests/unit/mcp/test_team_scope_enforcement.py`)
 - [x] Every trigger has a REQUIRED name (FAR-2227): trimmed, 1-255 characters,
       unique among a pipeline's live triggers. Creating without one is a 422
       (REST and the MCP `create_trigger` tool alike, plus the UI form and

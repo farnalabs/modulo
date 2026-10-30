@@ -144,6 +144,19 @@ applications. Built on the auth + model-backend core.
       list-run/cost and other sensitive tools are role-gated, HITL-gated tools
       route through human review, and the suite guards structural tool
       coverage so new tools cannot ship unscoped
+- [x] Viewer-level MCP reads are team-membership bounded (PR #2552): `run.list`,
+      `trigger.list`, `trigger.events.list` and `hitl.list` floor at `viewer`, so
+      `list_runs`, `list_triggers`, `get_trigger`, `list_trigger_events`,
+      `list_pending_hitl`, `list_hitl_reviews` and `get_hitl_review` apply
+      `account_team_scope_clause` against the row's effective owner (a trigger uses
+      its owning pipeline; runs and HITL use the stamped run owner with the pipeline
+      owner as fallback) for a viewer. Org-level rows stay visible and a
+      team-private row is visible only to a member of the owning team; a viewer read
+      whose account context is unset fails closed with `McpAuthContextError` rather
+      than degrading to an org-wide read
+      (`backend/src/modulo/api/mcp_server.py`,
+      `backend/tests/unit/mcp/test_team_scope_enforcement.py`,
+      `backend/tests/unit/mcp/test_get_trigger_events.py`)
 
 
 - [x] MCP trigger dispatch (2026-09-22): the `trigger_pipeline` tool drives the
@@ -164,7 +177,9 @@ applications. Built on the auth + model-backend core.
       shape, and a successful decision reports
       `{"status": "approved"|"rejected", "review_id": ...}` through the real
       HITLManager; `list_pending_hitl` returns the org's undecided gates with the
-      shared description resolver. Five `mcp/review_hitl.feature` scenarios
+      shared description resolver (clamped to the caller's team memberships for a
+      viewer-level key, see the viewer-read bullet below). Five
+      `mcp/review_hitl.feature` scenarios
       execute in CI against these real handler seams (auth re-validation + DB /
       HITLManager seams patched), closing the last legacy `/mcp/tools/call`
       `@awaiting-implementation` draft under the review surface
