@@ -35,6 +35,7 @@ from modulo.db.models import (
     Run,
     SuiteRun,
 )
+from modulo.db.models.system_map import SystemMapNode
 
 # ---------------------------------------------------------------------------
 # 1. Model → resolver-key mapping convention
@@ -72,6 +73,7 @@ MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY: list[tuple[type[Any], str]] = [
     (Run, "Run access derives from pipeline ownership (ADR 038 §5); owner_team_id is metadata, not a security control"),
     (SuiteRun, "SuiteRun access derives from EvalSuite ownership (ADR 038 §5); no own visibility column"),
     (Journey, "Journey access derives from its parent run/pipeline (ADR 038 §5); org-role-floor-only"),
+    (SystemMapNode, "SystemMapNode access derives from its parent system map revision (ADR 038 §5); derived entity"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -254,6 +256,10 @@ class TestTeamScopeWiring:
             # DB RLS alone (migration 0314), never route-wired.
             "external_agents",
             "mcp_servers",
+            # FAR-2236: system maps carry the visibility pair and are
+            # registered for completeness; enforced by DB RLS alone
+            # (migration 0341), never route-wired.
+            "system_maps",
         }
         actual = set(TEAM_SCOPED_RESOLVERS)
         assert actual == expected, (
