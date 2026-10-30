@@ -30,6 +30,10 @@ VALID_BINDING_KINDS: tuple[str, ...] = ("trigger", "action_pipeline")
 
 VALID_VISIBILITY: tuple[str, ...] = ("org", "team")
 
+_ANCHORED_NODE_TYPE_PATTERN = f"^({'|'.join(VALID_NODE_TYPES)})$"
+_ANCHORED_REL_TYPE_PATTERN = f"^({'|'.join(VALID_REL_TYPES)})$"
+_ANCHORED_BINDING_KIND_PATTERN = f"^({'|'.join(VALID_BINDING_KINDS)})$"
+
 
 # ─── Request bodies ───
 
@@ -61,7 +65,7 @@ class SystemMapRevisionCreate(BaseModel):
 
 class SystemMapNodeCreate(BaseModel):
     node_key: str = Field(min_length=1, max_length=100)
-    node_type: str = Field(pattern="|".join(VALID_NODE_TYPES))
+    node_type: str = Field(pattern=_ANCHORED_NODE_TYPE_PATTERN)
     display_name: str = Field(min_length=1, max_length=255)
     config_json: dict[str, Any] = Field(default_factory=dict)
     pipeline_id: uuid.UUID | None = None
@@ -75,7 +79,7 @@ class SystemMapNodeCreate(BaseModel):
 class SystemMapRelationshipCreate(BaseModel):
     source_node_key: str = Field(min_length=1, max_length=100)
     target_node_key: str = Field(min_length=1, max_length=100)
-    relationship_type: str = Field(pattern="|".join(VALID_REL_TYPES))
+    relationship_type: str = Field(pattern=_ANCHORED_REL_TYPE_PATTERN)
     config_json: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -93,7 +97,7 @@ class AttributionBindingCreate(BaseModel):
     pipeline_id: uuid.UUID
     trigger_id: uuid.UUID | None = None
     node_key: str = Field(min_length=1, max_length=100)
-    binding_kind: str = Field(pattern="|".join(VALID_BINDING_KINDS))
+    binding_kind: str = Field(pattern=_ANCHORED_BINDING_KIND_PATTERN)
 
 
 # ─── Response models ───
