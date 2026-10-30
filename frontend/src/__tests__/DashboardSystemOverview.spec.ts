@@ -43,3 +43,60 @@ describe('DashboardSystemOverview', () => {
     expect(wrapper.text()).toContain('No system maps yet')
   })
 })
+
+describe('DashboardSystemOverview measured state', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockGet.mockReset()
+  })
+
+  it('renders measured metrics, healthy/critical health and active cooldowns', async () => {
+    const richOverview = {
+      ...overview,
+      nodes: [
+        {
+          node_key: 'build', node_type: 'pipeline', display_name: 'Build', health: 'healthy',
+          queue_depth: 3, throughput_per_min: 12, failure_rate: 0.123, telemetry_coverage: 0.5,
+        },
+        {
+          node_key: 'deploy', node_type: 'pipeline', display_name: 'Deploy', health: 'critical',
+          queue_depth: 0, throughput_per_min: 0, failure_rate: 1, telemetry_coverage: 1,
+        },
+      ],
+      loop_configs: [{ ...overview.loop_configs[0], cooldown_active: true }],
+      bottlenecks: [],
+    }
+    mockGet.mockImplementation((url: string) => url === '/api/v1/system-maps'
+      ? Promise.resolve({ data: { items: [map], total: 1, page: 1, page_size: 100 } })
+      : Promise.resolve({ data: richOverview }))
+    const wrapper = mount(DashboardSystemOverview)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('12.3%')
+    expect(wrapper.text()).toContain('50.0%')
+    expect(wrapper.text()).toContain('100.0%')
+    expect(wrapper.text()).toContain('healthy')
+    expect(wrapper.text()).toContain('critical')
+    expect(wrapper.text()).toContain('Cooldown active')
+    expect(wrapper.find('[data-testid="dashboard-system-bottlenecks"]').exists()).toBe(false)
+  })
+
+  it('renders the error state when loading fails', async () => {
+    mockGet.mockResolvedValue({ error: new Error('list down') })
+    const wrapper = mount(DashboardSystemOverview)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('list down')
+  })
+
+  it('renders the unpublished state when no map has a published revision', async () => {
+    mockGet.mockResolvedValue({
+      data: { items: [{ ...map, published_revision_id: null }], total: 1, page: 1, page_size: 100 },
+    })
+    const wrapper = mount(DashboardSystemOverview)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="dashboard-system-unpublished"]').exists()).toBe(true)
+    expect(mockGet).toHaveBeenCalledTimes(1)
+  })
+})

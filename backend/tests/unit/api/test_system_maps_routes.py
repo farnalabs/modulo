@@ -1580,3 +1580,618 @@ def test_system_map_overview_response_includes_bottlenecks() -> None:
     )
     assert len(overview.bottlenecks) == 1
     assert overview.bottlenecks[0].kind == "unobserved"
+
+
+# ─── Changed-lines coverage: helper, detail and error arms ───
+
+
+def _install_session(*, scalar_one: object = 1, one_or_none: object = None) -> MagicMock:
+    """Override the request session with a scripted execute() result."""
+    from modulo.api.dependencies import get_db_session
+
+    session = MagicMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=None)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=cm)
+    session.begin_nested = MagicMock(return_value=cm)
+    session.flush = AsyncMock()
+    session.rollback = AsyncMock()
+    session.add = MagicMock()
+    session.info = {}
+    bind = MagicMock()
+    bind.dialect.name = "postgresql"
+    session.get_bind = MagicMock(return_value=bind)
+    result = MagicMock()
+    result.scalar_one.return_value = scalar_one
+    result.scalar_one_or_none.return_value = one_or_none
+    session.execute = AsyncMock(return_value=result)
+
+    async def _get_session():
+        yield session
+
+    app.dependency_overrides[get_db_session] = _get_session
+    return session
+
+
+async def test_get_repo_builds_repository_with_shared_session_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modulo.api.routes import system_maps as routes
+
+    session = MagicMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=session)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=ctx)
+    monkeypatch.setattr(routes, "get_settings", lambda: MagicMock())
+    monkeypatch.setattr(routes, "get_or_create_engine", lambda settings: MagicMock())
+    monkeypatch.setattr(routes, "get_or_create_session_factory", lambda engine: factory)
+
+    repository = await routes._get_repo()
+
+    assert isinstance(repository, SystemMapRepository)
+    generator = repository._session_factory()
+    assert await anext(generator) is session
+
+
+async def test_get_repo_dependency_delegates_to_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    from modulo.api.routes import system_maps as routes
+
+    sentinel = MagicMock()
+    monkeypatch.setattr(routes, "_get_repo", AsyncMock(return_value=sentinel))
+
+    assert await routes.get_repo() is sentinel
+
+
+async def test_record_audit_swallows_write_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from modulo.api.routes import system_maps as routes
+
+    session = MagicMock()
+    nested = MagicMock()
+    nested.__aenter__ = AsyncMock(return_value=None)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested)
+    monkeypatch.setattr(routes, "append_audit_event", AsyncMock(side_effect=RuntimeError("audit down")))
+
+    await routes._record_audit(
+        session,
+        org_id=_ORG_ID,
+        event_type="system_map.updated",
+        account_id=_USER_ID,
+        resource_id=_MAP_ID,
+    )
+
+
+def test_list_system_maps_filters_count_by_visibility(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("list_maps_by_org", AsyncMock(return_value=[]))
+
+    resp = http.get(_BASE, params={"visibility": "org"})
+
+    assert resp.status_code == 200, resp.text
+
+
+def test_list_system_maps_awaits_awaitable_total(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("list_maps_by_org", AsyncMock(return_value=[]))
+
+    async def _total() -> int:
+        return 7
+
+    _install_session(scalar_one=_total())
+
+    resp = http.get(_BASE)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["total"] == 7
+
+
+def _direct_principal() -> TenantPrincipal:
+    return TenantPrincipal(
+        username="test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="operator",
+        is_system_admin=False,
+        via_api_key=False,
+        client_kind="test",
+    )
+
+
+def _direct_session() -> MagicMock:
+    session = MagicMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=None)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=cm)
+    session.begin_nested = MagicMock(return_value=cm)
+    session.flush = AsyncMock()
+    session.info = {}
+    bind = MagicMock()
+    bind.dialect.name = "postgresql"
+    session.get_bind = MagicMock(return_value=bind)
+    session.execute = AsyncMock(return_value=MagicMock())
+    return session
+
+
+async def _assert_http_exception_reraised(endpoint, **kwargs: object) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await endpoint(**kwargs)
+    assert exc_info.value.status_code == 418
+
+
+async def test_list_endpoint_reraises_http_exception() -> None:
+    from modulo.api.routes.system_maps import list_system_maps_endpoint
+
+    repository = MagicMock(spec=SystemMapRepository)
+    repository.list_maps_by_org = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
+    await _assert_http_exception_reraised(
+        list_system_maps_endpoint,
+        page=1,
+        page_size=20,
+        name=None,
+        owner_team_id=None,
+        visibility=None,
+        session=_direct_session(),
+        principal=_direct_principal(),
+        repository=repository,
+    )
+
+
+async def test_get_endpoint_reraises_http_exception() -> None:
+    from modulo.api.routes.system_maps import get_system_map_endpoint
+
+    repository = MagicMock(spec=SystemMapRepository)
+    repository.get_map_by_id = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
+    await _assert_http_exception_reraised(
+        get_system_map_endpoint,
+        map_id=_MAP_ID,
+        session=_direct_session(),
+        principal=_direct_principal(),
+        repository=repository,
+    )
+
+
+async def test_update_endpoint_reraises_http_exception() -> None:
+    from modulo.api.routes.system_maps import update_system_map_endpoint
+    from modulo.api.schemas.system_maps import SystemMapUpdate
+
+    repository = MagicMock(spec=SystemMapRepository)
+    repository.get_map_by_id = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
+    await _assert_http_exception_reraised(
+        update_system_map_endpoint,
+        map_id=_MAP_ID,
+        req=SystemMapUpdate(name="New"),
+        session=_direct_session(),
+        principal=_direct_principal(),
+        repository=repository,
+    )
+
+
+async def test_delete_endpoint_reraises_http_exception() -> None:
+    from modulo.api.routes.system_maps import delete_system_map_endpoint
+
+    repository = MagicMock(spec=SystemMapRepository)
+    repository.soft_delete_map = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
+    await _assert_http_exception_reraised(
+        delete_system_map_endpoint,
+        map_id=_MAP_ID,
+        session=_direct_session(),
+        principal=_direct_principal(),
+        repository=repository,
+    )
+
+
+async def test_list_bindings_endpoint_reraises_http_exception() -> None:
+    from modulo.api.routes.system_maps import list_attribution_bindings_endpoint
+
+    repository = MagicMock(spec=SystemMapRepository)
+    repository.get_map_by_id = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
+    await _assert_http_exception_reraised(
+        list_attribution_bindings_endpoint,
+        map_id=_MAP_ID,
+        session=_direct_session(),
+        principal=_direct_principal(),
+        repository=repository,
+    )
+
+
+async def test_delete_binding_endpoint_reraises_http_exception() -> None:
+    from modulo.api.routes.system_maps import delete_attribution_binding_endpoint
+
+    repository = MagicMock(spec=SystemMapRepository)
+    repository.get_map_by_id = AsyncMock(side_effect=HTTPException(status_code=418, detail="teapot"))
+    await _assert_http_exception_reraised(
+        delete_attribution_binding_endpoint,
+        map_id=_MAP_ID,
+        binding_id=uuid.uuid4(),
+        session=_direct_session(),
+        principal=_direct_principal(),
+        repository=repository,
+    )
+
+
+def test_update_system_map_rejects_empty_payload(client: tuple[TestClient, _Harness]) -> None:
+    http, _ = client
+
+    resp = http.put(f"{_BASE}/{_MAP_ID}", json={})
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "No fields to update"
+
+
+def test_update_system_map_validates_team_transition(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(side_effect=[_map_row(), _map_row(visibility="team")]))
+
+    resp = http.put(f"{_BASE}/{_MAP_ID}", json={"visibility": "team"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["visibility"] == "team"
+
+
+def test_update_system_map_team_transition_missing_map(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=None))
+
+    resp = http.put(f"{_BASE}/{_MAP_ID}", json={"visibility": "team"})
+
+    assert resp.status_code == 404
+
+
+def test_get_revision_with_graph_missing_graph_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row()))
+    harness.stub("get_full_revision_graph", AsyncMock(return_value=None))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}", params={"include_graph": "true"})
+
+    assert resp.status_code == 404
+
+
+def test_create_revision_persists_relationships(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("list_revisions", AsyncMock(return_value=[]))
+    harness.stub("create_revision", AsyncMock(return_value=_revision_row()))
+    harness.stub("validate_bindings", AsyncMock(return_value=[]))
+    harness.stub("create_node", AsyncMock(return_value=_node_row()))
+    harness.stub("create_relationship", AsyncMock(return_value=_relationship_row()))
+
+    payload = {
+        "nodes": [{"node_key": "node-1", "node_type": "pipeline", "display_name": "Node 1"}],
+        "relationships": [{"source_node_key": "node-1", "target_node_key": "node-1", "relationship_type": "flow"}],
+        "loop_configs": [],
+    }
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions", json=payload)
+
+    assert resp.status_code == 201, resp.text
+    harness.repository.create_relationship.assert_awaited_once()
+
+
+def test_publish_revision_missing_publish_result_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row()))
+    harness.stub("validate_publish", AsyncMock(return_value=(True, [])))
+    harness.stub("publish_revision", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/publish")
+
+    assert resp.status_code == 404
+
+
+def test_publish_revision_integrity_error_returns_409(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row()))
+    harness.stub("validate_publish", AsyncMock(return_value=(True, [])))
+    harness.stub("publish_revision", AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("dup"))))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/publish")
+
+    assert resp.status_code == 409, resp.text
+
+
+def test_archive_revision_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/archive")
+
+    assert resp.status_code == 404
+
+
+def test_archive_revision_missing_revision_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/archive")
+
+    assert resp.status_code == 404
+
+
+def test_archive_revision_keeps_unrelated_published_pointer(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub(
+        "get_map_by_id",
+        AsyncMock(return_value=_map_row(published_revision_id=uuid.uuid4())),
+    )
+    harness.stub("get_revision_by_id", AsyncMock(return_value=_revision_row(status="published")))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}/archive")
+
+    assert resp.status_code == 200, resp.text
+
+
+def test_delete_revision_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=None))
+
+    resp = http.delete(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}")
+
+    assert resp.status_code == 404
+
+
+def test_delete_revision_missing_revision_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_revision_by_id", AsyncMock(return_value=None))
+
+    resp = http.delete(f"{_BASE}/{_MAP_ID}/revisions/{_REV_ID}")
+
+    assert resp.status_code == 404
+
+
+def test_overview_with_matching_loop_config_has_no_bottleneck(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    loop_node = _node_row(node_key="loop-1", node_type="improvement_loop")
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub(
+        "get_full_revision_graph",
+        AsyncMock(
+            return_value={
+                "revision": _revision_row(status="published"),
+                "nodes": [loop_node],
+                "relationships": [],
+                "loop_configs": [_loop_config_row(node_key="loop-1")],
+            }
+        ),
+    )
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["bottlenecks"] == []
+
+
+def test_overview_missing_graph_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("get_full_revision_graph", AsyncMock(return_value=None))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
+
+    assert resp.status_code == 404
+
+
+def _binding_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "pipeline_id": str(uuid.uuid4()),
+        "trigger_id": str(uuid.uuid4()),
+        "node_key": "node-1",
+        "binding_kind": "trigger",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_create_binding_without_published_revision_returns_409(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/attribution-bindings", json=_binding_payload())
+
+    assert resp.status_code == 409
+
+
+def test_create_binding_missing_node_returns_422(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("get_node_by_map_revision_key", AsyncMock(return_value=None))
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/attribution-bindings", json=_binding_payload())
+
+    assert resp.status_code == 422
+    assert "does not exist in the published map revision" in resp.json()["detail"]
+
+
+def test_create_binding_wrong_node_type_returns_422(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub(
+        "get_node_by_map_revision_key",
+        AsyncMock(return_value=_node_row(node_type="improvement_loop")),
+    )
+
+    resp = http.post(f"{_BASE}/{_MAP_ID}/attribution-bindings", json=_binding_payload())
+
+    assert resp.status_code == 422
+    assert "require a pipeline node" in resp.json()["detail"]
+
+
+def test_create_action_binding_missing_loop_config_returns_422(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub(
+        "get_node_by_map_revision_key",
+        AsyncMock(return_value=_node_row(node_type="improvement_loop")),
+    )
+    harness.stub("get_loop_config_by_node_key", AsyncMock(return_value=None))
+
+    resp = http.post(
+        f"{_BASE}/{_MAP_ID}/attribution-bindings",
+        json=_binding_payload(binding_kind="action_pipeline", trigger_id=None),
+    )
+
+    assert resp.status_code == 422
+    assert "no improvement-loop configuration" in resp.json()["detail"]
+
+
+def test_create_action_binding_mismatched_loop_pipeline_returns_422(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub(
+        "get_node_by_map_revision_key",
+        AsyncMock(return_value=_node_row(node_type="improvement_loop")),
+    )
+    harness.stub(
+        "get_loop_config_by_node_key",
+        AsyncMock(return_value=_loop_config_row(action_pipeline_id=uuid.uuid4())),
+    )
+
+    resp = http.post(
+        f"{_BASE}/{_MAP_ID}/attribution-bindings",
+        json=_binding_payload(binding_kind="action_pipeline", trigger_id=None),
+    )
+
+    assert resp.status_code == 422
+    assert "different action pipeline" in resp.json()["detail"]
+
+
+def test_create_binding_missing_pipeline_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    pipeline_id = uuid.uuid4()
+    node = _node_row()
+    node.pipeline_id = pipeline_id
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("get_node_by_map_revision_key", AsyncMock(return_value=node))
+    _install_session(one_or_none=None)
+
+    resp = http.post(
+        f"{_BASE}/{_MAP_ID}/attribution-bindings",
+        json=_binding_payload(pipeline_id=str(pipeline_id)),
+    )
+
+    assert resp.status_code == 404
+    assert "not found in this organisation" in resp.json()["detail"]
+
+
+def test_create_binding_missing_trigger_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    pipeline_id = uuid.uuid4()
+    node = _node_row()
+    node.pipeline_id = pipeline_id
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    harness.stub("get_published_revision", AsyncMock(return_value=_revision_row(status="published")))
+    harness.stub("get_node_by_map_revision_key", AsyncMock(return_value=node))
+    # RLS set_config calls also use execute(), so resolve the pipeline and the
+    # trigger from scalar_one_or_none in call order instead of side_effecting
+    # execute() itself.
+    session = _install_session()
+
+    def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        result = MagicMock()
+        if "FROM pipelines" in str(stmt):
+            result.scalar_one_or_none.return_value = MagicMock(id=pipeline_id)
+        else:
+            result.scalar_one_or_none.return_value = None
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    resp = http.post(
+        f"{_BASE}/{_MAP_ID}/attribution-bindings",
+        json=_binding_payload(pipeline_id=str(pipeline_id)),
+    )
+
+    assert resp.status_code == 404
+    assert "Trigger" in resp.json()["detail"]
+
+
+def test_list_bindings_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=None))
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/attribution-bindings")
+
+    assert resp.status_code == 404
+
+
+def test_delete_binding_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=None))
+
+    resp = http.delete(f"{_BASE}/{_MAP_ID}/attribution-bindings/{uuid.uuid4()}")
+
+    assert resp.status_code == 404
+
+
+def test_system_map_revision_schema_rejects_duplicate_and_dangling_entries() -> None:
+    from pydantic import ValidationError
+
+    from modulo.api.schemas.system_maps import (
+        SystemMapLoopConfigCreate,
+        SystemMapNodeCreate,
+        SystemMapRelationshipCreate,
+        SystemMapRevisionCreate,
+    )
+
+    node = SystemMapNodeCreate(node_key="a", node_type="pipeline", display_name="A")
+    loop = SystemMapLoopConfigCreate(
+        node_key="a",
+        target_signal="error_rate",
+        observation_window_seconds=60,
+        action_pipeline_id=uuid.uuid4(),
+        budget_limit_usd=Decimal(1),
+        cooldown_seconds=1,
+        outcome_metric="error_rate",
+    )
+
+    with pytest.raises(ValidationError):
+        SystemMapRevisionCreate(nodes=[node, node])
+
+    with pytest.raises(ValidationError):
+        SystemMapRevisionCreate(
+            nodes=[node],
+            relationships=[
+                SystemMapRelationshipCreate(source_node_key="a", target_node_key="a", relationship_type="flow"),
+                SystemMapRelationshipCreate(source_node_key="a", target_node_key="a", relationship_type="flow"),
+            ],
+        )
+
+    with pytest.raises(ValidationError):
+        SystemMapRevisionCreate(
+            nodes=[node],
+            relationships=[
+                SystemMapRelationshipCreate(source_node_key="ghost", target_node_key="a", relationship_type="flow")
+            ],
+        )
+
+    with pytest.raises(ValidationError):
+        SystemMapRevisionCreate(nodes=[node], loop_configs=[loop, loop])
+
+    with pytest.raises(ValidationError):
+        SystemMapRevisionCreate(nodes=[node], loop_configs=[loop.model_copy(update={"node_key": "ghost"})])
+
+    with pytest.raises(ValidationError):
+        SystemMapRevisionCreate(nodes=[node], loop_configs=[loop])
