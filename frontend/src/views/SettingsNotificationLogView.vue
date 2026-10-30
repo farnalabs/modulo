@@ -2,7 +2,7 @@
   <div class="page-wide">
     <PageHeader :title="$t('views.AdminNotificationDeliveryLogView.notification_delivery_log')" :subtitle="$t('views.SettingsNotificationLogView.delivery_history_for_all_webhook_notifications')" />
 
-    <div class="rounded-lg border bg-card p-4 shadow-sm">
+    <DataCard variant="bordered" padding="md" elevation="sm">
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <label for="settingsnotificationlogview-status" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.SettingsNotificationLogView.status') }}</label>
@@ -56,7 +56,7 @@
       <div v-if="total > 0" class="mt-3 text-sm text-muted-foreground">
         {{ $t('views.AdminNotificationDeliveryLogView.deliveries_count', { count: total }, total) }}
       </div>
-    </div>
+    </DataCard>
 
     <!-- STATE-3 (ux-conformance): the column layout is known before the first
          row arrives, so the loading placeholder is a determinate table
@@ -80,7 +80,7 @@
     />
 
     <template v-else>
-      <div class="overflow-hidden rounded-lg border bg-card shadow-sm">
+      <DataCard variant="bordered" padding="none" elevation="sm" card-class="overflow-hidden">
         <table class="w-full">
           <thead>
             <tr class="border-b bg-muted/50 text-left text-xs font-medium uppercase text-muted-foreground">
@@ -117,7 +117,7 @@
             </tr>
           </tbody>
         </table>
-      </div>
+      </DataCard>
 
       <div class="flex items-center justify-between">
         <button type="button"
@@ -154,6 +154,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 
