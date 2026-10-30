@@ -29,7 +29,7 @@ importers:
         version: 5.3.0
       '@lucide/vue':
         specifier: ^1.41.0
-        version: 1.65.0(vue@3.5.44(@typescript/typescript6@6.0.2))
+        version: 1.64.0(vue@3.5.44(@typescript/typescript6@6.0.2))
       '@primeuix/styled':
         specifier: ^0.7.4
         version: 0.7.4
@@ -834,8 +834,8 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@lucide/vue@1.65.0':
-    resolution: {integrity: sha512-J34stKcr0jKIkzhG09Hz/lJgAnl9yhGgvaUcRcTQXv4qVGdfEBDzHGsZ5skS8anlRALLHV+EekBYWswEVkcBww==}
+  '@lucide/vue@1.64.0':
+    resolution: {integrity: sha512-9Ta6cbHDk49GgKkSQRRVm55Cb99lou++5p4RNzUkS2NvOqD0RlWTEvidWgKMURUkfyz+3J6eeQz7tzCj3PJ0zA==}
     peerDependencies:
       vue: '>=3.0.1'
 
@@ -4198,7 +4198,7 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@lucide/vue@1.65.0(vue@3.5.44(@typescript/typescript6@6.0.2))':
+  '@lucide/vue@1.64.0(vue@3.5.44(@typescript/typescript6@6.0.2))':
     dependencies:
       vue: 3.5.44(@typescript/typescript6@6.0.2)
 
