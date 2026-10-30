@@ -20,8 +20,11 @@ One attribution binding table:
   for cost/outcome attribution. Partial unique indexes enforce one binding per
   (org, pipeline_id, node_key) for triggers and action pipelines.
 
-All tables are org-scoped with RLS (``rls_team_isolation`` on Postgres — the
-team policy includes the org check so no separate org-only policy is needed).
+All tables are org-scoped with RLS on Postgres. ``system_maps`` carries
+``visibility``/``owner_team_id`` and therefore uses ``rls_team_isolation`` (the
+team policy includes the org check as an AND gate). The other seven tables have
+no team-visibility columns and follow the house org-only pattern:
+``rls_org_isolation`` (see 0110 / 0124).
 """
 
 from __future__ import annotations
@@ -81,6 +84,13 @@ _TEAM_POLICY = (
     " OR (NULLIF(current_setting('app.execution_context'::text, true), ''::text) = 'true'::text)))"
 )
 
+# Only system_maps carries visibility/owner_team_id; the team policy references
+# both columns, so it cannot be applied to the other seven tables.
+_TEAM_SCOPED_TABLES: tuple[str, ...] = (_TABLE_SYSTEM_MAPS,)
+_ORG_ONLY_TABLES: tuple[str, ...] = tuple(t for t in _ORG_SCOPED_TABLES if t not in _TEAM_SCOPED_TABLES)
+
+_ORG_POLICY = "((organisation_id = (NULLIF(current_setting('app.organisation_id'::text, true), ''::text))::uuid))"
+
 _ALTER_TABLE_PREFIX = 'ALTER TABLE "'
 _SET_NULL = "SET NULL"
 
@@ -89,12 +99,16 @@ _ENABLE_RLS_STATEMENTS: tuple[str, ...] = tuple(
 ) + tuple(_ALTER_TABLE_PREFIX + table + '" FORCE ROW LEVEL SECURITY' for table in _ORG_SCOPED_TABLES)
 
 _CREATE_POLICY_STATEMENTS: tuple[str, ...] = tuple(
-    'CREATE POLICY rls_team_isolation ON "' + table + '" USING (' + _TEAM_POLICY + ")" for table in _ORG_SCOPED_TABLES
+    'CREATE POLICY rls_team_isolation ON "' + table + '" USING (' + _TEAM_POLICY + ")" for table in _TEAM_SCOPED_TABLES
+) + tuple(
+    'CREATE POLICY rls_org_isolation ON "' + table + '" USING (' + _ORG_POLICY + ")" for table in _ORG_ONLY_TABLES
 )
 
-_DROP_POLICY_STATEMENTS: tuple[str, ...] = tuple(
-    'DROP POLICY IF EXISTS rls_team_isolation ON "' + table + '"' for table in _ORG_SCOPED_TABLES
-) + tuple(_ALTER_TABLE_PREFIX + table + '" DISABLE ROW LEVEL SECURITY' for table in _ORG_SCOPED_TABLES)
+_DROP_POLICY_STATEMENTS: tuple[str, ...] = (
+    tuple('DROP POLICY IF EXISTS rls_team_isolation ON "' + table + '"' for table in _TEAM_SCOPED_TABLES)
+    + tuple('DROP POLICY IF EXISTS rls_org_isolation ON "' + table + '"' for table in _ORG_ONLY_TABLES)
+    + tuple(_ALTER_TABLE_PREFIX + table + '" DISABLE ROW LEVEL SECURITY' for table in _ORG_SCOPED_TABLES)
+)
 
 _GRANT_CREATE_SCHEMA = "GRANT CREATE ON SCHEMA public TO " + _MIGRATE_ROLE
 _GRANT_REFERENCES_ORGS = "GRANT REFERENCES ON TABLE public.organisations TO " + _MIGRATE_ROLE
@@ -146,18 +160,20 @@ def _create_tables() -> None:
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("description", sa.String(length=2000), nullable=True),
         sa.Column("owner_team_id", sa.Uuid(), nullable=True),
+        sa.Column("visibility", sa.String(length=10), nullable=False, server_default="org"),
         sa.Column("default_map", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("published_revision_id", sa.Uuid(), nullable=True),
+        sa.Column("account_id", sa.Uuid(), nullable=False),
+        sa.Column("updated_by", sa.Uuid(), nullable=True),
+        sa.Column("deleted_by", sa.Uuid(), nullable=True),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["owner_team_id"], ["teams.id"], ondelete=_SET_NULL),
-        sa.ForeignKeyConstraint(
-            ["published_revision_id", "organisation_id"],
-            ["system_map_revisions.id", "system_map_revisions.organisation_id"],
-            ondelete=_SET_NULL,
-        ),
+        sa.ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["updated_by"], ["accounts.id"], ondelete=_SET_NULL),
+        sa.ForeignKeyConstraint(["deleted_by"], ["accounts.id"], ondelete=_SET_NULL),
         sa.PrimaryKeyConstraint("id"),
         sa.CheckConstraint("visibility IN ('org', 'team')", name="ck_system_maps_visibility"),
         sa.CheckConstraint("visibility = 'org' OR owner_team_id IS NOT NULL", name="ck_system_maps_team_owner"),
@@ -174,12 +190,27 @@ def _create_tables() -> None:
         sa.Column("status", sa.String(length=30), nullable=False, server_default="draft"),
         sa.Column("content_json", _JSON_TYPE, nullable=False, server_default=sa.text("'{}'")),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["system_map_id"], [_TABLE_SYSTEM_MAPS + ".id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.CheckConstraint("status IN ('draft', 'published', 'archived')", name="ck_system_map_revisions_status"),
         sa.UniqueConstraint("system_map_id", "revision_number", name="uq_system_map_revisions_map_number"),
+    )
+
+    # Composite FK system_maps.published_revision_id -> system_map_revisions.
+    # Added AFTER system_map_revisions exists: a forward reference inside the
+    # system_maps CREATE TABLE fails on Postgres because the target is created
+    # later in this migration.
+    op.create_foreign_key(
+        "fk_system_maps_published_revision",
+        _TABLE_SYSTEM_MAPS,
+        _TABLE_SYSTEM_MAP_REVISIONS,
+        ["published_revision_id", "organisation_id"],
+        ["id", "organisation_id"],
+        ondelete=_SET_NULL,
     )
 
     # system_map_nodes
@@ -198,6 +229,9 @@ def _create_tables() -> None:
         sa.Column("eval_id", sa.Uuid(), nullable=True),
         sa.Column("position_x", sa.Numeric(10, 2), nullable=False, server_default="0"),
         sa.Column("position_y", sa.Numeric(10, 2), nullable=False, server_default="0"),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["revision_id"], [_TABLE_SYSTEM_MAP_REVISIONS + ".id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["pipeline_id"], ["pipelines.id"], ondelete=_SET_NULL),
@@ -222,6 +256,9 @@ def _create_tables() -> None:
         sa.Column("target_node_key", sa.String(length=100), nullable=False),
         sa.Column("relationship_type", sa.String(length=50), nullable=False),
         sa.Column("config_json", _JSON_TYPE, nullable=False, server_default=sa.text("'{}'")),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["revision_id"], [_TABLE_SYSTEM_MAP_REVISIONS + ".id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -251,6 +288,9 @@ def _create_tables() -> None:
         sa.Column("budget_limit_usd", sa.Numeric(14, 6), nullable=False),
         sa.Column("cooldown_seconds", sa.Integer(), nullable=False),
         sa.Column("outcome_metric", sa.String(length=100), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["revision_id"], [_TABLE_SYSTEM_MAP_REVISIONS + ".id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["action_pipeline_id"], ["pipelines.id"], ondelete="RESTRICT"),
@@ -272,6 +312,8 @@ def _create_tables() -> None:
         sa.Column("node_key", sa.String(length=100), nullable=False),
         sa.Column("binding_kind", sa.String(length=30), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["pipeline_id"], ["pipelines.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["trigger_id"], ["triggers.id"], ondelete="CASCADE"),
@@ -292,6 +334,8 @@ def _create_tables() -> None:
         sa.Column("idempotency_key", sa.String(length=255), nullable=False),
         sa.Column("status", sa.String(length=30), nullable=False, server_default="pending"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["loop_config_id"], [_TABLE_SYSTEM_MAP_LOOP_CONFIGS + ".id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -317,6 +361,9 @@ def _create_tables() -> None:
         sa.Column("status", sa.String(length=30), nullable=False, server_default="active"),
         sa.Column("consumed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("released_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["organisation_id"], ["organisations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["loop_config_id"], [_TABLE_SYSTEM_MAP_LOOP_CONFIGS + ".id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -333,6 +380,8 @@ def _create_indexes() -> None:
     op.create_index("ix_system_maps_organisation_id", _TABLE_SYSTEM_MAPS, ["organisation_id"])
     op.create_index("ix_system_maps_owner_team_id", _TABLE_SYSTEM_MAPS, ["owner_team_id"])
     op.create_index("ix_system_maps_published_revision_id", _TABLE_SYSTEM_MAPS, ["published_revision_id"])
+    op.create_index("ix_system_maps_account_id", _TABLE_SYSTEM_MAPS, ["account_id"])
+    op.create_index("ix_system_maps_deleted_by", _TABLE_SYSTEM_MAPS, ["deleted_by"])
     # Partial unique: one live default map per org
     op.execute(
         'CREATE UNIQUE INDEX uq_system_maps_org_default_live ON "'
@@ -521,9 +570,15 @@ def downgrade() -> None:
     op.drop_index("ix_system_map_revisions_organisation_id", table_name=_TABLE_SYSTEM_MAP_REVISIONS)
 
     op.drop_index("ix_system_maps_published_revision_id", table_name=_TABLE_SYSTEM_MAPS)
+    op.drop_index("ix_system_maps_deleted_by", table_name=_TABLE_SYSTEM_MAPS)
+    op.drop_index("ix_system_maps_account_id", table_name=_TABLE_SYSTEM_MAPS)
     op.drop_index("ix_system_maps_owner_team_id", table_name=_TABLE_SYSTEM_MAPS)
     op.drop_index("ix_system_maps_organisation_id", table_name=_TABLE_SYSTEM_MAPS)
     op.execute("DROP INDEX IF EXISTS uq_system_maps_org_default_live")
+
+    # The composite FK is a forward reference to system_map_revisions, so it
+    # must be dropped before that table (which system_maps depends on).
+    op.drop_constraint("fk_system_maps_published_revision", _TABLE_SYSTEM_MAPS, type_="foreignkey")
 
     # Drop tables in reverse dependency order
     op.drop_table(_TABLE_SYSTEM_MAP_LOOP_RESERVATIONS)

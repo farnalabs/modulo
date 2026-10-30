@@ -32,7 +32,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from modulo.db.models.base import JSONB_COL, OrgScoped, SoftDeleteMixin
+from modulo.db.models.base import JSONB_COL, ONDELETE_SET_NULL, OrgScoped, SoftDeleteMixin
 
 if TYPE_CHECKING:
     from modulo.db.models.pipeline import Pipeline
@@ -64,7 +64,6 @@ _admission_status_sql = ", ".join(f"'{v}'" for v in _VALID_ADMISSION_STATUSES)
 _VALID_RESERVATION_STATUSES = ("active", "consumed", "released", "expired")
 _reservation_status_sql = ", ".join(f"'{v}'" for v in _VALID_RESERVATION_STATUSES)
 
-_ONDELETE_SET_NULL = "SET NULL"
 _ONDELETE_RESTRICT = "RESTRICT"
 _ONDELETE_CASCADE = "CASCADE"
 
@@ -88,7 +87,7 @@ class SystemMap(SoftDeleteMixin, OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete=_ONDELETE_SET_NULL), index=True
+        Uuid(), ForeignKey("teams.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     default_map: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
@@ -97,10 +96,10 @@ class SystemMap(SoftDeleteMixin, OrgScoped):
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete=_ONDELETE_SET_NULL), nullable=True
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True
     )
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET_NULL"), nullable=True, index=True
+        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
 
     # Composite FK to system_map_revisions (id + organisation_id) is declared in the migration.
@@ -183,16 +182,16 @@ class SystemMapNode(SoftDeleteMixin, OrgScoped):
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     config_json: Mapped[dict[str, Any]] = mapped_column(JSONB_COL, nullable=False, default=dict)
     pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipelines.id", ondelete=_ONDELETE_SET_NULL), index=True
+        Uuid(), ForeignKey("pipelines.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     connector_instance_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("connector_instances.id", ondelete=_ONDELETE_SET_NULL), index=True
+        Uuid(), ForeignKey("connector_instances.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("teams.id", ondelete=_ONDELETE_SET_NULL), index=True
+        Uuid(), ForeignKey("teams.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     eval_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("evals.id", ondelete=_ONDELETE_SET_NULL), index=True
+        Uuid(), ForeignKey("evals.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     position_x: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, server_default="0")
     position_y: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, server_default="0")
