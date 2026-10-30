@@ -2142,6 +2142,10 @@ async def zombie_watchdog(
     stall is attributable from logs alone — answering WHERE the executor is
     stuck, not just THAT it is stuck.
     """
+    # Retain this keyword for callers using the public watchdog signature. The
+    # zombie watchdog only needs the executor task; claim fencing is handled by
+    # the retry hook and terminalisation helpers invoked below.
+    del claim_token
     if grace_seconds is None:
         grace_seconds = int(get_settings().saq_setup_grace_seconds)
     # FAR-873: record monotonic start so the claim→dispatch gap is measurable

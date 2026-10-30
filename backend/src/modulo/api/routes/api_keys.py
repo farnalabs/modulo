@@ -599,7 +599,7 @@ async def create_api_key_endpoint(
     )
 
 
-@router.get("", response_model=list[ApiKeyListResponse])
+@router.get("")
 @handle_db_errors(_CODE_API_KEYS_LIST_API_KEYS_ENDPOINT)
 async def list_api_keys_endpoint(
     session: AsyncSession = Depends(get_db_session),

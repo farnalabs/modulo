@@ -787,7 +787,7 @@ def test_build_stream_system_prompt_uses_skill_loader() -> None:
     loader = MagicMock()
     loader.build_system_prompt = AsyncMock(return_value="System prompt text")
     with patch("modulo.api.routes.assistant.SkillLoader", return_value=loader):
-        prompt = asyncio.run(assistant_routes._build_stream_system_prompt(ctx, supports_tools=True))
+        prompt = asyncio.run(assistant_routes._build_stream_system_prompt(ctx))
     assert prompt == "System prompt text"
     loader.build_system_prompt.assert_awaited_once_with(
         org_id=_ORG_ID,
