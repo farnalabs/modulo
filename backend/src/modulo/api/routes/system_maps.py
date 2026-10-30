@@ -23,7 +23,9 @@ from modulo.api.schemas.system_maps import (
     SystemMapDiscoverySkipped,
     SystemMapDiscoverySource,
 )
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.lifecycle_map.validation import normalize_content
 from modulo.core.system_maps_discovery import DiscoverySource, discover_draft
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -46,7 +48,20 @@ def _fingerprint(draft: Any) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-@router.post("/discover", response_model=SystemMapDiscoveryReport, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/discover",
+    response_model=SystemMapDiscoveryReport,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            audited(
+                "system_map_discovery_drafted",
+                "system_map",
+                principal_dep=get_current_tenant_user,
+            )
+        )
+    ],
+)
 async def discover_system_map(
     request: SystemMapDiscoveryRequest,
     session: AsyncSession = Depends(get_db_session),
