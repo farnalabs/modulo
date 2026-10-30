@@ -35,6 +35,10 @@
     <!-- Full-page error -->
     <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="dashboardStore.fetchSummary" />
     <template v-else-if="summary">
+      <DashboardSystemOverview
+        v-if="planStore.loaded && planStore.featureEnabled('system_maps')"
+        class="mb-4"
+      />
       <!-- Row 1: Summary stat cards -->
       <div :class="['grid gap-4 sm:grid-cols-2 lg:grid-cols-4 transition-opacity duration-200', periodRefreshing ? 'opacity-60' : 'opacity-100']">
         <StatCard :label="$t('views.DashboardView.pipelines')" :value="cardValue(summary.period?.metrics?.active_pipelines?.current, summary.active_pipelines)" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null" :no-baseline-label="selectedWindow != null ? $t('views.DashboardView.no_prior_data') : undefined" :neutral-trend="true">
@@ -226,6 +230,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
+import DashboardSystemOverview from '../components/dashboard/DashboardSystemOverview.vue'
 import { usePlanStore } from '../stores/planStore'
 import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
