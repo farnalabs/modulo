@@ -58,9 +58,12 @@ for self-builders):
 docker compose -f deploy/compose/runner.yml --profile runner build bundled-runner
 ```
 
-The runner Dockerfile runs `opencode-ai`'s normal npm postinstall so the native
-Linux binary is included in the image. Do not add `--ignore-scripts` to that
-install: the image may build without the executable and fail only at dispatch.
+The runner Dockerfile installs `opencode-ai` with npm lifecycle scripts
+**disabled**, then checks for and explicitly runs only that pinned package's
+`postinstall.mjs`. This keeps arbitrary dependency lifecycle scripts disabled
+while still installing the native Linux binary required by the image. The
+package version is pinned by `OPENCODE_VERSION`; do not replace the explicit
+postinstall with a wildcard or a general lifecycle-script enablement.
 
 Pin-advance process: the GHCR publish job (GA item) bumps `OPENCODE_VERSION`
 (current minor + N-1 support window), scans (trivy/grype fail high/critical
