@@ -136,7 +136,7 @@ jobs:
   build:
     name: Build and smoke-test macOS arm64 bundle
     needs: normalize-inputs
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       VERSION_NUM: ${{ needs.normalize-inputs.outputs.version }}
@@ -170,7 +170,7 @@ jobs:
           shellcheck scripts/macos/install.sh
           bash -n scripts/macos/build-native-bundle.sh
           bash -n scripts/macos/install.sh
-          grep -q 'macos-14' .github/workflows/macos-installer.yml
+          grep -q 'macos-15' .github/workflows/macos-installer.yml
           {
             echo '## macOS native installer dry-run (contract-only)'
             echo ''

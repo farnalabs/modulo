@@ -18,7 +18,7 @@ below).
 | Server host platform | v1 status |
 |----------------------|-----------|
 | **Linux** | Supported (native single-install and container paths) |
-| **macOS arm64** | Supported native single-install host (signed/notarized `.dmg`, macos-14 validation) |
+| **macOS arm64** | Supported native single-install host (signed/notarized `.dmg`, macos-15 validation) |
 | **Windows** | Not a supported v1 server host: no native installer, no Windows release artifact |
 
 Docker Desktop (see Development / Evaluation below) is a developer
@@ -27,7 +27,7 @@ VM, so the deployed stack is still Linux. It is not a supported production
 host.
 
 macOS arm64 is a native release target. The signed and notarized `.dmg` is built
-on `macos-14` with the pinned native runtime and is validated separately from the
+on `macos-15` with the pinned native runtime and is validated separately from the
 Linux bundle. It requires Apple Silicon; x64/Rosetta is not supported. The
 macOS installer's trust boundary is Apple Developer ID signing/notarization and
 stapling, verified with `codesign`, `spctl` and `hdiutil verify`; it does not
