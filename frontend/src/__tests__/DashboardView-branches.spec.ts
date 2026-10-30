@@ -734,6 +734,10 @@ describe('DashboardView branches — team expansion', () => {
     setActivePinia(pinia)
     const planStore = usePlanStore()
     planStore.currentTier = 'team'
+    // DashboardView re-fetches the plan whenever it has not loaded yet
+    // (`loaded` gates the system_maps flag read); model an already-loaded
+    // team plan so the mocked community payload cannot overwrite the tier.
+    planStore.loaded = true
 
     const wrapper = mount(DashboardView)
     await flushPromises()
@@ -1002,7 +1006,12 @@ describe('DashboardView branches — eval trend and team eval display', () => {
     const { usePlanStore } = await import('../stores/planStore')
     const pinia = createPinia()
     setActivePinia(pinia)
-    usePlanStore().currentTier = 'team'
+    const planStore = usePlanStore()
+    planStore.currentTier = 'team'
+    // DashboardView re-fetches the plan whenever it has not loaded yet
+    // (`loaded` gates the system_maps flag read); model an already-loaded
+    // team plan so the mocked community payload cannot overwrite the tier.
+    planStore.loaded = true
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
         return Promise.resolve({
