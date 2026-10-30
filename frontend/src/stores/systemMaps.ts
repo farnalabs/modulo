@@ -5,6 +5,7 @@ import { decodeJwtPayload } from '../lib/jwt'
 import { withTimeout } from '../lib/asyncUtils'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { usePlanStore } from './planStore'
+import { SYSTEM_CONFIG_MANAGE_PERMISSION } from '../composables/useLicenceAccess'
 
 interface InternalFeatureFlagsPayload {
   flags?: Array<{ name: string; currently_active: boolean }>
@@ -31,6 +32,9 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   const { isOperator } = useCurrentUser()
   const hasSystemMapsAccess = computed(() =>
     planStore.userPermissions.includes('system_maps_access'),
+  )
+  const canProbeInternalFlags = computed(
+    () => planStore.userPermissions.includes(SYSTEM_CONFIG_MANAGE_PERMISSION),
   )
   const hasDraft = computed(() => draft.value !== null)
 
@@ -87,7 +91,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
           ? Promise.resolve()
           : planStore.fetchPlan()
       await Promise.all([planRequest, planStore.fetchPermissions()])
-      if (!planStore.devMode || !hasSystemMapsAccess.value) return
+      if (!planStore.devMode || !hasSystemMapsAccess.value || !canProbeInternalFlags.value) return
 
       const response = await withTimeout(
         api.GET('/api/v1/admin/feature-flags'),

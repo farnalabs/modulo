@@ -177,7 +177,7 @@ describe('DashboardView', () => {
       if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
       if (url === '/api/v1/dashboard/trends') return Promise.resolve({ data: null, error: undefined })
       if (url === '/api/v1/plan') return Promise.resolve({ data: { ...mockPlanData, dev_mode: true }, error: undefined })
-      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: ['system_maps_access'] }, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: ['system_maps_access', 'system.config.manage'] }, error: undefined })
       if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: { flags: [{ name: 'system_maps', currently_active: true }] }, error: undefined })
       return Promise.resolve({ data: null, error: undefined })
     })
@@ -198,13 +198,29 @@ describe('DashboardView', () => {
     expect(mockGet).not.toHaveBeenCalledWith('/api/v1/admin/feature-flags')
   })
 
+  it('does not probe the system-admin route for an operator without system.config.manage', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(jwtForUser('operator'))
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+      if (url === '/api/v1/plan') return Promise.resolve({ data: { ...mockPlanData, dev_mode: true }, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: ['system_maps_access'] }, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="dashboard-system-overview"]').exists()).toBe(false)
+    expect(mockGet).not.toHaveBeenCalledWith('/api/v1/admin/feature-flags')
+  })
+
   it('fails closed while internal access is loading or unavailable', async () => {
     vi.mocked(getAccessToken).mockReturnValue(jwtForUser('admin'))
     let rejectFlags: ((reason?: unknown) => void) | undefined
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
       if (url === '/api/v1/plan') return Promise.resolve({ data: { ...mockPlanData, dev_mode: true }, error: undefined })
-      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: ['system_maps_access'] }, error: undefined })
+      if (url === '/api/v1/auth/permissions') return Promise.resolve({ data: { permissions: ['system_maps_access', 'system.config.manage'] }, error: undefined })
       if (url === '/api/v1/admin/feature-flags') return new Promise((_, reject) => { rejectFlags = reject })
       return Promise.resolve({ data: null, error: undefined })
     })
