@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     _require_internal_system_maps_access,
     get_db_session,
@@ -26,14 +28,20 @@ from modulo.api.schemas.system_maps import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
-from modulo.core.lifecycle_map.validation import normalize_content
+from modulo.core.lifecycle_map.validation import (
+    LifecycleMapContentError,
+    LifecycleMapPipelineConflictError,
+    normalize_content,
+)
+from modulo.core.system_map_persistence import SystemMapNameConflictError, SystemMapRepository
 from modulo.core.system_maps_discovery import DiscoverySource, discover_draft
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_folder import PipelineFolder
 from modulo.db.models.trigger import Trigger
-from modulo.db.repositories.system_map import SystemMapRepository
 from modulo.db.rls import set_rls_org, set_rls_user_context
+
+_CODE_SYSTEM_MAPS_DISCOVER = "system_maps.discover"
 
 _log = logging.getLogger(__name__)
 router = APIRouter(
@@ -46,6 +54,56 @@ router = APIRouter(
 def _fingerprint(draft: Any) -> str:
     payload = {"nodes": list(draft.nodes), "relationships": list(draft.relationships)}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _stage_type(node: dict[str, Any]) -> str:
+    """Map a discovery node to an honest lifecycle-map stage type.
+
+    Trigger nodes are ``pipeline`` graph nodes but carry no Modulo pipeline of
+    their own, so ``manual`` describes them accurately; connectors and folders
+    are external systems and stay ``placeholder`` (never published as Modulo).
+    """
+    if node["node_type"] == "pipeline":
+        return "manual" if node["config_json"].get("source_kind") == "trigger" else "modulo"
+    return "placeholder"
+
+
+async def _persist_discovery_draft(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    name: str,
+    description: str | None,
+    content: dict[str, Any],
+) -> tuple[Any, uuid.UUID, int]:
+    """Persist a draft, mapping domain refusals to their HTTP status.
+
+    ``handle_db_errors`` on the route owns the SQLAlchemy/IntegrityError arms;
+    this helper translates only the domain errors the repository can raise.
+    """
+    repository = SystemMapRepository()
+    try:
+        map_obj = await repository.get_or_create_draft(
+            session,
+            organisation_id=principal.organisation_id,
+            account_id=principal.account_id,
+            name=name,
+            description=description,
+        )
+        map_obj, revision_id = await repository.save_discovery_revision(
+            session,
+            organisation_id=principal.organisation_id,
+            map_id=map_obj.id,
+            content=content,
+            updated_by=principal.account_id,
+        )
+    except LifecycleMapPipelineConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except SystemMapNameConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except LifecycleMapContentError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
+    return map_obj, revision_id, map_obj.version
 
 
 @router.post(
@@ -62,6 +120,7 @@ def _fingerprint(draft: Any) -> str:
         )
     ],
 )
+@handle_db_errors(_CODE_SYSTEM_MAPS_DISCOVER)
 async def discover_system_map(
     request: SystemMapDiscoveryRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -142,21 +201,13 @@ async def discover_system_map(
             *[DiscoverySource(kind="folder", identifier=str(folder.id), name=folder.name) for folder in folders],
         ]
         draft = discover_draft(sources)
-        repository = SystemMapRepository()
-        map_obj = await repository.get_or_create_draft(
-            session,
-            organisation_id=principal.organisation_id,
-            account_id=principal.account_id,
-            name=request.name,
-            description=request.description,
-        )
         content = normalize_content(
             {
                 "stages": [
                     {
                         "id": node["node_key"],
                         "name": node["display_name"],
-                        "type": "modulo" if node["node_type"] == "pipeline" else "placeholder",
+                        "type": _stage_type(node),
                         "pipeline_id": node.get("pipeline_id"),
                         "config_json": node["config_json"],
                     }
@@ -177,14 +228,13 @@ async def discover_system_map(
                 "discovery": {"warnings": list(draft.warnings), "skipped": list(draft.skipped)},
             }
         )
-        map_obj, revision_id = await repository.save_discovery_revision(
+        map_obj, revision_id, revision_number = await _persist_discovery_draft(
             session,
-            organisation_id=principal.organisation_id,
-            map_id=map_obj.id,
+            principal=principal,
+            name=request.name,
+            description=request.description,
             content=content,
-            updated_by=principal.account_id,
         )
-        revision_number = map_obj.version
 
     return SystemMapDiscoveryReport(
         sources_inspected=[
