@@ -130,23 +130,28 @@ jobs:
           # The repo is mounted at its real path ($PWD) - NOT /repo - so the
           # host-absolute paths recorded in the venv (the editable .pth and the
           # venv directory itself) resolve inside the container despite --network none.
-          python_bin="$(cd backend && uv run --offline --no-build --no-sync which python)"
-          if [ ! -x "${python_bin}" ]; then
-            echo "::error::precondition violated: offline python interpreter not found at '${python_bin}'"
-            exit 1
-          fi
-          export python_bin
+           PYTHON_BIN="$(cd backend && uv run --offline --no-build --no-sync which python)"
+           if [ ! -x "${PYTHON_BIN}" ]; then
+             echo "::error::precondition violated: offline python interpreter not found at '${PYTHON_BIN}'"
+             exit 1
+           fi
+           export PYTHON_BIN
+
           docker run --rm --network none \
             -v "$PWD:$PWD" -w "$PWD/backend" \
             -v "${UV_CACHE_DIR}:${UV_CACHE_DIR}" \
             -v "${UV_PYTHON_INSTALL_DIR}:${UV_PYTHON_INSTALL_DIR}" \
-            -e UV_CACHE_DIR -e UV_PYTHON_INSTALL_DIR -e python_bin \
+            -e UV_CACHE_DIR -e UV_PYTHON_INSTALL_DIR -e PYTHON_BIN \
             ubuntu:24.04 \
-            /bin/bash -euc '
-              echo "container glibc: $(ldd --version | head -n1)"
-              "${python_bin:?precondition: python_bin env is not propagated into the container}" --version || {
+
+             /bin/bash -euc '
+               echo "container glibc: $(ldd --version | head -n1)"
+               "${PYTHON_BIN:?precondition: PYTHON_BIN env is not propagated into the container}" --version || {
+
+
                 echo "::error::venv interpreter does not run inside the min-glibc container (glibc/glibc-linked deps mismatch) - fail the release"
                 exit 1
               }
-              "${python_bin}" -c "import modulo.launcher.entry, modulo.launcher.config_source, modulo.launcher.upgrade, modulo.launcher.doctor; print(\"launcher boot import graph OK (offline, network none)\")"  #NOSONAR uv-locked, offline, network-none container import proof; no untrusted deps are executed
+               "${PYTHON_BIN}" -c "import modulo.launcher.entry, modulo.launcher.config_source, modulo.launcher.upgrade, modulo.launcher.doctor; print(\"launcher boot import graph OK (offline, network none)\")"  #NOSONAR uv-locked, offline, network-none container import proof; no untrusted deps are executed
+
             '

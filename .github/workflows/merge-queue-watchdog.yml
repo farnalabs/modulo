@@ -275,17 +275,21 @@ jobs:
           LAST_SUCCESS="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status success --limit 1 --json updatedAt 2>/dev/null)" || LAST_SUCCESS="[]"
           LAST_SUCCESS_AGE="$(echo "$LAST_SUCCESS" | python3 -c "$PY_AGE" 2>/dev/null)" || LAST_SUCCESS_AGE="-1"
           # Normalise: empty or non-numeric => -1 (unmeasurable, never alerts).
-          case "$LAST_SUCCESS_AGE" in
-            -1) : ;;
-            ''|*[!0-9]*) LAST_SUCCESS_AGE="-1" ;;
-          esac
+           case "$LAST_SUCCESS_AGE" in
+             -1) : ;;
+             ''|*[!0-9]*) LAST_SUCCESS_AGE="-1" ;;
+             *) : ;;
+           esac
+
 
           OPEN_PRS="$(gh pr list --repo "$REPO" --state open --limit 100 --json reviewDecision,mergeStateStatus,isDraft 2>/dev/null)" || OPEN_PRS="[]"
           APPROVED_WAITING="$(echo "$OPEN_PRS" | jq '[.[] | select(.reviewDecision == "APPROVED") | select(.mergeStateStatus == "CLEAN" or .mergeStateStatus == "UNSTABLE")] | length' 2>/dev/null)" || APPROVED_WAITING="0"
           # Normalise: empty or non-numeric => 0 (never alerts).
-          case "$APPROVED_WAITING" in
-            ''|*[!0-9]*) APPROVED_WAITING="0" ;;
-          esac
+           case "$APPROVED_WAITING" in
+             ''|*[!0-9]*) APPROVED_WAITING="0" ;;
+             *) : ;;
+           esac
+
 
           # Alert iff approved PRs are waiting AND no successful run for the
           # stale threshold. -1 (unmeasurable) and 0 (nothing waiting) can
@@ -337,16 +341,20 @@ jobs:
           # starvation is always visible.
           ZERO_MERGE_MIN=90
           MERGEABLE_WAITING="$(echo "$OPEN_PRS" | jq '[.[] | select(.reviewDecision == "APPROVED") | select(.mergeStateStatus == "CLEAN" or .mergeStateStatus == "UNSTABLE")] | length' 2>/dev/null)" || MERGEABLE_WAITING="0"
-          case "$MERGEABLE_WAITING" in
-            ''|*[!0-9]*) MERGEABLE_WAITING="0" ;;
-          esac
+           case "$MERGEABLE_WAITING" in
+             ''|*[!0-9]*) MERGEABLE_WAITING="0" ;;
+             *) : ;;
+           esac
+
           # AWAITING_REVIEW (5b): open non-draft PRs that are NOT
           # approved+mergeable — i.e. awaiting review or CI. Drafts are
           # excluded: a draft is deliberately not ready and must never alert.
           AWAITING_REVIEW="$(echo "$OPEN_PRS" | jq '[.[] | select(.isDraft != true) | select((.reviewDecision == "APPROVED" and (.mergeStateStatus == "CLEAN" or .mergeStateStatus == "UNSTABLE")) | not)] | length' 2>/dev/null)" || AWAITING_REVIEW="0"
-          case "$AWAITING_REVIEW" in
-            ''|*[!0-9]*) AWAITING_REVIEW="0" ;;
-          esac
+           case "$AWAITING_REVIEW" in
+             ''|*[!0-9]*) AWAITING_REVIEW="0" ;;
+             *) : ;;
+           esac
+
           # Last-merge age (F4): minutes since the true max(mergedAt), NOT
           # `gh pr list --state merged --limit 1` — that returns the most
           # recently CREATED merged PR, and mergedAt is not monotonic with
@@ -372,10 +380,12 @@ jobs:
           '
           LAST_MERGED="$(gh pr list --repo "$REPO" --state merged --limit 300 --json mergedAt 2>/dev/null)" || LAST_MERGED="[]"
           LAST_MERGE_AGE="$(echo "$LAST_MERGED" | python3 -c "$PY_MERGE_AGE" 2>/dev/null)" || LAST_MERGE_AGE="-1"
-          case "$LAST_MERGE_AGE" in
-            -1) : ;;
-            ''|*[!0-9]*) LAST_MERGE_AGE="-1" ;;
-          esac
+           case "$LAST_MERGE_AGE" in
+             -1) : ;;
+             ''|*[!0-9]*) LAST_MERGE_AGE="-1" ;;
+             *) : ;;
+           esac
+
           ZERO_MERGE_ALERT=false
           if [ "$LAST_MERGE_AGE" -ge "$ZERO_MERGE_MIN" ]; then
             if [ "$MERGEABLE_WAITING" -gt 0 ]; then
@@ -486,13 +496,12 @@ jobs:
           WATCHDOG_FILE="$WATCHDOG_FILE_PATH"
           WATCHDOG_CANCELLED=""
           WATCHDOG_LOG_READABLE="true"
-          if [ -f "$WATCHDOG_FILE" ]; then
-            if ! WATCHDOG_CANCELLED="$(cat "$WATCHDOG_FILE" 2>/dev/null)"; then
-              WATCHDOG_CANCELLED=""
-              WATCHDOG_LOG_READABLE="false"
-              echo "::warning::merge-queue-watchdog: could not read ${WATCHDOG_FILE} - any stuck-runner cancel it recorded may be mis-reported as pending dedupe on this tick."
-            fi
-          fi
+           if [ -f "$WATCHDOG_FILE" ] && ! WATCHDOG_CANCELLED="$(cat "$WATCHDOG_FILE" 2>/dev/null)"; then
+             WATCHDOG_CANCELLED=""
+             WATCHDOG_LOG_READABLE="false"
+             echo "::warning::merge-queue-watchdog: could not read ${WATCHDOG_FILE} - any stuck-runner cancel it recorded may be mis-reported as pending dedupe on this tick."
+           fi
+
 
           BENIGN=0
           STUCK=0
@@ -525,9 +534,11 @@ jobs:
               STEPS="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
                 --jq '[.jobs[] | select(.name | test("Merge queue")) | (.steps | length)] | first // -1' \
                 2>/dev/null || echo "-1")" || STEPS="-1"
-              case "$STEPS" in
-                ''|*[!0-9-]*) STEPS="-1" ;;
-              esac
+               case "$STEPS" in
+                 ''|*[!0-9-]*) STEPS="-1" ;;
+                 *) : ;;
+               esac
+
 
               # Class priority is deliberate: membership of the watchdog-cancelled
               # set wins, because a blocked-queue cancel is a real stall even
