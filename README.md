@@ -159,41 +159,22 @@ The [configuration reference](docs/configuration-reference.md) documents the
 server-side environment variables, and [agent-config.md](docs/agent-config.md)
 covers pipeline graph and node configuration.
 
-## Native install (Linux)
+## Native install (Linux) - not yet available
 
-No Docker and no repository clone: one script installs a self-contained
-Modulo bundle that ships its own Python runtime, PostgreSQL 16, and Redis 8.
+The native single-install path is Alpha work for workstation and evaluation
+use. It is not the supported production path, and it is not installable today:
+a clean clone cannot install because no signed `bundle-v*` release or trust key
+has been published yet. Do not use the native installer until a signed release
+is published.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
-bash modulo-install.sh
-```
+Docker Compose is the supported path for both evaluation and production. Start
+with the [system requirements](docs/system-requirements.md), then follow the
+[deployment guide](docs/deployment.md). The [release process](docs/release-process.md)
+documents what must exist before the native path can become available.
 
-**Versioned install (recommended for production):**
+Native installation on macOS and Windows is also Alpha scope and is not
+installable today.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/farnalabs/modulo/main/scripts/install.sh -o modulo-install.sh
-VERSION=bundle-v0.4.0 bash modulo-install.sh
-```
-
-Replace `bundle-v0.4.0` with the bundle tag you intend to run. The `VERSION`
-variable pins the exact bundle release tag (see the [release process](docs/release-process.md)
-for the version convention).
-
-The installer verifies every byte it downloads (SHA256SUMS plus a signed
-release manifest) before executing anything, lays the bundle out under
-`~/.local/opt/modulo/` (with a `current` symlink that later upgrades
-re-point), and writes a `modulo` shim on your PATH. First boot with
-`modulo start` creates the 0600 secrets file, initialises the bundled
-Postgres data dir, and seeds nothing externally - see the docs below for
-the full command surface.
-
-- [System requirements](docs/system-requirements.md) - the OS/glibc and
-  architecture matrix the native bundle supports today.
-- [Upgrade process](docs/upgrade-process.md) - `modulo upgrade`, the
-  enforced pre-upgrade dump, and the rollback playbook.
-- [Troubleshooting](docs/troubleshooting.md) - the native first-aid commands
-  (`modulo doctor`, `status`, `logs`) and the Compose migration path.
 
 ## Documentation
 

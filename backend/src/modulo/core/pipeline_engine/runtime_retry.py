@@ -57,7 +57,7 @@ from langgraph.errors import NodeCancelledError
 from modulo.connectors.base import node_fires_dispatch_job
 from modulo.core.pipeline_engine import retry_compensation as rc
 from modulo.core.pipeline_engine.model_backend_errors import non_retryable_provider_code
-from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+from modulo.core.pipeline_engine.node_runner import ConnectorNodeFailedError, SandboxNodeFailedError
 from modulo.core.pipeline_engine.retry_compensation import NodeRetryPolicy
 
 _log = logging.getLogger(__name__)
@@ -103,9 +103,17 @@ _NEVER_RETRYABLE_NAMES: frozenset[str] = frozenset(
 )
 
 
+def _retry_classification_exception(exc: BaseException) -> BaseException:
+    """Return the underlying fault for wrapper exceptions used by node bodies."""
+    if isinstance(exc, ConnectorNodeFailedError):
+        return exc.cause
+    return exc
+
+
 def _is_never_retryable(exc: BaseException) -> bool:
     """True for a terminal fault that must never be re-executed by a retry."""
-    return isinstance(exc, asyncio.CancelledError) or type(exc).__name__ in _NEVER_RETRYABLE_NAMES
+    classified = _retry_classification_exception(exc)
+    return isinstance(classified, asyncio.CancelledError) or type(classified).__name__ in _NEVER_RETRYABLE_NAMES
 
 
 # Control-flow terminal faults that MUST reach the run-level terminal path and
@@ -167,18 +175,19 @@ def failure_event(exc: BaseException) -> str | None:
     silently make every existing pipeline retry more aggressively on deploy.
     Internal cancellation (``asyncio.CancelledError``) is never retried.
     """
-    if _is_never_retryable(exc):
+    classified = _retry_classification_exception(exc)
+    if _is_never_retryable(classified):
         return None
     # FAR-2006: a provider credential / funding refusal is permanent even
     # though it surfaces as the transient ``SandboxNodeFailedError`` carrier.
     # Classify it from the retained sandbox output before the transient-class
     # branch, or an inline node retry re-executes a 401/402 that can never
     # succeed (the measured three-attempt, ~10-min-per-attempt waste).
-    if non_retryable_provider_code(str(exc)) is not None:
+    if non_retryable_provider_code(str(classified)) is not None:
         return None
-    if isinstance(exc, TimeoutError):
+    if isinstance(classified, TimeoutError):
         return "timeout"
-    if isinstance(exc, _TRANSIENT_ERROR_CLASSES):
+    if isinstance(classified, _TRANSIENT_ERROR_CLASSES):
         return "error"
     # Anything else (programming bugs, generic exceptions) is non-retryable.
     return None
@@ -228,14 +237,16 @@ def _backoff_seconds(policy: NodeRetryPolicy, attempt_n: int) -> float:
     return min(float(policy.backoff_seconds) * float(2 ** (attempt_n - 1)), _BACKOFF_CAP_SECONDS)
 
 
-def _compensated_marker(node_id: str) -> dict[str, Any]:
+def _compensated_marker(node_id: str, exc: BaseException | None = None) -> dict[str, Any]:
     """State update marking a watched node completed via a compensation edge.
 
-    Returned in place of the failed node's own output so the run CONTINUES —
-    the graph sees the watched node as completed rather than failed, and
-    ``_compensated`` is threaded for observability / the audit trail.
+    A connector failure remains attached to the marker so compensation can
+    continue the graph without losing the typed failure at finalization.
     """
-    return {"_compensated": True, "_compensated_node": node_id}
+    marker: dict[str, Any] = {"_compensated": True, "_compensated_node": node_id}
+    if isinstance(exc, ConnectorNodeFailedError):
+        marker.update(exc.envelope)
+    return marker
 
 
 def resolve_compensation_target(_node_id: str, outgoing_edges: list[dict[str, Any]]) -> str | None:
@@ -601,7 +612,7 @@ async def _resolve_failed_attempt(
     if edge_result is not None:
         return edge_result
     if await _handle_compensation(ctx, state, exc):
-        return _compensated_marker(ctx.node_id)
+        return _compensated_marker(ctx.node_id, exc)
     return _RERAISE
 
 

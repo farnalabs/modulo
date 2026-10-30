@@ -1,8 +1,9 @@
 name: "Windows: Build Installer (Inno Setup)"
 
 # FAR-679: native Windows packaging is deliberately fail-closed until a real
-# Windows runtime exists. A Linux bundle is never relabeled as Windows, and
-# dry-run validates the launcher/Inno contracts without creating an installer.
+# Windows runtime exists. A Linux bundle is never relabeled as Windows. Dry-run
+# records that packaging is unavailable; it does not compile a fake or incomplete
+# installer and does not claim to validate the runtime contract.
 
 on:
   workflow_call:
@@ -79,18 +80,19 @@ jobs:
           if (Test-Path -LiteralPath (Join-Path $env:RUNNER_TEMP 'modulo.exe')) {
             throw 'launcher helper created a fake executable'
           }
-      - name: Validate Inno Setup script
+      - name: Refuse packaging without native bundle
+        if: ${{ inputs.mode != 'dry-run' }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $outputDir = Join-Path $env:RUNNER_TEMP 'inno-contract'
-          New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-          & iscc "/Qp" "/DVERSION_NUM=$env:VERSION_NUM" '/DBUNDLE_ARCH=amd64' "/DBUNDLE_DIR=$env:RUNNER_TEMP/native-bundle" "/O$outputDir" '/Fcontract-check' 'deploy/windows/modulo.iss'
+          throw 'Native Windows packaging is unavailable until the real native bundle is supplied; compile-only packaging is intentionally skipped.'
       - name: Validate native Windows runtime prerequisite
         run: |
           $ErrorActionPreference = 'Stop'
           Write-Host 'Native Windows runtime/binaries are not yet available.'
           Write-Host 'The current bundle artifact is Linux-only and must not be relabeled as Windows.'
-          if ($env:MODE -ne 'dry-run') {
+          if ($env:MODE -eq 'dry-run') {
+            Write-Host 'Dry-run contract: packaging is intentionally skipped until a real native bundle exists.'
+          } else {
             throw 'Cannot publish Windows installer: no real Windows-native runtime/binaries exist.'
           }
       - name: Dry-run summary

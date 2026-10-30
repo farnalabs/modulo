@@ -23,6 +23,8 @@ import pytest
 import modulo.core.feature_flags as feature_flags_module
 from modulo.core.feature_flags import (
     DEFAULT_OFF_FLAGS,
+    INTERNAL_FLAGS,
+    RETIRED_INTERNAL_FLAGS,
     TIER_RANK,
     CommunityTier,
     DbPlanContext,
@@ -614,7 +616,8 @@ class TestEffectiveFeatureFlags:
     def test_effective_flags_without_overrides_returns_full_set(self) -> None:
         ctx = CommunityTier()
         flags = effective_feature_flags(ctx)
-        assert len(flags) == len([f for f in ctx.list_all_features() if f.name != "lifecycle_map_journeys"])
+        visible_flags = [f for f in ctx.list_all_features() if f.name not in RETIRED_INTERNAL_FLAGS | INTERNAL_FLAGS]
+        assert len(flags) == len(visible_flags)
         inactive_names = {f.name for f in flags if not f.currently_active}
         assert "user_scoped_mcp_keys" in inactive_names
         assert "eval_system" not in inactive_names
@@ -624,7 +627,8 @@ class TestEffectiveFeatureFlags:
         flags = effective_feature_flags(ctx, {"no_such_flag": True})
         names = {f.name for f in flags}
         assert "no_such_flag" not in names
-        assert len(flags) == len([f for f in ctx.list_all_features() if f.name != "lifecycle_map_journeys"])
+        visible_flags = [f for f in ctx.list_all_features() if f.name not in RETIRED_INTERNAL_FLAGS | INTERNAL_FLAGS]
+        assert len(flags) == len(visible_flags)
 
     def test_db_plan_context_list_all_features_returns_full_registry(self) -> None:
         """The DB-backed context's full-set member returns every known flag.

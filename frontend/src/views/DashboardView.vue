@@ -179,7 +179,7 @@
             <Sparkline class="h-16 w-full" :data="trendRejectionRate" :labels="trendLabels" unit="%" color="hsl(var(--destructive-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
         </div>
-        <div v-else class="flex items-center justify-center py-12">
+        <div v-else class="flex items-center justify-center min-h-[200px]">
           <p class="text-sm italic text-muted-foreground">{{ $t('views.DashboardView.no_data_trends') }}</p>
         </div>
       </div>

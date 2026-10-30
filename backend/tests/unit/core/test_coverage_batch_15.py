@@ -44,10 +44,10 @@ from modulo.core.eval_engine.execute_suite_run import (
 )
 from modulo.core.eval_engine.typed_judge import JudgeErrorCode
 from modulo.core.pipeline_engine.errors import (
-    ConnectorNodeFailedError,
     NodeMissingModelBackendError,
     RouterNoMatchError,
 )
+from modulo.core.pipeline_engine.node_runner import ConnectorNodeFailedError
 from modulo.core.pipeline_impact import (
     _check_edge_repoint_breaking,
     check_port_change_breaking,
@@ -336,8 +336,13 @@ class TestPipelineEngineErrors:
         missing = NodeMissingModelBackendError("node", "agent")
         assert missing.node_id == "node"
         assert missing.agent_id == "agent"
-        connector = ConnectorNodeFailedError("connector", "upstream rejected request")
+        connector = ConnectorNodeFailedError(
+            node_id="connector",
+            envelope={"connector_failure": True},
+            cause=RuntimeError("upstream rejected request"),
+        )
         assert connector.node_id == "connector"
+        assert connector.envelope == {"connector_failure": True}
         assert "upstream rejected request" in str(connector)
 
 

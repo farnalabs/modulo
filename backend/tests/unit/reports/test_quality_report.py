@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.sql import operators
 
@@ -30,6 +31,7 @@ from modulo.core.reports.quality_report import (
     format_slack_message,
     generate_quality_report,
 )
+from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
 from modulo.db.models.base import Base
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval import Eval
@@ -38,9 +40,13 @@ from tests.unit.reports.helpers import (
     SLACK_URL,
     SLACK_URL_2,
     has_predicate,
+    make_http_client,
     make_http_response,
     patched_quality_delivery,
 )
+
+# Sentinel for "the config omitted the key entirely".
+_ABSENT = object()
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -220,7 +226,7 @@ class TestFormatSummaryBlock:
 
 
 class TestFormatEvalBreakdown:
-    def test_returns_correct_structure(self) -> None:
+    def test_builds_section_with_this_and_last_week_counts(self) -> None:
         eval_bd = {
             "current_week": {"total_evals": 50, "passed_evals": 40, "pass_rate": 80.0},
             "previous_week": {"total_evals": 40, "passed_evals": 30, "pass_rate": 75.0},
@@ -230,7 +236,7 @@ class TestFormatEvalBreakdown:
         assert "This week: 40/50" in block["text"]["text"]
         assert "Last week: 30/40" in block["text"]["text"]
 
-    def test_handles_none_pass_rate(self) -> None:
+    def test_renders_em_dash_for_none_pass_rate(self) -> None:
         eval_bd = {
             "current_week": {"total_evals": 50, "passed_evals": 40, "pass_rate": None},
             "previous_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
@@ -342,7 +348,7 @@ class TestFormatTrendSection:
 
 
 class TestFormatSlackMessage:
-    def test_returns_valid_json(self) -> None:
+    def test_serialises_blocks_as_a_json_array(self) -> None:
         result = format_slack_message(_REPORT_WITH_DATA)
         parsed = json.loads(result)
         assert isinstance(parsed, list)
@@ -474,16 +480,11 @@ class TestWebhookSigning:
 
 
 class TestDeliverQualityReport:
-    def _client(self, **post_kwargs: object) -> AsyncMock:
-        client = AsyncMock()
-        client.post = AsyncMock(**post_kwargs)
-        return client
-
     async def test_returns_success_for_2xx(self) -> None:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
-        with patched_quality_delivery(self._client(return_value=make_http_response())):
+        with patched_quality_delivery(make_http_client(return_value=make_http_response())):
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 1
@@ -498,7 +499,7 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
         preformatted = format_slack_message(_REPORT_DELIVERY)
-        mock_client = self._client(return_value=make_http_response())
+        mock_client = make_http_client(return_value=make_http_response())
 
         with patched_quality_delivery(mock_client):
             results = await deliver_quality_report(preformatted, recipient_config)
@@ -515,7 +516,7 @@ class TestDeliverQualityReport:
         recipient_config = {"webhook_urls": [url]}
 
         with patched_quality_delivery(
-            self._client(return_value=make_http_response(is_success=False, status_code=500, text="error"))
+            make_http_client(return_value=make_http_response(is_success=False, status_code=500, text="error"))
         ):
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -528,7 +529,7 @@ class TestDeliverQualityReport:
         recipient_config = {"webhook_urls": [url]}
 
         with patched_quality_delivery(
-            self._client(return_value=make_http_response(is_success=False, status_code=500, text="x" * 500))
+            make_http_client(return_value=make_http_response(is_success=False, status_code=500, text="x" * 500))
         ):
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -541,7 +542,7 @@ class TestDeliverQualityReport:
         recipient_config = {"webhook_urls": [url1, url2]}
 
         with patched_quality_delivery(
-            self._client(
+            make_http_client(
                 side_effect=[
                     make_http_response(is_success=False, status_code=500, text="fail"),
                     make_http_response(),
@@ -560,7 +561,7 @@ class TestDeliverQualityReport:
         recipient_config = {"webhook_urls": [url1, url2]}
 
         with patched_quality_delivery(
-            self._client(
+            make_http_client(
                 side_effect=[
                     httpx.RequestError("Connection refused"),
                     make_http_response(),
@@ -582,7 +583,7 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         secret = "super-secret"
         recipient_config = {"webhook_urls": [url], "signing_secret": secret}
-        mock_client = self._client(return_value=make_http_response())
+        mock_client = make_http_client(return_value=make_http_response())
 
         with patched_quality_delivery(mock_client):
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
@@ -604,7 +605,7 @@ class TestDeliverQualityReport:
     async def test_unsigned_delivery_sends_json_without_signature(self) -> None:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
-        mock_client = self._client(return_value=make_http_response())
+        mock_client = make_http_client(return_value=make_http_response())
 
         with patched_quality_delivery(mock_client):
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
@@ -620,7 +621,7 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         secret = "verify-me"
         recipient_config = {"webhook_urls": [url], "signing_secret": secret}
-        mock_client = self._client(return_value=make_http_response())
+        mock_client = make_http_client(return_value=make_http_response())
 
         with patched_quality_delivery(mock_client):
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
@@ -636,7 +637,7 @@ class TestDeliverQualityReport:
     async def test_empty_signing_secret_treated_as_unsigned(self) -> None:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url], "signing_secret": ""}
-        mock_client = self._client(return_value=make_http_response())
+        mock_client = make_http_client(return_value=make_http_response())
 
         with patched_quality_delivery(mock_client):
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
@@ -648,47 +649,27 @@ class TestDeliverQualityReport:
 
     # --- Configurable delivery timeout ---
 
-    async def test_custom_timeout_used(self) -> None:
-        url = SLACK_URL
-        recipient_config = {"webhook_urls": [url], "timeout": 5.0}
+    @pytest.mark.parametrize(
+        ("config_timeout", "expected"),
+        [
+            (5.0, 5.0),
+            (_ABSENT, _REPORT_HTTP_TIMEOUT),
+            ("abc", _REPORT_HTTP_TIMEOUT),
+            (0, _REPORT_HTTP_TIMEOUT),
+        ],
+        ids=["custom-honored", "absent-default", "invalid-default", "zero-default"],
+    )
+    async def test_recipient_config_timeout_reaches_the_client(self, config_timeout: object, expected: float) -> None:
+        """The recipient config's ``timeout`` must reach the pinned client; an
+        absent or invalid value falls back to the reporting default."""
+        recipient_config: dict[str, object] = {"webhook_urls": [SLACK_URL]}
+        if config_timeout is not _ABSENT:
+            recipient_config["timeout"] = config_timeout
 
-        with patched_quality_delivery(self._client(return_value=make_http_response())) as client_cls:
+        with patched_quality_delivery(make_http_client(return_value=make_http_response())) as client_cls:
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
-        assert client_cls.call_args.kwargs["timeout"] == 5.0
-
-    async def test_default_timeout_used_when_absent(self) -> None:
-        from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
-
-        url = SLACK_URL
-        recipient_config = {"webhook_urls": [url]}
-
-        with patched_quality_delivery(self._client(return_value=make_http_response())) as client_cls:
-            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
-
-        assert client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
-
-    async def test_invalid_timeout_falls_back_to_default(self) -> None:
-        from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
-
-        url = SLACK_URL
-        recipient_config = {"webhook_urls": [url], "timeout": "abc"}
-
-        with patched_quality_delivery(self._client(return_value=make_http_response())) as client_cls:
-            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
-
-        assert client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
-
-    async def test_zero_timeout_falls_back_to_default(self) -> None:
-        from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
-
-        url = SLACK_URL
-        recipient_config = {"webhook_urls": [url], "timeout": 0}
-
-        with patched_quality_delivery(self._client(return_value=make_http_response())) as client_cls:
-            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
-
-        assert client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
+        assert client_cls.call_args.kwargs["timeout"] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -746,7 +727,16 @@ class TestGenerateQualityReport:
 
         return SimpleNamespace(execute=execute)
 
-    async def test_returns_correct_structure(self) -> None:
+    def _empty_session(self) -> SimpleNamespace:
+        """Session for an org with no runs, evals or spend this week."""
+        return self._make_session(
+            daily_rows=[],
+            daily_eval_rows=[],
+            weekly_row={"run_count": 0, "total_spend": 0.0},
+            eval_row={"total_evals": 0, "passed_evals": 0},
+        )
+
+    async def test_report_contains_all_expected_sections(self) -> None:
         org_id = uuid.uuid4()
         today = datetime.now(UTC).date()
         current_start = today - timedelta(days=6)
@@ -773,12 +763,7 @@ class TestGenerateQualityReport:
 
     async def test_zero_runs_produces_runs_delta_pct_none(self) -> None:
         org_id = uuid.uuid4()
-        session = self._make_session(
-            daily_rows=[],
-            daily_eval_rows=[],
-            weekly_row={"run_count": 0, "total_spend": 0.0},
-            eval_row={"total_evals": 0, "passed_evals": 0},
-        )
+        session = self._empty_session()
 
         report = await generate_quality_report(session, org_id)
 
@@ -801,12 +786,7 @@ class TestGenerateQualityReport:
 
     async def test_missing_dates_in_trend_produce_zero_runs_and_none_pass_rate(self) -> None:
         org_id = uuid.uuid4()
-        session = self._make_session(
-            daily_rows=[],
-            daily_eval_rows=[],
-            weekly_row={"run_count": 0, "total_spend": 0.0},
-            eval_row={"total_evals": 0, "passed_evals": 0},
-        )
+        session = self._empty_session()
 
         report = await generate_quality_report(session, org_id)
 
@@ -818,34 +798,25 @@ class TestGenerateQualityReport:
     async def test_cost_defaults_to_zero(self) -> None:
         org_id = uuid.uuid4()
 
-        session = self._make_session(
-            daily_rows=[],
-            daily_eval_rows=[],
-            weekly_row={"run_count": 0, "total_spend": 0.0},
-            eval_row={"total_evals": 0, "passed_evals": 0},
-        )
+        session = self._empty_session()
 
         report = await generate_quality_report(session, org_id)
 
         assert report["summary"]["total_cost_usd"] == 0.0
 
-    async def test_propagates_sqlalchemy_errors(self) -> None:
-        from sqlalchemy.exc import SQLAlchemyError
-
-        org_id = uuid.uuid4()
+    @pytest.mark.parametrize(
+        "error",
+        [SQLAlchemyError("db down"), RuntimeError("boom")],
+        ids=["sqlalchemy-error", "unexpected-error"],
+    )
+    async def test_propagates_database_and_unexpected_errors(self, error: Exception) -> None:
+        """Generation must fail loudly rather than return a zeroed report when a
+        query raises."""
         session = AsyncMock()
-        session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
+        session.execute = AsyncMock(side_effect=error)
 
-        with pytest.raises(SQLAlchemyError, match="db down"):
-            await generate_quality_report(session, org_id)
-
-    async def test_propagates_unexpected_errors(self) -> None:
-        org_id = uuid.uuid4()
-        session = AsyncMock()
-        session.execute = AsyncMock(side_effect=RuntimeError("boom"))
-
-        with pytest.raises(RuntimeError, match="boom"):
-            await generate_quality_report(session, org_id)
+        with pytest.raises(type(error), match=str(error)):
+            await generate_quality_report(session, uuid.uuid4())
 
     async def test_reraises_cancelled_error(self) -> None:
         org_id = uuid.uuid4()

@@ -1239,7 +1239,7 @@ async def test_seed_converges_trigger_config_json(session: AsyncSession, monkeyp
     """Trigger config_json is converged to the current spec."""
     await _run_seed(session, monkeypatch, _demo_settings())
 
-    pr_webhook = select(Trigger).where(Trigger.trigger_type == "webhook", Trigger.name.is_(None))
+    pr_webhook = select(Trigger).where(Trigger.trigger_type == "webhook", Trigger.name == "PR opened")
     webhook_trigger = (await session.execute(pr_webhook)).scalar_one()
     webhook_trigger.config_json = {"stale": True}
     await session.commit()

@@ -434,7 +434,7 @@ export type TriggerRef = TriggerResponse
 
 export interface TriggerCreateBody {
   trigger_type: 'cron' | 'manual' | 'webhook' | 'polling' | 'agent_signal' | 'ongoing' | 'slack_app_mention'
-  name?: string
+  name: string
   active?: boolean
   cron_expression?: string
   cron_timezone?: string

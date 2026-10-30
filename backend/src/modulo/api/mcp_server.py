@@ -57,6 +57,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from modulo.api.constants import SYSTEM_MAPS_FLAG
 from modulo.api.db_error_handling import (
     _MSG_LOCK_TIMEOUT,
     raise_session_contract_error,
@@ -88,6 +89,7 @@ from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
 from modulo.api.routes.triggers import (
     _encrypt_trigger_config_secrets,
+    _require_unique_trigger_name,
     _streak_status_for,
     _validate_connector_instance_team_scope,
     _validate_trigger_config_keys,
@@ -123,7 +125,12 @@ from modulo.auth.oauth import (
     oauth_grant_set,
     scopes_required_role,
 )
-from modulo.auth.permissions import _clamp_role, grants_permit, set_authz_enforce
+from modulo.auth.permissions import (
+    SYSTEM_MAPS_ACCESS_PERMISSION,
+    _clamp_role,
+    grants_permit,
+    set_authz_enforce,
+)
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.analytics.builder import (
     AnalyticsDimension,
@@ -162,6 +169,7 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # authenticated last, leaking cross-tenant data.
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import (
+    INTERNAL_FLAGS,
     RETIRED_INTERNAL_FLAGS,
     get_registry,
     resolve_mcp_human_linked_hitl_authority,
@@ -570,6 +578,43 @@ def _mcp_internal_lifecycle_map_access() -> bool:
 def _require_mcp_internal_lifecycle_map_access() -> None:
     if not _mcp_internal_lifecycle_map_access():
         raise MCPAuthorizationError("Lifecycle map tools are restricted to internal operators")
+
+
+def _mcp_internal_system_maps_access() -> bool:
+    """Return whether the MCP caller has the internal system maps grant.
+
+    The grant leg goes through ``grants_permit`` — the same live resolver the
+    REST gate reaches via ``require_in_dev_operator`` -> ``_enforce_key_grant``
+    -> ``assert_grant``. Membership is never tested by hand: ``grants_permit``
+    re-reads ``is_delegable`` on every call, so marking the permission
+    non-delegable revokes it from already-minted grant-bearing credentials
+    without a second code change. ``grants is None`` (JWTs, legacy keys) does
+    not narrow, matching REST.
+    """
+    if not getattr(get_settings(), "modulo_dev_mode", True):
+        return False
+    role = _ctx_role_val()
+    return ORG_ROLE_HIERARCHY.get(role or "", -1) >= ORG_ROLE_HIERARCHY["operator"] and grants_permit(
+        _ctx_key_grants.get(None), SYSTEM_MAPS_ACCESS_PERMISSION
+    )
+
+
+def _mcp_flag_visible(
+    flag_name: str,
+    *,
+    internal_lifecycle_access: bool,
+    internal_system_maps_access: bool,
+) -> bool:
+    """Return whether the MCP caller may see ``flag_name`` in a flag listing.
+
+    Internal flags are hidden from ordinary callers; each internal namespace
+    has its own gate (System Maps grant vs the retained lifecycle-map grant).
+    """
+    if flag_name not in INTERNAL_FLAGS:
+        return True
+    if flag_name == SYSTEM_MAPS_FLAG:
+        return internal_system_maps_access
+    return flag_name in RETIRED_INTERNAL_FLAGS and internal_lifecycle_access
 
 
 def _ctx_team_id_val() -> uuid.UUID | None:
@@ -2517,8 +2562,20 @@ def _parse_basic_auth_header(request: Request, params: dict[str, str]) -> tuple[
     return creds, None
 
 
-async def _load_trigger_row(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> Any | None:
-    """Load a non-deleted trigger row, org-scoped. None when not found."""
+async def _load_trigger_row(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    tid: uuid.UUID,
+    *,
+    account_id: uuid.UUID | None = None,
+) -> Any | None:
+    """Load a non-deleted trigger row, org-scoped. None when not found.
+
+    Pass *account_id* for a viewer-scoped read: the load is then additionally
+    bounded by that account's team memberships (``account_team_scope_clause``),
+    so ``trigger.list``'s viewer floor can never expose a trigger on a
+    team-private pipeline the viewer does not belong to.
+    """
     from sqlalchemy import select
 
     from modulo.db.models.trigger import Trigger
@@ -2528,6 +2585,15 @@ async def _load_trigger_row(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) 
         Trigger.organisation_id == org_id,
         Trigger.deleted_at.is_(None),
     )
+    if account_id is not None:
+        from modulo.db.crud.team_scope import account_team_scope_clause
+        from modulo.db.models.pipeline import Pipeline
+
+        q = (
+            q.join(Pipeline, Trigger.pipeline_id == Pipeline.id)
+            .where(Pipeline.deleted_at.is_(None))
+            .where(account_team_scope_clause(Pipeline.owner_team_id, account_id))
+        )
     return (await s.execute(q)).scalar_one_or_none()
 
 
@@ -3445,6 +3511,11 @@ async def _list_runs_impl(
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", str(pid))
+        # ``run.list`` is viewer-reachable: a viewer (JWT/OAuth, no team-scoped
+        # credential) has ``_ctx_team_id`` None, so without the membership
+        # clause it would enumerate every team's runs. Fail closed on a missing
+        # account context rather than widening to an org-wide read.
+        viewer_account_id = _ctx_user_id_val() if _ctx_role_val() == "viewer" else None
         result = await db_list_runs(
             s,
             organisation_id=org_id,
@@ -3454,6 +3525,7 @@ async def _list_runs_impl(
             page_size=limit,
             cursor=cursor,
             team_id=_ctx_team_id_val(),
+            account_id=viewer_account_id,
         )
         # Child-run cost+count rollup: ONE GROUP BY query for the whole
         # page, joined in Python — never a per-row aggregate (avoids N+1).
@@ -6312,6 +6384,17 @@ async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
 
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(team_scope_clause(effective_owner, key_team_id))
+        if _ctx_role_val() == "viewer":
+            # ``hitl.list`` is viewer-reachable: a viewer (no team-scoped
+            # credential, so ``_ctx_team_id`` is None) must be bounded by its
+            # account's team memberships. ``hitl_claims`` carries only the
+            # org-only RLS policy, so this predicate is the only boundary.
+            # ``_ctx_user_id_val`` raises when the account context is unset —
+            # an auth-context failure must never degrade to an org-wide read.
+            from modulo.db.crud.team_scope import account_team_scope_clause
+
+            effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+            base_where.append(account_team_scope_clause(effective_owner, _ctx_user_id_val()))
         gates, total = await _load_pending_hitl_reviews(s, base_where, page, page_size)
         # FAR-613: resolve each gate's description via the shared batched
         # resolver (same normalisation + the FAR-688 unified context-first
@@ -6433,6 +6516,14 @@ async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
             # sees reviews for runs owned by its own team (or org-level runs).
             effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
             base_where.append(team_scope_clause(effective_owner, key_team_id))
+        if _ctx_role_val() == "viewer":
+            # ``hitl.list`` is viewer-reachable and ``hitl_claims`` has only
+            # the org-only RLS policy, so the account-team membership clamp is
+            # the only boundary. Fail closed when the account context is unset.
+            from modulo.db.crud.team_scope import account_team_scope_clause
+
+            effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+            base_where.append(account_team_scope_clause(effective_owner, _ctx_user_id_val()))
         result = await s.execute(
             select(HitlClaim, Pipeline.name, Run.run_number)
             .join(Run, HitlClaim.run_id == Run.id)
@@ -6494,9 +6585,15 @@ async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
     if rid_err:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+    # ``hitl.list`` is viewer-reachable: bound the read by the account's team
+    # memberships. ``_ctx_user_id_val`` raises when the account context is
+    # unset — fail closed rather than degrade to an unclamped read.
+    viewer_account_id = _ctx_user_id_val() if _ctx_role_val() == "viewer" else None
     async with _session(org_id) as s:
-        run = await _load_hitl_run(s, rid, org_id)
+        run = await _load_hitl_run(s, rid, org_id, viewer_account_id=viewer_account_id)
         if run is _TEAM_SCOPE_ERROR:
+            if viewer_account_id is not None:
+                return {"error": "review_not_found", "run_id": run_id, "review_id": review_id}
             return _team_scope_error("run", run_id)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
@@ -6624,6 +6721,8 @@ async def _load_hitl_run(
     s: AsyncSession,
     rid: uuid.UUID,
     org_id: uuid.UUID,
+    *,
+    viewer_account_id: uuid.UUID | None = None,
 ) -> Any | None:
     """Load the HITL gate's run, enforcing the team boundary.
 
@@ -6631,16 +6730,39 @@ async def _load_hitl_run(
     is the backstop; the explicit filter makes cross-tenant access impossible
     even if RLS were misconfigured.
 
+    Pass *viewer_account_id* for a viewer-scoped read: the load is then also
+    bounded by that account's team memberships (``account_team_scope_clause``)
+    against the run's effective owner, so ``get_hitl_review`` can never expose
+    a gate on a team-private pipeline the viewer does not belong to.
+
     Returns the run ORM object on success, ``_TEAM_SCOPE_ERROR`` when a
-    team-scoped key must not act on the run, or ``None`` when the run is not
-    found.
+    team-scoped key must not act on the run (or a viewer is outside its
+    membership boundary), or ``None`` when the run is not found.
     """
     run = await get_run(s, rid, organisation_id=org_id)
     if run is None:
         return None
+    if viewer_account_id is not None and not await _viewer_run_scope_visible(s, rid, viewer_account_id):
+        return _TEAM_SCOPE_ERROR
     if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
         return _TEAM_SCOPE_ERROR
     return run
+
+
+async def _viewer_run_scope_visible(
+    s: AsyncSession,
+    rid: uuid.UUID,
+    account_id: uuid.UUID,
+) -> bool:
+    """True when a viewer's team memberships cover the run's effective owner.
+
+    ``hitl_claims`` carries only the org-only RLS policy, so a viewer read has
+    no team boundary of its own; :func:`modulo.db.crud.team_scope.viewer_run_scope_visible`
+    supplies the account-team membership clamp the REST HITL lists also apply.
+    """
+    from modulo.db.crud.team_scope import viewer_run_scope_visible
+
+    return await viewer_run_scope_visible(s, rid, account_id)
 
 
 def _hitl_human_only_denial_payload(
@@ -7427,6 +7549,8 @@ async def _build_trigger_event_query(
     key_team_id: uuid.UUID | None,
     trigger_id: str | None,
     pipeline_id: str | None,
+    account_id: uuid.UUID | None = None,
+    viewer: bool = False,
 ) -> tuple[Any, dict[str, Any] | None]:
     from sqlalchemy import select
 
@@ -7436,6 +7560,16 @@ async def _build_trigger_event_query(
 
     q = select(TriggerEvent).where(TriggerEvent.organisation_id == org_id)
     joined = False
+
+    def _ensure_pipeline_join() -> None:
+        # TriggerEvent -> Trigger -> Pipeline is only needed by the
+        # owner_team_id scopes below; join at most once across them.
+        nonlocal q, joined
+        if joined:
+            return
+        q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
+        q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
+        joined = True
 
     q, trigger_filter_err = await _apply_trigger_event_trigger_filter(s, q, key_team_id, trigger_id)
     if trigger_filter_err:
@@ -7454,14 +7588,22 @@ async def _build_trigger_event_query(
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return None, _team_scope_error("pipeline", str(pid))
-        if not joined:
-            q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
-            q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
-            joined = True
+        _ensure_pipeline_join()
         q = q.where(
             Trigger.pipeline_id == pid,
             _Pipeline.deleted_at.is_(None),
         )
+
+    if viewer:
+        # Fail closed: a viewer read MUST carry the account-membership
+        # boundary. An unset account is an auth-context failure — it must never
+        # degrade into an org-wide read.
+        if account_id is None:
+            raise McpAuthContextError("No authenticated user context for this MCP request")
+        from modulo.db.crud.team_scope import account_team_scope_clause
+
+        _ensure_pipeline_join()
+        q = q.where(account_team_scope_clause(_Pipeline.owner_team_id, account_id))
 
     if key_team_id is not None:
         # A team-scoped key only sees events whose trigger's pipeline
@@ -7469,10 +7611,7 @@ async def _build_trigger_event_query(
         # ``list_triggers`` applies.
         from modulo.db.crud.team_scope import team_scope_clause
 
-        if not joined:
-            q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
-            q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
-            joined = True
+        _ensure_pipeline_join()
         q = q.where(team_scope_clause(_Pipeline.owner_team_id, key_team_id))
 
     return q, None
@@ -7542,7 +7681,20 @@ async def _list_trigger_events_impl(
 
     async with _session(org_id) as s:
         key_team_id = _ctx_team_id_val()
-        q, q_err = await _build_trigger_event_query(s, org_id, key_team_id, trigger_id, pipeline_id)
+        viewer = _ctx_role_val() == "viewer"
+        # Fail closed: the viewer leg of the query needs a real account id.
+        # ``_ctx_user_id_val`` raises rather than returning None, so an unset
+        # context cannot silently skip the membership clause.
+        viewer_account_id = _ctx_user_id_val() if viewer else None
+        q, q_err = await _build_trigger_event_query(
+            s,
+            org_id,
+            key_team_id,
+            trigger_id,
+            pipeline_id,
+            account_id=viewer_account_id,
+            viewer=viewer,
+        )
         if q_err:
             return q_err
         total = int((await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0)
@@ -7586,7 +7738,7 @@ async def list_trigger_events(
 @mcp.tool(
     description="List triggers configured for the organisation with cursor-based pagination. "
     "Optionally filter by pipeline_id. Returns trigger metadata "
-    "including type, active status, and cron schedule.",
+    "including name, type, active status, and cron schedule.",
 )
 @_RETRY_DB
 async def list_triggers(
@@ -7612,14 +7764,15 @@ async def list_triggers(
                 owner_team_id = await _pipeline_owner_team_id(s, pid)
                 if _team_scoped_key_mismatch(owner_team_id):
                     return _team_scope_error("pipeline", str(pid))
-            result = await db_list_triggers(
-                s,
-                org_id,
-                pipeline_id=pid,
-                cursor=cursor,
-                limit=lim,
-                team_id=_ctx_team_id_val(),
-            )
+            trigger_list_kwargs: dict[str, Any] = {
+                "pipeline_id": pid,
+                "cursor": cursor,
+                "limit": lim,
+                "team_id": _ctx_team_id_val(),
+            }
+            if _ctx_role_val() == "viewer":
+                trigger_list_kwargs["account_id"] = _ctx_user_id_val()
+            result = await db_list_triggers(s, org_id, **trigger_list_kwargs)
             # FAR-251 — surface the SAME streak_status shape as the REST
             # trigger serializers (via the shared routes helper), computed
             # INSIDE the RLS transaction so a deactivated trigger's reason /
@@ -7628,6 +7781,7 @@ async def list_triggers(
                 {
                     "id": str(t.id),
                     "pipeline_id": str(t.pipeline_id),
+                    "name": t.name,
                     "trigger_type": t.trigger_type,
                     "active": t.active,
                     "max_concurrent_runs": t.max_concurrent_runs,
@@ -8010,9 +8164,18 @@ async def _validate_ongoing_trigger_create(
     return datetime.now(UTC), None
 
 
+def _normalise_trigger_name(name: Any) -> tuple[str, dict[str, Any] | None]:
+    """FAR-2227: strip and validate a trigger name (1..255 chars); returns (name, error)."""
+    cleaned = name.strip() if isinstance(name, str) else ""
+    if not cleaned or len(cleaned) > 255:
+        return cleaned, {"error": "validation", "field": "name", "detail": "name is required (1-255 characters)"}
+    return cleaned, None
+
+
 def _build_trigger_record(
     org_id: uuid.UUID,
     pid: uuid.UUID,
+    name: str,
     trigger_type: str,
     active: bool,
     max_concurrent_runs: int,
@@ -8034,6 +8197,7 @@ def _build_trigger_record(
     trigger = Trigger(
         organisation_id=org_id,
         pipeline_id=pid,
+        name=name,
         trigger_type=trigger_type,
         active=active,
         max_concurrent_runs=max_concurrent_runs,
@@ -8056,6 +8220,7 @@ def _build_trigger_record(
 
 async def _create_trigger_impl(
     pipeline_id: str,
+    name: str,
     trigger_type: str,
     active: bool,
     cron_expression: str | None,
@@ -8072,6 +8237,9 @@ async def _create_trigger_impl(
     pid, input_err = _validate_trigger_create_inputs(pipeline_id, max_concurrent_runs, daily_spend_limit)
     if input_err:
         return input_err
+    clean_name, name_err = _normalise_trigger_name(name)
+    if name_err:
+        return name_err
     try:
         _validate_trigger_config_keys(config_json)
     except FastAPIHTTPException as exc:
@@ -8087,6 +8255,10 @@ async def _create_trigger_impl(
         owner_team_id, gate_denial = await _pipeline_team_gate(s, pid)
         if gate_denial:
             return gate_denial
+        try:
+            await _require_unique_trigger_name(s, pid, clean_name)
+        except FastAPIHTTPException as exc:
+            return {"error": "conflict", "field": "name", "detail": exc.detail}
         # FAR-1595: a connector reference named at create time is
         # team-validated against the owning pipeline before the trigger can
         # ever poll it (the fire job reads the row team-blind). This is the
@@ -8111,6 +8283,7 @@ async def _create_trigger_impl(
         trigger, build_err = _build_trigger_record(
             org_id,
             pid,
+            clean_name,
             trigger_type,
             active,
             max_concurrent_runs,
@@ -8133,6 +8306,7 @@ async def _create_trigger_impl(
     return {
         "id": str(trigger.id),
         "pipeline_id": str(trigger.pipeline_id),
+        "name": trigger.name,
         "trigger_type": trigger.trigger_type,
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
@@ -8142,11 +8316,14 @@ async def _create_trigger_impl(
     }
 
 
-@mcp.tool(description="Create a new trigger for a pipeline.")
+@mcp.tool(
+    description="Create a new trigger for a pipeline. `name` is required (1-255 chars) and must be unique per pipeline."
+)
 @mcp_audited("trigger_created", "trigger", fail_closed=False)
 @_RETRY_DB
 async def create_trigger(
     pipeline_id: str,
+    name: str,
     trigger_type: str = "manual",
     active: bool = True,
     cron_expression: str | None = None,
@@ -8157,6 +8334,7 @@ async def create_trigger(
     try:
         return await _create_trigger_impl(
             pipeline_id,
+            name,
             trigger_type,
             active,
             cron_expression,
@@ -8188,6 +8366,7 @@ def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> di
     return {
         "id": str(trigger.id),
         "pipeline_id": str(trigger.pipeline_id),
+        "name": trigger.name,
         "trigger_type": trigger.trigger_type,
         "active": trigger.active,
         "max_concurrent_runs": trigger.max_concurrent_runs,
@@ -8218,8 +8397,13 @@ async def _get_trigger_impl(trigger_id: str) -> dict[str, Any]:
 
     from modulo.core.cron_helpers import _count_ongoing_runs
 
+    # ``trigger.list`` is viewer-reachable, so a viewer read must be bounded by
+    # the account's team memberships — never org-wide. Fail closed when the
+    # account context is missing rather than degrading to an unscoped read.
+    viewer_account_id = _ctx_user_id_val() if _ctx_role_val() == "viewer" else None
+
     async with _session(org_id) as s:
-        trigger = await _load_trigger_row(s, org_id, tid)
+        trigger = await _load_trigger_row(s, org_id, tid, account_id=viewer_account_id)
         if trigger is not None:
             owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
             if _team_scoped_key_mismatch(owner_team_id):
@@ -8454,6 +8638,56 @@ def _recompute_ongoing_next_fire(
             trigger.next_fire_at = datetime.now(UTC)
 
 
+async def _rename_trigger_in_session(s: AsyncSession, trigger: Any, name: str | None) -> dict[str, Any] | None:
+    """Apply a requested rename inside the update session; returns a conflict envelope or None."""
+    if name is not None and name != trigger.name:
+        # Validated BEFORE mutation: a clean early return commits.
+        try:
+            await _require_unique_trigger_name(s, trigger.pipeline_id, name, exclude_id=trigger.id)
+        except FastAPIHTTPException as exc:
+            return {"error": "conflict", "field": "name", "detail": exc.detail}
+        trigger.name = name
+    return None
+
+
+async def _validate_trigger_update_config(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    trigger: Any,
+    owner_team_id: uuid.UUID | None,
+    config_json: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Validate a write-time config merge before mutation; returns an error envelope or None."""
+    if config_json is None:
+        return None
+    # FAR-1735: validate the SAME recursive masked merge the write path uses
+    # (REST parity) — a shallow merge would judge a different shape than
+    # `_merge_trigger_config_json` persists.
+    merged_config = merge_masked_config_json(trigger.config_json or {}, config_json)
+    try:
+        _validate_trigger_config_keys(merged_config, context="merged config_json")
+    except FastAPIHTTPException as exc:
+        return {"error": "validation", "detail": exc.detail}
+    # FAR-1595: a NEW connector reference written through the general update
+    # path is team-validated too — same shared gate REST's PUT calls, so MCP is
+    # not a bypass around it. Judged on the MERGED config and against the
+    # PREVIOUS value (an unchanged reference is not re-judged), all BEFORE the
+    # ORM object is mutated: a clean early return from `_session` COMMITS.
+    try:
+        await _validate_connector_instance_team_scope(
+            s,
+            org_id=org_id,
+            pipeline_owner_team_id=owner_team_id,
+            config=merged_config,
+            previous_connector_instance_id=(trigger.config_json or {}).get("connector_instance_id"),
+        )
+    except FastAPIHTTPException as exc:
+        from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
+
+        return {"error": CONNECTOR_TEAM_MISMATCH, "detail": str(exc.detail)}
+    return None
+
+
 async def _update_trigger_txn(
     org_id: uuid.UUID,
     tid: uuid.UUID,
@@ -8465,6 +8699,7 @@ async def _update_trigger_txn(
     daily_spend_limit: float | None,
     clear_daily_spend_limit: bool,
     config_json: dict[str, Any] | None,
+    name: str | None = None,
 ) -> tuple[Any, int, dict[str, Any], bool] | dict[str, Any]:
     """Run the trigger update inside its own session (validate-then-mutate).
 
@@ -8511,34 +8746,12 @@ async def _update_trigger_txn(
         # `_session()` wraps the body in `s.begin()`, so a clean early
         # return COMMITS — validating after mutation would persist an
         # invalid merged config while reporting a validation error.
-        if config_json is not None:
-            # FAR-1735: validate the SAME recursive masked merge the write
-            # path uses (REST parity) — the shallow merge here previously
-            # judged a different shape than `_merge_trigger_config_json`
-            # persisted.
-            merged_config = merge_masked_config_json(trigger.config_json or {}, config_json)
-            try:
-                _validate_trigger_config_keys(merged_config, context="merged config_json")
-            except FastAPIHTTPException as exc:
-                return {"error": "validation", "detail": exc.detail}
-            # FAR-1595: a NEW connector reference written through the general
-            # update path is team-validated too — same shared gate REST's PUT
-            # calls, so MCP is not a bypass around it. Judged on the MERGED
-            # config and against the PREVIOUS value (an unchanged reference is
-            # not re-judged), all BEFORE the ORM object is mutated: a clean
-            # early return from ``_session`` COMMITS.
-            try:
-                await _validate_connector_instance_team_scope(
-                    s,
-                    org_id=org_id,
-                    pipeline_owner_team_id=owner_team_id,
-                    config=merged_config,
-                    previous_connector_instance_id=(trigger.config_json or {}).get("connector_instance_id"),
-                )
-            except FastAPIHTTPException as exc:
-                from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
-
-                return {"error": CONNECTOR_TEAM_MISMATCH, "detail": str(exc.detail)}
+        config_err = await _validate_trigger_update_config(s, org_id, trigger, owner_team_id, config_json)
+        if config_err is not None:
+            return config_err
+        rename_err = await _rename_trigger_in_session(s, trigger, name)
+        if rename_err is not None:
+            return rename_err
         await _apply_trigger_field_updates(
             s,
             trigger,
@@ -8570,7 +8783,7 @@ async def _update_trigger_txn(
 
 @mcp.tool(
     description="Update an existing trigger's configuration. "
-    "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
+    "Mirrors PUT /api/v1/triggers/{id}. Pass name to rename (unique per pipeline). Setting cron_expression or "
     "cron_timezone is only valid for cron triggers.",
 )
 @mcp_audited("trigger_updated", "trigger", fail_closed=False)
@@ -8584,11 +8797,17 @@ async def update_trigger(
     daily_spend_limit: float | None = None,
     clear_daily_spend_limit: bool = False,
     config_json: dict[str, Any] | None = None,
+    name: str | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("update_trigger")
+        clean_name: str | None = None
+        if name is not None:
+            clean_name, name_err = _normalise_trigger_name(name)
+            if name_err:
+                return name_err
 
         org_id = _ctx_org_id_val()
         tid, input_err = _validate_trigger_update_inputs(trigger_id, max_concurrent_runs, daily_spend_limit)
@@ -8607,6 +8826,7 @@ async def update_trigger(
             daily_spend_limit=daily_spend_limit,
             clear_daily_spend_limit=clear_daily_spend_limit,
             config_json=config_json,
+            name=clean_name,
         )
         if isinstance(outcome, dict):
             return outcome
@@ -10212,6 +10432,8 @@ async def list_feature_flags() -> dict[str, Any]:
                 if isinstance(raw_overrides, dict):
                     org_overrides = {k: bool(v) for k, v in raw_overrides.items()}
 
+        internal_lifecycle_access = _mcp_internal_lifecycle_map_access()
+        internal_system_maps_access = _mcp_internal_system_maps_access()
         return {
             "license": {
                 "tier": registry.current_tier,
@@ -10228,6 +10450,11 @@ async def list_feature_flags() -> dict[str, Any]:
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
+                if _mcp_flag_visible(
+                    f.name,
+                    internal_lifecycle_access=internal_lifecycle_access,
+                    internal_system_maps_access=internal_system_maps_access,
+                )
             ],
             "would_activate": [
                 {
@@ -10238,6 +10465,11 @@ async def list_feature_flags() -> dict[str, Any]:
                 }
                 for f in registry.tier_gap_flags()
                 if f.name not in org_overrides
+                if _mcp_flag_visible(
+                    f.name,
+                    internal_lifecycle_access=internal_lifecycle_access,
+                    internal_system_maps_access=internal_system_maps_access,
+                )
             ],
         }
     except MCPAuthorizationError as exc:
@@ -11311,10 +11543,16 @@ async def get_available_features() -> dict[str, Any]:
             plan_ctx = await resolve_plan_context(settings, s, org)
 
         current_tier = plan_ctx.tier()
+        internal_lifecycle_access = _mcp_internal_lifecycle_map_access()
+        internal_system_maps_access = _mcp_internal_system_maps_access()
         all_flags = [
             flag
             for flag in plan_ctx.list_enabled_features()
-            if flag.name not in RETIRED_INTERNAL_FLAGS or _mcp_internal_lifecycle_map_access()
+            if _mcp_flag_visible(
+                flag.name,
+                internal_lifecycle_access=internal_lifecycle_access,
+                internal_system_maps_access=internal_system_maps_access,
+            )
         ]
 
         lines = ["| Feature | Required Tier | Available |", "|---------|---------------|-----------|"]
@@ -12974,6 +13212,11 @@ async def _hitl_review_scope_error(
     )
     if _team_scoped_key_mismatch(owner_team_id):
         return _team_scope_error_str("run", str(rid))
+    if _ctx_role_val() == "viewer" and not await _viewer_run_scope_visible(s, rid, _ctx_user_id_val()):
+        # Same viewer membership boundary as the ``get_hitl_review`` tool this
+        # resource mirrors; render the boundary as a plain not-found so the
+        # resource never reveals a team-private gate.
+        return f"HITL gate not found on run {rid}."
     return None
 
 

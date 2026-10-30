@@ -216,6 +216,12 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Retired internal Lifecycle Map journey display",
         tier="community",
     ),
+    # ── Community tier — System Maps (Beta, internal dogfood only) ─────────────
+    FeatureFlag(
+        name="system_maps",
+        description="Beta System Maps (Delivery System Maps)",
+        tier="community",
+    ),
     # ── Community tier — webhook notification delivery log (default OFF, FAR-656) ──
     FeatureFlag(
         name="webhook_notification_log",
@@ -270,6 +276,17 @@ TIER_RANK: dict[str, int] = {"community": 0, "team": 1}
 # route's dev-mode visibility gate instead of an org feature override.
 RETIRED_INTERNAL_FLAGS: frozenset[str] = frozenset({"lifecycle_map_journeys"})
 
+# Internal-only flags that are visible/enableable ONLY in dev-mode for
+# internal operators (system admin + operator role + in-dev grant). These are
+# filtered from customer-facing catalogue and plan responses (see
+# effective_feature_flags, get_available_features MCP tool).
+INTERNAL_FLAGS: frozenset[str] = frozenset(
+    {
+        "lifecycle_map_journeys",
+        "system_maps",
+    }
+)
+
 
 DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
     {
@@ -282,6 +299,7 @@ DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
         "sso_unrestricted_provisioning",
         "api_key_grants",
         "autonomy_gating",
+        "system_maps",
     }
 )
 
@@ -662,10 +680,16 @@ def effective_feature_flags(
     (``FeatureFlagRegistry.set_override``) is already folded into each flag's
     ``currently_active`` by the registry before this overlay applies.
 
+    Internal-only flags (``INTERNAL_FLAGS``) are filtered from customer-facing
+    catalogue and plan responses — they are visible only in dev-mode to internal
+    operators via the admin feature-flag endpoints and the MCP ``get_available_features``
+    tool.
+
     Returns copies (``dataclasses.replace``) for overlaid flags so the plan
     context's own registry state is never mutated.
     """
-    flags = [flag for flag in plan_ctx.list_all_features() if flag.name not in RETIRED_INTERNAL_FLAGS]
+    internal_and_retired = RETIRED_INTERNAL_FLAGS | INTERNAL_FLAGS
+    flags = [flag for flag in plan_ctx.list_all_features() if flag.name not in internal_and_retired]
     if not org_overrides:
         return flags
     return [

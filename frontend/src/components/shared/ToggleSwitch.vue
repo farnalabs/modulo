@@ -13,7 +13,7 @@
   >
     <span
       class="inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform"
-      :class="checked ? 'translate-x-[18px]' : 'translate-x-0.5'"
+      :class="checked ? 'translate-x-3.5' : 'translate-x-0.5'"
     />
   </button>
 </template>

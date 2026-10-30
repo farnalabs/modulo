@@ -51,6 +51,10 @@ def authz_enforce_enabled() -> bool:
     return _authz_enforce_ctx.get() is not False
 
 
+# Single source of truth for the System Maps grant name. REST and MCP gates
+# import this rather than re-declaring the literal.
+SYSTEM_MAPS_ACCESS_PERMISSION = "system_maps_access"
+
 PERMISSIONS: dict[str, str] = {
     # pipelines
     "pipeline.create": "operator",
@@ -70,7 +74,7 @@ PERMISSIONS: dict[str, str] = {
     # runs
     "run.trigger": "runner",
     "run.cancel": "runner",
-    "run.list": "runner",
+    "run.list": "viewer",
     "run.output": "runner",
     "run.evals": "runner",
     "run.status": "viewer",
@@ -105,14 +109,15 @@ PERMISSIONS: dict[str, str] = {
     "connector.list.in_dev": "operator",
     "model_backend.list.in_dev": "operator",
     "library.search.in_dev": "operator",
+    SYSTEM_MAPS_ACCESS_PERMISSION: "operator",
     # secrets
     "secret.manage": "operator",
     # triggers
     "trigger.create": "operator",
     "trigger.update": "operator",
     "trigger.delete": "operator",
-    "trigger.list": "runner",
-    "trigger.events.list": "runner",
+    "trigger.list": "viewer",
+    "trigger.events.list": "viewer",
     "trigger.cleanup": "runner",
     # api keys
     "api_key.create": "runner",
@@ -177,7 +182,7 @@ PERMISSIONS: dict[str, str] = {
     "hitl.reject": "operator",
     "hitl.deliver_manual": "operator",
     "hitl.review": "operator",
-    "hitl.list": "runner",
+    "hitl.list": "viewer",
     # library
     "library.copy": "runner",
     "library.search": "viewer",

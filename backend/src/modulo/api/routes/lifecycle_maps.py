@@ -1482,6 +1482,18 @@ def _team_scope_filter(lifecycle_map: Any) -> uuid.UUID | None:
     return None
 
 
+def _viewer_account_scope_id(principal: TenantPrincipal) -> uuid.UUID | None:
+    """Return the account id when a viewer read must be team-membership clamped.
+
+    ``runs`` carries only the org-isolation RLS policy, so a viewer (which
+    presents no team-scoped credential) needs the explicit account-team
+    membership clamp on every run read the journey endpoints perform. An
+    admin/owner already carries the team-scoped credential, so no clamp is
+    added for them.
+    """
+    return principal.account_id if principal.org_role == "viewer" else None
+
+
 _JOURNEY_STATUS_FILTER_VALUES = ("complete", "failed")
 
 
@@ -1531,6 +1543,7 @@ async def list_journeys_endpoint(
                 updated_since=updated_since,
                 cursor=cursor,
                 limit=limit,
+                viewer_account_id=_viewer_account_scope_id(principal),
             )
     except ValueError as exc:
         _log.exception(_CODE_LIFECYCLE_MAPS_LIST_JOURNEYS)
@@ -1594,11 +1607,16 @@ async def get_journey_endpoint(
                 kind=kind,
                 ref=ref,
                 owner_team_id=owner_team_id,
+                viewer_account_id=_viewer_account_scope_id(principal),
             )
             if journey_result is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Journey not found")
             journey, unattributed = journey_result
-            runs = await list_journey_runs(session, journey=journey)
+            runs = await list_journey_runs(
+                session,
+                journey=journey,
+                viewer_account_id=_viewer_account_scope_id(principal),
+            )
     except ValueError as exc:
         _log.exception(_CODE_LIFECYCLE_MAPS_GET_JOURNEY)
         raise HTTPException(

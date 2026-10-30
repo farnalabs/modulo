@@ -6,7 +6,7 @@ import asyncio
 import datetime
 import logging
 import uuid
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -50,6 +50,7 @@ from tests.unit.reports.helpers import (
     make_report_mock,
     patched_http_client,
     report_firing_env,
+    select_returns,
 )
 
 # ---------------------------------------------------------------------------
@@ -151,32 +152,16 @@ class TestSetRlsOrg:
 
 
 class TestFireScheduledReport:
-    async def test_skips_when_report_missing(self) -> None:
-        report_id = uuid.uuid4()
-        org_id = uuid.uuid4()
-
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
-
-        session = MockSession(execute_side_effect=[result_mock])
-
-        with report_firing_env(session):
-            result = await _fire_scheduled_report(report_id=report_id, org_id=org_id)
-
-        assert result["status"] == "skipped"
-        assert result["reason"] == "report_inactive_or_missing"
-
-    async def test_skips_when_report_inactive(self) -> None:
-        report_id = uuid.uuid4()
-        org_id = uuid.uuid4()
-        report_mock = make_report_mock(active=False)
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = report_mock
-
-        session = MockSession(execute_side_effect=[result_mock])
+    @pytest.mark.parametrize(
+        "report",
+        [None, make_report_mock(active=False)],
+        ids=["missing", "inactive"],
+    )
+    async def test_skips_when_report_missing_or_inactive(self, report: MagicMock | None) -> None:
+        session = MockSession(execute_side_effect=[select_returns(report)])
 
         with report_firing_env(session):
-            result = await _fire_scheduled_report(report_id=report_id, org_id=org_id)
+            result = await _fire_scheduled_report(report_id=uuid.uuid4(), org_id=uuid.uuid4())
 
         assert result["status"] == "skipped"
         assert result["reason"] == "report_inactive_or_missing"
@@ -185,8 +170,7 @@ class TestFireScheduledReport:
         report_id = uuid.uuid4()
         org_id = uuid.uuid4()
         report_mock = make_report_mock(report_type="unknown_type")
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = report_mock
+        result_mock = select_returns(report_mock)
 
         session = MockSession(execute_side_effect=[result_mock])
 
@@ -214,8 +198,7 @@ class TestFireScheduledReport:
         report_mock.id = report_id
         report_mock.organisation_id = org_id
 
-        select_result = MagicMock()
-        select_result.scalar_one_or_none.return_value = report_mock
+        select_result = select_returns(report_mock)
 
         update_result = MagicMock()
 
@@ -244,8 +227,7 @@ class TestFireScheduledReport:
         report_mock = make_report_mock(report_type="minimal", cron_expression="0 9 * * *")
         report_mock.id = uuid.uuid4()
 
-        select_result = MagicMock()
-        select_result.scalar_one_or_none.return_value = report_mock
+        select_result = select_returns(report_mock)
 
         update_result = MagicMock()
 
@@ -279,8 +261,7 @@ class TestFireScheduledReport:
         report_mock.id = report_id
         report_mock.organisation_id = org_id
 
-        select_result = MagicMock()
-        select_result.scalar_one_or_none.return_value = report_mock
+        select_result = select_returns(report_mock)
 
         session = MockSession(execute_side_effect=[select_result])
 
@@ -482,8 +463,7 @@ class TestFireScheduledReportLockScope:
 
     async def test_concurrent_fires_cannot_double_run(self) -> None:
         report = make_report_mock(report_type="concurrency_probe", cron_expression="0 9 * * *")
-        select_result = MagicMock()
-        select_result.scalar_one_or_none.return_value = report
+        select_result = select_returns(report)
         session = MockSession([select_result, MagicMock(), MagicMock()])
         redis = _LeaseRedis()
 
@@ -554,12 +534,6 @@ def _one_time_report(last_sent_at: datetime.datetime | None = None) -> MagicMock
     return report
 
 
-def _select_returns(report: MagicMock) -> MagicMock:
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = report
-    return result
-
-
 def _statements(session: MockSession) -> list[object]:
     return [call.args[0] for call in session.execute.await_args_list]
 
@@ -593,7 +567,7 @@ class TestReportFireEpochIdempotency:
 
         report = _recurring_report()
         session = MockSession(
-            [_select_returns(report)],
+            [select_returns(report)],
             raise_on=lambda stmt: str(stmt).lstrip().startswith("UPDATE") and "last_sent_at" in str(stmt),
         )
 
@@ -617,7 +591,7 @@ class TestReportFireEpochIdempotency:
     async def test_already_delivered_epoch_is_skipped(self) -> None:
         epoch = "2026-07-01T09:00:00+00:00"
         report = _recurring_report(last_sent_at=datetime.datetime(2026, 7, 1, 9, 0, tzinfo=datetime.UTC))
-        session = MockSession([_select_returns(report)])
+        session = MockSession([select_returns(report)])
 
         with report_firing_env(session):
             result = await _fire_scheduled_report(
@@ -633,7 +607,7 @@ class TestReportFireEpochIdempotency:
             return {"rows": 1}
 
         report = _recurring_report(last_sent_at=datetime.datetime(2026, 7, 1, 9, 0, tzinfo=datetime.UTC))
-        session = MockSession([_select_returns(report)])
+        session = MockSession([select_returns(report)])
 
         with (
             report_firing_env(session),
@@ -728,7 +702,7 @@ class TestReportFireLeaseOutcome:
             delivered.append(1)
             return [{"status": "delivered"}]
 
-        session = MockSession([_select_returns(report)])
+        session = MockSession([select_returns(report)])
         with (
             patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
@@ -750,7 +724,7 @@ class TestReportFireLeaseOutcome:
         redis = _LeaseRedis()
         report = _recurring_report()
         await _acquire_report_fire_lease(redis, report.id, "epoch-A")
-        session = MockSession([_select_returns(report)])
+        session = MockSession([select_returns(report)])
 
         result = await _fire_scheduled_report(
             report_id=report.id,
@@ -801,43 +775,45 @@ class TestReportFireLeasePrimitives:
     def test_lease_epoch_decodes_bytes(self) -> None:
         assert _lease_epoch(b'{"token":"t","epoch":"epoch-E"}') == "epoch-E"
 
-    def test_lease_epoch_returns_none_on_undecodable_bytes(self) -> None:
-        assert _lease_epoch(b"\xff\xfe\x00") is None
-
-    def test_lease_epoch_returns_none_for_non_string(self) -> None:
-        assert _lease_epoch(123) is None
-
-    def test_lease_epoch_returns_none_for_invalid_json(self) -> None:
-        assert _lease_epoch("{not json") is None
-
-    def test_lease_epoch_returns_none_for_non_dict_payload(self) -> None:
-        assert _lease_epoch("[1, 2, 3]") is None
-
-    def test_lease_epoch_returns_none_for_non_string_epoch(self) -> None:
-        assert _lease_epoch('{"epoch": 123}') is None
+    @pytest.mark.parametrize(
+        "stored",
+        [b"\xff\xfe\x00", 123, "{not json", "[1, 2, 3]", '{"epoch": 123}'],
+        ids=["undecodable-bytes", "non-string", "invalid-json", "non-dict-payload", "non-string-epoch"],
+    )
+    def test_lease_epoch_returns_none_for_malformed_values(self, stored: object) -> None:
+        assert _lease_epoch(stored) is None
 
     def test_parse_epoch_treats_naive_as_utc(self) -> None:
         parsed = _parse_epoch("2026-07-02T09:00:00")
         assert parsed == datetime.datetime(2026, 7, 2, 9, 0, tzinfo=datetime.UTC)
 
-    async def test_acquire_lease_propagates_cancellation(self) -> None:
+    @pytest.mark.parametrize(
+        "lease_call",
+        [
+            pytest.param(
+                lambda: _acquire_report_fire_lease(_CancellingRedis(), uuid.uuid4(), "epoch-E"),  # type: ignore[arg-type]
+                id="acquire",
+            ),
+            pytest.param(
+                lambda: _release_report_fire_lease(_CancellingRedis(), uuid.uuid4(), "tok"),  # type: ignore[arg-type]
+                id="release",
+            ),
+        ],
+    )
+    async def test_lease_operations_propagate_cancellation(self, lease_call: Callable[[], Awaitable[object]]) -> None:
         with pytest.raises(asyncio.CancelledError):
-            await _acquire_report_fire_lease(_CancellingRedis(), uuid.uuid4(), "epoch-E")  # type: ignore[arg-type]
+            await lease_call()
 
     async def test_release_lease_is_a_noop_without_client_or_lease(self) -> None:
         assert await _release_report_fire_lease(None, uuid.uuid4(), "tok") is None
         assert await _release_report_fire_lease(_LeaseRedis(), uuid.uuid4(), None) is None  # type: ignore[arg-type]
-
-    async def test_release_lease_propagates_cancellation(self) -> None:
-        with pytest.raises(asyncio.CancelledError):
-            await _release_report_fire_lease(_CancellingRedis(), uuid.uuid4(), "tok")  # type: ignore[arg-type]
 
     async def test_terminal_stamp_cancellation_is_not_swallowed(self) -> None:
         async def generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
             return {"rows": 1}
 
         report = _recurring_report()
-        session = _CancelledOnUpdateSession([_select_returns(report)])
+        session = _CancelledOnUpdateSession([select_returns(report)])
 
         with (
             report_firing_env(session),
@@ -862,7 +838,7 @@ class TestOneTimeReportNotStranded:
             raise RuntimeError("crashed before the terminal stamp")
 
         report = _one_time_report()
-        session = MockSession([_select_returns(report)])
+        session = MockSession([select_returns(report)])
 
         with (
             report_firing_env(session),
@@ -889,7 +865,7 @@ class TestTerminalStampDoesNotClobber:
             return {"rows": 1}
 
         report = _recurring_report()
-        session = MockSession([_select_returns(report)])
+        session = MockSession([select_returns(report)])
 
         with (
             report_firing_env(session),
@@ -912,7 +888,7 @@ class TestTerminalStampDoesNotClobber:
             return {"rows": 1}
 
         report = _one_time_report()
-        session = MockSession([_select_returns(report)])
+        session = MockSession([select_returns(report)])
 
         with (
             report_firing_env(session),
@@ -987,20 +963,15 @@ class TestDeliverWebhook:
 
 
 class TestDeliverViaConfig:
-    async def test_slack_webhook_type(self) -> None:
-        url = SLACK_URL
-        config = {"type": "slack_webhook", "webhook_urls": [url]}
-        client = make_http_client([make_http_response(status_code=200)])
-
-        with patched_http_client(client):
-            results = await _deliver_via_config({"text": "hello"}, config)
-
-        assert len(results) == 1
-        assert results[0]["status"] == "delivered"
-
-    async def test_webhook_type_default(self) -> None:
-        url = "https://hooks.example.com/report"
-        config = {"urls": [url]}
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"type": "slack_webhook", "webhook_urls": [SLACK_URL]},
+            {"urls": ["https://hooks.example.com/report"]},
+        ],
+        ids=["explicit-slack-webhook-type", "type-defaults-to-webhook"],
+    )
+    async def test_delivers_via_the_configured_channel(self, config: dict[str, object]) -> None:
         client = make_http_client([make_http_response(status_code=200)])
 
         with patched_http_client(client):
@@ -1009,21 +980,25 @@ class TestDeliverViaConfig:
         assert len(results) == 1
         assert results[0]["status"] == "delivered"
 
-    async def test_timeout_passes_through_recipient_config(self) -> None:
+    @pytest.mark.parametrize(
+        ("raw_timeout", "expected"),
+        [(True, _REPORT_HTTP_TIMEOUT), (4.25, 4.25)],
+        ids=["bool-rejected", "float-honored"],
+    )
+    async def test_timeout_passes_through_recipient_config(self, raw_timeout: object, expected: float) -> None:
         """The recipient config ``timeout`` must reach the underlying HTTP
         client — and a boolean value must be rejected, not coerced to 1.0."""
         url = "https://hooks.example.com/report"
 
-        for raw_timeout, expected in ((True, _REPORT_HTTP_TIMEOUT), (4.25, 4.25)):
-            with (
-                patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
-                patched_http_client(make_http_client([make_http_response(status_code=200)])) as client_cls,
-            ):
-                await _deliver_via_config(
-                    {"report": "data"},
-                    {"urls": [url], "timeout": raw_timeout},
-                )
-            assert client_cls.call_args.kwargs["timeout"] == expected
+        with (
+            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+            patched_http_client(make_http_client([make_http_response(status_code=200)])) as client_cls,
+        ):
+            await _deliver_via_config(
+                {"report": "data"},
+                {"urls": [url], "timeout": raw_timeout},
+            )
+        assert client_cls.call_args.kwargs["timeout"] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -1179,41 +1154,41 @@ class TestParseRetryAfter:
 
 
 class TestCoerceTimeout:
-    def test_accepts_positive_int(self) -> None:
-        assert _coerce_timeout(10) == 10.0
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (10, 10.0),
+            (2.5, 2.5),
+            ("5.5", 5.5),
+            ("7", 7.0),
+            ("0.5", 0.5),
+        ],
+        ids=["positive-int", "positive-float", "numeric-string-float", "numeric-string-int", "fractional-string"],
+    )
+    def test_accepts_positive_values(self, value: object, expected: float) -> None:
+        assert _coerce_timeout(value) == expected
 
-    def test_accepts_positive_float(self) -> None:
-        assert _coerce_timeout(2.5) == 2.5
-
-    def test_accepts_numeric_string(self) -> None:
-        assert _coerce_timeout("5.5") == 5.5
-        assert _coerce_timeout("7") == 7.0
-
-    def test_accepts_fractional_string_below_one(self) -> None:
-        assert _coerce_timeout("0.5") == 0.5
-
-    def test_rejects_bool_true(self) -> None:
+    @pytest.mark.parametrize(
+        "value",
+        [True, False, 0, 0.0, "0", -1, -0.5, "abc", None, object()],
+        ids=[
+            "bool-true",
+            "bool-false",
+            "int-zero",
+            "float-zero",
+            "string-zero",
+            "negative-int",
+            "negative-float",
+            "non-numeric-string",
+            "none",
+            "arbitrary-object",
+        ],
+    )
+    def test_rejects_everything_else(self, value: object) -> None:
         """A boolean must never coerce to ``1.0`` — ``float(True)`` is 1.0, so
         without the guard a ``{"timeout": true}`` config would silently become a
         1-second request timeout."""
-        assert _coerce_timeout(True) is None
-
-    def test_rejects_bool_false(self) -> None:
-        assert _coerce_timeout(False) is None
-
-    def test_rejects_zero(self) -> None:
-        assert _coerce_timeout(0) is None
-        assert _coerce_timeout(0.0) is None
-        assert _coerce_timeout("0") is None
-
-    def test_rejects_negative(self) -> None:
-        assert _coerce_timeout(-1) is None
-        assert _coerce_timeout(-0.5) is None
-
-    def test_rejects_non_numeric(self) -> None:
-        assert _coerce_timeout("abc") is None
-        assert _coerce_timeout(None) is None
-        assert _coerce_timeout(object()) is None
+        assert _coerce_timeout(value) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1425,29 +1400,32 @@ class TestDeliverToUrlsTimeout:
             await _deliver_to_urls([url], {"a": 1}, request_timeout=request_timeout)  # type: ignore[arg-type]
         return client_cls.call_args.kwargs["timeout"]
 
-    async def test_valid_float_timeout_is_honored(self) -> None:
-        assert await self._client_timeout(2.5) == 2.5
-
-    async def test_valid_int_timeout_is_honored(self) -> None:
-        assert await self._client_timeout(15) == 15.0
-
-    async def test_none_timeout_uses_default(self) -> None:
-        assert await self._client_timeout(None) == _REPORT_HTTP_TIMEOUT
-
-    async def test_bool_timeout_falls_back_to_default(self) -> None:
-        """``{"timeout": true}`` in a recipient config must NOT become a 1s
-        timeout — the bool guard in ``_coerce_timeout`` must fall back to the
-        default 30s."""
-        assert await self._client_timeout(True) == _REPORT_HTTP_TIMEOUT
-
-    async def test_zero_timeout_falls_back_to_default(self) -> None:
-        assert await self._client_timeout(0) == _REPORT_HTTP_TIMEOUT
-
-    async def test_negative_timeout_falls_back_to_default(self) -> None:
-        assert await self._client_timeout(-5) == _REPORT_HTTP_TIMEOUT
-
-    async def test_non_numeric_timeout_falls_back_to_default(self) -> None:
-        assert await self._client_timeout("abc") == _REPORT_HTTP_TIMEOUT
+    @pytest.mark.parametrize(
+        ("request_timeout", "expected"),
+        [
+            (2.5, 2.5),
+            (15, 15.0),
+            (None, _REPORT_HTTP_TIMEOUT),
+            (True, _REPORT_HTTP_TIMEOUT),
+            (0, _REPORT_HTTP_TIMEOUT),
+            (-5, _REPORT_HTTP_TIMEOUT),
+            ("abc", _REPORT_HTTP_TIMEOUT),
+        ],
+        ids=[
+            "float-honored",
+            "int-honored",
+            "none-default",
+            "bool-default",
+            "zero-default",
+            "negative-default",
+            "non-numeric-default",
+        ],
+    )
+    async def test_timeout_is_coerced_or_falls_back_to_default(self, request_timeout: object, expected: float) -> None:
+        """Only a positive number is honored; every invalid value — notably the
+        bool ``true`` that would otherwise become a 1s timeout — falls back to
+        the default."""
+        assert await self._client_timeout(request_timeout) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -1589,8 +1567,7 @@ class TestDeliverToUrls:
 
 class TestFireInvalidCron:
     async def _make_session_with_report(self, report: MagicMock) -> MockSession:
-        select_result = MagicMock()
-        select_result.scalar_one_or_none.return_value = report
+        select_result = select_returns(report)
         return MockSession(execute_side_effect=[select_result, MagicMock()])
 
     async def test_deactivates_report_on_invalid_cron(self) -> None:

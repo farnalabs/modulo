@@ -3,12 +3,7 @@
     <PageHeader
       :title="$t('views.AdminCostBreakdownView.cost_breakdown')"
       :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')"
-      :tabs="[
-        { label: $t('views.AdminCostBreakdownView.tabs_overview'), to: '/admin/costs' },
-        { label: $t('views.AdminCostBreakdownView.tabs_spend_limits'), to: '/admin/costs/limits' },
-        { label: $t('views.AdminCostBreakdownView.tabs_cost_components'), to: '/admin/costs/components' },
-        { label: $t('views.AdminCostBreakdownView.tabs_cost_controls'), to: '/admin/costs/controls' },
-      ]"
+       :tabs="costPageTabs"
     />
 
     <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
@@ -19,42 +14,41 @@
 
       <template v-else>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Card>
-            <template #title><span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend_this_month') }}</span></template>
-            <template #content>
-              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-total-spend">{{ formatMoney(totalSpend, currencyCode) }}</p>
-            </template>
-          </Card>
-          <Card>
-            <template #title><span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.avg_cost_per_run') }}</span></template>
-            <template #content>
-              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-avg-per-run">{{ formatMoney(avgCostPerRun, currencyCode) }}</p>
-            </template>
-          </Card>
-          <Card>
-            <template #title><span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.cost_per_successful_run') }}</span></template>
-            <template #content>
-              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-per-successful-run">
-                <template v-if="successfulRuns > 0">{{ formatMoney(costPerSuccessfulRun, currencyCode) }}</template>
-                <template v-else>—</template>
-              </p>
+          <MetricCard
+            :label="$t('views.AdminCostBreakdownView.total_spend_this_month')"
+            :value="formatMoney(totalSpend, currencyCode)"
+            data-testid="cost-total-spend"
+          />
+          <MetricCard
+            :label="$t('views.AdminCostBreakdownView.avg_cost_per_run')"
+            :value="formatMoney(avgCostPerRun, currencyCode)"
+            data-testid="cost-avg-per-run"
+          />
+          <MetricCard
+            :label="$t('views.AdminCostBreakdownView.cost_per_successful_run')"
+            :value="successfulRuns > 0 ? formatMoney(costPerSuccessfulRun, currencyCode) : '—'"
+            data-testid="cost-per-successful-run"
+          >
+            <template #default>
               <p class="mt-1 text-xs text-muted-foreground" data-testid="cost-successful-runs-count">
                 {{ successfulRuns > 0 ? $t('views.AdminCostBreakdownView.successful_runs_count', { count: successfulRuns }) : $t('views.AdminCostBreakdownView.no_successful_runs') }}
               </p>
             </template>
-          </Card>
-          <Card>
-            <template #title><span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_runs') }}</span></template>
-            <template #content>
-              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-total-runs">{{ totalRuns }}</p>
-            </template>
-          </Card>
+          </MetricCard>
+          <MetricCard
+            :label="$t('views.AdminCostBreakdownView.total_runs')"
+            :value="totalRuns"
+            data-testid="cost-total-runs"
+          />
         </div>
 
-        <Card>
-          <template #title>{{ $t('views.AdminCostBreakdownView.per_team_cost_breakdown') }}</template>
-          <template #subtitle>{{ $t('views.AdminCostBreakdownView.monthly_spend_run_count_and_avg_by_team') }}</template>
-          <template #content>
+        <DataCard
+          :title="$t('views.AdminCostBreakdownView.per_team_cost_breakdown')"
+          :description="$t('views.AdminCostBreakdownView.monthly_spend_run_count_and_avg_by_team')"
+           padding="none"
+           heading-level="h2"
+         >
+          <template #default>
             <EmptyState
               v-if="items.length === 0"
               :title="$t('views.AdminCostBreakdownView.no_team_cost_data_available')"
@@ -107,12 +101,14 @@
               {{ $t('views.AdminCostBreakdownView.unattributed_spend_unavailable') }}
             </p>
           </template>
-        </Card>
+        </DataCard>
 
-        <Card>
-          <template #title>{{ $t('views.AdminCostBreakdownView.cost_anomaly_alerts') }}</template>
-          <template #subtitle>{{ $t('views.AdminCostBreakdownView.days_where_spend_exceeded_2x_avg') }}</template>
-          <template #content>
+         <DataCard
+           heading-level="h2"
+           :title="$t('views.AdminCostBreakdownView.cost_anomaly_alerts')"
+          :description="$t('views.AdminCostBreakdownView.days_where_spend_exceeded_2x_avg')"
+        >
+          <template #default>
             <LoadingSpinner v-if="anomaliesLoading" />
             <ErrorAlert
               v-else-if="anomaliesError"
@@ -147,7 +143,7 @@
               </p>
             </div>
           </template>
-        </Card>
+        </DataCard>
       </template>
       </div>
     </FeatureGate>
@@ -167,13 +163,16 @@ import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import Card from 'primevue/card'
+import DataCard from '../components/ui/DataCard.vue'
+import MetricCard from '../components/ui/MetricCard.vue'
 import Button from 'primevue/button'
 import { DataTable } from '../components/ui/data-table'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
+import { useCostPageTabs } from '../composables/useCostPageTabs'
 
 const { t } = useI18n()
+const costPageTabs = useCostPageTabs()
 const planStore = usePlanStore()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 

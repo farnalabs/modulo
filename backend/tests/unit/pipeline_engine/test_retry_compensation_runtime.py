@@ -30,9 +30,10 @@ from typing import Any
 
 import pytest
 
-from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+from modulo.core.pipeline_engine.node_runner import ConnectorNodeFailedError, SandboxNodeFailedError
 from modulo.core.pipeline_engine.runtime_retry import (
     CompensationFailedError,
+    failure_event,
     make_retrying_node_fn,
 )
 
@@ -370,6 +371,48 @@ async def test_per_edge_retry_does_not_reexecute_source_for_never_retryable_majo
 # --------------------------------------------------------------------------- #
 # Compensation edges (§E)
 # --------------------------------------------------------------------------- #
+
+
+async def test_connector_failure_preserves_p5_compensation_and_envelope() -> None:
+    calls = 0
+
+    async def connector(state: dict[str, Any]) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        raise ConnectorNodeFailedError(
+            node_id="n1",
+            envelope={
+                "connector_failure": True,
+                "error_code": "connector.side_effect_unknown",
+                "artifacts": [{"node_id": "n1", "status": "failed", "error": "write exploded"}],
+            },
+            cause=RuntimeError("write exploded"),
+        )
+
+    comp_calls = 0
+
+    async def compensation(state: dict[str, Any]) -> dict[str, Any]:
+        nonlocal comp_calls
+        comp_calls += 1
+        return {"compensated": True}
+
+    wrapped = make_retrying_node_fn(
+        connector,
+        node_id="n1",
+        node_def={"id": "n1"},
+        pipeline_retry_policy={},
+        outgoing_edges=[{"source": "n1", "target": "n2", "on_failure_target": "n-comp"}],
+        raw_fn_resolver=lambda node_id: {"n1": connector, "n-comp": compensation}.get(node_id),
+        node_defs={"n1": {"id": "n1"}, "n-comp": {"id": "n-comp"}},
+    )
+
+    result = await wrapped({"run_context": {}})
+
+    assert calls == 1
+    assert comp_calls == 1
+    assert result["_compensated"] is True
+    assert result["connector_failure"] is True
+    assert result["error_code"] == "connector.side_effect_unknown"
 
 
 async def test_compensation_fires_and_run_continues_on_success() -> None:
@@ -758,3 +801,8 @@ async def test_compile_path_wires_retry_wrapper_without_breaking_normal_exec() -
     # the run completed normally through the retry-wrapped callables.
     assert not result["run_context"]["input"]
     assert isinstance(result.get("artifacts"), list)
+
+
+def test_failure_event_non_retryable_provider_code() -> None:
+    assert failure_event(RuntimeError("HTTP 401 Unauthorized")) is None
+    assert failure_event(RuntimeError("HTTP 402 payment required")) is None

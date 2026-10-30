@@ -23,6 +23,7 @@ from modulo.core.pipeline_engine.executor import (
     _accumulate_llm_tokens,
     _failure_event_matches,
     _graph_contains_sandbox_agent,
+    _node_output_connector_failure,
     _node_output_stall_reason,
     _record_node_markers,
     _retry_after_policy,
@@ -31,6 +32,7 @@ from modulo.core.pipeline_engine.executor import (
 )
 from modulo.core.pipeline_engine.node_runner import (
     SANDBOX_AGENT_FAILED_SUMMARY,
+    ConnectorNodeFailedError,
     SandboxNodeFailedError,
     SandboxQueueTimeoutError,
     SandboxRateLimitedError,
@@ -880,6 +882,47 @@ async def test_stream_graph_maps_compensation_failed_error_to_terminal_status():
     assert len(published) == 1
     assert published[0][1]["error"] == COMPENSATION_FAILED_CODE
     executor._otel_bridge.end_run_root.assert_called_once()
+    detach.assert_called_once()
+
+
+async def test_stream_graph_maps_connector_node_failed_error_to_terminal_status():
+    """FAR-2090: when a connector node fails, ConnectorNodeFailedError propagates
+    to the stream graph handler which persists the envelope and terminalizes as failed.
+    """
+    envelope = {"error_code": "connector.failed", "artifacts": [{"status": "failed"}]}
+    compiled = _mock_compiled_raising(
+        ConnectorNodeFailedError(
+            node_id="node-a",
+            envelope=envelope,
+            cause=RuntimeError("connector boom"),
+        )
+    )
+
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    completed_outputs: dict[str, Any] = {}
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach") as detach,
+    ):
+        status, error_code, detail, _ntu = await executor._stream_graph(
+            compiled,
+            None,
+            {"configurable": {"thread_id": "org:run"}},
+            {"node-a"},
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed_outputs,
+        )
+
+    assert status == "failed"
+    assert error_code == "connector.failed"
+    assert "connector boom" in detail
+    assert completed_outputs["node-a"] == envelope
     detach.assert_called_once()
 
 
@@ -4470,6 +4513,48 @@ def _split_stored_columns(envelope: dict[str, Any], node_id: str = "node-x") -> 
     return split_node_output(envelope, "sandbox_agent", None)
 
 
+def test_connector_failure_envelope_is_recognized_at_stream_seam():
+    envelope = {"artifacts": [{"node_id": "node-conn", "status": "failed", "error": "upstream timeout"}]}
+
+    assert _node_output_connector_failure(envelope, "connector") == "upstream timeout"
+    assert _node_output_connector_failure(envelope, "sandbox_agent") is None
+
+
+def test_connector_failure_marker_produces_typed_terminal_failure():
+    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+    from modulo.core.pipeline_engine.executor import _stream_terminal_reason, _StreamState
+
+    state = _StreamState(connector_failure_reason="Connector reported operation failure")
+    broker = RunEventBroker(uuid.uuid4())
+
+    result = _stream_terminal_reason(state, broker, uuid.uuid4())
+
+    assert result is not None
+    assert result[0] == "failed"
+    assert result[1] == "connector.failed"
+    assert result[2] == "Connector reported operation failure"
+
+
+@pytest.mark.asyncio
+async def test_finalize_downgrades_connector_failure():
+    """A connector node that returned a failure envelope downgrades a complete run to failed."""
+    executor, _session = _finalize_executor_with_session()
+    args = _finalize_args(uuid.uuid4(), uuid.uuid4())
+    args["node_type_map"] = {"node-conn": "connector"}
+    args["completed_node_outputs"] = {
+        "node-conn": {
+            "artifacts": [{"node_id": "node-conn", "status": "failed", "error": "upstream timeout"}],
+        }
+    }
+
+    mock_finalize, final_run = await _finalize_with_patched_tail(executor, args)
+
+    assert final_run is not None
+    assert mock_finalize.await_args.kwargs["status"] == "failed"
+    assert mock_finalize.await_args.kwargs["error_code"] == "connector.failed"
+    assert "upstream timeout" in mock_finalize.await_args.kwargs["error_detail"]
+
+
 @pytest.mark.asyncio
 async def test_finalize_downgrades_masked_sandbox_agent_failure():
     """A ``complete`` run whose completed sandbox-agent output is the stamped
@@ -5498,3 +5583,620 @@ async def test_teardown_model_backend_hub_when_connector_hub_init_raises_pre_str
     assert set_cc.call_args_list[-1] == call(None)
     assert set_ah.call_args_list[-1] == call(None)
     registry.close.assert_called_once_with(run_id)
+
+
+class TestNodeOutputConnectorFailure:
+    """Tests for _node_output_connector_failure."""
+
+    def test_non_dict_returns_none(self):
+        assert _node_output_connector_failure("not a dict") is None
+        assert _node_output_connector_failure(None) is None
+        assert _node_output_connector_failure(123) is None
+
+    def test_marked_false_and_wrong_node_type_returns_none(self):
+        # Not marked, and node_type is not connector/dispatch
+        output = {"artifacts": [{"status": "failed", "error": "oops"}]}
+        assert _node_output_connector_failure(output, "agent") is None
+        assert _node_output_connector_failure(output, "sandbox_agent") is None
+        assert _node_output_connector_failure(output, None) is None
+
+    def test_marked_true_returns_failure_even_for_wrong_node_type(self):
+        # Legacy marker: connector_failure=True
+        output = {"connector_failure": True, "artifacts": []}
+        assert _node_output_connector_failure(output, "agent") == "Connector reported failure"
+        assert _node_output_connector_failure(output, "sandbox_agent") == "Connector reported failure"
+
+    def test_connector_node_with_failed_artifact_returns_error(self):
+        output = {"artifacts": [{"node_id": "c1", "status": "failed", "error": "GitHub API error"}]}
+        assert _node_output_connector_failure(output, "connector", expected_node_id="c1") == "GitHub API error"
+        assert _node_output_connector_failure(output, "connector") == "GitHub API error"
+
+    def test_dispatch_node_with_failed_artifact_returns_error(self):
+        output = {"artifacts": [{"node_id": "d1", "status": "failed", "error": "Dispatch timeout"}]}
+        assert _node_output_connector_failure(output, "dispatch", expected_node_id="d1") == "Dispatch timeout"
+        assert _node_output_connector_failure(output, "dispatch") == "Dispatch timeout"
+
+    def test_connector_node_with_failed_artifact_no_error_returns_generic(self):
+        output = {"artifacts": [{"node_id": "c1", "status": "failed"}]}
+        assert (
+            _node_output_connector_failure(output, "connector", expected_node_id="c1") == "Connector reported failure"
+        )
+        assert _node_output_connector_failure(output, "connector") == "Connector reported failure"
+
+    def test_dispatch_node_with_failed_artifact_no_error_returns_generic(self):
+        output = {"artifacts": [{"node_id": "d1", "status": "failed"}]}
+        assert _node_output_connector_failure(output, "dispatch", expected_node_id="d1") == "Connector reported failure"
+        assert _node_output_connector_failure(output, "dispatch") == "Connector reported failure"
+
+    def test_artifact_not_dict_skipped(self):
+        output = {"artifacts": ["not a dict", {"node_id": "c1", "status": "failed", "error": "real error"}]}
+        assert _node_output_connector_failure(output, "connector", expected_node_id="c1") == "real error"
+        assert _node_output_connector_failure(output, "connector") == "real error"
+
+    def test_unstamped_failed_artifact_returns_none(self):
+        """Un-stamped artifact entries (raw third-party payloads) are rejected."""
+        output = {"artifacts": [{"status": "failed", "error": "fake error"}]}
+        assert _node_output_connector_failure(output, "connector", expected_node_id="c1") is None
+        assert _node_output_connector_failure(output, "connector") is None
+
+    def test_artifact_status_not_failed_skipped(self):
+        output = {"artifacts": [{"status": "completed", "error": "ignored"}]}
+        assert _node_output_connector_failure(output, "connector") is None
+
+    def test_empty_artifacts_returns_none_unless_marked(self):
+        output = {"artifacts": []}
+        assert _node_output_connector_failure(output, "connector") is None
+        output_marked = {"connector_failure": True, "artifacts": []}
+        assert _node_output_connector_failure(output_marked, "connector") == "Connector reported failure"
+
+
+async def test_stream_graph_captures_connector_failure():
+    """_stream_graph captures connector failure from a connector node and
+    terminalizes the run with connector.failed."""
+    node_run_id = uuid.uuid4()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "connector-node",
+            "run_id": node_run_id,
+            "data": {
+                "output": {
+                    "artifacts": [{"node_id": "connector-node", "status": "failed", "error": "GitHub query failed"}]
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    completed_node_outputs: dict[str, Any] = {}
+    node_ids = {"connector-node"}
+    node_type_map = {"connector-node": "connector"}
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach"),
+    ):
+        status, error_code, _error_detail, _ntu = await executor._stream_graph(
+            compiled,
+            {"input": 1},
+            {"configurable": {"thread_id": "org:run"}},
+            node_ids,
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+        )
+
+    assert status == "failed"
+    assert error_code == "connector.failed"
+    assert "GitHub query failed" in _error_detail
+
+
+async def test_stream_graph_captures_dispatch_failure():
+    """_stream_graph captures dispatch failure from a dispatch node."""
+    node_run_id = uuid.uuid4()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "dispatch-node",
+            "run_id": node_run_id,
+            "data": {
+                "output": {"artifacts": [{"node_id": "dispatch-node", "status": "failed", "error": "Dispatch timeout"}]}
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    completed_node_outputs: dict[str, Any] = {}
+    node_ids = {"dispatch-node"}
+    node_type_map = {"dispatch-node": "dispatch"}
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach"),
+    ):
+        status, error_code, _error_detail, _ntu = await executor._stream_graph(
+            compiled,
+            {"input": 1},
+            {"configurable": {"thread_id": "org:run"}},
+            node_ids,
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+        )
+
+    assert status == "failed"
+    assert error_code == "connector.failed"
+    assert "Dispatch timeout" in _error_detail
+
+
+async def test_stream_graph_legacy_connector_failure_marker():
+    """_stream_graph captures legacy connector_failure marker from any node type."""
+    node_run_id = uuid.uuid4()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "some-node",
+            "run_id": node_run_id,
+            "data": {
+                "output": {
+                    "connector_failure": True,
+                    "artifacts": [],
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    completed_node_outputs: dict[str, Any] = {}
+    node_ids = {"some-node"}
+    node_type_map = {"some-node": "agent"}  # agent node with legacy marker
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach"),
+    ):
+        status, error_code, _error_detail, _ntu = await executor._stream_graph(
+            compiled,
+            {"input": 1},
+            {"configurable": {"thread_id": "org:run"}},
+            node_ids,
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+        )
+
+    assert status == "failed"
+    assert error_code == "connector.failed"
+    assert "Connector reported failure" in _error_detail
+
+
+class TestNodeOutputConnectorFailureExtra:
+    """Additional tests for _node_output_connector_failure branch coverage."""
+
+    def test_artifacts_not_list_returns_none_unless_marked(self):
+        # artifacts is a string, not a list
+        output = {"artifacts": "not a list"}
+        assert _node_output_connector_failure(output, "connector") is None
+
+        # But marked=True should still return failure
+        output_marked = {"connector_failure": True, "artifacts": "not a list"}
+        assert _node_output_connector_failure(output_marked, "connector") == "Connector reported failure"
+
+    def test_artifacts_none_returns_none_unless_marked(self):
+        output = {"artifacts": None}
+        assert _node_output_connector_failure(output, "connector") is None
+
+        output_marked = {"connector_failure": True, "artifacts": None}
+        assert _node_output_connector_failure(output_marked, "connector") == "Connector reported failure"
+
+    def test_marked_true_wrong_node_type_no_artifacts(self):
+        """Legacy marker on wrong node type with no artifacts."""
+        output = {"connector_failure": True}
+        assert _node_output_connector_failure(output, "agent") == "Connector reported failure"
+
+    def test_connector_node_no_artifacts_key(self):
+        """connector node with no artifacts key at all."""
+        output = {}
+        assert _node_output_connector_failure(output, "connector") is None
+
+
+def test_downgrade_connector_failures_connector_node_with_non_failed_artifact():
+    """Connector node with non-failed artifact should not trigger downgrade."""
+    executor = PipelineExecutor(MagicMock())
+    completed_node_outputs = {
+        "node-1": {"artifacts": [{"status": "completed", "error": "not a failure"}]},
+    }
+    node_type_map = {"node-1": "connector"}
+
+    final_status, error_code, error_detail = executor._downgrade_connector_failures(
+        final_status="complete",
+        error_code=None,
+        error_detail=None,
+        completed_node_outputs=completed_node_outputs,
+        node_type_map=node_type_map,
+    )
+
+    assert final_status == "complete"
+    assert error_code is None
+    assert error_detail is None
+
+
+def test_downgrade_connector_failures_connector_node_with_empty_artifacts():
+    """Connector node with empty artifacts list should not trigger downgrade."""
+    executor = PipelineExecutor(MagicMock())
+    completed_node_outputs = {
+        "node-1": {"artifacts": []},
+    }
+    node_type_map = {"node-1": "connector"}
+
+    final_status, error_code, error_detail = executor._downgrade_connector_failures(
+        final_status="complete",
+        error_code=None,
+        error_detail=None,
+        completed_node_outputs=completed_node_outputs,
+        node_type_map=node_type_map,
+    )
+
+    assert final_status == "complete"
+    assert error_code is None
+    assert error_detail is None
+
+
+def test_downgrade_connector_failures_dispatch_node_with_non_failed_artifact():
+    """Dispatch node with non-failed artifact should not trigger downgrade."""
+    executor = PipelineExecutor(MagicMock())
+    completed_node_outputs = {
+        "node-1": {"artifacts": [{"status": "completed"}]},
+    }
+    node_type_map = {"node-1": "dispatch"}
+
+    final_status, error_code, error_detail = executor._downgrade_connector_failures(
+        final_status="complete",
+        error_code=None,
+        error_detail=None,
+        completed_node_outputs=completed_node_outputs,
+        node_type_map=node_type_map,
+    )
+
+    assert final_status == "complete"
+    assert error_code is None
+    assert error_detail is None
+
+
+def test_downgrade_connector_failures_does_not_false_downgrade_successful_run_with_embedded_artifacts():
+    """MAJOR 1 regression test: A successful connector node whose raw output
+    embeds an artifacts array with a failed item must NOT be downgraded."""
+    executor = PipelineExecutor(MagicMock())
+    completed_node_outputs = {
+        "node-1": {
+            "artifacts": [
+                {
+                    "node_id": "node-1",
+                    "status": "completed",
+                    "output": {"artifacts": [{"status": "failed", "error": "embedded CI artifact failure"}]},
+                }
+            ]
+        },
+    }
+    stored_node_outputs = {"node-1": {"artifacts": [{"status": "failed", "error": "embedded CI artifact failure"}]}}
+    node_type_map = {"node-1": "connector"}
+
+    final_status, error_code, error_detail = executor._downgrade_connector_failures(
+        final_status="complete",
+        error_code=None,
+        error_detail=None,
+        completed_node_outputs=completed_node_outputs,
+        node_type_map=node_type_map,
+        stored_node_outputs=stored_node_outputs,
+    )
+
+    assert final_status == "complete"
+    assert error_code is None
+    assert error_detail is None
+
+
+def test_downgrade_connector_failures_raised_write_uses_side_effect_unknown():
+    """MAJOR 2: A raised connector write failure downgrades to connector.side_effect_unknown."""
+    executor = PipelineExecutor(MagicMock())
+    completed_node_outputs = {
+        "node-1": {
+            "artifacts": [
+                {
+                    "node_id": "node-1",
+                    "status": "failed",
+                    "error": "write timeout",
+                    "error_code": "connector.side_effect_unknown",
+                }
+            ],
+            "connector_failure": True,
+            "error_code": "connector.side_effect_unknown",
+        },
+    }
+    node_type_map = {"node-1": "connector"}
+
+    final_status, error_code, error_detail = executor._downgrade_connector_failures(
+        final_status="complete",
+        error_code=None,
+        error_detail=None,
+        completed_node_outputs=completed_node_outputs,
+        node_type_map=node_type_map,
+    )
+
+    assert final_status == "failed"
+    assert error_code == "connector.side_effect_unknown"
+    assert "write timeout" in error_detail
+
+
+def test_downgrade_connector_failures_reported_failure_uses_connector_failed():
+    """MAJOR 2: A reported operational failure downgrades to connector.failed."""
+    executor = PipelineExecutor(MagicMock())
+    completed_node_outputs = {
+        "node-1": {
+            "artifacts": [
+                {
+                    "node_id": "node-1",
+                    "status": "failed",
+                    "error": "Connector reported operation failure",
+                    "error_code": "connector.failed",
+                }
+            ],
+            "connector_failure": True,
+            "error_code": "connector.failed",
+        },
+    }
+    node_type_map = {"node-1": "connector"}
+
+    final_status, error_code, error_detail = executor._downgrade_connector_failures(
+        final_status="complete",
+        error_code=None,
+        error_detail=None,
+        completed_node_outputs=completed_node_outputs,
+        node_type_map=node_type_map,
+    )
+
+    assert final_status == "failed"
+    assert error_code == "connector.failed"
+    assert "Connector reported operation failure" in error_detail
+
+
+async def test_stream_graph_captures_connector_write_raise_unknown_side_effect():
+    """MAJOR 2: Raised connector write terminalizes as connector.side_effect_unknown."""
+    node_run_id = uuid.uuid4()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "connector-write-node",
+            "run_id": node_run_id,
+            "data": {
+                "output": {
+                    "artifacts": [
+                        {
+                            "node_id": "connector-write-node",
+                            "status": "failed",
+                            "error": "write timeout",
+                            "error_code": "connector.side_effect_unknown",
+                        }
+                    ],
+                    "connector_failure": True,
+                    "error_code": "connector.side_effect_unknown",
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    completed_node_outputs: dict[str, Any] = {}
+    node_ids = {"connector-write-node"}
+    node_type_map = {"connector-write-node": "connector"}
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach"),
+    ):
+        status, error_code, _error_detail, _ntu = await executor._stream_graph(
+            compiled,
+            {"input": 1},
+            {"configurable": {"thread_id": "org:run"}},
+            node_ids,
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+        )
+
+    assert status == "failed"
+    assert error_code == "connector.side_effect_unknown"
+    assert "write timeout" in _error_detail
+
+
+class TestTryAgentFailureElevation:
+    """Tests for _try_agent_failure_elevation."""
+
+    def test_elevation_enabled_returns_terminal_failure(self):
+        from modulo.core.pipeline_engine.executor import _try_agent_failure_elevation
+
+        broker = MagicMock()
+        run_id = uuid.uuid4()
+        reason = "Agent failed"
+
+        with patch("modulo.settings.get_settings") as mock_get_settings:
+            mock_settings = MagicMock()
+            mock_settings.modulo_agent_failure_elevation_enabled = True
+            mock_get_settings.return_value = mock_settings
+
+            result = _try_agent_failure_elevation(broker, run_id, reason, {"tokens": 100})
+
+        assert result is not None
+        status, error_code, error_detail, usage = result
+        assert status == "failed"
+        assert error_code == "agent.failed"
+        assert reason in error_detail
+        assert usage == {"tokens": 100}
+
+    def test_elevation_disabled_returns_none(self):
+        from modulo.core.pipeline_engine.executor import _try_agent_failure_elevation
+
+        broker = MagicMock()
+        run_id = uuid.uuid4()
+        reason = "Agent failed"
+
+        with patch("modulo.settings.get_settings") as mock_get_settings:
+            mock_settings = MagicMock()
+            mock_settings.modulo_agent_failure_elevation_enabled = False
+            mock_get_settings.return_value = mock_settings
+
+            result = _try_agent_failure_elevation(broker, run_id, reason, None)
+
+        assert result is None
+
+    def test_elevation_exception_returns_none_and_logs_warning(self):
+        from modulo.core.pipeline_engine.executor import _try_agent_failure_elevation
+
+        broker = MagicMock()
+        run_id = uuid.uuid4()
+        reason = "Agent failed"
+
+        with (
+            patch("modulo.settings.get_settings", side_effect=RuntimeError("settings error")),
+            patch("modulo.core.pipeline_engine.executor._log") as mock_log,
+        ):
+            result = _try_agent_failure_elevation(broker, run_id, reason, None)
+
+        assert result is None
+        mock_log.warning.assert_called_once()
+        call_args = mock_log.warning.call_args
+        assert "agent_failure_elevation.failed_open" in str(call_args)
+        assert str(run_id) in str(call_args)
+        assert reason in str(call_args)
+
+
+async def test_stream_graph_captures_agent_failure():
+    """_stream_graph captures agent failure and elevates to agent.failed when enabled."""
+    node_run_id = uuid.uuid4()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "agent-node",
+            "run_id": node_run_id,
+            "data": {
+                "output": {
+                    "output": {
+                        "agent_status": "failed",
+                        "error": "Agent task failed",
+                    }
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    completed_node_outputs: dict[str, Any] = {}
+    node_ids = {"agent-node"}
+    node_type_map = {"agent-node": "agent"}
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach"),
+        patch("modulo.settings.get_settings") as mock_get_settings,
+    ):
+        mock_settings = MagicMock()
+        mock_settings.modulo_agent_failure_elevation_enabled = True
+        mock_get_settings.return_value = mock_settings
+
+        status, error_code, _error_detail, _ntu = await executor._stream_graph(
+            compiled,
+            {"input": 1},
+            {"configurable": {"thread_id": "org:run"}},
+            node_ids,
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+        )
+
+    assert status == "failed"
+    assert error_code == "agent.failed"
+    assert "Agent task failed" in _error_detail
+
+
+async def test_stream_graph_agent_failure_elevation_disabled():
+    """_stream_graph does not elevate agent failure when elevation is disabled."""
+    node_run_id = uuid.uuid4()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "agent-node",
+            "run_id": node_run_id,
+            "data": {
+                "output": {
+                    "output": {
+                        "agent_status": "failed",
+                        "error": "Agent task failed",
+                    }
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    broker = _mock_registry().get_or_create.return_value
+
+    executor = PipelineExecutor(MagicMock())
+    executor._otel_bridge = MagicMock()
+    executor._otel_bridge.start_run_root.return_value = MagicMock()
+
+    completed_node_outputs: dict[str, Any] = {}
+    node_ids = {"agent-node"}
+    node_type_map = {"agent-node": "agent"}
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.context_api.attach", return_value="tok"),
+        patch("modulo.core.pipeline_engine.executor.context_api.detach"),
+        patch("modulo.settings.get_settings") as mock_get_settings,
+    ):
+        mock_settings = MagicMock()
+        mock_settings.modulo_agent_failure_elevation_enabled = False
+        mock_get_settings.return_value = mock_settings
+
+        status, error_code, _error_detail, _ntu = await executor._stream_graph(
+            compiled,
+            {"input": 1},
+            {"configurable": {"thread_id": "org:run"}},
+            node_ids,
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+        )
+
+    # When elevation is disabled, agent failure doesn't terminalize the run
+    # (stall_reason would take precedence if present, otherwise complete)
+    assert status == "complete"
+    assert error_code is None

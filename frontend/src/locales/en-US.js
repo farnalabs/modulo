@@ -2777,6 +2777,12 @@ export default {
       "no_limit": "No limit",
       "saving": "Saving...",
       "save": "Save",
+      "no_teams_found": "No teams found.",
+      "inherit_org_limit": "Inherit org limit",
+      "form_control": "Form control",
+      "no_value": "—",
+      "failed_to_load": "Failed to load: {detail}",
+      "failed_to_save": "Failed to save: {detail}",
       "ceiling_updated": "Ceilings updated."
     },
     "CostComponentsView": {
@@ -3935,6 +3941,10 @@ export default {
       "create_trigger": "Create Trigger",
       "no_triggers_configured": "No triggers configured",
       "no_triggers_configured_description": "Create a trigger to automatically start pipeline runs on a schedule, webhook, or other event.",
+      "name": "Name",
+      "name_placeholder": "e.g. Nightly release notes",
+      "please_enter_a_name": "Please enter a name for the trigger.",
+      "name_too_long": "The trigger name must be 255 characters or fewer.",
       "pipeline": "Pipeline",
       "type": "Type",
       "status": "Status",
@@ -5468,6 +5478,7 @@ export default {
     "run": { "superseded": "Run superseded", "no_progress": "Run made no progress" },
     "queue": { "expired": "Queue wait expired" },
     "connector": {
+      "failed": "Connector failed",
       "invalid_key": "Invalid connector key",
       "permission": "Connector permission denied",
       "rate_limit": "Connector rate limited",
@@ -5551,10 +5562,12 @@ export default {
     "run": { "superseded": "This run was superseded by a newer run." },
     "queue": { "expired": "The run waited in the capacity queue past this pipeline's queue timeout and was dropped before it started. It was superseded, not failed." },
     "connector": {
+      "failed": "The connector reported that its operation failed.",
       "invalid_key": "The connector key is invalid or missing.",
       "permission": "The connector does not have permission to access the resource.",
       "rate_limit": "The connector hit an API rate limit.",
-      "network": "A network error occurred while calling the connector."
+      "network": "A network error occurred while calling the connector.",
+      "side_effect_unknown": "The connector write was cancelled mid-send or raised an error; upstream side-effect state is unknown."
     },
     "capacity": {
       "org": "The organisation has reached its maximum concurrent run limit.",

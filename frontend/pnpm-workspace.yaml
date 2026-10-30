@@ -291,3 +291,4 @@ minimumReleaseAgeExclude:
   - '@rollup/rollup-win32-x64-gnu@4.66.0'
   - '@rollup/rollup-win32-x64-msvc@4.66.0'
   - 'rollup@4.66.0'
+  - '@lucide/vue@1.64.0'

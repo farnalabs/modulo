@@ -835,6 +835,7 @@ async def _do_list_runs(
             cursor=query.cursor,
             variant_group_id=query.variant_group_id,
             batch_id=query.batch_id,
+            account_id=user.account_id if user.org_role == "viewer" else None,
         )
         # Child-run cost rollup: ONE GROUP BY query for the whole page, joined
         # in Python — never a per-row aggregate (avoids N+1).
@@ -1956,7 +1957,8 @@ async def get_run_stats_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            return await get_run_stats(session, period)
+            account_id = principal.account_id if principal.org_role == "viewer" else None
+            return await get_run_stats(session, period, account_id=account_id)
     except ProgrammingError:
         _log.exception("runs.get_run_stats_endpoint")
         raise HTTPException(
@@ -1994,7 +1996,8 @@ async def get_run_heatmap_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            return await get_run_heatmap(session, year)
+            account_id = principal.account_id if principal.org_role == "viewer" else None
+            return await get_run_heatmap(session, year, account_id=account_id)
     except ProgrammingError:
         _log.exception("runs.get_run_heatmap_endpoint")
         raise HTTPException(
