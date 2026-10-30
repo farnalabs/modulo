@@ -22183,6 +22183,15 @@ export interface components {
             created_at?: string | null;
             /** Run Id */
             run_id?: string | null;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /**
+             * Pipeline Deleted
+             * @default false
+             */
+            pipeline_deleted: boolean;
             /** Error Detail */
             error_detail?: string | null;
         };

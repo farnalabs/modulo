@@ -4025,6 +4025,7 @@ export default {
       "timestamp_expired": "Timestamp Expired",
       "error_detail": "Error detail",
       "trigger_id": "Trigger ID",
+      "pipeline": "Pipeline",
       "validation_failed": "Validation Failed",
       "flood_rejected": "Flood Rejected",
       "no_match": "No Match",

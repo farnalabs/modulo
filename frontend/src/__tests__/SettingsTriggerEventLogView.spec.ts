@@ -34,6 +34,9 @@ function makeEvent(overrides: Record<string, unknown> = {}) {
     run_id: 'run-abc123def456',
     error_detail: null,
     trigger_id: 'trg-789xyz012abc',
+    pipeline_id: 'pipe-001',
+    pipeline_name: 'Release pipeline',
+    pipeline_deleted: false,
     ...overrides,
   }
 }
@@ -133,6 +136,48 @@ describe('SettingsTriggerEventLogView', () => {
     expect(wrapper.text()).toContain('#trg-789x')
     expect(wrapper.text()).toContain('Sep')
     expect(wrapper.text()).toContain('15')
+  })
+
+  it('links the run and the pipeline to their detail surfaces', async () => {
+    getMock.mockResolvedValue({
+      data: { items: [makeEvent()], total: 1, next_cursor: null },
+      error: undefined,
+    })
+    const wrapper = mount(SettingsTriggerEventLogView)
+    await flushPromises()
+    expect(wrapper.find(`a[href="/runs/${makeEvent().run_id}"]`).exists()).toBe(true)
+    expect(wrapper.find(`a[href="/pipelines/${makeEvent().pipeline_id}/editor"]`).exists()).toBe(true)
+    expect(wrapper.text()).toContain('Release pipeline')
+  })
+
+  it('renders a deleted pipeline as plain text, keeping its name but dropping the link', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        items: [makeEvent({ pipeline_deleted: true })],
+        total: 1,
+        next_cursor: null,
+      },
+      error: undefined,
+    })
+    const wrapper = mount(SettingsTriggerEventLogView)
+    await flushPromises()
+    expect(wrapper.find('a[href^="/pipelines/"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Release pipeline')
+  })
+
+  it('renders dash when the event has no pipeline', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        items: [makeEvent({ pipeline_id: null, pipeline_name: null })],
+        total: 1,
+        next_cursor: null,
+      },
+      error: undefined,
+    })
+    const wrapper = mount(SettingsTriggerEventLogView)
+    await flushPromises()
+    expect(wrapper.find('a[href^="/pipelines/"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('\u2014')
   })
 
   it('renders dash for missing run_id', async () => {
@@ -466,7 +511,7 @@ describe('SettingsTriggerEventLogView', () => {
     })
     const wrapper = mount(SettingsTriggerEventLogView)
     await flushPromises()
-    const td = wrapper.find('td[title]')
+    const td = wrapper.find('td[title*="A very long error detail"]')
     expect(td.exists()).toBe(true)
     expect(td.attributes('title')).toContain('A very long error detail')
   })
