@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 const mockGet = vi.hoisted(() => vi.fn())
 const mockGetAccessToken = vi.hoisted(() => vi.fn())
 const mockIsOperator = vi.hoisted(() => ({ value: false }))
+const mockIsSystemAdmin = vi.hoisted(() => ({ value: false }))
 const mockPlanStore = vi.hoisted(() => ({
   loaded: false,
   currentTier: 'community',
@@ -19,7 +20,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 vi.mock('../stores/planStore', () => ({ usePlanStore: () => mockPlanStore }))
 vi.mock('../composables/useCurrentUser', () => ({
-  useCurrentUser: () => ({ isOperator: mockIsOperator }),
+  useCurrentUser: () => ({ isOperator: mockIsOperator, isSystemAdmin: mockIsSystemAdmin }),
 }))
 
 import { useSystemMapsStore } from '../stores/systemMaps'
@@ -42,6 +43,7 @@ describe('useSystemMapsStore access', () => {
     mockGet.mockReset()
     mockGetAccessToken.mockReturnValue(jwtFor('operator-1'))
     mockIsOperator.value = false
+    mockIsSystemAdmin.value = false
     mockPlanStore.loaded = false
     mockPlanStore.currentTier = 'community'
     mockPlanStore.devMode = false
@@ -75,6 +77,44 @@ describe('useSystemMapsStore access', () => {
     expect(store.systemMapsEnabled).toBe(true)
   })
 
+  it('allows a system admin with no org role to probe the system-admin endpoint', async () => {
+    mockIsSystemAdmin.value = true
+    mockPlanStore.loaded = true
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access', 'system.config.manage']
+    mockGet.mockResolvedValue({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+
+    const store = useSystemMapsStore()
+    await store.fetchAccess()
+
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/admin/feature-flags')
+    expect(store.systemMapsEnabled).toBe(true)
+  })
+
+  it('denies an ordinary admin without the system-admin capability', async () => {
+    mockIsOperator.value = true
+    mockPlanStore.loaded = true
+    mockPlanStore.devMode = true
+    mockPlanStore.userPermissions = ['system_maps_access']
+
+    const store = useSystemMapsStore()
+    await store.fetchAccess()
+
+    expect(mockGet).not.toHaveBeenCalled()
+    expect(store.systemMapsEnabled).toBe(false)
+  })
+
+  it('does not repeat an access probe after access has settled', async () => {
+    configureAuthorizedAccess()
+    mockGet.mockResolvedValue({ data: { flags: [] } })
+    const store = useSystemMapsStore()
+
+    await store.fetchAccess()
+    await store.fetchAccess()
+
+    expect(mockGet).toHaveBeenCalledTimes(1)
+  })
+
   it('resets access state when the token principal changes', async () => {
     configureAuthorizedAccess()
     mockGet.mockResolvedValue({ data: { flags: [] } })
@@ -88,6 +128,22 @@ describe('useSystemMapsStore access', () => {
 
     expect(mockGet).toHaveBeenCalledTimes(2)
     expect(store.systemMapsEnabled).toBe(false)
+  })
+
+  it('resets access state when reset is called', async () => {
+    configureAuthorizedAccess()
+    mockGet.mockResolvedValue({ data: { flags: [{ name: 'system_maps', currently_active: true }] } })
+    const store = useSystemMapsStore()
+
+    await store.fetchAccess()
+    store.reset()
+
+    expect(store.accessLoaded).toBe(false)
+    expect(store.systemMapsEnabled).toBe(false)
+    expect(store.error).toBeNull()
+    expect(store.loaded).toBe(false)
+    expect(store.discoveryAvailable).toBe(false)
+    expect(store.draft).toBeNull()
   })
 
   it('fails closed when no access token is present', async () => {
@@ -140,6 +196,18 @@ describe('useSystemMapsStore access', () => {
     expect(mockPlanStore.fetchPermissions).toHaveBeenCalledTimes(1)
   })
 
+  it('records an Error rejection and remains disabled', async () => {
+    configureAuthorizedAccess()
+    mockGet.mockRejectedValue(new Error('feature flags unavailable'))
+
+    const store = useSystemMapsStore()
+    await store.fetchAccess()
+
+    expect(store.error).toBe('feature flags unavailable')
+    expect(store.systemMapsEnabled).toBe(false)
+    expect(store.accessLoaded).toBe(true)
+  })
+
   it('uses a stable message for non-Error failures', async () => {
     configureAuthorizedAccess()
     mockGet.mockRejectedValue('not an Error instance')
@@ -149,6 +217,18 @@ describe('useSystemMapsStore access', () => {
 
     expect(store.error).toBe('Internal feature flags request failed')
     expect(store.systemMapsEnabled).toBe(false)
+  })
+
+  it('fails closed for malformed or missing feature-flag payloads', async () => {
+    configureAuthorizedAccess()
+    const store = useSystemMapsStore()
+
+    for (const data of [undefined, {}, { flags: undefined }, { flags: 'not-an-array' }]) {
+      mockGet.mockResolvedValueOnce({ data })
+      store.reset()
+      await store.fetchAccess()
+      expect(store.systemMapsEnabled).toBe(false)
+    }
   })
 
   it('keeps discovery fail-closed until its endpoint exists', async () => {

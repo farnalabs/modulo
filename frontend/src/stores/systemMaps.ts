@@ -29,7 +29,7 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
   let accessPrincipalSub: string | null = null
 
   const planStore = usePlanStore()
-  const { isOperator } = useCurrentUser()
+  const { isOperator, isSystemAdmin } = useCurrentUser()
   const hasSystemMapsAccess = computed(() =>
     planStore.userPermissions.includes('system_maps_access'),
   )
@@ -75,10 +75,10 @@ export const useSystemMapsStore = defineStore('systemMaps', () => {
     error.value = null
     systemMapsEnabled.value = false
     try {
-      // The role is available locally from the access token. Do not even fetch
-      // the permissions catalogue for ordinary users; the internal probe is
-      // intentionally unreachable to them.
-      if (!isOperator.value) return
+      // The role is available locally from the access token. System admins are
+      // instance-scoped and may have no org_role at all, so their capability
+      // must be accepted independently of the org operator role.
+      if (!isOperator.value && !isSystemAdmin.value) return
       const planRequest =
         planStore.loaded || planStore.currentTier !== 'community'
           ? Promise.resolve()
