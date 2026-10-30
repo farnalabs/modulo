@@ -1596,37 +1596,37 @@ jobs:
           rebuild_batch_without() {
             local offenders="$1"
             local new_merged=""
-             local new_conflict=""
-             local batch_words
+            local new_conflict=""
+            local batch_words
+            local num
 
-             # /tmp/merged_prs.txt is a SINGLE whitespace-separated line (the merge
-
+            # /tmp/merged_prs.txt is a SINGLE whitespace-separated line (the merge
             # step's format, also consumed by the CI-failure webhook payload), so
             # split on whitespace rather than assuming one PR per line.
             batch_words=$(xargs < /tmp/merged_prs.txt 2>/dev/null || true)
-             git checkout -B merge-queue main >/dev/null 2>&1
-             for num in $batch_words; do
-               [ -z "$num" ] && continue
-               case " $offenders " in *" $num "*) continue ;; esac
-               git fetch origin "+refs/pull/$num/head:refs/heads/pr-$num" >/dev/null 2>&1 || true
-               if ! git rev-parse --verify -q "pr-$num" >/dev/null 2>&1; then
-                 echo "  PR #$num branch unavailable during rebuild - dropping it from this batch"
-                 continue
-               fi
-               if git merge --squash "pr-$num" >/dev/null 2>&1; then
-                 if git diff --cached --quiet; then
-                   echo "  PR #$num has no changes relative to the rebuilt branch (already on main) - dropping as duplicate"
-                 else
-                   git commit -q -m "squash! Merge PR #$num"
-                   new_merged="$new_merged $num"
-                 fi
-               else
-                 git merge --abort >/dev/null 2>&1 || true
-                 git reset --hard HEAD >/dev/null 2>&1 || true
-                 echo "  MERGE CONFLICT in PR #$num during rebuild - dropping it from this batch"
-                 new_conflict="$new_conflict $num"
-               fi
-             done
+            git checkout -B merge-queue main >/dev/null 2>&1
+            for num in $batch_words; do
+              [ -z "$num" ] && continue
+              case " $offenders " in *" $num "*) continue ;; esac
+              git fetch origin "+refs/pull/$num/head:refs/heads/pr-$num" >/dev/null 2>&1 || true
+              if ! git rev-parse --verify -q "pr-$num" >/dev/null 2>&1; then
+                echo "  PR #$num branch unavailable during rebuild - dropping it from this batch"
+                continue
+              fi
+              if git merge --squash "pr-$num" >/dev/null 2>&1; then
+                if git diff --cached --quiet; then
+                  echo "  PR #$num has no changes relative to the rebuilt branch (already on main) - dropping as duplicate"
+                else
+                  git commit -q -m "squash! Merge PR #$num"
+                  new_merged="$new_merged $num"
+                fi
+              else
+                git merge --abort >/dev/null 2>&1 || true
+                git reset --hard HEAD >/dev/null 2>&1 || true
+                echo "  MERGE CONFLICT in PR #$num during rebuild - dropping it from this batch"
+                new_conflict="$new_conflict $num"
+              fi
+            done
 
             printf '%s\n' "$(echo "$new_merged" | xargs)" > /tmp/merged_prs.txt
             if [ -n "$new_conflict" ]; then

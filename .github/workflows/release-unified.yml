@@ -708,17 +708,17 @@ jobs:
           done
 
           # Resolve the GA manifest digest after both stable tags are published.
-           for img in all-in-one backend frontend runner-opencode; do
-             case "$img" in
-               all-in-one) image_name="$IMAGE_NAMESPACE";;
-               backend) image_name="$IMAGE_NAMESPACE/backend";;
-               frontend) image_name="$IMAGE_NAMESPACE/frontend";;
-               runner-opencode) image_name="$IMAGE_NAMESPACE/runner-opencode";;
-               *)
-                 echo "::error::unsupported image key during retag: $img"
-                 exit 1
-                 ;;
-             esac
+          for img in all-in-one backend frontend runner-opencode; do
+            case "$img" in
+              all-in-one) image_name="$IMAGE_NAMESPACE"; output_name=all_in_one_digest ;;
+              backend) image_name="$IMAGE_NAMESPACE/backend"; output_name=backend_digest ;;
+              frontend) image_name="$IMAGE_NAMESPACE/frontend"; output_name=frontend_digest ;;
+              runner-opencode) image_name="$IMAGE_NAMESPACE/runner-opencode"; output_name=runner_opencode_digest ;;
+              *)
+                echo "::error::unsupported image key during digest lookup: $img"
+                exit 1
+                ;;
+            esac
 
             digest="$(docker buildx imagetools inspect "ghcr.io/$image_name:$VERSION_NUM" --format '{{json .Manifest.Digest}}' | tr -d '"')"
             if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
