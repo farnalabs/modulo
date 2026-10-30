@@ -582,11 +582,15 @@ jobs:
           HAS_RISK=false
           while IFS= read -r file; do
             [ -z "$file" ] && continue
+            # Some paths match more than one pattern (a migration is also
+            # backend; `backend/*.md` is also docs). Each arm therefore falls
+            # through with `;;&` so every overlapping category is recorded
+            # instead of only the first match.
             case "$file" in
-              backend/src/modulo/db/migrations/*) HAS_MIGRATIONS=true ;;
-              backend/*) HAS_BACKEND=true ;;
-              frontend/*) HAS_FRONTEND=true ;;
-              .github/*|deploy/*) HAS_CI=true ;;
+              backend/src/modulo/db/migrations/*) HAS_MIGRATIONS=true ;;&
+              backend/*) HAS_BACKEND=true ;;&
+              frontend/*) HAS_FRONTEND=true ;;&
+              .github/*|deploy/*) HAS_CI=true ;;&
               docs/*|*.md) HAS_DOCS=true ;;
             esac
             if is_high_risk "$file"; then
