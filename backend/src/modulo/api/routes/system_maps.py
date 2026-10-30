@@ -152,7 +152,6 @@ async def list_system_maps_endpoint(
     name: str | None = Query(default=None),
     owner_team_id: uuid.UUID | None = Query(default=None),
     visibility: str | None = Query(default=None),
-    include_deleted: bool = Query(default=False),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_LIST),
     repository: SystemMapRepository = Depends(get_repo),
@@ -167,16 +166,12 @@ async def list_system_maps_endpoint(
             maps = await repository.list_maps_by_org(
                 session,
                 organisation_id=principal.organisation_id,
-                include_deleted=include_deleted,
                 visibility=visibility,
                 owner_team_id=owner_team_id,
+                name=name,
                 limit=page_size,
                 offset=offset,
             )
-
-            # Apply name filter in-memory (could be pushed to DB if needed)
-            if name:
-                maps = [m for m in maps if name.lower() in m.name.lower()]
 
             # Count total for pagination
             from sqlalchemy import func
@@ -186,8 +181,7 @@ async def list_system_maps_endpoint(
                 .select_from(SystemMap)
                 .where(SystemMap.organisation_id == principal.organisation_id)
             )
-            if not include_deleted:
-                count_stmt = count_stmt.where(SystemMap.deleted_at.is_(None))
+            count_stmt = count_stmt.where(SystemMap.deleted_at.is_(None))
             if visibility:
                 count_stmt = count_stmt.where(SystemMap.visibility == visibility)
             if owner_team_id:
@@ -514,6 +508,7 @@ async def get_system_map_revision_endpoint(
     repository: SystemMapRepository = Depends(get_repo),
 ) -> SystemMapRevisionResponse | SystemMapRevisionDetailResponse:
     """Get specific revision."""
+    graph: dict[str, Any] | None = None
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -529,6 +524,10 @@ async def get_system_map_revision_endpoint(
             revision = await repository.get_revision_by_id(
                 session, organisation_id=principal.organisation_id, revision_id=rev_id
             )
+            if include_graph:
+                graph = await repository.get_full_revision_graph(
+                    session, organisation_id=principal.organisation_id, revision_id=rev_id
+                )
     except ProgrammingError as exc:
         _log.exception("system_maps.get_system_map_revision_endpoint")
         raise HTTPException(
@@ -555,9 +554,6 @@ async def get_system_map_revision_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
 
     if include_graph:
-        graph = await repository.get_full_revision_graph(
-            session, organisation_id=principal.organisation_id, revision_id=rev_id
-        )
         if not graph:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_REVISION_NOT_FOUND)
         return SystemMapRevisionDetailResponse(
@@ -619,9 +615,9 @@ async def create_system_map_revision_endpoint(
                 revision_number=next_revision_number,
                 status="draft",
                 content_json={
-                    "nodes": [n.model_dump() for n in req.nodes],
-                    "relationships": [r.model_dump() for r in req.relationships],
-                    "loop_configs": [lc.model_dump() for lc in req.loop_configs],
+                    "nodes": [n.model_dump(mode="json") for n in req.nodes],
+                    "relationships": [r.model_dump(mode="json") for r in req.relationships],
+                    "loop_configs": [lc.model_dump(mode="json") for lc in req.loop_configs],
                     "notes": req.notes,
                 },
             )
@@ -1251,7 +1247,6 @@ async def list_attribution_bindings_endpoint(
     pipeline_id: uuid.UUID | None = Query(default=None),
     trigger_id: uuid.UUID | None = Query(default=None),
     binding_kind: str | None = Query(default=None),
-    include_deleted: bool = Query(default=False),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_LIST),
     repository: SystemMapRepository = Depends(get_repo),
@@ -1276,7 +1271,6 @@ async def list_attribution_bindings_endpoint(
                 trigger_id=trigger_id,
                 system_map_id=map_id,
                 binding_kind=binding_kind,
-                include_deleted=include_deleted,
             )
     except ProgrammingError as exc:
         _log.exception("system_maps.list_attribution_bindings_endpoint")

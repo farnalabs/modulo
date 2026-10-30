@@ -115,22 +115,20 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         include_deleted: bool = False,
         visibility: str | None = None,
         owner_team_id: uuid.UUID | None = None,
+        name: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> Sequence[SystemMap]:
         """List system maps for an organisation."""
-        stmt = (
-            select(SystemMap)
-            .where(SystemMap.organisation_id == organisation_id)
-            .order_by(SystemMap.created_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
+        stmt = select(SystemMap).where(SystemMap.organisation_id == organisation_id)
         stmt = include_soft_deleted(stmt) if include_deleted else stmt.where(SystemMap.deleted_at.is_(None))
         if visibility:
             stmt = stmt.where(SystemMap.visibility == visibility)
         if owner_team_id:
             stmt = stmt.where(SystemMap.owner_team_id == owner_team_id)
+        if name:
+            stmt = stmt.where(SystemMap.name.ilike(f"%{name}%"))
+        stmt = stmt.order_by(SystemMap.created_at.desc()).limit(limit).offset(offset)
         result = await session.execute(stmt)
         return result.scalars().all()
 

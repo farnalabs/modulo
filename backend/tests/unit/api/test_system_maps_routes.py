@@ -465,6 +465,33 @@ def test_list_system_maps_returns_paginated(client: tuple[TestClient, _Harness])
     assert body["items"][0]["name"] == "Test System Map"
 
 
+def test_list_system_maps_passes_name_to_repository_before_pagination(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    list_maps = AsyncMock(return_value=[_map_row(name="Matching map")])
+    harness.stub("list_maps_by_org", list_maps)
+
+    resp = http.get(_BASE, params={"name": "matching"})
+
+    assert resp.status_code == 200, resp.text
+    assert list_maps.await_args.kwargs["name"] == "matching"
+    assert resp.json()["items"][0]["name"] == "Matching map"
+
+
+def test_list_system_maps_ignores_include_deleted_and_keeps_live_scope(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    list_maps = AsyncMock(return_value=[])
+    harness.stub("list_maps_by_org", list_maps)
+
+    resp = http.get(_BASE, params={"include_deleted": "true"})
+
+    assert resp.status_code == 200, resp.text
+    assert "include_deleted" not in list_maps.await_args.kwargs
+
+
 def test_list_system_maps_filters_by_name(client: tuple[TestClient, _Harness]) -> None:
     http, harness = client
     maps = [_map_row(name="Map A"), _map_row(map_id=uuid.uuid4(), name="Map B")]
@@ -474,7 +501,7 @@ def test_list_system_maps_filters_by_name(client: tuple[TestClient, _Harness]) -
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert len(body["items"]) == 1
+    assert len(body["items"]) == 2
     assert body["items"][0]["name"] == "Map A"
 
 
@@ -644,6 +671,11 @@ def test_get_revision_with_graph_returns_detail(client: tuple[TestClient, _Harne
     assert "relationships" in body
     assert "loop_configs" in body
     assert len(body["nodes"]) == 1
+    harness.repository.get_full_revision_graph.assert_awaited_once_with(
+        harness.repository.get_full_revision_graph.call_args.args[0],
+        organisation_id=_ORG_ID,
+        revision_id=_REV_ID,
+    )
 
 
 def test_get_revision_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
@@ -675,23 +707,34 @@ def test_create_revision_returns_201(client: tuple[TestClient, _Harness]) -> Non
     harness.stub("create_relationship", AsyncMock(return_value=_relationship_row()))
     harness.stub("create_loop_config", AsyncMock(return_value=_loop_config_row()))
 
+    pipeline_id = uuid.uuid4()
     payload = {
         "nodes": [
             {
                 "node_key": "node-1",
                 "node_type": "pipeline",
                 "display_name": "Node 1",
-                "config_json": {},
-                "pipeline_id": None,
+                "config_json": {"created_at": "2026-01-01T00:00:00Z", "amount": "1.25"},
+                "pipeline_id": str(pipeline_id),
                 "connector_instance_id": None,
                 "owner_team_id": None,
                 "eval_id": None,
-                "position_x": "0",
-                "position_y": "0",
+                "position_x": "1.50",
+                "position_y": "2.25",
             }
         ],
         "relationships": [],
-        "loop_configs": [],
+        "loop_configs": [
+            {
+                "node_key": "loop-1",
+                "target_signal": "error_rate",
+                "observation_window_seconds": 300,
+                "action_pipeline_id": str(pipeline_id),
+                "budget_limit_usd": "10.50",
+                "cooldown_seconds": 60,
+                "outcome_metric": "success_rate",
+            }
+        ],
         "notes": "Initial revision",
     }
     resp = http.post(f"{_BASE}/{_MAP_ID}/revisions", json=payload)
@@ -700,6 +743,12 @@ def test_create_revision_returns_201(client: tuple[TestClient, _Harness]) -> Non
     body = resp.json()
     assert body["id"] == str(_REV_ID)
     assert body["revision_number"] == 1
+
+    create_revision = harness.repository.create_revision
+    content = create_revision.await_args.kwargs["content_json"]
+    assert content["nodes"][0]["pipeline_id"] == str(pipeline_id)
+    assert content["nodes"][0]["position_x"] == "1.50"
+    assert content["loop_configs"][0]["budget_limit_usd"] == "10.50"
 
 
 def test_create_revision_missing_map_returns_404(client: tuple[TestClient, _Harness]) -> None:
@@ -969,6 +1018,20 @@ def test_create_attribution_binding_invalid_pipeline_returns_404(client: tuple[T
     resp = http.post(f"{_BASE}/{_MAP_ID}/attribution-bindings", json=payload)
 
     assert resp.status_code == 404
+
+
+def test_list_attribution_bindings_ignores_include_deleted_and_keeps_live_scope(
+    client: tuple[TestClient, _Harness],
+) -> None:
+    http, harness = client
+    harness.stub("get_map_by_id", AsyncMock(return_value=_map_row()))
+    list_bindings = AsyncMock(return_value=[])
+    harness.stub("list_attribution_bindings", list_bindings)
+
+    resp = http.get(f"{_BASE}/{_MAP_ID}/attribution-bindings", params={"include_deleted": "true"})
+
+    assert resp.status_code == 200, resp.text
+    assert "include_deleted" not in list_bindings.await_args.kwargs
 
 
 def test_list_attribution_bindings_returns_list(client: tuple[TestClient, _Harness]) -> None:

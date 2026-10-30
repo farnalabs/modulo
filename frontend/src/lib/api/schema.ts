@@ -39029,7 +39029,6 @@ export interface operations {
                 name?: string | null;
                 owner_team_id?: string | null;
                 visibility?: string | null;
-                include_deleted?: boolean;
                 _fresh?: boolean;
             };
             header?: never;
@@ -39419,7 +39418,6 @@ export interface operations {
                 pipeline_id?: string | null;
                 trigger_id?: string | null;
                 binding_kind?: string | null;
-                include_deleted?: boolean;
                 _fresh?: boolean;
             };
             header?: never;
