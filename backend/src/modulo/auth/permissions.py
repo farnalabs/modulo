@@ -74,7 +74,7 @@ PERMISSIONS: dict[str, str] = {
     # runs
     "run.trigger": "runner",
     "run.cancel": "runner",
-    "run.list": "runner",
+    "run.list": "viewer",
     "run.output": "runner",
     "run.evals": "runner",
     "run.status": "viewer",
@@ -116,8 +116,8 @@ PERMISSIONS: dict[str, str] = {
     "trigger.create": "operator",
     "trigger.update": "operator",
     "trigger.delete": "operator",
-    "trigger.list": "runner",
-    "trigger.events.list": "runner",
+    "trigger.list": "viewer",
+    "trigger.events.list": "viewer",
     "trigger.cleanup": "runner",
     # api keys
     "api_key.create": "runner",
@@ -182,7 +182,7 @@ PERMISSIONS: dict[str, str] = {
     "hitl.reject": "operator",
     "hitl.deliver_manual": "operator",
     "hitl.review": "operator",
-    "hitl.list": "runner",
+    "hitl.list": "viewer",
     # library
     "library.copy": "runner",
     "library.search": "viewer",

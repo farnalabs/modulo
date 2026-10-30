@@ -19,10 +19,12 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import ColumnElement, Text, cast, or_, select, text
+from sqlalchemy import ColumnElement, Text, cast, false, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.run import Run
+from modulo.db.models.team_membership import TeamMembership
 
 # FAR-1515 CRITICAL 1: candidate rows behind the connector/model-backend team
 # gates must be read TEAM-BLIND but ORG-SCOPED. ``rls_team_isolation``
@@ -56,6 +58,48 @@ def team_scope_clause(owner_team_id_col: Any, team_id: Any) -> ColumnElement[boo
     owner.
     """
     return or_(owner_team_id_col.is_(None), owner_team_id_col == team_id)
+
+
+def account_team_scope_clause(owner_team_id_col: Any, account_id: uuid.UUID | None) -> ColumnElement[bool]:
+    """Build the team-visibility predicate for an account-scoped viewer read.
+
+    Org-visible rows are available to every account. Team-private rows are
+    available only when the account has a membership in the owning team. A
+    missing account context is fail-closed rather than becoming an unscoped
+    read.
+    """
+    if account_id is None:
+        return false()
+    membership_team_ids = select(TeamMembership.team_id).where(TeamMembership.account_id == account_id)
+    return or_(owner_team_id_col.is_(None), owner_team_id_col.in_(membership_team_ids))
+
+
+async def viewer_run_scope_visible(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    account_id: uuid.UUID,
+) -> bool:
+    """True when a viewer's team memberships cover the run's effective owner.
+
+    Tables that carry only the org-isolation RLS policy (``hitl_claims``,
+    ``runs``) have no team boundary of their own, so a viewer read has to
+    apply the account-team membership clamp explicitly. Org-level runs (no
+    owning team) are visible to every account; a team-private run is visible
+    only to members of the owning team. The run's stamped owner is
+    authoritative, with the pipeline owner as the fallback for pre-stamp rows
+    — the same precedence the list filters use.
+    """
+    visible = (
+        await session.execute(
+            select(Run.id)
+            .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .where(
+                Run.id == run_id,
+                account_team_scope_clause(func.coalesce(Run.owner_team_id, Pipeline.owner_team_id), account_id),
+            )
+        )
+    ).first()
+    return visible is not None
 
 
 async def pipeline_owner_team_id(session: AsyncSession, pipeline_id: uuid.UUID) -> uuid.UUID | None:
