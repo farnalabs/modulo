@@ -59,8 +59,8 @@ async def test_get_or_create_draft_creates_and_flushes_new_map() -> None:
     assert created.description == "draft"
     assert created.visibility == "org"
     assert created.version == 1
-    assert created.content_json["stages"] == []
-    assert created.content_json["edges"] == []
+    assert not created.content_json["stages"]
+    assert not created.content_json["edges"]
     session.add.assert_called_once_with(created)
     session.flush.assert_awaited_once()
 
@@ -83,7 +83,8 @@ async def test_save_discovery_revision_updates_map_and_stamps_revision_id() -> N
     assert lifecycle_map.version == 2
     assert lifecycle_map.updated_by == _USER_ID
     assert lifecycle_map.content_json["discovery_revision_id"] == str(revision_id)
-    assert revision_id == uuid.uuid5(_DISCOVERY_NAMESPACE, f"{_MAP_ID}:abc123")
+    expected_revision_id = uuid.uuid5(_DISCOVERY_NAMESPACE, f"{_MAP_ID}:abc123")
+    assert revision_id == expected_revision_id
     session.flush.assert_awaited_once()
 
 

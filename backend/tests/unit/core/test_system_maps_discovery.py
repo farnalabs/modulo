@@ -81,7 +81,7 @@ def test_empty_inventory_reports_warning_without_skipped_sources() -> None:
 
     assert draft.node_count == 0
     assert draft.edge_count == 0
-    assert draft.skipped == ()
+    assert not draft.skipped
     assert draft.warnings == ("No supported organisation sources were available for discovery",)
 
 
@@ -89,5 +89,5 @@ def test_supported_sources_without_skips_do_not_warn() -> None:
     draft = discover_draft([DiscoverySource(kind="folder", identifier="f1", name="Delivery", folder_id="f1")])
 
     assert draft.node_count == 1
-    assert draft.skipped == ()
-    assert draft.warnings == ()
+    assert not draft.skipped
+    assert not draft.warnings
