@@ -74,15 +74,19 @@ async def _persist_discovery_draft(
     principal: TenantPrincipal,
     name: str,
     description: str | None,
-    content: dict[str, Any],
+    raw_content: dict[str, Any],
 ) -> tuple[Any, uuid.UUID, int]:
     """Persist a draft, mapping domain refusals to their HTTP status.
 
     ``handle_db_errors`` on the route owns the SQLAlchemy/IntegrityError arms;
-    this helper translates only the domain errors the repository can raise.
+    this helper translates the domain errors that normalisation and the
+    repository can raise. Normalisation MUST live inside this ``try``: a draft
+    assembled from org data can still violate the lifecycle-map content bounds
+    (e.g. an over-long source name), and that refusal is a 422, not a 500.
     """
     repository = SystemMapRepository()
     try:
+        content = normalize_content(raw_content)
         map_obj = await repository.get_or_create_draft(
             session,
             organisation_id=principal.organisation_id,
@@ -201,39 +205,37 @@ async def discover_system_map(
             *[DiscoverySource(kind="folder", identifier=str(folder.id), name=folder.name) for folder in folders],
         ]
         draft = discover_draft(sources)
-        content = normalize_content(
-            {
-                "stages": [
-                    {
-                        "id": node["node_key"],
-                        "name": node["display_name"],
-                        "type": _stage_type(node),
-                        "pipeline_id": node.get("pipeline_id"),
-                        "config_json": node["config_json"],
-                    }
-                    for node in draft.nodes
-                ],
-                "edges": [
-                    {
-                        "id": f"{edge['source_node_key']}->{edge['target_node_key']}:{edge['relationship_type']}",
-                        "source": edge["source_node_key"],
-                        "target": edge["target_node_key"],
-                        "description": edge["relationship_type"],
-                        "config_json": edge["config_json"],
-                    }
-                    for edge in draft.relationships
-                ],
-                "notes": "System Maps discovery draft; inferred edges are suggestions and are not published.",
-                "discovery_fingerprint": _fingerprint(draft),
-                "discovery": {"warnings": list(draft.warnings), "skipped": list(draft.skipped)},
-            }
-        )
+        raw_content = {
+            "stages": [
+                {
+                    "id": node["node_key"],
+                    "name": node["display_name"],
+                    "type": _stage_type(node),
+                    "pipeline_id": node.get("pipeline_id"),
+                    "config_json": node["config_json"],
+                }
+                for node in draft.nodes
+            ],
+            "edges": [
+                {
+                    "id": f"{edge['source_node_key']}->{edge['target_node_key']}:{edge['relationship_type']}",
+                    "source": edge["source_node_key"],
+                    "target": edge["target_node_key"],
+                    "description": edge["relationship_type"],
+                    "config_json": edge["config_json"],
+                }
+                for edge in draft.relationships
+            ],
+            "notes": "System Maps discovery draft; inferred edges are suggestions and are not published.",
+            "discovery_fingerprint": _fingerprint(draft),
+            "discovery": {"warnings": list(draft.warnings), "skipped": list(draft.skipped)},
+        }
         map_obj, revision_id, revision_number = await _persist_discovery_draft(
             session,
             principal=principal,
             name=request.name,
             description=request.description,
-            content=content,
+            raw_content=raw_content,
         )
 
     return SystemMapDiscoveryReport(

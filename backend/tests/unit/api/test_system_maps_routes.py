@@ -305,6 +305,26 @@ def test_discovery_maps_persistence_errors_to_http_status(
     assert response.status_code == expected_status
 
 
+def test_discovery_maps_normalisation_failure_is_422(
+    route_client: tuple[TestClient, AsyncMock],
+) -> None:
+    """A content-bound refusal from ``normalize_content`` must be a 422.
+
+    Normalisation runs over a draft assembled from org inventory (e.g. a
+    source name longer than the lifecycle-map bound), so it is part of the
+    persistence path, not an unhandled server bug.
+    """
+    client, _session = route_client
+    with patch(
+        "modulo.api.routes.system_maps.normalize_content",
+        side_effect=LifecycleMapContentError("stage name too long"),
+    ):
+        response = client.post("/api/v1/system-maps/discover", json={"name": "invalid"})
+
+    assert response.status_code == 422
+    assert "stage name too long" in response.json()["detail"]
+
+
 def test_discovery_persists_deterministic_report_and_suggested_edges(
     route_client: tuple[TestClient, AsyncMock],
 ) -> None:
