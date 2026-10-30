@@ -62,8 +62,11 @@ LaunchAgent seam from the app bundle. See the platform support matrix in
 The native upgrade swaps the `current` symlink after a verified data
 snapshot; migrations run through the new bundle's boot lifespan. On macOS arm64,
 install the signed/notarized `.dmg` on Apple Silicon only; x64/Rosetta is not
-supported. The installer verifies the release manifest/checksum chain before
-copying the app. Two entry points perform the same swap:
+supported. The Linux installer verifies the signed release manifest/checksum
+chain before copying the app; the macOS installer does not read the release
+manifest and instead verifies the DMG and app bundle through `hdiutil verify`
+plus Apple Developer ID signing/notarization. Two entry points perform the same
+swap:
 
 - the published installer (`bash scripts/install.sh`), and
 - the launcher command (`modulo upgrade <target-version>`).

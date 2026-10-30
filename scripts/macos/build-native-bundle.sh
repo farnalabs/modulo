@@ -147,18 +147,12 @@ EOF
 clang -Wall -Wextra -Werror -o "${APP_ROOT}/Contents/MacOS/modulo" "${BUILD_ROOT}/launcher.c"
 chmod 755 "${APP_ROOT}/Contents/MacOS/modulo"
 
-cat > "${APP_ROOT}/Contents/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>run.modulo.app</string>
-<key>CFBundleName</key><string>Modulo</string>
-<key>CFBundleExecutable</key><string>modulo</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>${VERSION}</string>
-<key>CFBundleVersion</key><string>${VERSION}</string>
-</dict></plist>
-EOF
+# Single source of truth for the app-bundle metadata: the shared helper in
+# scripts/ owns the Info.plist contents (the gate0 filter watches it too).
+(
+  cd "${APP_ROOT}/Contents"
+  "${ROOT_DIR}/scripts/create-macos-info-plist.sh" "${VERSION}" "Info.plist"
+)
 
 echo "${VERSION}" > "${BUNDLE_ROOT}/VERSION"
 file "${APP_ROOT}/Contents/MacOS/modulo"

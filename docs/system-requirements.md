@@ -29,8 +29,9 @@ host.
 macOS arm64 is a native release target. The signed and notarized `.dmg` is built
 on `macos-14` with the pinned native runtime and is validated separately from the
 Linux bundle. It requires Apple Silicon; x64/Rosetta is not supported. The
-installer's trust boundary is the signed release manifest plus Apple Developer ID
-signing/notarization and stapling. Windows remains out of scope for v1.
+macOS installer's trust boundary is Apple Developer ID signing/notarization and
+stapling, verified with `codesign`, `spctl` and `hdiutil verify`; it does not
+consume the Linux signed release manifest. Windows remains out of scope for v1.
 
 A Windows-hosted deployment therefore means Windows Server running the Linux
 stack in a VM or container host, not native Windows binaries.
