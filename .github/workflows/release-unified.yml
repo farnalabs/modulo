@@ -184,9 +184,11 @@ jobs:
     name: Release (${{ inputs.mode }})
     if: inputs.mode != 'dry-run'
     runs-on: ubicloud-standard-2
+    # Covers the bounded 90-minute merge-queue wait plus setup overhead.
     timeout-minutes: 120
     permissions:
       contents: write
+      pull-requests: write
       actions: write
       packages: write
       id-token: write
@@ -433,6 +435,7 @@ jobs:
         run: |
           set -euo pipefail
           GA_TAG="v${VERSION}"
+          BRANCH="release/promote-${VERSION}"
 
           # Safety 1: only promote OUT of an active freeze.
           if ! git rev-parse -q --verify "refs/tags/release-freeze" >/dev/null 2>&1; then
@@ -455,8 +458,8 @@ jobs:
           RC_SHA=$(git rev-parse "${LATEST_RC}^{commit}")
 
           # Safety 4: main must still be exactly the validated RC commit. Fetch
-          # live so a commit landing after checkout is caught - we promote the
-          # commit that was validated, never "whatever is on main now".
+          # live so a commit landing after checkout is caught - the release PR
+          # starts from this exact validated commit.
           git fetch origin main
           HEAD_SHA=$(git rev-parse origin/main)
           if [ "$RC_SHA" != "$HEAD_SHA" ]; then
@@ -476,16 +479,116 @@ jobs:
             exit 1
           fi
 
-          echo "Promoting $LATEST_RC to GA as $GA_TAG"
+          # CHANGELOG.md is release metadata and must land through protected
+          # main. Keep the existing release-freeze as the publication hold while
+          # the promote PR waits; cut already uses the temporary hold only for
+          # its version-bump window. A promote must never clear the freeze until
+          # the exact GA tag exists.
+          #
+          # Keep the remote branch as the auditable release record; reuse one
+          # open PR and refuse a closed duplicate rather than racing a second
+          # promotion.
+          git fetch origin --tags
+          PREV=""
+          if git describe --tags --abbrev=0 "${RC_SHA}^" > /tmp/previous-ga-tag.txt 2>/dev/null; then
+            PREV="$(cat /tmp/previous-ga-tag.txt)"
+          fi
+          if [ -z "$PREV" ]; then
+            PREV="$(git rev-list --max-parents=0 "$RC_SHA" | tail -n1)"
+          fi
+          PR_NUMBER="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Reusing existing promote PR #${PR_NUMBER} for ${VERSION}."
+          else
+            CLOSED_PR="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state closed --json number --jq '.[0].number // empty')"
+            if [ -n "$CLOSED_PR" ]; then
+              echo "::error::Promote branch ${BRANCH} has a closed PR (#${CLOSED_PR}); refusing to create a duplicate."
+              exit 1
+            fi
+            git checkout -B "$BRANCH" "$RC_SHA"
+            python3 scripts/generate_changelog.py \
+              --from "$PREV" --to "$RC_SHA" \
+              --version "$VERSION" --output CHANGELOG.md > /tmp/ga-release-notes.md
+            git add CHANGELOG.md
+            if git diff --cached --quiet; then
+              echo "::error::CHANGELOG.md produced no promote metadata change; refusing to create an empty release PR."
+              exit 1
+            fi
+            git commit -m "changelog: ${GA_TAG}"
+            git push --set-upstream origin "$BRANCH"
+            PR_NUMBER="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base main --head "$BRANCH" \
+              --title "chore(release): promote ${GA_TAG}" \
+              --body "Promote ${LATEST_RC} to ${GA_TAG}. This release metadata PR must pass normal CI, review, and merge-queue gates before GA publication and freeze lift.")"
+            PR_NUMBER="${PR_NUMBER##*/}"
+          fi
+
+          # A workflow-created PR does not receive pull_request CI/review events.
+          # Explicitly request the normal gates for this exact PR head; only the
+          # protected merge queue may merge it.
+          PR_SHA="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq '.headRefOid')"
+          if [ -z "$PR_SHA" ]; then
+            echo "::error::Promote PR #${PR_NUMBER} has no head SHA; refusing to wait without exact-ref evidence."
+            exit 1
+          fi
+          gh workflow run "CI: Fast Validation" --repo "${GITHUB_REPOSITORY}" --ref "$BRANCH"
+          gh workflow run pr-review.yml --repo "${GITHUB_REPOSITORY}" --ref main \
+            -f pr_number="$PR_NUMBER" -f head_sha="$PR_SHA" -f head_branch="$BRANCH"
+
+          MERGED_SHA=""
+          MAX_POLLS=360
+          for ((poll=1; poll<=MAX_POLLS; poll++)); do
+            PR_JSON="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" \
+              --json state,mergedAt,mergeCommit,headRefOid,reviewDecision,mergeStateStatus)" || {
+              echo "::error::Could not read promote PR #${PR_NUMBER}; refusing to proceed without merge evidence."
+              exit 1
+            }
+            PR_STATE="$(jq -r '.state' <<<"$PR_JSON")"
+            MERGED_AT="$(jq -r '.mergedAt // empty' <<<"$PR_JSON")"
+            if [ "$PR_STATE" = "MERGED" ] && [ -n "$MERGED_AT" ]; then
+              MERGED_SHA="$(jq -r '.mergeCommit.oid // empty' <<<"$PR_JSON")"
+              if [ -z "$MERGED_SHA" ]; then
+                echo "::error::Promote PR #${PR_NUMBER} is merged but has no merge commit SHA; refusing to publish."
+                exit 1
+              fi
+              break
+            fi
+            if [ "$PR_STATE" = "CLOSED" ]; then
+              echo "::error::Promote PR #${PR_NUMBER} closed without merging; refusing to publish."
+              exit 1
+            fi
+            echo "Promote PR #${PR_NUMBER} is ${PR_STATE} (review=$(jq -r '.reviewDecision // "unknown"' <<<"$PR_JSON"), merge=$(jq -r '.mergeStateStatus // "unknown"' <<<"$PR_JSON")); waiting (${poll}/${MAX_POLLS})."
+            sleep 15
+          done
+          if [ -z "$MERGED_SHA" ]; then
+            echo "::error::Timed out waiting for promote PR #${PR_NUMBER} to merge through CI, review, and merge queue."
+            exit 1
+          fi
+
+          # Exact merged-SHA handoff: the GA tag is created only at the commit
+          # the protected merge returned, never at a moving branch or main ref.
+          git fetch origin "$MERGED_SHA"
+          git checkout --detach "$MERGED_SHA"
+          if [ "$(git rev-parse HEAD)" != "$MERGED_SHA" ]; then
+            echo "::error::Could not check out exact merged SHA ${MERGED_SHA}; refusing to publish."
+            exit 1
+          fi
           git tag -a "$GA_TAG" -m "Release $GA_TAG (promoted from $LATEST_RC)"
           git push origin "$GA_TAG"
-
-          # Lift the freeze: the merge queue resumes on its next tick.
+          TAG_SHA="$(git rev-parse "${GA_TAG}^{commit}")"
+          if [ "$TAG_SHA" != "$MERGED_SHA" ]; then
+            echo "::error::GA tag ${GA_TAG} resolved to ${TAG_SHA}, expected merged PR SHA ${MERGED_SHA}."
+            exit 1
+          fi
+          # Lift the freeze only after the protected metadata merge and exact GA
+          # tag handoff both succeeded. The merge queue resumes on its next tick.
           git push origin --delete release-freeze
           echo "Freeze lifted - merge queue resumes."
 
-          echo "ga_tag=$GA_TAG" >> "$GITHUB_OUTPUT"
-          echo "rc_tag=$LATEST_RC" >> "$GITHUB_OUTPUT"
+          {
+            echo "ga_tag=$GA_TAG"
+            echo "rc_tag=$LATEST_RC"
+            echo "promote_sha=$MERGED_SHA"
+          } >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
       # RECUT: publish from the new RC tag, which was created at current main.
@@ -764,68 +867,44 @@ jobs:
           GA_TAG: ${{ steps.promote.outputs.ga_tag }}
         shell: bash
         run: |
-          set -uo pipefail
-          rc=0
+          set -euo pipefail
           NOTES_FILE="$(mktemp)"
 
-          # 1. Previous tag
-          git fetch origin --tags 2>/dev/null || true
-          PREV="$(git describe --tags --abbrev=0 "${GA_TAG}^" 2>/dev/null || true)"
+          # The CHANGELOG change was already merged through protected main in the
+          # promote step. Re-read the exact GA tag; never mutate main here.
+          git fetch origin --tags
+          if ! git checkout --detach "$GA_TAG"; then
+            echo "::error::Could not check out the exact GA tag ${GA_TAG}; refusing to publish release notes."
+            exit 1
+          fi
+          if [ "$(git rev-parse "${GA_TAG}^{commit}")" != "${{ steps.promote.outputs.promote_sha }}" ]; then
+            echo "::error::GA tag ${GA_TAG} is not at the protected promote merge SHA; refusing to publish release notes."
+            exit 1
+          fi
+
+          PREV=""
+          if git describe --tags --abbrev=0 "${GA_TAG}^" > /tmp/previous-ga-tag.txt 2>/dev/null; then
+            PREV="$(cat /tmp/previous-ga-tag.txt)"
+          fi
           if [ -z "$PREV" ]; then
             PREV="$(git rev-list --max-parents=0 "$GA_TAG" | tail -n1)"
           fi
           echo "Changelog range: ${PREV}..${GA_TAG}"
 
-          # 2. Sync local main
-          if ! git fetch origin main || ! git checkout -B main origin/main; then
-            echo "::error::Could not sync local main to origin/main"
-            rc=1
-          fi
+          # Generate release notes from the already-merged metadata. A notes
+          # generation failure is fatal; there is no minimal-notes fallback that
+          # could hide a broken or incomplete CHANGELOG.
+          python3 scripts/generate_changelog.py \
+            --from "$PREV" --to "$GA_TAG" \
+            --version "$VERSION" --output CHANGELOG.md > "$NOTES_FILE"
 
-          # 3. Generate CHANGELOG section + release notes
-          if [ "$rc" -eq 0 ]; then
-            if ! python3 scripts/generate_changelog.py \
-                --from "$PREV" --to "$GA_TAG" \
-                --version "$VERSION" --output CHANGELOG.md > "$NOTES_FILE"; then
-              echo "::warning::generate_changelog.py failed; falling back to minimal notes"
-              printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
-              rc=1
-            fi
-
-            # 4. Commit CHANGELOG.md
-            if [ "$rc" -eq 0 ]; then
-              git add CHANGELOG.md
-              if git diff --cached --quiet; then
-                echo "CHANGELOG.md already up to date for ${GA_TAG}"
-              elif git commit -m "changelog: ${GA_TAG}" && git push origin main; then
-                echo "CHANGELOG.md committed to main for ${GA_TAG}."
-              else
-                echo "::error::Failed to commit/push CHANGELOG.md"
-                rc=1
-              fi
-            fi
-          fi
-
-          if [ ! -s "$NOTES_FILE" ]; then
-            printf 'See CHANGELOG.md in the repository for details.\n' > "$NOTES_FILE"
-          fi
-
-          # 5. Update or create GitHub Release
           if gh release view "$GA_TAG" >/dev/null 2>&1; then
-            if ! gh release edit "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
-              echo "::warning::GitHub Release update failed for ${GA_TAG}"
-            else
-              echo "GitHub Release updated for ${GA_TAG}."
-            fi
+            gh release edit "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE"
+            echo "GitHub Release updated for ${GA_TAG}."
           else
-            if ! gh release create "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE" 2>/dev/null; then
-              echo "::warning::GitHub Release creation failed for ${GA_TAG}"
-            else
-              echo "GitHub Release created for ${GA_TAG}."
-            fi
+            gh release create "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE"
+            echo "GitHub Release created for ${GA_TAG}."
           fi
-
-          exit $rc
 
   # ---------------------------------------------------------------------------
   # Build and sign the release bundle (cut and recut).

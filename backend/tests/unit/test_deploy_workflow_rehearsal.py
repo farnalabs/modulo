@@ -527,3 +527,74 @@ def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:
     assert "-f force_deploy=true" in dispatch
     assert '-f release_ref="${RC_TAG}"' in dispatch
     assert '-f release_sha="${RC_SHA}"' in dispatch
+
+
+def _promote_step() -> dict[str, Any]:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    return steps[_step_names(steps).index("Promote to GA and lift freeze")]
+
+
+def test_release_promote_uses_a_single_protected_pr_and_exact_merged_sha() -> None:
+    script = _promote_step()["run"]
+
+    assert "git push origin main" not in script
+    assert 'BRANCH="release/promote-${VERSION}"' in script
+    assert 'gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state open' in script
+    assert "closed PR" in script
+    assert 'git push --set-upstream origin "$BRANCH"' in script
+    assert 'gh pr create --repo "${GITHUB_REPOSITORY}"' in script
+    assert 'gh workflow run "CI: Fast Validation"' in script
+    assert "gh workflow run pr-review.yml" in script
+    assert "MAX_POLLS=360" in script
+    assert "sleep 15" in script
+    assert 'MERGED_SHA="$(jq -r \'.mergeCommit.oid // empty\' <<<"$PR_JSON")"' in script
+    assert 'git fetch origin "$MERGED_SHA"' in script
+    assert 'git checkout --detach "$MERGED_SHA"' in script
+    assert 'git tag -a "$GA_TAG"' in script
+    assert 'git push origin "$GA_TAG"' in script
+    assert "git push origin --delete release-freeze" in script
+    assert "release-freeze" in script
+    assert "promote_sha=$MERGED_SHA" in script
+
+
+def test_release_promote_has_no_bypass_or_silent_fallback() -> None:
+    script = _promote_step()["run"]
+
+    assert "--admin" not in script
+    assert "--force" not in script
+    assert "|| true" not in script
+    assert "git push origin main" not in script
+    assert "git push --force origin main" not in script
+    assert "gh pr merge" not in script
+    assert "closed PR" in script
+    assert "closed without merging" in script
+    assert "Timed out waiting for promote PR" in script
+    assert 'if [ "$(git rev-parse HEAD)" != "$MERGED_SHA" ]; then' in script
+    assert 'if [ "$TAG_SHA" != "$MERGED_SHA" ]; then' in script
+
+
+def test_release_promote_wait_budget_fits_release_job_timeout() -> None:
+    script = _promote_step()["run"]
+    max_polls = int(re.search(r"MAX_POLLS=(\d+)", script).group(1))
+    poll_seconds = int(re.search(r"sleep (\d+)", script).group(1))
+    release_job = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]
+
+    assert max_polls * poll_seconds == 5400
+    assert max_polls * poll_seconds <= release_job["timeout-minutes"] * 60
+
+
+def test_release_promote_bypass_scan_excludes_cut_path() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    promote_scripts = [step["run"] for step in steps if "promote" in step.get("if", "") and "run" in step]
+    assert len(promote_scripts) >= 4
+
+    for script in promote_scripts:
+        assert "--admin" not in script
+        assert "git push origin main" not in script
+        assert "git push --force origin main" not in script
+        assert "git checkout -B main origin/main" not in script
+
+    promote = _promote_step()["run"]
+    assert "git push origin --delete release-freeze" in promote
