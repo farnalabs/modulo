@@ -20,20 +20,18 @@
       </button>
     </div>
 
-    <div v-if="loading" data-testid="settings-runtime-config-loading" aria-busy="true">
-      <span class="sr-only">{{ $t('views.SettingsRuntimeConfigView.loading') }}</span>
-      <div aria-hidden="true" class="card overflow-hidden">
-        <div class="border-b bg-muted/30 px-4 py-3">
-          <div class="h-4 w-40 rounded bg-muted/50" />
-        </div>
-        <div v-for="row in 6" :key="row" class="flex items-center gap-4 border-b px-4 py-3 last:border-0">
-          <div class="h-4 w-1/4 rounded bg-muted/50" />
-          <div class="h-4 w-1/4 rounded bg-muted/50" />
-          <div class="h-4 w-1/5 rounded bg-muted/50" />
-          <div class="h-4 w-1/5 rounded bg-muted/50" />
-        </div>
-      </div>
-    </div>
+    <!-- STATE-3 + VIS-3 (ux-conformance): the column layout is known before the
+         first row arrives, so the loading placeholder is the shared
+         TableSkeleton rather than a bespoke skeleton copy. It carries the
+         sr-only aria-live loading announcement and aria-busy on the placeholder
+         table, and mirrors the real six-column layout to avoid layout shift. -->
+    <TableSkeleton
+      v-if="loading"
+      :columns="6"
+      :rows="6"
+      :aria-label="$t('common.loading')"
+      data-testid="settings-runtime-config-loading"
+    />
 
     <ErrorAlert v-else-if="error && !featureRequired" :message="error" :on-retry="loadConfig" />
 
@@ -202,6 +200,7 @@ import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { AlertTriangle } from '@lucide/vue'
 

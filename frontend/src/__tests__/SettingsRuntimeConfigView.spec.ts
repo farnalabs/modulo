@@ -490,13 +490,24 @@ describe('SettingsRuntimeConfigView', () => {
 
   // ─── Loading state ────────────────────────────────────────────────────
 
-  it('shows a loading skeleton while fetching', async () => {
+  it('shows the shared table skeleton while fetching', async () => {
     getMock.mockReturnValueOnce(new Promise(() => {}))
     const wrapper = mount(SettingsRuntimeConfigView, {
       global: { stubs: { FeatureGate: gateStub } },
     })
     await nextTick()
-    expect(wrapper.find('[data-testid="settings-runtime-config-loading"]').exists()).toBe(true)
+
+    const skeleton = wrapper.find('[data-testid="settings-runtime-config-loading"]')
+    expect(skeleton.exists()).toBe(true)
+
+    // VIS-3: the loading state is composed from the shared TableSkeleton, not a
+    // bespoke copy — it carries the sr-only aria-live announcement and puts
+    // aria-busy on the placeholder table rather than a wrapping div.
+    const live = skeleton.find('output')
+    expect(live.attributes('aria-live')).toBe('polite')
+    expect(live.text()).toBe('Loading')
+    expect(wrapper.find('[data-testid="settings-runtime-config-loading"]').attributes('aria-busy')).toBeUndefined()
+    expect(skeleton.find('table').attributes('aria-busy')).toBe('true')
   })
 
   it('renders an empty state when no config entries are returned', async () => {
