@@ -609,9 +609,10 @@ jobs:
           git tag -d release-freeze
           echo "Swapped release-freeze for release-publication-hold while the promote PR merges."
           git fetch origin --tags
+          PREV_FILE="$(mktemp)"
           PREV=""
-          if git describe --tags --abbrev=0 "${RC_SHA}^" > /tmp/previous-ga-tag.txt 2>/dev/null; then
-            PREV="$(cat /tmp/previous-ga-tag.txt)"
+          if git describe --tags --abbrev=0 "${RC_SHA}^" > "$PREV_FILE" 2>/dev/null; then
+            PREV="$(cat "$PREV_FILE")"
           fi
           if [ -z "$PREV" ]; then
             PREV="$(git rev-list --max-parents=0 "$RC_SHA" | tail -n1)"
@@ -626,13 +627,14 @@ jobs:
                exit 1
              fi
               git checkout -B "$BRANCH" "$RC_SHA"
-              EXPECTED_CHANGELOG=/tmp/ga-expected-changelog.md
+              EXPECTED_CHANGELOG="$(mktemp)"
               python3 scripts/generate_changelog.py \
                 --from "$PREV" --to "$RC_SHA" \
                 --version "$VERSION" --body-only > "$EXPECTED_CHANGELOG"
+              RELEASE_NOTES="$(mktemp)"
               python3 scripts/generate_changelog.py \
                 --from "$PREV" --to "$RC_SHA" \
-                --version "$VERSION" --output CHANGELOG.md >/tmp/ga-release-notes.md
+                --version "$VERSION" --output CHANGELOG.md > "$RELEASE_NOTES"
               EXPECTED_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' "$EXPECTED_CHANGELOG")"
               ACTUAL_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' CHANGELOG.md)"
               EXPECTED_SECTION="$(printf '%s\\n' "$EXPECTED_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
@@ -687,12 +689,14 @@ jobs:
               echo "::error::Promote PR #${PR_NUMBER} contains no CHANGELOG.md release metadata diff from ${RC_SHA}; refusing to publish."
               exit 1
             fi
-            git show "${PR_SHA}:CHANGELOG.md" > /tmp/ga-pr-changelog.md
+            PR_CHANGELOG="$(mktemp)"
+            git show "${PR_SHA}:CHANGELOG.md" > "$PR_CHANGELOG"
+            EXPECTED_CHANGELOG="$(mktemp)"
             python3 scripts/generate_changelog.py \
               --from "$PREV" --to "$RC_SHA" \
-              --version "$VERSION" --body-only > /tmp/ga-expected-changelog.md
-            EXPECTED_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' /tmp/ga-expected-changelog.md)"
-            ACTUAL_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' /tmp/ga-pr-changelog.md)"
+              --version "$VERSION" --body-only > "$EXPECTED_CHANGELOG"
+            EXPECTED_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' "$EXPECTED_CHANGELOG")"
+            ACTUAL_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' "$PR_CHANGELOG")"
             EXPECTED_SECTION="$(printf '%s\\n' "$EXPECTED_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
             ACTUAL_SECTION="$(printf '%s\\n' "$ACTUAL_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
             if [ -z "$ACTUAL_SECTION" ] || [ "$ACTUAL_SECTION" != "$EXPECTED_SECTION" ]; then
@@ -1119,9 +1123,10 @@ jobs:
             exit 1
           fi
 
+          PREV_FILE="$(mktemp)"
           PREV=""
-          if git describe --tags --abbrev=0 "${GA_TAG}^" > /tmp/previous-ga-tag.txt 2>/dev/null; then
-            PREV="$(cat /tmp/previous-ga-tag.txt)"
+          if git describe --tags --abbrev=0 "${GA_TAG}^" > "$PREV_FILE" 2>/dev/null; then
+            PREV="$(cat "$PREV_FILE")"
           fi
           if [ -z "$PREV" ]; then
             PREV="$(git rev-list --max-parents=0 "$GA_TAG" | tail -n1)"
