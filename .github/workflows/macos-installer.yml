@@ -297,6 +297,7 @@ jobs:
           MOUNT="$RUNNER_TEMP/modulo-mount"
           MOUNT_ATTACHED=0
           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
+          DMG_TEMP=''
 
           prepare_data_directory() {
             local data_uid data_mode mkdir_error current_uid
@@ -503,8 +504,12 @@ jobs:
                 fi
               fi
 
+              if [[ -n "$DMG_TEMP" ]]; then
+                rm -f "$DMG_TEMP"
+              fi
               rm -rf "$MOUNT" "$CERT" "$NOTARY_KEY" "$IDENTITY_PEM_PATH" "$RUNNER_TEMP/modulo-install"
               rm_status=$?
+
               if [[ -L "$DATA" || -L "$OWNED_PIDS" ]]; then
                 echo "::error::cleanup refused to remove unexpected symlink under smoke data path: data=$DATA owned_pids=$OWNED_PIDS" >&2
                 cleanup_result temporary_paths failed "unexpected symlink; data directory preserved"
@@ -912,8 +917,14 @@ jobs:
 
 
           DMG="build/Modulo-${VERSION_NUM}-macos-arm64.dmg"
+          DMG_TEMP="$RUNNER_TEMP/Modulo-${VERSION_NUM}-macos-arm64-$$.dmg"
           # shellcheck disable=SC2016
-          run_pre_smoke dmg_create hdiutil create -volname "Modulo ${VERSION_NUM}" -srcfolder "$APP" -ov -format UDZO "$DMG"
+          run_pre_smoke dmg_create bash -c '
+            set -euo pipefail
+            hdiutil create -volname "Modulo $1" -srcfolder "$2" -ov -format UDZO "$3"
+            mv -f "$3" "$4"
+          ' bash "$VERSION_NUM" "$APP" "$DMG_TEMP" "$DMG"
+
           # shellcheck disable=SC2016
           run_pre_smoke dmg_codesign codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
           # shellcheck disable=SC2016
