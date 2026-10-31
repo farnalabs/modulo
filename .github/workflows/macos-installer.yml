@@ -950,14 +950,28 @@ jobs:
             done
             return 1
           }
-          # shellcheck disable=SC2016
-          run_pre_smoke dmg_staple staple_dmg_with_retry
+          dmg_staple_output_file="$DATA/pre-smoke-dmg_staple.log"
+          rm -f "$dmg_staple_output_file"
+          set +e
+          staple_dmg_with_retry >"$dmg_staple_output_file" 2>&1
+          dmg_staple_exit=$?
+          set -e
+          printf 'run_pre_smoke: dmg_staple command_exit=%d\n' "$dmg_staple_exit"
+          if [[ "$dmg_staple_exit" -eq 0 ]]; then
+            printf 'pre_smoke: dmg_staple=ok (exit=%d)\n' "$dmg_staple_exit"
+          else
+            printf 'pre_smoke: dmg_staple=FAILED (exit=%d)\n' "$dmg_staple_exit" >&2
+            if [[ -s "$dmg_staple_output_file" ]]; then
+              printf 'pre_smoke output: dmg_staple\n' >&2
+              redact_pre_smoke_output < "$dmg_staple_output_file" >&2
+            fi
+            echo "::warning::DMG stapling failed after 6 retries; continuing without staple verification"
+          fi
           # shellcheck disable=SC2016
           if [[ "$dmg_staple_succeeded" -eq 1 ]]; then
             run_pre_smoke dmg_staple_validate xcrun stapler validate "$DMG"
-          else
-            echo "::warning::DMG stapling failed after 6 retries; continuing without staple verification"
           fi
+
           # shellcheck disable=SC2016
           run_pre_smoke dmg_codesign_verify codesign --verify --verbose=2 "$DMG"
           # shellcheck disable=SC2016
