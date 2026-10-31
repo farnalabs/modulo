@@ -552,7 +552,7 @@ def test_release_cut_uses_protected_main_pr_and_exact_merge_ref() -> None:
     for cleanup_name in cleanup_names:
         cleanup = steps[names.index(cleanup_name)]
         assert "always()" in cleanup["if"]
-        assert "steps.publication-hold.outcome == 'success'" in cleanup["if"]
+        assert "steps.publication-hold.outputs.established == 'true'" in cleanup["if"]
         assert "git push origin --delete release-publication-hold" in cleanup["run"]
     failed_cut_cleanup = steps[names.index("Clean up publication hold after failed release cut")]
     assert "steps.cut.outcome != 'success'" in failed_cut_cleanup["if"]

@@ -247,6 +247,7 @@ jobs:
           fi
           git tag -a release-publication-hold -m "Suppress stable publication while cut establishes release-freeze"
           git push origin release-publication-hold
+          echo "established=true" >> "$GITHUB_OUTPUT"
           echo "Established release-publication-hold before the version-bump PR."
 
       - name: Prepare exact cut commit through protected main (cut only)
@@ -398,7 +399,7 @@ jobs:
           echo "Schema freshness passed on exact target ${TARGET_SHA}."
 
       - name: Clean up publication hold after failed cut preparation
-        if: always() && inputs.mode == 'cut' && steps.publication-hold.outcome == 'success' && (steps.cut-commit.outcome != 'success' || steps.schema-freshness.outcome != 'success')
+        if: always() && inputs.mode == 'cut' && steps.publication-hold.outputs.established == 'true' && (steps.cut-commit.outcome != 'success' || steps.schema-freshness.outcome != 'success')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -458,7 +459,7 @@ jobs:
           echo "cut_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Clean up publication hold after failed release cut
-        if: always() && inputs.mode == 'cut' && steps.publication-hold.outcome == 'success' && steps.cut.outcome != 'success'
+        if: always() && inputs.mode == 'cut' && steps.publication-hold.outputs.established == 'true' && steps.cut.outcome != 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
