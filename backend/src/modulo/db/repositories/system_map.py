@@ -203,11 +203,13 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         organisation_id: uuid.UUID,
         system_map_id: uuid.UUID,
         revision_number: int,
+        revision_id: uuid.UUID | None = None,
         status: str = "draft",
         content_json: dict[str, Any] | None = None,
     ) -> SystemMapRevision:
-        """Create a new revision for a system map."""
+        """Create a new revision, optionally with a caller-supplied stable ID."""
         revision = SystemMapRevision(
+            id=revision_id or uuid.uuid4(),
             organisation_id=organisation_id,
             system_map_id=system_map_id,
             revision_number=revision_number,

@@ -93,6 +93,7 @@ class SystemMapDiscoveryRepository:
                 organisation_id=organisation_id,
                 system_map_id=map_id,
                 revision_number=revision_number,
+                revision_id=revision_id,
                 content_json=content,
             )
             for node in content.get("nodes", []):

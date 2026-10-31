@@ -50,6 +50,7 @@ _TENANT_TRIGGER_DDL = (
     "CREATE TRIGGER trg_system_map_nodes_owner_team_id_tenant BEFORE INSERT OR UPDATE OF owner_team_id, organisation_id ON system_map_nodes FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('teams', 'owner_team_id')",
     "CREATE TRIGGER trg_system_map_nodes_eval_id_tenant BEFORE INSERT OR UPDATE OF eval_id, organisation_id ON system_map_nodes FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('evals', 'eval_id')",
     "CREATE TRIGGER trg_system_map_loop_configs_action_pipeline_id_tenant BEFORE INSERT OR UPDATE OF action_pipeline_id, organisation_id ON system_map_loop_configs FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('pipelines', 'action_pipeline_id')",
+    "CREATE TRIGGER trg_system_map_loop_reservations_run_id_tenant BEFORE INSERT OR UPDATE OF run_id, organisation_id ON system_map_loop_reservations FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('runs', 'run_id')",
     "CREATE TRIGGER trg_system_map_attribution_bindings_pipeline_id_tenant BEFORE INSERT OR UPDATE OF pipeline_id, organisation_id ON system_map_attribution_bindings FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('pipelines', 'pipeline_id')",
     "CREATE TRIGGER trg_system_map_attribution_bindings_trigger_id_tenant BEFORE INSERT OR UPDATE OF trigger_id, organisation_id ON system_map_attribution_bindings FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organisation('triggers', 'trigger_id')",
 )
@@ -60,6 +61,7 @@ _TRIGGER_TABLES = (
     ("trg_system_map_nodes_owner_team_id_tenant", "system_map_nodes"),
     ("trg_system_map_nodes_eval_id_tenant", "system_map_nodes"),
     ("trg_system_map_loop_configs_action_pipeline_id_tenant", "system_map_loop_configs"),
+    ("trg_system_map_loop_reservations_run_id_tenant", "system_map_loop_reservations"),
     ("trg_system_map_attribution_bindings_pipeline_id_tenant", "system_map_attribution_bindings"),
     ("trg_system_map_attribution_bindings_trigger_id_tenant", "system_map_attribution_bindings"),
 )

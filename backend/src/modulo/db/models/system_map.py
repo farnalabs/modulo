@@ -408,7 +408,9 @@ class SystemMapLoopReservation(SoftDeleteMixin, OrgScoped):
     )
 
     loop_config_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
-    run_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False, index=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("runs.id", ondelete=_ONDELETE_RESTRICT), nullable=False, index=True
+    )
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     reserved_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False

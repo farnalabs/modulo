@@ -202,9 +202,15 @@ class TestSystemMapMigratedSchema:
             revisions_fks = await conn.run_sync(_referred_tables, "system_map_revisions")
             revisions = await conn.run_sync(lambda c: inspect(c).get_foreign_keys("system_map_revisions"))
             nodes_fks = await conn.run_sync(_referred_tables, "system_map_nodes")
+            reservations = await conn.run_sync(lambda c: inspect(c).get_foreign_keys("system_map_loop_reservations"))
 
         assert {"organisations", "teams", "accounts", "system_map_revisions"} <= maps_fks
         assert {"organisations", "system_maps"} <= revisions_fks
+        reservation_run_fks = [fk for fk in reservations if fk["name"] == "system_map_loop_reservations_run_id_fkey"]
+        assert len(reservation_run_fks) == 1
+        assert reservation_run_fks[0]["constrained_columns"] == ["run_id"]
+        assert reservation_run_fks[0]["referred_table"] == "runs"
+        assert reservation_run_fks[0]["referred_columns"] == ["id"]
         revision_map_fks = [fk for fk in revisions if fk["name"] == "fk_system_map_revisions_map_org"]
         assert len(revision_map_fks) == 1
         assert revision_map_fks[0]["constrained_columns"] == ["system_map_id", "organisation_id"]
@@ -227,6 +233,18 @@ class TestSystemMapMigratedSchema:
             )
             trigger_names = {row[0] for row in triggers}
         assert "trg_system_maps_owner_team_tenant" in trigger_names
+
+    @pytest.mark.asyncio
+    async def test_reservation_run_trigger_enforces_same_organisation(self, db_engine: AsyncEngine) -> None:
+        async with db_engine.connect() as conn:
+            triggers = await conn.execute(
+                text(
+                    "SELECT tgname FROM pg_trigger "
+                    "WHERE tgrelid = 'system_map_loop_reservations'::regclass AND NOT tgisinternal"
+                )
+            )
+            trigger_names = {row[0] for row in triggers}
+        assert "trg_system_map_loop_reservations_run_id_tenant" in trigger_names
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -452,7 +470,7 @@ class TestSystemMapModelRoundTrip:
 
     @pytest.mark.asyncio
     async def test_loop_config_attempt_and_reservation_round_trip(
-        self, db_session: AsyncSession, graph_parents: _GraphParents
+        self, db_session: AsyncSession, graph_parents: _GraphParents, test_snapshot: uuid.UUID
     ) -> None:
         org_id = graph_parents.org_id
         loop_config = graph_parents.loop_config
@@ -469,10 +487,29 @@ class TestSystemMapModelRoundTrip:
             idempotency_key="idem_123",
             status="pending",
         )
+        run_id = uuid.uuid4()
+        await db_session.execute(
+            text(
+                "INSERT INTO runs "
+                "(id, organisation_id, pipeline_id, snapshot_id, trigger_type, run_number, input_hash, "
+                "langgraph_thread_id) "
+                "VALUES (:id, :organisation_id, :pipeline_id, :snapshot_id, 'manual', :run_number, "
+                ":input_hash, :thread_id)"
+            ),
+            {
+                "id": run_id,
+                "organisation_id": org_id,
+                "pipeline_id": graph_parents.pipeline_id,
+                "snapshot_id": test_snapshot,
+                "run_number": 999999,
+                "input_hash": "0" * 64,
+                "thread_id": str(uuid.uuid4()),
+            },
+        )
         reservation = SystemMapLoopReservation(
             organisation_id=org_id,
             loop_config_id=loop_config.id,
-            run_id=uuid.uuid4(),
+            run_id=run_id,
             idempotency_key="res_456",
             cooldown_until=datetime.now(UTC) + timedelta(hours=1),
             status="active",
