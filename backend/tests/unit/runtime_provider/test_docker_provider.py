@@ -495,7 +495,7 @@ async def test_destroy_workspace_unknown(
 ) -> None:
     await provider.destroy_workspace("nonexistent")
 
-    assert provider._workspaces == {}
+    assert not provider._workspaces
 
 
 async def test_destroy_workspace_swallows_delete_error(
