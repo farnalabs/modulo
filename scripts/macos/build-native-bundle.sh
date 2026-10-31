@@ -93,6 +93,15 @@ cp "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock" "${BUNDLE_
 # and interpreter links resolve inside the app instead of to build-time paths.
 "${BUNDLE_ROOT}/runtime/bin/python3.12" -m venv --copies "${BUNDLE_ROOT}/backend/.venv"
 uv sync --frozen --no-dev --no-install-project --project "${BUNDLE_ROOT}/backend" --python "${BUNDLE_ROOT}/backend/.venv/bin/python"
+# The native launcher starts the bundled interpreter directly. Its child
+# supervisor processes deliberately receive an allowlisted environment that
+# excludes PYTHONPATH, so make the application source importable without an
+# inherited environment variable. A relative .pth keeps the installed app
+# relocatable after it is copied out of the build workspace.
+RUNTIME_SITE_PACKAGES="${BUNDLE_ROOT}/runtime/lib/python3.12/site-packages"
+mkdir -p "${RUNTIME_SITE_PACKAGES}"
+printf '%s\n' '../../../../backend/src' > "${RUNTIME_SITE_PACKAGES}/modulo-bundle.pth"
+env -u PYTHONPATH -u PYTHONHOME "${BUNDLE_ROOT}/runtime/bin/python3" -c 'import modulo.launcher.supervisor'
 
 assert_no_escaping_symlinks() {
   local root="$1" link target resolved canonical_root

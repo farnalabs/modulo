@@ -61,6 +61,11 @@ mkdir -p "$INSTALL_ROOT"
 TARGET="$INSTALL_ROOT/$(basename "$APP")"
 rm -rf "$TARGET"
 cp -R "$APP" "$TARGET"
+# Verify the copied, relocatable app—not the mounted source bundle—can import
+# the supervisor with the same clean environment used by launchd children.
+env -u PYTHONPATH -u PYTHONHOME \
+  "$TARGET/Contents/Resources/bundle/runtime/bin/python3" \
+  -c 'import modulo.launcher.supervisor'
 mkdir -p "$HOME/Library/LaunchAgents"
 PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
 DATA_DIR="${MODULO_DATA_DIR:-$HOME/Library/Application Support/Modulo/data}"
