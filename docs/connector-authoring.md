@@ -7,14 +7,14 @@ implements the `ConnectorBase` ABC and registers with the `ConnectorHub`.
 
 ```
 ConnectorBase (ABC)          ← modulo/connectors/base.py
-  ├── 43 connector types (filesystem, github, gitlab, jira,
-  │   linear, slack, shell, pagerduty, sentry, datadog, and more;
-  │   one `ConnectorType` enum member each)
-  │   including the generic REST connector (rest) and the
-  │   provider-dispatched `ticket-tracker` family; note that
-  │   `ci-runner` is an abstract label the hub cannot build
-  │   (the buildable CI types are github_actions_ci, gitlab_ci,
-  │   woodpecker);
+  ├── 43 `ConnectorType` enum members (filesystem, github, gitlab,
+  │   jira, linear, slack, shell, pagerduty, sentry, datadog, and
+  │   more), including the generic REST connector (rest) and the
+  │   provider-dispatched `ticket-tracker` family. The count
+  │   includes the abstract labels `ci-runner` and `custom`, which
+  │   have no hub build arm; the hub-native CI-runner ids
+  │   `github_actions_ci`, `gitlab_ci` and `woodpecker` are
+  │   buildable but are not enum members;
   │   see modulo/connectors/ for the full list
   ├── CIRunnerBase           ← modulo/connectors/ci_runner/ (abstract CI runner)
   ├── TicketTrackerBase      ← modulo/connectors/ticket_tracker/ (abstract ticket-tracker base)
@@ -162,8 +162,15 @@ directions:
   `ConnectorType.TICKET_TRACKER` as its enum member because Plane is
   work-item tracking.
 - `ci-runner` is an enum member the hub cannot build: it is the abstract
-  CI-runner label, and the buildable CI types are `github_actions_ci`,
-  `gitlab_ci` and `woodpecker`.
+  CI-runner label. The hub-native CI-runner ids are `github_actions_ci`,
+  `gitlab_ci` and `woodpecker` (buildable, but not enum members). Other enum
+  members whose capability set covers the four CI-runner operations
+  (`trigger_run`, `get_run_status`, `get_run_logs`, `list_runs`) are also
+  dispatch-capable: `circleci`, `buildkite`, `jenkins`, `teamcity` and
+  `azure_pipelines`.
+- `custom` is an enum member with no built-in connector class. It is the
+  label a plugin may report from `connector_type`; it is not a hub build arm,
+  so `custom` is only buildable when a plugin registers that exact id.
 
 ### The stored `allowed_operations` allowlist
 
