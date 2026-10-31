@@ -577,10 +577,10 @@ def _git(cwd: Path, *args: str) -> str:
 
 def _promote_harness(
     tmp_path: Path, *, scenario: str, ci_sha: str | None = None
-) -> tuple[subprocess.CompletedProcess[str], Path, str, str]:
+) -> tuple[subprocess.CompletedProcess[str], Path, str, str, dict[str, str]]:
     root = tmp_path / "repo"
     origin = tmp_path / "origin.git"
-    root.mkdir()
+    root.mkdir(parents=True)
     _git(root, "init", "-b", "main")
     _git(root, "config", "user.email", "test@example.invalid")
     _git(root, "config", "user.name", "test")
@@ -644,9 +644,24 @@ case "${1:-}" in
       create) printf 'https://github.example/pull/42\\n' ;;
     esac
     ;;
-  api) branch_sha ;;
-  workflow) ;;
-  run)
+   api) branch_sha ;;
+   release)
+     case "${2:-}" in
+       view) exit 1 ;;
+       create|edit)
+         if [[ "${FAIL_PUBLICATION_BLOCK:-}" == notes ]]; then
+           printf 'release publication failure\\n' >&2
+           exit 1
+         fi
+         printf 'release publication marker\\n' >> "$HARNESS_DIR/publication-markers"
+         ;;
+       *) ;;
+     esac
+     ;;
+
+   workflow) ;;
+   run)
+
     case "${2:-}" in
       list) printf '[{"databaseId":7,"headSha":"%s","createdAt":"2026-01-01T00:00:00Z"}]\\n' "$(branch_sha)" ;;
       watch) ;;
@@ -658,19 +673,109 @@ esac
         encoding="utf-8",
     )
     gh.chmod(0o755)
+
+    docker = bin_dir / "docker"
+    docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+freeze_marker() {
+  git -C "$ROOT" rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1 || {
+    printf 'freeze missing for docker\\n' >&2
+    exit 1
+  }
+  printf 'freeze-present:docker\\n' >> "$HARNESS_DIR/publication-markers"
+}
+freeze_marker
+if [[ "${1:-}" == login ]]; then
+  printf 'docker login marker\\n' >> "$HARNESS_DIR/publication-markers"
+  exit 0
+fi
+if [[ "${1:-}" == buildx && "${2:-}" == imagetools && "${3:-}" == create ]]; then
+  if [[ "${FAIL_PUBLICATION_BLOCK:-}" == retag ]]; then
+    printf 'docker retag failure\\n' >&2
+    exit 1
+  fi
+  printf 'docker retag marker %s\\n' "$*" >> "$HARNESS_DIR/publication-markers"
+  exit 0
+fi
+if [[ "${1:-}" == buildx && "${2:-}" == imagetools && "${3:-}" == inspect ]]; then
+  printf 'sha256:%064d\\n' 1
+  exit 0
+fi
+printf 'unexpected docker invocation: %s\\n' "$*" >&2
+exit 1
+""",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    helm = bin_dir / "helm"
+    helm.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+git -C "$ROOT" rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1 || {
+  printf 'freeze missing for helm\\n' >&2
+  exit 1
+}
+printf 'freeze-present:helm\\n' >> "$HARNESS_DIR/publication-markers"
+case "${1:-}" in
+  registry) printf 'helm login marker\\n' >> "$HARNESS_DIR/publication-markers" ;;
+  package)
+    destination=""
+    version=""
+    while (($#)); do
+      case "$1" in
+        --destination) destination="$2"; shift 2 ;;
+        --version) version="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    mkdir -p "$destination"
+    : > "$destination/modulo-${version}.tgz"
+    printf 'helm package marker %s\\n' "$version" >> "$HARNESS_DIR/publication-markers"
+    ;;
+  push)
+    if [[ "${FAIL_PUBLICATION_BLOCK:-}" == helm ]]; then
+      printf 'helm push failure\\n' >&2
+      exit 1
+    fi
+    printf 'helm push marker\\n' >> "$HARNESS_DIR/publication-markers"
+    ;;
+  *) printf 'unexpected helm invocation: %s\\n' "$*" >&2; exit 1 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    helm.chmod(0o755)
+
+    python3 = bin_dir / "python3"
+    python3.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+git -C "$ROOT" rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1 || {
+  printf 'freeze missing for notes\\n' >&2
+  exit 1
+}
+printf 'freeze-present:notes\\n' >> "$HARNESS_DIR/publication-markers"
+exec /usr/bin/python3 "$@"
+""",
+        encoding="utf-8",
+    )
+    python3.chmod(0o755)
+
     env = {
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "GITHUB_REPOSITORY": "example/repo",
         "VERSION": "1.2.3",
         "SCENARIO": scenario,
-        "HARNESS_DIR": str(tmp_path),
         "ROOT": str(root),
         "RC_SHA": rc_sha,
         "BRANCH_SHA": rc_sha,
         "PR_SHA": rc_sha,
         "GIT_DIR": str(root / ".git"),
         "GITHUB_OUTPUT": str(root / "github-output.txt"),
+        "HARNESS_DIR": str(tmp_path),
     }
     if scenario != "valid":
         _git(root, "checkout", "-b", "release/promote-1.2.3", rc_sha)
@@ -711,7 +816,40 @@ esac
         check=False,
         timeout=30,
     )
-    return result, root, rc_sha, env["PR_SHA"]
+    return result, root, rc_sha, env["PR_SHA"], env
+
+
+def _run_release_block(
+    root: Path,
+    env: dict[str, str],
+    name: str,
+    failure: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    steps = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
+    script = next(step["run"] for step in steps if step.get("name") == name)
+    script = script.replace("${{ steps.promote.outputs.rc_tag }}", '"$RC_TAG"')
+    script = script.replace("${{ steps.promote.outputs.ga_tag }}", '"$GA_TAG"')
+    script = script.replace("${{ steps.promote.outputs.promote_sha }}", '"$PROMOTE_SHA"')
+    block_env = {
+        **env,
+        "FAIL_PUBLICATION_BLOCK": failure or "",
+        "GH_TOKEN": "test",
+        "REGISTRY_USER": "test-user",
+        "IMAGE_NAMESPACE": "example/repo",
+        "RC_TAG": "v1.2.3-rc1",
+        "GA_TAG": "v1.2.3",
+        "PROMOTE_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
+        "GITHUB_OUTPUT": str(root / "publication-output.txt"),
+    }
+    return subprocess.run(  # noqa: S603 - fixed shell and workflow text under test
+        [which("bash") or "bash", "-eo", "pipefail", "-c", script],
+        cwd=root,
+        env=block_env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
 
 
 def _freeze_lift_script() -> str:
@@ -722,10 +860,26 @@ def _freeze_lift_script() -> str:
 
 
 def test_release_promote_successfully_publishes_exact_tag_and_lifts_freeze(tmp_path: Path) -> None:
-    result, root, _rc_sha, _pr_sha = _promote_harness(tmp_path, scenario="valid")
+    result, root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path, scenario="valid")
     assert result.returncode == 0, result.stderr + result.stdout
     assert "GA tag v1.2.3 published at" in result.stdout
     assert "release-freeze remains active" in result.stdout
+    markers_path = root.parent / "publication-markers"
+    markers_path.write_text("", encoding="utf-8")
+    for block_name, marker in (
+        ("Retag container images for GA", "docker retag marker"),
+        ("Push Helm chart to OCI registry", "helm push marker"),
+        ("Update CHANGELOG.md and GitHub Release for GA", "release publication marker"),
+    ):
+        publication = _run_release_block(root, env, block_name)
+        assert publication.returncode == 0, f"{block_name}: {publication.stderr}{publication.stdout}"
+        assert marker in (root.parent / "publication-markers").read_text(encoding="utf-8")
+    markers = (root.parent / "publication-markers").read_text(encoding="utf-8").splitlines()
+    assert markers.count("freeze-present:docker") >= 1
+    assert markers.count("freeze-present:helm") >= 1
+    assert markers.count("freeze-present:notes") >= 1
+    assert markers.index("freeze-present:docker") < markers.index("freeze-present:helm")
+    assert markers.index("freeze-present:helm") < markers.index("freeze-present:notes")
     output_values = dict(
         line.split("=", 1) for line in (root / "github-output.txt").read_text(encoding="utf-8").splitlines()
     )
@@ -752,22 +906,45 @@ def test_release_promote_successfully_publishes_exact_tag_and_lifts_freeze(tmp_p
     assert not _git(root, "ls-remote", "origin", "refs/tags/release-freeze")
 
 
+def test_release_promote_reestablishes_freeze_after_each_publication_failure(tmp_path: Path) -> None:
+    for block_name, failure in (
+        ("Retag container images for GA", "retag"),
+        ("Push Helm chart to OCI registry", "helm"),
+        ("Update CHANGELOG.md and GitHub Release for GA", "notes"),
+    ):
+        result, root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path / failure, scenario="valid")
+        assert result.returncode == 0, result.stderr + result.stdout
+        failed = _run_release_block(root, env, block_name, failure)
+        assert failed.returncode != 0
+        reestablish = _run_release_block(
+            root,
+            env,
+            "Re-establish release freeze after failed GA publication",
+        )
+        assert reestablish.returncode == 0, reestablish.stderr + reestablish.stdout
+        assert "Re-established release-freeze" in reestablish.stdout or "remains active" in reestablish.stdout
+        assert _git(root, "ls-remote", "origin", "refs/tags/release-freeze")
+        lift = _run_release_block(root, env, "Lift release freeze after successful GA publication")
+        assert lift.returncode == 0
+        assert "freeze lifted" in lift.stdout
+
+
 def test_release_promote_rejects_wrong_version_heading(tmp_path: Path) -> None:
-    result, _root, _rc_sha, _pr_sha = _promote_harness(tmp_path, scenario="wrong-heading")
+    result, _root, _rc_sha, _pr_sha, _env = _promote_harness(tmp_path, scenario="wrong-heading")
     output = result.stderr + result.stdout
     assert result.returncode != 0
     assert "exact generated release metadata" in output
 
 
 def test_release_promote_rejects_wrong_generated_release_body(tmp_path: Path) -> None:
-    result, _root, _rc_sha, _pr_sha = _promote_harness(tmp_path, scenario="wrong-body")
+    result, _root, _rc_sha, _pr_sha, _env = _promote_harness(tmp_path, scenario="wrong-body")
     output = result.stderr + result.stdout
     assert result.returncode != 0
     assert "exact generated release metadata" in output
 
 
 def test_release_promote_rejects_stale_reused_pr_head(tmp_path: Path) -> None:
-    result, _root, _rc_sha, _pr_sha = _promote_harness(tmp_path, scenario="stale")
+    result, _root, _rc_sha, _pr_sha, _env = _promote_harness(tmp_path, scenario="stale")
     output = result.stderr + result.stdout
     assert result.returncode != 0
     assert "does not match release branch" in output
@@ -775,7 +952,7 @@ def test_release_promote_rejects_stale_reused_pr_head(tmp_path: Path) -> None:
 
 def test_release_promote_rejects_old_ci_head(tmp_path: Path) -> None:
     old_ci_sha = "0" * 40
-    result, _root, _rc_sha, _pr_sha = _promote_harness(tmp_path, scenario="valid", ci_sha=old_ci_sha)
+    result, _root, _rc_sha, _pr_sha, _env = _promote_harness(tmp_path, scenario="valid", ci_sha=old_ci_sha)
     output = result.stderr + result.stdout
     assert result.returncode != 0
     assert "did not succeed for exact promote PR head" in output
