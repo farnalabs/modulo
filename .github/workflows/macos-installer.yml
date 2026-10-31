@@ -1035,13 +1035,23 @@ jobs:
           run_pre_smoke mount_attached_transition bash -c '[[ "$1" -eq 0 ]]' bash "$MOUNT_ATTACHED"
           echo "pre-install: detached mount: $MOUNT"
           INSTALL_ROOT="$RUNNER_TEMP/modulo install"
+          INSTALL_ENV=()
+          if [[ "$dmg_staple_ticket_unavailable" -eq 1 ]]; then
+            INSTALL_ENV=(
+              env
+              MODULO_MACOS_REHEARSAL_ALLOW_UNSTAPLED_TICKET=1
+              MODULO_MACOS_REHEARSAL_ALLOW_UNSTAPLED_TICKET_REASON=apple_cloudkit_ticket_unavailable
+            )
+          fi
 
 
           # Post-install smoke assertions with diagnostic capture
           # shellcheck disable=SC2016
           run_assertion "install_sh" \
+            "${INSTALL_ENV[@]}" \
             bash -c 'MODULO_INSTALL_ROOT="$1" MODULO_DATA_DIR="$2" scripts/macos/install.sh "$3"' \
             bash "$INSTALL_ROOT" "$DATA" "$DMG_WITH_SPACES" || exit 1
+
 
           run_assertion "launchctl_print_post_install" \
             launchctl print "gui/$(id -u)/run.modulo.launcher" || exit 1

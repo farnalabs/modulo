@@ -51,7 +51,11 @@ done < <(for candidate in "$MOUNT"/*.app; do [[ -d "$candidate" && ! -L "$candid
 [[ "$app_count" -eq 1 ]] || { echo "ERROR: expected exactly one non-symlink .app bundle on the DMG, found ${app_count}" >&2; exit 1; }
 [[ -d "$APP" && ! -L "$APP" ]] || { echo 'ERROR: DMG does not contain the expected non-symlink .app bundle' >&2; exit 1; }
 codesign --verify --deep --strict "$APP"
-spctl --assess --type execute "$APP"
+if [[ "${MODULO_MACOS_REHEARSAL_ALLOW_UNSTAPLED_TICKET:-}" == '1' && "${MODULO_MACOS_REHEARSAL_ALLOW_UNSTAPLED_TICKET_REASON:-}" == 'apple_cloudkit_ticket_unavailable' ]]; then
+  printf '%s\n' '::warning::Rehearsal-only: deferring mounted-app Gatekeeper assessment because the Apple CloudKit notarization ticket is unavailable.' >&2
+else
+  spctl --assess --type execute "$APP"
+fi
 INSTALL_ROOT="${MODULO_INSTALL_ROOT:-$HOME/Library/Application Support/Modulo}"
 mkdir -p "$INSTALL_ROOT"
 TARGET="$INSTALL_ROOT/$(basename "$APP")"
