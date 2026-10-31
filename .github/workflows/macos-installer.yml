@@ -1059,22 +1059,124 @@ jobs:
            # State.json / API port / healthz
            # shellcheck disable=SC2016
            run_assertion "state_json_api_port_healthz" bash -c '
-             STATE="$1/state.json"
+             DATA_DIR="$1"
+             TEMP_DIR="${2:-${RUNNER_TEMP:-}}"
+             STATE="$DATA_DIR/state.json"
              API_PORT=""
+             LAST_CURL_ERROR=""
              # First boot may run initdb and migrations before the API serves.
              # This is a wait-budget change only; /healthz remains a hard gate.
              for _attempt in $(seq 1 150); do
                if [[ -s "$STATE" ]]; then
-                 API_PORT="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["api_port"])'\'' "$STATE" 2>/dev/null || true)"
-                 if [[ -n "$API_PORT" ]] && curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" >/dev/null; then
-                   echo "$API_PORT"
-                   exit 0
+                 parsed_port="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["api_port"])'\'' "$STATE" 2>/dev/null || true)"
+                 if [[ -n "$parsed_port" ]]; then
+                   API_PORT="$parsed_port"
+                   if curl_err="$(curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" 2>&1 >/dev/null)"; then
+                     echo "$API_PORT"
+                     exit 0
+                   else
+                     LAST_CURL_ERROR="$curl_err"
+                   fi
                  fi
                fi
                sleep 2
              done
+
+             echo "=== Diagnostic: State file ==="
+             if [[ -f "$STATE" ]]; then
+               state_size="$(wc -c < "$STATE" | tr -d " ")"
+               echo "state file present: $STATE (size: ${state_size} bytes)"
+               if [[ -r "$STATE" ]]; then
+                 echo "state file contents:"
+                 cat "$STATE"
+                 echo ""
+               else
+                 echo "state file exists but is not readable"
+               fi
+             elif [[ -e "$STATE" ]]; then
+               echo "state path exists but is not a regular file: $STATE"
+               ls -la "$STATE" || true
+             else
+               echo "state file absent: $STATE"
+               if [[ -d "$DATA_DIR" ]]; then
+                 echo "contents of data dir ($DATA_DIR):"
+                 ls -la "$DATA_DIR" || true
+               else
+                 echo "data dir absent: $DATA_DIR"
+               fi
+             fi
+
+             echo "=== Diagnostic: Launcher logs ==="
+             log_found=0
+             for log_candidate in \
+               "$DATA_DIR/launcher.log" \
+               "$DATA_DIR/logs/launcher.log" \
+               "$TEMP_DIR/launcher.log"; do
+               if [[ -f "$log_candidate" ]]; then
+                 log_size="$(wc -c < "$log_candidate" | tr -d " ")"
+                 echo "found log: $log_candidate (size: ${log_size} bytes)"
+                 echo "last 50 lines of $log_candidate:"
+                 tail -n 50 "$log_candidate" || true
+                 echo ""
+                 log_found=1
+               fi
+             done
+             if [[ -d "$DATA_DIR" ]]; then
+               while IFS= read -r other_log; do
+                 [[ -n "$other_log" ]] || continue
+                 case "$other_log" in
+                   "$DATA_DIR/launcher.log"|"$DATA_DIR/logs/launcher.log") continue ;;
+                 esac
+                 echo "found log: $other_log"
+                 echo "last 50 lines of $other_log:"
+                 tail -n 50 "$other_log" || true
+                 echo ""
+                 log_found=1
+               done < <(find "$DATA_DIR" -type f -name "*.log" 2>/dev/null || true)
+             fi
+             if [[ -d "$TEMP_DIR" ]]; then
+               while IFS= read -r temp_log; do
+                 [[ -n "$temp_log" ]] || continue
+                 case "$temp_log" in
+                   "$TEMP_DIR/launcher.log"|"$DATA_DIR"/*) continue ;;
+                 esac
+                 echo "found log in temp: $temp_log"
+                 echo "last 50 lines of $temp_log:"
+                 tail -n 50 "$temp_log" || true
+                 echo ""
+                 log_found=1
+               done < <(find "$TEMP_DIR" -maxdepth 3 -type f -name "*launcher*.log" 2>/dev/null || true)
+             fi
+             if [[ "$log_found" -eq 0 ]]; then
+               echo "no launcher logs found in $DATA_DIR or $TEMP_DIR"
+             fi
+
+             echo "=== Diagnostic: Launcher processes and launchctl ==="
+             echo "launchctl print gui/$(id -u)/run.modulo.launcher:"
+             launchctl print "gui/$(id -u)/run.modulo.launcher" 2>&1 || true
+             echo ""
+             echo "pgrep -fl modulo:"
+             pgrep -fl modulo 2>&1 || true
+             echo ""
+             echo "ps -ef matching modulo, postgres, redis:"
+             ps -ef | grep -E "([m]odulo|[p]ostgres|[r]edis)" || true
+             echo ""
+
+             echo "=== Diagnostic: API_PORT and healthz ==="
+             if [[ -n "$API_PORT" ]]; then
+               echo "last observed API_PORT: $API_PORT"
+               if [[ -n "$LAST_CURL_ERROR" ]]; then
+                 echo "last curl error on http://127.0.0.1:${API_PORT}/healthz:"
+                 echo "$LAST_CURL_ERROR"
+               else
+                 echo "last curl error: none recorded"
+               fi
+             else
+               echo "no API_PORT was ever observed in state file"
+             fi
+
              exit 1
-           ' bash "$DATA"
+           ' bash "$DATA" "$RUNNER_TEMP"
            API_PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["api_port"])' "$DATA/state.json" 2>/dev/null || true)"
            [[ -n "$API_PORT" ]] || { echo '::error::native launcher never wrote state.json' >&2; exit 1; }
 
