@@ -36,7 +36,6 @@ cleanup() {
 trap cleanup EXIT
 hdiutil verify "$DMG" >/dev/null
 codesign --verify --verbose=2 "$DMG"
-spctl --assess --type open --context context:primary-signature "$DMG"
 hdiutil attach "$DMG" -mountpoint "$MOUNT" -nobrowse -readonly >/dev/null
 MOUNT_ATTACHED=1
 # The mounted volume ships Modulo-<version>.app, but the DMG itself may be
@@ -52,6 +51,7 @@ done < <(for candidate in "$MOUNT"/*.app; do [[ -d "$candidate" && ! -L "$candid
 [[ "$app_count" -eq 1 ]] || { echo "ERROR: expected exactly one non-symlink .app bundle on the DMG, found ${app_count}" >&2; exit 1; }
 [[ -d "$APP" && ! -L "$APP" ]] || { echo 'ERROR: DMG does not contain the expected non-symlink .app bundle' >&2; exit 1; }
 codesign --verify --deep --strict "$APP"
+spctl --assess --type execute "$APP"
 INSTALL_ROOT="${MODULO_INSTALL_ROOT:-$HOME/Library/Application Support/Modulo}"
 mkdir -p "$INSTALL_ROOT"
 TARGET="$INSTALL_ROOT/$(basename "$APP")"
