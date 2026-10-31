@@ -554,16 +554,6 @@ def test_release_cut_uses_protected_main_pr_and_exact_merge_ref() -> None:
     assert 'gh workflow run "CI: Fast Validation"' in script
     assert "gh workflow run pr-review.yml" in script
 
-    cleanup_names = [name for name in names if "Clean up publication hold" in name]
-    assert len(cleanup_names) == 2
-    for cleanup_name in cleanup_names:
-        cleanup = steps[names.index(cleanup_name)]
-        assert "always()" in cleanup["if"]
-        assert "steps.publication-hold.outputs.established == 'true'" in cleanup["if"]
-        assert "git push origin --delete release-publication-hold" in cleanup["run"]
-    failed_cut_cleanup = steps[names.index("Clean up publication hold after failed release cut")]
-    assert "steps.cut.outcome != 'success'" in failed_cut_cleanup["if"]
-
 
 def test_release_pr_driving_steps_use_the_trusted_bot_token() -> None:
     """Every release PR-driving step must run as the trusted ``farnalabs`` bot.
@@ -601,37 +591,6 @@ def test_release_pr_driving_steps_use_the_trusted_bot_token() -> None:
         assert guard_index < first_gh, f"{label} must check the secret before any gh call"
         assert 'echo "${GH_TOKEN}"' not in script, f"{label} must never log the token"
         assert "set -x" not in script, f"{label} must never trace the token"
-
-
-def test_release_promote_pr_driving_steps_use_trusted_pat_and_fail_closed() -> None:
-    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["release"]["steps"]
-    promote = next(step for step in steps if step.get("name") == "Promote to GA and lift freeze")
-    env = cast(dict[str, str], promote.get("env") or {})
-    script = cast(str, promote["run"])
-
-    assert env.get("GH_TOKEN") == _RELEASE_PR_TOKEN_SECRET
-    assert "GITHUB_TOKEN" not in env
-    assert '[ -z "${GH_TOKEN:-}" ]' in script
-    assert "MODULO_RELEASE_PR_TOKEN" in script
-    guard_index = script.index('[ -z "${GH_TOKEN:-}" ]')
-    first_gh = min(script.index(command) for command in _RELEASE_PR_DRIVING_COMMANDS if command in script)
-    assert guard_index < first_gh
-    assert 'echo "${GH_TOKEN}"' not in script
-    assert "set -x" not in script
-
-
-def test_release_cut_tags_the_exact_merged_commit_after_schema_gate() -> None:
-    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["release"]["steps"]
-    names = _step_names(steps)
-    prepare_idx = names.index("Prepare exact cut commit through protected main (cut only)")
-    schema_idx = names.index("Assert schema-freshness gate green on exact cut/recut commit")
-    cut_idx = names.index("Cut release candidate and freeze main")
-    assert prepare_idx < schema_idx < cut_idx
-    assert steps[schema_idx]["id"] == "schema-freshness"
-    assert "steps.cut-commit.outputs.cut_sha" in steps[schema_idx]["env"]["CUT_SHA"]
-    assert 'echo "cut_sha=$(git rev-parse HEAD)"' in steps[cut_idx]["run"]
 
 
 #: The repository secret holding a vault-sourced PAT for the trusted bot
@@ -1063,50 +1022,10 @@ def test_release_cut_cleanup_is_failure_safe() -> None:
         assert "git push origin --delete release-publication-hold" in step["run"]
 
 
-_RELEASE_PR_TOKEN_SECRET = "${{ secrets.MODULO_RELEASE_PR_TOKEN }}"
-_RELEASE_PR_DRIVING_COMMANDS = (
-    "gh pr create",
-    "gh pr view",
-    "gh workflow run pr-review.yml",
-    'gh workflow run "CI: Fast Validation"',
-)
-
-
 def _promote_step() -> dict[str, Any]:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["release"]["steps"]
     return steps[_step_names(steps).index("Promote to GA and lift freeze")]
-
-
-def _release_pr_driving_steps() -> list[tuple[str, dict[str, Any]]]:
-    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    return [
-        (f"{job_id}: {step.get('name', '')}", step)
-        for job_id, job in workflow["jobs"].items()
-        for step in job.get("steps", [])
-        if isinstance(step.get("run"), str) and any(command in step["run"] for command in _RELEASE_PR_DRIVING_COMMANDS)
-    ]
-
-
-def test_release_cut_and_promote_pr_drivers_use_trusted_token_and_fail_closed() -> None:
-    driving = _release_pr_driving_steps()
-    labels = [label for label, _step in driving]
-    assert any("Prepare exact cut commit" in label for label in labels)
-    assert any("Promote to GA" in label for label in labels)
-
-    for label, step in driving:
-        env = cast(dict[str, str], step.get("env") or {})
-        assert env.get("GH_TOKEN") == _RELEASE_PR_TOKEN_SECRET, f"{label} must use the trusted release PR PAT"
-        assert "GITHUB_TOKEN" not in env, f"{label} must keep branch pushes on the checkout github.token credential"
-        script = cast(str, step["run"])
-        assert "MODULO_RELEASE_PR_TOKEN" in script
-        assert '[ -z "${GH_TOKEN:-}" ]' in script
-        assert script.index('[ -z "${GH_TOKEN:-}" ]') < min(
-            script.index(command) for command in _RELEASE_PR_DRIVING_COMMANDS if command in script
-        )
-        assert "github.token" not in script
-        assert "set -x" not in script
-        assert 'echo "${GH_TOKEN}"' not in script
 
 
 def test_release_promote_drives_every_gh_call_with_the_trusted_bot_token(tmp_path: Path) -> None:
