@@ -427,11 +427,13 @@ app refuses to start without them:
 | `FERNET_KEY` | 44-char base64 Fernet key used to encrypt stored connector credentials | `$(openssl rand -base64 32)` (base64-encoded 32-byte key) |
 
 The SAQ **system** worker needs one more variable: `MODULO_SYSTEM_DATABASE_URL`.
-Its cross-org crons (`dispatcher_reconcile`, the stale-run sweep and the other
-system jobs) refuse to run without it, and `dispatcher_reconcile` gates
-`/healthz/ready`, so leaving it unset gives an API that answers while readiness
-never becomes ready. In standalone mode point it at the same SQLite file; in
-every other mode use the dedicated `modulo_system` role (see
+Its system-engine crons (the jobs that run on the `modulo_system` role,
+including `dispatcher_reconcile`) refuse to run without it, and
+`dispatcher_reconcile` gates `/healthz/ready`, so leaving it unset gives an API
+that answers while readiness never becomes ready. The stale-run sweep and
+`fire_due_triggers` are not in this set: they scope per-org on the regular
+engine and run without it. In standalone mode point it at the same SQLite file;
+in every other mode use the dedicated `modulo_system` role (see
 [Docker Compose](#docker-compose-single-server-multi-user)).
 
 The command below sets the required variables inline, so it is runnable as
