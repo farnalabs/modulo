@@ -603,6 +603,24 @@ def test_release_pr_driving_steps_use_the_trusted_bot_token() -> None:
         assert "set -x" not in script, f"{label} must never trace the token"
 
 
+def test_release_promote_pr_driving_steps_use_trusted_pat_and_fail_closed() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    promote = next(step for step in steps if step.get("name") == "Promote to GA and lift freeze")
+    env = cast(dict[str, str], promote.get("env") or {})
+    script = cast(str, promote["run"])
+
+    assert env.get("GH_TOKEN") == _RELEASE_PR_TOKEN_SECRET
+    assert "GITHUB_TOKEN" not in env
+    assert '[ -z "${GH_TOKEN:-}" ]' in script
+    assert "MODULO_RELEASE_PR_TOKEN" in script
+    guard_index = script.index('[ -z "${GH_TOKEN:-}" ]')
+    first_gh = min(script.index(command) for command in _RELEASE_PR_DRIVING_COMMANDS if command in script)
+    assert guard_index < first_gh
+    assert 'echo "${GH_TOKEN}"' not in script
+    assert "set -x" not in script
+
+
 def test_release_cut_tags_the_exact_merged_commit_after_schema_gate() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["release"]["steps"]
