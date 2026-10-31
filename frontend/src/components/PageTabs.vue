@@ -50,16 +50,28 @@ import manifest from '@/manifest.yaml'
 export interface Tab {
   label: string
   /**
-   * Exact `manifest.routes` key for this tab's destination (the bare route
-   * path, e.g. `/admin/costs`). The plan-lock lookup resolves against it
-   * verbatim, so a `to` carrying a query/hash (or a trailing-slash variant)
-   * does not match a manifest entry and the tab is read as ungated.
+   * This tab's destination. It may carry a query string (e.g.
+   * `/library?section=community`); every query pair is matched against the
+   * current route when resolving the active tab, so tabs that sub-select a
+   * view on one path stay distinguishable.
+   *
+   * The plan-lock lookup resolves the bare path against `manifest.routes`
+   * verbatim (a query/hash is stripped first), so a query-bearing `to` still
+   * resolves its route metadata.
    */
   to: string
   icon?: Component
   badge?: number | string
   badgeVariant?: 'primary' | 'warning' | 'destructive'
   dataTestId?: string
+  /**
+   * Marks the tab whose query selects the route's DEFAULT state — the state
+   * the route resolves to when its query keys are absent (e.g. `/library`
+   * renders the `native` section because `?section=native` is the default).
+   * Without this flag a query-bearing tab is active only when every one of its
+   * query pairs is present on the current route.
+   */
+  defaultQuery?: boolean
 }
 
 /** Copy + accessible name for a plan-locked tab. */
@@ -79,7 +91,7 @@ const manifestRoutes =
   (manifest as { routes?: Record<string, ManifestRouteEntry | undefined> }).routes ?? {}
 
 function requiredTier(to: string): string | null {
-  return manifestRoutes[to]?.required_tier ?? null
+  return manifestRoutes[parseTabTarget(to).path]?.required_tier ?? null
 }
 
 const { t } = useI18n()
@@ -131,25 +143,88 @@ function lockFor(tab: Tab): TabLock | null {
 }
 
 function isActive(to: string): boolean {
-  const [tabPath, tabQuery] = to.split('?')
-  const tabSection = new URLSearchParams(tabQuery).get('section')
-  const routeSection = typeof route.query.section === 'string' ? route.query.section : null
-  const effectiveRouteSection = routeSection ?? 'native'
-
-  if (tabQuery && tabSection !== effectiveRouteSection) return false
-  if (route.path === tabPath) return true
-  if (!route.path.startsWith(tabPath + '/')) return false
-
-  return !props.tabs.some((tab) => {
-    const [siblingPath, siblingQuery] = tab.to.split('?')
-    return (
-      tab.to !== to
-      && (!siblingQuery || new URLSearchParams(siblingQuery).get('section') === effectiveRouteSection)
-      && (route.path.startsWith(siblingPath + '/') || route.path === siblingPath)
-      && siblingPath.length > tabPath.length
-    )
-  })
+  return activeTabValue.value === to
 }
+
+/** A `to` split into the path the tab lives on and its query pairs. */
+interface TabTarget {
+  path: string
+  query: Array<{ key: string; value: string }>
+}
+
+/**
+ * Split a tab destination into its path and query pairs. A `to` may be a bare
+ * path, carry a query (`/library?section=community`) or a hash, or any of those
+ * combined; only the path is used for prefix matching.
+ */
+function parseTabTarget(to: string): TabTarget {
+  const hashIndex = to.indexOf('#')
+  const withoutHash = hashIndex === -1 ? to : to.slice(0, hashIndex)
+  const queryIndex = withoutHash.indexOf('?')
+  const path = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex)
+  const rawQuery = queryIndex === -1 ? '' : withoutHash.slice(queryIndex + 1)
+  const query = Array.from(
+    new URLSearchParams(rawQuery).entries(),
+    ([key, value]) => ({ key, value }),
+  )
+  return { path, query }
+}
+
+/**
+ * Every string value the current route holds for one query key. Vue Router
+ * types `query` values as `string | null | (string | null)[]`, and the object
+ * itself is absent in some mounts, so normalise defensively rather than
+ * assuming a string.
+ */
+function routeQueryValues(key: string): string[] {
+  const value: unknown = route?.query?.[key]
+  if (typeof value === 'string') return [value]
+  if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === 'string')
+  return []
+}
+
+function pathMatches(routePath: string, tabPath: string): boolean {
+  return routePath === tabPath || routePath.startsWith(tabPath + '/')
+}
+
+/**
+ * Generic query matching: a tab without a query matches on path alone; a tab
+ * with query pairs is active when the route carries every pair. A tab marked
+ * `defaultQuery` additionally matches when none of its keys are on the route —
+ * i.e. it is the state the route falls back to.
+ */
+function queryMatches(tab: Tab, query: TabTarget['query']): boolean {
+  if (query.length === 0) return true
+  const allKeysAbsent = query.every((pair) => routeQueryValues(pair.key).length === 0)
+  if (tab.defaultQuery && allKeysAbsent) return true
+  return query.every((pair) => routeQueryValues(pair.key).includes(pair.value))
+}
+
+/**
+ * The single tab that represents the current location. The most specific match
+ * wins: the longest matching path first (so a nested route highlights its own
+ * tab rather than its parent), then the most query pairs (so a query-selected
+ * view highlights over a plainer sibling on the same path).
+ */
+const activeTabValue = computed<string | null>(() => {
+  const routePath: unknown = route?.path
+  if (typeof routePath !== 'string' || routePath === '') return null
+
+  let active: { to: string; pathLength: number; queryCount: number } | null = null
+  for (const tab of props.tabs) {
+    const target = parseTabTarget(tab.to)
+    if (!pathMatches(routePath, target.path)) continue
+    if (!queryMatches(tab, target.query)) continue
+
+    const candidate = { to: tab.to, pathLength: target.path.length, queryCount: target.query.length }
+    const moreSpecific =
+      active === null
+      || candidate.pathLength > active.pathLength
+      || (candidate.pathLength === active.pathLength && candidate.queryCount > active.queryCount)
+    if (moreSpecific) active = candidate
+  }
+  return active?.to ?? null
+})
 
 function badgeClass(variant?: 'primary' | 'warning' | 'destructive'): string {
   switch (variant) {
