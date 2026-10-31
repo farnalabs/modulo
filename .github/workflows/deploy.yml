@@ -88,31 +88,44 @@ jobs:
       - name: Resolve run identity
         id: run_identity
         shell: bash
+        env:
+          # GitHub context and workflow_dispatch inputs are passed through the
+          # environment, never interpolated directly into the shell script.
+          # ``${{ github.event.* }}`` is untrusted data (zizmor
+          # template-injection): a value containing shell metacharacters must
+          # never become part of the script text executed on a runner that
+          # holds the deploy credentials. The built-ins GITHUB_SHA,
+          # GITHUB_REF and GITHUB_EVENT_NAME are already exported by the
+          # runner and are used directly below.
+          INPUT_RELEASE_SHA: ${{ github.event.inputs.release_sha }}
+          INPUT_RELEASE_REF: ${{ github.event.inputs.release_ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.event.after }}
         run: |
-          REQUESTED_SHA="${{ github.event.inputs.release_sha }}"
-          REQUESTED_REF="${{ github.event.inputs.release_ref }}"
+          REQUESTED_SHA="$INPUT_RELEASE_SHA"
+          REQUESTED_REF="$INPUT_RELEASE_REF"
           if [ -n "$REQUESTED_SHA" ]; then
             EFFECTIVE_SHA="$REQUESTED_SHA"
             EFFECTIVE_REF="$REQUESTED_REF"
           else
-            EFFECTIVE_SHA="${{ github.sha }}"
-            EFFECTIVE_REF="${{ github.ref }}"
+            EFFECTIVE_SHA="$GITHUB_SHA"
+            EFFECTIVE_REF="$GITHUB_REF"
           fi
           echo "RUN_SHA=${EFFECTIVE_SHA}"
           echo "RUN_REF=${EFFECTIVE_REF}"
-          echo "RUN_EVENT=${{ github.event_name }}"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "PUSH_BEFORE=${{ github.event.before }}"
-            echo "PUSH_AFTER=${{ github.event.after }}"
+          echo "RUN_EVENT=$GITHUB_EVENT_NAME"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "PUSH_BEFORE=$EVENT_BEFORE"
+            echo "PUSH_AFTER=$EVENT_AFTER"
           fi
           {
             echo "run_sha=${EFFECTIVE_SHA}"
             echo "run_ref=${EFFECTIVE_REF}"
-            echo "run_event=${{ github.event_name }}"
-            echo "push_before=${{ github.event.before }}"
-            echo "push_after=${{ github.event.after }}"
-            echo "requested_ref=${{ github.event.inputs.release_ref }}"
-            echo "requested_sha=${{ github.event.inputs.release_sha }}"
+            echo "run_event=$GITHUB_EVENT_NAME"
+            echo "push_before=$EVENT_BEFORE"
+            echo "push_after=$EVENT_AFTER"
+            echo "requested_ref=$REQUESTED_REF"
+            echo "requested_sha=$REQUESTED_SHA"
           } >> "$GITHUB_OUTPUT"
 
       - name: Validate requested release identity
