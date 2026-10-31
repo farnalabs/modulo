@@ -32,8 +32,6 @@
         data-testid="analytics-error"
       />
 
-      <CapacityQueuePanel class="mb-4" />
-
       <div v-if="store.loading" class="card p-4" data-testid="analytics-loading">
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div v-for="n in 4" :key="n" class="h-20 animate-pulse rounded-lg bg-muted" />
@@ -62,7 +60,7 @@
         />
 
         <div v-else class="space-y-4">
-          <div class="card p-4">
+          <div class="card p-4" data-testid="analytics-overview-chart">
             <div class="mb-3 flex items-center justify-between">
               <h2 class="text-base font-semibold">{{ chartTitle }}</h2>
               <button
@@ -111,41 +109,62 @@
             />
           </div>
 
-          <div class="card p-4" data-testid="analytics-table">
-            <div class="mb-3 flex items-center justify-between">
-              <h2 class="text-base font-semibold">{{ $t('views.AnalyticsView.trend_table_title') }}</h2>
-              <span class="text-xs text-muted-foreground">{{ $t('views.AnalyticsView.delta_hint') }}</span>
+          <details class="card p-4" data-testid="analytics-details">
+            <summary class="cursor-pointer list-none font-medium [&::-webkit-details-marker]:hidden">
+              <span class="inline-flex items-center gap-2">
+                <span aria-hidden="true">▸</span>
+                {{ $t('views.AnalyticsView.show_details') }}
+              </span>
+              <span class="ml-2 text-xs font-normal text-muted-foreground">{{ $t('views.AnalyticsView.delta_hint') }}</span>
+            </summary>
+            <div class="mt-4" data-testid="analytics-table">
+              <div class="mb-3 flex items-center justify-between">
+                <h2 class="text-base font-semibold">{{ $t('views.AnalyticsView.trend_table_title') }}</h2>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="border-b text-left text-muted-foreground">
+                      <th class="pb-2 font-medium">{{ $t('views.AnalyticsView.bucket_label') }}</th>
+                      <th class="pb-2 text-right font-medium">{{ currentMeasureLabel }}</th>
+                      <th class="pb-2 text-right font-medium">{{ $t('views.AnalyticsView.delta') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in tableRows" :key="row.label" class="border-b last:border-0">
+                      <td class="py-2.5 font-medium tabular-nums">{{ row.label }}</td>
+                      <td class="py-2.5 text-right tabular-nums">{{ row.formatted }}</td>
+                      <td class="py-2.5 text-right">
+                        <span
+                          v-if="row.direction"
+                          :class="arrowClass(row.direction)"
+                          class="inline-flex items-center gap-1 tabular-nums"
+                          data-testid="analytics-trend-arrow"
+                        >
+                          <span aria-hidden="true">{{ arrowGlyph(row.direction) }}</span>
+                          <span v-if="row.deltaPercent">{{ row.deltaPercent }}</span>
+                        </span>
+                        <span v-else class="text-muted-foreground">—</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
-            <div class="overflow-x-auto">
-              <table class="w-full text-sm">
-                <thead>
-                  <tr class="border-b text-left text-muted-foreground">
-                    <th class="pb-2 font-medium">{{ $t('views.AnalyticsView.bucket_label') }}</th>
-                    <th class="pb-2 text-right font-medium">{{ currentMeasureLabel }}</th>
-                    <th class="pb-2 text-right font-medium">{{ $t('views.AnalyticsView.delta') }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="row in tableRows" :key="row.label" class="border-b last:border-0">
-                    <td class="py-2.5 font-medium tabular-nums">{{ row.label }}</td>
-                    <td class="py-2.5 text-right tabular-nums">{{ row.formatted }}</td>
-                    <td class="py-2.5 text-right">
-                      <span
-                        v-if="row.direction"
-                        :class="arrowClass(row.direction)"
-                        class="inline-flex items-center gap-1 tabular-nums"
-                        data-testid="analytics-trend-arrow"
-                      >
-                        <span aria-hidden="true">{{ arrowGlyph(row.direction) }}</span>
-                        <span v-if="row.deltaPercent">{{ row.deltaPercent }}</span>
-                      </span>
-                      <span v-else class="text-muted-foreground">—</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
+          </details>
+
+          <details class="card p-4" data-testid="analytics-capacity-details">
+            <summary class="cursor-pointer list-none font-medium [&::-webkit-details-marker]:hidden">
+              <span class="inline-flex items-center gap-2">
+                <span aria-hidden="true">▸</span>
+                {{ $t('views.AnalyticsView.capacity_panel_title') }}
+              </span>
+              <span class="ml-2 text-xs font-normal text-muted-foreground">
+                {{ $t('views.AnalyticsView.capacity_panel_subtitle') }}
+              </span>
+            </summary>
+            <CapacityQueuePanel class="mt-4" />
+          </details>
         </div>
       </template>
     </template>
