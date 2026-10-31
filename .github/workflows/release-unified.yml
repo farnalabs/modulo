@@ -303,6 +303,7 @@ jobs:
       # The later release-freeze tag remains the authoritative release boundary.
       # -----------------------------------------------------------------------
       - name: Establish release publication hold (cut only)
+        id: publication-hold
         if: inputs.mode == 'cut'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -315,30 +316,171 @@ jobs:
           fi
           git tag -a release-publication-hold -m "Suppress stable publication while cut establishes release-freeze"
           git push origin release-publication-hold
-          echo "Established release-publication-hold before the version-bump push."
+          echo "established=true" >> "$GITHUB_OUTPUT"
+          echo "Established release-publication-hold before the version-bump PR."
 
-      - name: Bump version in SoT files and commit to main (cut only)
+      - name: Prepare exact cut commit through protected main (cut only)
+        id: cut-commit
         if: inputs.mode == 'cut'
-        # Mapped through the step env block (S7630): GitHub expressions inside a
-        # run block are interpolated before the shell parses the script, so
-        # values are data, never code.
         env:
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
+        shell: bash
         run: |
           set -euo pipefail
+          git fetch origin main
           CURRENT="$(python3 -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')"
           if [ "$CURRENT" = "$VERSION" ]; then
-            echo "backend/pyproject.toml is already at ${VERSION}; no bump required."
+            CUT_SHA="$(git rev-parse origin/main)"
+            git checkout --detach "$CUT_SHA"
+            echo "Version ${VERSION} is already on main; using exact main commit ${CUT_SHA}."
           else
-            python3 scripts/bump-version.py --set "$VERSION"
-            git add backend/pyproject.toml frontend/package.json deploy/helm/modulo/Chart.yaml
-            if git diff --cached --quiet; then
-              echo "::error::bump-version.py changed nothing - refusing to tag an unbumped tree."
+            BRANCH="release/version-${VERSION}"
+            PR_NUMBER="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+            if [ -n "$PR_NUMBER" ]; then
+              echo "Reusing existing open release PR #${PR_NUMBER}; duplicate cut refused."
+              git fetch origin "$BRANCH"
+              git checkout --detach "origin/$BRANCH"
+            else
+              CLOSED_PR="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state closed --json number --jq '.[0].number // empty')"
+              if [ -n "$CLOSED_PR" ]; then
+                echo "::error::Release branch ${BRANCH} has a closed PR (#${CLOSED_PR}); refusing to create a duplicate cut."
+                exit 1
+              fi
+              git checkout -B "$BRANCH" origin/main
+              python3 scripts/bump-version.py --set "$VERSION"
+              git add backend/pyproject.toml frontend/package.json deploy/helm/modulo/Chart.yaml
+              if git diff --cached --quiet; then
+                echo "::error::bump-version.py changed nothing - refusing to create an empty release PR."
+                exit 1
+              fi
+              git commit -m "chore(release): bump version to ${VERSION}"
+              BUMP_SHA="$(git rev-parse HEAD)"
+              git push --set-upstream origin "$BRANCH"
+              PR_NUMBER="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base main --head "$BRANCH" \
+                --title "chore(release): bump version to ${VERSION}" \
+                --body "Release version bump for ${VERSION}. This PR is created by the unified release workflow and must pass the normal CI, review, and merge-queue gates before the release is cut.")"
+            fi
+            PR_NUMBER="${PR_NUMBER##*/}"
+            PR_SHA="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq '.headRefOid')"
+            if [ -z "$PR_SHA" ]; then
+              echo "::error::Release PR #${PR_NUMBER} has no head SHA; refusing to dispatch validation."
               exit 1
             fi
-            git commit -m "chore(release): bump version to ${VERSION}"
-            git push origin main
-            echo "Committed version bump to ${VERSION} on main."
+            gh workflow run "CI: Fast Validation" --repo "${GITHUB_REPOSITORY}" --ref "$BRANCH"
+            gh workflow run pr-review.yml --repo "${GITHUB_REPOSITORY}" --ref main \
+              -f pr_number="$PR_NUMBER" -f head_sha="$PR_SHA" -f head_branch="$BRANCH"
+            echo "Dispatched CI and PR review for release PR #${PR_NUMBER} at ${PR_SHA}."
+            echo "Waiting for release PR #${PR_NUMBER} to merge through the normal protected-main path."
+
+            MAX_POLLS=360
+            for ((poll=1; poll<=MAX_POLLS; poll++)); do
+              PR_JSON="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" \
+                --json state,mergedAt,mergeCommit,headRefOid,reviewDecision,mergeStateStatus)" || {
+                echo "::error::Could not read release PR #${PR_NUMBER}; refusing to proceed without merge evidence."
+                exit 1
+              }
+              PR_STATE="$(jq -r '.state' <<<"$PR_JSON")"
+              MERGED_AT="$(jq -r '.mergedAt // empty' <<<"$PR_JSON")"
+              if [ "$PR_STATE" = "MERGED" ] && [ -n "$MERGED_AT" ]; then
+                CUT_SHA="$(jq -r '.mergeCommit.oid // empty' <<<"$PR_JSON")"
+                if [ -z "$CUT_SHA" ]; then
+                  echo "::error::Release PR #${PR_NUMBER} is merged but has no merge commit SHA; refusing to tag."
+                  exit 1
+                fi
+                break
+              fi
+              if [ "$PR_STATE" = "CLOSED" ]; then
+                echo "::error::Release PR #${PR_NUMBER} closed without merging; refusing to continue."
+                exit 1
+              fi
+              REVIEW_DECISION="$(jq -r '.reviewDecision // \"unknown\"' <<<"$PR_JSON")"
+              MERGE_STATUS="$(jq -r '.mergeStateStatus // \"unknown\"' <<<"$PR_JSON")"
+              echo "Release PR #${PR_NUMBER} is ${PR_STATE} (review=${REVIEW_DECISION}, merge=${MERGE_STATUS}); waiting (${poll}/${MAX_POLLS})."
+              sleep 15
+            done
+            if [ -z "${CUT_SHA:-}" ]; then
+              echo "::error::Timed out waiting for release PR #${PR_NUMBER} to merge through CI, review, and merge queue."
+              exit 1
+            fi
+            git fetch origin "$CUT_SHA"
+            git checkout --detach "$CUT_SHA"
+            MERGED_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')"
+            if [ "$MERGED_VERSION" != "$VERSION" ]; then
+              echo "::error::Merged release PR #${PR_NUMBER} resolved to ${CUT_SHA} but contains version ${MERGED_VERSION}, expected ${VERSION}."
+              exit 1
+            fi
+            echo "Release PR #${PR_NUMBER} merged at exact commit ${CUT_SHA}; bump commit was ${BUMP_SHA}."
+          fi
+          echo "cut_sha=$CUT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Assert schema-freshness gate green on exact cut/recut commit
+        id: schema-freshness
+        if: inputs.mode == 'cut' || inputs.mode == 'recut'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          CUT_SHA: ${{ steps.cut-commit.outputs.cut_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "cut" ]; then
+            TARGET_SHA="$CUT_SHA"
+            if [ -z "$TARGET_SHA" ]; then
+              echo "::error::Cut preparation produced no exact merged commit SHA."
+              exit 1
+            fi
+          else
+            git fetch origin main
+            TARGET_SHA="$(git rev-parse origin/main)"
+          fi
+          echo "Checking schema-freshness on exact target ${TARGET_SHA}..."
+          RUN_ID="$(gh run list --workflow ci.yml --commit "$TARGET_SHA" --limit 100 --json databaseId,path \
+            --jq '.[] | select(.path == ".github/workflows/ci.yml") | .databaseId' | head -n1)"
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No CI workflow run found for exact target ${TARGET_SHA}; refusing to tag."
+            exit 1
+          fi
+          echo "Found CI run: ${RUN_ID}"
+          POLL_INTERVAL_SECONDS=10
+          MAX_WAIT_SECONDS=2700
+          MAX_POLLS=$((MAX_WAIT_SECONDS / POLL_INTERVAL_SECONDS))
+          STATUS=""
+          for ((poll=1; poll<=MAX_POLLS; poll++)); do
+            STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.status')"
+            if [ "$STATUS" = "completed" ]; then
+              break
+            fi
+            echo "CI run ${RUN_ID} still in progress (${STATUS}); waiting (${poll}/${MAX_POLLS})."
+            sleep "$POLL_INTERVAL_SECONDS"
+          done
+          if [ "$STATUS" != "completed" ]; then
+            echo "::error::Timed out waiting for CI run ${RUN_ID}; refusing to tag."
+            exit 1
+          fi
+          SCHEMA_CONCLUSION="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" \
+            --jq '[.jobs[] | select(.name == "Schema freshness")][0].conclusion // empty')"
+          if [ "$SCHEMA_CONCLUSION" != "success" ]; then
+            echo "::error::Schema freshness was '${SCHEMA_CONCLUSION:-missing}' on exact target ${TARGET_SHA}; refusing to tag."
+            exit 1
+          fi
+          echo "Schema freshness passed on exact target ${TARGET_SHA}."
+
+      - name: Clean up publication hold after failed cut preparation
+        if: always() && inputs.mode == 'cut' && steps.publication-hold.outputs.established == 'true' && (steps.cut-commit.outcome != 'success' || steps.schema-freshness.outcome != 'success')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
+            if ! git push origin --delete release-publication-hold; then
+              echo "::error::Could not remove release-publication-hold after a failed cut preparation."
+              exit 1
+            fi
+            echo "Removed release-publication-hold after failed cut preparation."
+          else
+            echo "No release-publication-hold remains; no cleanup required."
           fi
 
       # -----------------------------------------------------------------------
@@ -382,6 +524,24 @@ jobs:
           # rc-validate.yml is dispatched once, by the consolidated
           # "Dispatch Deploy and rc-validate" step after the artefacts publish.
           echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
+          echo "cut_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Clean up publication hold after failed release cut
+        if: always() && inputs.mode == 'cut' && steps.publication-hold.outputs.established == 'true' && steps.cut.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
+            if ! git push origin --delete release-publication-hold; then
+              echo "::error::Could not remove release-publication-hold after a failed release cut."
+              exit 1
+            fi
+            echo "Removed release-publication-hold after failed release cut."
+          else
+            echo "No release-publication-hold remains; no cleanup required."
+          fi
 
       # -----------------------------------------------------------------------
       # RECUT: tag current main as the next RC (no version bump)

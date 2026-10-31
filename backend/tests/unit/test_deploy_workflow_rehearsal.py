@@ -10,6 +10,7 @@ pre-deploy wiring intact — the same reasoning as the sibling
 import importlib.util
 import os
 import re
+import shlex
 import subprocess
 import textwrap
 from pathlib import Path
@@ -532,6 +533,156 @@ def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:
     assert '-f release_sha="${RC_SHA}"' in dispatch
 
 
+def _release_step(name: str) -> dict[str, Any]:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    return cast(dict[str, Any], steps[_step_names(steps).index(name)])
+
+
+def _release_job_run(name: str) -> str:
+    run = _release_step(name).get("run")
+    assert isinstance(run, str), f"{name!r} must contain a shell run block"
+    return run
+
+
+def _shell_tokens(script: str) -> list[str]:
+    tokens: list[str] = []
+    for line in script.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|!(){}")
+        lexer.commenters = "#"
+        lexer.whitespace_split = True
+        try:
+            raw_tokens = list(lexer)
+        except ValueError:
+            raw_tokens = stripped.split()
+        for raw_token in raw_tokens:
+            tokens.extend(part for part in re.split(r"(&&|\|\||[;&|!(){}])", raw_token) if part)
+        tokens.append(";")
+    return tokens
+
+
+def _assert_protected_cut_commands_are_safe(cut_path: str) -> None:
+    tokens = _shell_tokens(cut_path)
+    violations: list[str] = []
+    force_pushes: list[list[str]] = []
+    command_prefixes = {";", "&&", "||", "&", "|", "(", "{", "if", "then", "elif", "else", "do", "!"}
+    for index, token in enumerate(tokens):
+        if index and tokens[index - 1] not in command_prefixes:
+            continue
+        if token == "gh" and tokens[index + 1 : index + 3] == ["pr", "merge"]:
+            violations.append("gh pr merge")
+        if token != "git" or index + 1 >= len(tokens) or tokens[index + 1] != "push":
+            continue
+        end = index + 2
+        while end < len(tokens) and tokens[end] not in {";", "&&", "||", "&", "|", ")", "}"}:
+            end += 1
+        invocation = tokens[index:end]
+        if "main" in invocation:
+            violations.append("git push to main")
+        if {"--force", "-f", "--force-with-lease"}.intersection(invocation):
+            force_pushes.append(invocation)
+            if invocation != ["git", "push", "origin", "release-freeze", "--force"]:
+                violations.append("unexpected force push: " + " ".join(invocation))
+    if "--admin" in tokens:
+        violations.append("gh pr merge --admin")
+    assert not violations, "protected release cut bypasses found: " + "; ".join(violations)
+    if not force_pushes:
+        return
+    assert len(force_pushes) == 2
+    assert all(push == ["git", "push", "origin", "release-freeze", "--force"] for push in force_pushes)
+
+
+def _cut_path_scripts() -> list[tuple[Path, str]]:
+    release = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    scripts = [
+        (RELEASE_WORKFLOW, step["run"])
+        for step in release["jobs"]["release"]["steps"]
+        if isinstance(step.get("run"), str) and "inputs.mode == 'promote'" not in str(step.get("if", ""))
+    ]
+    for workflow_path in (
+        BUNDLE_WORKFLOW,
+        REPO_ROOT / ".github" / "workflows" / "windows-installer.yml",
+        REPO_ROOT / ".github" / "workflows" / "macos-installer.yml",
+    ):
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        scripts.extend(
+            (workflow_path, step["run"])
+            for job in workflow.get("jobs", {}).values()
+            for step in job.get("steps", [])
+            if isinstance(step.get("run"), str)
+        )
+    return scripts
+
+
+def test_release_cut_uses_protected_main_pr_and_exact_merge_ref() -> None:
+    script = _release_job_run("Prepare exact cut commit through protected main (cut only)")
+    assert "git push origin main" not in script
+    assert 'BRANCH="release/version-${VERSION}"' in script
+    assert 'git push --set-upstream origin "$BRANCH"' in script
+    assert "gh pr create" in script
+    assert "mergeCommit.oid" in script
+    assert 'git fetch origin "$CUT_SHA"' in script
+    assert 'git checkout --detach "$CUT_SHA"' in script
+    assert 'gh workflow run "CI: Fast Validation"' in script
+    assert "gh workflow run pr-review.yml" in script
+
+
+def test_release_cut_contracts_are_scanned_across_complete_cut_workflow_graph() -> None:
+    scripts = _cut_path_scripts()
+    assert {path for path, _script in scripts} == {
+        RELEASE_WORKFLOW,
+        BUNDLE_WORKFLOW,
+        REPO_ROOT / ".github" / "workflows" / "windows-installer.yml",
+        REPO_ROOT / ".github" / "workflows" / "macos-installer.yml",
+    }
+    _assert_protected_cut_commands_are_safe("\n".join(script for _path, script in scripts))
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "echo x && git push origin main",
+        "echo x && gh pr merge 1",
+        "if (git push origin main); then exit 1; fi",
+        "x=$(git push origin main)",
+        "if ! git push origin main; then exit 1; fi",
+        "git push origin branch --force",
+        "gh pr merge --admin 123",
+    ],
+)
+def test_protected_cut_scanner_rejects_nested_release_bypasses(script: str) -> None:
+    with pytest.raises(AssertionError, match="protected release cut bypasses"):
+        _assert_protected_cut_commands_are_safe(script)
+
+
+def test_release_cut_tags_exact_merged_commit_after_schema_gate() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    names = _step_names(workflow["jobs"]["release"]["steps"])
+    prepare = names.index("Prepare exact cut commit through protected main (cut only)")
+    schema = names.index("Assert schema-freshness gate green on exact cut/recut commit")
+    cut = names.index("Cut release candidate and freeze main")
+    assert prepare < schema < cut
+    assert workflow["jobs"]["release"]["steps"][schema]["id"] == "schema-freshness"
+    assert "steps.cut-commit.outputs.cut_sha" in workflow["jobs"]["release"]["steps"][schema]["env"]["CUT_SHA"]
+    assert 'echo "cut_sha=$(git rev-parse HEAD)"' in workflow["jobs"]["release"]["steps"][cut]["run"]
+
+
+def test_release_cut_cleanup_is_failure_safe() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    names = _step_names(workflow["jobs"]["release"]["steps"])
+    for name in (
+        "Clean up publication hold after failed cut preparation",
+        "Clean up publication hold after failed release cut",
+    ):
+        step = workflow["jobs"]["release"]["steps"][names.index(name)]
+        assert "always()" in step["if"]
+        assert "steps.publication-hold.outputs.established == 'true'" in step["if"]
+        assert "git push origin --delete release-publication-hold" in step["run"]
+
+
 def _promote_step() -> dict[str, Any]:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["release"]["steps"]
@@ -650,16 +801,30 @@ case "${1:-}" in
        view) exit 1 ;;
        create|edit)
          if [[ "${FAIL_PUBLICATION_BLOCK:-}" == notes ]]; then
-           printf 'release publication failure\\n' >&2
+           printf 'release publication failure\n' >&2
            exit 1
          fi
-         printf 'release publication marker\\n' >> "$HARNESS_DIR/publication-markers"
+         title=""
+         notes_file=""
+         tag="${3:-}"
+         while (($#)); do
+           case "$1" in
+             --title) title="$2"; shift 2 ;;
+             --notes-file) notes_file="$2"; shift 2 ;;
+             *) shift ;;
+           esac
+         done
+         printf 'tag=%s\ntitle=%s\n' "$tag" "$title" > "$HARNESS_DIR/release-metadata"
+         cp "$notes_file" "$HARNESS_DIR/release-notes"
+         printf 'release publication marker\n' >> "$HARNESS_DIR/publication-markers"
          ;;
-       *) ;;
-     esac
+        *) ;;
+      esac
      ;;
 
    workflow) ;;
+
+
    run)
 
     case "${2:-}" in
@@ -690,6 +855,11 @@ if [[ "${1:-}" == login ]]; then
   printf 'docker login marker\\n' >> "$HARNESS_DIR/publication-markers"
   exit 0
 fi
+          if [[ "${FAIL_PUBLICATION_BLOCK:-}" == retag ]]; then
+            printf 'docker retag failure\\n' >&2
+            exit 1
+          fi
+
 if [[ "${1:-}" == buildx && "${2:-}" == imagetools && "${3:-}" == create ]]; then
   if [[ "${FAIL_PUBLICATION_BLOCK:-}" == retag ]]; then
     printf 'docker retag failure\\n' >&2
@@ -816,6 +986,7 @@ exec /usr/bin/python3 "$@"
         check=False,
         timeout=30,
     )
+    _git(root, "push", "origin", "refs/tags/release-freeze:refs/tags/release-freeze")
     return result, root, rc_sha, env["PR_SHA"], env
 
 
@@ -832,7 +1003,7 @@ def _run_release_block(
     script = script.replace("${{ steps.promote.outputs.promote_sha }}", '"$PROMOTE_SHA"')
     block_env = {
         **env,
-        "FAIL_PUBLICATION_BLOCK": failure or "",
+        "FAIL_PUBLICATION_BLOCK": "" if failure is None else failure,
         "GH_TOKEN": "test",
         "REGISTRY_USER": "test-user",
         "IMAGE_NAMESPACE": "example/repo",
@@ -859,6 +1030,56 @@ def _freeze_lift_script() -> str:
     )
 
 
+def _run_publication_sequence(
+    root: Path, env: dict[str, str], *, failure: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    block_names = (
+        "Retag container images for GA",
+        "Push Helm chart to OCI registry",
+        "Update CHANGELOG.md and GitHub Release for GA",
+    )
+    blocks = []
+    workflow_steps = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
+    for block_name in block_names:
+        script = next(step["run"] for step in workflow_steps if step.get("name") == block_name)
+        blocks.append(
+            script.replace("${{ steps.promote.outputs.rc_tag }}", '"$RC_TAG"')
+            .replace("${{ steps.promote.outputs.ga_tag }}", '"$GA_TAG"')
+            .replace("${{ steps.promote.outputs.promote_sha }}", '"$PROMOTE_SHA"')
+        )
+    recovery = _release_step("Re-establish release freeze after failed GA publication")["run"]
+    sequence = "\n\n".join(
+        [
+            "failure=0",
+            f"if !(\n{blocks[0]}\n); then failure=1; fi",
+            f"if (( failure == 0 )); then\nif ! (\n{blocks[1]}\n); then failure=1; fi\nfi",
+            f"if (( failure == 0 )); then\nif ! (\n{blocks[2]}\n); then failure=1; fi\nfi",
+            f"if (( failure != 0 )); then\n{recovery}\nfi",
+        ]
+    )
+
+    sequence_env = {
+        **env,
+        "FAIL_PUBLICATION_BLOCK": "" if failure is None else failure,
+        "GH_TOKEN": "test",
+        "REGISTRY_USER": "test-user",
+        "IMAGE_NAMESPACE": "example/repo",
+        "RC_TAG": "v1.2.3-rc1",
+        "GA_TAG": "v1.2.3",
+        "PROMOTE_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
+        "GITHUB_OUTPUT": str(root / "publication-output.txt"),
+    }
+    return subprocess.run(  # noqa: S603 - workflow blocks are repository-owned test fixtures
+        [which("bash") or "bash", "-eo", "pipefail", "-c", sequence],
+        cwd=root,
+        env=sequence_env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+
 def test_release_promote_successfully_publishes_exact_tag_and_lifts_freeze(tmp_path: Path) -> None:
     result, root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path, scenario="valid")
     assert result.returncode == 0, result.stderr + result.stdout
@@ -866,15 +1087,14 @@ def test_release_promote_successfully_publishes_exact_tag_and_lifts_freeze(tmp_p
     assert "release-freeze remains active" in result.stdout
     markers_path = root.parent / "publication-markers"
     markers_path.write_text("", encoding="utf-8")
-    for block_name, marker in (
-        ("Retag container images for GA", "docker retag marker"),
-        ("Push Helm chart to OCI registry", "helm push marker"),
-        ("Update CHANGELOG.md and GitHub Release for GA", "release publication marker"),
-    ):
-        publication = _run_release_block(root, env, block_name)
-        assert publication.returncode == 0, f"{block_name}: {publication.stderr}{publication.stdout}"
-        assert marker in (root.parent / "publication-markers").read_text(encoding="utf-8")
+    publication = _run_publication_sequence(root, env)
+    assert publication.returncode == 0, publication.stderr + publication.stdout
     markers = (root.parent / "publication-markers").read_text(encoding="utf-8").splitlines()
+    release_metadata = (root.parent / "release-metadata").read_text(encoding="utf-8").splitlines()
+    assert release_metadata == ["tag=v1.2.3", "title=v1.2.3"]
+    release_notes = (root.parent / "release-notes").read_text(encoding="utf-8")
+    assert "## [1.2.3]" in release_notes
+    assert "Release change" in release_notes
     assert markers.count("freeze-present:docker") >= 1
     assert markers.count("freeze-present:helm") >= 1
     assert markers.count("freeze-present:notes") >= 1
@@ -892,7 +1112,7 @@ def test_release_promote_successfully_publishes_exact_tag_and_lifts_freeze(tmp_p
     lift = subprocess.run(  # noqa: S603 - fixed shell and workflow text under test
         [which("bash") or "bash", "-eo", "pipefail", "-c", _freeze_lift_script()],
         cwd=root,
-        env={**os.environ, "PATH": os.environ["PATH"], "GH_TOKEN": "test"},
+        env={**env, "PATH": env["PATH"], "GH_TOKEN": "test"},
         capture_output=True,
         text=True,
         check=False,
@@ -906,28 +1126,13 @@ def test_release_promote_successfully_publishes_exact_tag_and_lifts_freeze(tmp_p
     assert not _git(root, "ls-remote", "origin", "refs/tags/release-freeze")
 
 
-def test_release_promote_reestablishes_freeze_after_each_publication_failure(tmp_path: Path) -> None:
-    for block_name, failure in (
-        ("Retag container images for GA", "retag"),
-        ("Push Helm chart to OCI registry", "helm"),
-        ("Update CHANGELOG.md and GitHub Release for GA", "notes"),
-    ):
+def test_release_promote_failure_reestablishes_freeze_without_lift(tmp_path: Path) -> None:
+    for failure in ("retag", "helm", "notes"):
         result, root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path / failure, scenario="valid")
         assert result.returncode == 0, result.stderr + result.stdout
-        failed = _run_release_block(root, env, block_name, failure)
-        assert failed.returncode != 0
+        publication = _run_publication_sequence(root, env, failure=failure)
+        assert publication.returncode == 0, publication.stderr + publication.stdout
         assert _git(root, "ls-remote", "origin", "refs/tags/release-freeze")
-        reestablish = _run_release_block(
-            root,
-            env,
-            "Re-establish release freeze after failed GA publication",
-        )
-        assert reestablish.returncode == 0, reestablish.stderr + reestablish.stdout
-        assert "Re-established release-freeze" in reestablish.stdout or "remains active" in reestablish.stdout
-        assert _git(root, "ls-remote", "origin", "refs/tags/release-freeze")
-        lift = _run_release_block(root, env, "Lift release freeze after successful GA publication")
-        assert lift.returncode == 0
-        assert "freeze lifted" in lift.stdout
 
 
 def test_release_promote_rejects_wrong_version_heading(tmp_path: Path) -> None:
