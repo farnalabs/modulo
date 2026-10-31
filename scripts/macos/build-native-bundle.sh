@@ -94,6 +94,24 @@ cp "${ROOT_DIR}/backend/pyproject.toml" "${ROOT_DIR}/backend/uv.lock" "${BUNDLE_
 "${BUNDLE_ROOT}/runtime/bin/python3.12" -m venv --copies "${BUNDLE_ROOT}/backend/.venv"
 uv sync --frozen --no-dev --no-install-project --project "${BUNDLE_ROOT}/backend" --python "${BUNDLE_ROOT}/backend/.venv/bin/python"
 
+# Assert the installed bundle's actual launcher module emits PostgreSQL's
+# value-bearing long option as one argv element. A shell command string would
+# be the wrong contract here: the supervisor passes an argv list directly.
+PYTHONPATH="${BUNDLE_ROOT}/backend/src:${BUNDLE_ROOT}/backend/.venv/lib/python3.12/site-packages" \
+  "${BUNDLE_ROOT}/backend/.venv/bin/python" - "${BUNDLE_ROOT}" <<'PY'
+from pathlib import Path
+import sys
+
+from modulo.launcher.initdb import postgres_server_argv
+
+bundle = Path(sys.argv[1])
+pgdata = bundle / "runtime-contract-pgdata"
+argv = postgres_server_argv(pgdata, "127.0.0.1", 18000, bundle / "bin")
+assert argv[1] == f"--pgdata={pgdata}", argv
+assert argv[2:] == ["--host", "127.0.0.1", "--port", "18000"], argv
+print(f"bundled postgres argv contract: {argv}")
+PY
+
 assert_no_escaping_symlinks() {
   local root="$1" link target resolved canonical_root
   canonical_root="$(cd "$root" && pwd -P)"

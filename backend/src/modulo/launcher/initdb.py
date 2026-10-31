@@ -16,7 +16,7 @@ Rules enforced here, all locked by tests:
   clear error, never re-init over it.
 * Every bundled-binary invocation goes through :func:`_run_command` with
   fully pinned arguments: initdb pins --pgdata/--username/--locale (it has
-  no endpoint to bind); the postmaster builder pins --pgdata/-h/-p and is
+  no endpoint to bind); the postmaster builder pins --pgdata=/-h/-p and is
   consumed by the slice-2 serving step.
 
 Deterministic test seam: setting ``MODULO_TEST_PAUSE_AT`` to a registered
@@ -160,12 +160,17 @@ def postgres_server_argv(pgdata: Path, host: str, port: int, bin_dir: Path) -> l
 
     Every bundled-binary invocation pins its endpoint arguments — the
     postmaster binds ONLY the launcher-owned host/port persisted in
-    state.json, never defaults.
+    state.json, never defaults. PostgreSQL's long-form command-line parser
+    requires value-bearing GUC options to use ``--name=value``; the combined
+    pgdata argument is therefore intentional.
     """
     return [
         _binary(bin_dir, "postgres"),
-        "--pgdata",
-        str(pgdata),
+        # PostgreSQL's long-form GUC parser requires a value-bearing option to
+        # use the --name=value spelling. The separate ``--pgdata``, path pair
+        # is accepted by initdb but is parsed by postgres as a valueless GUC,
+        # producing ``FATAL: --pgdata requires a value``.
+        f"--pgdata={pgdata}",
         "--host",
         host,
         "--port",
