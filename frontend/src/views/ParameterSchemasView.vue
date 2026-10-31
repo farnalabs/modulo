@@ -227,20 +227,17 @@
                     <div class="grid grid-cols-2 gap-3">
                       <div>
                       <label :for="'paramschema-param-type-' + idx" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.ParameterSchemasView.param_type') }}</label>
-                      <select
+                      <AppSelect
                         :id="'paramschema-param-type-' + idx"
                         v-model="param.type"
-                        class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        :options="parameterTypeOptions"
+                        option-label="label"
+                        option-value="value"
+                        label="Parameter type"
+                        class="w-full"
                         :data-testid="`paramschema-param-type-${idx}`"
                         @change="onParamTypeChange(param)"
-                      >
-                          <option value="string">string</option>
-                          <option value="number">number</option>
-                          <option value="boolean">boolean</option>
-                          <option value="select">select</option>
-                          <option value="model_backend_ref">model_backend_ref</option>
-                          <option value="schema_ref">schema_ref</option>
-                        </select>
+                      />
                       </div>
                       <div class="flex items-end gap-2 pb-1">
                         <label class="flex items-center gap-1.5 text-sm cursor-pointer">
@@ -335,27 +332,28 @@
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
                         :data-testid="`paramschema-param-default-${idx}`"
                       />
-                      <select
+                      <AppSelect
                         :id="'paramschema-param-default-' + idx"
                         v-else-if="param.type === 'boolean'"
                         v-model="param.default_value"
-                        class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        :options="booleanOptions"
+                        option-label="label"
+                        option-value="value"
+                        label="Parameter default"
+                        class="w-full"
                         :data-testid="`paramschema-param-default-${idx}`"
-                      >
-                        <option :value="undefined"></option>
-                        <option :value="true">true</option>
-                        <option :value="false">false</option>
-                      </select>
-                      <select
+                      />
+                      <AppSelect
                         :id="'paramschema-param-default-' + idx"
                         v-else-if="param.type === 'select' && param.options?.length"
                         v-model="param.default_value"
-                        class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
+                        :options="parameterOptionValues(param.options)"
+                        option-label="label"
+                        option-value="value"
+                        label="Parameter default"
+                        class="w-full"
                         :data-testid="`paramschema-param-default-${idx}`"
-                      >
-                        <option :value="undefined"></option>
-                        <option v-for="o in param.options" :key="o" :value="o">{{ o }}</option>
-                      </select>
+                      />
                       <span v-else class="text-sm text-muted-foreground">—</span>
                     </div>
                   </div>
@@ -513,48 +511,51 @@
                   :max="param.maximum"
                   :data-testid="`paramschema-set-value-${param.name}`"
                 />
-                <select
-                  v-else-if="param.type === 'boolean'"
-                  :id="'paramschema-set-value-' + param.name"
-                  v-model="setForm.values[param.name]"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  :data-testid="`paramschema-set-value-${param.name}`"
-                >
-                  <option :value="undefined"></option>
-                  <option :value="true">true</option>
-                  <option :value="false">false</option>
-                </select>
-                <select
-                  v-else-if="param.type === 'select'"
-                  :id="'paramschema-set-value-' + param.name"
-                  v-model="setForm.values[param.name]"
-                  class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                  :data-testid="`paramschema-set-value-${param.name}`"
-                >
-                  <option :value="undefined"></option>
-                  <option v-for="o in (param.options || [])" :key="o" :value="o">{{ o }}</option>
-                </select>
+                 <AppSelect
+                   v-else-if="param.type === 'boolean'"
+                   :id="'paramschema-set-value-' + param.name"
+                   v-model="setForm.values[param.name]"
+                   :options="booleanOptions"
+                   option-label="label"
+                   option-value="value"
+                   label="Parameter value"
+                   class="w-full"
+                   :data-testid="`paramschema-set-value-${param.name}`"
+                 />
+                 <AppSelect
+                   v-else-if="param.type === 'select'"
+                   :id="'paramschema-set-value-' + param.name"
+                   v-model="setForm.values[param.name]"
+                   :options="parameterOptionValues(param.options || [])"
+                   option-label="label"
+                   option-value="value"
+                   label="Parameter value"
+                   class="w-full"
+                   :data-testid="`paramschema-set-value-${param.name}`"
+                 />
                 <div v-else-if="param.type === 'model_backend_ref'">
-                  <select
-                    :id="'paramschema-set-value-' + param.name"
-                    v-model="setForm.values[param.name]"
-                    class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                    :data-testid="`paramschema-set-value-${param.name}`"
-                  >
-                    <option :value="undefined"></option>
-                    <option v-for="mb in modelBackends" :key="mb.id" :value="mb.id">{{ mb.name || shortId(mb.id) }}</option>
-                  </select>
+                   <AppSelect
+                     :id="'paramschema-set-value-' + param.name"
+                     v-model="setForm.values[param.name]"
+                     :options="modelBackendOptions"
+                     option-label="label"
+                     option-value="value"
+                     label="Model backend"
+                     class="w-full"
+                     :data-testid="`paramschema-set-value-${param.name}`"
+                   />
                 </div>
                 <div v-else-if="param.type === 'schema_ref'">
-                  <select
-                    :id="'paramschema-set-value-' + param.name"
-                    v-model="setForm.values[param.name]"
-                    class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                    :data-testid="`paramschema-set-value-${param.name}`"
-                  >
-                    <option :value="undefined"></option>
-                    <option v-for="s in allSchemas" :key="s.id" :value="s.id">{{ s.name || shortId(s.id) }}</option>
-                  </select>
+                   <AppSelect
+                     :id="'paramschema-set-value-' + param.name"
+                     v-model="setForm.values[param.name]"
+                     :options="schemaOptions"
+                     option-label="label"
+                     option-value="value"
+                     label="Schema"
+                     class="w-full"
+                     :data-testid="`paramschema-set-value-${param.name}`"
+                   />
                 </div>
               </div>
             </div>
@@ -675,27 +676,28 @@
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 :data-testid="`paramschema-validate-value-${param.name}`"
               />
-              <select
-                v-else-if="param.type === 'boolean'"
-                :id="'paramschema-validate-value-' + param.name"
-                v-model="validateValues[param.name]"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                :data-testid="`paramschema-validate-value-${param.name}`"
-              >
-                <option :value="undefined"></option>
-                <option :value="true">true</option>
-                <option :value="false">false</option>
-              </select>
-              <select
-                v-else-if="param.type === 'select'"
-                :id="'paramschema-validate-value-' + param.name"
-                v-model="validateValues[param.name]"
-                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                :data-testid="`paramschema-validate-value-${param.name}`"
-              >
-                <option :value="undefined"></option>
-                <option v-for="o in (param.options || [])" :key="o" :value="o">{{ o }}</option>
-              </select>
+               <AppSelect
+                 v-else-if="param.type === 'boolean'"
+                 :id="'paramschema-validate-value-' + param.name"
+                 v-model="validateValues[param.name]"
+                 :options="booleanOptions"
+                 option-label="label"
+                 option-value="value"
+                 label="Parameter value"
+                 class="w-full"
+                 :data-testid="`paramschema-validate-value-${param.name}`"
+               />
+               <AppSelect
+                 v-else-if="param.type === 'select'"
+                 :id="'paramschema-validate-value-' + param.name"
+                 v-model="validateValues[param.name]"
+                 :options="parameterOptionValues(param.options || [])"
+                 option-label="label"
+                 option-value="value"
+                 label="Parameter value"
+                 class="w-full"
+                 :data-testid="`paramschema-validate-value-${param.name}`"
+               />
             </div>
           </div>
 
@@ -735,6 +737,7 @@ import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import Button from 'primevue/button'
 import Tabs from 'primevue/tabs'
 import TabList from 'primevue/tablist'
@@ -799,6 +802,23 @@ interface ModelBackendItem {
 }
 
 const { t } = useI18n()
+
+const parameterTypeOptions = [
+  { value: 'string', label: 'string' },
+  { value: 'number', label: 'number' },
+  { value: 'boolean', label: 'boolean' },
+  { value: 'select', label: 'select' },
+  { value: 'model_backend_ref', label: 'model_backend_ref' },
+  { value: 'schema_ref', label: 'schema_ref' },
+]
+const booleanOptions = [
+  { value: undefined, label: '' },
+  { value: true, label: 'true' },
+  { value: false, label: 'false' },
+]
+function parameterOptionValues(values: string[]) {
+  return [{ value: undefined, label: '' }, ...values.map((value) => ({ value, label: value }))]
+}
 
 const { loading, error, data: schemasResp, load: loadSchemas } = useDataFetch<SchemaListResponse>(
   () => api.GET('/api/v1/parameter-schemas', {
@@ -1158,6 +1178,14 @@ async function doValidate() {
 // Model backends and schemas for ref pickers
 const modelBackends = ref<ModelBackendItem[]>([])
 const allSchemas = ref<SchemaItem[]>([])
+const modelBackendOptions = computed(() => [
+  { value: undefined, label: '' },
+  ...modelBackends.value.map((backend) => ({ value: backend.id, label: backend.name || shortId(backend.id) })),
+])
+const schemaOptions = computed(() => [
+  { value: undefined, label: '' },
+  ...allSchemas.value.map((schema) => ({ value: schema.id, label: schema.name || shortId(schema.id) })),
+])
 
 async function loadPickers() {
   try {

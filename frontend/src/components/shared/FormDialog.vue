@@ -9,8 +9,19 @@
     <slot />
     <template #footer>
       <div class="flex gap-2 justify-end">
-        <Button severity="secondary" outlined @click="modelValue = false">{{ $t('common.cancel') }}</Button>
-        <Button :disabled="confirmDisabled || loading" :loading="loading" @click="emit('confirm')">
+        <Button
+          severity="secondary"
+          outlined
+          :data-testid="cancelTestId"
+          @click="modelValue = false"
+        >{{ $t('common.cancel') }}</Button>
+        <Button
+          :severity="confirmSeverity"
+          :data-testid="confirmTestId"
+          :disabled="confirmDisabled || loading"
+          :loading="loading"
+          @click="emit('confirm')"
+        >
           {{ confirmText || 'Confirm' }}
         </Button>
       </div>
@@ -28,6 +39,9 @@ const props = defineProps<{
   confirmText?: string
   confirmDisabled?: boolean
   loading?: boolean
+  confirmSeverity?: 'primary' | 'secondary' | 'success' | 'info' | 'warn' | 'help' | 'danger' | 'contrast'
+  cancelTestId?: string
+  confirmTestId?: string
 }>()
 
 const modelValue = defineModel<boolean>('open')
