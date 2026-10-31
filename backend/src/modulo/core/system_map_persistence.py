@@ -12,6 +12,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.system_map import SystemMap
@@ -39,6 +40,22 @@ class SystemMapDiscoveryRepository:
     def __init__(self, repository: SystemMapRepository | None = None) -> None:
         self.repository = repository or SystemMapRepository(session_factory=_unused_session_factory)
 
+    async def _get_live_map_by_name(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        name: str,
+    ) -> SystemMap | None:
+        result = await session.execute(
+            select(SystemMap).where(
+                SystemMap.organisation_id == organisation_id,
+                SystemMap.name == name,
+                SystemMap.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_or_create_draft(
         self,
         session: AsyncSession,
@@ -48,24 +65,30 @@ class SystemMapDiscoveryRepository:
         name: str,
         description: str | None,
     ) -> SystemMap:
-        result = await session.execute(
-            select(SystemMap).where(
-                SystemMap.organisation_id == organisation_id,
-                SystemMap.name == name,
-                SystemMap.deleted_at.is_(None),
-            )
-        )
-        existing = result.scalar_one_or_none()
+        existing = await self._get_live_map_by_name(session, organisation_id=organisation_id, name=name)
         if existing is not None:
             raise SystemMapNameConflictError(f"A system map named {name!r} already exists")
-        return await self.repository.create_map(
-            session,
-            organisation_id=organisation_id,
-            name=name,
-            description=description,
-            visibility="org",
-            account_id=account_id,
-        )
+        try:
+            # The SELECT above is check-then-insert: a concurrent discovery call
+            # with the same name can pass it too. The partial unique index
+            # uq_system_maps_org_name_live is the arbiter; the savepoint keeps the
+            # caller's transaction usable after the losing insert is rejected.
+            async with session.begin_nested():
+                return await self.repository.create_map(
+                    session,
+                    organisation_id=organisation_id,
+                    name=name,
+                    description=description,
+                    visibility="org",
+                    account_id=account_id,
+                )
+        except IntegrityError as exc:
+            # Only report a conflict when the race winner is actually visible;
+            # any other integrity failure is a real error and must not become 409.
+            winner = await self._get_live_map_by_name(session, organisation_id=organisation_id, name=name)
+            if winner is None:
+                raise
+            raise SystemMapNameConflictError(f"A system map named {name!r} already exists") from exc
 
     async def save_discovery_revision(
         self,
