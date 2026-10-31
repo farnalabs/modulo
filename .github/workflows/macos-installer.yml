@@ -299,6 +299,45 @@ jobs:
           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
           DMG_TEMP=''
 
+          # The macOS runner volume is small (single-digit GB free after a
+          # Postgres + Redis + venv build) and the launcher's first boot writes
+          # initdb, WAL, migrations and __pycache__ into the data dir. Keep the
+          # headroom visible at each phase boundary so a full volume is a
+          # readable fact instead of an inferred one.
+          report_disk_usage() {
+            local label="$1" path
+            printf 'disk usage: %s\n' "$label"
+            df -h / "$GITHUB_WORKSPACE" "$RUNNER_TEMP" 2>&1 | sed -E 's/[[:space:]]+/ /g' || true
+            for path in "$GITHUB_WORKSPACE/build" "$RUNNER_TEMP/modulo install" "$DATA"; do
+              [[ -e "$path" ]] || continue
+              printf 'du: %s=%s\n' "$path" "$(du -sh "$path" 2>/dev/null | cut -f1)"
+            done
+          }
+
+          # Bounded, non-destructive reclaim. The build source trees, object
+          # files and downloaded tarballs are not needed once the .app exists:
+          # signing, DMG creation and the smoke suite all read the bundle only.
+          # Removing them here is worth roughly a gigabyte before the largest
+          # copies in the job (DMG, DMG-with-spaces duplicate, installed app).
+          reclaim_build_sources() {
+            local path free_before free_after
+            free_before="$(df -k "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}' || true)"
+            for path in \
+              "$GITHUB_WORKSPACE/build/src" \
+              "$GITHUB_WORKSPACE/build/pg-build" \
+              "$GITHUB_WORKSPACE/build/downloads"; do
+              [[ -e "$path" ]] || continue
+              rm -rf "$path"
+              printf 'reclaim: removed %s\n' "$path"
+            done
+            free_after="$(df -k "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}' || true)"
+            printf 'reclaim: free_kb_before=%s free_kb_after=%s\n' "$free_before" "$free_after"
+          }
+
+          report_disk_usage "before reclaim"
+          reclaim_build_sources
+          report_disk_usage "before signing"
+
           prepare_data_directory() {
             local data_uid data_mode mkdir_error current_uid
             current_uid="$(id -u)"
@@ -1052,23 +1091,36 @@ jobs:
             bash -c 'MODULO_INSTALL_ROOT="$1" MODULO_DATA_DIR="$2" scripts/macos/install.sh "$3"' \
             bash "$INSTALL_ROOT" "$DATA" "$DMG_WITH_SPACES" || exit 1
 
+          # The spaces-path copy exists only to prove the installer tolerates a
+          # DMG path containing spaces. Once installed it is dead weight, and the
+          # launcher's first boot is about to need the room.
+          rm -f "$DMG_WITH_SPACES"
+          report_disk_usage "after install"
+
 
           run_assertion "launchctl_print_post_install" \
             launchctl print "gui/$(id -u)/run.modulo.launcher" || exit 1
 
-           # State.json / API port / healthz
+           # state.json on disk is the HMAC envelope
+           # {"payload": {"api_port": ...}, "mac": "..."}. Reading a top-level
+           # "api_port" always raised KeyError, which silently turned this gate
+           # into a fixed sleep and failed it without ever issuing a request.
            # shellcheck disable=SC2016
            run_assertion "state_json_api_port_healthz" bash -c '
              DATA_DIR="$1"
              TEMP_DIR="${2:-${RUNNER_TEMP:-}}"
              STATE="$DATA_DIR/state.json"
+             ATTEMPTS=150
              API_PORT=""
              LAST_CURL_ERROR=""
+             read_api_port() {
+               python3 -c '\''import json,sys; d=json.load(open(sys.argv[1])); p=d.get("payload") if isinstance(d,dict) else None; port=p.get("api_port") if isinstance(p,dict) else None; print(port) if isinstance(port,int) and not isinstance(port,bool) else None'\'' "$1" 2>/dev/null
+             }
              # First boot may run initdb and migrations before the API serves.
              # This is a wait-budget change only; /healthz remains a hard gate.
-             for _attempt in $(seq 1 150); do
+             for _attempt in $(seq 1 "$ATTEMPTS"); do
                if [[ -s "$STATE" ]]; then
-                 parsed_port="$(python3 -c '\''import json,sys; print(json.load(open(sys.argv[1]))["api_port"])'\'' "$STATE" 2>/dev/null || true)"
+                 parsed_port="$(read_api_port "$STATE" || true)"
                  if [[ -n "$parsed_port" ]]; then
                    API_PORT="$parsed_port"
                    if curl_err="$(curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" 2>&1 >/dev/null)"; then
@@ -1082,103 +1134,76 @@ jobs:
                sleep 2
              done
 
-             echo "=== Diagnostic: State file ==="
-             if [[ -f "$STATE" ]]; then
-               state_size="$(wc -c < "$STATE" | tr -d " ")"
-               echo "state file present: $STATE (size: ${state_size} bytes)"
-               if [[ -r "$STATE" ]]; then
-                 echo "state file contents:"
-                 cat "$STATE"
-                 echo ""
+             # Bounded failure diagnostics. Everything goes to a scratch file
+             # first and only the first 200 lines are printed, so a mid-dump
+             # failure (a full volume included) cannot flood the step log. The
+             # pre-smoke-*.log set is deliberately never dumped: it is signing
+             # chatter with no bearing on the launcher.
+             diag_tail() {
+               local lines="$1" path="$2"
+               if [[ -f "$path" ]]; then
+                 printf -- "--- %s (tail %s) ---\n" "$path" "$lines"
+                 tail -n "$lines" "$path" 2>&1 || true
                else
-                 echo "state file exists but is not readable"
+                 printf -- "--- %s (absent) ---\n" "$path"
                fi
-             elif [[ -e "$STATE" ]]; then
-               echo "state path exists but is not a regular file: $STATE"
-               ls -la "$STATE" || true
-             else
-               echo "state file absent: $STATE"
-               if [[ -d "$DATA_DIR" ]]; then
-                 echo "contents of data dir ($DATA_DIR):"
-                 ls -la "$DATA_DIR" || true
+             }
+             DIAG_FILE="$TEMP_DIR/modulo-healthz-diagnostics.log"
+             : > "$DIAG_FILE" 2>/dev/null || DIAG_FILE=/dev/null
+             {
+               printf "=== healthz gate failed after %s attempts ===\n" "$ATTEMPTS"
+               printf "observed api_port: %s\n" "${API_PORT:-none}"
+               printf "last curl error: %s\n" "${LAST_CURL_ERROR:-none recorded}"
+               printf "\n=== disk ===\n"
+               df -h / "${GITHUB_WORKSPACE:-/}" "$TEMP_DIR" 2>&1 | sed -E "s/[[:space:]]+/ /g" || true
+               for diag_path in "${GITHUB_WORKSPACE:-}/build" "$TEMP_DIR/modulo install" "$DATA_DIR"; do
+                 [[ -e "$diag_path" ]] || continue
+                 printf "du %s=%s\n" "$diag_path" "$(du -sh "$diag_path" 2>/dev/null | cut -f1)"
+               done
+               printf "\n=== boot artifacts ===\n"
+               if [[ -s "$STATE" ]]; then
+                 state_port="$(read_api_port "$STATE" || true)"
+                 printf "state.json: present (%s bytes) payload.api_port=%s\n" "$(wc -c < "$STATE" | tr -d " ")" "${state_port:-UNREADABLE}"
+               elif [[ -e "$STATE" ]]; then
+                 printf "state.json: present but not a regular file\n"
                else
-                 echo "data dir absent: $DATA_DIR"
+                 printf "state.json: absent\n"
                fi
-             fi
-
-             echo "=== Diagnostic: Launcher logs ==="
-             log_found=0
-             for log_candidate in \
-               "$DATA_DIR/launcher.log" \
-               "$DATA_DIR/logs/launcher.log" \
-               "$TEMP_DIR/launcher.log"; do
-               if [[ -f "$log_candidate" ]]; then
-                 log_size="$(wc -c < "$log_candidate" | tr -d " ")"
-                 echo "found log: $log_candidate (size: ${log_size} bytes)"
-                 echo "last 50 lines of $log_candidate:"
-                 tail -n 50 "$log_candidate" || true
-                 echo ""
-                 log_found=1
-               fi
-             done
-             if [[ -d "$DATA_DIR" ]]; then
-               while IFS= read -r other_log; do
-                 [[ -n "$other_log" ]] || continue
-                 case "$other_log" in
-                   "$DATA_DIR/launcher.log"|"$DATA_DIR/logs/launcher.log") continue ;;
-                 esac
-                 echo "found log: $other_log"
-                 echo "last 50 lines of $other_log:"
-                 tail -n 50 "$other_log" || true
-                 echo ""
-                 log_found=1
-               done < <(find "$DATA_DIR" -type f -name "*.log" 2>/dev/null || true)
-             fi
-             if [[ -d "$TEMP_DIR" ]]; then
-               while IFS= read -r temp_log; do
-                 [[ -n "$temp_log" ]] || continue
-                 case "$temp_log" in
-                   "$TEMP_DIR/launcher.log"|"$DATA_DIR"/*) continue ;;
-                 esac
-                 echo "found log in temp: $temp_log"
-                 echo "last 50 lines of $temp_log:"
-                 tail -n 50 "$temp_log" || true
-                 echo ""
-                 log_found=1
-               done < <(find "$TEMP_DIR" -maxdepth 3 -type f -name "*launcher*.log" 2>/dev/null || true)
-             fi
-             if [[ "$log_found" -eq 0 ]]; then
-               echo "no launcher logs found in $DATA_DIR or $TEMP_DIR"
-             fi
-
-             echo "=== Diagnostic: Launcher processes and launchctl ==="
-             echo "launchctl print gui/$(id -u)/run.modulo.launcher:"
-             launchctl print "gui/$(id -u)/run.modulo.launcher" 2>&1 || true
-             echo ""
-             echo "pgrep -fl modulo:"
-             pgrep -fl modulo 2>&1 || true
-             echo ""
-             echo "ps -ef matching modulo, postgres, redis:"
-             ps -ef | grep -E "([m]odulo|[p]ostgres|[r]edis)" || true
-             echo ""
-
-             echo "=== Diagnostic: API_PORT and healthz ==="
-             if [[ -n "$API_PORT" ]]; then
-               echo "last observed API_PORT: $API_PORT"
-               if [[ -n "$LAST_CURL_ERROR" ]]; then
-                 echo "last curl error on http://127.0.0.1:${API_PORT}/healthz:"
-                 echo "$LAST_CURL_ERROR"
+               if [[ -f "$DATA_DIR/pgdata/PG_VERSION" ]]; then
+                 printf "pgdata: initialized (PG_VERSION present)\n"
                else
-                 echo "last curl error: none recorded"
+                 printf "pgdata: not initialized (initdb did not complete)\n"
+               fi
+               diag_tail 20 "$DATA_DIR/degraded.json"
+               printf "\n=== data dir ===\n"
+               ls -la "$DATA_DIR" 2>&1 || true
+               ls -la "$DATA_DIR/logs" 2>&1 || true
+               printf "\n=== launcher and child logs ===\n"
+               diag_tail 40 "$DATA_DIR/launcher.log"
+               diag_tail 40 "$DATA_DIR/logs/app.log"
+               diag_tail 40 "$DATA_DIR/logs/postgres.log"
+               diag_tail 40 "$DATA_DIR/logs/redis.log"
+               printf "\n=== launchctl ===\n"
+               launchctl print "gui/$(id -u)/run.modulo.launcher" 2>&1 \
+                 | grep -E "state =|pid =|runs =|last exit code|program =|immediate reason" \
+                 | head -n 12 || true
+               printf "\n=== processes ===\n"
+               pgrep -fl "modulo|postgres|redis" 2>&1 | head -n 20 || true
+             } >> "$DIAG_FILE" 2>&1 || true
+
+             diag_lines="$(wc -l < "$DIAG_FILE" 2>/dev/null | tr -d " " || true)"
+             if [[ -s "$DIAG_FILE" ]]; then
+               head -n 200 "$DIAG_FILE"
+               if [[ "${diag_lines:-0}" -gt 200 ]]; then
+                 printf "diagnostics truncated: 200 of %s lines shown\n" "$diag_lines"
                fi
              else
-               echo "no API_PORT was ever observed in state file"
+               printf "no diagnostics captured (unwritable/size-0 scratch file: %s)\n" "$DIAG_FILE"
              fi
-
              exit 1
            ' bash "$DATA" "$RUNNER_TEMP"
-           API_PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["api_port"])' "$DATA/state.json" 2>/dev/null || true)"
-           [[ -n "$API_PORT" ]] || { echo '::error::native launcher never wrote state.json' >&2; exit 1; }
+           API_PORT="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); p=d.get("payload") if isinstance(d,dict) else None; port=p.get("api_port") if isinstance(p,dict) else None; print(port) if isinstance(port,int) and not isinstance(port,bool) else None' "$DATA/state.json" 2>/dev/null || true)"
+           [[ -n "$API_PORT" ]] || { echo '::error::native launcher state.json has no usable payload.api_port' >&2; exit 1; }
 
            run_assertion "healthz_endpoint" \
              curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${API_PORT}/healthz" || exit 1
