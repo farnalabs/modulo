@@ -8,9 +8,12 @@ pre-deploy wiring intact — the same reasoning as the sibling
 """
 
 import importlib.util
+import json
 import os
 import re
 import shlex
+import shutil
+import stat
 import subprocess
 import textwrap
 from pathlib import Path
@@ -539,10 +542,236 @@ def _release_step(name: str) -> dict[str, Any]:
     return cast(dict[str, Any], steps[_step_names(steps).index(name)])
 
 
+def _cut_wait_budget_seconds(script: str) -> int:
+    match = re.search(r"MAX_POLLS=(\d+)", script)
+    assert match is not None, "cut script must define MAX_POLLS"
+    return int(match.group(1)) * 15
+
+
+def _schema_wait_budget_seconds(script: str) -> int:
+    match = re.search(r"MAX_WAIT_SECONDS=(\d+)", script)
+    assert match is not None, "schema script must define MAX_WAIT_SECONDS"
+    return int(match.group(1))
+
+
 def _release_job_run(name: str) -> str:
     run = _release_step(name).get("run")
     assert isinstance(run, str), f"{name!r} must contain a shell run block"
     return run
+
+
+def _run_bash(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required to execute release workflow contracts")
+    return subprocess.run(  # noqa: S603 - fixed bash executable and repository-owned workflow text
+        [bash, "--noprofile", "--norc", "-c", script],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def _cut_git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    git = shutil.which("git")
+    assert git is not None, "git is required to execute release workflow contracts"
+    return subprocess.run(  # noqa: S603 - resolved git executable and test-owned arguments
+        [git, *args], cwd=cwd, capture_output=True, text=True, timeout=30, check=True
+    )
+
+
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _cut_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
+    repo = tmp_path / "repo"
+    remote = tmp_path / "remote.git"
+    repo.mkdir()
+    _cut_git("init", "--bare", str(remote))
+    _cut_git("init", "-b", "main", str(repo))
+    for relative, content in (
+        ("backend/pyproject.toml", '[project]\nversion = "0.1.0"\n'),
+        ("frontend/package.json", '{"version": "0.1.0"}\n'),
+        ("deploy/helm/modulo/Chart.yaml", 'version: 0.1.0\nappVersion: "0.1.0"\n'),
+    ):
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    _cut_git("add", ".", cwd=repo)
+    _cut_git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base", cwd=repo)
+    _cut_git("remote", "add", "origin", str(remote), cwd=repo)
+    _cut_git("push", "origin", "main", cwd=repo)
+    initial_sha = _cut_git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+    for relative in ("backend/pyproject.toml", "frontend/package.json", "deploy/helm/modulo/Chart.yaml"):
+        target = repo / relative
+        target.write_text(target.read_text(encoding="utf-8").replace("0.1.0", "0.2.0"), encoding="utf-8")
+        _cut_git("add", ".", cwd=repo)
+    _cut_git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "merged", cwd=repo)
+    _cut_git("push", "origin", "HEAD:refs/heads/merged", cwd=repo)
+    _cut_git("reset", "--hard", initial_sha, cwd=repo)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "commands.log"
+    real_git = shutil.which("git")
+    assert real_git is not None
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -e
+printf 'git %s\\n' \"$*\" >> {shlex.quote(str(log))}
+exec {shlex.quote(real_git)} \"$@\"
+""",
+    )
+    _write_executable(
+        bin_dir / "python3",
+        f"""#!/usr/bin/env bash
+set -e
+printf 'python3 %s\\n' \"$*\" >> {shlex.quote(str(log))}
+if [ \"$1\" = \"-c\" ]; then
+  grep -q '0.2.0' backend/pyproject.toml && printf '0.2.0\\n' || printf '0.1.0\\n'
+  exit 0
+fi
+if [ \"$1\" = \"scripts/bump-version.py\" ]; then
+  printf '\\n# bump stub\\n' >> backend/pyproject.toml
+  printf '\\n# bump stub\\n' >> frontend/package.json
+  printf '\\n# bump stub\\n' >> deploy/helm/modulo/Chart.yaml
+  exit 0
+fi
+printf 'unexpected python command: %s\\n' \"$*\" >&2
+exit 1
+""",
+    )
+    merged_sha = _cut_git("rev-parse", "refs/remotes/origin/merged", cwd=repo).stdout.strip()
+    merged_json = shlex.quote(
+        json.dumps(
+            {
+                "state": "MERGED",
+                "mergedAt": "2026-01-01T00:00:00Z",
+                "mergeCommit": {"oid": merged_sha},
+                "headRefOid": "branch-head",
+                "reviewDecision": "APPROVED",
+                "mergeStateStatus": "CLEAN",
+            }
+        )
+    )
+    _write_executable(
+        bin_dir / "gh",
+        f"""#!/usr/bin/env bash
+set -e
+printf 'gh %s\\n' \"$*\" >> {shlex.quote(str(log))}
+case \"$*\" in
+  *'pr list'*) exit 0 ;;
+  *'pr create'*) printf 'https://github.com/example/repo/pull/7\\n'; exit 0 ;;
+  *'pr view'*'state,mergedAt,mergeCommit,headRefOid,reviewDecision,mergeStateStatus'*)
+    printf '%s\\n' {merged_json}
+    exit 0
+    ;;
+  *'pr view'*'headRefOid'*) printf 'branch-head\\n'; exit 0 ;;
+  *'workflow run'*) exit 0 ;;
+  *) printf 'unexpected gh command: %s\\n' \"$*\" >&2; exit 1 ;;
+esac
+""",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "GITHUB_REPOSITORY": "example/repo",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "remote.origin.fetch",
+            "GIT_CONFIG_VALUE_0": "+refs/heads/*:refs/remotes/origin/*",
+            "VERSION": "0.2.0",
+            "GITHUB_OUTPUT": str(tmp_path / "output"),
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@example.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@example.com",
+        }
+    )
+    return repo, log, env
+
+
+def test_protected_cut_executes_branch_pr_and_exact_merged_sha_handoff(tmp_path: Path) -> None:
+    repo, log, env = _cut_harness(tmp_path)
+    result = _run_bash(
+        _release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env
+    )
+    assert result.returncode == 0, (
+        f"stdout={result.stdout}\nstderr={result.stderr}\nlog={log.read_text(encoding='utf-8')}"
+    )
+    commands = log.read_text(encoding="utf-8")
+    assert "git push --set-upstream origin release/version-0.2.0" in commands
+    assert "gh pr create" in commands
+    assert "git checkout --detach" in commands
+    assert "git push origin main" not in commands
+    assert "git push origin release/version-0.2.0" not in commands
+
+
+def test_protected_cut_schema_handoff_uses_exact_cut_sha(tmp_path: Path) -> None:
+    repo, log, env = _cut_harness(tmp_path)
+    cut_sha = _cut_git("rev-parse", "refs/remotes/origin/merged", cwd=repo).stdout.strip()
+    gh_path = tmp_path / "bin" / "gh"
+    _write_executable(
+        gh_path,
+        f"""#!/usr/bin/env bash
+set -e
+printf 'gh %s\\n' \"$*\" >> {shlex.quote(str(log))}
+case \"$*\" in
+  *'run list'*) printf '123\\n'; exit 0 ;;
+  *'actions/runs/123/jobs'*) printf 'success\\n'; exit 0 ;;
+  *'actions/runs/123'*) printf 'completed\\n'; exit 0 ;;
+  *) printf 'unexpected gh call: %s\\n' \"$*\" >&2; exit 1 ;;
+esac
+""",
+    )
+    env.update({"CUT_SHA": cut_sha, "MODE": "cut"})
+    result = _run_bash(
+        _release_job_run("Assert schema-freshness gate green on exact cut/recut commit"), cwd=repo, env=env
+    )
+    assert result.returncode == 0, result.stderr
+    commands = log.read_text(encoding="utf-8")
+    assert f"--commit {cut_sha}" in commands
+    assert cut_sha in result.stdout
+
+
+def test_protected_cut_cleanup_executes_hold_deletion_after_preparation_failure(tmp_path: Path) -> None:
+    repo, _log, env = _cut_harness(tmp_path)
+    _write_executable(
+        tmp_path / "bin" / "gh",
+        """#!/usr/bin/env bash
+set -e
+case "$*" in
+  *'pr list'*'--state open'*) exit 0 ;;
+  *'pr list'*'--state closed'*) printf '99\\n'; exit 0 ;;
+  *) exit 0 ;;
+esac
+""",
+    )
+    failed_prep = _run_bash(
+        _release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env
+    )
+    assert failed_prep.returncode != 0
+    cleanup_log = tmp_path / "cleanup.log"
+    _write_executable(
+        tmp_path / "bin" / "git",
+        f"""#!/usr/bin/env bash
+printf 'git %s\\n' \"$*\" >> {shlex.quote(str(cleanup_log))}
+if [ \"$1 $2 $3 $4\" = 'ls-remote --exit-code origin refs/tags/release-publication-hold' ]; then exit 0; fi
+if [ \"$1 $2 $3 $4\" = 'push origin --delete release-publication-hold' ]; then exit 0; fi
+exit 0
+""",
+    )
+    cleanup = _run_bash(
+        _release_job_run("Clean up publication hold after failed cut preparation"), cwd=tmp_path, env=env
+    )
+    assert cleanup.returncode == 0, cleanup.stderr
+    assert "git push origin --delete release-publication-hold" in cleanup_log.read_text(encoding="utf-8")
 
 
 def _shell_tokens(script: str) -> list[str]:
@@ -805,16 +1034,25 @@ case "${1:-}" in
            exit 1
          fi
          title=""
-         notes_file=""
-         tag="${3:-}"
-         while (($#)); do
-           case "$1" in
-             --title) title="$2"; shift 2 ;;
-             --notes-file) notes_file="$2"; shift 2 ;;
-             *) shift ;;
-           esac
-         done
-         printf 'tag=%s\ntitle=%s\n' "$tag" "$title" > "$HARNESS_DIR/release-metadata"
+          notes_file=""
+          target=""
+          tag="${3:-}"
+          while (($#)); do
+            case "$1" in
+              --title) title="$2"; shift 2 ;;
+              --notes-file) notes_file="$2"; shift 2 ;;
+              --target) target="$2"; shift 2 ;;
+              *) shift ;;
+            esac
+          done
+         if [ -z "$target" ]; then
+           target=$(git -C "$ROOT" rev-parse "${tag}^{commit}")
+         fi
+          if [ -n "${EXPECTED_RELEASE_SHA:-}" ] && [ "$target" != "$EXPECTED_RELEASE_SHA" ]; then
+           printf 'release target mismatch: %s != %s\n' "$target" "$EXPECTED_RELEASE_SHA" >&2
+           exit 1
+          fi
+          printf 'tag=%s\ntitle=%s\ntarget=%s\n' "$tag" "$title" "$target" > "$HARNESS_DIR/release-metadata"
          cp "$notes_file" "$HARNESS_DIR/release-notes"
          printf 'release publication marker\n' >> "$HARNESS_DIR/publication-markers"
          ;;
@@ -946,6 +1184,7 @@ exec /usr/bin/python3 "$@"
         "GIT_DIR": str(root / ".git"),
         "GITHUB_OUTPUT": str(root / "github-output.txt"),
         "HARNESS_DIR": str(tmp_path),
+        "EXPECTED_RELEASE_SHA": "",
     }
     if scenario != "valid":
         _git(root, "checkout", "-b", "release/promote-1.2.3", rc_sha)
@@ -1010,6 +1249,8 @@ def _run_release_block(
         "RC_TAG": "v1.2.3-rc1",
         "GA_TAG": "v1.2.3",
         "PROMOTE_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
+        "EXPECTED_RELEASE_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
+        "HARNESS_DIR": env["HARNESS_DIR"],
         "GITHUB_OUTPUT": str(root / "publication-output.txt"),
     }
     return subprocess.run(  # noqa: S603 - fixed shell and workflow text under test
@@ -1067,6 +1308,8 @@ def _run_publication_sequence(
         "RC_TAG": "v1.2.3-rc1",
         "GA_TAG": "v1.2.3",
         "PROMOTE_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
+        "EXPECTED_RELEASE_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
+        "HARNESS_DIR": env["HARNESS_DIR"],
         "GITHUB_OUTPUT": str(root / "publication-output.txt"),
     }
     return subprocess.run(  # noqa: S603 - workflow blocks are repository-owned test fixtures
@@ -1080,21 +1323,25 @@ def _run_publication_sequence(
     )
 
 
-def test_release_promote_successfully_publishes_exact_tag_and_lifts_freeze(tmp_path: Path) -> None:
+def test_release_promote_successfully_publishes_exact_tag_target_and_lifts_freeze(tmp_path: Path) -> None:
     result, root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path, scenario="valid")
     assert result.returncode == 0, result.stderr + result.stdout
+    env["HARNESS_DIR"] = str(root.parent)
+    env["EXPECTED_RELEASE_SHA"] = _git(root, "rev-parse", "refs/remotes/origin/merge-result")
     assert "GA tag v1.2.3 published at" in result.stdout
     assert "release-freeze remains active" in result.stdout
     markers_path = root.parent / "publication-markers"
     markers_path.write_text("", encoding="utf-8")
     publication = _run_publication_sequence(root, env)
     assert publication.returncode == 0, publication.stderr + publication.stdout
-    markers = (root.parent / "publication-markers").read_text(encoding="utf-8").splitlines()
-    release_metadata = (root.parent / "release-metadata").read_text(encoding="utf-8").splitlines()
-    assert release_metadata == ["tag=v1.2.3", "title=v1.2.3"]
-    release_notes = (root.parent / "release-notes").read_text(encoding="utf-8")
-    assert "## [1.2.3]" in release_notes
-    assert "Release change" in release_notes
+    markers = (Path(env["HARNESS_DIR"]) / "publication-markers").read_text(encoding="utf-8").splitlines()
+    promote_sha = _git(root, "rev-parse", "refs/remotes/origin/merge-result")
+    commands = (Path(env["HARNESS_DIR"]) / "release-metadata").read_text(encoding="utf-8")
+    assert "tag=v1.2.3" in commands
+    assert "title=v1.2.3" in commands
+    assert f"target={promote_sha}" in commands
+    assert "## [1.2.3]" in (root.parent / "release-notes").read_text(encoding="utf-8")
+    assert "Release change" in (root.parent / "release-notes").read_text(encoding="utf-8")
     assert markers.count("freeze-present:docker") >= 1
     assert markers.count("freeze-present:helm") >= 1
     assert markers.count("freeze-present:notes") >= 1
