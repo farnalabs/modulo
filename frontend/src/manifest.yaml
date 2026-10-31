@@ -1050,12 +1050,6 @@ elements:
       - testid: dashboard-recent-runs
         type: element
         dynamic_testid: false
-      - testid: dashboard-system-overview
-        type: element
-        dynamic_testid: false
-      - testid: dashboard-system-discover
-        type: button
-        dynamic_testid: false
       - testid: dashboard-system-loading
         type: element
         dynamic_testid: false

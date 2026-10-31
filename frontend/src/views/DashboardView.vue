@@ -509,9 +509,10 @@ onMounted(async () => {
     ...(selectedWindow.value == null ? [] : [dashboardStore.fetchTrends(selectedWindow.value)]),
     loadCurrency(),
   ];
-  if (!planStore.loaded) {
+  if (!planStore.loaded || !planStore.currentTier || planStore.currentTier === 'community') {
     promises.push(planStore.fetchPlan())
   }
+  promises.push(systemMapsStore.fetchAccess())
   await Promise.all(promises);
 })
 </script>
