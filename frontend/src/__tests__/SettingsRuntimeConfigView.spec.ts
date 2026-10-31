@@ -21,7 +21,6 @@ const getMock = api.GET as unknown as Mock
 const postMock = api.POST as unknown as Mock
 const putMock = api.PUT as unknown as Mock
 const gateStub = { template: '<div><slot /></div>' }
-const loadingStub = { template: '<div data-testid="loading-spinner">loading</div>' }
 const errorAlertStub = {
   template: '<div data-testid="error-alert">{{ message }}</div>',
   props: ['message', 'onRetry'],
@@ -51,17 +50,16 @@ function mountView(itemsFn: () => any[] = () => [], hasDrift = false) {
   })
   return mount(SettingsRuntimeConfigView, {
     global: {
-      stubs: { FeatureGate: gateStub, LoadingSpinner: loadingStub, ErrorAlert: errorAlertStub },
+      stubs: { FeatureGate: gateStub, ErrorAlert: errorAlertStub },
     },
   })
 }
 
-/** Wait until items are loaded (table row appears) or spinner gone */
+/** Wait until items are loaded (table row appears) or the empty state renders */
 async function waitForLoaded(wrapper: ReturnType<typeof mount>) {
   await vi.waitFor(() => {
     const text = wrapper.text()
-    // Items loaded means either a table row content or the empty table renders
-    expect(text).toContain('Actions')
+    expect(text.includes('Actions') || text.includes('No configuration entries found')).toBe(true)
   })
 }
 
@@ -492,19 +490,26 @@ describe('SettingsRuntimeConfigView', () => {
 
   // ─── Loading state ────────────────────────────────────────────────────
 
-  it('shows loading spinner while fetching', async () => {
+  it('shows a loading skeleton while fetching', async () => {
     getMock.mockReturnValueOnce(new Promise(() => {}))
     const wrapper = mount(SettingsRuntimeConfigView, {
-      global: { stubs: { FeatureGate: gateStub, LoadingSpinner: loadingStub } },
+      global: { stubs: { FeatureGate: gateStub } },
     })
     await nextTick()
-    expect(wrapper.find('[data-testid="loading-spinner"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-runtime-config-loading"]').exists()).toBe(true)
+  })
+
+  it('renders an empty state when no config entries are returned', async () => {
+    const wrapper = mountView()
+    await waitForLoaded(wrapper)
+    expect(wrapper.text()).toContain('No configuration entries found')
+    expect(wrapper.find('table').exists()).toBe(false)
   })
 
   // ─── Table structure ───────────────────────────────────────────────────
 
   it('renders table headers for all columns', async () => {
-    const wrapper = mountView()
+    const wrapper = mountView(() => [makeEntry({ key: 'ONE' })])
     await waitForLoaded(wrapper)
     expect(wrapper.find('table').exists()).toBe(true)
     expect(wrapper.text()).toContain('Key')
@@ -606,7 +611,7 @@ describe('SettingsRuntimeConfigView', () => {
   it('disables reload button while initial load', async () => {
     getMock.mockReturnValueOnce(new Promise(() => {}))
     const wrapper = mount(SettingsRuntimeConfigView, {
-      global: { stubs: { FeatureGate: gateStub, LoadingSpinner: loadingStub } },
+      global: { stubs: { FeatureGate: gateStub } },
     })
     await nextTick()
     const reloadBtn = wrapper.find('[data-testid="settings-runtime-config-reload"]')

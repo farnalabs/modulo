@@ -6,7 +6,7 @@
 
     <div class="flex items-center gap-3">
       <div v-if="hasDrift" class="flex items-center gap-2 rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning-text">
-        <span>⚠</span>
+        <AlertTriangle class="h-4 w-4 shrink-0" aria-hidden="true" focusable="false" />
         <span>{{ $t('views.SettingsRuntimeConfigView.some_values_differ_from_environment_restart_to_sync') }}</span>
       </div>
       <button
@@ -20,9 +20,28 @@
       </button>
     </div>
 
-    <LoadingSpinner v-if="loading" />
+    <div v-if="loading" data-testid="settings-runtime-config-loading" aria-busy="true">
+      <span class="sr-only">{{ $t('views.SettingsRuntimeConfigView.loading') }}</span>
+      <div aria-hidden="true" class="card overflow-hidden">
+        <div class="border-b bg-muted/30 px-4 py-3">
+          <div class="h-4 w-40 rounded bg-muted/50" />
+        </div>
+        <div v-for="row in 6" :key="row" class="flex items-center gap-4 border-b px-4 py-3 last:border-0">
+          <div class="h-4 w-1/4 rounded bg-muted/50" />
+          <div class="h-4 w-1/4 rounded bg-muted/50" />
+          <div class="h-4 w-1/5 rounded bg-muted/50" />
+          <div class="h-4 w-1/5 rounded bg-muted/50" />
+        </div>
+      </div>
+    </div>
 
     <ErrorAlert v-else-if="error && !featureRequired" :message="error" :on-retry="loadConfig" />
+
+    <EmptyState
+      v-else-if="!featureRequired && items.length === 0"
+      :title="$t('views.SettingsRuntimeConfigView.no_config_entries')"
+      :description="$t('views.SettingsRuntimeConfigView.no_config_entries_description')"
+    />
 
     <div v-else-if="!featureRequired" class="rounded-lg border overflow-x-auto">
       <table class="w-full">
@@ -45,7 +64,8 @@
             >
               <td class="px-4 py-3">
                 <div class="flex items-center gap-2">
-                  <span v-if="entryHasDrift(entry)" class="text-warning-text" :title="$t('views.SettingsRuntimeConfigView.value_differs_from_environment')">⚠</span>
+                  <AlertTriangle v-if="entryHasDrift(entry)" class="h-4 w-4 shrink-0 text-warning-text" aria-hidden="true" focusable="false" />
+                  <span v-if="entryHasDrift(entry)" class="sr-only">{{ $t('views.SettingsRuntimeConfigView.value_differs_from_environment') }}</span>
                 <code class="text-sm font-mono">{{ entry.key }}</code>
                   <span
                     v-if="entry.hot_reloadable"
@@ -70,6 +90,7 @@
                   <button
                     type="button"
                     class="text-xs text-primary-text hover:underline"
+                    :data-testid="'settings-runtime-config-reveal-current-' + entry.key"
                     @click="revealKey(entry.key)"
                   >
                     {{ $t('views.SettingsRuntimeConfigView.reveal') }}
@@ -98,6 +119,7 @@
                   <button
                     type="button"
                     class="text-xs text-primary-text hover:underline"
+                    :data-testid="'settings-runtime-config-reveal-env-' + entry.key"
                     @click="revealKey(entry.key)"
                   >
                     {{ $t('views.SettingsRuntimeConfigView.reveal') }}
@@ -116,6 +138,7 @@
                   <button
                     type="button"
                     class="text-xs text-primary-text hover:underline"
+                    :data-testid="'settings-runtime-config-reveal-default-' + entry.key"
                     @click="revealKey(entry.key)"
                   >
                     {{ $t('views.SettingsRuntimeConfigView.reveal') }}
@@ -177,9 +200,10 @@ import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import FeatureGate from '../components/FeatureGate.vue'
+import { AlertTriangle } from '@lucide/vue'
 
 const { t } = useI18n()
 
