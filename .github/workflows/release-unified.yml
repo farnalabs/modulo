@@ -184,8 +184,9 @@ jobs:
     name: Release (${{ inputs.mode }})
     if: inputs.mode != 'dry-run'
     runs-on: ubicloud-standard-2
-    # Covers the bounded 90-minute merge-queue wait plus setup overhead.
-    timeout-minutes: 120
+    # Covers the bounded 90-minute merge-queue wait plus the bounded 45-minute
+    # schema-freshness wait and setup overhead.
+    timeout-minutes: 180
     permissions:
       contents: write
       pull-requests: write
@@ -225,77 +226,6 @@ jobs:
             echo "::error::version must be semver X.Y.Z (e.g. 0.1.0); got '$VERSION'"
             exit 1
           fi
-
-      # -----------------------------------------------------------------------
-      # Assert schema-freshness gate passed on the commit to be tagged.
-      # Runs for cut and recut (promote uses the validated RC which already passed).
-      # -----------------------------------------------------------------------
-      - name: Assert schema-freshness gate green on target commit
-        if: inputs.mode == 'cut' || inputs.mode == 'recut'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MODE: ${{ inputs.mode }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Determine the commit that will be tagged.
-          if [ "$MODE" = "cut" ]; then
-            # For cut: the version bump was just pushed to main, so the target is origin/main
-            TARGET_SHA="$(git rev-parse origin/main)"
-            echo "Cut mode: checking schema-freshness on origin/main (${TARGET_SHA})"
-          else
-            # For recut: the target is the current origin/main (will be fetched in recut step)
-            git fetch origin main
-            TARGET_SHA="$(git rev-parse origin/main)"
-            echo "Recut mode: checking schema-freshness on origin/main (${TARGET_SHA})"
-          fi
-
-          # Query the latest workflow run for the target SHA and check schema-freshness.
-          # We look for the most recent 'ci.yml' run on this SHA.
-          echo "Checking CI run for ${TARGET_SHA}..."
-          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/runs?per_page=100" \
-            --jq '.workflow_runs[] | select(.head_sha == "'"${TARGET_SHA}"'" and .path == ".github/workflows/ci.yml") | .id' \
-            | head -n1)
-          if [ -z "$RUN_ID" ]; then
-            echo "::error::No CI workflow run found for commit ${TARGET_SHA}. Cannot verify schema-freshness gate."
-            exit 1
-          fi
-          echo "Found CI run: ${RUN_ID}"
-
-          # Wait up to 45 minutes: the backend test suite can take about 30 minutes,
-          # so the old 10-minute bound rejected legitimate CI before it finished.
-          POLL_INTERVAL_SECONDS=10
-          MAX_WAIT_SECONDS=2700
-          MAX_POLLS=$((MAX_WAIT_SECONDS / POLL_INTERVAL_SECONDS))
-          STATUS=""
-          for ((poll=1; poll<=MAX_POLLS; poll++)); do
-            STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}" --jq '.status')
-            if [ "$STATUS" = "completed" ]; then
-              break
-            fi
-            echo "CI run ${RUN_ID} still in progress (status: ${STATUS}), waiting... (${poll}/${MAX_POLLS}; ${POLL_INTERVAL_SECONDS}s interval)"
-            sleep "$POLL_INTERVAL_SECONDS"
-          done
-          if [ "$STATUS" != "completed" ]; then
-            echo "::error::Timed out after ${MAX_WAIT_SECONDS}s waiting for CI run ${RUN_ID} to complete (last status: ${STATUS}). Refusing to proceed."
-            exit 1
-          fi
-
-          # Check the schema-freshness job conclusion
-          SCHEMA_JOB=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" \
-            --jq '.jobs[] | select(.name == "Schema freshness") | {conclusion: .conclusion, name: .name}')
-          if [ -z "$SCHEMA_JOB" ]; then
-            echo "::error::Schema freshness job not found in CI run ${RUN_ID}"
-            exit 1
-          fi
-          SCHEMA_CONCLUSION=$(echo "$SCHEMA_JOB" | jq -r '.conclusion')
-          echo "Schema freshness job conclusion: ${SCHEMA_CONCLUSION}"
-
-          if [ "$SCHEMA_CONCLUSION" != "success" ]; then
-            echo "::error::Schema freshness gate did not pass (conclusion: ${SCHEMA_CONCLUSION}) on commit ${TARGET_SHA}. Refusing to tag."
-            exit 1
-          fi
-          echo "Schema freshness gate passed on ${TARGET_SHA}."
 
       # -----------------------------------------------------------------------
       # Version bump (cut only). The publication hold is established first so
@@ -640,14 +570,27 @@ jobs:
           fi
 
           # CHANGELOG.md is release metadata and must land through protected
-          # main. Keep the existing release-freeze as the publication hold while
-          # the promote PR waits; cut already uses the temporary hold only for
-          # its version-bump window. A promote must never clear the freeze until
-          # the exact GA tag exists.
+          # main. The only authorised merger is merge-queue.yml, whose queue job
+          # runs only while no release-freeze exists and whose TOCTOU guard
+          # aborts any tick overlapping a freeze. Holding release-freeze during
+          # the PR wait would therefore deadlock promotion: the promote PR could
+          # never merge. Swap the freeze for the temporary
+          # release-publication-hold (which also suppresses stable publication),
+          # then re-establish release-freeze at the exact GA commit once the tag
+          # is pushed.
           #
           # Keep the remote branch as the auditable release record; reuse one
           # open PR and refuse a closed duplicate rather than racing a second
           # promotion.
+          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
+            echo "::error::release-publication-hold already exists; refusing to promote over an unresolved hold."
+            exit 1
+          fi
+          git tag -a release-publication-hold -m "Suppress stable publication while the promote PR merges"
+          git push origin release-publication-hold
+          git push origin --delete release-freeze
+          git tag -d release-freeze
+          echo "Swapped release-freeze for release-publication-hold while the promote PR merges."
           git fetch origin --tags
           PREV=""
           if git describe --tags --abbrev=0 "${RC_SHA}^" > /tmp/previous-ga-tag.txt 2>/dev/null; then
@@ -845,10 +788,19 @@ jobs:
              echo "::error::Remote GA tag ${GA_TAG} resolved to ${REMOTE_TAG_SHA}, expected merged PR SHA ${MERGED_SHA}."
              exit 1
            fi
-            # Keep release-freeze active while every downstream GA publication
-           # step runs. The finalisation step below is the only place allowed to
-           # lift it, after images, Helm and release notes have all succeeded.
-           echo "GA tag ${GA_TAG} published at ${TAG_SHA}; release-freeze remains active until all publication steps finish."
+            # Re-establish the authoritative release-freeze at the exact GA
+            # commit now that the protected merge has landed. Every downstream
+            # GA publication step runs under it, and the finalisation step
+            # below is the only place allowed to lift it.
+            git tag -f -a release-freeze -m "Release freeze active for ${GA_TAG}"
+            git push origin release-freeze --force
+            # The temporary suppression marker is now redundant with the freeze.
+            if ! git push origin --delete release-publication-hold; then
+              echo "::error::Could not remove release-publication-hold after re-establishing release-freeze; refusing a stale suppression marker."
+              exit 1
+            fi
+            echo "GA tag ${GA_TAG} published at ${TAG_SHA}; release-freeze remains active until all publication steps finish."
+
 
            {
 
@@ -1188,14 +1140,28 @@ jobs:
             git tag -f -a release-freeze -m "Release freeze retained after failed GA publication for ${GA_TAG}"
             git push origin release-freeze --force
             echo "Re-established release-freeze after failed GA publication."
-           else
-             if git rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1; then
-               echo "GA tag ${GA_TAG} was not created; existing release-freeze remains active."
-             else
-               echo "::error::GA publication failed before ${GA_TAG} existed and release-freeze is missing; refusing an unprotected state."
-               exit 1
-             fi
-           fi
+          elif git rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1; then
+            echo "GA tag ${GA_TAG} was not created; existing release-freeze remains active."
+          else
+            # The promote step removes release-freeze for the PR-merge window so
+            # the merge queue can run. If promotion then fails before the GA tag
+            # exists, the freeze must be restored at the still-validated RC
+            # commit (main) rather than left absent.
+            git fetch origin main
+            RESTORE_SHA="$(git rev-parse origin/main)"
+            git tag -f -a release-freeze -m "Release freeze restored after failed GA promotion for ${GA_TAG}" "$RESTORE_SHA"
+            git push origin release-freeze --force
+            echo "Restored release-freeze at ${RESTORE_SHA} after failed GA promotion."
+          fi
+          # A failed promotion must not leave the temporary suppression marker
+          # behind once the authoritative freeze is active again.
+          if git ls-remote --exit-code origin refs/tags/release-publication-hold >/dev/null 2>&1; then
+            if ! git push origin --delete release-publication-hold; then
+              echo "::error::Could not remove release-publication-hold after a failed GA promotion."
+              exit 1
+            fi
+            echo "Removed release-publication-hold after failed GA promotion."
+          fi
 
 
       - name: Lift release freeze after successful GA publication

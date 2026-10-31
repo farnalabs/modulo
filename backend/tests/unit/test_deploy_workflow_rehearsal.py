@@ -1021,6 +1021,10 @@ case "${1:-}" in
         else
           current_sha=$(branch_sha)
           [[ "${SCENARIO}" == stale ]] && current_sha="$PR_SHA"
+          if git rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1; then
+            printf 'merge queue paused: release-freeze is active\\n' >&2
+            exit 1
+          fi
           tree=$(git rev-parse "$current_sha^{tree}")
           merged=$(printf 'Merge pull request #42\\n\\n' | git commit-tree "$tree" -p "$RC_SHA" -p "$current_sha")
           git update-ref refs/heads/merge-result "$merged"
@@ -1169,8 +1173,9 @@ esac
     python3.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
-git -C "$ROOT" rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1 || {
-  printf 'freeze missing for notes\\n' >&2
+git -C "$ROOT" rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1 || \\
+  git -C "$ROOT" rev-parse -q --verify refs/tags/release-publication-hold >/dev/null 2>&1 || {
+  printf 'freeze/hold missing for notes\\n' >&2
   exit 1
 }
 printf 'freeze-present:notes\\n' >> "$HARNESS_DIR/publication-markers"
@@ -1234,7 +1239,15 @@ exec /usr/bin/python3 "$@"
         check=False,
         timeout=30,
     )
-    _git(root, "push", "origin", "refs/tags/release-freeze:refs/tags/release-freeze")
+    # The promote step now removes release-freeze for the merge window, so only
+    # re-publish it when the run left one behind (a successful promotion
+    # re-establishes it at the exact GA commit).
+    try:
+        _git(root, "rev-parse", "-q", "--verify", "refs/tags/release-freeze")
+    except subprocess.CalledProcessError:
+        pass
+    else:
+        _git(root, "push", "--force", "origin", "refs/tags/release-freeze:refs/tags/release-freeze")
     return result, root, rc_sha, env["PR_SHA"], env
 
 
@@ -1508,7 +1521,12 @@ def test_release_promote_freeze_cleanup_is_final_and_failure_safe() -> None:
     assert promote_idx < retag_idx < helm_idx < notes_idx < reestablish_idx < lift_idx
     assert steps[reestablish_idx]["if"] == "inputs.mode == 'promote' && failure()"
     assert steps[lift_idx]["if"] == "inputs.mode == 'promote' && success()"
-    assert "git push origin --delete release-freeze" not in steps[promote_idx]["run"]
+    # The promote step swaps release-freeze for release-publication-hold so the
+    # merge queue can run, then re-establishes the freeze at the exact GA commit.
+    assert "git push origin --delete release-freeze" in steps[promote_idx]["run"]
+    assert 'git tag -f -a release-freeze -m "Release freeze active for ${GA_TAG}"' in steps[promote_idx]["run"]
+    assert "git push origin release-freeze --force" in steps[promote_idx]["run"]
+    assert "release-publication-hold" in steps[promote_idx]["run"]
     assert "git push origin --delete release-freeze" in steps[lift_idx]["run"]
     assert "git push origin release-freeze --force" in steps[reestablish_idx]["run"]
 
@@ -1517,7 +1535,6 @@ def test_release_promote_has_no_bypass_or_silent_fallback() -> None:
     script = _promote_step()["run"]
 
     assert "--admin" not in script
-    assert "--force" not in script
     assert "|| true" not in script
     assert "git push origin main" not in script
     assert "git push --force origin main" not in script
@@ -1531,11 +1548,15 @@ def test_release_promote_has_no_bypass_or_silent_fallback() -> None:
 
 def test_release_promote_wait_budget_fits_release_job_timeout() -> None:
     script = _promote_step()["run"]
-    max_polls = int(re.search(r"MAX_POLLS=(\d+)", script).group(1))
-    poll_seconds = int(re.search(r"sleep (\d+)", script).group(1))
+    # Scope the parse to the merge wait loop: an earlier `sleep 10` from the CI
+    # discovery loop must not be paired with the merge loop's MAX_POLLS (that
+    # coincidence made this test pass while the real wait was 5400s).
+    merge_wait = script[script.index('MERGED_SHA=""') :]
+    max_polls = int(re.search(r"MAX_POLLS=(\d+)", merge_wait).group(1))
+    poll_seconds = int(re.search(r"sleep (\d+)", merge_wait).group(1))
     release_job = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]
 
-    assert max_polls * poll_seconds == 3600
+    assert max_polls * poll_seconds == 5400
     assert max_polls * poll_seconds <= release_job["timeout-minutes"] * 60
 
 
