@@ -93,6 +93,24 @@ def test_valid_manifest_is_contract_validation_only(tmp_path: Path) -> None:
     assert set(manifest["native_requirements"]["postgresql"]["binaries"]) == set(_POSTGRES_BINARIES)
 
 
+def test_validate_rejects_manifest_path_outside_bundle(tmp_path: Path) -> None:
+    bundle, _ = _bundle(tmp_path)
+    outside_manifest = tmp_path / "manifest.json"
+    outside_manifest.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="manifest path must be beneath the allowed local root"):
+        validate(outside_manifest, _SCHEMA, bundle)
+
+
+def test_validate_rejects_schema_path_outside_repository_scripts(tmp_path: Path) -> None:
+    bundle, manifest_path = _bundle(tmp_path)
+    outside_schema = tmp_path / "schema.json"
+    outside_schema.write_text(_SCHEMA.read_text(encoding="utf-8"), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="schema path must be beneath the allowed local root"):
+        validate(manifest_path, outside_schema, bundle)
+
+
 def test_validate_does_not_mutate_the_manifest_it_validated(tmp_path: Path) -> None:
     bundle, manifest_path = _bundle(tmp_path)
     before = manifest_path.read_text(encoding="utf-8")

@@ -57,6 +57,8 @@ FORBIDDEN_BUNDLE_ENTRIES: tuple[str, ...] = (
     "pyinstaller-entrypoint.py",
 )
 
+_SCHEMA_FILENAME = "windows-bundle-manifest.schema.json"
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -116,6 +118,39 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _repository_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _resolve_local_input(path: Path, label: str, *, allowed_root: Path | None = None) -> Path:
+    """Resolve a CLI input and require it to stay in the intended local boundary."""
+    candidate = path.expanduser().resolve()
+    root = (allowed_root or _repository_root()).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        boundary = "the repository root" if allowed_root is None else "the allowed local root"
+        raise ValueError(f"{label} must be beneath {boundary}: {path}") from exc
+    return candidate
+
+
+def _resolve_schema_path(path: Path) -> Path:
+    schema = _resolve_local_input(path, "schema path", allowed_root=_repository_root() / "scripts")
+    if schema.name != _SCHEMA_FILENAME:
+        raise ValueError(f"schema path must name {_SCHEMA_FILENAME}: {path}")
+    return schema
+
+
+def _load_json(path: Path, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"could not read {label}: {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must contain a JSON object: {path}")
+    return value
+
+
 def _validate_binary_name(binary: str, requirement_name: str) -> None:
     if not binary or binary in {".", ".."} or "/" in binary or "\\" in binary:
         raise ValueError(f"{requirement_name} binary name must not contain path separators: {binary!r}")
@@ -130,19 +165,7 @@ def _assert_known_layout(name: str, relative_path: str) -> None:
         raise ValueError(f"{name} relative_path must be {expected!r} (native binary inventory); got {relative_path!r}")
 
 
-def validate(manifest_path: Path, schema_path: Path, bundle_path: Path) -> dict[str, Any]:
-    """Validate a manifest against the schema, the inventory and the emitted bundle.
-
-    Returns the parsed manifest exactly as it was read - validation never
-    mutates it and never writes back to it.
-    """
-    manifest_path = Path(manifest_path)
-    schema_path = Path(schema_path)
-    bundle_path = Path(bundle_path)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
-    root = bundle_path.resolve()
-    assert_no_scaffolding(root)
-
+def _validate_manifest_paths(manifest: dict[str, Any], root: Path) -> None:
     launcher_path = manifest.get("launcher", {}).get("path")
     if launcher_path:
         _resolve_beneath(root, launcher_path, "launcher path")
@@ -159,12 +182,15 @@ def validate(manifest_path: Path, schema_path: Path, bundle_path: Path) -> dict[
                 _validate_binary_name(binary, name)
                 _resolve_beneath(native_root, binary, f"{name} binary")
 
-    schema = json.loads(schema_path.read_text(encoding="utf-8-sig"))
+
+def _validate_manifest_schema(manifest: dict[str, Any], schema: dict[str, Any]) -> None:
     errors = sorted(Draft202012Validator(schema).iter_errors(manifest), key=lambda error: list(error.path))
     if errors:
         details = "; ".join(error.message for error in errors)
         raise ValueError(f"manifest does not match schema: {details}")
 
+
+def _validate_required_files(manifest: dict[str, Any], root: Path) -> None:
     launcher = _resolve_beneath(root, manifest["launcher"]["path"], "launcher path")
     if not launcher.is_file() or launcher.stat().st_size == 0:
         raise ValueError(f"manifest launcher is missing or empty: {launcher}")
@@ -172,13 +198,17 @@ def validate(manifest_path: Path, schema_path: Path, bundle_path: Path) -> dict[
     if not frontend.is_dir() or not any(frontend.iterdir()):
         raise ValueError(f"manifest frontend dist is missing or empty: {frontend}")
 
+
+def _validate_inventory_presence(manifest: dict[str, Any]) -> None:
+    requirements = manifest.get("native_requirements", {})
     for service, requirement in NATIVE_INVENTORY.items():
-        req = manifest.get("native_requirements", {}).get(service, {})
-        binaries = req.get("binaries", [])
-        missing = [b for b in requirement["binaries"] if b not in binaries]
+        binaries = requirements.get(service, {}).get("binaries", [])
+        missing = [binary for binary in requirement["binaries"] if binary not in binaries]
         if missing:
             raise ValueError(f"missing required {service} binary from inventory: {', '.join(missing)}")
 
+
+def _validate_binary_metadata(manifest: dict[str, Any], root: Path) -> None:
     for name, requirement in manifest["native_requirements"].items():
         native_root = _resolve_beneath(root, requirement["relative_path"], f"{name} relative path")
         metadata_map = requirement.get("metadata")
@@ -199,6 +229,20 @@ def validate(manifest_path: Path, schema_path: Path, bundle_path: Path) -> dict[
             if metadata.get("size_bytes") != path.stat().st_size:
                 raise ValueError(f"required {name} binary size does not match manifest: {path}")
 
+
+def validate(manifest_path: Path, schema_path: Path, bundle_path: Path) -> dict[str, Any]:
+    """Validate a manifest against the schema, the inventory and the emitted bundle."""
+    root = Path(bundle_path).resolve()
+    manifest_file = _resolve_local_input(Path(manifest_path), "manifest path", allowed_root=root)
+    schema_file = _resolve_schema_path(Path(schema_path))
+    manifest = _load_json(manifest_file, "manifest")
+    schema = _load_json(schema_file, "schema")
+    assert_no_scaffolding(root)
+    _validate_manifest_paths(manifest, root)
+    _validate_manifest_schema(manifest, schema)
+    _validate_required_files(manifest, root)
+    _validate_inventory_presence(manifest)
+    _validate_binary_metadata(manifest, root)
     return manifest
 
 

@@ -321,54 +321,74 @@ function Get-ServiceInputCheck {
     return New-Check "$Service inputs" "OK" "$(@($Requirement['binaries']).Count) required binaries under '$binDirectory'"
 }
 
-function Get-PrerequisiteChecks {
-    <#
-    .SYNOPSIS
-    Every prerequisite as one reportable check. Records failures instead of
-    throwing, so a single run reports all of them.
-    #>
-    param($Toolchain, $Inventory, [string]$PostgresDirectory, [string]$RedisDirectory)
+function Add-ToolchainChecks {
+    param([System.Collections.Generic.List[object]]$Checks, $Toolchain)
 
-    $checks = [System.Collections.Generic.List[object]]::new()
-    $checks.Add((New-Check "version" $(if ($Version -match '^\d+\.\d+\.\d+$') { "OK" } else { "FAIL" }) "$Version ($Architecture)"))
-    $checks.Add((New-Check "manifest schema" $(if (Test-Path -LiteralPath $schemaPath -PathType Leaf) { "OK" } else { "FAIL" }) "$schemaPath"))
-    $checks.Add((New-Check "uv" $(if ($null -ne $Toolchain["uv"]) { "OK" } else { "FAIL" }) $(if ($null -ne $Toolchain["uv"]) { [string]$Toolchain["uv"] } else { "not found on PATH - see https://docs.astral.sh/uv/" })))
-    $checks.Add((New-Check "pnpm" $(if ($null -ne $Toolchain["pnpm"]) { "OK" } else { "FAIL" }) $(if ($null -ne $Toolchain["pnpm"]) { [string]$Toolchain["pnpm"] } else { "not found on PATH - install the version recorded in frontend/package.json" })))
-    $checks.Add((New-Check "backend python (jsonschema)" $(if ($null -ne $Toolchain["backend_python"]) { "OK" } else { "FAIL" }) $(if ($null -ne $Toolchain["backend_python"]) { [string]$Toolchain["backend_python"] } else { "unavailable via 'uv run --project backend' - run 'uv sync' in backend/" })))
-    $checks.Add((New-Check "backend PyInstaller" $(if ($null -ne $Toolchain["backend_pyinstaller"]) { "OK" } else { "FAIL" }) $(if ($null -ne $Toolchain["backend_pyinstaller"]) { [string]$Toolchain["backend_pyinstaller"] } else { "not installed in the backend environment - run 'uv add --group dev pyinstaller' in backend/" })))
+    $definitions = @(
+        @("uv", "not found on PATH - see https://docs.astral.sh/uv/"),
+        @("pnpm", "not found on PATH - install the version recorded in frontend/package.json"),
+        @("backend python (jsonschema)", "unavailable via 'uv run --project backend' - run 'uv sync' in backend/"),
+        @("backend PyInstaller", "not installed in the backend environment - run 'uv add --group dev pyinstaller' in backend/")
+    )
+    foreach ($definition in $definitions) {
+        $key = switch ($definition[0]) {
+            "backend python (jsonschema)" { "backend_python"; break }
+            "backend PyInstaller" { "backend_pyinstaller"; break }
+            default { $definition[0] }
+        }
+        $value = $Toolchain[$key]
+        $status = if ($null -ne $value) { "OK" } else { "FAIL" }
+        $detail = if ($null -ne $value) { [string]$value } else { $definition[1] }
+        $Checks.Add((New-Check $definition[0] $status $detail))
+    }
+}
+
+function Add-InventoryChecks {
+    param([System.Collections.Generic.List[object]]$Checks, $Inventory, [string]$PostgresDirectory, [string]$RedisDirectory)
 
     if ($null -eq $Inventory) {
-        $checks.Add((New-Check "native binary inventory" "SKIP" "unavailable (needs the backend Python environment)"))
-        $checks.Add((New-Check "postgresql inputs" "SKIP" "not checked: the inventory is unavailable"))
-        $checks.Add((New-Check "redis inputs" "SKIP" "not checked: the inventory is unavailable"))
-        return $checks
+        $Checks.Add((New-Check "native binary inventory" "SKIP" "unavailable (needs the backend Python environment)"))
+        foreach ($service in @("postgresql", "redis")) {
+            $Checks.Add((New-Check "$service inputs" "SKIP" "not checked: the inventory is unavailable"))
+        }
+        return
     }
-    $summary = foreach ($service in @("postgresql", "redis")) { "${service}: $(@($Inventory[$service]['binaries']).Count) binaries at '$([string]$Inventory[$service]['relative_path'])'" }
-    $checks.Add((New-Check "native binary inventory" "OK" (($summary -join "; ") + " (from the validator)")))
-
-    $hints = [ordered]@{
+    $summary = foreach ($service in @("postgresql", "redis")) {
+        "${service}: $(@($Inventory[$service]['binaries']).Count) binaries at '$([string]$Inventory[$service]['relative_path'])'"
+    }
+    $Checks.Add((New-Check "native binary inventory" "OK" (($summary -join "; ") + " (from the validator)")))
+    $hints = @{
         postgresql = "Pass -PostgresDirectory <dir> or set $postgresEnvVar to the PostgreSQL distribution directory."
         redis = "Pass -RedisDirectory <dir> or set $redisEnvVar to the Redis distribution directory."
     }
-    $inputs = [ordered]@{
-        postgresql = $PostgresDirectory
-        redis = $RedisDirectory
-    }
+    $inputs = @{ postgresql = $PostgresDirectory; redis = $RedisDirectory }
     foreach ($service in @("postgresql", "redis")) {
-        $checks.Add((Get-ServiceInputCheck -Service $service -InputDirectory $inputs[$service] -Hint $hints[$service] -Requirement $Inventory[$service]))
+        $Checks.Add((Get-ServiceInputCheck -Service $service -InputDirectory $inputs[$service] -Hint $hints[$service] -Requirement $Inventory[$service]))
     }
+}
+
+function Get-PrerequisiteChecks {
+    param($Toolchain, $Inventory, [string]$PostgresDirectory, [string]$RedisDirectory)
+
+    $checks = [System.Collections.Generic.List[object]]::new()
+    $versionStatus = if ($Version -match '^\d+\.\d+\.\d+$') { "OK" } else { "FAIL" }
+    $schemaStatus = if (Test-Path -LiteralPath $schemaPath -PathType Leaf) { "OK" } else { "FAIL" }
+    $checks.Add((New-Check "version" $versionStatus "$Version ($Architecture)"))
+    $checks.Add((New-Check "manifest schema" $schemaStatus "$schemaPath"))
+    Add-ToolchainChecks -Checks $checks -Toolchain $Toolchain
+    Add-InventoryChecks -Checks $checks -Inventory $Inventory -PostgresDirectory $PostgresDirectory -RedisDirectory $RedisDirectory
     return $checks
 }
 
-function Write-CheckReport {
+function Show-CheckReport {
     param($Checks)
 
-    Write-Host "Windows bundle prerequisite check"
-    Write-Host ""
+    Write-Output "Windows bundle prerequisite check"
+    Write-Output ""
     foreach ($check in $Checks) {
-        Write-Host ("  {0,-30} {1,-5} {2}" -f ($check.Label + ":"), $check.Status, $check.Detail)
+        Write-Output ("  {0,-30} {1,-5} {2}" -f ($check.Label + ":"), $check.Status, $check.Detail)
     }
-    Write-Host ""
+    Write-Output ""
 }
 
 # ---------------------------------------------------------------------------
@@ -424,30 +444,30 @@ if ($ValidateOnly) {
         }
         $checks.Add($manifestCheck)
     }
-    Write-CheckReport -Checks $checks
+    Show-CheckReport -Checks $checks
 
     $checked = @($checks | Where-Object { $_.Status -ne "SKIP" } | ForEach-Object { $_.Label })
     $notChecked = @("frontend dependency install and build", "PyInstaller packaging", "launcher smoke run", "bundle assembly", "manifest generation")
     $notChecked += @($checks | Where-Object { $_.Status -eq "SKIP" } | ForEach-Object { $_.Label })
-    Write-Host ("Checked: " + ($checked -join ", ") + ".")
-    Write-Host ("Not checked: " + ($notChecked -join ", ") + ".")
-    Write-Host ("Output directory: {0} (guard passed; not created in -ValidateOnly)" -f $output)
+    Write-Output ("Checked: " + ($checked -join ", ") + ".")
+    Write-Output ("Not checked: " + ($notChecked -join ", ") + ".")
+    Write-Output ("Output directory: {0} (guard passed; not created in -ValidateOnly)" -f $output)
     if (-not $IsWindows) {
-        Write-Host "Note: a full build requires Windows - PyInstaller cannot cross-compile a Windows launcher, and it cannot be smoke-run here."
+        Write-Output "Note: a full build requires Windows - PyInstaller cannot cross-compile a Windows launcher, and it cannot be smoke-run here."
     }
 
     $failed = @($checks | Where-Object { $_.Status -eq "FAIL" })
     if ($failed.Count -gt 0) {
         Fail ("prerequisite check failed: " + (($failed | ForEach-Object { $_.Label }) -join "; ") + ". See the report above.")
     }
-    Write-Host "Prerequisite check passed. Nothing was built."
+    Write-Output "Prerequisite check passed. Nothing was built."
     exit 0
 }
 
 # ---------------------------------------------------------------------------
 # 5. Full build
 # ---------------------------------------------------------------------------
-Write-CheckReport -Checks $checks
+Show-CheckReport -Checks $checks
 $failed = @($checks | Where-Object { $_.Status -eq "FAIL" })
 if ($failed.Count -gt 0) {
     Fail ("prerequisite check failed: " + (($failed | ForEach-Object { $_.Label }) -join "; ") + ". See the report above.")
@@ -500,7 +520,7 @@ function Invoke-LauncherSmokeCheck([string]$Executable, [string]$StagingDirector
     if ($reportedVersion -ne $Version) {
         Fail "the packaged launcher reports version '$reportedVersion' but the bundle version is '$Version'."
     }
-    Write-Host "Launcher smoke check OK: 'modulo.exe version' reported modulo $reportedVersion."
+    Write-Output "Launcher smoke check OK: 'modulo.exe version' reported modulo $reportedVersion."
 }
 
 $frontendDist = Join-Path $frontendRoot "dist"
@@ -642,8 +662,8 @@ if __name__ == "__main__":
         Fail "bundle manifest validation failed (exit $($validation.ExitCode)): $($validation.Output -join ' ')"
     }
 
-    Write-Host "Windows bundle created: $output"
-    Write-Host "Manifest: $manifestPath"
+    Write-Output "Windows bundle created: $output"
+    Write-Output "Manifest: $manifestPath"
 } finally {
     # The staging directory was created by this run, outside the repo.
     if (Test-Path -LiteralPath $staging) {
