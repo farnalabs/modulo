@@ -51,19 +51,22 @@ The script fails loudly (non-zero exit, nothing written) if any mirror has drift
 
 ## Upgrade Paths
 
-### Native single-install (Linux)
+### Native single-install (Linux and macOS arm64)
 
-The native single-install path is **Linux-first** and still in progress: it
-cannot complete an install from a clean clone yet, so there is nothing to
-upgrade until that is resolved (FAR-2213). Native macOS and Windows installs are
-in the Alpha scope (implementation record FAR-678 and FAR-679, validation in
-FAR-2196 and FAR-2197), and this section will gain their upgrade paths once
-those artifacts are installable. See the platform support matrix in
+The native single-install path supports the published Linux bundle and the
+signed, notarized macOS arm64 `.dmg`. Windows remains out of scope. Linux uses
+`scripts/install.sh`; macOS uses `scripts/macos/install.sh` and installs the
+LaunchAgent seam from the app bundle. See the platform support matrix in
 [`docs/system-requirements.md`](./system-requirements.md).
 
 The native upgrade swaps the `current` symlink after a verified data
-snapshot; migrations run through the new bundle's boot lifespan. Two entry
-points perform the same swap:
+snapshot; migrations run through the new bundle's boot lifespan. On macOS arm64,
+install the signed/notarized `.dmg` on Apple Silicon only; x64/Rosetta is not
+supported. The Linux installer verifies the signed release manifest/checksum
+chain before copying the app; the macOS installer does not read the release
+manifest and instead verifies the DMG and app bundle through `hdiutil verify`
+plus Apple Developer ID signing/notarization. Two entry points perform the same
+swap:
 
 - the published installer (`bash scripts/install.sh`), and
 - the launcher command (`modulo upgrade <target-version>`).
@@ -91,15 +94,33 @@ refuses when no snapshot is present.
 
 `modulo upgrade` and `scripts/install.sh` both refuse to install from an
 unsigned or unverifiable release manifest (an ed25519 signature over the
-manifest's exact bytes). The trust store ships in a PROVISIONING state:
-production signing keys are NOT yet provisioned (the release pipeline's
-`BUNDLE_MANIFEST_SIGNING_KEY` Actions secret must be set, and the
-installer's production trust slots `TRUST_KEY_CURRENT_B64` /
-`TRUST_KEY_NEXT_B64` in `backend/src/modulo/launcher/manifest.py`
-`_TRUST_ROWS` mirror it). Until a human provisions those keys, signed
-releases cannot be produced and unsigned ones fail closed at install -
-deliberate: an unsigned release must never install silently. Provisions
-are a manual, keys-in-vault operation tracked as needs-human.
+manifest's exact bytes). The current production key, `modulo-2026-a`, is
+provisioned in the shipped verifier and the release pipeline's
+`BUNDLE_MANIFEST_SIGNING_KEY` GitHub Actions secret. The next rotation slot is
+reserved and remains empty in both trust-store assemblies:
+`backend/src/modulo/launcher/manifest.py` `_TRUST_ROWS` and the installer's
+`TRUST_KEY_CURRENT_B64` / `TRUST_KEY_NEXT_B64` values in `scripts/install.sh`.
+
+No `bundle-v*` release has been published yet, so this does not claim that a
+signed bundle is already available or that the installer is currently usable.
+When rotation begins, use this two-stage protocol; do not change only the
+secret. First, provision the replacement public key under a new key id in the
+reserved NEXT slot and ship that overlap while the old key remains in CURRENT.
+For the promotion release, make one coordinated change before producing any
+artifact: move the old public key to NEXT under its old id, move the replacement
+public key to CURRENT under its new id, update the checked-in trust store and
+current-key id (in both the verifier and installer), replace the
+``BUNDLE_MANIFEST_SIGNING_KEY`` GitHub Actions secret with the matching new
+private key, and update the release workflow's expected-key-id contract to the
+new current id. Release signing always derives the envelope key id from the
+checked-in CURRENT slot. Verify that promotion release before publishing it:
+old releases continue to verify via NEXT and the new release verifies via
+CURRENT. Merely changing the secret while CURRENT remains the old key creates
+a mismatched envelope and is invalid. After the compatibility window, remove
+the old key from NEXT in both trust-store assemblies. Keep private signing key
+material in the GitHub Actions secret only; never commit it. These are manual,
+keys-in-vault operations tracked as needs-human.
+
 
 ### Docker Compose
 

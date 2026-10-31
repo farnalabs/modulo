@@ -224,6 +224,17 @@ describe('CollectionDetailView install action (FAR-826)', () => {
     expect(wrapper.find('[data-testid="collection-install-warnings"]').exists()).toBe(false)
   })
 
+  it('renders a placeholder version when the install record has no collection version', async () => {
+    mockPublishedCollection([{ ...makeInstall(), collection_version: '' }])
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('v?')
+  })
+
   it('renders re-provision warnings returned by a successful install', async () => {
     mockPublishedCollection([])
     const warning =

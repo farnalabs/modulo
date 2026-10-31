@@ -170,6 +170,51 @@ class StreamRequest(BaseModel):
     )
 
 
+class AssistantSessionResponse(BaseModel):
+    id: str
+    account_id: str
+    name: str | None
+    session_number: int
+    provider: str | None
+    model: str | None
+    context_window_tokens: int
+    system_prompt_hash: str | None
+    message_count: int
+    created_at: str | None
+    updated_at: str | None
+
+
+class AssistantSessionListResponse(BaseModel):
+    items: list[AssistantSessionResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class AssistantMessageResponse(BaseModel):
+    id: str
+    session_id: str
+    role: str
+    content: str | None
+    tool_calls_json: dict[str, Any] | None
+    tool_results_json: dict[str, Any] | None
+    token_count: int | None
+    parent_id: str | None
+    created_at: str | None
+
+
+class AssistantMessageListResponse(BaseModel):
+    items: list[AssistantMessageResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class DeletedAssistantSessionResponse(BaseModel):
+    status: str
+    id: str
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 
@@ -485,7 +530,7 @@ def _build_stream_backend(req: StreamRequest, api_key: str) -> tuple[ModelBacken
         return None, f"Failed to initialize backend: {exc}"
 
 
-async def _build_stream_system_prompt(ctx: _StreamContext, supports_tools: bool) -> str:
+async def _build_stream_system_prompt(ctx: _StreamContext) -> str:
     async with ctx.db_session.begin():
         await set_rls_org(ctx.db_session, ctx.principal.organisation_id)
         skill_loader = SkillLoader(ctx.db_session)
@@ -764,8 +809,7 @@ async def _initialise_stream(ctx: _StreamContext) -> _StreamInit:
         return _StreamInit(error_detail="Failed to build model backend")
 
     # 3. Construct system prompt from config + skills
-    supports_tools = getattr(backend, "supports_tools", False)
-    system_prompt = await _build_stream_system_prompt(ctx, supports_tools)
+    system_prompt = await _build_stream_system_prompt(ctx)
 
     # 4. Save user message to DB
     parent_msg_id = await _save_stream_user_message(ctx)
@@ -806,7 +850,7 @@ async def list_sessions(
     principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
-) -> dict[str, Any]:
+) -> AssistantSessionListResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -838,7 +882,7 @@ async def list_sessions(
 
             items = [_serialise_session(s, count_map.get(s.id, 0)) for s in sessions]
 
-        return {"items": items, "total": total, "page": page, "page_size": page_size}
+        return AssistantSessionListResponse(items=items, total=total, page=page, page_size=page_size)
     except ProgrammingError:
         logger.exception("assistant.list_sessions")
         raise HTTPException(
@@ -913,7 +957,7 @@ async def create_session(
     req: CreateSessionRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
-) -> dict[str, Any]:
+) -> AssistantSessionResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -939,7 +983,7 @@ async def create_session(
             session.add(chat_session)
             await session.flush()
 
-        return _serialise_session(chat_session)
+        return AssistantSessionResponse.model_validate(_serialise_session(chat_session))
     except ProgrammingError:
         logger.exception("assistant.create_session")
         raise HTTPException(
@@ -971,7 +1015,7 @@ async def get_session(
     session_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
-) -> dict[str, Any]:
+) -> AssistantSessionResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -981,7 +1025,7 @@ async def get_session(
             count_result = await session.execute(count_q)
             msg_count = count_result.scalar() or 0
 
-        return _serialise_session(chat_session, msg_count)
+        return AssistantSessionResponse.model_validate(_serialise_session(chat_session, msg_count))
     except ProgrammingError:
         logger.exception("assistant.get_session")
         raise HTTPException(
@@ -1019,7 +1063,7 @@ async def rename_session(
     req: RenameSessionRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
-) -> dict[str, Any]:
+) -> AssistantSessionResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1028,7 +1072,7 @@ async def rename_session(
             chat_session.name = req.name
             await session.flush()
 
-        return _serialise_session(chat_session)
+        return AssistantSessionResponse.model_validate(_serialise_session(chat_session))
     except ProgrammingError:
         logger.exception("assistant.rename_session")
         raise HTTPException(
@@ -1073,7 +1117,7 @@ async def delete_session(
     session_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
-) -> dict[str, str]:
+) -> DeletedAssistantSessionResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1090,7 +1134,7 @@ async def delete_session(
             except Exception:
                 logger.exception("assistant.redis_cleanup_failed")
 
-        return {"status": "deleted", "id": str(session_id)}
+        return DeletedAssistantSessionResponse(status="deleted", id=str(session_id))
     except ProgrammingError:
         logger.exception("assistant.delete_session")
         raise HTTPException(
@@ -1129,7 +1173,7 @@ async def list_messages(
     principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=500)] = 100,
-) -> dict[str, Any]:
+) -> AssistantMessageListResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1149,12 +1193,12 @@ async def list_messages(
             result = await session.execute(q)
             messages = result.scalars().all()
 
-        return {
-            "items": [_serialise_message(m) for m in messages],
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-        }
+        return AssistantMessageListResponse(
+            items=[AssistantMessageResponse.model_validate(_serialise_message(m)) for m in messages],
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
     except ProgrammingError:
         logger.exception("assistant.list_messages")
         raise HTTPException(
@@ -1192,7 +1236,7 @@ async def append_message(
     req: AppendMessageRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: Annotated[TenantPrincipal, Depends(get_current_tenant_user)],
-) -> dict[str, Any]:
+) -> AssistantMessageResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1211,7 +1255,7 @@ async def append_message(
             session.add(msg)
             await session.flush()
 
-        return _serialise_message(msg)
+        return AssistantMessageResponse.model_validate(_serialise_message(msg))
     except ProgrammingError:
         logger.exception("assistant.append_message")
         raise HTTPException(

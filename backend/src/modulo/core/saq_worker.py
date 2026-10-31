@@ -100,6 +100,7 @@ _CRON_DAILY = "0 3 * * *"
 #: distinct off-peak slot from the other daily crons (facts maintenance 01:00,
 #: kill-switch drill 03:00) so the three never contend.
 _CRON_DAILY_0230 = "30 2 * * *"
+_CRON_DEMO_DAILY_REFRESH = "5 0 * * *"
 
 # Scheduled run-retention window (FAR-1549). Pinned explicitly so the purge
 # and its audit record read the SAME cutoff: ``batch_delete_old_terminal_runs``
@@ -1208,6 +1209,22 @@ async def _persist_suite_run_execution_failure(
 # ---------------------------------------------------------------------------
 # Job functions — system worker (plan F1 / F3c / PR B step 6)
 # ---------------------------------------------------------------------------
+
+
+async def demo_daily_refresh(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — refresh the configured demo org's rolling sample window.
+
+    This is a demo-fixture convergence job, not a production entity lifecycle
+    transition. The seed is gated by the demo configuration and preserves
+    durable provenance on existing HITL claims.
+    """
+    settings = get_settings()
+    if not settings.modulo_demo_enabled:
+        return {"status": "disabled"}
+    from modulo.db.seed_demo import seed_demo_runtime
+
+    summary = await seed_demo_runtime(session_factory=_make_session_factory())
+    return {"status": "refreshed" if summary else "disabled", "summary": summary}
 
 
 async def fire_due_triggers(_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -2673,6 +2690,7 @@ def _system_functions() -> list[Any]:
     from modulo.core.worker_memory import memory_monitor_cron
 
     return [
+        demo_daily_refresh,
         fire_due_triggers,
         dispatcher_reconcile,
         claim_expiry,
@@ -2709,6 +2727,16 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
     from modulo.core.worker_memory import memory_monitor_cron
 
     return [
+        # demo_daily_refresh: keep the rolling three-day demo window current.
+        CronJob(
+            demo_daily_refresh,
+            cron=_CRON_DEMO_DAILY_REFRESH,
+            unique=True,
+            timeout=600,
+            heartbeat=60,
+            retries=1,
+            ttl=900,
+        ),
         # fire_due_triggers: every 60s (croniter parses 5-field cron, so the
         # 30s intent is not achievable — every minute); the atomic next_fire_at
         # advance makes multi-machine ticks safe (unique=True only prevents overlap).

@@ -755,8 +755,25 @@ async function checkAxeMobile(page: Page) {
     process.stdout.write(`[mobile-layout] skipping axe on ${page.url()} (DOM too large: ${domSize} elements)\n`)
     return
   }
-  const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
-  const violations = filterViolations(results.violations)
+  // axe reads COMPUTED colours, so a CSS transition still in flight is measured
+  // as a blended intermediate the user never rests on. PrimeVue transitions
+  // button background/foreground over ~200ms, and a button that mounts late —
+  // e.g. /variants/compare's empty-state "New Comparison", rendered only once
+  // the groups fetch resolves empty — can still be transitioning when this
+  // audit starts. Observed there as #90949b on #10675c (2.21:1) while the
+  // settled page renders #0bdab4 with dark ink. Disable transitions for the
+  // duration of the audit so every colour is read at its settled value, then
+  // restore them for the checks and screenshot that follow.
+  const transitionOverride = await page.addStyleTag({
+    content: '*,*::before,*::after{transition:none !important}',
+  })
+  let violations
+  try {
+    const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
+    violations = filterViolations(results.violations)
+  } finally {
+    await transitionOverride.evaluate((node) => node.remove())
+  }
   if (violations.length > 0) {
     process.stdout.write(`\n=== ${page.url()} mobile WCAG violations ===\n`)
     for (const v of violations) {

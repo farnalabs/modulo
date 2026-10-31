@@ -58,6 +58,7 @@ def test_gate0_covers_bundled_boot_critical_modules() -> None:
         "backend/src/modulo/db/url_utils.py",
         "backend/src/modulo/settings.py",
         "backend/src/modulo/api/main.py",
+        "backend/src/modulo/launcher/service.py",
     ]
     uncovered = [path for path in critical if not _covered(patterns, path)]
     assert not uncovered, (
@@ -73,6 +74,8 @@ def test_gate0_covers_bundled_boot_critical_directories() -> None:
         "backend/src/modulo/db/migrations",
         "backend/src/modulo/db/settings_resolver.py",
         "deploy/fly/entrypoint.sh",
+        "scripts/macos/install.sh",
+        "scripts/create-macos-info-plist.sh",
     ]
     uncovered = [path for path in critical_dirs if not _covered(patterns, path)]
     assert not uncovered, f"Gate 0 always-run filter lost directory coverage for: {uncovered}"

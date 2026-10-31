@@ -66,11 +66,12 @@ jobs:
 
           case "${pg_compose_major}" in
             '' | *[!0-9]*) echo "::error::could not parse a postgres major version from docker-compose.yml (got '${pg_compose_major}')"; exit 1 ;;
+            *) : ;;
           esac
           case "${redis_compose_major}" in
             '' | *[!0-9]*) echo "::error::could not parse a redis major version from docker-compose.yml (got '${redis_compose_major}')"; exit 1 ;;
+            *) : ;;
           esac
-
           if [ "${PG_MAJOR}" != "${pg_compose_major}" ]; then
             echo "::error::version drift: bundle pins PostgreSQL major ${PG_MAJOR} (scripts/bundle-versions.env) but docker-compose.yml pins major ${pg_compose_major}. Bump both together."
             exit 1
@@ -109,11 +110,12 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/bundle-versions.env
-          case "${{ matrix.arch }}" in
-            amd64) PBS_TARBALL="$PBS_AMD64_TARBALL"; PBS_SHA256="$PBS_CPYTHON_AMD64_SHA256" ;;
-            arm64) PBS_TARBALL="$PBS_ARM64_TARBALL"; PBS_SHA256="$PBS_CPYTHON_ARM64_SHA256" ;;
-            *) echo "::error::unsupported matrix arch: ${{ matrix.arch }}"; exit 1 ;;
-          esac
+           case "${{ matrix.arch }}" in
+             amd64) PBS_TARBALL="$PBS_AMD64_TARBALL"; PBS_SHA256="$PBS_CPYTHON_AMD64_SHA256" ;;
+             arm64) PBS_TARBALL="$PBS_ARM64_TARBALL"; PBS_SHA256="$PBS_CPYTHON_ARM64_SHA256" ;;
+             *) echo "::error::unsupported matrix arch: ${{ matrix.arch }}" >&2; exit 1 ;;
+           esac
+
           VERSION_NUM="${{ inputs.version }}"
           {
             echo "ARCH=${{ matrix.arch }}"
@@ -356,13 +358,30 @@ jobs:
               artifacts=artifacts,
           )
           payload = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
+          signing_key = os.environ["MANIFEST_SIGNING_KEY"]
+          if len(signing_key) != 64:
+              raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must be exactly 32-byte Ed25519 private-key hex")
+          try:
+              int(signing_key, 16)
+          except ValueError as exc:
+              raise SystemExit("BUNDLE_MANIFEST_SIGNING_KEY must contain only hexadecimal characters") from exc
           signature = manifest_module.sign_release_bytes(
-              payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=os.environ["MANIFEST_SIGNING_KEY"]
+              payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=signing_key
           )
+          if signature["key_id"] != manifest_module._KEY_ID_CURRENT:
+              raise SystemExit("generated manifest signature used an unexpected key_id")
+          try:
+              verified_key_id = manifest_module.verify_signature(payload, signature)
+          except manifest_module.ManifestSecurityError as exc:
+              raise SystemExit(f"generated manifest signature failed trust-store verification: {exc}") from exc
+          if verified_key_id != manifest_module._KEY_ID_CURRENT:
+              raise SystemExit("generated manifest signature did not verify under the expected current key_id")
+          print(f"manifest signature verified under expected key_id {verified_key_id}")
           with open(os.path.join(build_root, "RELEASE_MANIFEST.json"), "wb") as handle:
               handle.write(payload)
           with open(os.path.join(build_root, "RELEASE_MANIFEST.json.sig"), "w", encoding="utf-8") as handle:
               handle.write(json.dumps(signature))
+
           PYEOF
 
       - name: Upload bundle artefacts as workflow outputs

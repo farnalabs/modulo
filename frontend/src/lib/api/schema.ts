@@ -5631,6 +5631,10 @@ export interface paths {
          *
          *     Requires X-Modulo-Timestamp header (Unix seconds, ±300s window).
          *     Requires X-Modulo-Webhook-Secret header if trigger has hmac_secret configured.
+         *     Alternatively, when no Modulo header is sent, GitHub's ``X-Hub-Signature-256``
+         *     (``sha256=`` HMAC-SHA256 of the raw body keyed by the trigger's hmac_secret) is
+         *     accepted. That scheme carries no timestamp, so it has no replay window; payload
+         *     dedup bounds replays. If any Modulo header is present, the Modulo scheme is used.
          *
          *     ADR 047 exempt-channel: this route is CSRF-exempt via the audited
          *     ``/api/v1/triggers/`` prefix and exempt from the org-role sweep because it
@@ -5669,7 +5673,9 @@ export interface paths {
          *     principal (if present) must hold the ``run.trigger`` permission (``runner``
          *     minimum). An unauthenticated caller must present a valid HMAC signature
          *     (``X-Modulo-Webhook-Secret`` + ``X-Modulo-Timestamp``) over the stored
-         *     payload — the same verification ``receive_webhook`` performs.
+         *     payload — the same verification ``receive_webhook`` performs. FAR-2251:
+         *     GitHub's ``X-Hub-Signature-256`` over the stored body is also accepted
+         *     when no Modulo header is present.
          */
         post: operations["replay_webhook_api_v1_triggers__trigger_id__webhook_replay__event_id__post"];
         delete?: never;
@@ -7351,6 +7357,26 @@ export interface paths {
          * @description Soft delete an attribution binding.
          */
         delete: operations["delete_attribution_binding_endpoint_api_v1_system_maps__map_id__attribution_bindings__binding_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system-maps/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover System Map
+         * @description Inspect the organisation and persist an unpublished deterministic draft.
+         */
+        post: operations["discover_system_map_api_v1_system_maps_discover_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -12296,6 +12322,78 @@ export interface components {
             /** Allowed Models */
             allowed_models?: string[] | null;
         };
+        /** AssistantMessageListResponse */
+        AssistantMessageListResponse: {
+            /** Items */
+            items: components["schemas"]["AssistantMessageResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** AssistantMessageResponse */
+        AssistantMessageResponse: {
+            /** Id */
+            id: string;
+            /** Session Id */
+            session_id: string;
+            /** Role */
+            role: string;
+            /** Content */
+            content: string | null;
+            /** Tool Calls Json */
+            tool_calls_json: {
+                [key: string]: unknown;
+            } | null;
+            /** Tool Results Json */
+            tool_results_json: {
+                [key: string]: unknown;
+            } | null;
+            /** Token Count */
+            token_count: number | null;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Created At */
+            created_at: string | null;
+        };
+        /** AssistantSessionListResponse */
+        AssistantSessionListResponse: {
+            /** Items */
+            items: components["schemas"]["AssistantSessionResponse"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /** AssistantSessionResponse */
+        AssistantSessionResponse: {
+            /** Id */
+            id: string;
+            /** Account Id */
+            account_id: string;
+            /** Name */
+            name: string | null;
+            /** Session Number */
+            session_number: number;
+            /** Provider */
+            provider: string | null;
+            /** Model */
+            model: string | null;
+            /** Context Window Tokens */
+            context_window_tokens: number;
+            /** System Prompt Hash */
+            system_prompt_hash: string | null;
+            /** Message Count */
+            message_count: number;
+            /** Created At */
+            created_at: string | null;
+            /** Updated At */
+            updated_at: string | null;
+        };
         /** AttributionBindingCreate */
         AttributionBindingCreate: {
             /**
@@ -14368,6 +14466,13 @@ export interface components {
         DeleteOAuthClientResponse: {
             /** Deleted */
             deleted: boolean;
+        };
+        /** DeletedAssistantSessionResponse */
+        DeletedAssistantSessionResponse: {
+            /** Status */
+            status: string;
+            /** Id */
+            id: string;
         };
         /** DeletionRequestResponse */
         DeletionRequestResponse: {
@@ -20720,6 +20825,11 @@ export interface components {
              * @enum {string}
              */
             aggregate_state: "healthy" | "engine_unreachable" | "image_not_pulled" | "stale";
+            /**
+             * Engine Configured
+             * @default true
+             */
+            engine_configured: boolean;
             /** Probe Interval Seconds */
             probe_interval_seconds: number;
             /** Staleness Threshold Seconds */
@@ -22123,6 +22233,70 @@ export interface components {
              * @default false
              */
             default_map: boolean;
+        };
+        /** SystemMapDiscoveryReport */
+        SystemMapDiscoveryReport: {
+            /** Sources Inspected */
+            sources_inspected: components["schemas"]["SystemMapDiscoverySource"][];
+            /** Node Count */
+            node_count: number;
+            /** Edge Count */
+            edge_count: number;
+            /** Inferred Nodes */
+            inferred_nodes: {
+                [key: string]: unknown;
+            }[];
+            /** Inferred Edges */
+            inferred_edges: {
+                [key: string]: unknown;
+            }[];
+            /** Skipped */
+            skipped: components["schemas"]["SystemMapDiscoverySkipped"][];
+            /** Warnings */
+            warnings: string[];
+            /**
+             * Draft Map Id
+             * Format: uuid
+             */
+            draft_map_id: string;
+            /**
+             * Draft Revision Id
+             * Format: uuid
+             */
+            draft_revision_id: string;
+            /** Draft Revision Number */
+            draft_revision_number: number;
+            /**
+             * Published
+             * @default false
+             */
+            published: boolean;
+        };
+        /** SystemMapDiscoveryRequest */
+        SystemMapDiscoveryRequest: {
+            /**
+             * Name
+             * @default Discovered System Map
+             */
+            name: string;
+            /** Description */
+            description?: string | null;
+        };
+        /** SystemMapDiscoverySkipped */
+        SystemMapDiscoverySkipped: {
+            /** Source */
+            source: string;
+            /** Reason */
+            reason: string;
+        };
+        /** SystemMapDiscoverySource */
+        SystemMapDiscoverySource: {
+            /** Kind */
+            kind: string;
+            /** Identifier */
+            identifier: string;
+            /** Name */
+            name: string;
         };
         /** SystemMapListResponse */
         SystemMapListResponse: {
@@ -39365,6 +39539,41 @@ export interface operations {
             };
         };
     };
+    discover_system_map_api_v1_system_maps_discover_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemMapDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapDiscoveryReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     list_oauth_clients_endpoint_api_v1_mcp_oauth_clients_get: {
         parameters: {
             query?: {
@@ -48167,9 +48376,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantSessionListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -48204,9 +48411,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantSessionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -48239,9 +48444,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantSessionResponse"];
                 };
             };
             /** @description Session not found */
@@ -48281,9 +48484,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["DeletedAssistantSessionResponse"];
                 };
             };
             /** @description Session not found */
@@ -48327,9 +48528,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantSessionResponse"];
                 };
             };
             /** @description Session not found */
@@ -48371,9 +48570,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantMessageListResponse"];
                 };
             };
             /** @description Session not found */
@@ -48417,9 +48614,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["AssistantMessageResponse"];
                 };
             };
             /** @description Session not found */

@@ -124,6 +124,14 @@ jobs:
     name: Changelog classification
     if: github.event_name == 'pull_request'
     runs-on: ubicloud-standard-2
+    env:
+      CHECK_NAME: "changelog-classified"
+      FAST_LANE_CHECK_NAME: "fast-lane-eligible"
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      EVENT_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+      REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -189,9 +197,10 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          FAST_LANE_CHECK_NAME: ${{ env.FAST_LANE_CHECK_NAME }}
+          HEAD_SHA: ${{ env.HEAD_SHA }}
         run: |
           RC="${{ steps.classify.outputs.classify_rc }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
           # Conclusion contract (FAR-1099):
           #   0 -> success  : class-A and (if labelled) guardrails pass
           #   1 -> neutral  : class-B / unlabelled — NOT a failure. The PR takes
@@ -219,7 +228,7 @@ jobs:
           # correctly (a dotted `-f output.title=` sends a literal key and
           # GitHub drops it, leaving the check run with no title/summary).
           BODY=$(jq -n \
-            --arg name "fast-lane-eligible" \
+            --arg name "$FAST_LANE_CHECK_NAME" \
             --arg sha "$HEAD_SHA" \
             --arg conclusion "$CONCLUSION" \
             --arg title "$TITLE" \
@@ -251,14 +260,15 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          EVENT_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BASE_REF: ${{ env.BASE_REF }}
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          HEAD_SHA: ${{ env.HEAD_SHA }}
+          EVENT_LABELS_JSON: ${{ env.EVENT_LABELS_JSON }}
+          REPO: ${{ env.REPO }}
+          CHECK_NAME: ${{ env.CHECK_NAME }}
         run: |
           set -euo pipefail
 
-          CHECK_NAME="changelog-classified"
           CREATED_IDS=""
           COMPLETED="false"
 
@@ -556,9 +566,11 @@ jobs:
               # $glob is a REGISTRY GLOB on purpose - quoting it would turn
               # pattern matching into a literal string compare (see above).
               # shellcheck disable=SC2254
-              case "$file" in
-                $glob) return 0 ;;
-              esac
+               case "$file" in
+                 $glob) return 0 ;;
+                 *) ;;
+               esac
+
             done <<< "$RISK_GLOBS"
             return 1
           }
@@ -572,21 +584,19 @@ jobs:
           HAS_RISK=false
           while IFS= read -r file; do
             [ -z "$file" ] && continue
+            # Some paths match more than one pattern (a migration is also
+            # backend; `backend/*.md` is also docs). Each arm therefore falls
+            # through with `;;&` so every overlapping category is recorded
+            # instead of only the first match.
             case "$file" in
-              backend/src/modulo/db/migrations/*) HAS_MIGRATIONS=true ;;
-            esac
-            case "$file" in
-              backend/*) HAS_BACKEND=true ;;
-            esac
-            case "$file" in
-              frontend/*) HAS_FRONTEND=true ;;
-            esac
-            case "$file" in
-              .github/*|deploy/*) HAS_CI=true ;;
-            esac
-            case "$file" in
-              docs/*|*.md) HAS_DOCS=true ;;
-            esac
+              backend/src/modulo/db/migrations/*) HAS_MIGRATIONS=true ;;&
+              backend/*) HAS_BACKEND=true ;;&
+              frontend/*) HAS_FRONTEND=true ;;&
+               .github/*|deploy/*) HAS_CI=true ;;&
+               docs/*|*.md) HAS_DOCS=true ;;&
+               *) ;;
+             esac
+
             if is_high_risk "$file"; then
               HAS_RISK=true
             fi

@@ -1038,6 +1038,15 @@ elements:
       - testid: dashboard-run-activity
         type: element
         dynamic_testid: false
+      - testid: dashboard-system-overview
+        type: element
+        dynamic_testid: false
+      - testid: dashboard-system-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-draft-review
+        type: element
+        dynamic_testid: false
       - testid: dashboard-recent-runs
         type: element
         dynamic_testid: false
@@ -7364,6 +7373,7 @@ features:
             # FAR-591 D5: Runners page + health-probe cache
             - "[x] A per-machine health-probe system cron (runner_health_probe, every 60s, retries=2, unique=True) probes the deployment's Docker engine THROUGH the socket-proxy and upserts one runner_probe_cache row per (organisation, machine): engine reachability, pinned-image presence, and the engine's /info CPU/memory for the concurrency preflight — the Runners page and node editor read ONLY this cache, never a synchronous engine probe on the request path"
             - "[x] The probe tick is three-phase (engine probe + image inspects run BEFORE any DB transaction opens; the write tx is scoped to the upserts), prunes (org, machine) rows not refreshed within a 24h retention window, and upserts per org inside a SAVEPOINT so one poisoned org rolls back only itself; a per-org infrastructure error (SQLAlchemyError) marks the org failed and re-raises at the end of the tick so SAQ's retries engage, while the wrapper persists the saq:cron:stats:runner_health_probe liveness key on success AND failure (failure records zero counts + error=probe_failed; the last_run_at refresh keeps the /healthz/ready staleness check honest; the FAR-538 per-machine cron heartbeat is refreshed per successful tick)"
+            - "[x] A deployment with no Docker engine is not an error (FAR-2239): GET /api/v1/runners/status carries engine_configured (false when neither MODULO_DOCKER_HOST/DOCKER_HOST nor a local Docker socket exists), and the Runners status strip then reads a neutral 'Docker runner not available on this deployment' and the Bundled Runner profile badge reads 'not available' instead of a red 'engine unreachable'; a configured-but-failing engine keeps the red engine-unreachable state. A profile still carrying the release placeholder digest shows neutral 'Bundled runner image not yet pinned' guidance (badge 'image not yet pinned'), while real digests that fail to resolve (image not pulled) keep their warning (frontend/src/components/runners/RunnerStatusStrip.vue, frontend/src/views/runners/RunnersProfilesTab.vue, frontend/src/__tests__/runners/RunnerStatusStrip.spec.ts, frontend/src/__tests__/runners/RunnersProfilesTab.spec.ts)"
             - "[x] Pinned-image presence aggregates over NON-placeholder refs only — a placeholder-digest org reads unknown (None), never a permanent false 'image not pulled'; a non-404 inspect failure records unknown (a transient error must not read as absent); the worst-of strip state is stale > engine_unreachable > image_not_pulled > healthy, and a stale cache can never read green — a dead probe renders 'status unknown (last checked Xs ago)'"
             - "[x] A healthy→unreachable transition emits BOTH an error-dashboard entry (signal runner_unavailable) and an in-app notification (category runner, action URL /admin/runners/concurrency) — detected against the previous cached row so a dead probe never loops alerts, the FIRST down probe also alerts (no previous row defaults to was-reachable), and re-alerting requires a recovery in between"
             - "[x] GET /api/v1/runners/status (runners.status, environment_profiles feature) returns the per-machine strip states with server-side staleness, the worst-of aggregate, per-profile health + live template drift, and the org's sandbox-concurrency contract with the engine-resource preflight; multi-machine preflight sizes against WORST-OF (min reported CPU, min reported memory) because dispatches can land on any machine; corpse rows beyond the 24h retention window are invisible to both the tick and the read; the profile read paginates instead of silently capping at 100"
@@ -7516,12 +7526,13 @@ features:
 
             # Webhook
             - "[x] Webhook delivery is HMAC-SHA256 verified via X-Modulo-Webhook-Secret with an X-Modulo-Timestamp validated within the ±300s replay window; invalid/missing signature -> 401, missing trigger -> 404, expired timestamp -> 400"
+            - "[x] When no X-Modulo-* header is sent, a webhook delivery is also accepted with GitHub's X-Hub-Signature-256 (sha256= HMAC-SHA256 of the raw body keyed by the trigger's hmac_secret); invalid/malformed -> 401, Modulo headers always win with no fallback; no timestamp so no replay window beyond payload dedup"
             - "[x] HMAC-less triggers accept unauthenticated deliveries by design, with a log warning"
             - "[x] A valid delivery returns 202 {'run_id', status: 'accepted'}; the run is dispatched in the background via fail-fast SAQ enqueue, and dispatch failures are ingested as error events without blocking the 202 (capacity-deferred runs are left to dispatcher_reconcile)"
             - "[x] Duplicate payloads are rejected 400 'Duplicate webhook payload'; concurrent-run-limit and pipeline rate-limit rejections are 429; a busy pipeline snapshot lock retries acquisition briefly, then surfaces an honest 503 'snapshot lock unavailable — retry the delivery' (never a fabricated 'queued' ack with no run behind it)"
             - "[x] Every webhook delivery outcome is recorded as a TriggerEvent row (accepted, paused, guardrail_blocked, ...), and the stored raw payload supports replay"
             - "[x] Capacity outcomes are legible in the trigger event log (FAR-1344): the /admin/trigger-events result filter offers backpressure_skipped, coalesced and spend_limit_reached alongside concurrency_limit_reached, each renders with a DISTINCT badge (backpressure rose, concurrency orange, coalesced cyan, spend purple) rather than the shared throttle colour, and GET /api/v1/admin/trigger-events returns result_counts — a grouped count of the capacity vocabulary for the last 24h against the previous 24h with an up/down/flat direction — rendered as a capacity-outcome count/trend strip above the log (tests/unit/api/test_admin_triggers.py)"
-            - "[x] Replay (POST /triggers/{id}/webhook/replay/{event_id}) re-fires a stored payload, reusing the original hash and preserving dedup + flood protection; an authenticated principal needs the 'run.trigger' runner permission, and an unauthenticated replay must present a valid HMAC over the stored payload"
+            - "[x] Replay (POST /triggers/{id}/webhook/replay/{event_id}) re-fires a stored payload, reusing the original hash and preserving dedup + flood protection; an authenticated principal needs the 'run.trigger' runner permission, and an unauthenticated replay must present a valid HMAC over the stored payload (X-Modulo-* headers, or GitHub's X-Hub-Signature-256 over the stored body when no X-Modulo-* header is sent)"
             - "[x] Guardrail-blocked webhook deliveries are ack'd with a non-success 422 (never a false 'accepted'); the run + TriggerEvent rows stay committed for visibility"
             - "[x] cleanup-expired sweeps stale dedup hashes and expired WebhookPayload rows under a Postgres advisory lock (safe to call from cron with a runner credential)"
 

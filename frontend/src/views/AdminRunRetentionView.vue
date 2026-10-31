@@ -84,10 +84,11 @@
         {{ $t('views.AdminRunRetentionView.purge_result', { runs: purgeResult.purged_runs, checkpoints: purgeResult.purged_checkpoints, bytes: formatBytes(purgeResult.freed_estimated_bytes) }) }}
       </div>
 
-      <Card>
-        <template #title>{{ $t('views.AdminRunRetentionView.filters_title') }}</template>
-        <template #subtitle>{{ $t('views.AdminRunRetentionView.filters_subtitle') }}</template>
-        <template #content>
+      <DataCard
+        heading-level="h2"
+        :title="$t('views.AdminRunRetentionView.filters_title')"
+        :description="$t('views.AdminRunRetentionView.filters_subtitle')"
+      >
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <label class="mb-1.5 block text-xs font-medium text-muted-foreground" for="rr-date-from">{{ $t('views.AdminRunRetentionView.from_label') }}</label>
@@ -146,13 +147,13 @@
               {{ $t('views.AdminRunRetentionView.reset') }}
             </button>
           </div>
-        </template>
-      </Card>
+      </DataCard>
 
-      <Card>
-        <template #title>{{ $t('views.AdminRunRetentionView.summary_title') }}</template>
-        <template #subtitle>{{ $t('views.AdminRunRetentionView.summary_subtitle') }}</template>
-        <template #content>
+      <DataCard
+        heading-level="h2"
+        :title="$t('views.AdminRunRetentionView.summary_title')"
+        :description="$t('views.AdminRunRetentionView.summary_subtitle')"
+      >
           <div v-if="loading" class="flex justify-center py-6">
             <LoadingSpinner />
           </div>
@@ -176,17 +177,17 @@
               <p class="text-xs text-muted-foreground">{{ $t('views.AdminRunRetentionView.terminal_purgeable') }}</p>
             </div>
           </div>
-        </template>
-      </Card>
+      </DataCard>
 
       <div class="mb-4 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm" data-testid="admin-run-retention-warning">
         {{ $t('views.AdminRunRetentionView.warning_terminal_only') }}
       </div>
 
-      <Card>
-        <template #title>{{ $t('views.AdminRunRetentionView.candidates_title') }}</template>
-        <template #subtitle>{{ $t('views.AdminRunRetentionView.candidates_subtitle') }}</template>
-        <template #content>
+      <DataCard
+        heading-level="h2"
+        :title="$t('views.AdminRunRetentionView.candidates_title')"
+        :description="$t('views.AdminRunRetentionView.candidates_subtitle')"
+      >
           <div v-if="loading" class="flex justify-center py-6">
             <LoadingSpinner />
           </div>
@@ -225,8 +226,7 @@
               </tbody>
             </table>
           </div>
-        </template>
-      </Card>
+      </DataCard>
 
       <Dialog
         :visible="showPurgeConfirm"
@@ -272,7 +272,7 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
-import Card from 'primevue/card'
+import DataCard from '../components/ui/DataCard.vue'
 import Select from '../components/shared/AppSelect.vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'

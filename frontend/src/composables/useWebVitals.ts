@@ -1,5 +1,6 @@
 import { onMounted, onUnmounted } from 'vue'
 import { usePlanStore } from '../stores/planStore'
+import { getAuthHeaders } from '../lib/api/auth'
 import type { MetricType } from 'web-vitals'
 
 interface WebVitalEvent {
@@ -21,7 +22,10 @@ function flush() {
   const batch = _buffer.splice(0)
   fetch(VITALS_API, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    // FAR-2237: the session is Bearer-authenticated (access token in
+    // localStorage). Without the Authorization header the CSRF middleware
+    // treats this as a cookie-authenticated POST with no X-CSRF-Token and 403s.
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ events: batch }),
     credentials: 'include',
   }).catch(() => {

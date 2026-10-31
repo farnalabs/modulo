@@ -38,6 +38,8 @@ on:
 env:
   SECRET_KEY: ${{ secrets.SECRET_KEY }}
   FERNET_KEY: ${{ secrets.FERNET_KEY }}
+  # Common content type for Linear API calls (avoids duplicate literal S1192)
+  LINEAR_CONTENT_TYPE: "Content-Type: application/json"
   # THE single git-credential mechanism for this workflow (FAR-1940). It is an
   # env-driven `url.<base>.insteadOf` rewrite, so the token travels in the
   # remote URL and git sends ONE Authorization header. The default token is
@@ -57,6 +59,7 @@ env:
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
   GIT_CONFIG_VALUE_0: "https://github.com/"
+
 
 permissions:
   contents: read
@@ -142,8 +145,15 @@ jobs:
           set -euo pipefail
           # Numeric hardening: expressions above default missing payload fields
           # to 0, but reject anything non-numeric before bash arithmetic.
-          case "$CHAIN_DEPTH" in ''|*[!0-9]*) CHAIN_DEPTH=0 ;; esac
-          case "$CHAIN_READY_AT" in ''|*[!0-9]*) CHAIN_READY_AT=0 ;; esac
+           case "$CHAIN_DEPTH" in
+             ''|*[!0-9]*) CHAIN_DEPTH=0 ;;
+             *) ;;
+           esac
+           case "$CHAIN_READY_AT" in
+             ''|*[!0-9]*) CHAIN_READY_AT=0 ;;
+             *) ;;
+           esac
+
           SHOULD_RUN=false
           case "$EVENT_NAME" in
             schedule|workflow_dispatch)
@@ -169,6 +179,9 @@ jobs:
                   SHOULD_RUN=true
                 fi
               fi ;;
+            *)
+              echo "::warning::Ignoring unsupported merge-queue event '$EVENT_NAME'"
+              ;;
           esac
           echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
           echo "Event gate: event=$EVENT_NAME action=${EVENT_ACTION:-n/a} -> should_run=$SHOULD_RUN"
@@ -441,9 +454,12 @@ jobs:
                 # the next scheduled/dispatched pass picks the PR up once the
                 # fixed CI is green, so chaining here would only burn light passes.
                 case "$CI_CONCLUSION" in
-                  ""|null|unknown|in_progress|queued|pending|requested|waiting)
-                    echo "$NUM" >> /tmp/ci_pending_prs.txt ;;
-                esac
+                   ""|null|unknown|in_progress|queued|pending|requested|waiting)
+                     echo "$NUM" >> /tmp/ci_pending_prs.txt ;;
+                   *)
+                     echo "CI conclusion '$CI_CONCLUSION' is terminal and not pending; leaving PR for the next scheduled pass." ;;
+                 esac
+
               else
                 echo "$pr" >> /tmp/approved_prs.json
                 APPROVED_COUNT=$((APPROVED_COUNT + 1))
@@ -591,21 +607,23 @@ jobs:
           # so it can never reason about a different commit than the one that
           # produced the no-op. Exit statuses are captured explicitly because this
           # step runs under `bash -e` (`git diff --quiet` exits 1 for "differs").
-          classify_duplicate() {
-            local num="${1}"
-            local ref="pr-${num}" base diff_rc plus cherry_out
-            local -a paths=()
+           classify_duplicate() {
+             local num="${1}"
+             local ref="pr-${num}" base diff_rc plus cherry_out
+             local keep_status=keep
+             local -a paths=()
+
             if ! git rev-parse --verify --quiet "refs/heads/${ref}" >/dev/null; then
-              printf 'keep\t%s\n' "the PR head ref ${ref} is not available locally, so its content could not be compared with main"
+              printf '%s\t%s\n' "$keep_status" "the PR head ref ${ref} is not available locally, so its content could not be compared with main"
               return 0
             fi
             base=$(git rev-parse --verify --quiet origin/main || git rev-parse --verify --quiet main || true)
             if [ -z "${base}" ]; then
-              printf 'keep\t%s\n' "neither origin/main nor main is available to compare the PR against"
+              printf '%s\t%s\n' "$keep_status" "neither origin/main nor main is available to compare the PR against"
               return 0
             fi
             if ! git merge-base "${base}" "${ref}" >/dev/null 2>&1; then
-              printf 'keep\t%s\n' "the PR head shares no merge base with main, so its content could not be compared"
+              printf '%s\t%s\n' "$keep_status" "the PR head shares no merge base with main, so its content could not be compared"
               return 0
             fi
             # (1) Empty diff at the merge base: the PR contributes nothing at all.
@@ -617,7 +635,7 @@ jobs:
               return 0
             fi
             if [ "${diff_rc}" -ne 1 ]; then
-              printf 'keep\t%s\n' "comparing the PR against main failed (git diff exited ${diff_rc})"
+              printf '%s\t%s\n' "$keep_status" "comparing the PR against main failed (git diff exited ${diff_rc})"
               return 0
             fi
             # (2) Every path the PR touches already matches main byte for byte.
@@ -635,7 +653,7 @@ jobs:
             # (3) Commits not in main by id, but each with a patch-equivalent
             # commit upstream. Any '+' means real content main does not have.
             if ! cherry_out=$(git cherry "${base}" "${ref}" 2>/dev/null); then
-              printf 'keep\t%s\n' "git cherry could not be computed against main"
+              printf '%s\t%s\n' "$keep_status" "git cherry could not be computed against main"
               return 0
             fi
             if [ -z "${cherry_out}" ]; then
@@ -643,7 +661,7 @@ jobs:
                 printf 'close\t%s\n' "the PR head is already an ancestor of main"
                 return 0
               fi
-              printf 'keep\t%s\n' "git cherry lists no commits ahead of main, which is ambiguous rather than proof"
+              printf '%s\t%s\n' "$keep_status" "git cherry lists no commits ahead of main, which is ambiguous rather than proof"
               return 0
             fi
             plus=$(printf '%s\n' "${cherry_out}" | grep -c '^+' || true)
@@ -651,7 +669,7 @@ jobs:
               printf 'close\t%s\n' "every commit on the PR is already upstream by patch-id"
               return 0
             fi
-            printf 'keep\t%s\n' "${plus} commit(s) on the PR are not upstream (git cherry marks them '+'), so the no-op does not prove the changes are on main"
+            printf '%s\t%s\n' "$keep_status" "${plus} commit(s) on the PR are not upstream (git cherry marks them '+'), so the no-op does not prove the changes are on main"
             return 0
           }
 
@@ -917,13 +935,16 @@ jobs:
                     # graph, and judging it against main's head would exclude a
                     # harmless filename fix. A rename that brings a file INTO
                     # the migration dir is an addition, and is checked.
-                    case "$path" in
-                      "$MIG_DIR"/*)
-                        if git cat-file -e "main:${path}" 2>/dev/null; then
-                          continue
-                        fi
-                        ;;
-                    esac
+                     case "$path" in
+                       "$MIG_DIR"/*)
+                         if git cat-file -e "main:${path}" 2>/dev/null; then
+                           continue
+                         fi
+                         ;;
+                       *)
+                         ;;
+                     esac
+
                     ;;
                   *) continue ;;
                 esac
@@ -1287,12 +1308,15 @@ jobs:
             # /tmp/conflict_prs.txt is written by the merge step from jq'd PR
             # numbers. Anything else is unexpected input: skip it rather than
             # pass it into a `gh` command line.
-            case "$NUM" in
-              *[!0-9]*)
-                echo "::warning::ignoring an unexpected entry in the conflict list ('${NUM}') - the merge step writes PR numbers."
-                continue
-                ;;
-            esac
+             case "$NUM" in
+               *[!0-9]*)
+                 echo "::warning::ignoring an unexpected entry in the conflict list ('${NUM}') - the merge step writes PR numbers."
+                 continue
+                 ;;
+               *)
+                 ;;
+             esac
+
             if [ -z "$REPO" ]; then
               echo "::warning::GITHUB_REPOSITORY is empty, so the notification history cannot be read - dispatching without dedupe (fail open)."
               NOTIFY_PRS="$NOTIFY_PRS $NUM"
@@ -1575,35 +1599,37 @@ jobs:
             local offenders="$1"
             local new_merged=""
             local new_conflict=""
-            local NUM
             local batch_words
+            local num
+
             # /tmp/merged_prs.txt is a SINGLE whitespace-separated line (the merge
             # step's format, also consumed by the CI-failure webhook payload), so
             # split on whitespace rather than assuming one PR per line.
             batch_words=$(xargs < /tmp/merged_prs.txt 2>/dev/null || true)
             git checkout -B merge-queue main >/dev/null 2>&1
-            for NUM in $batch_words; do
-              [ -z "$NUM" ] && continue
-              case " $offenders " in *" $NUM "*) continue ;; esac
-              git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" >/dev/null 2>&1 || true
-              if ! git rev-parse --verify -q "pr-$NUM" >/dev/null 2>&1; then
-                echo "  PR #$NUM branch unavailable during rebuild - dropping it from this batch"
+            for num in $batch_words; do
+              [ -z "$num" ] && continue
+              case " $offenders " in *" $num "*) continue ;; esac
+              git fetch origin "+refs/pull/$num/head:refs/heads/pr-$num" >/dev/null 2>&1 || true
+              if ! git rev-parse --verify -q "pr-$num" >/dev/null 2>&1; then
+                echo "  PR #$num branch unavailable during rebuild - dropping it from this batch"
                 continue
               fi
-              if git merge --squash "pr-$NUM" >/dev/null 2>&1; then
+              if git merge --squash "pr-$num" >/dev/null 2>&1; then
                 if git diff --cached --quiet; then
-                  echo "  PR #$NUM has no changes relative to the rebuilt branch (already on main) - dropping as duplicate"
+                  echo "  PR #$num has no changes relative to the rebuilt branch (already on main) - dropping as duplicate"
                 else
-                  git commit -q -m "squash! Merge PR #$NUM"
-                  new_merged="$new_merged $NUM"
+                  git commit -q -m "squash! Merge PR #$num"
+                  new_merged="$new_merged $num"
                 fi
               else
                 git merge --abort >/dev/null 2>&1 || true
                 git reset --hard HEAD >/dev/null 2>&1 || true
-                echo "  MERGE CONFLICT in PR #$NUM during rebuild - dropping it from this batch"
-                new_conflict="$new_conflict $NUM"
+                echo "  MERGE CONFLICT in PR #$num during rebuild - dropping it from this batch"
+                new_conflict="$new_conflict $num"
               fi
             done
+
             printf '%s\n' "$(echo "$new_merged" | xargs)" > /tmp/merged_prs.txt
             if [ -n "$new_conflict" ]; then
               local prior_conflicts
@@ -2272,7 +2298,7 @@ jobs:
           # Keep -sS (stderr stays visible: connection/TLS errors reach the log);
           # drop -f so we can branch on the real HTTP status code.
           HTTP_CODE=$(curl -sS -o "${RUNNER_TEMP}/self-report-body.json" -w '%{http_code}' --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
-            -H "Content-Type: application/json" \
+            -H "$LINEAR_CONTENT_TYPE" \
             -H "Authorization: Bearer $MODULO_SELF_REPORT_TOKEN" \
             -d "$PAYLOAD") || HTTP_CODE="000"
 
@@ -2328,11 +2354,12 @@ jobs:
             exit 0
           fi
 
-          # Resolve the FAR team id once - the result is identical for every PR.
-          TEAM_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
-            -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
-            -d '{"query":"{ teams(first: 50) { nodes { id key } } }"}' \
-            | jq -r '.data.teams.nodes[] | select(.key == "FAR") | .id' 2>/dev/null || echo "")
+           # Resolve the FAR team id once - the result is identical for every PR.
+           TEAM_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
+             -H "Authorization: $LINEAR_API_KEY" -H "$LINEAR_CONTENT_TYPE" \
+             -d '{"query":"{ teams(first: 50) { nodes { id key } } }"}' \
+             | jq -r '.data.teams.nodes[] | select(.key == "FAR") | .id' 2>/dev/null || echo "")
+
           if [ -z "$TEAM_ID" ]; then
             echo "::warning::Could not resolve FAR team id - skipping Linear ticket close (fail-open)."
             exit 0
@@ -2341,7 +2368,7 @@ jobs:
           # Resolve the FAR team's "Done" workflow state by name instead of a
           # hard-coded workspace UUID, so the close target can't silently drift.
           DONE_STATE_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
-            -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" -H "$LINEAR_CONTENT_TYPE" \
             -d "{\"query\":\"query(\$teamId: String!) { team(id: \$teamId) { states { nodes { id name } } } }\",\"variables\":{\"teamId\":\"$TEAM_ID\"}}" \
             | jq -r '.data.team.states.nodes[] | select(.name == "Done") | .id' 2>/dev/null || echo "")
           if [ -z "$DONE_STATE_ID" ]; then
@@ -2382,7 +2409,7 @@ jobs:
               # \"IssueFilter\""), so every close attempt failed open with
               # "Ticket not found" (FAR-530 root cause).
               ISSUE_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
-                -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+                -H "Authorization: $LINEAR_API_KEY" -H "$LINEAR_CONTENT_TYPE" \
                 -d "{\"query\":\"query(\$identifier: String!) { issue(id: \$identifier) { id identifier state { name } } }\",\"variables\":{\"identifier\":\"$TICKET\"}}" \
                 | jq -r '.data.issue.id // empty' 2>/dev/null || echo "")
               if [ -z "$ISSUE_ID" ]; then
@@ -2400,7 +2427,7 @@ jobs:
                   '{query: $q, variables: { input: { issueId: $id, body: $body } } }' \
                   2>/dev/null || echo "")
                 COMMENT_OK=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
-                  -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+                  -H "Authorization: $LINEAR_API_KEY" -H "$LINEAR_CONTENT_TYPE" \
                   -d "$COMMENT_PAYLOAD" \
                   | jq -r '.data.commentCreate.success' 2>/dev/null || echo "")
                 if [ "$COMMENT_OK" = "true" ]; then
@@ -2411,7 +2438,7 @@ jobs:
                 continue
               fi
               RESULT=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
-                -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+                -H "Authorization: $LINEAR_API_KEY" -H "$LINEAR_CONTENT_TYPE" \
                 -d "{\"query\":\"mutation(\$id: String!, \$stateId: String!) { issueUpdate(id: \$id, input: { stateId: \$stateId }) { issue { id state { name } } } }\",\"variables\":{\"id\":\"$ISSUE_ID\",\"stateId\":\"$DONE_STATE_ID\"}}" \
                 | jq -r '.data.issueUpdate.issue.state.name' 2>/dev/null || echo "")
               if [ -n "$RESULT" ]; then
@@ -2778,7 +2805,7 @@ jobs:
                     --arg id "$FAR_TICKET" \
                     '{query: $q, variables: {id: $id}}')
                   ISSUE_ID=$(curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
-                    -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+                    -H "Authorization: $LINEAR_API_KEY" -H "$LINEAR_CONTENT_TYPE" \
                     -d "$QUERY_PAYLOAD" \
                     | jq -r '.data.issue.id // empty' 2>/dev/null || echo "")
                   if [ -n "$ISSUE_ID" ]; then
@@ -2787,7 +2814,7 @@ jobs:
                       --arg id "$ISSUE_ID" --arg body "$COMMENT_BODY" \
                       '{query: $q, variables: {input: {issueId: $id, body: $body}}}')
                     curl -sS --max-time 30 -X POST https://api.linear.app/graphql \
-                      -H "Authorization: $LINEAR_API_KEY" -H "Content-Type: application/json" \
+                      -H "Authorization: $LINEAR_API_KEY" -H "$LINEAR_CONTENT_TYPE" \
                       -d "$MUTATION_PAYLOAD" \
                       > /dev/null 2>&1 || echo "::warning::Failed to post Linear comment for $FAR_TICKET"
                   fi

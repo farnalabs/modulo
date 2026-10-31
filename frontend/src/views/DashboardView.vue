@@ -36,7 +36,7 @@
     <ErrorAlert v-else-if="error && !summary" :message="error" :on-retry="dashboardStore.fetchSummary" />
     <template v-else-if="summary">
       <DashboardSystemOverview
-        v-if="planStore.loaded && planStore.featureEnabled('system_maps')"
+        v-if="(planStore.loaded && planStore.featureEnabled('system_maps')) || (systemMapsStore.accessLoaded && systemMapsStore.systemMapsEnabled)"
         class="mb-4"
       />
       <!-- Row 1: Summary stat cards -->

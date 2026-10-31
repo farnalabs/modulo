@@ -9,6 +9,7 @@ pre-deploy wiring intact — the same reasoning as the sibling
 
 import importlib.util
 import re
+import textwrap
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,8 +18,10 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+BUNDLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "bundle-release.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-unified.yml"
 NATIVE_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-release-smoke.yml"
+MANIFEST_SOURCE = REPO_ROOT / "backend" / "src" / "modulo" / "launcher" / "manifest.py"
 
 _REHEARSAL_STEP_NAME = "Pre-deploy REHEARSAL migrations (one-off machine — always rolls back)"
 _REAL_STEP_NAME = "Pre-deploy migrations (one-off machine)"
@@ -43,6 +46,12 @@ def _upload_step_name(suffix: str) -> str:
     return f"Upload migration machine logs ({suffix})"
 
 
+def _python_heredoc(run_script: str, marker: str = "PY") -> str:
+    match = re.search(rf"python - <<'{marker}'\n(?P<body>.*?)\n\s*{marker}", run_script, re.DOTALL)
+    assert match is not None, "expected embedded Python heredoc"
+    return textwrap.dedent(match.group("body"))
+
+
 def _release_validator() -> Any:
     spec = importlib.util.spec_from_file_location(
         "validate_release_tag", REPO_ROOT / "scripts" / "validate_release_tag.py"
@@ -52,6 +61,20 @@ def _release_validator() -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_release_signature_heredocs_compile_as_python() -> None:
+    workflows = ((BUNDLE_WORKFLOW, "PYEOF"), (RELEASE_WORKFLOW, "PY"))
+    for workflow_path, marker in workflows:
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        scripts = [
+            step["run"]
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if "verify_signature" in step.get("run", "") and "MANIFEST_SIGNING_KEY" in step.get("run", "")
+        ]
+        assert len(scripts) == 1, f"expected one signing script in {workflow_path}"
+        compile(_python_heredoc(scripts[0], marker), str(workflow_path), "exec")
 
 
 def test_rehearsal_step_exists_before_real_migrations_per_leg() -> None:
@@ -170,15 +193,72 @@ def test_release_identity_step_passes_gh_token_to_its_gh_api_calls() -> None:
     assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
 
 
+#: Caller job id -> called reusable workflow, relative to the repo root.
+_INSTALLER_CALLS = (
+    ("windows-installer", "./.github/workflows/windows-installer.yml"),
+    ("macos-installer", "./.github/workflows/macos-installer.yml"),
+)
+
+#: GitHub permission levels, weakest to strongest. ``none`` declares no access.
+_PERMISSION_RANK = {"none": 0, "read": 1, "write": 2}
+
+
+def _declared_permissions(workflow: dict[str, Any]) -> dict[str, str]:
+    """Every permission a reusable workflow declares, at its strongest level.
+
+    A caller cannot elevate permissions across a reusable-workflow boundary, so
+    it must grant at least what the called workflow declares. The declaration
+    has two layers and both count: the workflow-level default (inherited by
+    jobs that do not override it) and each job's own ``permissions`` block.
+    """
+    blocks: list[dict[str, str]] = [workflow.get("permissions") or {}]
+    blocks.extend(job.get("permissions") or {} for job in workflow.get("jobs", {}).values())
+
+    declared: dict[str, str] = {}
+    for block in blocks:
+        for permission, level in block.items():
+            current = declared.get(permission)
+            if current is None or _PERMISSION_RANK[level] > _PERMISSION_RANK[current]:
+                declared[permission] = level
+    return {permission: level for permission, level in declared.items() if _PERMISSION_RANK[level] > 0}
+
+
+def test_release_installer_callers_grant_permissions_their_jobs_require() -> None:
+    """Every installer caller must grant >= what its called workflow declares.
+
+    A hardcoded expected-permissions dict only pins today's values; this parses
+    the called workflow so the gate fails if EITHER side moves out of step —
+    a caller under-granting, or a newly added job declaring a permission the
+    caller never granted (the failure a real cut/recut surfaces, not a dry-run).
+    """
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+
+    for caller_job_id, called_relative_path in _INSTALLER_CALLS:
+        caller = workflow["jobs"][caller_job_id]
+        assert caller["uses"] == called_relative_path, f"{caller_job_id} calls an unexpected workflow"
+
+        called = yaml.safe_load((REPO_ROOT / called_relative_path).read_text(encoding="utf-8"))
+        granted = caller.get("permissions") or {}
+
+        for permission, required_level in sorted(_declared_permissions(called).items()):
+            assert permission in granted, (
+                f"{caller_job_id} does not grant '{permission}', which {called_relative_path} declares"
+            )
+            assert _PERMISSION_RANK[granted[permission]] >= _PERMISSION_RANK[required_level], (
+                f"{caller_job_id} grants '{permission}: {granted[permission]}' but "
+                f"{called_relative_path} declares '{permission}: {required_level}'"
+            )
+
+
 def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["attest-artefacts"]
-    assert job["needs"] == ["produce-sbom", "bundle", "release"]
+    assert job["needs"] == ["produce-sbom", "final-release-manifest", "release"]
     names = _step_names(job["steps"])
     assert "Download the SBOM artefact" in names
-    assert "Download the published bundle artefact" in names
-    bundle_download = job["steps"][names.index("Download the published bundle artefact")]
-    assert bundle_download["with"]["name"] == "bundle-artefacts-amd64"
+    assert "Download the final cross-platform release artefact" in names
+    bundle_download = job["steps"][names.index("Download the final cross-platform release artefact")]
+    assert bundle_download["with"]["name"] == "final-release-artefacts-${{ inputs.version }}"
     assert bundle_download["with"]["path"] == "release-artefacts"
     assert bundle_download["if"] == "inputs.mode == 'cut' || inputs.mode == 'recut'"
     attest = job["steps"][names.index("Attest the file artefacts")]
@@ -356,6 +436,76 @@ def test_release_sh_passes_rehearsal_env_through() -> None:
     release_sh = (REPO_ROOT / "deploy" / "fly" / "release.sh").read_text(encoding="utf-8")
     assert "unset " not in release_sh, "release.sh must not unset env vars (would strip ALEMBIC_REHEARSAL)"
     assert "alembic upgrade heads" in release_sh
+
+
+def test_release_signing_derives_key_id_from_current_slot() -> None:
+    manifest_source = MANIFEST_SOURCE.read_text(encoding="utf-8")
+    current_match = re.search(r'_KEY_ID_CURRENT = "(?P<key_id>[^"]+)"', manifest_source)
+    assert current_match is not None
+    current_key_id = current_match.group("key_id")
+
+    for workflow_path in (BUNDLE_WORKFLOW, RELEASE_WORKFLOW):
+        workflow_text = workflow_path.read_text(encoding="utf-8")
+        assert "key_id=manifest_module._KEY_ID_CURRENT" in workflow_text or "key_id=m._KEY_ID_CURRENT" in workflow_text
+    release_workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    verify_steps = release_workflow["jobs"]["publish-release"]["steps"]
+    verify_name = "Verify final manifest signature against the checked-in trust store"
+    verify_step = verify_steps[_step_names(verify_steps).index(verify_name)]
+    assert verify_step["env"]["EXPECTED_KEY_ID"] == current_key_id
+
+    assert "The release workflows always\nsign with :data:`_KEY_ID_CURRENT`" in manifest_source
+    assert "literal replacement id" in manifest_source
+    assert "Merely changing the secret while CURRENT remains the old key" in manifest_source
+
+
+def test_bundle_release_verifies_generated_signature_before_upload() -> None:
+    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "bundle-release.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["bundle"]["steps"]
+    names = _step_names(steps)
+    sign_idx = names.index("Generate and sign the SIGNED release manifest")
+    upload_idx = names.index("Upload bundle artefacts as workflow outputs")
+    sign_step = steps[sign_idx]
+    script = sign_step["run"]
+    assert sign_idx < upload_idx
+    assert sign_step["env"]["MANIFEST_SIGNING_KEY"] == "${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}"
+    assert "verify_signature(payload, signature)" in script
+    assert "_KEY_ID_CURRENT" in script
+    assert "generated manifest signature failed trust-store verification" in script
+    assert "generated manifest signature did not verify under the expected current key_id" in script
+    assert "private_key_hex" in script
+    assert "MANIFEST_SIGNING_KEY" not in steps[upload_idx].get("run", "")
+
+
+def test_final_release_manifest_verification_step_precedes_github_release() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    final_steps = workflow["jobs"]["final-release-manifest"]["steps"]
+    final_names = _step_names(final_steps)
+    build_idx = final_names.index("Build final signed manifest after every platform artifact")
+    script = final_steps[build_idx]["run"]
+    assert final_steps[build_idx]["env"]["MANIFEST_SIGNING_KEY"] == "${{ secrets.BUNDLE_MANIFEST_SIGNING_KEY }}"
+    assert "verify_signature(payload, sig)" in script
+    assert "_KEY_ID_CURRENT" in script
+    publish_steps = workflow["jobs"]["publish-release"]["steps"]
+    publish_names = _step_names(publish_steps)
+    verify_idx = publish_names.index("Verify final manifest signature against the checked-in trust store")
+    publish_idx = publish_names.index("Create GitHub Release with assets")
+    verify_script = publish_steps[verify_idx]["run"]
+    assert verify_idx < publish_idx
+    assert "read_signature_file" in verify_script
+    assert "verify_release_from_files" in verify_script
+    assert "EXPECTED_KEY_ID" in publish_steps[verify_idx]["env"]
+    assert "RELEASE_MANIFEST.json.sig" in verify_script
+    assert "sha256sum --check SHA256SUMS" not in verify_script
+
+
+def test_portable_artifact_presence_check_is_not_signature_gate() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["publish-release"]["steps"]
+    names = _step_names(steps)
+    portable_idx = names.index("Verify portable release artefacts")
+    final_idx = names.index("Verify final manifest signature against the checked-in trust store")
+    assert portable_idx < final_idx
+    assert "verify_release_from_files" not in steps[portable_idx]["run"]
 
 
 def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:

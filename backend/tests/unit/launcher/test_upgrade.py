@@ -1579,7 +1579,8 @@ def test_installer_uses_portable_commands_and_fails_closed_for_darwin():
     assert "base64 -D" in source
     assert "base64 -d" in source
     assert 'cp -- "${FROM_FILE}"' not in source
-    assert "macOS native artifact is not yet published" in source
+    assert "this Linux installer cannot install the macOS arm64 artifact" in source
+    assert "scripts/macos/install.sh" in source
 
 
 def _installer_probe(

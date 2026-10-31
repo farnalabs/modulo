@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.agent_command_sync import is_clean_agent_commands, sync_agent_row_commands
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.connector_refs import connector_ref_type_id
 from modulo.core.graph_validator import GraphValidator, check_sandbox_only_field_placement
 from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
@@ -947,7 +948,7 @@ def _build_v2_requires(
     connector_type_refs_set: set[str] = set()
     for a_entry in agents_list:
         for ref in a_entry.get("connector_type_refs", []):
-            ctid = ref.get("connector_type_id", ref.get("type", ""))
+            ctid = connector_ref_type_id(ref)
             if ctid:
                 connector_type_refs_set.add(ctid)
 

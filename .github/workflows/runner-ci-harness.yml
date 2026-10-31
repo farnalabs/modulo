@@ -29,6 +29,8 @@ env:
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/.insteadOf'
   GIT_CONFIG_VALUE_0: "https://github.com/"
+  CHANGED_TRUE: "changed=true"
+  CHANGED_FALSE: "changed=false"
 
 permissions:
   contents: read
@@ -79,7 +81,7 @@ jobs:
           EVENT_BEFORE: ${{ github.event.before }}
         run: |
           if [ "$HARNESS_FORCE" = "true" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "$CHANGED_TRUE" >> "$GITHUB_OUTPUT"
             echo "Forced run (weekly drift backstop) - path filter skipped."
             exit 0
           fi
@@ -107,14 +109,14 @@ jobs:
             # unreachable before-SHA fails the `git diff` below, which fails
             # OPEN loudly (never silently skips).
             if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo "$CHANGED_TRUE" >> "$GITHUB_OUTPUT"
               echo "Push without a resolvable before-SHA - running harness."
               exit 0
             fi
             BASE="$EVENT_BEFORE"
           else
             # workflow_dispatch (manual validation) - run unconditionally.
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "$CHANGED_TRUE" >> "$GITHUB_OUTPUT"
             echo "Manual dispatch - running harness unconditionally."
             exit 0
           fi
@@ -131,15 +133,15 @@ jobs:
           CHANGED="$(git diff --name-only "$BASE" HEAD -- $PATHS)" || rc=$?
           if [ "$rc" -ne 0 ]; then
             echo "::warning::path-filter git diff failed (rc=$rc); running Bundled Runner harness unconditionally (fail open)"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "$CHANGED_TRUE" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ -n "$CHANGED" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "$CHANGED_TRUE" >> "$GITHUB_OUTPUT"
             echo "Bundled Runner surface changed:"
             echo "$CHANGED"
           else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "$CHANGED_FALSE" >> "$GITHUB_OUTPUT"
             echo "No Bundled Runner surface changes - skipping harness."
           fi
       - name: Pre-pull the workspace image (outer engine)

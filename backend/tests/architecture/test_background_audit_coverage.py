@@ -233,6 +233,7 @@ INVENTORY: dict[str, PathRecord] = {
     "cost_probe": _exempt("probe_bookkeeping"),
     "analytics_facts_maintenance": _exempt("derived_analytics"),
     "journey_reconcile": _exempt("derived_state"),
+    "demo_daily_refresh": _exempt("demo_fixture"),
     # FAR-1108 chunk 8b: read-only decision-record reconciliation — never
     # mutates a decision record.
     "decision_record_reconcile": _exempt("read_only_detection"),

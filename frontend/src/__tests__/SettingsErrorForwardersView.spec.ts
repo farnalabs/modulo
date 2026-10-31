@@ -61,7 +61,7 @@ function mountView() {
 }
 
 function cardFor(wrapper: ReturnType<typeof mount>, name: string) {
-  const cards = wrapper.findAll('.rounded-lg.border.bg-card')
+  const cards = wrapper.findAll('.card-base.bg-card')
   return cards.find((c) => c.text().includes(name))!
 }
 

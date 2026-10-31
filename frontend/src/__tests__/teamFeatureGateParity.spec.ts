@@ -24,6 +24,9 @@ const BACKEND_FEATURE_FLAGS = join(REPO_ROOT, 'backend', 'src', 'modulo', 'core'
 /**
  * Known acceptable exceptions — backend-only features with no UI surface:
  *   - scim: SCIM provisioning is API-only (no UI)
+ *   - system_maps: the discovery/draft-generation API is backend-only in this
+ *     change; the internal System Maps review UI (a separate change) is the
+ *     first frontend surface and will add the featureEnabled reference.
  *
  * ``external_secrets`` is NOT an exception: the flag was retired, so external
  * secret backends are available on every tier and no gate (backend or

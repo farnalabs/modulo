@@ -46,7 +46,14 @@ New-Item -ItemType Directory -Path $missingExeBundle, $missingMarkerBundle, $val
 [System.IO.File]::WriteAllText((Join-Path $missingExeBundle "modulo-runtime.json"), '{"contract":"native-windows-v1"}')
 [System.IO.File]::WriteAllText((Join-Path $missingMarkerBundle "modulo.exe"), "placeholder")
 
-function Invoke-Iscc([string]$bundleDir, [string]$outputName) {
+function Invoke-Iscc {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$bundleDir,
+        [Parameter(Mandatory = $true)]
+        [string]$outputName
+    )
+
     $arguments = @(
         "/Qp",
         "/O$outputDir",
@@ -59,25 +66,25 @@ function Invoke-Iscc([string]$bundleDir, [string]$outputName) {
     )
     $compilerOutput = & $isccPath @arguments 2>&1
     $exitCode = [int]$LASTEXITCODE
-    $compilerOutput | ForEach-Object { Write-Host $_ }
+    $compilerOutput | ForEach-Object { Write-Information -MessageData $_ -InformationAction Continue }
     return $exitCode
 }
 
 try {
-    Write-Host "=== Modulo Windows Installer Contract Test ==="
-    Write-Host "Inno Setup: $isccPath"
-    Write-Host "Installer source: $issPath"
+    Write-Output "=== Modulo Windows Installer Contract Test ==="
+    Write-Output "Inno Setup: $isccPath"
+    Write-Output "Installer source: $issPath"
 
-    Write-Host "Checking that a bundle missing modulo.exe fails compilation..."
+    Write-Output "Checking that a bundle missing modulo.exe fails compilation..."
     $missingExeExit = Invoke-Iscc $missingExeBundle "missing-exe-contract"
-    Write-Host "Missing modulo.exe compile exit code: $missingExeExit"
+    Write-Output "Missing modulo.exe compile exit code: $missingExeExit"
     if ($missingExeExit -eq 0) {
         throw "Installer compiled despite missing modulo.exe."
     }
 
-    Write-Host "Checking that a bundle missing modulo-runtime.json fails compilation..."
+    Write-Output "Checking that a bundle missing modulo-runtime.json fails compilation..."
     $missingMarkerExit = Invoke-Iscc $missingMarkerBundle "missing-marker-contract"
-    Write-Host "Missing modulo-runtime.json compile exit code: $missingMarkerExit"
+    Write-Output "Missing modulo-runtime.json compile exit code: $missingMarkerExit"
     if ($missingMarkerExit -eq 0) {
         throw "Installer compiled despite missing modulo-runtime.json."
     }
@@ -88,16 +95,16 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $validBundle "modulo.exe"), "placeholder")
     [System.IO.File]::WriteAllText((Join-Path $validBundle "modulo-runtime.json"), '{"contract":"native-windows-v1"}')
 
-    Write-Host "Checking that the minimal declared contract compiles..."
+    Write-Output "Checking that the minimal declared contract compiles..."
     $validExit = Invoke-Iscc $validBundle "valid-contract"
-    Write-Host "Valid contract compile exit code: $validExit"
+    Write-Output "Valid contract compile exit code: $validExit"
     $installerPath = Join-Path $outputDir "valid-contract.exe"
     if ($validExit -ne 0 -or -not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
         throw "Installer failed to compile the minimal declared contract."
     }
 
-    Write-Host "PASS: missing required runtime files fail closed."
-    Write-Host "PASS: declared marker/executable contract compiles without committing a fake bundle."
+    Write-Output "PASS: missing required runtime files fail closed."
+    Write-Output "PASS: declared marker/executable contract compiles without committing a fake bundle."
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {

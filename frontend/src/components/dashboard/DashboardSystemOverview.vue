@@ -51,17 +51,41 @@
     </template>
     <p class="mt-4 text-xs text-muted-foreground">{{ $t('views.DashboardView.discovery_beta_note') }}</p>
   </section>
+
+  <SectionCard
+    :title="$t('views.DashboardView.system_overview')"
+    :description="$t('views.DashboardView.system_overview_description')"
+    data-testid="dashboard-system-draft-review"
+    aria-live="polite"
+  >
+    <template #header>
+      <button
+        type="button"
+        disabled
+        class="rounded-md border px-3 py-2 text-sm font-medium opacity-60"
+        data-testid="dashboard-system-discover"
+        :aria-label="$t('views.DashboardView.discover_my_system')"
+      >
+        {{ $t('views.DashboardView.discover_my_system') }}
+      </button>
+    </template>
+
+    <SystemMapDraftReview />
+  </SectionCard>
 </template>
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import ErrorAlert from '../shared/ErrorAlert.vue'
+import SectionCard from '../shared/SectionCard.vue'
+import SystemMapDraftReview from '../system-maps/SystemMapDraftReview.vue'
 import EmptyState from '../shared/EmptyState.vue'
 import { useSystemMapsStore } from '../../stores/systemMaps'
 
 const { t } = useI18n()
 const store = useSystemMapsStore()
 store.fetchOverview()
+void store.fetchDiscovery()
 
 function metric(value: number | null | undefined): string | number { return value == null ? t('views.DashboardView.unknown_metric') : value }
 function percent(value: number | null | undefined): string { return value == null ? t('views.DashboardView.unobserved_metric') : `${(value * 100).toFixed(1)}%` }

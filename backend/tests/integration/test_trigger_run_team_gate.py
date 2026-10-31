@@ -483,8 +483,12 @@ async def _seed_trigger(
     pipeline_id: uuid.UUID,
     account_id: uuid.UUID,
     name: str,
+    *,
+    trigger_type: str = "manual",
+    cron_expression: str | None = None,
+    cron_timezone: str | None = None,
 ) -> uuid.UUID:
-    """Raw-INSERT a manual trigger on the pipeline.
+    """Raw-INSERT a trigger on the pipeline (manual unless overridden).
 
     ``triggers.config_json`` is NOT NULL with a Python-side ``default=dict``
     (no SQL server default), so the raw INSERT must supply it;
@@ -496,14 +500,17 @@ async def _seed_trigger(
         await conn.execute(
             text(
                 "INSERT INTO triggers (id, organisation_id, pipeline_id, name, "
-                "trigger_type, account_id, config_json) "
-                "VALUES (:id, :oid, :pid, :name, 'manual', :uid, '{}'::json)"
+                "trigger_type, cron_expression, cron_timezone, account_id, config_json) "
+                "VALUES (:id, :oid, :pid, :name, :ttype, :cron_expr, :cron_tz, :uid, '{}'::json)"
             ),
             {
                 "id": str(trigger_id),
                 "oid": str(org_id),
                 "pid": str(pipeline_id),
                 "name": name,
+                "ttype": trigger_type,
+                "cron_expr": cron_expression,
+                "cron_tz": cron_timezone,
                 "uid": str(account_id),
             },
         )
@@ -801,6 +808,93 @@ class TestTriggerTeamGate:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+
+
+class TestTriggerReadTeamVisibility:
+    """A team member must see triggers on their own team-private pipeline.
+
+    ``list_triggers``, ``preview_cron_schedule`` and ``list_trigger_events``
+    join ``pipelines``, which is gated by the ``rls_team_isolation`` policy.
+    Its membership/admin arms read ``app.user_id`` / ``app.org_role``; with
+    only ``set_rls_org`` those GUCs are empty, so the policy filters the
+    team-private pipeline out of the join and the read silently returns an
+    empty list (or 404). Each test below fails if the
+    ``set_rls_user_context`` call is removed from its route.
+    """
+
+    @pytest.mark.usefixtures("_add_trigger_member_to_team")
+    @pytest.mark.asyncio
+    async def test_member_lists_trigger_on_team_private_pipeline(
+        self,
+        team_gate_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org: uuid.UUID,
+        admin_user: uuid.UUID,
+        trigger_member_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        trigger_id = await _seed_trigger(
+            db_engine, org, team_private_pipeline, admin_user, f"read-{uuid.uuid4().hex[:8]}"
+        )
+        token = _token(org, trigger_member_user, "operator")
+        resp = await team_gate_client.get(
+            f"/api/v1/triggers?pipeline_id={team_private_pipeline}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        ids = {item["id"] for item in resp.json()["items"]}
+        assert str(trigger_id) in ids, "member must see the trigger on their team-private pipeline"
+
+    @pytest.mark.usefixtures("_add_trigger_member_to_team")
+    @pytest.mark.asyncio
+    async def test_member_reads_trigger_events_on_team_private_pipeline(
+        self,
+        team_gate_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org: uuid.UUID,
+        admin_user: uuid.UUID,
+        trigger_member_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        trigger_id = await _seed_trigger(
+            db_engine, org, team_private_pipeline, admin_user, f"read-{uuid.uuid4().hex[:8]}"
+        )
+        token = _token(org, trigger_member_user, "operator")
+        resp = await team_gate_client.get(
+            f"/api/v1/triggers/{trigger_id}/events",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert not resp.json()["items"], "the trigger row must resolve (no events seeded)"
+
+    @pytest.mark.usefixtures("_add_trigger_member_to_team")
+    @pytest.mark.asyncio
+    async def test_member_previews_cron_schedule_on_team_private_pipeline(
+        self,
+        team_gate_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org: uuid.UUID,
+        admin_user: uuid.UUID,
+        trigger_member_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        trigger_id = await _seed_trigger(
+            db_engine,
+            org,
+            team_private_pipeline,
+            admin_user,
+            f"read-{uuid.uuid4().hex[:8]}",
+            trigger_type="cron",
+            cron_expression="0 9 * * *",
+            cron_timezone="UTC",
+        )
+        token = _token(org, trigger_member_user, "operator")
+        resp = await team_gate_client.get(
+            f"/api/v1/triggers/{trigger_id}/cron/preview",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["next_fire_times"], "cron preview must resolve the trigger and return fire times"
 
 
 class TestTriggerTeamGateWiring:

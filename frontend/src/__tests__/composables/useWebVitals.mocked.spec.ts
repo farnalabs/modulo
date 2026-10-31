@@ -8,8 +8,13 @@ const h = vi.hoisted(() => {
   const fetchPlan = vi.fn()
   const planStore = { currentTier: 'community', fetchPlan, featureEnabled }
   const usePlanStore = vi.fn(() => planStore)
-  return { metricHandlers, featureEnabled, fetchPlan, planStore, usePlanStore }
+  const getAuthHeaders = vi.fn((): Record<string, string> => ({}))
+  return { metricHandlers, featureEnabled, fetchPlan, planStore, usePlanStore, getAuthHeaders }
 })
+
+vi.mock('../../lib/api/auth', () => ({
+  getAuthHeaders: h.getAuthHeaders,
+}))
 
 vi.mock('web-vitals', () => ({
   onLCP: vi.fn((cb: (metric: unknown) => void) => { h.metricHandlers.LCP = cb }),
@@ -34,6 +39,8 @@ beforeEach(() => {
   vi.useRealTimers()
   for (const key of Object.keys(h.metricHandlers)) delete h.metricHandlers[key]
   h.featureEnabled.mockReset()
+  h.getAuthHeaders.mockReset()
+  h.getAuthHeaders.mockReturnValue({})
   h.fetchPlan.mockReset()
   h.fetchPlan.mockResolvedValue(undefined)
   h.planStore.currentTier = 'community'
@@ -115,6 +122,23 @@ describe('useWebVitals', () => {
     expect(body.events[0].route_path).toBe(window.location.pathname)
     expect(body.events[0].page_url).toBe(window.location.href)
     wrapper.unmount()
+  })
+
+  it('sends the Bearer Authorization header so the CSRF middleware does not 403 the beacon', async () => {
+    h.featureEnabled.mockReturnValue(true)
+    h.getAuthHeaders.mockReturnValue({ Authorization: 'Bearer test-token' })
+    const wrapper = await mountHarness()
+    await vi.waitFor(() => expect(Object.keys(h.metricHandlers)).toHaveLength(5))
+
+    h.metricHandlers.LCP(makeMetric('LCP', 120))
+    wrapper.unmount()
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect(init.headers).toMatchObject({
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer test-token',
+    })
   })
 
   it('flushes immediately once ten metrics accumulate', async () => {
