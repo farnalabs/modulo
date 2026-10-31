@@ -1,0 +1,227 @@
+"""Validate the Windows native bundle manifest and its referenced files.
+
+The module is also the single source of the two bundle contracts the PowerShell
+builder consumes, so neither has a second hard-coded copy:
+
+``--print-inventory``
+    Print the required native binaries (and their bundle-relative location) per
+    service as JSON.
+``--check-bundle DIR``
+    Refuse a bundle that still contains PyInstaller build scaffolding.
+
+Manifest validation exits non-zero with a single ``error: ...`` line rather than
+a traceback, and never mutates the manifest it validated.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import ntpath
+import sys
+from collections.abc import Sequence
+from pathlib import Path, PureWindowsPath
+from typing import Any, TypedDict
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+
+
+class NativeRequirement(TypedDict):
+    """One native service the bundle must ship, and where it lives in the bundle."""
+
+    relative_path: str
+    binaries: tuple[str, ...]
+
+
+#: The authoritative native-binary inventory. The builder reads this through
+#: ``--print-inventory`` instead of keeping its own list.
+NATIVE_INVENTORY: dict[str, NativeRequirement] = {
+    "postgresql": {
+        "relative_path": "postgres/bin",
+        "binaries": ("initdb.exe", "postgres.exe", "pg_isready.exe", "psql.exe", "pg_dump.exe"),
+    },
+    "redis": {
+        "relative_path": "redis/bin",
+        "binaries": ("redis-server.exe", "redis-cli.exe"),
+    },
+}
+
+#: PyInstaller scaffolding. It is built in a temp staging directory and must
+#: never be copied into - or survive inside - the emitted bundle.
+FORBIDDEN_BUNDLE_ENTRIES: tuple[str, ...] = (
+    "pyinstaller",
+    "pyinstaller-work",
+    "pyinstaller-spec",
+    "pyinstaller-entrypoint.py",
+)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--manifest", type=Path, help="Manifest file to validate.")
+    parser.add_argument("--schema", type=Path, help="JSON Schema the manifest must satisfy.")
+    parser.add_argument("--bundle", type=Path, help="Bundle root the manifest describes.")
+    parser.add_argument(
+        "--print-inventory", action="store_true", help="Print the native binary inventory as JSON and exit."
+    )
+    parser.add_argument(
+        "--check-bundle", type=Path, default=None, help="Check a bundle for build scaffolding and exit."
+    )
+    return parser
+
+
+def inventory_document() -> dict[str, dict[str, Any]]:
+    """The inventory in JSON-serialisable form (tuples become lists)."""
+    return {
+        name: {"relative_path": requirement["relative_path"], "binaries": list(requirement["binaries"])}
+        for name, requirement in NATIVE_INVENTORY.items()
+    }
+
+
+def assert_no_scaffolding(bundle_root: Path) -> None:
+    """Raise when the bundle contains a build artefact that must not ship."""
+    root = Path(bundle_root)
+    if not root.is_dir():
+        raise ValueError(f"bundle root is not a directory: {root}")
+    forbidden = {entry.casefold() for entry in FORBIDDEN_BUNDLE_ENTRIES}
+    offenders = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.name.casefold() in forbidden)
+    if offenders:
+        raise ValueError(f"bundle contains build scaffolding that must not ship: {', '.join(offenders)}")
+
+
+def _resolve_beneath(root: Path, reference: str, label: str) -> Path:
+    if not reference:
+        raise ValueError(f"{label} must be a relative path beneath the bundle root: {reference!r}")
+    win_path = PureWindowsPath(reference)
+    if win_path.is_absolute() or win_path.drive or ntpath.isabs(reference):
+        raise ValueError(f"{label} must be a relative path beneath the bundle root: {reference!r}")
+    normalized = reference.replace("\\", "/")
+    if normalized.startswith("/"):
+        raise ValueError(f"{label} must be a relative path beneath the bundle root: {reference!r}")
+    candidate = (root / Path(normalized)).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{label} escapes the bundle root: {reference!r}") from exc
+    return candidate
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validate_binary_name(binary: str, requirement_name: str) -> None:
+    if not binary or binary in {".", ".."} or "/" in binary or "\\" in binary:
+        raise ValueError(f"{requirement_name} binary name must not contain path separators: {binary!r}")
+    win_path = PureWindowsPath(binary)
+    if win_path.is_absolute() or win_path.drive or ntpath.isabs(binary):
+        raise ValueError(f"{requirement_name} binary name must be relative: {binary!r}")
+
+
+def _assert_known_layout(name: str, relative_path: str) -> None:
+    expected = NATIVE_INVENTORY[name]["relative_path"]
+    if relative_path != expected:
+        raise ValueError(f"{name} relative_path must be {expected!r} (native binary inventory); got {relative_path!r}")
+
+
+def validate(manifest_path: Path, schema_path: Path, bundle_path: Path) -> dict[str, Any]:
+    """Validate a manifest against the schema, the inventory and the emitted bundle.
+
+    Returns the parsed manifest exactly as it was read - validation never
+    mutates it and never writes back to it.
+    """
+    manifest_path = Path(manifest_path)
+    schema_path = Path(schema_path)
+    bundle_path = Path(bundle_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    root = bundle_path.resolve()
+    assert_no_scaffolding(root)
+
+    launcher_path = manifest.get("launcher", {}).get("path")
+    if launcher_path:
+        _resolve_beneath(root, launcher_path, "launcher path")
+    frontend_dist_path = manifest.get("frontend", {}).get("dist_path")
+    if frontend_dist_path:
+        _resolve_beneath(root, frontend_dist_path, "frontend dist path")
+    for name, requirement in manifest.get("native_requirements", {}).items():
+        rel_path = requirement.get("relative_path")
+        if rel_path:
+            native_root = _resolve_beneath(root, rel_path, f"{name} relative path")
+            if name in NATIVE_INVENTORY:
+                _assert_known_layout(name, rel_path)
+            for binary in requirement.get("binaries", []):
+                _validate_binary_name(binary, name)
+                _resolve_beneath(native_root, binary, f"{name} binary")
+
+    schema = json.loads(schema_path.read_text(encoding="utf-8-sig"))
+    errors = sorted(Draft202012Validator(schema).iter_errors(manifest), key=lambda error: list(error.path))
+    if errors:
+        details = "; ".join(error.message for error in errors)
+        raise ValueError(f"manifest does not match schema: {details}")
+
+    launcher = _resolve_beneath(root, manifest["launcher"]["path"], "launcher path")
+    if not launcher.is_file() or launcher.stat().st_size == 0:
+        raise ValueError(f"manifest launcher is missing or empty: {launcher}")
+    frontend = _resolve_beneath(root, manifest["frontend"]["dist_path"], "frontend dist path")
+    if not frontend.is_dir() or not any(frontend.iterdir()):
+        raise ValueError(f"manifest frontend dist is missing or empty: {frontend}")
+
+    for service, requirement in NATIVE_INVENTORY.items():
+        req = manifest.get("native_requirements", {}).get(service, {})
+        binaries = req.get("binaries", [])
+        missing = [b for b in requirement["binaries"] if b not in binaries]
+        if missing:
+            raise ValueError(f"missing required {service} binary from inventory: {', '.join(missing)}")
+
+    for name, requirement in manifest["native_requirements"].items():
+        native_root = _resolve_beneath(root, requirement["relative_path"], f"{name} relative path")
+        metadata_map = requirement.get("metadata")
+        if not isinstance(metadata_map, dict):
+            raise ValueError(f"required {name} metadata is missing from manifest")
+        for binary in requirement["binaries"]:
+            _validate_binary_name(binary, name)
+            path = _resolve_beneath(native_root, binary, f"{name} binary")
+            if not path.is_file() or path.stat().st_size == 0:
+                raise ValueError(f"required {name} binary is missing or empty: {path}")
+            if binary not in metadata_map:
+                raise ValueError(f"required {name} binary metadata is missing from manifest: {binary}")
+            metadata = metadata_map[binary]
+            if not isinstance(metadata, dict):
+                raise ValueError(f"required {name} binary metadata is invalid: {binary}")
+            if metadata.get("sha256") != _hash_file(path):
+                raise ValueError(f"required {name} binary hash does not match manifest: {path}")
+            if metadata.get("size_bytes") != path.stat().st_size:
+                raise ValueError(f"required {name} binary size does not match manifest: {path}")
+
+    return manifest
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _parser()
+    args = parser.parse_args(argv)
+    try:
+        if args.print_inventory:
+            print(json.dumps(inventory_document(), indent=2))
+            return 0
+        if args.check_bundle is not None:
+            assert_no_scaffolding(args.check_bundle)
+            print(f"Bundle hygiene OK: {args.check_bundle}")
+            return 0
+        if args.manifest is None or args.schema is None or args.bundle is None:
+            parser.error("--manifest, --schema and --bundle are required (or use --print-inventory / --check-bundle)")
+        validate(args.manifest, args.schema, args.bundle)
+    except (ValueError, OSError, SchemaError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"Validated Windows bundle manifest: {args.manifest}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
