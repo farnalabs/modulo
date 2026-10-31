@@ -120,7 +120,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
@@ -137,10 +137,10 @@ const name = ref('')
 const slug = ref('')
 const description = ref('')
 const visibility = ref('org')
-const visibilityOptions = [
+const visibilityOptions = computed(() => [
   { value: 'org', label: t('views.LibraryView.collection_visibility_org') },
   { value: 'team', label: t('views.LibraryView.collection_visibility_team') },
-]
+])
 const pins = ref<{ slug: string; version: string }[]>([])
 const saving = ref(false)
 const error = ref<string | null>(null)

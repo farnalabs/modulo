@@ -164,6 +164,46 @@ function mountViewAllSlots(
   return mount(SettingsMcpView, { global: { stubs: { ...stubs, Dialog: dialogAllSlotsStub } } })
 }
 
+describe('FormDialog', () => {
+  function mountFormDialog(props: Record<string, unknown> = {}) {
+    return mount(FormDialog, {
+      props: { open: true, title: 'Confirm action', ...props },
+      global: {
+        stubs: {
+          Dialog: {
+            props: ['visible'],
+            template: '<div v-if="visible"><slot name="header" /><slot /><slot name="footer" /></div>',
+          },
+          Button: {
+            props: ['disabled', 'loading'],
+            template: '<button :disabled="disabled" :data-loading="loading"><slot /></button>',
+          },
+        },
+      },
+    })
+  }
+
+  it('renders confirm text and loading states through the real component', () => {
+    const normal = mountFormDialog({ confirmText: 'Delete', confirmLoadingText: 'Deleting...' })
+    expect(normal.findAll('button')[1].text()).toBe('Delete')
+    expect((normal.findAll('button')[1].element as HTMLButtonElement).disabled).toBe(false)
+
+    const loading = mountFormDialog({ confirmText: 'Delete', confirmLoadingText: 'Deleting...', loading: true })
+    const loadingButton = loading.findAll('button')[1]
+    expect(loadingButton.text()).toBe('Deleting...')
+    expect((loadingButton.element as HTMLButtonElement).disabled).toBe(true)
+    expect(loadingButton.attributes('data-loading')).toBe('true')
+
+    const fallback = mountFormDialog({ confirmText: 'Delete', loading: true })
+    expect(fallback.findAll('button')[1].text()).toBe('Delete')
+  })
+
+  it('disables the confirm button when confirmDisabled is true', () => {
+    const wrapper = mountFormDialog({ confirmText: 'Delete', confirmDisabled: true })
+    expect((wrapper.findAll('button')[1].element as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
 describe('SettingsMcpView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
