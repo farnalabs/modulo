@@ -2775,6 +2775,21 @@ elements:
         type: element
         dynamic_testid: false
     /evidence:
+      - testid: evidence-run-picker
+        type: element
+        dynamic_testid: false
+      - testid: evidence-run-search
+        type: input
+        dynamic_testid: false
+      - testid: evidence-recent-run
+        type: input
+        dynamic_testid: false
+      - testid: evidence-recent-runs-error
+        type: element
+        dynamic_testid: false
+      - testid: evidence-recent-runs-empty
+        type: element
+        dynamic_testid: false
       - testid: evidence-run-id
         type: input
         dynamic_testid: false
@@ -2975,6 +2990,21 @@ elements:
         type: element
         dynamic_testid: false
       - testid: compliance-evidence-index-scope-note
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-summary
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-summary-status
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-summary-count
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-summary-progress
+        type: element
+        dynamic_testid: false
+      - testid: compliance-evidence-summary-percentage
         type: element
         dynamic_testid: false
       - testid: compliance-evidence-index-loading

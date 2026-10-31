@@ -18,6 +18,12 @@ vi.mock('../lib/api/client', () => ({
   },
 }))
 
+const { mockFetchRuns } = vi.hoisted(() => ({ mockFetchRuns: vi.fn() }))
+
+vi.mock('../lib/api/runs', () => ({
+  fetchRuns: mockFetchRuns,
+}))
+
 import EvidenceView from '../views/EvidenceView.vue'
 
 interface Row {
@@ -69,6 +75,8 @@ describe('EvidenceView', () => {
   beforeEach(() => {
     routeState.query = {}
     mockGet.mockReset()
+    mockFetchRuns.mockReset()
+    mockFetchRuns.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50, next_cursor: null, has_more: false })
   })
 
   it('renders the form and the pre-load prompt without fetching', async () => {
@@ -76,12 +84,84 @@ describe('EvidenceView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Evidence')
+    expect(wrapper.find('[data-testid="evidence-run-search"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="evidence-recent-run"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="evidence-run-id"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="evidence-node-id"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="evidence-key"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="evidence-load"]').text()).toBe('Load evidence')
     expect(wrapper.text()).toContain('Choose a run')
     expect(mockGet).not.toHaveBeenCalled()
+  })
+
+  it('loads recent runs and updates the run id when a recent run is selected', async () => {
+    mockFetchRuns.mockResolvedValue({
+      items: [
+        {
+          run_id: 'run-recent-1',
+          pipeline_id: 'pipe-1',
+          pipeline_name: 'Compliance Pipeline',
+          status: 'complete',
+          created_at: '2026-02-01T12:00:00Z',
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      next_cursor: null,
+      has_more: false,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const select = wrapper.find('[data-testid="evidence-recent-run"]')
+    expect(select.text()).toContain('Compliance Pipeline')
+
+    await select.setValue('run-recent-1')
+    expect((wrapper.find('[data-testid="evidence-run-id"]').element as HTMLInputElement).value).toBe('run-recent-1')
+  })
+
+  it('filters recent runs by search query', async () => {
+    mockFetchRuns.mockResolvedValue({
+      items: [
+        {
+          run_id: 'run-recent-1',
+          pipeline_id: 'pipe-1',
+          pipeline_name: 'Compliance Pipeline',
+          status: 'complete',
+        },
+        {
+          run_id: 'run-recent-2',
+          pipeline_id: 'pipe-2',
+          pipeline_name: 'Security Scanner',
+          status: 'failed',
+        },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 50,
+      next_cursor: null,
+      has_more: false,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="evidence-run-search"]').setValue('Security')
+    await nextTick()
+
+    const options = wrapper.findAll('[data-testid="evidence-recent-run"] option')
+    expect(options.some((opt) => opt.text().includes('Security Scanner'))).toBe(true)
+    expect(options.some((opt) => opt.text().includes('Compliance Pipeline'))).toBe(false)
+  })
+
+  it('surfaces an error when loading recent runs fails', async () => {
+    mockFetchRuns.mockRejectedValue(new Error('Failed to fetch runs'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="evidence-recent-runs-error"]').text()).toContain('Failed to fetch runs')
   })
 
   it('rejects a submit with no run id before calling the API', async () => {

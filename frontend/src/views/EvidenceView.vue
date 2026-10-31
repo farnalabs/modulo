@@ -5,10 +5,55 @@
       :subtitle="$t('views.EvidenceView.subtitle')"
     />
 
+    <section class="space-y-3" aria-labelledby="evidence-run-picker-heading" data-testid="evidence-run-picker">
+      <div>
+        <h2 id="evidence-run-picker-heading" class="text-base font-semibold">{{ $t('views.EvidenceView.run_picker_title') }}</h2>
+        <p class="text-sm text-muted-foreground">{{ $t('views.EvidenceView.run_picker_description') }}</p>
+      </div>
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="min-w-72 flex-1">
+          <label for="evidence-run-search" class="mb-1 block text-sm font-medium">
+            {{ $t('views.EvidenceView.run_search') }}
+          </label>
+          <input
+            id="evidence-run-search"
+            v-model="runSearch"
+            type="search"
+            data-testid="evidence-run-search"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            :placeholder="$t('views.EvidenceView.run_search_placeholder')"
+          />
+        </div>
+        <div class="min-w-72 flex-1">
+          <label for="evidence-recent-run" class="mb-1 block text-sm font-medium">
+            {{ $t('views.EvidenceView.recent_run') }}
+          </label>
+          <select
+            id="evidence-recent-run"
+            v-model="runId"
+            data-testid="evidence-recent-run"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            :disabled="recentRunsLoading || recentRuns.length === 0"
+          >
+            <option value="">{{ recentRunsLoading ? $t('views.EvidenceView.recent_runs_loading') : $t('views.EvidenceView.choose_recent_run') }}</option>
+            <option v-for="run in filteredRecentRuns" :key="run.run_id" :value="run.run_id">
+              {{ runLabel(run) }}
+            </option>
+          </select>
+        </div>
+      </div>
+      <div v-if="recentRunsError" class="text-sm text-destructive-text" aria-live="assertive" data-testid="evidence-recent-runs-error">
+        {{ recentRunsError }}
+      </div>
+      <p v-else-if="!recentRunsLoading && recentRuns.length === 0" class="text-sm text-muted-foreground" data-testid="evidence-recent-runs-empty">
+        {{ $t('views.EvidenceView.no_recent_runs') }}
+      </p>
+    </section>
+
     <form class="flex flex-wrap items-end gap-3" @submit.prevent="load">
       <div>
         <label for="evidence-run-id" class="mb-1 block text-sm font-medium">
-          {{ $t('views.EvidenceView.run_id') }}
+          {{ $t('views.EvidenceView.manual_run_id') }}
         </label>
         <input
           id="evidence-run-id"
@@ -111,7 +156,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -121,6 +166,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import DataCard from '../components/ui/DataCard.vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import { fetchRuns, type RunListItem } from '../lib/api/runs'
 
 interface EvidenceRow {
   id: string
@@ -142,10 +188,39 @@ const route = useRoute()
 const runId = ref('')
 const nodeId = ref('')
 const keyFilter = ref('')
+const runSearch = ref('')
+const recentRuns = ref<RunListItem[]>([])
+const recentRunsLoading = ref(false)
+const recentRunsError = ref<string | null>(null)
 const rows = ref<EvidenceRow[]>([])
+
+const filteredRecentRuns = computed(() => {
+  const query = runSearch.value.trim().toLowerCase()
+  if (!query) return recentRuns.value
+  return recentRuns.value.filter((run) => run.run_id.toLowerCase().includes(query) || (run.pipeline_name ?? '').toLowerCase().includes(query))
+})
 const loading = ref(false)
 const hasLoaded = ref(false)
 const loadError = ref<string | null>(null)
+
+function runLabel(run: RunListItem): string {
+  const pipeline = run.pipeline_name ?? t('views.EvidenceView.unknown_pipeline')
+  const created = run.created_at ? new Date(run.created_at).toLocaleString() : t('views.EvidenceView.unknown_time')
+  return `${pipeline} · ${run.status} · ${created} · ${run.run_id}`
+}
+
+async function loadRecentRuns(): Promise<void> {
+  recentRunsLoading.value = true
+  recentRunsError.value = null
+  try {
+    const response = await fetchRuns({ page: 1, page_size: 50 })
+    recentRuns.value = response.items
+  } catch (err) {
+    recentRunsError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    recentRunsLoading.value = false
+  }
+}
 
 function formatValue(value: unknown): string {
   if (typeof value === 'string') return value
@@ -193,6 +268,7 @@ async function load(): Promise<void> {
 }
 
 onMounted(() => {
+  void loadRecentRuns()
   const queryRunId = route.query.run_id
   if (typeof queryRunId === 'string' && queryRunId) {
     runId.value = queryRunId
