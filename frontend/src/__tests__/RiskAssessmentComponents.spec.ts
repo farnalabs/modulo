@@ -19,6 +19,7 @@ import {
 import { formatDateFilename, formatDateShort, formatDateShortWithTime, formatRelativeTime } from '../lib/formatDate'
 import {
   RISK_ACTIONS,
+  RISK_WINDOW_CHOICES,
   defaultRiskAssessmentFilters,
   type EvidenceRow,
 } from '../lib/riskAssessment'
@@ -354,6 +355,14 @@ describe('RiskAssessmentFacets', () => {
       .findAll('option')
       .map((o) => o.attributes('value'))
     expect(actionValues).toEqual(['', ...RISK_ACTIONS])
+
+    // The rendered windows ARE the shared deep-link vocabulary — the facet and
+    // the route hydration read one source, so neither can drift from the other.
+    const dayValues = wrapper
+      .find('[data-testid="risk-assessment-days"]')
+      .findAll('option')
+      .map((o) => Number(o.attributes('value')))
+    expect(dayValues).toEqual(RISK_WINDOW_CHOICES.map((choice) => choice.value))
   })
 
   it('emits the updated filters as the operator edits', async () => {
