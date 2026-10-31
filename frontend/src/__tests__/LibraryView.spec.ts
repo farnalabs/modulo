@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { createRouter, createWebHistory } from 'vue-router'
-import { nextTick as vueNextTick } from 'vue'
+import { createRouter, createWebHistory, useRoute } from 'vue-router'
+import { nextTick as vueNextTick, reactive } from 'vue'
 
 async function nextTick() {
   await vueNextTick()
@@ -362,6 +362,127 @@ describe('LibraryView', () => {
     vm.viewCollection(collection)
     expect(router.push).toHaveBeenCalledWith({ name: 'library-pipeline-wizard', params: { id: 'native-1' } })
     expect(router.push).toHaveBeenCalledWith({ name: 'library-collection-detail', params: { id: 'collection-1' } })
+    wrapper.unmount()
+  })
+})
+
+
+describe('LibraryView tab routing (FAR-2260)', () => {
+  type Query = Record<string, unknown>
+
+  // The suite mocks `vue-router` globally (src/__tests__/setup.ts), so the
+  // component's `useRoute()` is driven by this reactive object instead of a
+  // real history. Assigning `query` here is exactly what a tab-link
+  // navigation, a deep link or a popstate does to the live route.
+  const currentRoute = reactive({
+    path: '/library',
+    fullPath: '/library',
+    params: {} as Record<string, string>,
+    query: {} as Query,
+    hash: '',
+    matched: [],
+    name: 'library',
+    redirectedFrom: undefined,
+  })
+
+  function setRoute(query: Query) {
+    currentRoute.path = '/library'
+    currentRoute.query = query
+    const search = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) {
+      if (typeof value === 'string') search.set(key, value)
+    }
+    const qs = search.toString()
+    currentRoute.fullPath = qs ? `/library?${qs}` : '/library'
+  }
+
+  function callsWhere(predicate: (query: Query) => boolean): unknown[][] {
+    return getMock.mock.calls.filter((call: unknown[]) => {
+      const query = (call[1] as { params?: { query?: Query } } | undefined)?.params?.query
+      return !!query && predicate(query)
+    })
+  }
+
+  async function mountAt(query: Query) {
+    setRoute(query)
+    const wrapper = mount(LibraryView, { global: { plugins: [router] } })
+    await nextTick()
+    return wrapper
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 12 })
+    ;(useRoute as unknown as { mockReturnValue: (route: unknown) => void }).mockReturnValue(currentRoute)
+    setRoute({})
+  })
+
+  it('deep-links straight into the community section', async () => {
+    getMock.mockResolvedValue({ items: [COMMUNITY_ITEM], total: 1, page: 1, page_size: 12 })
+    const wrapper = await mountAt({ section: 'community' })
+
+    expect(callsWhere((query) => query.source === 'community').length).toBeGreaterThan(0)
+    expect(wrapper.get('[data-testid="library-section-community"]').classes()).toContain('active')
+    expect(wrapper.find('[data-testid="library-community-disclaimer"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Translate to French')
+    wrapper.unmount()
+  })
+
+  it('deep-links straight into the collections section', async () => {
+    const wrapper = await mountAt({ section: 'collections' })
+
+    expect(callsWhere((query) => query.primitive_type === 'library_collection').length).toBeGreaterThan(0)
+    expect(wrapper.get('[data-testid="library-section-collections"]').classes()).toContain('active')
+    expect(wrapper.find('[data-testid="library-create-collection"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('marks the native tab active on a bare /library deep link', async () => {
+    getMock.mockResolvedValue({ items: [NATIVE_ITEM], total: 1, page: 1, page_size: 12 })
+    const wrapper = await mountAt({})
+
+    expect(wrapper.get('[data-testid="library-section-native"]').classes()).toContain('active')
+    expect(wrapper.get('[data-testid="library-section-community"]').classes()).not.toContain('active')
+    expect(wrapper.text()).toContain('PRD to Requirements')
+    wrapper.unmount()
+  })
+
+  it('fetches once when a tab click is followed by its route change', async () => {
+    const wrapper = await mountAt({})
+    getMock.mockClear()
+
+    // The click applies the section and fetches…
+    await wrapper.get('[data-testid="library-section-community"]').trigger('click')
+    await nextTick()
+    // …then the router-link navigation commits the matching query, which must
+    // not trigger a second fetch for the section already on screen.
+    setRoute({ section: 'community' })
+    await nextTick()
+
+    expect(callsWhere((query) => query.source === 'community')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('follows browser back and forward, fetching each section once', async () => {
+    const wrapper = await mountAt({ section: 'community' })
+    expect(wrapper.get('[data-testid="library-section-community"]').classes()).toContain('active')
+
+    // Back to the bare /library URL: the default (native) section is fetched once.
+    getMock.mockClear()
+    setRoute({})
+    await nextTick()
+
+    expect(callsWhere((query) => query.source === 'community')).toHaveLength(0)
+    expect(callsWhere((query) => query.source === undefined)).toHaveLength(1)
+    expect(wrapper.get('[data-testid="library-section-native"]').classes()).toContain('active')
+
+    // Forward to ?section=community: fetched once, and the tab follows.
+    getMock.mockClear()
+    setRoute({ section: 'community' })
+    await nextTick()
+
+    expect(callsWhere((query) => query.source === 'community')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="library-section-community"]').classes()).toContain('active')
     wrapper.unmount()
   })
 })

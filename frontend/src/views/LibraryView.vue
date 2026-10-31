@@ -306,7 +306,9 @@ const section = ref<LibrarySection>(routeSection(route.query.section))
 const sectionReady = ref(false)
 
 const libraryTabs = computed(() => [
-  { label: t('views.LibraryView.native_library'), to: '/library?section=native', dataTestId: 'library-section-native' },
+  // `defaultQuery` marks the state `/library` falls back to when `section` is
+  // absent from the URL, so the Native tab is active on a bare `/library`.
+  { label: t('views.LibraryView.native_library'), to: '/library?section=native', dataTestId: 'library-section-native', defaultQuery: true },
   { label: t('views.LibraryView.community_tab'), to: '/library?section=community', dataTestId: 'library-section-community' },
   { label: t('views.LibraryView.collections_tab'), to: '/library?section=collections', dataTestId: 'library-section-collections' },
 ])
@@ -363,10 +365,14 @@ watch([loadResp, section], ([d]) => {
 
 watch(
   () => route.query.section,
-  (value, previous) => {
+  (value) => {
     if (!sectionReady.value) return
     const next = routeSection(value)
-    if (next === section.value && value === previous) return
+    // The click handler already applied this section and fetched for it, so the
+    // tab-click navigation that follows must not fetch the same section twice.
+    // A genuine external change (deep link, browser back/forward) leaves
+    // `section` stale, so it still passes this guard exactly once.
+    if (next === section.value) return
     section.value = next
     page.value = 1
     if (section.value === 'collections') loadCollections()
