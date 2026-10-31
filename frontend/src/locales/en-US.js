@@ -1885,7 +1885,13 @@ export default {
       "invalid_days_parameter": "Invalid days parameter: must be a positive integer.",
       "failed_to_create_starter_pipeline": "Failed to create starter pipeline. Please try again.",
       "avg_approval_time": "Avg approval time",
-      "rejection_rate": "Rejection rate"
+      "rejection_rate": "Rejection rate",
+      "system_overview": "System Overview",
+      "system_overview_description": "Review the inferred shape of your delivery system before it is published.",
+      "discover_my_system": "Discover My System",
+      "system_maps_coming_soon": "System discovery is not available in this build yet. No discovery request was made and nothing has been published.",
+      "system_maps_review_title": "System Maps draft review",
+      "system_maps_no_publish_note": "Draft review and publishing will appear here only after the discovery API is available."
     },
     "ComplianceEvidenceIndex": {
       "title": "Compliance Evidence Index",

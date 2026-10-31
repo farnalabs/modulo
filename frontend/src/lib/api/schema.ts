@@ -7162,6 +7162,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system-maps/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover System Map
+         * @description Inspect the organisation and persist an unpublished deterministic draft.
+         */
+        post: operations["discover_system_map_api_v1_system_maps_discover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mcp/oauth/clients": {
         parameters: {
             query?: never;
@@ -21934,6 +21954,70 @@ export interface components {
              * @default false
              */
             has_more: boolean;
+        };
+        /** SystemMapDiscoveryReport */
+        SystemMapDiscoveryReport: {
+            /** Sources Inspected */
+            sources_inspected: components["schemas"]["SystemMapDiscoverySource"][];
+            /** Node Count */
+            node_count: number;
+            /** Edge Count */
+            edge_count: number;
+            /** Inferred Nodes */
+            inferred_nodes: {
+                [key: string]: unknown;
+            }[];
+            /** Inferred Edges */
+            inferred_edges: {
+                [key: string]: unknown;
+            }[];
+            /** Skipped */
+            skipped: components["schemas"]["SystemMapDiscoverySkipped"][];
+            /** Warnings */
+            warnings: string[];
+            /**
+             * Draft Map Id
+             * Format: uuid
+             */
+            draft_map_id: string;
+            /**
+             * Draft Revision Id
+             * Format: uuid
+             */
+            draft_revision_id: string;
+            /** Draft Revision Number */
+            draft_revision_number: number;
+            /**
+             * Published
+             * @default false
+             */
+            published: boolean;
+        };
+        /** SystemMapDiscoveryRequest */
+        SystemMapDiscoveryRequest: {
+            /**
+             * Name
+             * @default Discovered System Map
+             */
+            name: string;
+            /** Description */
+            description?: string | null;
+        };
+        /** SystemMapDiscoverySkipped */
+        SystemMapDiscoverySkipped: {
+            /** Source */
+            source: string;
+            /** Reason */
+            reason: string;
+        };
+        /** SystemMapDiscoverySource */
+        SystemMapDiscoverySource: {
+            /** Kind */
+            kind: string;
+            /** Identifier */
+            identifier: string;
+            /** Name */
+            name: string;
         };
         /** TargetInjection */
         TargetInjection: {
@@ -38167,6 +38251,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JourneySelfReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    discover_system_map_api_v1_system_maps_discover_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SystemMapDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemMapDiscoveryReport"];
                 };
             };
             /** @description Validation Error */

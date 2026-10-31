@@ -21,6 +21,7 @@ vi.mock('../composables/useApi', () => ({
 
 vi.mock('../lib/jwt', () => ({
   decodeJwtPayload: () => ({ org_role: 'admin' }),
+  principalSubject: () => null,
 }))
 
 const testRoute = vi.hoisted(() => ({

@@ -1038,6 +1038,15 @@ elements:
       - testid: dashboard-run-activity
         type: element
         dynamic_testid: false
+      - testid: dashboard-system-overview
+        type: element
+        dynamic_testid: false
+      - testid: dashboard-system-discover
+        type: button
+        dynamic_testid: false
+      - testid: system-map-draft-review
+        type: element
+        dynamic_testid: false
       - testid: dashboard-recent-runs
         type: element
         dynamic_testid: false

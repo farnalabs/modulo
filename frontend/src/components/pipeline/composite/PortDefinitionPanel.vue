@@ -3,6 +3,7 @@ import { ref } from "vue";
 import Button from 'primevue/button'
 import Select from '../../shared/AppSelect.vue'
 import ErrorAlert from '../../shared/ErrorAlert.vue'
+import DataCard from '../../ui/DataCard.vue'
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort, ParameterPortType } from "../../../types/pipeline";
 
@@ -252,10 +253,14 @@ async function detectPlaceholders() {
     </div>
 
     <!-- Add / Edit Form -->
-    <div v-if="showAddForm" class="rounded-lg border bg-card p-4">
-      <h4 class="mb-3 text-sm font-medium">
-        {{ editingIndex !== null ? "Edit Port" : "Add Port" }}
-      </h4>
+    <DataCard
+      v-if="showAddForm"
+      :title="editingIndex !== null ? 'Edit Port' : 'Add Port'"
+      heading-level="h4"
+      title-class="text-sm font-medium"
+      padding="md"
+      elevation="sm"
+    >
       <div class="space-y-3">
         <div>
           <label for="portdefinitionpanel-field-6" class="mb-1 block text-xs font-medium text-muted-foreground"
@@ -349,6 +354,6 @@ async function detectPlaceholders() {
           </Button>
         </div>
       </div>
-    </div>
+    </DataCard>
   </div>
 </template>

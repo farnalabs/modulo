@@ -36,12 +36,13 @@
       <ErrorAlert v-else-if="error" :message="error" :on-retry="reload" class="mb-6" />
 
       <div v-else>
-        <div class="card p-6 mb-6">
-          <h2 class="text-lg font-medium text-foreground mb-1">{{ primitive?.name }}</h2>
-          <p v-if="primitive?.description" class="text-sm text-muted-foreground mb-4">
-            {{ primitive.description }}
-          </p>
-
+        <DataCard
+          :title="primitive?.name"
+          :description="primitive?.description ?? undefined"
+          heading-level="h2"
+          padding="lg"
+          card-class="mb-6"
+        >
           <div class="flex items-center gap-2 mb-4">
             <span
               v-for="tag in (primitive?.tags || []).slice(0, 5)"
@@ -56,17 +57,17 @@
             <p><strong>{{ $t('views.LibraryPipelineWizard.author') }}</strong> {{ primitive?.author || '—' }}</p>
             <p><strong>{{ $t('views.LibraryPipelineWizard.version') }}</strong> {{ primitive?.version || '—' }}</p>
           </div>
-        </div>
+        </DataCard>
 
         <!-- Sub-pipeline visualization for composites -->
-        <div
+        <DataCard
           v-if="subGraphNodes.length > 0"
-          class="card p-6 mb-6"
+          :title="$t('views.LibraryPipelineWizard.pipeline_visualisation')"
+          :description="$t('views.LibraryPipelineWizard.sub_pipeline_internal')"
+          heading-level="h3"
+          padding="lg"
+          card-class="mb-6"
         >
-          <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.pipeline_visualisation') }}</h3>
-          <p class="text-sm text-muted-foreground mb-4">
-            {{ $t('views.LibraryPipelineWizard.sub_pipeline_internal') }}
-          </p>
           <div class="h-72 rounded-lg border bg-card overflow-hidden">
             <VueFlow
               :nodes="subGraphNodes"
@@ -87,11 +88,14 @@
               </template>
             </VueFlow>
           </div>
-        </div>
+        </DataCard>
 
-        <div class="card p-6 mb-6">
-          <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.pipeline_configuration') }}</h3>
-
+        <DataCard
+          :title="$t('views.LibraryPipelineWizard.pipeline_configuration')"
+          heading-level="h3"
+          padding="lg"
+          card-class="mb-6"
+        >
           <div class="space-y-4">
             <div>
               <label for="librarypipelinewizard-field-2" class="block text-sm font-medium text-foreground mb-1">{{ $t('views.LibraryPipelineWizard.pipeline_name') }}</label>
@@ -115,16 +119,25 @@
               />
             </div>
           </div>
-        </div>
+        </DataCard>
 
-        <div class="card p-6 mb-6">
-          <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.ownership') }}</h3>
-          <p class="text-sm text-muted-foreground mb-4">{{ $t('views.LibraryPipelineWizard.choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi') }}</p>
+        <DataCard
+          :title="$t('views.LibraryPipelineWizard.ownership')"
+          :description="$t('views.LibraryPipelineWizard.choose_who_this_pipeline_belongs_to_orgwide_pipelines_are_vi')"
+          heading-level="h3"
+          padding="lg"
+          card-class="mb-6"
+        >
           <OwnershipPicker v-model="ownership" :label="$t('views.LibraryPipelineWizard.owner')" />
-        </div>
+        </DataCard>
 
-        <div v-if="templateAgents.length > 0" class="card p-6 mb-6">
-          <h3 class="text-base font-medium text-foreground mb-4">{{ $t('views.LibraryPipelineWizard.template_agents', { count: templateAgents.length }) }}</h3>
+        <DataCard
+          v-if="templateAgents.length > 0"
+          :title="$t('views.LibraryPipelineWizard.template_agents', { count: templateAgents.length })"
+          heading-level="h3"
+          padding="lg"
+          card-class="mb-6"
+        >
           <div class="space-y-3">
             <div
               v-for="(agent, i) in templateAgents"
@@ -149,7 +162,7 @@
               </div>
             </div>
           </div>
-        </div>
+        </DataCard>
 
         <div class="flex items-center gap-3">
           <Button :disabled="creating" class="px-6 py-2.5" @click="createPipeline" data-testid="library-wizard-create">
@@ -190,6 +203,7 @@ import Button from 'primevue/button'
 import { useDataFetch } from '../composables/useDataFetch'
 import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
 import BackLink from '../components/BackLink.vue'
