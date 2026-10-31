@@ -66,7 +66,7 @@ function Invoke-Iscc {
     )
     $compilerOutput = & $isccPath @arguments 2>&1
     $exitCode = [int]$LASTEXITCODE
-    $compilerOutput | ForEach-Object { Write-Output $_ }
+    $compilerOutput | ForEach-Object { Write-Information -MessageData $_ -InformationAction Continue }
     return $exitCode
 }
 
