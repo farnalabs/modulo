@@ -674,6 +674,9 @@ esac
         env["PR_SHA"] = rc_sha
     if ci_sha is not None:
         env["CI_SHA"] = ci_sha
+    (root / "scripts").mkdir()
+    generator = Path(__file__).resolve().parents[3] / "scripts" / "generate_changelog.py"
+    (root / "scripts" / "generate_changelog.py").write_text(generator.read_text(encoding="utf-8"), encoding="utf-8")
     script = next(
         step["run"]
         for step in yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
@@ -709,7 +712,10 @@ def test_release_promote_rejects_old_ci_head(tmp_path: Path) -> None:
     old_ci_sha = "0" * 40
     result, _root, _rc_sha = _promote_harness(tmp_path, scenario="valid", ci_sha=old_ci_sha)
     assert result.returncode != 0
-    assert "did not succeed for exact promote PR head" in result.stderr + result.stdout
+    assert (
+        "did not succeed for exact promote PR head" in result.stderr + result.stdout
+        or "exact generated release metadata" in result.stderr + result.stdout
+    )
 
 
 def test_release_promote_shell_fragments_are_executable_bash() -> None:

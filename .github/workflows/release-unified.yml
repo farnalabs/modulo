@@ -505,16 +505,28 @@ jobs:
                echo "::error::Promote branch ${BRANCH} has a closed PR (#${CLOSED_PR}); refusing to create a duplicate."
                exit 1
              fi
-             git checkout -B "$BRANCH" "$RC_SHA"
-             python3 scripts/generate_changelog.py \
-               --from "$PREV" --to "$RC_SHA" \
-               --version "$VERSION" --output CHANGELOG.md > /tmp/ga-release-notes.md
-             git add CHANGELOG.md
-             if git diff --cached --quiet; then
-               echo "::error::CHANGELOG.md produced no promote metadata change; refusing to create an empty release PR."
-               exit 1
-             fi
-             git commit -m "changelog: ${GA_TAG}"
+              git checkout -B "$BRANCH" "$RC_SHA"
+              EXPECTED_CHANGELOG=/tmp/ga-expected-changelog.md
+              python3 scripts/generate_changelog.py \
+                --from "$PREV" --to "$RC_SHA" \
+                --version "$VERSION" --body-only > "$EXPECTED_CHANGELOG"
+              python3 scripts/generate_changelog.py \
+                --from "$PREV" --to "$RC_SHA" \
+                --version "$VERSION" --output CHANGELOG.md >/tmp/ga-release-notes.md
+              EXPECTED_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' "$EXPECTED_CHANGELOG")"
+              ACTUAL_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' CHANGELOG.md)"
+              EXPECTED_SECTION="$(printf '%s\\n' "$EXPECTED_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
+              ACTUAL_SECTION="$(printf '%s\\n' "$ACTUAL_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
+              if [ -z "$ACTUAL_SECTION" ] || [ "$ACTUAL_SECTION" != "$EXPECTED_SECTION" ]; then
+                echo "::error::CHANGELOG.md does not contain the exact generated release metadata for ${GA_TAG}."
+                exit 1
+              fi
+              git add CHANGELOG.md
+              if git diff --cached --quiet; then
+                echo "::error::CHANGELOG.md produced no promote metadata change; refusing to create an empty release PR."
+                exit 1
+              fi
+              git commit -m "changelog: ${GA_TAG}"
              git push --set-upstream origin "$BRANCH"
              PR_NUMBER="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base main --head "$BRANCH" \
                --title "chore(release): promote ${GA_TAG}" \
@@ -551,12 +563,24 @@ jobs:
              echo "::error::Promote PR #${PR_NUMBER} head ${PR_SHA} is not based on validated RC ${LATEST_RC} (${RC_SHA}); refusing stale PR reuse."
              exit 1
            fi
-           if git diff --quiet "${RC_SHA}..${PR_SHA}" -- CHANGELOG.md; then
-             echo "::error::Promote PR #${PR_NUMBER} contains no CHANGELOG.md release metadata diff from ${RC_SHA}; refusing to publish."
-             exit 1
-           fi
+            if git diff --quiet "${RC_SHA}..${PR_SHA}" -- CHANGELOG.md; then
+              echo "::error::Promote PR #${PR_NUMBER} contains no CHANGELOG.md release metadata diff from ${RC_SHA}; refusing to publish."
+              exit 1
+            fi
+            git show "${PR_SHA}:CHANGELOG.md" > /tmp/ga-pr-changelog.md
+            python3 scripts/generate_changelog.py \
+              --from "$PREV" --to "$RC_SHA" \
+              --version "$VERSION" --body-only > /tmp/ga-expected-changelog.md
+            EXPECTED_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' /tmp/ga-expected-changelog.md)"
+            ACTUAL_SECTION="$(awk -v version="$VERSION" 'BEGIN { heading = "## [" version "] — " } index($0, heading) == 1 { found=1 } found && NR > 1 && index($0, "## [") == 1 && index($0, heading) != 1 { exit } found { print }' /tmp/ga-pr-changelog.md)"
+            EXPECTED_SECTION="$(printf '%s\\n' "$EXPECTED_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
+            ACTUAL_SECTION="$(printf '%s\\n' "$ACTUAL_SECTION" | sed -E '1s/ — [0-9]{4}-[0-9]{2}-[0-9]{2}//')"
+            if [ -z "$ACTUAL_SECTION" ] || [ "$ACTUAL_SECTION" != "$EXPECTED_SECTION" ]; then
+              echo "::error::Promote PR #${PR_NUMBER} CHANGELOG.md is not the exact generated release metadata for ${GA_TAG}."
+              exit 1
+            fi
 
-           # A workflow-created PR does not receive pull_request CI/review events.
+            # A workflow-created PR does not receive pull_request CI/review events.
            # Explicitly request the normal gates for this exact PR head; only
            # the protected merge queue may merge it.
            gh workflow run "CI: Fast Validation" --repo "${GITHUB_REPOSITORY}" --ref "$BRANCH"
@@ -603,14 +627,25 @@ jobs:
              fi
              MERGED_AT="$(jq -r '.mergedAt // empty' <<<"$PR_JSON")"
              if [ "$PR_STATE" = "MERGED" ] && [ -n "$MERGED_AT" ]; then
-
-              MERGED_SHA="$(jq -r '.mergeCommit.oid // empty' <<<"$PR_JSON")"
-              if [ -z "$MERGED_SHA" ]; then
-                echo "::error::Promote PR #${PR_NUMBER} is merged but has no merge commit SHA; refusing to publish."
-                exit 1
-              fi
-              break
-            fi
+               FINAL_PR_HEAD_SHA="$CURRENT_PR_SHA"
+               if [ "$FINAL_PR_HEAD_SHA" != "$PR_SHA" ]; then
+                 echo "::error::Promote PR #${PR_NUMBER} final head changed from ${PR_SHA} to ${FINAL_PR_HEAD_SHA}; refusing to accept stale CI evidence."
+                 exit 1
+               fi
+               FINAL_CI_JSON="$(gh run view "$CI_RUN_ID" --repo "${GITHUB_REPOSITORY}" --json headSha,status,conclusion)"
+               if [ "$(jq -r '.headSha // empty' <<<"$FINAL_CI_JSON")" != "$FINAL_PR_HEAD_SHA" ] || \
+                  [ "$(jq -r '.status // empty' <<<"$FINAL_CI_JSON")" != "completed" ] || \
+                  [ "$(jq -r '.conclusion // empty' <<<"$FINAL_CI_JSON")" != "success" ]; then
+                 echo "::error::Final CI: Fast Validation evidence is not successful for exact merged PR head ${FINAL_PR_HEAD_SHA}: ${FINAL_CI_JSON}"
+                 exit 1
+               fi
+               MERGED_SHA="$(jq -r '.mergeCommit.oid // empty' <<<"$PR_JSON")"
+               if [ -z "$MERGED_SHA" ]; then
+                 echo "::error::Promote PR #${PR_NUMBER} is merged but has no merge commit SHA; refusing to publish."
+                 exit 1
+               fi
+               break
+             fi
             if [ "$PR_STATE" = "CLOSED" ]; then
               echo "::error::Promote PR #${PR_NUMBER} closed without merging; refusing to publish."
               exit 1
@@ -631,14 +666,26 @@ jobs:
             echo "::error::Could not check out exact merged SHA ${MERGED_SHA}; refusing to publish."
             exit 1
           fi
-          git tag -a "$GA_TAG" -m "Release $GA_TAG (promoted from $LATEST_RC)"
-          git push origin "$GA_TAG"
-          TAG_SHA="$(git rev-parse "${GA_TAG}^{commit}")"
-          if [ "$TAG_SHA" != "$MERGED_SHA" ]; then
-            echo "::error::GA tag ${GA_TAG} resolved to ${TAG_SHA}, expected merged PR SHA ${MERGED_SHA}."
-            exit 1
-          fi
-           # Keep release-freeze active while every downstream GA publication
+           git tag -a "$GA_TAG" -m "Release $GA_TAG (promoted from $LATEST_RC)"
+           git push origin "$GA_TAG"
+           TAG_SHA="$(git rev-parse "${GA_TAG}^{commit}")"
+           if [ "$TAG_SHA" != "$MERGED_SHA" ]; then
+             echo "::error::GA tag ${GA_TAG} resolved to ${TAG_SHA}, expected merged PR SHA ${MERGED_SHA}."
+             exit 1
+           fi
+           REMOTE_TAG_SHA="$(git ls-remote origin "refs/tags/${GA_TAG}" | awk '{print $1}')"
+           if [ -z "$REMOTE_TAG_SHA" ]; then
+             echo "::error::Remote GA tag ${GA_TAG} is missing after push."
+             exit 1
+           fi
+           if [ "$(git cat-file -t "$REMOTE_TAG_SHA")" = "tag" ]; then
+             REMOTE_TAG_SHA="$(git cat-file tag "$REMOTE_TAG_SHA" | awk '/^object / {print $2; exit}')"
+           fi
+           if [ "$REMOTE_TAG_SHA" != "$MERGED_SHA" ]; then
+             echo "::error::Remote GA tag ${GA_TAG} resolved to ${REMOTE_TAG_SHA}, expected merged PR SHA ${MERGED_SHA}."
+             exit 1
+           fi
+            # Keep release-freeze active while every downstream GA publication
            # step runs. The finalisation step below is the only place allowed to
            # lift it, after images, Helm and release notes have all succeeded.
            echo "GA tag ${GA_TAG} published at ${TAG_SHA}; release-freeze remains active until all publication steps finish."
