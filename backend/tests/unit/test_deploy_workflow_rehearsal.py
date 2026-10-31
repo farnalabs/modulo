@@ -577,7 +577,7 @@ def _git(cwd: Path, *args: str) -> str:
 
 def _promote_harness(
     tmp_path: Path, *, scenario: str, ci_sha: str | None = None
-) -> tuple[subprocess.CompletedProcess[str], Path, str]:
+) -> tuple[subprocess.CompletedProcess[str], Path, str, str]:
     root = tmp_path / "repo"
     origin = tmp_path / "origin.git"
     root.mkdir()
@@ -587,20 +587,17 @@ def _promote_harness(
     (root / "README.md").write_text("base\n", encoding="utf-8")
     _git(root, "add", "README.md")
     _git(root, "commit", "-m", "base")
+    _git(root, "tag", "-a", "v1.2.2", "-m", "previous GA")
+    (root / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n", encoding="utf-8")
+    _git(root, "add", "CHANGELOG.md")
+    _git(root, "commit", "-m", "feat: release change (#123)")
     rc_sha = _git(root, "rev-parse", "HEAD")
     _git(root, "tag", "-a", "v1.2.3-rc1", "-m", "rc")
     _git(root, "tag", "-a", "validated/v1.2.3-rc1", "-m", "validated")
     _git(root, "tag", "-a", "release-freeze", "-m", "freeze")
-    (root / "CHANGELOG.md").write_text("## 1.2.3\n", encoding="utf-8")
-    _git(root, "add", "CHANGELOG.md")
-    _git(root, "commit", "-m", "release metadata")
-    branch_sha = _git(root, "rev-parse", "HEAD")
-    _git(root, "branch", "release/promote-1.2.3")
-    _git(root, "checkout", "main")
-    _git(root, "reset", "--hard", rc_sha)
     _git(root, "init", "--bare", str(origin))
     _git(root, "remote", "add", "origin", str(origin))
-    _git(root, "push", "origin", "main", "release/promote-1.2.3")
+    _git(root, "push", "origin", "main", "--tags")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -608,40 +605,52 @@ def _promote_harness(
     gh.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then printf 'gh version test\\n'; exit 0; fi
+branch_sha() { git rev-parse "refs/remotes/origin/release/promote-1.2.3"; }
 case "${1:-}" in
   pr)
     case "${2:-}" in
       list)
         if [[ "$*" == *"--state open"* ]]; then
-          [[ "${SCENARIO}" == closed ]] && printf '\\n' || printf '42\\n'
+          [[ "${SCENARIO}" == valid ]] && printf '\\n' || printf '42\\n'
         else
-          [[ "${SCENARIO}" == closed ]] && printf '9\\n' || printf '\\n'
+          printf '\\n'
         fi
         ;;
       view)
+        if [[ "$*" == *"labels,title,url"* ]]; then
+          printf '%s\\n' '{"labels":[{"name":"changelog: feature"}],"title":"Release change","url":"https://github.example/pull/123"}'
+          exit 0
+        fi
         count_file="$HARNESS_DIR/pr-view-count"
         count=0; [[ -f "$count_file" ]] && count=$(cat "$count_file")
         count=$((count + 1)); printf '%s' "$count" > "$count_file"
         if [[ "$count" -eq 1 ]]; then
-          printf '%s\\n' '{"state":"OPEN","headRefName":"release/promote-1.2.3",'\
-            '"baseRefName":"main","headRefOid":"'"$PR_SHA"'"}'
+          current_sha=$(branch_sha)
+          [[ "${SCENARIO}" == stale ]] && current_sha="$PR_SHA"
+          printf '%s\\n' '{"state":"OPEN","headRefName":"release/promote-1.2.3",'\\
+            '"baseRefName":"main","headRefOid":"'"$current_sha"'"}'
         else
-          printf '%s\\n' '{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z",'\
-            '"headRefOid":"'"$PR_SHA"'","mergeCommit":{"oid":"'"$PR_SHA"'"}}'
+          current_sha=$(branch_sha)
+          [[ "${SCENARIO}" == stale ]] && current_sha="$PR_SHA"
+          tree=$(git rev-parse "$current_sha^{tree}")
+          merged=$(printf 'Merge pull request #42\\n\\n' | git commit-tree "$tree" -p "$RC_SHA" -p "$current_sha")
+          git update-ref refs/heads/merge-result "$merged"
+          git push origin refs/heads/merge-result >/dev/null
+          printf '%s\\n' '{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z",'\\
+            '"headRefOid":"'"$current_sha"'","mergeCommit":{"oid":"'"$merged"'"}}'
         fi
         ;;
       create) printf 'https://github.example/pull/42\\n' ;;
     esac
     ;;
-  api) printf '%s\\n' "$BRANCH_SHA" ;;
+  api) branch_sha ;;
   workflow) ;;
   run)
     case "${2:-}" in
-      list) printf '[{"databaseId":7,"headSha":"%s","createdAt":"2026-01-01T00:00:00Z"}]\\n' "$PR_SHA" ;;
+      list) printf '[{"databaseId":7,"headSha":"%s","createdAt":"2026-01-01T00:00:00Z"}]\\n' "$(branch_sha)" ;;
       watch) ;;
-      view)
-        printf '{"headSha":"%s","status":"completed","conclusion":"success"}\\n' "${CI_SHA:-$PR_SHA}"
-        ;;
+      view) printf '{"headSha":"%s","status":"completed","conclusion":"success"}\\n' "${CI_SHA:-$(branch_sha)}" ;;
     esac
     ;;
 esac
@@ -656,20 +665,32 @@ esac
         "VERSION": "1.2.3",
         "SCENARIO": scenario,
         "HARNESS_DIR": str(tmp_path),
-        "BRANCH_SHA": branch_sha,
-        "PR_SHA": branch_sha,
+        "ROOT": str(root),
+        "RC_SHA": rc_sha,
+        "BRANCH_SHA": rc_sha,
+        "PR_SHA": rc_sha,
+        "GIT_DIR": str(root / ".git"),
+        "GITHUB_OUTPUT": str(root / "github-output.txt"),
     }
-    if scenario == "stale":
-        _git(root, "checkout", "-b", "stale", rc_sha)
-        (root / "unrelated.txt").write_text("stale\n", encoding="utf-8")
-        _git(root, "add", "unrelated.txt")
-        _git(root, "commit", "-m", "stale")
-        stale_sha = _git(root, "rev-parse", "HEAD")
+    if scenario != "valid":
+        _git(root, "checkout", "-b", "release/promote-1.2.3", rc_sha)
+        changelog = "# Changelog\n\n## [Unreleased]\n"
+        if scenario == "wrong-heading":
+            changelog += "\n## [1.2.4] — 2026-01-01\n\n### Features\n- wrong version\n"
+        elif scenario == "wrong-body":
+            changelog += "\n## [1.2.3] — 2026-01-01\n\n### Features\n- wrong release body\n"
+        else:
+            changelog += "\n## [1.2.3] — 2026-01-01\n\n### Features\n- Release change\n"
+        (root / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
+        _git(root, "add", "CHANGELOG.md")
+        _git(root, "commit", "-m", "promote metadata")
+        branch_sha = _git(root, "rev-parse", "HEAD")
+        _git(root, "push", "origin", "HEAD:refs/heads/release/promote-1.2.3")
         _git(root, "checkout", "main")
-        _git(root, "branch", "-f", "release/promote-1.2.3", stale_sha)
-        _git(root, "push", "origin", "release/promote-1.2.3", "--force")
-        env["BRANCH_SHA"] = stale_sha
-        env["PR_SHA"] = stale_sha
+        env["BRANCH_SHA"] = branch_sha
+        env["PR_SHA"] = branch_sha
+    if scenario == "stale":
+        env["PR_SHA"] = rc_sha
     if scenario == "mismatch":
         env["PR_SHA"] = rc_sha
     if ci_sha is not None:
@@ -677,15 +698,12 @@ esac
     (root / "scripts").mkdir()
     generator = Path(__file__).resolve().parents[3] / "scripts" / "generate_changelog.py"
     (root / "scripts" / "generate_changelog.py").write_text(generator.read_text(encoding="utf-8"), encoding="utf-8")
-    script = next(
-        step["run"]
-        for step in yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
-        if step.get("name") == "Promote to GA and lift freeze"
-    )
+    scripts = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
+    promote = next(step["run"] for step in scripts if step.get("name") == "Promote to GA and lift freeze")
     bash = which("bash")
     assert bash is not None
     result = subprocess.run(  # noqa: S603 - fixed shell and workflow text under test
-        [bash, "-eo", "pipefail", "-c", script],
+        [bash, "-eo", "pipefail", "-c", promote],
         cwd=root,
         env=env,
         capture_output=True,
@@ -693,29 +711,74 @@ esac
         check=False,
         timeout=30,
     )
-    return result, root, rc_sha
+    return result, root, rc_sha, env["PR_SHA"]
+
+
+def _freeze_lift_script() -> str:
+    steps = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
+    return next(
+        step["run"] for step in steps if step.get("name") == "Lift release freeze after successful GA publication"
+    )
+
+
+def test_release_promote_successfully_publishes_exact_tag_and_lifts_freeze(tmp_path: Path) -> None:
+    result, root, _rc_sha, _pr_sha = _promote_harness(tmp_path, scenario="valid")
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "GA tag v1.2.3 published at" in result.stdout
+    assert "release-freeze remains active" in result.stdout
+    output_values = dict(
+        line.split("=", 1) for line in (root / "github-output.txt").read_text(encoding="utf-8").splitlines()
+    )
+    assert output_values == {
+        "ga_tag": "v1.2.3",
+        "rc_tag": "v1.2.3-rc1",
+        "promote_sha": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
+    }
+
+    lift = subprocess.run(  # noqa: S603 - fixed shell and workflow text under test
+        [which("bash") or "bash", "-eo", "pipefail", "-c", _freeze_lift_script()],
+        cwd=root,
+        env={**os.environ, "PATH": os.environ["PATH"], "GH_TOKEN": "test"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert lift.returncode == 0, lift.stderr + lift.stdout
+    assert "freeze lifted" in lift.stdout
+    remote_tag_object = _git(root, "ls-remote", "origin", "refs/tags/v1.2.3").split()[0]
+    remote_ga_sha = _git(root, "cat-file", "tag", remote_tag_object).splitlines()[0].split()[1]
+    assert remote_ga_sha == _git(root, "rev-parse", "v1.2.3^{commit}")
+    assert not _git(root, "ls-remote", "origin", "refs/tags/release-freeze")
+
+
+def test_release_promote_rejects_wrong_version_heading(tmp_path: Path) -> None:
+    result, _root, _rc_sha, _pr_sha = _promote_harness(tmp_path, scenario="wrong-heading")
+    output = result.stderr + result.stdout
+    assert result.returncode != 0
+    assert "exact generated release metadata" in output
+
+
+def test_release_promote_rejects_wrong_generated_release_body(tmp_path: Path) -> None:
+    result, _root, _rc_sha, _pr_sha = _promote_harness(tmp_path, scenario="wrong-body")
+    output = result.stderr + result.stdout
+    assert result.returncode != 0
+    assert "exact generated release metadata" in output
 
 
 def test_release_promote_rejects_stale_reused_pr_head(tmp_path: Path) -> None:
-    result, _root, _rc_sha = _promote_harness(tmp_path, scenario="stale")
+    result, _root, _rc_sha, _pr_sha = _promote_harness(tmp_path, scenario="stale")
+    output = result.stderr + result.stdout
     assert result.returncode != 0
-    assert "refusing to publish" in result.stderr + result.stdout
-
-
-def test_release_promote_rejects_pr_and_branch_head_mismatch(tmp_path: Path) -> None:
-    result, _root, _rc_sha = _promote_harness(tmp_path, scenario="mismatch")
-    assert result.returncode != 0
-    assert "does not match release branch" in result.stderr + result.stdout
+    assert "does not match release branch" in output
 
 
 def test_release_promote_rejects_old_ci_head(tmp_path: Path) -> None:
     old_ci_sha = "0" * 40
-    result, _root, _rc_sha = _promote_harness(tmp_path, scenario="valid", ci_sha=old_ci_sha)
+    result, _root, _rc_sha, _pr_sha = _promote_harness(tmp_path, scenario="valid", ci_sha=old_ci_sha)
+    output = result.stderr + result.stdout
     assert result.returncode != 0
-    assert (
-        "did not succeed for exact promote PR head" in result.stderr + result.stdout
-        or "exact generated release metadata" in result.stderr + result.stdout
-    )
+    assert "did not succeed for exact promote PR head" in output
 
 
 def test_release_promote_shell_fragments_are_executable_bash() -> None:
