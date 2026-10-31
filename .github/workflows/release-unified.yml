@@ -496,45 +496,98 @@ jobs:
           if [ -z "$PREV" ]; then
             PREV="$(git rev-list --max-parents=0 "$RC_SHA" | tail -n1)"
           fi
-          PR_NUMBER="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
-          if [ -n "$PR_NUMBER" ]; then
-            echo "Reusing existing promote PR #${PR_NUMBER} for ${VERSION}."
-          else
-            CLOSED_PR="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state closed --json number --jq '.[0].number // empty')"
-            if [ -n "$CLOSED_PR" ]; then
-              echo "::error::Promote branch ${BRANCH} has a closed PR (#${CLOSED_PR}); refusing to create a duplicate."
-              exit 1
-            fi
-            git checkout -B "$BRANCH" "$RC_SHA"
-            python3 scripts/generate_changelog.py \
-              --from "$PREV" --to "$RC_SHA" \
-              --version "$VERSION" --output CHANGELOG.md > /tmp/ga-release-notes.md
-            git add CHANGELOG.md
-            if git diff --cached --quiet; then
-              echo "::error::CHANGELOG.md produced no promote metadata change; refusing to create an empty release PR."
-              exit 1
-            fi
-            git commit -m "changelog: ${GA_TAG}"
-            git push --set-upstream origin "$BRANCH"
-            PR_NUMBER="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base main --head "$BRANCH" \
-              --title "chore(release): promote ${GA_TAG}" \
-              --body "Promote ${LATEST_RC} to ${GA_TAG}. This release metadata PR must pass normal CI, review, and merge-queue gates before GA publication and freeze lift.")"
-            PR_NUMBER="${PR_NUMBER##*/}"
-          fi
+           PR_NUMBER="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+           if [ -n "$PR_NUMBER" ]; then
+             echo "Reusing existing promote PR #${PR_NUMBER} for ${VERSION}."
+           else
+             CLOSED_PR="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --base main --state closed --json number --jq '.[0].number // empty')"
+             if [ -n "$CLOSED_PR" ]; then
+               echo "::error::Promote branch ${BRANCH} has a closed PR (#${CLOSED_PR}); refusing to create a duplicate."
+               exit 1
+             fi
+             git checkout -B "$BRANCH" "$RC_SHA"
+             python3 scripts/generate_changelog.py \
+               --from "$PREV" --to "$RC_SHA" \
+               --version "$VERSION" --output CHANGELOG.md > /tmp/ga-release-notes.md
+             git add CHANGELOG.md
+             if git diff --cached --quiet; then
+               echo "::error::CHANGELOG.md produced no promote metadata change; refusing to create an empty release PR."
+               exit 1
+             fi
+             git commit -m "changelog: ${GA_TAG}"
+             git push --set-upstream origin "$BRANCH"
+             PR_NUMBER="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base main --head "$BRANCH" \
+               --title "chore(release): promote ${GA_TAG}" \
+               --body "Promote ${LATEST_RC} to ${GA_TAG}. This release metadata PR must pass normal CI, review, and merge-queue gates before GA publication and freeze lift.")"
+             PR_NUMBER="${PR_NUMBER##*/}"
+           fi
 
-          # A workflow-created PR does not receive pull_request CI/review events.
-          # Explicitly request the normal gates for this exact PR head; only the
-          # protected merge queue may merge it.
-          PR_SHA="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq '.headRefOid')"
-          if [ -z "$PR_SHA" ]; then
-            echo "::error::Promote PR #${PR_NUMBER} has no head SHA; refusing to wait without exact-ref evidence."
-            exit 1
-          fi
-          gh workflow run "CI: Fast Validation" --repo "${GITHUB_REPOSITORY}" --ref "$BRANCH"
-          gh workflow run pr-review.yml --repo "${GITHUB_REPOSITORY}" --ref main \
-            -f pr_number="$PR_NUMBER" -f head_sha="$PR_SHA" -f head_branch="$BRANCH"
+           # A reused PR is shared state. Prove that it is still the expected
+           # release branch, is based on this exact validated RC, and contains
+           # the release metadata change before asking any gate to run.
+           PR_JSON="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" \
+             --json headRefName,headRefOid,baseRefName,state)" || {
+             echo "::error::Could not read promote PR #${PR_NUMBER}; refusing to trust shared release state."
+             exit 1
+           }
+           PR_HEAD_REF="$(jq -r '.headRefName // empty' <<<"$PR_JSON")"
+           PR_BASE_REF="$(jq -r '.baseRefName // empty' <<<"$PR_JSON")"
+           PR_STATE="$(jq -r '.state // empty' <<<"$PR_JSON")"
+           PR_SHA="$(jq -r '.headRefOid // empty' <<<"$PR_JSON")"
+           if [ "$PR_STATE" != "OPEN" ] || [ "$PR_HEAD_REF" != "$BRANCH" ] || [ "$PR_BASE_REF" != "main" ]; then
+             echo "::error::Promote PR #${PR_NUMBER} is not the expected open ${BRANCH}->main PR (state=${PR_STATE}, head=${PR_HEAD_REF}, base=${PR_BASE_REF})."
+             exit 1
+           fi
+           BRANCH_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" --jq '.object.sha')" || {
+             echo "::error::Could not read release branch ${BRANCH}; refusing to trust reused promote PR."
+             exit 1
+           }
+           if [ -z "$BRANCH_SHA" ] || [ "$BRANCH_SHA" != "$PR_SHA" ]; then
+             echo "::error::Promote PR #${PR_NUMBER} head SHA (${PR_SHA}) does not match release branch ${BRANCH} (${BRANCH_SHA}); refusing stale or externally modified PR."
+             exit 1
+           fi
+           git fetch origin "$BRANCH"
+           if ! git merge-base --is-ancestor "$RC_SHA" "$PR_SHA"; then
+             echo "::error::Promote PR #${PR_NUMBER} head ${PR_SHA} is not based on validated RC ${LATEST_RC} (${RC_SHA}); refusing stale PR reuse."
+             exit 1
+           fi
+           if git diff --quiet "${RC_SHA}..${PR_SHA}" -- CHANGELOG.md; then
+             echo "::error::Promote PR #${PR_NUMBER} contains no CHANGELOG.md release metadata diff from ${RC_SHA}; refusing to publish."
+             exit 1
+           fi
 
-          MERGED_SHA=""
+           # A workflow-created PR does not receive pull_request CI/review events.
+           # Explicitly request the normal gates for this exact PR head; only
+           # the protected merge queue may merge it.
+           gh workflow run "CI: Fast Validation" --repo "${GITHUB_REPOSITORY}" --ref "$BRANCH"
+           gh workflow run pr-review.yml --repo "${GITHUB_REPOSITORY}" --ref main \
+             -f pr_number="$PR_NUMBER" -f head_sha="$PR_SHA" -f head_branch="$BRANCH"
+
+           # Find the dispatched CI run by its exact head SHA, never by branch
+           # alone. A stable-branch run is not evidence for this release PR.
+           CI_RUN_ID=""
+           for ((ci_poll=1; ci_poll<=30; ci_poll++)); do
+             CI_RUN_ID="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "CI: Fast Validation" --branch "$BRANCH" --limit 20 --json databaseId,headSha,createdAt \
+               | jq -r --arg sha "$PR_SHA" '[.[] | select(.headSha == $sha)] | sort_by(.createdAt) | last.databaseId // empty')"
+             if [ -n "$CI_RUN_ID" ]; then
+               break
+             fi
+             echo "Waiting for CI: Fast Validation run for exact PR head ${PR_SHA} (${ci_poll}/30)."
+             sleep 10
+           done
+           if [ -z "$CI_RUN_ID" ]; then
+             echo "::error::No CI: Fast Validation run found for exact promote PR head ${PR_SHA}; refusing to merge."
+             exit 1
+           fi
+           gh run watch "$CI_RUN_ID" --repo "${GITHUB_REPOSITORY}" --exit-status
+           CI_JSON="$(gh run view "$CI_RUN_ID" --repo "${GITHUB_REPOSITORY}" --json headSha,status,conclusion)"
+           if [ "$(jq -r '.headSha' <<<"$CI_JSON")" != "$PR_SHA" ] || [ "$(jq -r '.status' <<<"$CI_JSON")" != "completed" ] || [ "$(jq -r '.conclusion' <<<"$CI_JSON")" != "success" ]; then
+             echo "::error::CI: Fast Validation run ${CI_RUN_ID} did not succeed for exact promote PR head ${PR_SHA}: ${CI_JSON}"
+             exit 1
+           fi
+
+           MERGED_SHA=""
+
           MAX_POLLS=360
           for ((poll=1; poll<=MAX_POLLS; poll++)); do
             PR_JSON="$(gh pr view "$PR_NUMBER" --repo "${GITHUB_REPOSITORY}" \
@@ -542,9 +595,15 @@ jobs:
               echo "::error::Could not read promote PR #${PR_NUMBER}; refusing to proceed without merge evidence."
               exit 1
             }
-            PR_STATE="$(jq -r '.state' <<<"$PR_JSON")"
-            MERGED_AT="$(jq -r '.mergedAt // empty' <<<"$PR_JSON")"
-            if [ "$PR_STATE" = "MERGED" ] && [ -n "$MERGED_AT" ]; then
+             PR_STATE="$(jq -r '.state' <<<"$PR_JSON")"
+             CURRENT_PR_SHA="$(jq -r '.headRefOid // empty' <<<"$PR_JSON")"
+             if [ "$CURRENT_PR_SHA" != "$PR_SHA" ]; then
+               echo "::error::Promote PR #${PR_NUMBER} changed head from ${PR_SHA} to ${CURRENT_PR_SHA} after exact-head CI; refusing to merge stale CI evidence."
+               exit 1
+             fi
+             MERGED_AT="$(jq -r '.mergedAt // empty' <<<"$PR_JSON")"
+             if [ "$PR_STATE" = "MERGED" ] && [ -n "$MERGED_AT" ]; then
+
               MERGED_SHA="$(jq -r '.mergeCommit.oid // empty' <<<"$PR_JSON")"
               if [ -z "$MERGED_SHA" ]; then
                 echo "::error::Promote PR #${PR_NUMBER} is merged but has no merge commit SHA; refusing to publish."
@@ -579,12 +638,13 @@ jobs:
             echo "::error::GA tag ${GA_TAG} resolved to ${TAG_SHA}, expected merged PR SHA ${MERGED_SHA}."
             exit 1
           fi
-          # Lift the freeze only after the protected metadata merge and exact GA
-          # tag handoff both succeeded. The merge queue resumes on its next tick.
-          git push origin --delete release-freeze
-          echo "Freeze lifted - merge queue resumes."
+           # Keep release-freeze active while every downstream GA publication
+           # step runs. The finalisation step below is the only place allowed to
+           # lift it, after images, Helm and release notes have all succeeded.
+           echo "GA tag ${GA_TAG} published at ${TAG_SHA}; release-freeze remains active until all publication steps finish."
 
-          {
+           {
+
             echo "ga_tag=$GA_TAG"
             echo "rc_tag=$LATEST_RC"
             echo "promote_sha=$MERGED_SHA"
@@ -901,13 +961,52 @@ jobs:
           if gh release view "$GA_TAG" >/dev/null 2>&1; then
             gh release edit "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE"
             echo "GitHub Release updated for ${GA_TAG}."
-          else
-            gh release create "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE"
-            echo "GitHub Release created for ${GA_TAG}."
+           else
+             gh release create "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE"
+             echo "GitHub Release created for ${GA_TAG}."
+           fi
+
+      - name: Re-establish release freeze after failed GA publication
+        if: inputs.mode == 'promote' && failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          GA_TAG="v${VERSION}"
+          if git rev-parse -q --verify "refs/tags/${GA_TAG}" >/dev/null 2>&1; then
+            git tag -f -a release-freeze -m "Release freeze retained after failed GA publication for ${GA_TAG}"
+            git push origin release-freeze --force
+            echo "Re-established release-freeze after failed GA publication."
+           else
+             if git rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1; then
+               echo "GA tag ${GA_TAG} was not created; existing release-freeze remains active."
+             else
+               echo "::error::GA publication failed before ${GA_TAG} existed and release-freeze is missing; refusing an unprotected state."
+               exit 1
+             fi
+           fi
+
+
+      - name: Lift release freeze after successful GA publication
+        if: inputs.mode == 'promote' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git rev-parse -q --verify refs/tags/release-freeze >/dev/null 2>&1; then
+            echo "::error::release-freeze is missing at final GA publication step; refusing to lift an unknown hold."
+            exit 1
           fi
+          git push origin --delete release-freeze
+          echo "All GA publication steps succeeded; freeze lifted and merge queue resumes."
 
   # ---------------------------------------------------------------------------
+
   # Build and sign the release bundle (cut and recut).
+
   #
   # Delegated to the single implementation in bundle-release.yml (FAR-670 /
   # FAR-675): it builds from the RC tag, writes the per-file SHA256SUMS and the

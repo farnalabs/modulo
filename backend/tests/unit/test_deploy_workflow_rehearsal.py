@@ -8,9 +8,12 @@ pre-deploy wiring intact — the same reasoning as the sibling
 """
 
 import importlib.util
+import os
 import re
+import subprocess
 import textwrap
 from pathlib import Path
+from shutil import which
 from typing import Any, cast
 
 import pytest
@@ -553,9 +556,228 @@ def test_release_promote_uses_a_single_protected_pr_and_exact_merged_sha() -> No
     assert 'git checkout --detach "$MERGED_SHA"' in script
     assert 'git tag -a "$GA_TAG"' in script
     assert 'git push origin "$GA_TAG"' in script
-    assert "git push origin --delete release-freeze" in script
+    assert "release-freeze remains active until all publication steps finish" in script
     assert "release-freeze" in script
     assert "promote_sha=$MERGED_SHA" in script
+
+
+def _git(cwd: Path, *args: str) -> str:
+    git = which("git")
+    assert git is not None
+    result = subprocess.run(  # noqa: S603 - fixed executable from PATH and test-controlled arguments
+        [git, *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    return result.stdout.strip()
+
+
+def _promote_harness(
+    tmp_path: Path, *, scenario: str, ci_sha: str | None = None
+) -> tuple[subprocess.CompletedProcess[str], Path, str]:
+    root = tmp_path / "repo"
+    origin = tmp_path / "origin.git"
+    root.mkdir()
+    _git(root, "init", "-b", "main")
+    _git(root, "config", "user.email", "test@example.invalid")
+    _git(root, "config", "user.name", "test")
+    (root / "README.md").write_text("base\n", encoding="utf-8")
+    _git(root, "add", "README.md")
+    _git(root, "commit", "-m", "base")
+    rc_sha = _git(root, "rev-parse", "HEAD")
+    _git(root, "tag", "-a", "v1.2.3-rc1", "-m", "rc")
+    _git(root, "tag", "-a", "validated/v1.2.3-rc1", "-m", "validated")
+    _git(root, "tag", "-a", "release-freeze", "-m", "freeze")
+    (root / "CHANGELOG.md").write_text("## 1.2.3\n", encoding="utf-8")
+    _git(root, "add", "CHANGELOG.md")
+    _git(root, "commit", "-m", "release metadata")
+    branch_sha = _git(root, "rev-parse", "HEAD")
+    _git(root, "branch", "release/promote-1.2.3")
+    _git(root, "checkout", "main")
+    _git(root, "reset", "--hard", rc_sha)
+    _git(root, "init", "--bare", str(origin))
+    _git(root, "remote", "add", "origin", str(origin))
+    _git(root, "push", "origin", "main", "release/promote-1.2.3")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  pr)
+    case "${2:-}" in
+      list)
+        if [[ "$*" == *"--state open"* ]]; then
+          [[ "${SCENARIO}" == closed ]] && printf '\\n' || printf '42\\n'
+        else
+          [[ "${SCENARIO}" == closed ]] && printf '9\\n' || printf '\\n'
+        fi
+        ;;
+      view)
+        count_file="$HARNESS_DIR/pr-view-count"
+        count=0; [[ -f "$count_file" ]] && count=$(cat "$count_file")
+        count=$((count + 1)); printf '%s' "$count" > "$count_file"
+        if [[ "$count" -eq 1 ]]; then
+          printf '%s\\n' '{"state":"OPEN","headRefName":"release/promote-1.2.3",'\
+            '"baseRefName":"main","headRefOid":"'"$PR_SHA"'"}'
+        else
+          printf '%s\\n' '{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z",'\
+            '"headRefOid":"'"$PR_SHA"'","mergeCommit":{"oid":"'"$PR_SHA"'"}}'
+        fi
+        ;;
+      create) printf 'https://github.example/pull/42\\n' ;;
+    esac
+    ;;
+  api) printf '%s\\n' "$BRANCH_SHA" ;;
+  workflow) ;;
+  run)
+    case "${2:-}" in
+      list) printf '[{"databaseId":7,"headSha":"%s","createdAt":"2026-01-01T00:00:00Z"}]\\n' "$PR_SHA" ;;
+      watch) ;;
+      view)
+        printf '{"headSha":"%s","status":"completed","conclusion":"success"}\\n' "${CI_SHA:-$PR_SHA}"
+        ;;
+    esac
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GITHUB_REPOSITORY": "example/repo",
+        "VERSION": "1.2.3",
+        "SCENARIO": scenario,
+        "HARNESS_DIR": str(tmp_path),
+        "BRANCH_SHA": branch_sha,
+        "PR_SHA": branch_sha,
+    }
+    if scenario == "stale":
+        _git(root, "checkout", "-b", "stale", rc_sha)
+        (root / "unrelated.txt").write_text("stale\n", encoding="utf-8")
+        _git(root, "add", "unrelated.txt")
+        _git(root, "commit", "-m", "stale")
+        stale_sha = _git(root, "rev-parse", "HEAD")
+        _git(root, "checkout", "main")
+        _git(root, "branch", "-f", "release/promote-1.2.3", stale_sha)
+        _git(root, "push", "origin", "release/promote-1.2.3", "--force")
+        env["BRANCH_SHA"] = stale_sha
+        env["PR_SHA"] = stale_sha
+    if scenario == "mismatch":
+        env["PR_SHA"] = rc_sha
+    if ci_sha is not None:
+        env["CI_SHA"] = ci_sha
+    script = next(
+        step["run"]
+        for step in yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
+        if step.get("name") == "Promote to GA and lift freeze"
+    )
+    bash = which("bash")
+    assert bash is not None
+    result = subprocess.run(  # noqa: S603 - fixed shell and workflow text under test
+        [bash, "-eo", "pipefail", "-c", script],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    return result, root, rc_sha
+
+
+def test_release_promote_rejects_stale_reused_pr_head(tmp_path: Path) -> None:
+    result, _root, _rc_sha = _promote_harness(tmp_path, scenario="stale")
+    assert result.returncode != 0
+    assert "refusing to publish" in result.stderr + result.stdout
+
+
+def test_release_promote_rejects_pr_and_branch_head_mismatch(tmp_path: Path) -> None:
+    result, _root, _rc_sha = _promote_harness(tmp_path, scenario="mismatch")
+    assert result.returncode != 0
+    assert "does not match release branch" in result.stderr + result.stdout
+
+
+def test_release_promote_rejects_old_ci_head(tmp_path: Path) -> None:
+    old_ci_sha = "0" * 40
+    result, _root, _rc_sha = _promote_harness(tmp_path, scenario="valid", ci_sha=old_ci_sha)
+    assert result.returncode != 0
+    assert "did not succeed for exact promote PR head" in result.stderr + result.stdout
+
+
+def test_release_promote_shell_fragments_are_executable_bash() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    for name in (
+        "Promote to GA and lift freeze",
+        "Re-establish release freeze after failed GA publication",
+        "Lift release freeze after successful GA publication",
+    ):
+        script = steps[names.index(name)]["run"]
+        bash = which("bash")
+        assert bash is not None
+        result = subprocess.run(  # noqa: S603 - fixed executable from PATH; workflow text is syntax-checked only
+            [bash, "-n"],
+            input=script,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "LC_ALL": "C"},
+            timeout=30,
+        )
+        assert result.returncode == 0, f"{name}: {result.stderr}"
+
+
+def test_release_promote_reuses_only_exact_current_rc_metadata_pr() -> None:
+    script = _promote_step()["run"]
+
+    assert 'PR_HEAD_REF="$(jq -r' in script
+    assert 'PR_BASE_REF="$(jq -r' in script
+    assert 'PR_STATE="$(jq -r' in script
+    assert 'BRANCH_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}"' in script
+    assert 'git merge-base --is-ancestor "$RC_SHA" "$PR_SHA"' in script
+    assert 'git diff --quiet "${RC_SHA}..${PR_SHA}" -- CHANGELOG.md' in script
+    assert "refusing stale or externally modified PR" in script
+    assert "refusing stale PR reuse" in script
+
+
+def test_release_promote_requires_exact_head_ci_success_before_merge() -> None:
+    script = _promote_step()["run"]
+
+    assert 'gh run list --repo "${GITHUB_REPOSITORY}" --workflow "CI: Fast Validation"' in script
+    assert "select(.headSha == $sha)" in script
+    assert 'gh run watch "$CI_RUN_ID" --repo "${GITHUB_REPOSITORY}" --exit-status' in script
+    assert 'CI_JSON="$(gh run view "$CI_RUN_ID"' in script
+    assert 'jq -r \'.conclusion\' <<<"$CI_JSON")" != "success"' in script
+    assert 'CURRENT_PR_SHA="$(jq -r' in script
+    assert "changed head from ${PR_SHA}" in script
+
+
+def test_release_promote_freeze_cleanup_is_final_and_failure_safe() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    promote_idx = names.index("Promote to GA and lift freeze")
+    retag_idx = names.index("Retag container images for GA")
+    helm_idx = names.index("Push Helm chart to OCI registry")
+    notes_idx = names.index("Update CHANGELOG.md and GitHub Release for GA")
+    reestablish_idx = names.index("Re-establish release freeze after failed GA publication")
+    lift_idx = names.index("Lift release freeze after successful GA publication")
+
+    assert promote_idx < retag_idx < helm_idx < notes_idx < reestablish_idx < lift_idx
+    assert steps[reestablish_idx]["if"] == "inputs.mode == 'promote' && failure()"
+    assert steps[lift_idx]["if"] == "inputs.mode == 'promote' && success()"
+    assert "git push origin --delete release-freeze" not in steps[promote_idx]["run"]
+    assert "git push origin --delete release-freeze" in steps[lift_idx]["run"]
+    assert "git push origin release-freeze --force" in steps[reestablish_idx]["run"]
 
 
 def test_release_promote_has_no_bypass_or_silent_fallback() -> None:
@@ -580,7 +802,7 @@ def test_release_promote_wait_budget_fits_release_job_timeout() -> None:
     poll_seconds = int(re.search(r"sleep (\d+)", script).group(1))
     release_job = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]
 
-    assert max_polls * poll_seconds == 5400
+    assert max_polls * poll_seconds == 3600
     assert max_polls * poll_seconds <= release_job["timeout-minutes"] * 60
 
 
@@ -597,4 +819,4 @@ def test_release_promote_bypass_scan_excludes_cut_path() -> None:
         assert "git checkout -B main origin/main" not in script
 
     promote = _promote_step()["run"]
-    assert "git push origin --delete release-freeze" in promote
+    assert "release-freeze remains active until all publication steps finish" in promote
