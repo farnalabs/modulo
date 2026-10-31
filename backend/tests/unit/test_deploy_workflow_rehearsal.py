@@ -936,7 +936,15 @@ def test_release_promote_uses_a_single_protected_pr_and_exact_merged_sha() -> No
     assert 'git checkout --detach "$MERGED_SHA"' in script
     assert 'git tag -a "$GA_TAG"' in script
     assert 'git push origin "$GA_TAG"' in script
+    release_script = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
+    release_step = next(
+        step for step in release_script if step.get("name") == "Update CHANGELOG.md and GitHub Release for GA"
+    )
+    assert release_step["env"]["MERGED_SHA"] == "${{ steps.promote.outputs.promote_sha }}"
+    assert 'gh release edit "$GA_TAG" --target "$MERGED_SHA"' in release_step["run"]
+    assert 'gh release create "$GA_TAG" --target "$MERGED_SHA"' in release_step["run"]
     assert "release-freeze remains active until all publication steps finish" in script
+
     assert "release-freeze" in script
     assert "promote_sha=$MERGED_SHA" in script
 
@@ -1046,9 +1054,10 @@ case "${1:-}" in
             esac
           done
          if [ -z "$target" ]; then
-           target=$(git -C "$ROOT" rev-parse "${tag}^{commit}")
+           printf 'release target is required\n' >&2
+           exit 1
          fi
-          if [ -n "${EXPECTED_RELEASE_SHA:-}" ] && [ "$target" != "$EXPECTED_RELEASE_SHA" ]; then
+         if [ -n "${EXPECTED_RELEASE_SHA:-}" ] && [ "$target" != "$EXPECTED_RELEASE_SHA" ]; then
            printf 'release target mismatch: %s != %s\n' "$target" "$EXPECTED_RELEASE_SHA" >&2
            exit 1
           fi
@@ -1234,12 +1243,17 @@ def _run_release_block(
     env: dict[str, str],
     name: str,
     failure: str | None = None,
+    *,
+    expected_release_sha: str | None = None,
+    omit_target: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     steps = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]["steps"]
     script = next(step["run"] for step in steps if step.get("name") == name)
     script = script.replace("${{ steps.promote.outputs.rc_tag }}", '"$RC_TAG"')
     script = script.replace("${{ steps.promote.outputs.ga_tag }}", '"$GA_TAG"')
     script = script.replace("${{ steps.promote.outputs.promote_sha }}", '"$PROMOTE_SHA"')
+    if omit_target:
+        script = script.replace(' --target "$MERGED_SHA"', "")
     block_env = {
         **env,
         "FAIL_PUBLICATION_BLOCK": "" if failure is None else failure,
@@ -1249,7 +1263,8 @@ def _run_release_block(
         "RC_TAG": "v1.2.3-rc1",
         "GA_TAG": "v1.2.3",
         "PROMOTE_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
-        "EXPECTED_RELEASE_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
+        "MERGED_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
+        "EXPECTED_RELEASE_SHA": expected_release_sha or _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
         "HARNESS_DIR": env["HARNESS_DIR"],
         "GITHUB_OUTPUT": str(root / "publication-output.txt"),
     }
@@ -1287,15 +1302,19 @@ def _run_publication_sequence(
             script.replace("${{ steps.promote.outputs.rc_tag }}", '"$RC_TAG"')
             .replace("${{ steps.promote.outputs.ga_tag }}", '"$GA_TAG"')
             .replace("${{ steps.promote.outputs.promote_sha }}", '"$PROMOTE_SHA"')
+            .replace("set -euo pipefail", "set -uo pipefail", 1)
         )
     recovery = _release_step("Re-establish release freeze after failed GA publication")["run"]
+    lift = _freeze_lift_script()
+    block_commands = [f"if bash -eo pipefail -c {shlex.quote(block)}; then :; else failure=1; fi" for block in blocks]
     sequence = "\n\n".join(
         [
             "failure=0",
-            f"if !(\n{blocks[0]}\n); then failure=1; fi",
-            f"if (( failure == 0 )); then\nif ! (\n{blocks[1]}\n); then failure=1; fi\nfi",
-            f"if (( failure == 0 )); then\nif ! (\n{blocks[2]}\n); then failure=1; fi\nfi",
+            block_commands[0],
+            f"if (( failure == 0 )); then\n{block_commands[1]}\nfi",
+            f"if (( failure == 0 )); then\n{block_commands[2]}\nfi",
             f"if (( failure != 0 )); then\n{recovery}\nfi",
+            f"if (( failure == 0 )); then\n{lift}\nfi",
         ]
     )
 
@@ -1308,6 +1327,7 @@ def _run_publication_sequence(
         "RC_TAG": "v1.2.3-rc1",
         "GA_TAG": "v1.2.3",
         "PROMOTE_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
+        "MERGED_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
         "EXPECTED_RELEASE_SHA": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
         "HARNESS_DIR": env["HARNESS_DIR"],
         "GITHUB_OUTPUT": str(root / "publication-output.txt"),
@@ -1356,21 +1376,34 @@ def test_release_promote_successfully_publishes_exact_tag_target_and_lifts_freez
         "promote_sha": _git(root, "rev-parse", "refs/remotes/origin/merge-result"),
     }
 
-    lift = subprocess.run(  # noqa: S603 - fixed shell and workflow text under test
-        [which("bash") or "bash", "-eo", "pipefail", "-c", _freeze_lift_script()],
-        cwd=root,
-        env={**env, "PATH": env["PATH"], "GH_TOKEN": "test"},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-    assert lift.returncode == 0, lift.stderr + lift.stdout
-    assert "freeze lifted" in lift.stdout
+    assert "freeze lifted" in publication.stdout
     remote_tag_object = _git(root, "ls-remote", "origin", "refs/tags/v1.2.3").split()[0]
     remote_ga_sha = _git(root, "cat-file", "tag", remote_tag_object).splitlines()[0].split()[1]
     assert remote_ga_sha == _git(root, "rev-parse", "v1.2.3^{commit}")
     assert not _git(root, "ls-remote", "origin", "refs/tags/release-freeze")
+
+
+def test_release_publication_rejects_missing_or_wrong_target(tmp_path: Path) -> None:
+    result, root, _rc_sha, _pr_sha, env = _promote_harness(tmp_path, scenario="valid")
+    assert result.returncode == 0, result.stderr + result.stdout
+    expected = _git(root, "rev-parse", "refs/remotes/origin/merge-result")
+    missing = _run_release_block(
+        root,
+        env,
+        "Update CHANGELOG.md and GitHub Release for GA",
+        omit_target=True,
+        expected_release_sha=expected,
+    )
+    assert missing.returncode != 0
+    assert "release target is required" in missing.stderr
+    wrong = _run_release_block(
+        root,
+        env,
+        "Update CHANGELOG.md and GitHub Release for GA",
+        expected_release_sha="0" * 40,
+    )
+    assert wrong.returncode != 0
+    assert "release target mismatch" in wrong.stderr
 
 
 def test_release_promote_failure_reestablishes_freeze_without_lift(tmp_path: Path) -> None:
@@ -1379,7 +1412,8 @@ def test_release_promote_failure_reestablishes_freeze_without_lift(tmp_path: Pat
         assert result.returncode == 0, result.stderr + result.stdout
         publication = _run_publication_sequence(root, env, failure=failure)
         assert publication.returncode == 0, publication.stderr + publication.stdout
-        assert _git(root, "ls-remote", "origin", "refs/tags/release-freeze")
+        assert _git(root, "ls-remote", "origin", "refs/tags/release-freeze"), publication.stderr + publication.stdout
+        assert "freeze lifted" not in publication.stdout
 
 
 def test_release_promote_rejects_wrong_version_heading(tmp_path: Path) -> None:

@@ -1132,6 +1132,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           GA_TAG: ${{ steps.promote.outputs.ga_tag }}
+          MERGED_SHA: ${{ steps.promote.outputs.promote_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1166,10 +1167,11 @@ jobs:
             --version "$VERSION" --output CHANGELOG.md > "$NOTES_FILE"
 
           if gh release view "$GA_TAG" >/dev/null 2>&1; then
-            gh release edit "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE"
+            gh release edit "$GA_TAG" --target "$MERGED_SHA" --title "$GA_TAG" --notes-file "$NOTES_FILE"
             echo "GitHub Release updated for ${GA_TAG}."
-           else
-             gh release create "$GA_TAG" --title "$GA_TAG" --notes-file "$NOTES_FILE"
+          else
+            gh release create "$GA_TAG" --target "$MERGED_SHA" --title "$GA_TAG" --notes-file "$NOTES_FILE"
+
              echo "GitHub Release created for ${GA_TAG}."
            fi
 
