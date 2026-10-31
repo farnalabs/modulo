@@ -196,7 +196,7 @@ class TestSystemMapCrud:
         assert maps == [map_obj]
 
     async def test_list_maps_by_org_unfiltered(self, repo: SystemMapRepository) -> None:
-        assert await repo.list_maps_by_org(_session(_result(rows=[])), organisation_id=_ORG) == []
+        assert not await repo.list_maps_by_org(_session(_result(rows=[])), organisation_id=_ORG)
 
     async def test_get_default_map(self, repo: SystemMapRepository) -> None:
         map_obj = _map()
@@ -240,7 +240,7 @@ class TestRevisionCrud:
         revision = await repo.create_revision(db, organisation_id=_ORG, system_map_id=_MAP, revision_number=2)
         assert revision.revision_number == 2
         assert revision.status == "draft"
-        assert revision.content_json == {}
+        assert not revision.content_json
         db.flush.assert_awaited_once()
 
     async def test_create_revision_with_content(self, repo: SystemMapRepository) -> None:
@@ -285,7 +285,7 @@ class TestRevisionCrud:
         assert await repo.list_revisions(
             db, organisation_id=_ORG, system_map_id=_MAP, include_deleted=True, status="draft"
         ) == [revision]
-        assert await repo.list_revisions(_session(_result(rows=[])), organisation_id=_ORG, system_map_id=_MAP) == []
+        assert not await repo.list_revisions(_session(_result(rows=[])), organisation_id=_ORG, system_map_id=_MAP)
 
     async def test_publish_revision_missing_or_foreign(self, repo: SystemMapRepository) -> None:
         assert (
@@ -335,7 +335,7 @@ class TestNodeAndRelationshipCrud:
             position_y=Decimal(2),
         )
         assert node.node_key == "n1"
-        assert node.config_json == {}
+        assert not node.config_json
         assert node.position_x == Decimal(1)
         db.flush.assert_awaited_once()
 
@@ -370,8 +370,8 @@ class TestNodeAndRelationshipCrud:
         assert await repo.list_nodes_in_revision(
             _session(_result(rows=[node])), organisation_id=_ORG, revision_id=_REV, include_deleted=True
         ) == [node]
-        assert (
-            await repo.list_nodes_in_revision(_session(_result(rows=[])), organisation_id=_ORG, revision_id=_REV) == []
+        assert not (
+            await repo.list_nodes_in_revision(_session(_result(rows=[])), organisation_id=_ORG, revision_id=_REV)
         )
 
     async def test_update_node(self, repo: SystemMapRepository) -> None:
@@ -413,7 +413,7 @@ class TestNodeAndRelationshipCrud:
             relationship_type="flow",
         )
         assert rel.relationship_type == "flow"
-        assert rel.config_json == {}
+        assert not rel.config_json
         db.flush.assert_awaited_once()
 
     async def test_list_relationships_in_revision(self, repo: SystemMapRepository) -> None:
@@ -421,11 +421,10 @@ class TestNodeAndRelationshipCrud:
         assert await repo.list_relationships_in_revision(
             _session(_result(rows=[rel])), organisation_id=_ORG, revision_id=_REV, include_deleted=True
         ) == [rel]
-        assert (
+        assert not (
             await repo.list_relationships_in_revision(
                 _session(_result(rows=[])), organisation_id=_ORG, revision_id=_REV
             )
-            == []
         )
 
     async def test_delete_relationship_variants(self, repo: SystemMapRepository) -> None:
@@ -489,9 +488,8 @@ class TestLoopConfigAndBindingCrud:
         assert await repo.list_loop_configs_in_revision(
             _session(_result(rows=[loop])), organisation_id=_ORG, revision_id=_REV, include_deleted=True
         ) == [loop]
-        assert (
+        assert not (
             await repo.list_loop_configs_in_revision(_session(_result(rows=[])), organisation_id=_ORG, revision_id=_REV)
-            == []
         )
 
     async def test_create_attribution_binding(self, repo: SystemMapRepository) -> None:
@@ -540,7 +538,7 @@ class TestLoopConfigAndBindingCrud:
             include_deleted=True,
         )
         assert result == [binding]
-        assert await repo.list_attribution_bindings(_session(_result(rows=[])), organisation_id=_ORG) == []
+        assert not await repo.list_attribution_bindings(_session(_result(rows=[])), organisation_id=_ORG)
 
     async def test_get_trigger_and_action_bindings(self, repo: SystemMapRepository) -> None:
         binding = SystemMapAttributionBinding(
@@ -754,7 +752,7 @@ class TestReservationCrud:
         assert await repo.list_active_reservations(
             db, organisation_id=_ORG, loop_config_id=_NODE, before=datetime.now(UTC)
         ) == [reservation]
-        assert await repo.list_active_reservations(_session(_result(rows=[])), organisation_id=_ORG) == []
+        assert not await repo.list_active_reservations(_session(_result(rows=[])), organisation_id=_ORG)
 
     async def test_update_reservation_status_variants(self, repo: SystemMapRepository) -> None:
         assert (
@@ -848,7 +846,7 @@ class TestValidateTeamBinding:
 
 class TestValidateBindings:
     async def test_empty_bindings(self, repo: SystemMapRepository) -> None:
-        assert (
+        assert not (
             await repo.validate_bindings(
                 _session(),
                 organisation_id=_ORG,
@@ -857,7 +855,6 @@ class TestValidateBindings:
                 node_bindings=[],
                 action_pipeline_ids=[],
             )
-            == []
         )
 
     async def test_missing_pipeline(self, repo: SystemMapRepository) -> None:
@@ -888,7 +885,7 @@ class TestValidateBindings:
     async def test_pipeline_non_team_is_accepted(self, repo: SystemMapRepository) -> None:
         pipeline = SimpleNamespace(id=_PIPELINE, visibility="org", owner_team_id=None)
         db = _session(_result(rows=[pipeline]))
-        assert (
+        assert not (
             await repo.validate_bindings(
                 db,
                 organisation_id=_ORG,
@@ -897,7 +894,6 @@ class TestValidateBindings:
                 node_bindings=[{"pipeline_id": _PIPELINE}],
                 action_pipeline_ids=[],
             )
-            == []
         )
 
     async def test_missing_connector(self, repo: SystemMapRepository) -> None:
@@ -928,7 +924,7 @@ class TestValidateBindings:
     async def test_connector_non_team_is_accepted(self, repo: SystemMapRepository) -> None:
         connector = SimpleNamespace(id=_NODE, visibility="org", owner_team_id=None)
         db = _session(_result(rows=[connector]))
-        assert (
+        assert not (
             await repo.validate_bindings(
                 db,
                 organisation_id=_ORG,
@@ -937,7 +933,6 @@ class TestValidateBindings:
                 node_bindings=[{"connector_instance_id": _NODE}],
                 action_pipeline_ids=[],
             )
-            == []
         )
 
     async def test_missing_eval(self, repo: SystemMapRepository) -> None:
@@ -988,7 +983,7 @@ class TestValidateBindings:
             _result(iterable=[SimpleNamespace(id=_NODE, pipeline_id=_PIPELINE)]),
             _result(rows=[SimpleNamespace(id=_PIPELINE, visibility="org", owner_team_id=None)]),
         )
-        assert (
+        assert not (
             await repo.validate_bindings(
                 db,
                 organisation_id=_ORG,
@@ -997,7 +992,6 @@ class TestValidateBindings:
                 node_bindings=[{"eval_id": _NODE}],
                 action_pipeline_ids=[],
             )
-            == []
         )
 
     async def test_team_bound_pipeline_connector_and_eval_are_accepted(self, repo: SystemMapRepository) -> None:
@@ -1006,7 +1000,7 @@ class TestValidateBindings:
         connector = SimpleNamespace(id=_NODE, visibility="team", owner_team_id=_TEAM)
 
         pipeline_db = _session(_result(rows=[pipeline]), team_row)
-        assert (
+        assert not (
             await repo.validate_bindings(
                 pipeline_db,
                 organisation_id=_ORG,
@@ -1015,11 +1009,10 @@ class TestValidateBindings:
                 node_bindings=[{"pipeline_id": _PIPELINE}],
                 action_pipeline_ids=[],
             )
-            == []
         )
 
         connector_db = _session(_result(rows=[connector]), team_row)
-        assert (
+        assert not (
             await repo.validate_bindings(
                 connector_db,
                 organisation_id=_ORG,
@@ -1028,7 +1021,6 @@ class TestValidateBindings:
                 node_bindings=[{"connector_instance_id": _NODE}],
                 action_pipeline_ids=[],
             )
-            == []
         )
 
         eval_db = _session(
@@ -1036,7 +1028,7 @@ class TestValidateBindings:
             _result(rows=[SimpleNamespace(id=_PIPELINE, visibility="team", owner_team_id=_TEAM)]),
             team_row,
         )
-        assert (
+        assert not (
             await repo.validate_bindings(
                 eval_db,
                 organisation_id=_ORG,
@@ -1045,11 +1037,10 @@ class TestValidateBindings:
                 node_bindings=[{"eval_id": _NODE}],
                 action_pipeline_ids=[],
             )
-            == []
         )
 
         owner_db = _session(team_row)
-        assert (
+        assert not (
             await repo.validate_bindings(
                 owner_db,
                 organisation_id=_ORG,
@@ -1058,7 +1049,6 @@ class TestValidateBindings:
                 node_bindings=[{"owner_team_id": _TEAM}],
                 action_pipeline_ids=[],
             )
-            == []
         )
 
     async def test_node_owner_team_error(self, repo: SystemMapRepository) -> None:

@@ -1652,7 +1652,8 @@ async def test_record_audit_swallows_write_failure(monkeypatch: pytest.MonkeyPat
     nested.__aenter__ = AsyncMock(return_value=None)
     nested.__aexit__ = AsyncMock(return_value=False)
     session.begin_nested = MagicMock(return_value=nested)
-    monkeypatch.setattr(routes, "append_audit_event", AsyncMock(side_effect=RuntimeError("audit down")))
+    append_audit = AsyncMock(side_effect=RuntimeError("audit down"))
+    monkeypatch.setattr(routes, "append_audit_event", append_audit)
 
     await routes._record_audit(
         session,
@@ -1661,6 +1662,8 @@ async def test_record_audit_swallows_write_failure(monkeypatch: pytest.MonkeyPat
         account_id=_USER_ID,
         resource_id=_MAP_ID,
     )
+
+    append_audit.assert_awaited_once()
 
 
 def test_list_system_maps_filters_count_by_visibility(client: tuple[TestClient, _Harness]) -> None:
@@ -1968,7 +1971,7 @@ def test_overview_with_matching_loop_config_has_no_bottleneck(
     resp = http.get(f"{_BASE}/{_MAP_ID}/overview")
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["bottlenecks"] == []
+    assert not resp.json()["bottlenecks"]
 
 
 def test_overview_missing_graph_returns_404(client: tuple[TestClient, _Harness]) -> None:
