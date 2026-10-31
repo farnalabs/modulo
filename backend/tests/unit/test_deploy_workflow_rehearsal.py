@@ -916,6 +916,7 @@ def test_release_promote_reestablishes_freeze_after_each_publication_failure(tmp
         assert result.returncode == 0, result.stderr + result.stdout
         failed = _run_release_block(root, env, block_name, failure)
         assert failed.returncode != 0
+        assert _git(root, "ls-remote", "origin", "refs/tags/release-freeze")
         reestablish = _run_release_block(
             root,
             env,
