@@ -232,6 +232,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import DashboardNotificationsPanel from '../components/DashboardNotificationsPanel.vue'
 import DashboardSystemOverview from '../components/dashboard/DashboardSystemOverview.vue'
 import { usePlanStore } from '../stores/planStore'
+import { useSystemMapsStore } from '../stores/systemMaps'
 import { useDashboardStore } from '../stores/dashboard'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import Sparkline from '../components/shared/Sparkline.vue'
@@ -248,6 +249,7 @@ const { t } = useI18n()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 
 const planStore = usePlanStore()
+const systemMapsStore = useSystemMapsStore()
 const dashboardStore = useDashboardStore()
 
 const loading = computed(() => dashboardStore.loading)
