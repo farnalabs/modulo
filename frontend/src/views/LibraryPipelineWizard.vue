@@ -11,7 +11,7 @@
           <ArrowLeft class="h-4 w-4" aria-hidden="true" />
           {{ $t('views.LibraryPipelineWizard.back_to_library') }}
         </button>
-        <PageHeader :title="$t('views.LibraryPipelineWizard.create_pipeline_from_template')" />
+        <PageHeader :title="$t('views.LibraryPipelineWizard.create_pipeline_from_template')" :subtitle="$t('views.LibraryPipelineWizard.subtitle')" />
       </div>
     </header>
 

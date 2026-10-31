@@ -13,7 +13,7 @@
           <ArrowLeft class="mr-1 inline-block h-4 w-4" aria-hidden="true" />
           {{ $t('views.AdminErrorDetailView.back') }}
         </button>
-        <PageHeader :title="$t('views.AdminErrorDetailView.error_group_detail')" :subtitle="group ? shortId(group.fingerprint) : undefined" />
+        <PageHeader :title="$t('views.AdminErrorDetailView.error_group_detail')" :subtitle="group ? shortId(group.fingerprint) : $t('views.AdminErrorDetailView.subtitle')" />
       </div>
     </header>
 
