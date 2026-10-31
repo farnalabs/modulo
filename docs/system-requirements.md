@@ -137,7 +137,9 @@ MySQL and MariaDB are configured through `MODULO_DB` (`settings.py` accepts
 dependency, but they are **not** production-conformant:
 
 * `db/crud/run_node_outputs.py::dialect_insert` raises
-  `NotImplementedError` for any dialect other than `postgres` / `sqlite`. That
+  `NotImplementedError` for any SQLAlchemy dialect other than `postgresql` /
+  `sqlite` (note the dialect name is `postgresql`, not the `MODULO_DB` value
+  `postgres`). That
   module is the chokepoint for every `run_node_outputs` read and write (FAR-583),
   so a run cannot store its node outputs, telemetry, markers, or artifacts on
   either backend.
