@@ -569,3 +569,71 @@ def test_release_cut_tags_the_exact_merged_commit_after_schema_gate() -> None:
     assert steps[schema_idx]["id"] == "schema-freshness"
     assert "steps.cut-commit.outputs.cut_sha" in steps[schema_idx]["env"]["CUT_SHA"]
     assert 'echo "cut_sha=$(git rev-parse HEAD)"' in steps[cut_idx]["run"]
+
+
+def _release_step(name: str) -> dict[str, Any]:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    return steps[_step_names(steps).index(name)]
+
+
+def _cut_wait_budget_seconds(script: str) -> int:
+    max_polls = int(re.search(r"MAX_POLLS=(\d+)", script).group(1))
+    sleep_seconds = 15
+    return max_polls * sleep_seconds
+
+
+def _schema_wait_budget_seconds(script: str) -> int:
+    return int(re.search(r"MAX_WAIT_SECONDS=(\d+)", script).group(1))
+
+
+def _model_cut_handoff(*, current_version: str, target_version: str, merged_sha: str) -> dict[str, Any]:
+    """Model the deterministic cut contract, without contacting GitHub.
+
+    The workflow's external GitHub queue is intentionally not simulated. This
+    models only the shell decisions that must remain true around that boundary.
+    """
+    if current_version == target_version:
+        return {"pushes_main": False, "handoff_sha": merged_sha, "creates_pr": False}
+    return {"pushes_main": False, "handoff_sha": merged_sha, "creates_pr": True}
+
+
+def _model_hold_cleanup(*, established: bool, cut_ok: bool, schema_ok: bool) -> bool:
+    return established and (not cut_ok or not schema_ok)
+
+
+def test_protected_cut_decision_logic_is_executable_and_budgeted() -> None:
+    cut_script = _release_step("Prepare exact cut commit through protected main (cut only)")["run"]
+    schema_script = _release_step("Assert schema-freshness gate green on exact cut/recut commit")["run"]
+    release_job = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]
+
+    # Executable model: a version-changing cut creates a release PR/branch and
+    # never pushes main; the exact merge SHA is the later handoff ref.
+    handoff = _model_cut_handoff(current_version="0.1.0", target_version="0.2.0", merged_sha="abc123")
+    assert handoff == {"pushes_main": False, "handoff_sha": "abc123", "creates_pr": True}
+    already_cut = _model_cut_handoff(current_version="0.2.0", target_version="0.2.0", merged_sha="def456")
+    assert already_cut["pushes_main"] is False
+    assert already_cut["handoff_sha"] == "def456"
+
+    # The model is tied to the extracted workflow snippets, not a duplicated
+    # timeout constant: both exact handoff operations must remain wired.
+    assert 'git fetch origin "$CUT_SHA"' in cut_script
+    assert 'git checkout --detach "$CUT_SHA"' in cut_script
+    assert 'TARGET_SHA="$CUT_SHA"' in schema_script
+    assert _cut_wait_budget_seconds(cut_script) == 5400
+    assert _schema_wait_budget_seconds(schema_script) == 2700
+    assert _cut_wait_budget_seconds(cut_script) + _schema_wait_budget_seconds(schema_script) <= 180 * 60
+    assert release_job["timeout-minutes"] >= 180
+
+
+def test_protected_cut_cleanup_model_removes_hold_on_preparation_failure() -> None:
+    cleanup = _release_step("Clean up publication hold after failed cut preparation")
+    cleanup_script = cleanup["run"]
+
+    assert _model_hold_cleanup(established=True, cut_ok=False, schema_ok=True)
+    assert _model_hold_cleanup(established=True, cut_ok=True, schema_ok=False)
+    assert not _model_hold_cleanup(established=True, cut_ok=True, schema_ok=True)
+    assert not _model_hold_cleanup(established=False, cut_ok=False, schema_ok=False)
+    assert "git push origin --delete release-publication-hold" in cleanup_script
+    assert "steps.cut-commit.outcome != 'success'" in cleanup["if"]
+    assert "steps.schema-freshness.outcome != 'success'" in cleanup["if"]

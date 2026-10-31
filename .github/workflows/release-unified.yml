@@ -186,7 +186,9 @@ jobs:
     name: Release (${{ inputs.mode }})
     if: inputs.mode != 'dry-run'
     runs-on: ubicloud-standard-2
-    timeout-minutes: 120
+    # Covers the bounded 90-minute merge-queue wait plus the bounded 45-minute
+    # schema-freshness wait, with additional setup and GitHub API overhead.
+    timeout-minutes: 180
     permissions:
       contents: write
       pull-requests: write
