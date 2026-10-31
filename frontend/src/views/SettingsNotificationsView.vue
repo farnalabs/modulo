@@ -83,7 +83,7 @@
             :options="dashboardLevelOptions"
             option-label="label"
             option-value="value"
-            label="Dashboard notification level"
+            :label="$t('views.SettingsNotificationsView.dashboard_level_label')"
             :disabled="busy"
             aria-describedby="settings-notifications-level-help"
             data-testid="settings-notifications-level"

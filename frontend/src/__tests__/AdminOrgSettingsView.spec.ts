@@ -125,6 +125,7 @@ vi.mock('vue-router', async () => {
 })
 
 import AdminOrgSettingsView from '../views/AdminOrgSettingsView.vue'
+import AppSelect from '../components/shared/AppSelect.vue'
 import { usePlanStore } from '../stores/planStore'
 import { api } from '../lib/api/client'
 
@@ -222,6 +223,10 @@ describe('AdminOrgSettingsView', () => {
     return confirmBtn
   }
 
+  function windowUnitSelect(wrapper: { findComponent: (component: unknown) => any }) {
+    return wrapper.findComponent(AppSelect)
+  }
+
   function windowPutBodies(): unknown[] {
     return vi
       .mocked(api.PUT)
@@ -243,14 +248,14 @@ describe('AdminOrgSettingsView', () => {
     hitlWindowState.data = { hitl_review_window_seconds: 900, is_default: false }
     const wrapper = await mountWindowView()
     expect((wrapper.find('[data-testid="org-hitl-review-window-value"]').element as HTMLInputElement).value).toBe('15')
-    expect((wrapper.find('[data-testid="org-hitl-review-window-unit"]').element as HTMLSelectElement).value).toBe('minutes')
+    expect(windowUnitSelect(wrapper).props('modelValue')).toBe('minutes')
     expect(wrapper.find('[data-testid="org-hitl-review-window-status"]').text()).toContain('900 seconds')
     wrapper.unmount()
 
     hitlWindowState.data = { hitl_review_window_seconds: 86400, is_default: false }
     const days = await mountWindowView()
     expect((days.find('[data-testid="org-hitl-review-window-value"]').element as HTMLInputElement).value).toBe('1')
-    expect((days.find('[data-testid="org-hitl-review-window-unit"]').element as HTMLSelectElement).value).toBe('days')
+    expect(windowUnitSelect(days).props('modelValue')).toBe('days')
     days.unmount()
   })
 
@@ -267,7 +272,7 @@ describe('AdminOrgSettingsView', () => {
 
   it('saves a non-minute unit converted to seconds', async () => {
     const wrapper = await mountWindowView()
-    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('hours')
+    await windowUnitSelect(wrapper).vm.$emit('update:modelValue', 'hours')
     await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('2')
     await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
     await flushPromises()
@@ -290,7 +295,7 @@ describe('AdminOrgSettingsView', () => {
 
   it('refuses a value below the 60 second floor without calling the API', async () => {
     const wrapper = await mountWindowView()
-    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('seconds')
+    await windowUnitSelect(wrapper).vm.$emit('update:modelValue', 'seconds')
     await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('30')
     await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
     await flushPromises()
@@ -315,7 +320,7 @@ describe('AdminOrgSettingsView', () => {
     // Minimum-value coverage: `0` seconds is below the envelope floor, so the
     // resolver must refuse it (the safety net has no "0 = disabled").
     const wrapper = await mountWindowView()
-    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('seconds')
+    await windowUnitSelect(wrapper).vm.$emit('update:modelValue', 'seconds')
     await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('0')
     await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
     await flushPromises()
@@ -340,7 +345,7 @@ describe('AdminOrgSettingsView', () => {
 
   it('refuses a value above the 604800 second ceiling without calling the API', async () => {
     const wrapper = await mountWindowView()
-    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('minutes')
+    await windowUnitSelect(wrapper).vm.$emit('update:modelValue', 'minutes')
     await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('10081')
     await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
     await flushPromises()
@@ -352,14 +357,14 @@ describe('AdminOrgSettingsView', () => {
 
   it('accepts the exact envelope bounds', async () => {
     const wrapper = await mountWindowView()
-    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('seconds')
+    await windowUnitSelect(wrapper).vm.$emit('update:modelValue', 'seconds')
     await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('60')
     await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
     await flushPromises()
 
     // A successful save re-normalises the form to the largest whole unit, so
     // re-pick the unit before exercising the upper bound.
-    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('seconds')
+    await windowUnitSelect(wrapper).vm.$emit('update:modelValue', 'seconds')
     await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('604800')
     await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
     await flushPromises()
@@ -470,7 +475,7 @@ describe('AdminOrgSettingsView', () => {
     hitlWindowState.data = { hitl_review_window_seconds: 90, is_default: false }
     const wrapper = await mountWindowView()
     expect((wrapper.find('[data-testid="org-hitl-review-window-value"]').element as HTMLInputElement).value).toBe('90')
-    expect((wrapper.find('[data-testid="org-hitl-review-window-unit"]').element as HTMLSelectElement).value).toBe(
+    expect(windowUnitSelect(wrapper).props('modelValue')).toBe(
       'seconds',
     )
     wrapper.unmount()
@@ -488,7 +493,7 @@ describe('AdminOrgSettingsView', () => {
   it('reports a save rejection (thrown) inline without redirecting', async () => {
     vi.mocked(api.PUT).mockRejectedValueOnce(new Error('network down'))
     const wrapper = await mountWindowView()
-    await wrapper.find('[data-testid="org-hitl-review-window-unit"]').setValue('seconds')
+    await windowUnitSelect(wrapper).vm.$emit('update:modelValue', 'seconds')
     await wrapper.find('[data-testid="org-hitl-review-window-value"]').setValue('120')
     await wrapper.find('[data-testid="org-hitl-review-window-save"]').trigger('click')
     await flushPromises()

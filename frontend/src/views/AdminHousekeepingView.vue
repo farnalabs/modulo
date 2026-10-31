@@ -235,6 +235,7 @@
         :title="$t('views.AdminHousekeepingView.confirm_cleanup')"
         :description="$t('views.AdminHousekeepingView.delete_warning')"
         :confirm-text="$t('views.AdminHousekeepingView.delete_items', { count: selectedCount })"
+        :confirm-loading-text="$t('views.AdminHousekeepingView.cleaning_up')"
         confirm-severity="danger"
         cancel-test-id="hk-cancel-cleanup"
         confirm-test-id="hk-confirm-cleanup"

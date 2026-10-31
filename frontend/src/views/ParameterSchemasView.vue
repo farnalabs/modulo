@@ -233,7 +233,7 @@
                         :options="parameterTypeOptions"
                         option-label="label"
                         option-value="value"
-                        label="Parameter type"
+                        :label="$t('views.ParameterSchemasView.param_type')"
                         class="w-full"
                         :data-testid="`paramschema-param-type-${idx}`"
                         @change="onParamTypeChange(param)"
@@ -339,7 +339,7 @@
                         :options="booleanOptions"
                         option-label="label"
                         option-value="value"
-                        label="Parameter default"
+                        :label="$t('views.ParameterSchemasView.param_default')"
                         class="w-full"
                         :data-testid="`paramschema-param-default-${idx}`"
                       />
@@ -350,7 +350,7 @@
                         :options="parameterOptionValues(param.options)"
                         option-label="label"
                         option-value="value"
-                        label="Parameter default"
+                        :label="$t('views.ParameterSchemasView.param_default')"
                         class="w-full"
                         :data-testid="`paramschema-param-default-${idx}`"
                       />
@@ -518,7 +518,7 @@
                    :options="booleanOptions"
                    option-label="label"
                    option-value="value"
-                   label="Parameter value"
+                   :label="$t('views.ParameterSchemasView.parameter_values')"
                    class="w-full"
                    :data-testid="`paramschema-set-value-${param.name}`"
                  />
@@ -529,7 +529,7 @@
                    :options="parameterOptionValues(param.options || [])"
                    option-label="label"
                    option-value="value"
-                   label="Parameter value"
+                   :label="$t('views.ParameterSchemasView.parameter_values')"
                    class="w-full"
                    :data-testid="`paramschema-set-value-${param.name}`"
                  />
@@ -540,7 +540,8 @@
                      :options="modelBackendOptions"
                      option-label="label"
                      option-value="value"
-                     label="Model backend"
+                      :label="$t('views.ParameterSchemasView.model_backend_label')"
+
                      class="w-full"
                      :data-testid="`paramschema-set-value-${param.name}`"
                    />
@@ -552,7 +553,8 @@
                      :options="schemaOptions"
                      option-label="label"
                      option-value="value"
-                     label="Schema"
+                      :label="$t('views.ParameterSchemasView.schema_label')"
+
                      class="w-full"
                      :data-testid="`paramschema-set-value-${param.name}`"
                    />
@@ -683,7 +685,7 @@
                  :options="booleanOptions"
                  option-label="label"
                  option-value="value"
-                 label="Parameter value"
+                 :label="$t('views.ParameterSchemasView.parameter_values')"
                  class="w-full"
                  :data-testid="`paramschema-validate-value-${param.name}`"
                />
@@ -694,7 +696,7 @@
                  :options="parameterOptionValues(param.options || [])"
                  option-label="label"
                  option-value="value"
-                 label="Parameter value"
+                 :label="$t('views.ParameterSchemasView.parameter_values')"
                  class="w-full"
                  :data-testid="`paramschema-validate-value-${param.name}`"
                />

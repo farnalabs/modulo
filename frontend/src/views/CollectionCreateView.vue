@@ -60,7 +60,7 @@
               :options="visibilityOptions"
               option-label="label"
               option-value="value"
-              label="Collection visibility"
+              :label="$t('views.LibraryView.collection_visibility')"
               class="w-full"
               data-testid="collection-visibility"
             />

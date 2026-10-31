@@ -90,7 +90,7 @@
               :options="formRoleOptions.map((roleOption) => ({ value: roleOption, label: roleLabel(roleOption) }))"
               option-label="label"
               option-value="value"
-              label="Redaction role"
+              :label="$t('views.AdminEvidenceRedaction.role')"
               :disabled="editingRule !== null"
               class="w-full"
               data-testid="admin-evidence-redaction-role"

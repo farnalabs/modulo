@@ -63,7 +63,7 @@
               :options="hitlWindowUnitOptions"
               option-label="label"
               option-value="value"
-              label="HITL review window unit"
+              :label="$t('views.AdminOrgSettingsView.hitl_review_window_unit')"
               class="w-full"
               data-testid="org-hitl-review-window-unit"
             />

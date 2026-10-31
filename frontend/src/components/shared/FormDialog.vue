@@ -22,7 +22,7 @@
           :loading="loading"
           @click="emit('confirm')"
         >
-          {{ confirmText || 'Confirm' }}
+          {{ loading ? (confirmLoadingText || confirmText || 'Confirm') : (confirmText || 'Confirm') }}
         </Button>
       </div>
     </template>
@@ -37,6 +37,7 @@ const props = defineProps<{
   title: string
   description?: string
   confirmText?: string
+  confirmLoadingText?: string
   confirmDisabled?: boolean
   loading?: boolean
   confirmSeverity?: 'primary' | 'secondary' | 'success' | 'info' | 'warn' | 'help' | 'danger' | 'contrast'
