@@ -17,8 +17,7 @@ from modulo.api.main import app
 from modulo.api.routes.system_maps import router
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.lifecycle_map.validation import LifecycleMapContentError, LifecycleMapPipelineConflictError
-from modulo.core.system_map_persistence import SystemMapNameConflictError, SystemMapRepository
+from modulo.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
 from modulo.core.system_maps_discovery import DiscoveryDraft
 from modulo.settings import Settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -268,11 +267,11 @@ def test_discovery_operator_role_boundary(org_role: str, expected_status: int) -
     draft_map = _DraftMap()
     try:
         with (
-            patch.object(SystemMapRepository, "get_or_create_draft", new=AsyncMock(return_value=draft_map)),
+            patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=draft_map)),
             patch.object(
-                SystemMapRepository,
+                SystemMapDiscoveryRepository,
                 "save_discovery_revision",
-                new=AsyncMock(return_value=(draft_map, _REVISION_ID)),
+                new=AsyncMock(return_value=(draft_map, _REVISION_ID, 1)),
             ),
         ):
             response = TestClient(app).post("/api/v1/system-maps/discover", json={"name": "boundary"})
@@ -285,8 +284,6 @@ def test_discovery_operator_role_boundary(org_role: str, expected_status: int) -
 @pytest.mark.parametrize(
     ("raised", "expected_status"),
     [
-        (LifecycleMapContentError("invalid graph"), 422),
-        (LifecycleMapPipelineConflictError("pipeline already mapped"), 409),
         (SystemMapNameConflictError("name taken"), 409),
         (IntegrityError("INSERT", None, Exception("duplicate key")), 409),
         (ProgrammingError("SELECT", {}, Exception("missing relation")), 501),
@@ -299,30 +296,10 @@ def test_discovery_maps_persistence_errors_to_http_status(
     route_client: tuple[TestClient, AsyncMock],
 ) -> None:
     client, _session = route_client
-    with patch.object(SystemMapRepository, "get_or_create_draft", new=AsyncMock(side_effect=raised)):
+    with patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(side_effect=raised)):
         response = client.post("/api/v1/system-maps/discover", json={"name": "errors"})
 
     assert response.status_code == expected_status
-
-
-def test_discovery_maps_normalisation_failure_is_422(
-    route_client: tuple[TestClient, AsyncMock],
-) -> None:
-    """A content-bound refusal from ``normalize_content`` must be a 422.
-
-    Normalisation runs over a draft assembled from org inventory (e.g. a
-    source name longer than the lifecycle-map bound), so it is part of the
-    persistence path, not an unhandled server bug.
-    """
-    client, _session = route_client
-    with patch(
-        "modulo.api.routes.system_maps.normalize_content",
-        side_effect=LifecycleMapContentError("stage name too long"),
-    ):
-        response = client.post("/api/v1/system-maps/discover", json={"name": "invalid"})
-
-    assert response.status_code == 422
-    assert "stage name too long" in response.json()["detail"]
 
 
 def test_discovery_persists_deterministic_report_and_suggested_edges(
@@ -371,11 +348,11 @@ def test_discovery_persists_deterministic_report_and_suggested_edges(
 
     draft_map = _DraftMap()
     with (
-        patch.object(SystemMapRepository, "get_or_create_draft", new=AsyncMock(return_value=draft_map)),
+        patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=draft_map)),
         patch.object(
-            SystemMapRepository,
+            SystemMapDiscoveryRepository,
             "save_discovery_revision",
-            new=AsyncMock(return_value=(draft_map, _REVISION_ID)),
+            new=AsyncMock(return_value=(draft_map, _REVISION_ID, 1)),
         ) as save_revision,
     ):
         first = client.post("/api/v1/system-maps/discover", json={"name": "draft"})
@@ -420,11 +397,11 @@ def test_discovery_tenant_scoping_queries_filter_and_set_rls(
 
     draft_map = _DraftMap()
     with (
-        patch.object(SystemMapRepository, "get_or_create_draft", new=AsyncMock(return_value=draft_map)),
+        patch.object(SystemMapDiscoveryRepository, "get_or_create_draft", new=AsyncMock(return_value=draft_map)),
         patch.object(
-            SystemMapRepository,
+            SystemMapDiscoveryRepository,
             "save_discovery_revision",
-            new=AsyncMock(return_value=(draft_map, _REVISION_ID)),
+            new=AsyncMock(return_value=(draft_map, _REVISION_ID, 1)),
         ),
     ):
         response = client.post("/api/v1/system-maps/discover", json={"name": "scoped"})

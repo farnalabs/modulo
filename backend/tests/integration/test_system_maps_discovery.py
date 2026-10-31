@@ -1,12 +1,4 @@
-"""Integration tests for System Maps discovery persistence.
-
-The adapter stores discovery drafts in the existing organisation-scoped
-``lifecycle_maps`` document until the dedicated System Maps schema lands. These
-tests exercise that compatibility contract against a real Postgres
-(testcontainers): idempotent draft creation, discovery ownership scoping, the
-revision-id/version contract, the derived stage projection and the RLS
-boundary.
-"""
+"""Integration tests for System Maps discovery persistence."""
 
 from __future__ import annotations
 
@@ -16,16 +8,18 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.lifecycle_map.service import create_lifecycle_map
-from modulo.core.system_map_persistence import _DISCOVERY_MARKER, SystemMapNameConflictError, SystemMapRepository
+from modulo.core.system_map_persistence import (
+    _DISCOVERY_NAMESPACE,
+    SystemMapDiscoveryRepository,
+    SystemMapNameConflictError,
+)
 from modulo.core.system_maps_discovery import DiscoverySource, discover_draft
-from modulo.db.models.lifecycle_map import LifecycleMap
-from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.models.system_map import SystemMap, SystemMapNode, SystemMapRelationship, SystemMapRevision
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 pytestmark = pytest.mark.integration
 
-_REPO = SystemMapRepository()
+_REPO = SystemMapDiscoveryRepository()
 
 
 def _factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
@@ -42,35 +36,32 @@ async def _scoped_session(
     await set_rls_user_context(session, user_id, role)
 
 
-def _content(*, stage_ids: list[str], fingerprint: str = "fingerprint") -> dict:
+def _content(*, node_keys: list[str], fingerprint: str = "fingerprint") -> dict[str, object]:
     return {
-        "stages": [{"id": stage_id, "name": stage_id.upper(), "type": "manual"} for stage_id in stage_ids],
-        "edges": [],
+        "nodes": [
+            {
+                "node_key": node_key,
+                "node_type": "pipeline",
+                "display_name": node_key.upper(),
+                "config_json": {},
+            }
+            for node_key in node_keys
+        ],
+        "relationships": [],
         "discovery_fingerprint": fingerprint,
     }
 
 
-async def test_get_or_create_draft_is_idempotent_and_discovery_owned(
+async def test_get_or_create_draft_creates_a_system_map(
     db_engine: AsyncEngine,
     test_org: uuid.UUID,
     test_user: uuid.UUID,
 ) -> None:
-    name = f"Discovery Idempotent {uuid.uuid4().hex[:8]}"
+    name = f"Discovery Draft {uuid.uuid4().hex[:8]}"
 
     async with _factory(db_engine)() as session, session.begin():
         await _scoped_session(session, test_org, test_user)
-        first = await _REPO.get_or_create_draft(
-            session,
-            organisation_id=test_org,
-            account_id=test_user,
-            name=name,
-            description="draft",
-        )
-        first_id = first.id
-
-    async with _factory(db_engine)() as session, session.begin():
-        await _scoped_session(session, test_org, test_user)
-        second = await _REPO.get_or_create_draft(
+        draft = await _REPO.get_or_create_draft(
             session,
             organisation_id=test_org,
             account_id=test_user,
@@ -78,27 +69,29 @@ async def test_get_or_create_draft_is_idempotent_and_discovery_owned(
             description="draft",
         )
 
-    assert second.id == first_id
-    assert second.version == 1
-    assert second.content_json[_DISCOVERY_MARKER] is True
+    assert isinstance(draft, SystemMap)
+    assert draft.organisation_id == test_org
+    assert draft.name == name
+    assert draft.description == "draft"
+    assert draft.visibility == "org"
+    assert draft.default_map is False
 
 
-async def test_get_or_create_draft_rejects_a_user_authored_name_collision(
+async def test_get_or_create_draft_rejects_a_live_name_collision(
     db_engine: AsyncEngine,
     test_org: uuid.UUID,
     test_user: uuid.UUID,
 ) -> None:
-    name = f"User Authored {uuid.uuid4().hex[:8]}"
+    name = f"Collision {uuid.uuid4().hex[:8]}"
 
     async with _factory(db_engine)() as session, session.begin():
         await _scoped_session(session, test_org, test_user)
-        created = await create_lifecycle_map(
+        created = await _REPO.get_or_create_draft(
             session,
-            org_id=test_org,
-            name=name,
+            organisation_id=test_org,
             account_id=test_user,
-            description="user map",
-            content_json={"stages": [], "edges": []},
+            name=name,
+            description="original",
         )
         created_id = created.id
 
@@ -110,23 +103,31 @@ async def test_get_or_create_draft_rejects_a_user_authored_name_collision(
                 organisation_id=test_org,
                 account_id=test_user,
                 name=name,
-                description="draft",
+                description="replacement",
             )
 
-    # The user map must survive intact: never adopted, never overwritten.
     async with _factory(db_engine)() as session, session.begin():
         await _scoped_session(session, test_org, test_user)
-        survived = await session.get(LifecycleMap, created_id)
-    assert survived is not None
-    assert survived.content_json == {"stages": [], "edges": []}
+        survived = (await session.execute(select(SystemMap).where(SystemMap.id == created_id))).scalar_one()
+
+    assert survived.description == "original"
 
 
-async def test_save_discovery_revision_is_stable_bumps_version_and_projects_stages(
+async def test_save_discovery_revision_persists_current_system_map_entities(
     db_engine: AsyncEngine,
     test_org: uuid.UUID,
     test_user: uuid.UUID,
 ) -> None:
     name = f"Discovery Revision {uuid.uuid4().hex[:8]}"
+    content = _content(node_keys=["build"], fingerprint="fingerprint-1")
+    content["relationships"] = [
+        {
+            "source_node_key": "build",
+            "target_node_key": "build",
+            "relationship_type": "flow",
+            "config_json": {"suggested": True},
+        }
+    ]
 
     async with _factory(db_engine)() as session, session.begin():
         await _scoped_session(session, test_org, test_user)
@@ -137,50 +138,97 @@ async def test_save_discovery_revision_is_stable_bumps_version_and_projects_stag
             name=name,
             description="draft",
         )
-        map_id = draft.id
-        saved, first_revision = await _REPO.save_discovery_revision(
+        saved_map, revision_id, revision_number = await _REPO.save_discovery_revision(
             session,
             organisation_id=test_org,
-            map_id=map_id,
-            content=_content(stage_ids=["build"]),
+            map_id=draft.id,
+            content=content,
             updated_by=test_user,
         )
-        first_version = saved.version
-        first_revision_id = str(first_revision)
+
+        revision = (
+            await session.execute(select(SystemMapRevision).where(SystemMapRevision.id == revision_id))
+        ).scalar_one()
+        nodes = list(
+            (await session.execute(select(SystemMapNode).where(SystemMapNode.revision_id == revision_id))).scalars()
+        )
+        relationships = list(
+            (
+                await session.execute(
+                    select(SystemMapRelationship).where(SystemMapRelationship.revision_id == revision_id)
+                )
+            ).scalars()
+        )
+
+    assert saved_map.updated_by == test_user
+    assert revision_number == 1
+    assert revision.system_map_id == draft.id
+    assert revision.content_json == content
+    assert [(node.node_key, node.node_type) for node in nodes] == [("build", "pipeline")]
+    assert [(edge.source_node_key, edge.target_node_key, edge.relationship_type) for edge in relationships] == [
+        ("build", "build", "flow")
+    ]
+
+
+async def test_save_identical_discovery_reuses_revision_without_duplicate_children(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    name = f"Stable Revision {uuid.uuid4().hex[:8]}"
+    content = _content(node_keys=["build"], fingerprint="fingerprint-stable")
 
     async with _factory(db_engine)() as session, session.begin():
         await _scoped_session(session, test_org, test_user)
-        saved, second_revision = await _REPO.save_discovery_revision(
+        draft = await _REPO.get_or_create_draft(
             session,
             organisation_id=test_org,
-            map_id=map_id,
-            content=_content(stage_ids=["build"]),
+            account_id=test_user,
+            name=name,
+            description="draft",
+        )
+        first_map, first_revision_id, first_number = await _REPO.save_discovery_revision(
+            session,
+            organisation_id=test_org,
+            map_id=draft.id,
+            content=content,
             updated_by=test_user,
         )
-        second_version = saved.version
-
-    # Same fingerprint => same synthetic revision id, but every save advances
-    # the version counter under the row lock.
-    assert str(second_revision) == first_revision_id
-    assert (first_version, second_version) == (2, 3)
-    assert saved.content_json[_DISCOVERY_MARKER] is True
-    assert saved.content_json["discovery_revision_id"] == first_revision_id
-
-    async with _factory(db_engine)() as session, session.begin():
-        await _scoped_session(session, test_org, test_user)
-        stages = list(
-            (await session.execute(select(LifecycleMapStage).where(LifecycleMapStage.map_id == map_id))).scalars()
+        second_map, second_revision_id, second_number = await _REPO.save_discovery_revision(
+            session,
+            organisation_id=test_org,
+            map_id=draft.id,
+            content=content,
+            updated_by=test_user,
         )
-    assert [(stage.stage_id, stage.version) for stage in stages] == [("build", 3)]
+        revisions = list(
+            (
+                await session.execute(select(SystemMapRevision).where(SystemMapRevision.system_map_id == draft.id))
+            ).scalars()
+        )
+        nodes = list(
+            (
+                await session.execute(select(SystemMapNode).where(SystemMapNode.revision_id == first_revision_id))
+            ).scalars()
+        )
+
+    expected_revision_id = uuid.uuid5(_DISCOVERY_NAMESPACE, f"{draft.id}:fingerprint-stable")
+    assert first_map is second_map
+    assert first_revision_id == second_revision_id
+    assert second_revision_id == expected_revision_id
+    assert first_number == 1
+    assert second_number == 1
+    assert len(revisions) == 1
+    assert len(nodes) == 1
 
 
-async def test_save_discovery_revision_is_rls_scoped(
+async def test_save_discovery_revision_is_organisation_scoped(
     db_engine: AsyncEngine,
     app_engine: AsyncEngine,
     test_org: uuid.UUID,
     test_user: uuid.UUID,
 ) -> None:
-    name = f"Discovery RLS {uuid.uuid4().hex[:8]}"
+    name = f"Discovery Scope {uuid.uuid4().hex[:8]}"
 
     async with _factory(db_engine)() as session, session.begin():
         await _scoped_session(session, test_org, test_user)
@@ -191,17 +239,16 @@ async def test_save_discovery_revision_is_rls_scoped(
             name=name,
             description="draft",
         )
-        map_id = draft.id
 
     other_org = uuid.uuid4()
     async with _factory(app_engine)() as session, session.begin():
         await _scoped_session(session, other_org, test_user)
-        with pytest.raises(ValueError, match="discovery draft map not found"):
+        with pytest.raises(ValueError, match="system map discovery draft not found"):
             await _REPO.save_discovery_revision(
                 session,
                 organisation_id=other_org,
-                map_id=map_id,
-                content=_content(stage_ids=["build"]),
+                map_id=draft.id,
+                content=_content(node_keys=["build"]),
                 updated_by=test_user,
             )
 
@@ -213,4 +260,5 @@ def test_discovery_draft_contains_only_suggested_edges() -> None:
             DiscoverySource(kind="trigger", identifier="t", name="webhook", pipeline_id="p"),
         ]
     )
+
     assert all(edge["config_json"].get("suggested") is True for edge in draft.relationships)
