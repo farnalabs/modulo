@@ -8,7 +8,13 @@ pre-deploy wiring intact — the same reasoning as the sibling
 """
 
 import importlib.util
+import json
+import os
 import re
+import shlex
+import shutil
+import stat
+import subprocess
 import textwrap
 from pathlib import Path
 from typing import Any, cast
@@ -527,3 +533,454 @@ def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:
     assert "-f force_deploy=true" in dispatch
     assert '-f release_ref="${RC_TAG}"' in dispatch
     assert '-f release_sha="${RC_SHA}"' in dispatch
+
+
+def test_release_cut_uses_protected_main_pr_and_exact_merge_ref() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    cut = steps[names.index("Prepare exact cut commit through protected main (cut only)")]
+    script = cut["run"]
+
+    assert "git push origin main" not in script
+    assert 'git push --set-upstream origin "$BRANCH"' in script
+    assert "gh pr create" in script
+    assert 'gh pr view "$PR_NUMBER"' in script
+    assert "mergeCommit.oid" in script
+    assert 'git fetch origin "$CUT_SHA"' in script
+    assert 'git checkout --detach "$CUT_SHA"' in script
+    assert "MERGED_VERSION=" in script
+    assert 'gh workflow run "CI: Fast Validation"' in script
+    assert "gh workflow run pr-review.yml" in script
+
+    cleanup_names = [name for name in names if "Clean up publication hold" in name]
+    assert len(cleanup_names) == 2
+    for cleanup_name in cleanup_names:
+        cleanup = steps[names.index(cleanup_name)]
+        assert "always()" in cleanup["if"]
+        assert "steps.publication-hold.outputs.established == 'true'" in cleanup["if"]
+        assert "git push origin --delete release-publication-hold" in cleanup["run"]
+    failed_cut_cleanup = steps[names.index("Clean up publication hold after failed release cut")]
+    assert "steps.cut.outcome != 'success'" in failed_cut_cleanup["if"]
+
+
+def test_release_cut_tags_the_exact_merged_commit_after_schema_gate() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    prepare_idx = names.index("Prepare exact cut commit through protected main (cut only)")
+    schema_idx = names.index("Assert schema-freshness gate green on exact cut/recut commit")
+    cut_idx = names.index("Cut release candidate and freeze main")
+    assert prepare_idx < schema_idx < cut_idx
+    assert steps[schema_idx]["id"] == "schema-freshness"
+    assert "steps.cut-commit.outputs.cut_sha" in steps[schema_idx]["env"]["CUT_SHA"]
+    assert 'echo "cut_sha=$(git rev-parse HEAD)"' in steps[cut_idx]["run"]
+
+
+def _release_step(name: str) -> dict[str, Any]:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    return cast(dict[str, Any], steps[_step_names(steps).index(name)])
+
+
+def _cut_wait_budget_seconds(script: str) -> int:
+    match = re.search(r"MAX_POLLS=(\d+)", script)
+    assert match is not None, "cut script must define MAX_POLLS"
+    max_polls = int(match.group(1))
+    sleep_seconds = 15
+    return max_polls * sleep_seconds
+
+
+def _schema_wait_budget_seconds(script: str) -> int:
+    match = re.search(r"MAX_WAIT_SECONDS=(\d+)", script)
+    assert match is not None, "schema script must define MAX_WAIT_SECONDS"
+    return int(match.group(1))
+
+
+def _release_job_run(name: str) -> str:
+    run = _release_step(name).get("run")
+    assert isinstance(run, str), f"{name!r} must contain a shell run block"
+    return run
+
+
+def _run_bash(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required to execute release workflow contracts")
+    return subprocess.run(  # noqa: S603 - fixed bash path and workflow-extracted script
+        [bash, "--noprofile", "--norc", "-c", script],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    git = shutil.which("git")
+    assert git is not None, "git is required to execute release workflow contracts"
+    return subprocess.run(  # noqa: S603 - resolved git path and test-owned arguments
+        [git, *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+
+
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _cut_harness(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
+    """Build a local git remote and command shims for the emitted cut script."""
+    repo = tmp_path / "repo"
+    remote = tmp_path / "remote.git"
+    repo.mkdir()
+    _git("init", "--bare", str(remote))
+    _git("init", "-b", "main", str(repo))
+    for relative, content in (
+        ("backend/pyproject.toml", '[project]\nversion = "0.1.0"\n'),
+        ("frontend/package.json", '{"version": "0.1.0"}\n'),
+        ("deploy/helm/modulo/Chart.yaml", 'version: 0.1.0\nappVersion: "0.1.0"\n'),
+    ):
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    _git("add", ".", cwd=repo)
+    _git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base", cwd=repo)
+    _git("remote", "add", "origin", str(remote), cwd=repo)
+    _git("push", "origin", "main", cwd=repo)
+    initial_sha = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+
+    # The merged commit is present on the local remote and carries the target version.
+    for relative, pattern in (
+        ("backend/pyproject.toml", 'version = "0.2.0"'),
+        ("frontend/package.json", '"version": "0.2.0"'),
+        ("deploy/helm/modulo/Chart.yaml", 'version: 0.2.0\nappVersion: "0.2.0"'),
+    ):
+        target = repo / relative
+        target.write_text(target.read_text(encoding="utf-8").replace("0.1.0", "0.2.0"), encoding="utf-8")
+        assert pattern in target.read_text(encoding="utf-8")
+    _git("add", ".", cwd=repo)
+    _git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "merged", cwd=repo)
+    merged_sha = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+    _git("push", "origin", "HEAD:refs/heads/merged", cwd=repo)
+    _git("reset", "--hard", initial_sha, cwd=repo)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "commands.log"
+    real_git = shutil.which("git")
+    assert real_git is not None
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+set -e
+printf 'git %s\\n' \"$*\" >> {shlex.quote(str(log))}
+exec {shlex.quote(real_git)} \"$@\"
+""",
+    )
+    _write_executable(
+        bin_dir / "python3",
+        f"""#!/usr/bin/env bash
+set -e
+printf 'python3 %s\\n' \"$*\" >> {shlex.quote(str(log))}
+if [ "$1" = "-c" ]; then
+  if grep -q '0.2.0' backend/pyproject.toml; then
+    printf '0.2.0\\n'
+  else
+    printf '0.1.0\\n'
+  fi
+  exit 0
+fi
+if [ "$1" = "scripts/bump-version.py" ] && [ "$2" = "--set" ] && [ "$3" = "0.2.0" ]; then
+  printf '\n# bump stub\n' >> backend/pyproject.toml
+  printf '\n# bump stub\n' >> frontend/package.json
+  printf '\n# bump stub\n' >> deploy/helm/modulo/Chart.yaml
+  exit 0
+fi
+printf 'unexpected python command: %s\\n' "$*" >&2
+exit 1
+""",
+    )
+    merged_json = shlex.quote(
+        json.dumps(
+            {
+                "state": "MERGED",
+                "mergedAt": "2026-01-01T00:00:00Z",
+                "mergeCommit": {"oid": merged_sha},
+                "headRefOid": "branch-head",
+                "reviewDecision": "APPROVED",
+                "mergeStateStatus": "CLEAN",
+            }
+        )
+    )
+    _write_executable(
+        bin_dir / "gh",
+        f"""#!/usr/bin/env bash
+set -e
+printf 'gh %s\\n' \"$*\" >> {shlex.quote(str(log))}
+case \"$*\" in
+  *'pr list'*'--state open'*) exit 0 ;;
+  *'pr list'*'--state closed'*) exit 0 ;;
+  *'pr create'*) printf 'https://github.com/example/repo/pull/7\\n'; exit 0 ;;
+  *'pr view'*'state,mergedAt,mergeCommit,headRefOid,reviewDecision,mergeStateStatus'*)
+    printf '%s\\n' {merged_json}
+    exit 0
+    ;;
+  *'pr view'*'headRefOid'*) printf 'branch-head\\n'; exit 0 ;;
+  *'workflow run'*) exit 0 ;;
+  *) printf 'unexpected gh command: %s\\n' \"$*\" >&2; exit 1 ;;
+esac
+""",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "GITHUB_REPOSITORY": "example/repo",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "remote.origin.fetch",
+            "GIT_CONFIG_VALUE_0": "+refs/heads/*:refs/remotes/origin/*",
+            "VERSION": "0.2.0",
+            "GITHUB_OUTPUT": str(tmp_path / "output"),
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@example.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@example.com",
+        }
+    )
+    return repo, log, env
+
+
+def test_protected_cut_executes_branch_pr_and_exact_merged_sha_handoff(tmp_path: Path) -> None:
+    repo, log, env = _cut_harness(tmp_path)
+    script = _release_job_run("Prepare exact cut commit through protected main (cut only)")
+    result = _run_bash(script, cwd=repo, env=env)
+    assert result.returncode == 0, (
+        f"stdout={result.stdout}\nstderr={result.stderr}\nlog={log.read_text(encoding='utf-8')}"
+    )
+    commands = log.read_text(encoding="utf-8")
+    assert "git push --set-upstream origin release/version-0.2.0" in commands
+    assert "gh pr create" in commands
+    assert f"git fetch origin {env['GITHUB_REPOSITORY']}" not in commands
+    assert f"git fetch origin {_git('rev-parse', 'HEAD', cwd=repo).stdout.strip()}" in commands
+    assert "git checkout --detach" in commands
+    assert "git push origin main" not in commands
+    assert "git push origin release/version-0.2.0" not in commands
+
+
+def test_protected_cut_schema_handoff_uses_exact_cut_sha(tmp_path: Path) -> None:
+    repo, log, env = _cut_harness(tmp_path)
+    cut_sha = _git("rev-parse", "refs/remotes/origin/merged", cwd=repo).stdout.strip()
+    schema_script = _release_job_run("Assert schema-freshness gate green on exact cut/recut commit")
+    gh_path = tmp_path / "bin" / "gh"
+    gh_path.write_text(
+        f"""#!/usr/bin/env bash
+set -e
+printf 'gh %s\\n' \"$*\" >> {shlex.quote(str(log))}
+case \"$*\" in
+  *'run list'*) printf '123\\n'; exit 0 ;;
+  *'actions/runs/123/jobs'*)
+    printf 'success\\n'
+    exit 0
+    ;;
+  *'actions/runs/123'*) printf 'completed\\n'; exit 0 ;;
+  *) printf 'unexpected gh call: %s\\n' \"$*\" >&2; exit 1 ;;
+ esac
+
+""",
+        encoding="utf-8",
+    )
+    gh_path.chmod(gh_path.stat().st_mode | stat.S_IXUSR)
+    env.update({"CUT_SHA": cut_sha, "MODE": "cut", "GITHUB_REPOSITORY": "example/repo"})
+    result = _run_bash(schema_script, cwd=repo, env=env)
+    assert result.returncode == 0, result.stderr
+    commands = log.read_text(encoding="utf-8")
+    assert f"--commit {cut_sha}" in commands
+    assert cut_sha in result.stdout
+
+
+def test_protected_cut_cleanup_executes_hold_deletion_after_preparation_failure(tmp_path: Path) -> None:
+    repo, _log, env = _cut_harness(tmp_path)
+    bin_dir = tmp_path / "bin"
+    _write_executable(
+        bin_dir / "gh",
+        """#!/usr/bin/env bash
+set -e
+case "$*" in
+  *'pr list'*'--state open'*) exit 0 ;;
+  *'pr list'*'--state closed'*) printf '99\\n'; exit 0 ;;
+  *) exit 0 ;;
+esac
+""",
+    )
+    failed_prep = _run_bash(
+        _release_job_run("Prepare exact cut commit through protected main (cut only)"),
+        cwd=repo,
+        env=env,
+    )
+    assert failed_prep.returncode != 0
+
+    cleanup_log = tmp_path / "cleanup.log"
+    _write_executable(
+        bin_dir / "git",
+        f"""#!/usr/bin/env bash
+printf 'git %s\\n' \"$*\" >> {shlex.quote(str(cleanup_log))}
+if [ \"$1 $2 $3 $4\" = 'ls-remote --exit-code origin refs/tags/release-publication-hold' ]; then
+  exit 0
+fi
+if [ \"$1 $2 $3 $4\" = 'push origin --delete release-publication-hold' ]; then
+  exit 0
+fi
+exit 0
+""",
+    )
+    cleanup = _run_bash(
+        _release_job_run("Clean up publication hold after failed cut preparation"),
+        cwd=tmp_path,
+        env=env,
+    )
+    assert cleanup.returncode == 0, cleanup.stderr
+    assert "git push origin --delete release-publication-hold" in cleanup_log.read_text(encoding="utf-8")
+
+
+_CUT_PATH_WORKFLOWS = (
+    RELEASE_WORKFLOW,
+    BUNDLE_WORKFLOW,
+    REPO_ROOT / ".github" / "workflows" / "windows-installer.yml",
+    REPO_ROOT / ".github" / "workflows" / "macos-installer.yml",
+)
+
+
+def _cut_path_scripts() -> list[tuple[Path, str]]:
+    """Return shell steps reachable from cut/recut, including called workflows.
+
+    The promote job intentionally contains a direct ``git push origin main`` for
+    its changelog commit. It is not part of the cut graph and must not weaken
+    this guard, so only the release job's cut/recut steps are selected from the
+    caller; reusable workflows called by those modes are scanned completely.
+    """
+    release = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    release_steps = release["jobs"]["release"]["steps"]
+    scripts = [
+        (RELEASE_WORKFLOW, step["run"])
+        for step in release_steps
+        if isinstance(step.get("run"), str) and "inputs.mode == 'promote'" not in str(step.get("if", ""))
+    ]
+    for workflow_path in _CUT_PATH_WORKFLOWS[1:]:
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        scripts.extend(
+            (workflow_path, step["run"])
+            for job in workflow.get("jobs", {}).values()
+            for step in job.get("steps", [])
+            if isinstance(step.get("run"), str)
+        )
+    return scripts
+
+
+def _shell_tokens(script: str) -> list[str]:
+    """Tokenize shell lines, retaining executable boundaries but not quoted text."""
+    tokens: list[str] = []
+    logical_lines: list[str] = []
+    for line in script.splitlines():
+        if logical_lines and logical_lines[-1].endswith("\\"):
+            logical_lines[-1] = logical_lines[-1][:-1] + line
+        else:
+            logical_lines.append(line)
+    for line in logical_lines:
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|!(){}")
+        lexer.commenters = "#"
+        lexer.whitespace_split = True
+        try:
+            raw_tokens = list(lexer)
+        except ValueError:
+            # A malformed shell fragment cannot be safely classified; retain its
+            # raw command words so a bypass still fails closed.
+            raw_tokens = stripped.split()
+        for raw_token in raw_tokens:
+            # shlex groups adjacent punctuation (for example ``);``). Split it
+            # back into boundaries while leaving words and quoted literals intact.
+            parts = re.split(r"(&&|\|\||[;&|!(){}])", raw_token)
+            tokens.extend(part for part in parts if part)
+        tokens.append(";")
+    return tokens
+
+
+def _assert_protected_cut_commands_are_safe(cut_path: str) -> None:
+    tokens = _shell_tokens(cut_path)
+    violations: list[str] = []
+    force_pushes: list[list[str]] = []
+
+    command_prefixes = {";", "&&", "||", "&", "|", "(", "{", "if", "then", "elif", "else", "do", "!"}
+    for index, token in enumerate(tokens):
+        is_command_start = index == 0 or tokens[index - 1] in command_prefixes
+        if not is_command_start:
+            continue
+        if token == "gh" and tokens[index + 1 : index + 3] == ["pr", "merge"]:
+            violations.append("gh pr merge")
+        if token != "git" or index + 1 >= len(tokens) or tokens[index + 1] != "push":
+            continue
+        end = index + 2
+        while end < len(tokens) and tokens[end] not in {";", "&&", "||", "&", "|", ")", "}"}:
+            end += 1
+        invocation = tokens[index:end]
+        if "main" in invocation:
+            violations.append("git push to main")
+        force_flags = {"--force", "-f", "--force-with-lease"}
+        if force_flags.intersection(invocation):
+            force_pushes.append(invocation)
+            if invocation != ["git", "push", "origin", "release-freeze", "--force"]:
+                violations.append("unexpected force push: " + " ".join(invocation))
+
+    if "--admin" in tokens:
+        violations.append("gh pr merge --admin")
+    assert not violations, "protected release cut bypasses found: " + "; ".join(violations)
+    assert len(force_pushes) == 2
+    assert all(push == ["git", "push", "origin", "release-freeze", "--force"] for push in force_pushes)
+
+
+def test_protected_cut_contracts_are_scanned_across_the_complete_cut_workflow_graph() -> None:
+    scripts = _cut_path_scripts()
+    assert {path for path, _script in scripts} == set(_CUT_PATH_WORKFLOWS)
+    _assert_protected_cut_commands_are_safe("\n".join(script for _path, script in scripts))
+
+    cut_step = _release_step("Cut release candidate and freeze main")["run"]
+    assert "git push origin release-freeze --force" in cut_step
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "echo x && git push origin main",
+        "echo x && gh pr merge 1",
+        "if (git push origin main); then exit 1; fi",
+        "x=$(git push origin main)",
+        "if ! git push origin main; then exit 1; fi",
+        "git push origin branch --force",
+        "gh pr merge --admin 123",
+    ],
+)
+def test_protected_cut_scanner_rejects_nested_release_bypasses(script: str) -> None:
+    with pytest.raises(AssertionError, match="protected release cut bypasses"):
+        _assert_protected_cut_commands_are_safe(script)
+
+
+def test_protected_cut_decision_logic_remains_budgeted() -> None:
+    cut_script = _release_job_run("Prepare exact cut commit through protected main (cut only)")
+    schema_script = _release_job_run("Assert schema-freshness gate green on exact cut/recut commit")
+    release_job = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["release"]
+
+    assert 'TARGET_SHA="$CUT_SHA"' in schema_script
+    assert _cut_wait_budget_seconds(cut_script) == 5400
+    assert _schema_wait_budget_seconds(schema_script) == 2700
+    assert _cut_wait_budget_seconds(cut_script) + _schema_wait_budget_seconds(schema_script) <= 180 * 60
+    assert release_job["timeout-minutes"] >= 180
