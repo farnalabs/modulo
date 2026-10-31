@@ -463,6 +463,29 @@ describe('LibraryView tab routing (FAR-2260)', () => {
     wrapper.unmount()
   })
 
+  it('does not refetch when the already-active tab is clicked', async () => {
+    const wrapper = await mountAt({})
+    getMock.mockClear()
+
+    await wrapper.get('[data-testid="library-section-native"]').trigger('click')
+    await nextTick()
+
+    expect(getMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('follows a route change into the collections section', async () => {
+    const wrapper = await mountAt({})
+    getMock.mockClear()
+
+    setRoute({ section: 'collections' })
+    await nextTick()
+
+    expect(callsWhere((query) => query.primitive_type === 'library_collection')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="library-section-collections"]').classes()).toContain('active')
+    wrapper.unmount()
+  })
+
   it('follows browser back and forward, fetching each section once', async () => {
     const wrapper = await mountAt({ section: 'community' })
     expect(wrapper.get('[data-testid="library-section-community"]').classes()).toContain('active')

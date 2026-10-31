@@ -329,6 +329,25 @@ describe('PageTabs', () => {
       expect(links[1].classes()).toContain('active')
     })
 
+    it('ignores a hash fragment when matching a tab destination', () => {
+      const tabs = [
+        { label: 'Native', to: '/library?section=native#top', defaultQuery: true },
+        { label: 'Community', to: '/library?section=community#top' },
+      ]
+      const wrapper = createWrapper(tabs, '/library', { section: 'community' })
+      const links = wrapper.findAll('.page-tab')
+      expect(links[0].classes()).not.toContain('active')
+      expect(links[1].classes()).toContain('active')
+    })
+
+    it('leaves no tab active when the route has an empty path', () => {
+      const wrapper = createWrapperForRoute(
+        [{ label: 'Native', to: '/library?section=native', defaultQuery: true }],
+        { path: '', query: {} },
+      )
+      expect(wrapper.find('.page-tab').classes()).not.toContain('active')
+    })
+
     it('prefers the tab with more matching query pairs on the same path', () => {
       const tabs = [
         { label: 'Errors', to: '/reports?view=errors' },
