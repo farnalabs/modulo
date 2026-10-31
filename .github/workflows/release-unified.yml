@@ -304,6 +304,9 @@ jobs:
               echo "::error::Release PR #${PR_NUMBER} has no head SHA; refusing to dispatch validation."
               exit 1
             fi
+            # Keep explicit dispatches as a deterministic hand-off so the release
+            # never depends on webhook delivery for its CI run and reviewer
+            # dispatch; the merge queue remains the only merger.
             gh workflow run "CI: Fast Validation" --repo "${GITHUB_REPOSITORY}" --ref "$BRANCH"
             gh workflow run pr-review.yml --repo "${GITHUB_REPOSITORY}" --ref main \
               -f pr_number="$PR_NUMBER" -f head_sha="$PR_SHA" -f head_branch="$BRANCH"

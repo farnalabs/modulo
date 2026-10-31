@@ -536,6 +536,123 @@ def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:
     assert '-f release_sha="${RC_SHA}"' in dispatch
 
 
+def test_release_cut_uses_protected_main_pr_and_exact_merge_ref() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    cut = steps[names.index("Prepare exact cut commit through protected main (cut only)")]
+    script = cut["run"]
+
+    assert "git push origin main" not in script
+    assert 'git push --set-upstream origin "$BRANCH"' in script
+    assert "gh pr create" in script
+    assert 'gh pr view "$PR_NUMBER"' in script
+    assert "mergeCommit.oid" in script
+    assert 'git fetch origin "$CUT_SHA"' in script
+    assert 'git checkout --detach "$CUT_SHA"' in script
+    assert "MERGED_VERSION=" in script
+    assert 'gh workflow run "CI: Fast Validation"' in script
+    assert "gh workflow run pr-review.yml" in script
+
+    cleanup_names = [name for name in names if "Clean up publication hold" in name]
+    assert len(cleanup_names) == 2
+    for cleanup_name in cleanup_names:
+        cleanup = steps[names.index(cleanup_name)]
+        assert "always()" in cleanup["if"]
+        assert "steps.publication-hold.outputs.established == 'true'" in cleanup["if"]
+        assert "git push origin --delete release-publication-hold" in cleanup["run"]
+    failed_cut_cleanup = steps[names.index("Clean up publication hold after failed release cut")]
+    assert "steps.cut.outcome != 'success'" in failed_cut_cleanup["if"]
+
+
+def test_release_pr_driving_steps_use_the_trusted_bot_token() -> None:
+    """Every release PR-driving step must run as the trusted ``farnalabs`` bot.
+
+    Regression gate for FAR-2213. The cut PR (#2649, run 41228054548) was
+    created with ``github.token``: GitHub reported ``author_association: NONE``,
+    so ``pr-review.yml`` skipped the review dispatch and ``merge-queue.yml``
+    skipped the PR — the release could never merge. The secret is scoped to the
+    specific steps that need it (never exported at job level) and each step
+    fails closed when it is missing, because a silent fallback to
+    ``github.token`` would recreate the exact bug.
+
+    The scan covers every job and mode, so a promote-mode PR step added later
+    is gated automatically.
+    """
+    driving = _release_pr_driving_steps()
+    assert driving, "expected at least one step that drives the release PR"
+    assert any("Prepare exact cut commit" in label for label, _step in driving)
+
+    for label, step in driving:
+        env = cast(dict[str, str], step.get("env") or {})
+        assert env.get("GH_TOKEN") == _RELEASE_PR_TOKEN_SECRET, (
+            f"{label} drives the release PR with GH_TOKEN={env.get('GH_TOKEN')!r}; "
+            "a github.token PR is authored by github-actions[bot] and skipped by the same-repo author guard"
+        )
+        assert "GITHUB_TOKEN" not in env, f"{label} must keep the branch push on the checkout github.token credential"
+        script = cast(str, step["run"])
+        assert "github.token" not in script
+        assert "MODULO_RELEASE_PR_TOKEN" in script, (
+            f"{label} must fail closed with an ::error:: naming MODULO_RELEASE_PR_TOKEN"
+        )
+        assert '[ -z "${GH_TOKEN:-}" ]' in script, f"{label} must reject an empty GH_TOKEN"
+        guard_index = script.index('[ -z "${GH_TOKEN:-}" ]')
+        first_gh = min(script.index(command) for command in _RELEASE_PR_DRIVING_COMMANDS if command in script)
+        assert guard_index < first_gh, f"{label} must check the secret before any gh call"
+        assert 'echo "${GH_TOKEN}"' not in script, f"{label} must never log the token"
+        assert "set -x" not in script, f"{label} must never trace the token"
+
+
+def test_release_cut_tags_the_exact_merged_commit_after_schema_gate() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    prepare_idx = names.index("Prepare exact cut commit through protected main (cut only)")
+    schema_idx = names.index("Assert schema-freshness gate green on exact cut/recut commit")
+    cut_idx = names.index("Cut release candidate and freeze main")
+    assert prepare_idx < schema_idx < cut_idx
+    assert steps[schema_idx]["id"] == "schema-freshness"
+    assert "steps.cut-commit.outputs.cut_sha" in steps[schema_idx]["env"]["CUT_SHA"]
+    assert 'echo "cut_sha=$(git rev-parse HEAD)"' in steps[cut_idx]["run"]
+
+
+#: The repository secret holding a vault-sourced PAT for the trusted bot
+#: identity (`farnalabs`). ``github.token`` cannot be used for release PRs: it
+#: authors as ``github-actions[bot]`` with ``author_association: NONE``.
+_RELEASE_PR_TOKEN_SECRET = "${{ secrets.MODULO_RELEASE_PR_TOKEN }}"
+
+#: Commands that author, poll, or drive the release PR. A ``github.token`` PR is
+#: authored by ``github-actions[bot]`` with ``author_association: NONE``, which
+#: ``.github/scripts/same-repo-author-guard.py`` treats as external — so
+#: ``pr-review.yml`` skips the review dispatch and ``merge-queue.yml`` skips the
+#: PR entirely, leaving it unmergeable (FAR-2213, PR #2649).
+_RELEASE_PR_DRIVING_COMMANDS = (
+    "gh pr create",
+    "gh pr view",
+    "gh workflow run pr-review.yml",
+    'gh workflow run "CI: Fast Validation"',
+)
+
+
+def _release_workflow_steps() -> list[tuple[str, dict[str, Any]]]:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    return [
+        (f"{job_id}: {step.get('name', '')}", cast(dict[str, Any], step))
+        for job_id, job in workflow["jobs"].items()
+        for step in job.get("steps", [])
+    ]
+
+
+def _release_pr_driving_steps() -> list[tuple[str, dict[str, Any]]]:
+    """Every step in every job/mode that creates, polls, or drives the release PR."""
+    driving: list[tuple[str, dict[str, Any]]] = []
+    for label, step in _release_workflow_steps():
+        run = step.get("run")
+        if isinstance(run, str) and any(command in run for command in _RELEASE_PR_DRIVING_COMMANDS):
+            driving.append((label, step))
+    return driving
+
+
 def _release_step(name: str) -> dict[str, Any]:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["release"]["steps"]
@@ -741,6 +858,43 @@ def test_protected_cut_executes_branch_pr_and_exact_merged_sha_handoff(tmp_path:
     assert "git push origin release/version-0.2.0" not in commands
 
 
+def test_protected_cut_drives_every_gh_call_with_the_trusted_bot_token(tmp_path: Path) -> None:
+    """Executes the cut step and proves every ``gh`` call carried the PAT.
+
+    The harness ``gh`` shim records ``GH_TOKEN`` per invocation, so this fails
+    if the step falls back to ``github.token`` even when the structural
+    assertion above were loosened.
+    """
+    repo, log, env = _cut_harness(tmp_path)
+    script = _release_job_run("Prepare exact cut commit through protected main (cut only)")
+    result = _run_bash(script, cwd=repo, env=env)
+    assert result.returncode == 0, (
+        f"stdout={result.stdout}\nstderr={result.stderr}\nlog={log.read_text(encoding='utf-8')}"
+    )
+    token_log = Path(str(log) + ".tokens")
+    observed = {line for line in token_log.read_text(encoding="utf-8").splitlines() if line}
+    assert observed == {env["GH_TOKEN"]}
+
+
+@pytest.mark.parametrize("token", [None, ""])
+def test_protected_cut_fails_closed_without_the_release_pr_token(tmp_path: Path, token: str | None) -> None:
+    repo, log, env = _cut_harness(tmp_path)
+    script = _release_job_run("Prepare exact cut commit through protected main (cut only)")
+    guarded_env = dict(env)
+    if token is None:
+        guarded_env.pop("GH_TOKEN")
+    else:
+        guarded_env["GH_TOKEN"] = token
+
+    result = _run_bash(script, cwd=repo, env=guarded_env)
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "::error::" in output
+    assert "MODULO_RELEASE_PR_TOKEN" in output
+    assert not Path(str(log) + ".tokens").exists()
+
+
 def test_protected_cut_schema_handoff_uses_exact_cut_sha(tmp_path: Path) -> None:
     repo, log, env = _cut_harness(tmp_path)
     cut_sha = _cut_git("rev-parse", "refs/remotes/origin/merged", cwd=repo).stdout.strip()
@@ -873,19 +1027,6 @@ def _cut_path_scripts() -> list[tuple[Path, str]]:
             if isinstance(step.get("run"), str)
         )
     return scripts
-
-
-def test_release_cut_uses_protected_main_pr_and_exact_merge_ref() -> None:
-    script = _release_job_run("Prepare exact cut commit through protected main (cut only)")
-    assert "git push origin main" not in script
-    assert 'BRANCH="release/version-${VERSION}"' in script
-    assert 'git push --set-upstream origin "$BRANCH"' in script
-    assert "gh pr create" in script
-    assert "mergeCommit.oid" in script
-    assert 'git fetch origin "$CUT_SHA"' in script
-    assert 'git checkout --detach "$CUT_SHA"' in script
-    assert 'gh workflow run "CI: Fast Validation"' in script
-    assert "gh workflow run pr-review.yml" in script
 
 
 def test_release_cut_contracts_are_scanned_across_complete_cut_workflow_graph() -> None:
