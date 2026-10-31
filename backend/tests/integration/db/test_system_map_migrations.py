@@ -3,8 +3,8 @@
 Two layers of proof:
 
 * a real Alembic round-trip against a PRIVATE Postgres database (upgrade from
-  ``0340_drop_assistant_ui_driving_flag_row`` to ``0343_system_maps_revision_fk``
-  then ``downgrade -3``), so the migration's DDL is exercised exactly as shipped;
+  ``0340_drop_assistant_ui_driving_flag_row`` to ``0345_system_maps_name_integrity``
+  then ``downgrade -5``), so the migration's DDL is exercised exactly as shipped;
 * schema assertions against the session's fully-migrated database, including
   model↔migrated-schema column parity for all eight tables — the check that
   catches a migration drifting behind the ORM.
@@ -49,7 +49,7 @@ pytestmark = pytest.mark.integration
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-MIGRATION_REV = "0344_system_maps_tenant_integrity"
+MIGRATION_REV = "0345_system_maps_name_integrity"
 PREV_REV = "0340_drop_assistant_ui_driving_flag_row"
 
 _SYSTEM_MAP_MODELS = (
@@ -154,7 +154,7 @@ async def test_migration_round_trips_against_private_database(private_db_url: st
         for table in _EXPECTED_TABLES:
             assert table in tables, f"Table {table} was not created"
 
-        _run_alembic(private_db_url, "downgrade", "-4")
+        _run_alembic(private_db_url, "downgrade", "-5")
         tables = await _table_names(engine)
         for table in _EXPECTED_TABLES:
             assert table not in tables, f"Table {table} was not dropped"
@@ -186,6 +186,7 @@ class TestSystemMapMigratedSchema:
             "ix_system_maps_account_id",
             "ix_system_maps_deleted_by",
             "uq_system_maps_org_default_live",
+            "uq_system_maps_org_name_live",
         ):
             assert name in maps_indexes, f"Index {name} not found on system_maps"
         for name in (
@@ -413,6 +414,45 @@ class TestSystemMapModelRoundTrip:
         assert loaded_revision.revision_number == 1
         assert loaded_revision.content_json == {"test": "data"}
         assert loaded_revision.deleted_by is None
+
+    @pytest.mark.asyncio
+    async def test_live_name_unique_index_rejects_duplicate_draft(
+        self, db_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+    ) -> None:
+        """Prove-the-fix: the DB guard behind the discovery check-then-insert.
+
+        Two concurrent ``POST /system-maps/discover`` calls can both pass the
+        SELECT; the loser's INSERT must be rejected by
+        ``uq_system_maps_org_name_live`` rather than persisting a duplicate.
+        """
+        name = f"Duplicate Draft {uuid.uuid4().hex[:8]}"
+
+        db_session.add(SystemMap(organisation_id=test_org, name=name, account_id=test_user))
+        await db_session.flush()
+        db_session.add(SystemMap(organisation_id=test_org, name=name, account_id=test_user))
+        with pytest.raises(IntegrityError, match="uq_system_maps_org_name_live"):
+            await db_session.flush()
+
+    @pytest.mark.asyncio
+    async def test_soft_deleted_map_name_can_be_reused(
+        self, db_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
+    ) -> None:
+        """The guard is partial: a retired map must not reserve its name forever."""
+        name = f"Reusable Draft {uuid.uuid4().hex[:8]}"
+        retired = SystemMap(
+            organisation_id=test_org,
+            name=name,
+            account_id=test_user,
+            deleted_at=datetime.now(UTC),
+        )
+        db_session.add(retired)
+        await db_session.flush()
+
+        replacement = SystemMap(organisation_id=test_org, name=name, account_id=test_user)
+        db_session.add(replacement)
+        await db_session.flush()
+
+        assert replacement.id != retired.id
 
     @pytest.mark.asyncio
     async def test_node_relationship_and_binding_round_trip(

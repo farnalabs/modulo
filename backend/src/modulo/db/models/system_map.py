@@ -82,6 +82,17 @@ class SystemMap(SoftDeleteMixin, OrgScoped):
             postgresql_where=text("default_map AND deleted_at IS NULL"),
             sqlite_where=text("default_map AND deleted_at IS NULL"),
         ),
+        # Partial unique: one live map per (org, name). The discovery draft
+        # path is check-then-insert, so this is the database-level guard that
+        # turns a lost race into an IntegrityError instead of a duplicate.
+        Index(
+            "uq_system_maps_org_name_live",
+            "organisation_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
         UniqueConstraint("id", "organisation_id", name="uq_system_maps_id_organisation_id"),
     )
 
