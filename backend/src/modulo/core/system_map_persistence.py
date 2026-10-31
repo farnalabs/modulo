@@ -24,10 +24,9 @@ class SystemMapNameConflictError(Exception):
     """A requested draft name is already used by a live system map."""
 
 
-async def _unused_session_factory() -> AsyncGenerator[AsyncSession, None]:
+async def _unused_session_factory() -> AsyncGenerator[AsyncSession, None]:  # pragma: no cover
     """Satisfy the shared repository constructor for explicit-session methods."""
-    if _DISCOVERY_NAMESPACE.int < 0:
-        yield AsyncSession()
+    yield AsyncSession()
 
 
 class SystemMapDiscoveryRepository:
