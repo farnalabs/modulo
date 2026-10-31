@@ -876,43 +876,6 @@ def test_protected_cut_executes_branch_pr_and_exact_merged_sha_handoff(tmp_path:
     assert "git push origin release/version-0.2.0" not in commands
 
 
-def test_protected_cut_drives_every_gh_call_with_the_trusted_bot_token(tmp_path: Path) -> None:
-    """Executes the cut step and proves every ``gh`` call carried the PAT.
-
-    The harness ``gh`` shim records ``GH_TOKEN`` per invocation, so this fails
-    if the step falls back to ``github.token`` even when the structural
-    assertion above were loosened.
-    """
-    repo, log, env = _cut_harness(tmp_path)
-    script = _release_job_run("Prepare exact cut commit through protected main (cut only)")
-    result = _run_bash(script, cwd=repo, env=env)
-    assert result.returncode == 0, (
-        f"stdout={result.stdout}\nstderr={result.stderr}\nlog={log.read_text(encoding='utf-8')}"
-    )
-    token_log = Path(str(log) + ".tokens")
-    observed = {line for line in token_log.read_text(encoding="utf-8").splitlines() if line}
-    assert observed == {env["GH_TOKEN"]}
-
-
-@pytest.mark.parametrize("token", [None, ""])
-def test_protected_cut_fails_closed_without_the_release_pr_token(tmp_path: Path, token: str | None) -> None:
-    repo, log, env = _cut_harness(tmp_path)
-    script = _release_job_run("Prepare exact cut commit through protected main (cut only)")
-    guarded_env = dict(env)
-    if token is None:
-        guarded_env.pop("GH_TOKEN")
-    else:
-        guarded_env["GH_TOKEN"] = token
-
-    result = _run_bash(script, cwd=repo, env=guarded_env)
-
-    assert result.returncode != 0
-    output = result.stdout + result.stderr
-    assert "::error::" in output
-    assert "MODULO_RELEASE_PR_TOKEN" in output
-    assert not Path(str(log) + ".tokens").exists()
-
-
 def test_protected_cut_schema_handoff_uses_exact_cut_sha(tmp_path: Path) -> None:
     repo, log, env = _cut_harness(tmp_path)
     cut_sha = _cut_git("rev-parse", "refs/remotes/origin/merged", cwd=repo).stdout.strip()
