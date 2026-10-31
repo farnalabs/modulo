@@ -417,8 +417,8 @@ Modulo supports three deployment modes depending on your needs.
 
 ### Standalone (single-user, local)
 
-Three environment variables are **required** and have no default: the app
-refuses to start without them:
+The API itself requires three environment variables that have no default: the
+app refuses to start without them:
 
 | Variable | Purpose | How to generate |
 |----------|---------|-----------------|
@@ -426,7 +426,16 @@ refuses to start without them:
 | `SECRET_KEY` | 32+ byte random string used to sign JWTs | `$(openssl rand -base64 48)` |
 | `FERNET_KEY` | 44-char base64 Fernet key used to encrypt stored connector credentials | `$(openssl rand -base64 32)` (base64-encoded 32-byte key) |
 
-The command below sets all three inline, so it is runnable as written. `MODULO_USERS`
+The SAQ **system** worker needs one more variable: `MODULO_SYSTEM_DATABASE_URL`.
+Its cross-org crons (`dispatcher_reconcile`, the stale-run sweep and the other
+system jobs) refuse to run without it, and `dispatcher_reconcile` gates
+`/healthz/ready`, so leaving it unset gives an API that answers while readiness
+never becomes ready. In standalone mode point it at the same SQLite file; in
+every other mode use the dedicated `modulo_system` role (see
+[Docker Compose](#docker-compose-single-server-multi-user)).
+
+The command below sets the required variables inline, so it is runnable as
+written. `MODULO_USERS`
 seeds the initial admin user (optional but recommended for first login); `MODULO_DB=sqlite`
 selects the SQLite backend so no separate database server is needed.
 
@@ -435,6 +444,7 @@ git clone https://github.com/farnalabs/modulo   # or install the farnalabs-modul
 cd backend
 uv sync
 DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
+  MODULO_SYSTEM_DATABASE_URL=sqlite+aiosqlite:///./modulo.db \
   SECRET_KEY=$(openssl rand -base64 48) \
   FERNET_KEY=$(openssl rand -base64 32) \
   MODULO_USERS=admin:changeme \
@@ -454,7 +464,7 @@ Runs and triggers require Redis plus the SAQ workers – see [`docs/quickstart.m
 
 **What you lose vs. full deployment:**
 - **No horizontal scaling** – one process, one user at a time
-- **No task durability** – if the SAQ worker crashes mid-run, the run is lost (re-run manually)
+- **No high availability** – a worker crash mid-run is recovered or terminalised by `dispatcher_reconcile` only while the system worker and Redis stay up; a lost Redis strands in-flight jobs until it returns
 - **No distributed rate limiting** – without Redis the limiter is a per-process no-op, so limits don't coordinate across processes
 
 **What you keep:**
