@@ -253,11 +253,18 @@ jobs:
         id: cut-commit
         if: inputs.mode == 'cut'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # FAR-2213: release PR creation and PR-driving dispatches must use the
+          # trusted bot PAT. The checkout github.token remains the branch-push
+          # credential, preserving least privilege for git operations.
+          GH_TOKEN: ${{ secrets.MODULO_RELEASE_PR_TOKEN }}
           VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::MODULO_RELEASE_PR_TOKEN is missing or empty; refusing to create the release PR as github-actions[bot] (author_association NONE is rejected by the same-repo author guard)."
+            exit 1
+          fi
           git fetch origin main
           CURRENT="$(python3 -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')"
           if [ "$CURRENT" = "$VERSION" ]; then
@@ -519,11 +526,18 @@ jobs:
         id: promote
         if: inputs.mode == 'promote'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Every gh PR create/view and CI/review dispatch in this step must
+          # authenticate as the trusted bot identity; never fall back to the
+          # workflow token, which the same-repo author guard rejects.
+          GH_TOKEN: ${{ secrets.MODULO_RELEASE_PR_TOKEN }}
           VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::MODULO_RELEASE_PR_TOKEN is missing or empty; refusing to drive the promote PR with github-actions[bot]."
+            exit 1
+          fi
           GA_TAG="v${VERSION}"
           BRANCH="release/promote-${VERSION}"
 
