@@ -910,21 +910,6 @@ jobs:
           # shellcheck disable=SC2016
           run_pre_smoke app_codesign_verify codesign --verify --deep --strict --verbose=2 "$APP"
 
-          # App stapling: fail closed if it fails (app stapling is fast and reliable)
-          app_staple_with_retry() {
-            local attempt
-            for attempt in 1 2 3 4 5 6; do
-              if xcrun stapler staple "$APP"; then
-                return 0
-              fi
-              if [[ "$attempt" -lt 6 ]]; then
-                sleep 20
-              fi
-            done
-            return 1
-          }
-          # shellcheck disable=SC2016
-          run_pre_smoke app_staple app_staple_with_retry
 
           DMG="build/Modulo-${VERSION_NUM}-macos-arm64.dmg"
           # shellcheck disable=SC2016
