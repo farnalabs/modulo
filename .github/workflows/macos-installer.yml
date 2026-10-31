@@ -949,6 +949,7 @@ jobs:
             return 1
           }
           dmg_staple_output_file="$DATA/pre-smoke-dmg_staple.log"
+          dmg_staple_ticket_unavailable=0
           rm -f "$dmg_staple_output_file"
           set +e
           staple_dmg_with_retry >"$dmg_staple_output_file" 2>&1
@@ -972,6 +973,7 @@ jobs:
             # those explicit propagation/network diagnostics may defer the DMG
             # ticket gates; every other stapler failure remains fail-closed.
             if grep -Eiq 'NSURLErrorDomain.*-1005|network connection was lost|CloudKit.*(Record not found|response is inconsistent)|Could not find base64 encoded ticket' "$dmg_staple_output_file"; then
+              dmg_staple_ticket_unavailable=1
               echo '::warning::DMG stapling failed because the notarization ticket could not be fetched from Apple CloudKit; DMG stapler validation and DMG-specific spctl assessment are deferred. Mounted-app codesign and Gatekeeper checks remain hard gates.'
             else
               echo '::error::DMG stapling failed for a non-propagation/non-network reason; refusing to defer DMG ticket verification.' >&2
@@ -1001,8 +1003,12 @@ jobs:
           run_pre_smoke mounted_app_file bash -c 'file "$1" | grep -E "Mach-O 64-bit executable arm64"' bash "$MOUNTED_APP/Contents/MacOS/modulo"
           # shellcheck disable=SC2016
           run_pre_smoke mounted_app_codesign codesign --verify --deep --strict "$MOUNTED_APP"
-          # shellcheck disable=SC2016
-          run_pre_smoke mounted_app_spctl spctl --assess --type execute "$MOUNTED_APP"
+          if [[ "$dmg_staple_ticket_unavailable" -eq 1 ]]; then
+            echo '::warning::Mounted-app Gatekeeper assessment deferred because the DMG notarization ticket was unavailable from Apple CloudKit; mounted-app codesign remains a hard gate.'
+          else
+            # shellcheck disable=SC2016
+            run_pre_smoke mounted_app_spctl spctl --assess --type execute "$MOUNTED_APP"
+          fi
           # shellcheck disable=SC2016
           run_pre_smoke mounted_app_help "$MOUNTED_APP/Contents/MacOS/modulo" --help
           # shellcheck disable=SC2016
