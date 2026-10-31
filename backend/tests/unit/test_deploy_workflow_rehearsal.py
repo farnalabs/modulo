@@ -880,20 +880,85 @@ def _cut_path_scripts() -> list[tuple[Path, str]]:
     return scripts
 
 
+def _shell_tokens(script: str) -> list[str]:
+    """Tokenize executable shell lines without treating comments or quoted text as commands."""
+    tokens: list[str] = []
+    logical_lines: list[str] = []
+    for line in script.splitlines():
+        if logical_lines and logical_lines[-1].endswith("\\"):
+            logical_lines[-1] = logical_lines[-1][:-1] + line
+        else:
+            logical_lines.append(line)
+    for line in logical_lines:
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|!")
+        lexer.commenters = "#"
+        lexer.whitespace_split = True
+        try:
+            tokens.extend(list(lexer))
+        except ValueError:
+            # A malformed shell fragment cannot be safely classified; retain its
+            # raw command words so a bypass still fails closed.
+            tokens.extend(stripped.split())
+        tokens.append(";")
+    return tokens
+
+
+def _assert_protected_cut_commands_are_safe(cut_path: str) -> None:
+    tokens = _shell_tokens(cut_path)
+    violations: list[str] = []
+    force_pushes: list[list[str]] = []
+
+    command_prefixes = {";", "&", "|", "if", "then", "elif", "!"}
+    for index, token in enumerate(tokens[:-1]):
+        is_command_start = index == 0 or tokens[index - 1] in command_prefixes
+        if not is_command_start:
+            continue
+        if token == "gh" and tokens[index + 1 : index + 3] == ["pr", "merge"]:
+            violations.append("gh pr merge")
+        if token != "git" or tokens[index + 1] != "push":
+            continue
+        end = index + 2
+        while end < len(tokens) and tokens[end] not in {";", "&", "|"}:
+            end += 1
+        invocation = tokens[index:end]
+        if "main" in invocation:
+            violations.append("git push to main")
+        force_flags = {"--force", "-f", "--force-with-lease"}
+        if force_flags.intersection(invocation):
+            force_pushes.append(invocation)
+            if invocation != ["git", "push", "origin", "release-freeze", "--force"]:
+                violations.append("unexpected force push: " + " ".join(invocation))
+
+    if "--admin" in tokens:
+        violations.append("gh pr merge --admin")
+    assert not violations, "protected release cut bypasses found: " + "; ".join(violations)
+    assert len(force_pushes) == 2
+    assert all(push == ["git", "push", "origin", "release-freeze", "--force"] for push in force_pushes)
+
+
 def test_protected_cut_contracts_are_scanned_across_the_complete_cut_workflow_graph() -> None:
     scripts = _cut_path_scripts()
     assert {path for path, _script in scripts} == set(_CUT_PATH_WORKFLOWS)
-    cut_path = "\n".join(script for _path, script in scripts)
-
-    assert re.search(r"(?m)^\s*gh\s+pr\s+merge\b", cut_path) is None
-    assert re.search(r"(?m)^\s*git\s+push\b[^\n]*\bmain\b", cut_path) is None
-
-    force_pushes = re.findall(r"(?m)^\s*git\s+push\b[^\n]*--force(?:-with-lease)?\b[^\n]*$", cut_path)
-    assert len(force_pushes) == 2
-    assert all(push.strip() == "git push origin release-freeze --force" for push in force_pushes)
+    _assert_protected_cut_commands_are_safe("\n".join(script for _path, script in scripts))
 
     cut_step = _release_step("Cut release candidate and freeze main")["run"]
     assert "git push origin release-freeze --force" in cut_step
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "if ! git push origin main; then exit 1; fi",
+        "git push origin branch --force",
+        "gh pr merge --admin 123",
+    ],
+)
+def test_protected_cut_scanner_rejects_nested_release_bypasses(script: str) -> None:
+    with pytest.raises(AssertionError, match="protected release cut bypasses"):
+        _assert_protected_cut_commands_are_safe(script)
 
 
 def test_protected_cut_decision_logic_remains_budgeted() -> None:
