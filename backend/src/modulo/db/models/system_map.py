@@ -134,6 +134,13 @@ class SystemMapRevision(SoftDeleteMixin, OrgScoped):
     __table_args__ = (
         CheckConstraint(f"status IN ({_revision_status_sql})", name="ck_system_map_revisions_status"),
         UniqueConstraint("system_map_id", "revision_number", name="uq_system_map_revisions_map_number"),
+        Index(
+            "uq_system_map_revisions_one_published",
+            "system_map_id",
+            unique=True,
+            postgresql_where=text("status = 'published'"),
+            sqlite_where=text("status = 'published'"),
+        ),
         UniqueConstraint("id", "organisation_id", name="uq_system_map_revisions_id_organisation_id"),
         ForeignKeyConstraint(
             ["system_map_id", "organisation_id"],

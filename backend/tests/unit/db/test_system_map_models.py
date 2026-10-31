@@ -63,6 +63,13 @@ class TestSystemMapModels:
             [element.target_fullname.rsplit(".", 1)[-1] for element in constraint.elements],
         )
 
+    def test_system_map_revision_published_index_is_partial_unique(self):
+        index = next(
+            item for item in SystemMapRevision.__table__.indexes if item.name == "uq_system_map_revisions_one_published"
+        )
+        assert index.unique is True
+        assert str(index.dialect_options["postgresql"]["where"]) == "status = 'published'"
+
     def test_system_map_revision_parent_fk_is_tenant_scoped(self):
         assert self._constraint_shape(SystemMapRevision, "fk_system_map_revisions_map_org") == (
             ["system_map_id", "organisation_id"],

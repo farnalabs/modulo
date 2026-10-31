@@ -25,9 +25,12 @@ class SystemMapNameConflictError(Exception):
 
 
 async def _unused_session_factory() -> AsyncGenerator[AsyncSession, None]:
-    """Satisfy the shared repository constructor for explicit-session methods."""
-    if _DISCOVERY_NAMESPACE.int < 0:
-        yield AsyncSession()
+    """Fail loudly if a repository method accidentally uses the factory.
+
+    Discovery passes sessions explicitly; this factory exists only because the
+    shared repository base requires one for methods that do not use it.
+    """
+    raise RuntimeError("SystemMapDiscoveryRepository requires an explicit session")
 
 
 class SystemMapDiscoveryRepository:

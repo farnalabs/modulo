@@ -18,6 +18,7 @@ depends_on: str | Sequence[str] | None = None
 
 _TRIGGER = "trg_system_maps_owner_team_tenant"
 _FUNCTION = "enforce_system_map_owner_team"
+_PUBLISHED_INDEX = "uq_system_map_revisions_one_published"
 
 
 def _is_postgres() -> bool:
@@ -59,6 +60,12 @@ def upgrade() -> None:
             """
         )
     )
+    op.execute(
+        sa.text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_system_map_revisions_one_published "
+            "ON public.system_map_revisions (system_map_id) WHERE status = 'published'"
+        )
+    )
     op.execute(sa.text(f'DROP TRIGGER IF EXISTS "{_TRIGGER}" ON public.system_maps'))
     op.execute(
         sa.text(
@@ -76,3 +83,4 @@ def downgrade() -> None:
         return
     op.execute(sa.text(f'DROP TRIGGER IF EXISTS "{_TRIGGER}" ON public.system_maps'))
     op.execute(sa.text("DROP FUNCTION IF EXISTS public.enforce_system_map_owner_team()"))
+    op.execute(sa.text("DROP INDEX IF EXISTS uq_system_map_revisions_one_published"))

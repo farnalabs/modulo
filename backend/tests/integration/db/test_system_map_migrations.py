@@ -2,8 +2,9 @@
 
 Two layers of proof:
 
-* a real Alembic round-trip against a PRIVATE Postgres database (upgrade from
-  ``0340_drop_assistant_ui_driving_flag_row`` to ``0343_system_maps_revision_fk``
+    * a real Alembic round-trip against a PRIVATE Postgres database (upgrade from
+      ``0340_drop_assistant_ui_driving_flag_row`` to ``0344_system_maps_tenant_integrity``
+
   then ``downgrade -3``), so the migration's DDL is exercised exactly as shipped;
 * schema assertions against the session's fully-migrated database, including
   model↔migrated-schema column parity for all eight tables — the check that
@@ -193,6 +194,7 @@ class TestSystemMapMigratedSchema:
             "ix_system_map_revisions_system_map_id",
             "ix_system_map_revisions_status",
             "ix_system_map_revisions_deleted_by",
+            "uq_system_map_revisions_one_published",
         ):
             assert name in revisions_indexes, f"Index {name} not found on system_map_revisions"
 
@@ -225,7 +227,6 @@ class TestSystemMapMigratedSchema:
             "evals",
         } <= nodes_fks
 
-    @pytest.mark.asyncio
     @pytest.mark.asyncio
     async def test_owner_team_trigger_enforces_same_live_organisation(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as conn:
@@ -393,6 +394,23 @@ class TestSystemMapModelRoundTrip:
             revision=revision,
             loop_config=loop_config,
         )
+
+    @pytest.mark.asyncio
+    async def test_published_revision_index_rejects_duplicate_published_rows(
+        self, db_session: AsyncSession, graph_parents: _GraphParents
+    ) -> None:
+        first = graph_parents.revision
+        first.status = "published"
+        second = SystemMapRevision(
+            organisation_id=graph_parents.org_id,
+            system_map_id=graph_parents.map.id,
+            revision_number=2,
+            status="published",
+            content_json={"test": "second"},
+        )
+        db_session.add(second)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
 
     @pytest.mark.asyncio
     async def test_system_map_and_revision_round_trip(

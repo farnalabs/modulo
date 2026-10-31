@@ -55,6 +55,7 @@ from modulo.api.schemas.system_maps import (
 from modulo.api.team_scope import validate_owner_team_for_create
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.permissions import SYSTEM_MAPS_ACCESS_PERMISSION
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.system_map_persistence import SystemMapDiscoveryRepository, SystemMapNameConflictError
@@ -96,7 +97,7 @@ _MSG_BINDING_NOT_FOUND = "Attribution binding not found"
 _MSG_MAP_CONFLICTS_EXISTING = "System map conflicts with an existing resource"
 _MSG_REVISION_CONFLICTS_EXISTING = "Revision conflicts with an existing resource"
 
-_INTERNAL_SYSTEM_MAP_PERMISSION = "system_maps_access"
+_INTERNAL_SYSTEM_MAP_PERMISSION = SYSTEM_MAPS_ACCESS_PERMISSION
 _require_system_maps_feature = require_feature("system_maps")
 
 _log = logging.getLogger(__name__)
@@ -202,8 +203,6 @@ async def list_system_maps_endpoint(
                 count_stmt = count_stmt.where(SystemMap.name.ilike(f"%{name}%"))
             total_result = await session.execute(count_stmt)
             total = total_result.scalar_one()
-            if hasattr(total, "__await__"):
-                total = await total
 
     except ProgrammingError as exc:
         _log.exception("system_maps.list_system_maps_endpoint")
