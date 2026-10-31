@@ -527,3 +527,45 @@ def test_release_deploy_dispatch_runs_from_main_for_serialisation() -> None:
     assert "-f force_deploy=true" in dispatch
     assert '-f release_ref="${RC_TAG}"' in dispatch
     assert '-f release_sha="${RC_SHA}"' in dispatch
+
+
+def test_release_cut_uses_protected_main_pr_and_exact_merge_ref() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    cut = steps[names.index("Prepare exact cut commit through protected main (cut only)")]
+    script = cut["run"]
+
+    assert "git push origin main" not in script
+    assert 'git push --set-upstream origin "$BRANCH"' in script
+    assert "gh pr create" in script
+    assert 'gh pr view "$PR_NUMBER"' in script
+    assert "mergeCommit.oid" in script
+    assert 'git fetch origin "$CUT_SHA"' in script
+    assert 'git checkout --detach "$CUT_SHA"' in script
+    assert "MERGED_VERSION=" in script
+    assert 'gh workflow run "CI: Fast Validation"' in script
+    assert "gh workflow run pr-review.yml" in script
+
+    cleanup_names = [name for name in names if "Clean up publication hold" in name]
+    assert len(cleanup_names) == 2
+    for cleanup_name in cleanup_names:
+        cleanup = steps[names.index(cleanup_name)]
+        assert "always()" in cleanup["if"]
+        assert "steps.publication-hold.outcome == 'success'" in cleanup["if"]
+        assert "git push origin --delete release-publication-hold" in cleanup["run"]
+    failed_cut_cleanup = steps[names.index("Clean up publication hold after failed release cut")]
+    assert "steps.cut.outcome != 'success'" in failed_cut_cleanup["if"]
+
+
+def test_release_cut_tags_the_exact_merged_commit_after_schema_gate() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["release"]["steps"]
+    names = _step_names(steps)
+    prepare_idx = names.index("Prepare exact cut commit through protected main (cut only)")
+    schema_idx = names.index("Assert schema-freshness gate green on exact cut/recut commit")
+    cut_idx = names.index("Cut release candidate and freeze main")
+    assert prepare_idx < schema_idx < cut_idx
+    assert steps[schema_idx]["id"] == "schema-freshness"
+    assert "steps.cut-commit.outputs.cut_sha" in steps[schema_idx]["env"]["CUT_SHA"]
+    assert 'echo "cut_sha=$(git rev-parse HEAD)"' in steps[cut_idx]["run"]
