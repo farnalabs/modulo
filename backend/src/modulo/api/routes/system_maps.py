@@ -97,6 +97,25 @@ _MSG_BINDING_NOT_FOUND = "Attribution binding not found"
 _MSG_MAP_CONFLICTS_EXISTING = "System map conflicts with an existing resource"
 _MSG_REVISION_CONFLICTS_EXISTING = "Revision conflicts with an existing resource"
 
+# Endpoint names reused by the logging/error-handling decorators.
+_EP_LIST_SYSTEM_MAPS = "system_maps.list_system_maps_endpoint"
+_EP_CREATE_SYSTEM_MAP = "system_maps.create_system_map_endpoint"
+_EP_GET_SYSTEM_MAP = "system_maps.get_system_map_endpoint"
+_EP_UPDATE_SYSTEM_MAP = "system_maps.update_system_map_endpoint"
+_EP_DELETE_SYSTEM_MAP = "system_maps.delete_system_map_endpoint"
+_EP_GET_SYSTEM_MAP_REVISION = "system_maps.get_system_map_revision_endpoint"
+_EP_CREATE_SYSTEM_MAP_REVISION = "system_maps.create_system_map_revision_endpoint"
+_EP_PUBLISH_SYSTEM_MAP_REVISION = "system_maps.publish_system_map_revision_endpoint"
+_EP_ARCHIVE_SYSTEM_MAP_REVISION = "system_maps.archive_system_map_revision_endpoint"
+_EP_DELETE_SYSTEM_MAP_REVISION = "system_maps.delete_system_map_revision_endpoint"
+_EP_GET_SYSTEM_MAP_OVERVIEW = "system_maps.get_system_map_overview_endpoint"
+_EP_CREATE_ATTRIBUTION_BINDING = "system_maps.create_attribution_binding_endpoint"
+_EP_LIST_ATTRIBUTION_BINDINGS = "system_maps.list_attribution_bindings_endpoint"
+_EP_DELETE_ATTRIBUTION_BINDING = "system_maps.delete_attribution_binding_endpoint"
+
+_DESC_SYSTEM_MAP_ID = "System map ID"
+_DESC_REVISION_ID = "Revision ID"
+
 _INTERNAL_SYSTEM_MAP_PERMISSION = SYSTEM_MAPS_ACCESS_PERMISSION
 _require_system_maps_feature = require_feature("system_maps")
 
@@ -158,7 +177,7 @@ async def get_repo() -> SystemMapRepository:
 
 
 @router.get("")
-@handle_db_errors("system_maps.list_system_maps_endpoint")
+@handle_db_errors(_EP_LIST_SYSTEM_MAPS)
 async def list_system_maps_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -205,14 +224,14 @@ async def list_system_maps_endpoint(
             total = total_result.scalar_one()
 
     except ProgrammingError as exc:
-        _log.exception("system_maps.list_system_maps_endpoint")
+        _log.exception(_EP_LIST_SYSTEM_MAPS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.list_system_maps_endpoint")
-        _log.exception("system_maps.list_system_maps_endpoint")
+        raise_session_contract_error(exc, _EP_LIST_SYSTEM_MAPS)
+        _log.exception(_EP_LIST_SYSTEM_MAPS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -241,7 +260,7 @@ async def list_system_maps_endpoint(
         Depends(audited("system_map_created", "system_map", principal_dep=get_current_tenant_user_or_api_key))
     ],
 )
-@handle_db_errors("system_maps.create_system_map_endpoint")
+@handle_db_errors(_EP_CREATE_SYSTEM_MAP)
 async def create_system_map_endpoint(
     req: SystemMapCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -276,20 +295,20 @@ async def create_system_map_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except ProgrammingError as exc:
-        _log.exception("system_maps.create_system_map_endpoint")
+        _log.exception(_EP_CREATE_SYSTEM_MAP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("system_maps.create_system_map_endpoint")
+        _log.exception(_EP_CREATE_SYSTEM_MAP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_MAP_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.create_system_map_endpoint")
-        _log.exception("system_maps.create_system_map_endpoint")
+        raise_session_contract_error(exc, _EP_CREATE_SYSTEM_MAP)
+        _log.exception(_EP_CREATE_SYSTEM_MAP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -307,9 +326,9 @@ async def create_system_map_endpoint(
 
 
 @router.get("/{map_id}")
-@handle_db_errors("system_maps.get_system_map_endpoint")
+@handle_db_errors(_EP_GET_SYSTEM_MAP)
 async def get_system_map_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_LIST),
     repository: SystemMapRepository = Depends(get_repo),
@@ -323,14 +342,14 @@ async def get_system_map_endpoint(
                 session, organisation_id=principal.organisation_id, map_id=map_id
             )
     except ProgrammingError as exc:
-        _log.exception("system_maps.get_system_map_endpoint")
+        _log.exception(_EP_GET_SYSTEM_MAP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.get_system_map_endpoint")
-        _log.exception("system_maps.get_system_map_endpoint")
+        raise_session_contract_error(exc, _EP_GET_SYSTEM_MAP)
+        _log.exception(_EP_GET_SYSTEM_MAP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -356,9 +375,9 @@ async def get_system_map_endpoint(
         Depends(audited("system_map_updated", "system_map", principal_dep=get_current_tenant_user_or_api_key))
     ],
 )
-@handle_db_errors("system_maps.update_system_map_endpoint")
+@handle_db_errors(_EP_UPDATE_SYSTEM_MAP)
 async def update_system_map_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     req: SystemMapUpdate = Body(...),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_UPDATE),
@@ -412,20 +431,20 @@ async def update_system_map_endpoint(
                 payload_json=updates,
             )
     except ProgrammingError as exc:
-        _log.exception("system_maps.update_system_map_endpoint")
+        _log.exception(_EP_UPDATE_SYSTEM_MAP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("system_maps.update_system_map_endpoint")
+        _log.exception(_EP_UPDATE_SYSTEM_MAP)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_MAP_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.update_system_map_endpoint")
-        _log.exception("system_maps.update_system_map_endpoint")
+        raise_session_contract_error(exc, _EP_UPDATE_SYSTEM_MAP)
+        _log.exception(_EP_UPDATE_SYSTEM_MAP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -453,9 +472,9 @@ async def update_system_map_endpoint(
         )
     ],
 )
-@handle_db_errors("system_maps.delete_system_map_endpoint")
+@handle_db_errors(_EP_DELETE_SYSTEM_MAP)
 async def delete_system_map_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_DELETE),
     repository: SystemMapRepository = Depends(get_repo),
@@ -481,14 +500,14 @@ async def delete_system_map_endpoint(
                     payload_json={},
                 )
     except ProgrammingError as exc:
-        _log.exception("system_maps.delete_system_map_endpoint")
+        _log.exception(_EP_DELETE_SYSTEM_MAP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.delete_system_map_endpoint")
-        _log.exception("system_maps.delete_system_map_endpoint")
+        raise_session_contract_error(exc, _EP_DELETE_SYSTEM_MAP)
+        _log.exception(_EP_DELETE_SYSTEM_MAP)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -510,10 +529,10 @@ async def delete_system_map_endpoint(
 
 
 @router.get("/{map_id}/revisions/{rev_id}")
-@handle_db_errors("system_maps.get_system_map_revision_endpoint")
+@handle_db_errors(_EP_GET_SYSTEM_MAP_REVISION)
 async def get_system_map_revision_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
-    rev_id: uuid.UUID = Path(..., description="Revision ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
     include_graph: bool = Query(default=False, description="Include full graph (nodes, relationships, loop_configs)"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_GET),
@@ -541,14 +560,14 @@ async def get_system_map_revision_endpoint(
                     session, organisation_id=principal.organisation_id, revision_id=rev_id
                 )
     except ProgrammingError as exc:
-        _log.exception("system_maps.get_system_map_revision_endpoint")
+        _log.exception(_EP_GET_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.get_system_map_revision_endpoint")
-        _log.exception("system_maps.get_system_map_revision_endpoint")
+        raise_session_contract_error(exc, _EP_GET_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_GET_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -589,9 +608,9 @@ async def get_system_map_revision_endpoint(
         )
     ],
 )
-@handle_db_errors("system_maps.create_system_map_revision_endpoint")
+@handle_db_errors(_EP_CREATE_SYSTEM_MAP_REVISION)
 async def create_system_map_revision_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     req: SystemMapRevisionCreate = Body(...),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_CREATE),
@@ -712,20 +731,20 @@ async def create_system_map_revision_endpoint(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("system_maps.create_system_map_revision_endpoint")
+        _log.exception(_EP_CREATE_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("system_maps.create_system_map_revision_endpoint")
+        _log.exception(_EP_CREATE_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_REVISION_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.create_system_map_revision_endpoint")
-        _log.exception("system_maps.create_system_map_revision_endpoint")
+        raise_session_contract_error(exc, _EP_CREATE_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_CREATE_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -750,10 +769,10 @@ async def create_system_map_revision_endpoint(
         )
     ],
 )
-@handle_db_errors("system_maps.publish_system_map_revision_endpoint")
+@handle_db_errors(_EP_PUBLISH_SYSTEM_MAP_REVISION)
 async def publish_system_map_revision_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
-    rev_id: uuid.UUID = Path(..., description="Revision ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_PUBLISH),
     repository: SystemMapRepository = Depends(get_repo),
@@ -825,20 +844,20 @@ async def publish_system_map_revision_endpoint(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("system_maps.publish_system_map_revision_endpoint")
+        _log.exception(_EP_PUBLISH_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("system_maps.publish_system_map_revision_endpoint")
+        _log.exception(_EP_PUBLISH_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_REVISION_CONFLICTS_EXISTING,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.publish_system_map_revision_endpoint")
-        _log.exception("system_maps.publish_system_map_revision_endpoint")
+        raise_session_contract_error(exc, _EP_PUBLISH_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_PUBLISH_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -866,10 +885,10 @@ async def publish_system_map_revision_endpoint(
         )
     ],
 )
-@handle_db_errors("system_maps.archive_system_map_revision_endpoint")
+@handle_db_errors(_EP_ARCHIVE_SYSTEM_MAP_REVISION)
 async def archive_system_map_revision_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
-    rev_id: uuid.UUID = Path(..., description="Revision ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_ARCHIVE),
     repository: SystemMapRepository = Depends(get_repo),
@@ -917,14 +936,14 @@ async def archive_system_map_revision_endpoint(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("system_maps.archive_system_map_revision_endpoint")
+        _log.exception(_EP_ARCHIVE_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.archive_system_map_revision_endpoint")
-        _log.exception("system_maps.archive_system_map_revision_endpoint")
+        raise_session_contract_error(exc, _EP_ARCHIVE_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_ARCHIVE_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -953,10 +972,10 @@ async def archive_system_map_revision_endpoint(
         )
     ],
 )
-@handle_db_errors("system_maps.delete_system_map_revision_endpoint")
+@handle_db_errors(_EP_DELETE_SYSTEM_MAP_REVISION)
 async def delete_system_map_revision_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
-    rev_id: uuid.UUID = Path(..., description="Revision ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
+    rev_id: uuid.UUID = Path(..., description=_DESC_REVISION_ID),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_REVISION_DELETE),
     repository: SystemMapRepository = Depends(get_repo),
@@ -1003,14 +1022,14 @@ async def delete_system_map_revision_endpoint(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("system_maps.delete_system_map_revision_endpoint")
+        _log.exception(_EP_DELETE_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.delete_system_map_revision_endpoint")
-        _log.exception("system_maps.delete_system_map_revision_endpoint")
+        raise_session_contract_error(exc, _EP_DELETE_SYSTEM_MAP_REVISION)
+        _log.exception(_EP_DELETE_SYSTEM_MAP_REVISION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -1027,9 +1046,9 @@ async def delete_system_map_revision_endpoint(
 
 
 @router.get("/{map_id}/overview")
-@handle_db_errors("system_maps.get_system_map_overview_endpoint")
+@handle_db_errors(_EP_GET_SYSTEM_MAP_OVERVIEW)
 async def get_system_map_overview_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_OVERVIEW),
     repository: SystemMapRepository = Depends(get_repo),
@@ -1138,14 +1157,14 @@ async def get_system_map_overview_endpoint(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("system_maps.get_system_map_overview_endpoint")
+        _log.exception(_EP_GET_SYSTEM_MAP_OVERVIEW)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.get_system_map_overview_endpoint")
-        _log.exception("system_maps.get_system_map_overview_endpoint")
+        raise_session_contract_error(exc, _EP_GET_SYSTEM_MAP_OVERVIEW)
+        _log.exception(_EP_GET_SYSTEM_MAP_OVERVIEW)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -1156,6 +1175,117 @@ async def get_system_map_overview_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
+
+
+async def _validate_attribution_binding_node(
+    session: AsyncSession,
+    repository: SystemMapRepository,
+    *,
+    organisation_id: uuid.UUID,
+    map_id: uuid.UUID,
+    revision_id: uuid.UUID,
+    req: AttributionBindingCreate,
+) -> None:
+    """Validate that the target node exists and matches the binding kind."""
+    node = await repository.get_node_by_map_revision_key(
+        session,
+        organisation_id=organisation_id,
+        system_map_id=map_id,
+        revision_id=revision_id,
+        node_key=req.node_key,
+    )
+    if node is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Node {req.node_key} does not exist in the published map revision",
+        )
+
+    expected_node_type = "pipeline" if req.binding_kind == "trigger" else "improvement_loop"
+    if node.node_type != expected_node_type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"{req.binding_kind} bindings require a {expected_node_type} node; "
+                f"node {req.node_key} is {node.node_type}"
+            ),
+        )
+    if req.binding_kind == "trigger" and node.pipeline_id != req.pipeline_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Node {req.node_key} is bound to a different pipeline",
+        )
+    if req.binding_kind == "action_pipeline":
+        await _validate_action_pipeline_binding(
+            session,
+            repository,
+            organisation_id=organisation_id,
+            revision_id=revision_id,
+            req=req,
+        )
+
+
+async def _validate_action_pipeline_binding(
+    session: AsyncSession,
+    repository: SystemMapRepository,
+    *,
+    organisation_id: uuid.UUID,
+    revision_id: uuid.UUID,
+    req: AttributionBindingCreate,
+) -> None:
+    """Validate the loop config referenced by an action-pipeline binding."""
+    loop_config = await repository.get_loop_config_by_node_key(
+        session,
+        organisation_id=organisation_id,
+        revision_id=revision_id,
+        node_key=req.node_key,
+    )
+    if loop_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Node {req.node_key} has no improvement-loop configuration",
+        )
+    if loop_config.action_pipeline_id != req.pipeline_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Node {req.node_key} is configured for a different action pipeline",
+        )
+
+
+async def _verify_attribution_binding_targets(
+    session: AsyncSession,
+    *,
+    organisation_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    trigger_id: uuid.UUID | None,
+) -> None:
+    """Verify the referenced pipeline (and optional trigger) exist in the org."""
+    pipeline_stmt = select(Pipeline).where(
+        Pipeline.id == pipeline_id,
+        Pipeline.organisation_id == organisation_id,
+        Pipeline.deleted_at.is_(None),
+    )
+    pipeline_result = await session.execute(pipeline_stmt)
+    pipeline = pipeline_result.scalar_one_or_none()
+    if not pipeline:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline {pipeline_id} not found in this organisation",
+        )
+
+    if trigger_id:
+        trigger_stmt = select(Trigger).where(
+            Trigger.id == trigger_id,
+            Trigger.pipeline_id == pipeline_id,
+            Trigger.organisation_id == organisation_id,
+            Trigger.deleted_at.is_(None),
+        )
+        trigger_result = await session.execute(trigger_stmt)
+        trigger = trigger_result.scalar_one_or_none()
+        if not trigger:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Trigger {trigger_id} not found in this organisation",
+            )
 
 
 # ─── Attribution Bindings ───
@@ -1174,9 +1304,9 @@ async def get_system_map_overview_endpoint(
         )
     ],
 )
-@handle_db_errors("system_maps.create_attribution_binding_endpoint")
+@handle_db_errors(_EP_CREATE_ATTRIBUTION_BINDING)
 async def create_attribution_binding_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     req: AttributionBindingCreate = Body(...),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_BINDING_CREATE),
@@ -1200,81 +1330,20 @@ async def create_attribution_binding_endpoint(
             )
             if published_revision is None:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System map has no published revision")
-            node = await repository.get_node_by_map_revision_key(
+            await _validate_attribution_binding_node(
+                session,
+                repository,
+                organisation_id=principal.organisation_id,
+                map_id=map_id,
+                revision_id=published_revision.id,
+                req=req,
+            )
+            await _verify_attribution_binding_targets(
                 session,
                 organisation_id=principal.organisation_id,
-                system_map_id=map_id,
-                revision_id=published_revision.id,
-                node_key=req.node_key,
+                pipeline_id=req.pipeline_id,
+                trigger_id=req.trigger_id,
             )
-            if node is None:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=f"Node {req.node_key} does not exist in the published map revision",
-                )
-
-            expected_node_type = "pipeline" if req.binding_kind == "trigger" else "improvement_loop"
-            if node.node_type != expected_node_type:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=(
-                        f"{req.binding_kind} bindings require a {expected_node_type} node; "
-                        f"node {req.node_key} is {node.node_type}"
-                    ),
-                )
-            if req.binding_kind == "trigger" and node.pipeline_id != req.pipeline_id:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=f"Node {req.node_key} is bound to a different pipeline",
-                )
-            if req.binding_kind == "action_pipeline":
-                loop_config = await repository.get_loop_config_by_node_key(
-                    session,
-                    organisation_id=principal.organisation_id,
-                    revision_id=published_revision.id,
-                    node_key=req.node_key,
-                )
-                if loop_config is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail=f"Node {req.node_key} has no improvement-loop configuration",
-                    )
-                if loop_config.action_pipeline_id != req.pipeline_id:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail=f"Node {req.node_key} is configured for a different action pipeline",
-                    )
-
-            # Verify pipeline exists and is same org
-
-            pipeline_stmt = select(Pipeline).where(
-                Pipeline.id == req.pipeline_id,
-                Pipeline.organisation_id == principal.organisation_id,
-                Pipeline.deleted_at.is_(None),
-            )
-            pipeline_result = await session.execute(pipeline_stmt)
-            pipeline = pipeline_result.scalar_one_or_none()
-            if not pipeline:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Pipeline {req.pipeline_id} not found in this organisation",
-                )
-
-            # Verify trigger if provided
-            if req.trigger_id:
-                trigger_stmt = select(Trigger).where(
-                    Trigger.id == req.trigger_id,
-                    Trigger.pipeline_id == req.pipeline_id,
-                    Trigger.organisation_id == principal.organisation_id,
-                    Trigger.deleted_at.is_(None),
-                )
-                trigger_result = await session.execute(trigger_stmt)
-                trigger = trigger_result.scalar_one_or_none()
-                if not trigger:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Trigger {req.trigger_id} not found in this organisation",
-                    )
 
             binding = await repository.create_attribution_binding(
                 session,
@@ -1301,20 +1370,20 @@ async def create_attribution_binding_endpoint(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("system_maps.create_attribution_binding_endpoint")
+        _log.exception(_EP_CREATE_ATTRIBUTION_BINDING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except IntegrityError as exc:
-        _log.exception("system_maps.create_attribution_binding_endpoint")
+        _log.exception(_EP_CREATE_ATTRIBUTION_BINDING)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Attribution binding conflicts with existing binding",
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.create_attribution_binding_endpoint")
-        _log.exception("system_maps.create_attribution_binding_endpoint")
+        raise_session_contract_error(exc, _EP_CREATE_ATTRIBUTION_BINDING)
+        _log.exception(_EP_CREATE_ATTRIBUTION_BINDING)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -1330,9 +1399,9 @@ async def create_attribution_binding_endpoint(
 
 
 @router.get("/{map_id}/attribution-bindings")
-@handle_db_errors("system_maps.list_attribution_bindings_endpoint")
+@handle_db_errors(_EP_LIST_ATTRIBUTION_BINDINGS)
 async def list_attribution_bindings_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     pipeline_id: uuid.UUID | None = Query(default=None),
     trigger_id: uuid.UUID | None = Query(default=None),
     binding_kind: str | None = Query(default=None),
@@ -1362,14 +1431,14 @@ async def list_attribution_bindings_endpoint(
                 binding_kind=binding_kind,
             )
     except ProgrammingError as exc:
-        _log.exception("system_maps.list_attribution_bindings_endpoint")
+        _log.exception(_EP_LIST_ATTRIBUTION_BINDINGS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.list_attribution_bindings_endpoint")
-        _log.exception("system_maps.list_attribution_bindings_endpoint")
+        raise_session_contract_error(exc, _EP_LIST_ATTRIBUTION_BINDINGS)
+        _log.exception(_EP_LIST_ATTRIBUTION_BINDINGS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -1400,9 +1469,9 @@ async def list_attribution_bindings_endpoint(
         )
     ],
 )
-@handle_db_errors("system_maps.delete_attribution_binding_endpoint")
+@handle_db_errors(_EP_DELETE_ATTRIBUTION_BINDING)
 async def delete_attribution_binding_endpoint(
-    map_id: uuid.UUID = Path(..., description="System map ID"),
+    map_id: uuid.UUID = Path(..., description=_DESC_SYSTEM_MAP_ID),
     binding_id: uuid.UUID = Path(..., description="Attribution binding ID"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_SYSTEM_MAP_BINDING_DELETE),
@@ -1437,14 +1506,14 @@ async def delete_attribution_binding_endpoint(
                     payload_json={"system_map_id": str(map_id)},
                 )
     except ProgrammingError as exc:
-        _log.exception("system_maps.delete_attribution_binding_endpoint")
+        _log.exception(_EP_DELETE_ATTRIBUTION_BINDING)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "system_maps.delete_attribution_binding_endpoint")
-        _log.exception("system_maps.delete_attribution_binding_endpoint")
+        raise_session_contract_error(exc, _EP_DELETE_ATTRIBUTION_BINDING)
+        _log.exception(_EP_DELETE_ATTRIBUTION_BINDING)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,

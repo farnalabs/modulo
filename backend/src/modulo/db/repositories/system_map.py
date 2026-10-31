@@ -1066,6 +1066,149 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
                 return f"Team {team_id} is not available to this caller"
         return None
 
+    async def _validate_pipeline_bindings(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        account_id: uuid.UUID | None,
+        org_role: str | None,
+        pipeline_ids: set[uuid.UUID],
+    ) -> list[str]:
+        """Validate that every referenced pipeline exists and is caller-visible."""
+        errors: list[str] = []
+        result = await session.execute(
+            select(Pipeline).where(
+                Pipeline.id.in_(pipeline_ids),
+                Pipeline.organisation_id == organisation_id,
+                Pipeline.deleted_at.is_(None),
+            )
+        )
+        pipelines = {item.id: item for item in result.scalars().all()}
+        errors.extend(
+            f"Pipeline {item} does not exist in this organisation" for item in pipeline_ids - pipelines.keys()
+        )
+        for pipeline in pipelines.values():
+            if pipeline.visibility == "team" and pipeline.owner_team_id:
+                error = await self._validate_team_binding(
+                    session,
+                    organisation_id=organisation_id,
+                    account_id=account_id,
+                    org_role=org_role,
+                    team_id=pipeline.owner_team_id,
+                )
+                if error:
+                    errors.append(f"Pipeline {pipeline.id} is not available to this caller")
+        return errors
+
+    async def _validate_connector_bindings(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        account_id: uuid.UUID | None,
+        org_role: str | None,
+        connector_ids: set[uuid.UUID | None],
+    ) -> list[str]:
+        """Validate that every referenced connector exists and is caller-visible."""
+        errors: list[str] = []
+        result = await session.execute(
+            select(ConnectorInstance).where(
+                ConnectorInstance.id.in_(connector_ids),
+                ConnectorInstance.organisation_id == organisation_id,
+                ConnectorInstance.deleted_at.is_(None),
+            )
+        )
+        connectors = {item.id: item for item in result.scalars().all()}
+        errors.extend(
+            f"connector_instance_id {item} does not exist in this organisation"
+            for item in connector_ids - connectors.keys()
+        )
+        for connector in connectors.values():
+            if connector.visibility == "team" and connector.owner_team_id:
+                error = await self._validate_team_binding(
+                    session,
+                    organisation_id=organisation_id,
+                    account_id=account_id,
+                    org_role=org_role,
+                    team_id=connector.owner_team_id,
+                )
+                if error:
+                    errors.append(f"Connector {connector.id} is not available to this caller")
+        return errors
+
+    async def _validate_eval_bindings(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        account_id: uuid.UUID | None,
+        org_role: str | None,
+        eval_ids: set[uuid.UUID | None],
+    ) -> list[str]:
+        """Validate evals, their referenced pipelines, and team visibility."""
+        errors: list[str] = []
+        eval_result = await session.execute(
+            select(Eval.id, Eval.pipeline_id).where(
+                Eval.id.in_(eval_ids),
+                Eval.organisation_id == organisation_id,
+                Eval.deleted_at.is_(None),
+            )
+        )
+        evals = {item.id: item.pipeline_id for item in eval_result}
+        errors.extend(f"eval_id {item} does not exist in this organisation" for item in eval_ids - evals.keys())
+        eval_pipeline_ids = set(evals.values())
+        pipeline_result = await session.execute(
+            select(Pipeline).where(
+                Pipeline.id.in_(eval_pipeline_ids),
+                Pipeline.organisation_id == organisation_id,
+                Pipeline.deleted_at.is_(None),
+            )
+        )
+        eval_pipelines = {item.id: item for item in pipeline_result.scalars().all()}
+        errors.extend(
+            f"Eval {evaluation_id} references a pipeline outside this organisation"
+            for evaluation_id, pipeline_id in evals.items()
+            if pipeline_id not in eval_pipelines
+        )
+        for pipeline in eval_pipelines.values():
+            if pipeline.visibility == "team" and pipeline.owner_team_id:
+                error = await self._validate_team_binding(
+                    session,
+                    organisation_id=organisation_id,
+                    account_id=account_id,
+                    org_role=org_role,
+                    team_id=pipeline.owner_team_id,
+                )
+                if error:
+                    errors.append(f"Eval pipeline {pipeline.id} is not available to this caller")
+        return errors
+
+    async def _validate_owner_team_bindings(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        account_id: uuid.UUID | None,
+        org_role: str | None,
+        node_bindings: Sequence[dict[str, uuid.UUID | None]],
+    ) -> list[str]:
+        """Validate explicit owner_team_id references on each node binding."""
+        errors: list[str] = []
+        for binding in node_bindings:
+            team_id = binding.get("owner_team_id")
+            if team_id:
+                error = await self._validate_team_binding(
+                    session,
+                    organisation_id=organisation_id,
+                    account_id=account_id,
+                    org_role=org_role,
+                    team_id=team_id,
+                )
+                if error:
+                    errors.append(error)
+        return errors
+
     async def validate_bindings(
         self,
         session: AsyncSession,
@@ -1081,104 +1224,48 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         pipeline_ids = {value for binding in node_bindings for value in (binding.get("pipeline_id"),) if value}
         pipeline_ids.update(action_pipeline_ids)
         if pipeline_ids:
-            result = await session.execute(
-                select(Pipeline).where(
-                    Pipeline.id.in_(pipeline_ids),
-                    Pipeline.organisation_id == organisation_id,
-                    Pipeline.deleted_at.is_(None),
-                )
-            )
-            pipelines = {item.id: item for item in result.scalars().all()}
             errors.extend(
-                f"Pipeline {item} does not exist in this organisation" for item in pipeline_ids - pipelines.keys()
-            )
-            for pipeline in pipelines.values():
-                if pipeline.visibility == "team" and pipeline.owner_team_id:
-                    error = await self._validate_team_binding(
-                        session,
-                        organisation_id=organisation_id,
-                        account_id=account_id,
-                        org_role=org_role,
-                        team_id=pipeline.owner_team_id,
-                    )
-                    if error:
-                        errors.append(f"Pipeline {pipeline.id} is not available to this caller")
-        connector_ids = {
-            binding["connector_instance_id"] for binding in node_bindings if binding.get("connector_instance_id")
-        }
-        if connector_ids:
-            result = await session.execute(
-                select(ConnectorInstance).where(
-                    ConnectorInstance.id.in_(connector_ids),
-                    ConnectorInstance.organisation_id == organisation_id,
-                    ConnectorInstance.deleted_at.is_(None),
-                )
-            )
-            connectors = {item.id: item for item in result.scalars().all()}
-            errors.extend(
-                f"connector_instance_id {item} does not exist in this organisation"
-                for item in connector_ids - connectors.keys()
-            )
-            for connector in connectors.values():
-                if connector.visibility == "team" and connector.owner_team_id:
-                    error = await self._validate_team_binding(
-                        session,
-                        organisation_id=organisation_id,
-                        account_id=account_id,
-                        org_role=org_role,
-                        team_id=connector.owner_team_id,
-                    )
-                    if error:
-                        errors.append(f"Connector {connector.id} is not available to this caller")
-
-        eval_ids = {binding["eval_id"] for binding in node_bindings if binding.get("eval_id")}
-        if eval_ids:
-            result = await session.execute(
-                select(Eval.id, Eval.pipeline_id).where(
-                    Eval.id.in_(eval_ids),
-                    Eval.organisation_id == organisation_id,
-                    Eval.deleted_at.is_(None),
-                )
-            )
-            evals = {item.id: item.pipeline_id for item in result}
-            errors.extend(f"eval_id {item} does not exist in this organisation" for item in eval_ids - evals.keys())
-            eval_pipeline_ids = set(evals.values())
-            result = await session.execute(
-                select(Pipeline).where(
-                    Pipeline.id.in_(eval_pipeline_ids),
-                    Pipeline.organisation_id == organisation_id,
-                    Pipeline.deleted_at.is_(None),
-                )
-            )
-            eval_pipelines = {item.id: item for item in result.scalars().all()}
-            errors.extend(
-                f"Eval {evaluation_id} references a pipeline outside this organisation"
-                for evaluation_id, pipeline_id in evals.items()
-                if pipeline_id not in eval_pipelines
-            )
-            for pipeline in eval_pipelines.values():
-                if pipeline.visibility == "team" and pipeline.owner_team_id:
-                    error = await self._validate_team_binding(
-                        session,
-                        organisation_id=organisation_id,
-                        account_id=account_id,
-                        org_role=org_role,
-                        team_id=pipeline.owner_team_id,
-                    )
-                    if error:
-                        errors.append(f"Eval pipeline {pipeline.id} is not available to this caller")
-        for binding in node_bindings:
-            team_id = binding.get("owner_team_id")
-            if team_id:
-                error = await self._validate_team_binding(
+                await self._validate_pipeline_bindings(
                     session,
                     organisation_id=organisation_id,
                     account_id=account_id,
                     org_role=org_role,
-                    team_id=team_id,
+                    pipeline_ids=pipeline_ids,
                 )
-                if error:
-                    errors.append(error)
+            )
+        connector_ids = {
+            binding["connector_instance_id"] for binding in node_bindings if binding.get("connector_instance_id")
+        }
+        if connector_ids:
+            errors.extend(
+                await self._validate_connector_bindings(
+                    session,
+                    organisation_id=organisation_id,
+                    account_id=account_id,
+                    org_role=org_role,
+                    connector_ids=connector_ids,
+                )
+            )
+        eval_ids = {binding["eval_id"] for binding in node_bindings if binding.get("eval_id")}
+        if eval_ids:
+            errors.extend(
+                await self._validate_eval_bindings(
+                    session,
+                    organisation_id=organisation_id,
+                    account_id=account_id,
+                    org_role=org_role,
+                    eval_ids=eval_ids,
+                )
+            )
+        errors.extend(
+            await self._validate_owner_team_bindings(
+                session,
+                organisation_id=organisation_id,
+                account_id=account_id,
+                org_role=org_role,
+                node_bindings=node_bindings,
+            )
+        )
         return errors
 
     async def validate_publish(
@@ -1207,12 +1294,7 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
             session, organisation_id=organisation_id, revision_id=revision_id
         )
         flow_edges = [r for r in relationships if r.relationship_type == "flow"]
-        for relationship in relationships:
-            missing = sorted(
-                {key for key in (relationship.source_node_key, relationship.target_node_key) if key not in node_keys}
-            )
-            if missing:
-                errors.append(f"Relationship {relationship.id} references missing node(s): {', '.join(missing)}")
+        errors.extend(self._validate_relationship_endpoints(relationships, node_keys))
         if not self._is_acyclic(flow_edges):
             errors.append("Revision contains cycles in 'flow' relationships")
 
@@ -1221,34 +1303,17 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         loop_configs = await self.list_loop_configs_in_revision(
             session, organisation_id=organisation_id, revision_id=revision_id
         )
-        loop_config_keys = [loop.node_key for loop in loop_configs]
-        if len(loop_config_keys) != len(set(loop_config_keys)):
-            errors.append("Loop configs contain duplicate node keys")
-        for loop_config in loop_configs:
-            if loop_config.node_key not in node_keys:
-                errors.append(f"Loop config references missing node '{loop_config.node_key}'")
-            elif next(node for node in nodes if node.node_key == loop_config.node_key).node_type != "improvement_loop":
-                errors.append(f"Loop config '{loop_config.node_key}' does not target an improvement_loop node")
-        for loop_node in loop_nodes:
-            node_loop_config: SystemMapLoopConfig | None = await self.get_loop_config_by_node_key(
-                session, organisation_id=organisation_id, revision_id=revision_id, node_key=loop_node.node_key
+        errors.extend(
+            await self._validate_loop_configs(
+                session,
+                organisation_id=organisation_id,
+                revision_id=revision_id,
+                nodes=nodes,
+                node_keys=node_keys,
+                loop_nodes=loop_nodes,
+                loop_configs=loop_configs,
             )
-            if not node_loop_config:
-                errors.append(f"Improvement loop node '{loop_node.node_key}' missing loop config")
-            else:
-                required = (
-                    ("target_signal", node_loop_config.target_signal),
-                    ("observation_window_seconds", node_loop_config.observation_window_seconds),
-                    ("action_pipeline_id", node_loop_config.action_pipeline_id),
-                    ("budget_limit_usd", node_loop_config.budget_limit_usd),
-                    ("cooldown_seconds", node_loop_config.cooldown_seconds),
-                    ("outcome_metric", node_loop_config.outcome_metric),
-                )
-                missing = [
-                    name for name, value in required if value is None or (isinstance(value, str) and not value.strip())
-                ]
-                if missing:
-                    errors.append(f"Loop config for '{loop_node.node_key}' is incomplete: missing {', '.join(missing)}")
+        )
 
         # 3. Validate every node and loop foreign-key binding, including team scope.
         binding_errors = await self.validate_bindings(
@@ -1270,6 +1335,68 @@ class SystemMapRepository(BaseRepository):  # vulture: ignore
         errors.extend(binding_errors)
 
         return len(errors) == 0, errors
+
+    @staticmethod
+    def _validate_relationship_endpoints(
+        relationships: Sequence[SystemMapRelationship], node_keys: set[str]
+    ) -> list[str]:
+        """Report relationships whose endpoints do not resolve to live nodes."""
+        errors: list[str] = []
+        for relationship in relationships:
+            missing = sorted(
+                {key for key in (relationship.source_node_key, relationship.target_node_key) if key not in node_keys}
+            )
+            if missing:
+                errors.append(f"Relationship {relationship.id} references missing node(s): {', '.join(missing)}")
+        return errors
+
+    async def _validate_loop_configs(
+        self,
+        session: AsyncSession,
+        *,
+        organisation_id: uuid.UUID,
+        revision_id: uuid.UUID,
+        nodes: Sequence[SystemMapNode],
+        node_keys: set[str],
+        loop_nodes: Sequence[SystemMapNode],
+        loop_configs: Sequence[SystemMapLoopConfig],
+    ) -> list[str]:
+        """Validate loop-config keys and required parameters."""
+        errors: list[str] = []
+        loop_config_keys = [loop.node_key for loop in loop_configs]
+        if len(loop_config_keys) != len(set(loop_config_keys)):
+            errors.append("Loop configs contain duplicate node keys")
+        node_types = {node.node_key: node.node_type for node in nodes}
+        for loop_config in loop_configs:
+            if loop_config.node_key not in node_keys:
+                errors.append(f"Loop config references missing node '{loop_config.node_key}'")
+            elif node_types[loop_config.node_key] != "improvement_loop":
+                errors.append(f"Loop config '{loop_config.node_key}' does not target an improvement_loop node")
+        for loop_node in loop_nodes:
+            node_loop_config: SystemMapLoopConfig | None = await self.get_loop_config_by_node_key(
+                session, organisation_id=organisation_id, revision_id=revision_id, node_key=loop_node.node_key
+            )
+            if not node_loop_config:
+                errors.append(f"Improvement loop node '{loop_node.node_key}' missing loop config")
+            else:
+                errors.extend(self._missing_loop_parameters(loop_node.node_key, node_loop_config))
+        return errors
+
+    @staticmethod
+    def _missing_loop_parameters(node_key: str, loop_config: SystemMapLoopConfig) -> list[str]:
+        """Return an error entry when a loop config omits a required parameter."""
+        required = (
+            ("target_signal", loop_config.target_signal),
+            ("observation_window_seconds", loop_config.observation_window_seconds),
+            ("action_pipeline_id", loop_config.action_pipeline_id),
+            ("budget_limit_usd", loop_config.budget_limit_usd),
+            ("cooldown_seconds", loop_config.cooldown_seconds),
+            ("outcome_metric", loop_config.outcome_metric),
+        )
+        missing = [name for name, value in required if value is None or (isinstance(value, str) and not value.strip())]
+        if not missing:
+            return []
+        return [f"Loop config for '{node_key}' is incomplete: missing {', '.join(missing)}"]
 
     def _is_acyclic(self, flow_edges: list[SystemMapRelationship]) -> bool:
         """Check if the flow graph is acyclic using DFS."""
