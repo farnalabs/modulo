@@ -166,7 +166,11 @@
     <template v-else>
       <div class="space-y-6">
       <!-- Org Info -->
-      <SectionCard :title="$t('views.AdminOrgSettingsView.org_info')">
+      <DataCard
+        :title="$t('views.AdminOrgSettingsView.org_info')"
+        variant="context"
+        heading-level="h2"
+      >
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
             <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminOrgSettingsView.name') }}</span>
@@ -197,7 +201,7 @@
             <p class="mt-0.5 font-mono text-xs text-muted-foreground">{{ orgInfo.slug || shortId(orgInfo.id) }}</p>
           </div>
         </div>
-      </SectionCard>
+      </DataCard>
 
       <!-- Data Export -->
       <SectionCard
@@ -336,6 +340,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
+import DataCard from '../components/ui/DataCard.vue'
 import { ref, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'

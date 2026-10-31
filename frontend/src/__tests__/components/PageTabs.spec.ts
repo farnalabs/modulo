@@ -38,12 +38,12 @@ import { useRoute } from 'vue-router'
 import { usePlanStore } from '../../stores/planStore'
 import PageTabs from '../../components/PageTabs.vue'
 
-function createWrapper(tabs: any[], routePath = '/evals/editor') {
+function createWrapper(tabs: any[], routePath = '/evals/editor', query: Record<string, unknown> = {}) {
   ;(useRoute as any).mockReturnValue({
     path: routePath,
-    fullPath: routePath,
+    fullPath: Object.keys(query).length > 0 ? `${routePath}?${new URLSearchParams(query as Record<string, string>)}` : routePath,
     params: {},
-    query: {},
+    query,
     hash: '',
     matched: [],
     name: null,
@@ -56,7 +56,7 @@ function createWrapper(tabs: any[], routePath = '/evals/editor') {
       plugins: [i18n],
       stubs: {
         'router-link': {
-          template: '<a :href="to" data-testid="router-link-stub"><slot /></a>',
+          template: '<a :href="to" data-testid="router-link-stub" @click.prevent="$emit(\'click\', $event)"><slot /></a>',
           props: ['to'],
         },
       },
@@ -186,6 +186,19 @@ describe('PageTabs', () => {
     const links = wrapper.findAll('[data-testid="router-link-stub"]')
     expect(links[0].classes()).not.toContain('active')
     expect(links[1].classes()).toContain('active')
+  })
+
+  it('activates only the tab matching the current query section', () => {
+    const tabs = [
+      { label: 'Native', to: '/library?section=native' },
+      { label: 'Community', to: '/library?section=community' },
+      { label: 'Collections', to: '/library?section=collections' },
+    ]
+    const wrapper = createWrapper(tabs, '/library', { section: 'community' })
+    const links = wrapper.findAll('[data-testid="router-link-stub"]')
+    expect(links[0].classes()).not.toContain('active')
+    expect(links[1].classes()).toContain('active')
+    expect(links[2].classes()).not.toContain('active')
   })
 
   it('sets aria-label on nav element', () => {

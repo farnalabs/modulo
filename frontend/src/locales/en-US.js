@@ -533,6 +533,7 @@ export default {
       "assign_to": "Assign to:",
       "error_group_detail": "Error Group Detail",
       "subtitle": "Inspect occurrences, status, ownership, and event context for this error group.",
+      "fingerprint": "Fingerprint",
       "failed_to_load_events": "Failed to load events:",
       "last_seen": "Last Seen",
       "failed_to_update_status": "Failed to update status:",

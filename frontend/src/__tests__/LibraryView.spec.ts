@@ -70,9 +70,11 @@ const COMMUNITY_ITEM = {
 }
 
 describe('LibraryView', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks()
     getMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 12 })
+    await router.push('/library')
+    await router.isReady()
   })
 
   afterEach(() => {
@@ -134,7 +136,7 @@ describe('LibraryView', () => {
 
   it('renders the Community section separately with a non-verified indicator', async () => {
     getMock.mockResolvedValue({ items: [COMMUNITY_ITEM], total: 1, page: 1, page_size: 12 })
-    router.push('/library')
+    await router.push('/library')
     await router.isReady()
     const wrapper = mount(LibraryView, {
       global: { plugins: [router] },
@@ -420,13 +422,19 @@ describe('LibraryView responsive layout (FAR-640)', () => {
 
   it('shows collections tab and create button', async () => {
     getMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 12 })
-    const wrapper = await mountLibrary()
+    await router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+
+    await wrapper.get('[data-testid="library-section-collections"]').trigger('click')
+    await nextTick()
+    await nextTick()
 
     const collectionsTab = wrapper.find('[data-testid="library-section-collections"]')
     expect(collectionsTab.exists()).toBe(true)
-
-    await collectionsTab.trigger('click')
-    await nextTick()
 
     const createBtn = wrapper.find('[data-testid="library-create-collection"]')
     expect(createBtn.exists()).toBe(true)

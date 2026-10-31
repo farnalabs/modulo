@@ -15,9 +15,9 @@
         role="tab"
         :aria-selected="isActive(entry.tab.to) ? 'true' : 'false'"
         :aria-label="entry.lock ? entry.lock.aria : undefined"
-         :title="entry.lock ? entry.lock.tooltip : undefined"
-         v-bind="entry.lock ? { 'data-testid': 'page-tab-locked' } : entry.tab.dataTestId ? { 'data-testid': entry.tab.dataTestId } : {}"
-         @click="$emit('tab-click', entry.tab)"
+        :title="entry.lock ? entry.lock.tooltip : undefined"
+        v-bind="entry.lock ? { 'data-testid': 'page-tab-locked' } : entry.tab.dataTestId ? { 'data-testid': entry.tab.dataTestId } : {}"
+        @click="$emit('tab-click', entry.tab)"
       >
         <!-- FAR-47: a plan-locked tab keeps its space in the bar (never
              removed) and leads with the padlock; the tab itself links to the
@@ -121,9 +121,9 @@ function lockFor(tab: Tab): TabLock | null {
   // at a tier-entitled user and then flip it off (FAR-47 review). Leave the
   // tab unlocked until the plan has resolved — the analogue of the sidebar's
   // `tierInfoLoaded` gating in config/navigation.ts.
-   if (!planStore || !planStore.loaded) return null
-   if (planStore.isAtMinimumTier(tier)) return null
-   const plan = planStore.getTierLabel(tier)
+  if (!planStore || !planStore.loaded) return null
+  if (planStore.isAtMinimumTier(tier)) return null
+  const plan = planStore.getTierLabel(tier)
   return {
     tooltip: t('components.PageTabs.available_on_plan', { plan }),
     aria: t('components.PageTabs.locked_aria', { label: tab.label, plan }),
@@ -131,12 +131,23 @@ function lockFor(tab: Tab): TabLock | null {
 }
 
 function isActive(to: string): boolean {
-  const tabPath = to.split('?')[0]
-  if (route.fullPath === to || route.path === tabPath) return true
+  const [tabPath, tabQuery] = to.split('?')
+  const tabSection = new URLSearchParams(tabQuery).get('section')
+  const routeSection = typeof route.query.section === 'string' ? route.query.section : null
+  const effectiveRouteSection = routeSection ?? 'native'
+
+  if (tabQuery && tabSection !== effectiveRouteSection) return false
+  if (route.path === tabPath) return true
   if (!route.path.startsWith(tabPath + '/')) return false
+
   return !props.tabs.some((tab) => {
-    const siblingPath = tab.to.split('?')[0]
-    return tab.to !== to && (route.path.startsWith(siblingPath + '/') || route.path === siblingPath) && siblingPath.length > tabPath.length
+    const [siblingPath, siblingQuery] = tab.to.split('?')
+    return (
+      tab.to !== to
+      && (!siblingQuery || new URLSearchParams(siblingQuery).get('section') === effectiveRouteSection)
+      && (route.path.startsWith(siblingPath + '/') || route.path === siblingPath)
+      && siblingPath.length > tabPath.length
+    )
   })
 }
 

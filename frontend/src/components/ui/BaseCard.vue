@@ -36,7 +36,7 @@ const variantClass = computed(() => {
     case 'muted':
       return 'bg-muted/50'
     case 'context':
-      return 'bg-context-purple/10 border border-context-purple/20'
+      return 'bg-primary/5 border border-primary/20'
     case 'default':
     default:
       return 'bg-card'

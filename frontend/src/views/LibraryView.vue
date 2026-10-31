@@ -298,7 +298,12 @@ function removeType(value: string) {
 }
 
 type LibrarySection = 'native' | 'community' | 'collections'
-const section = ref<LibrarySection>('native')
+function routeSection(value: unknown): LibrarySection {
+  return value === 'community' || value === 'collections' ? value : 'native'
+}
+
+const section = ref<LibrarySection>(routeSection(route.query.section))
+const sectionReady = ref(false)
 
 const libraryTabs = computed(() => [
   { label: t('views.LibraryView.native_library'), to: '/library?section=native', dataTestId: 'library-section-native' },
@@ -307,10 +312,10 @@ const libraryTabs = computed(() => [
 ])
 
 function onLibraryTabClick(tab: { to: string }) {
-  const next = new URL(tab.to, window.location.origin).searchParams.get('section') as LibrarySection | null
+  const next = routeSection(new URL(tab.to, window.location.origin).searchParams.get('section'))
   if (next === section.value) return
-  section.value = next ?? 'native'
   page.value = 1
+  section.value = next
   if (section.value === 'collections') loadCollections()
   else loadPrimitives()
 }
@@ -355,6 +360,20 @@ watch([loadResp, section], ([d]) => {
     total.value = d.total
   }
 }, { immediate: true })
+
+watch(
+  () => route.query.section,
+  (value, previous) => {
+    if (!sectionReady.value) return
+    const next = routeSection(value)
+    if (next === section.value && value === previous) return
+    section.value = next
+    page.value = 1
+    if (section.value === 'collections') loadCollections()
+    else loadPrimitives()
+  },
+  { flush: 'sync' },
+)
 
 watchDebounced(search, () => {
   page.value = 1
@@ -480,11 +499,14 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onClickOutside)
 })
 onMounted(() => {
+  section.value = routeSection(route.query.section)
+  sectionReady.value = true
   const typeParam = route.query.type
   if (typeof typeParam === 'string' && typeParam) {
     selectedTypes.value = [typeParam]
   }
   document.addEventListener('mousedown', onClickOutside)
-  loadPrimitives()
+  if (section.value === 'collections') loadCollections()
+  else loadPrimitives()
 })
 </script>

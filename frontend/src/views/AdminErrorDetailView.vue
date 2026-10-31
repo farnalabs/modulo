@@ -13,7 +13,10 @@
           <ArrowLeft class="mr-1 inline-block h-4 w-4" aria-hidden="true" />
           {{ $t('views.AdminErrorDetailView.back') }}
         </button>
-        <PageHeader :title="$t('views.AdminErrorDetailView.error_group_detail')" :subtitle="group ? shortId(group.fingerprint) : $t('views.AdminErrorDetailView.subtitle')" />
+        <PageHeader
+          :title="$t('views.AdminErrorDetailView.error_group_detail')"
+          :subtitle="$t('views.AdminErrorDetailView.subtitle')"
+        />
       </div>
     </header>
 
@@ -131,6 +134,9 @@
 
       <div v-if="sampleEvent" class="card p-4">
         <h2 class="mb-2 text-base font-semibold">{{ $t('views.AdminErrorDetailView.message') }}</h2>
+        <p class="mb-2 text-xs text-muted-foreground">
+          {{ $t('views.AdminErrorDetailView.fingerprint') }}: <span class="font-mono">{{ shortId(group.fingerprint) }}</span>
+        </p>
         <p class="rounded-lg bg-muted p-3 text-sm font-mono">{{ sampleEvent.message }}</p>
 
         <div v-if="sampleEvent.stacktrace" class="mt-4">
