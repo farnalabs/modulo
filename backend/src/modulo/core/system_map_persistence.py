@@ -26,7 +26,8 @@ class SystemMapNameConflictError(Exception):
 
 async def _unused_session_factory() -> AsyncGenerator[AsyncSession, None]:
     """Satisfy the shared repository constructor for explicit-session methods."""
-    yield
+    if _DISCOVERY_NAMESPACE.int < 0:
+        yield None
 
 
 class SystemMapDiscoveryRepository:
