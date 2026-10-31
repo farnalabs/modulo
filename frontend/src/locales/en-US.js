@@ -2031,7 +2031,9 @@ export default {
       "system_default": "System default",
       "force_enabled": "Force enabled",
       "force_disabled": "Force disabled",
-      "locked_requires_team": "Requires team licence"
+      "locked_requires_team": "Requires team licence",
+      "plan_info_unavailable": "Plan information could not be loaded.",
+      "dev_mode_toggle_failed": "Failed to update developer mode:"
     },
     "EvalEditorView": {
       "eval_system_is_not_available_on_your_current_plan": "Eval system is not available on your current plan.",
