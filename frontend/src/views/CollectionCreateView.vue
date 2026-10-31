@@ -1,6 +1,6 @@
 <template>
   <div class="page-wide py-8">
-    <PageHeader :title="$t('views.LibraryView.collection_create_title')" />
+    <PageHeader :title="$t('views.LibraryView.collection_create_title')" :subtitle="$t('views.LibraryView.collection_create_subtitle')" />
     <div class="max-w-2xl mx-auto mt-6 space-y-4">
       <!--
         Create-form failure: the user edits the form and submits again; an

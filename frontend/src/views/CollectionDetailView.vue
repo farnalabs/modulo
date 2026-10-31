@@ -10,7 +10,7 @@
       role="alert"
     />
     <div v-else-if="collection" class="max-w-2xl mx-auto mt-6 space-y-4">
-      <PageHeader :title="collection.name" />
+      <PageHeader :title="collection.name" :subtitle="$t('views.CollectionDetail.subtitle')" />
       <div class="text-sm text-muted-foreground">
         @{{ collection.slug }} ·
         {{

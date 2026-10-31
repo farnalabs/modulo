@@ -47,7 +47,7 @@ const props = defineProps<{
   title?: string
   description?: string
   headingLevel?: 'h2' | 'h3' | 'h4'
-  variant?: 'default' | 'bordered' | 'elevated' | 'muted'
+  variant?: 'default' | 'bordered' | 'elevated' | 'muted' | 'context'
   padding?: 'none' | 'sm' | 'md' | 'lg'
   elevation?: 'none' | 'sm' | 'md' | 'lg'
   titleClass?: string

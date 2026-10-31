@@ -20,7 +20,7 @@
 import { computed } from 'vue'
 
 const props = defineProps<{
-  variant?: 'default' | 'bordered' | 'elevated' | 'muted'
+  variant?: 'default' | 'bordered' | 'elevated' | 'muted' | 'context'
   padding?: 'none' | 'sm' | 'md' | 'lg'
   elevation?: 'none' | 'sm' | 'md' | 'lg'
   class?: string
@@ -35,6 +35,8 @@ const variantClass = computed(() => {
       return 'bg-card shadow'
     case 'muted':
       return 'bg-muted/50'
+    case 'context':
+      return 'bg-context-purple/10 border border-context-purple/20'
     case 'default':
     default:
       return 'bg-card'

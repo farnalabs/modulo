@@ -15,8 +15,9 @@
         role="tab"
         :aria-selected="isActive(entry.tab.to) ? 'true' : 'false'"
         :aria-label="entry.lock ? entry.lock.aria : undefined"
-        :title="entry.lock ? entry.lock.tooltip : undefined"
-        v-bind="entry.lock ? { 'data-testid': 'page-tab-locked' } : {}"
+         :title="entry.lock ? entry.lock.tooltip : undefined"
+         v-bind="entry.lock ? { 'data-testid': 'page-tab-locked' } : entry.tab.dataTestId ? { 'data-testid': entry.tab.dataTestId } : {}"
+         @click="$emit('tab-click', entry.tab)"
       >
         <!-- FAR-47: a plan-locked tab keeps its space in the bar (never
              removed) and leads with the padlock; the tab itself links to the
@@ -41,6 +42,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import type { Component } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getActivePinia } from 'pinia'
 import { usePlanStore } from '../stores/planStore'
 import LockIcon from './LockIcon.vue'
 import manifest from '@/manifest.yaml'
@@ -57,6 +59,7 @@ export interface Tab {
   icon?: Component
   badge?: number | string
   badgeVariant?: 'primary' | 'warning' | 'destructive'
+  dataTestId?: string
 }
 
 /** Copy + accessible name for a plan-locked tab. */
@@ -85,8 +88,12 @@ const props = defineProps<{
   tabs: Tab[]
 }>()
 
+defineEmits<{
+  (event: 'tab-click', tab: Tab): void
+}>()
+
 const route = useRoute()
-const planStore = usePlanStore()
+const planStore = getActivePinia() ? usePlanStore() : null
 
 /**
  * FAR-47: tier-gated tabs are never hidden — they stay in the bar, occupy
@@ -114,9 +121,9 @@ function lockFor(tab: Tab): TabLock | null {
   // at a tier-entitled user and then flip it off (FAR-47 review). Leave the
   // tab unlocked until the plan has resolved — the analogue of the sidebar's
   // `tierInfoLoaded` gating in config/navigation.ts.
-  if (!planStore.loaded) return null
-  if (planStore.isAtMinimumTier(tier)) return null
-  const plan = planStore.getTierLabel(tier)
+   if (!planStore || !planStore.loaded) return null
+   if (planStore.isAtMinimumTier(tier)) return null
+   const plan = planStore.getTierLabel(tier)
   return {
     tooltip: t('components.PageTabs.available_on_plan', { plan }),
     aria: t('components.PageTabs.locked_aria', { label: tab.label, plan }),
@@ -124,11 +131,13 @@ function lockFor(tab: Tab): TabLock | null {
 }
 
 function isActive(to: string): boolean {
-  if (route.path === to) return true
-  if (!route.path.startsWith(to + '/')) return false
-  return !props.tabs.some(
-    (tab) => tab.to !== to && (route.path.startsWith(tab.to + '/') || route.path === tab.to) && tab.to.length > to.length,
-  )
+  const tabPath = to.split('?')[0]
+  if (route.fullPath === to || route.path === tabPath) return true
+  if (!route.path.startsWith(tabPath + '/')) return false
+  return !props.tabs.some((tab) => {
+    const siblingPath = tab.to.split('?')[0]
+    return tab.to !== to && (route.path.startsWith(siblingPath + '/') || route.path === siblingPath) && siblingPath.length > tabPath.length
+  })
 }
 
 function badgeClass(variant?: 'primary' | 'warning' | 'destructive'): string {
