@@ -3454,7 +3454,9 @@ export default {
       "override_cleared_for": "Override cleared for {key}.",
       "failed_to_apply_override": "Failed to apply override:",
       "failed_to_clear_override": "Failed to clear override:",
-      "loading": "Loading..."
+      "loading": "Loading...",
+      "no_config_entries": "No configuration entries found.",
+      "no_config_entries_description": "Runtime configuration will appear here once the server reports its settings."
     },
     "AdminConnectorsView": {
       "title": "Connectors",

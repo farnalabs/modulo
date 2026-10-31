@@ -6172,6 +6172,9 @@ elements:
       - testid: settings-runtime-config-reload
         type: button
         dynamic_testid: false
+      - testid: settings-runtime-config-loading
+        type: element
+        dynamic_testid: false
       - testid: settings-runtime-config-apply
         type: button
         dynamic_testid: false
