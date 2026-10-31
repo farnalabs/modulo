@@ -151,6 +151,8 @@ describe('AdminErrorDetailView', () => {
     expect(wrapper.text()).toContain('production')
     expect(wrapper.text()).toContain('1.2.3')
     expect(wrapper.text()).toContain('Raw Events (1)')
+    expect(wrapper.text()).toContain('Fingerprint: #abcdef12')
+    expect(wrapper.text()).toContain('Inspect occurrences, status, ownership, and event context for this error group.')
   })
 
   it('raw events: pagination next/prev fetch successive offsets and disable at bounds', async () => {

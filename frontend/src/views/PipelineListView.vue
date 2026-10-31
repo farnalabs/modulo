@@ -10,7 +10,7 @@
          When the onboarding banner or the mobile fixed header are present the
          chrome is taller than this offset and the page overflows into
          AppLayout's scroll area — accepted trade-off. -->
-    <PageHeader :title="$t('views.PipelineListView.title')" class="shrink-0 px-6 pt-6">
+    <PageHeader :title="$t('views.PipelineListView.title')" :subtitle="$t('views.PipelineListView.subtitle')" class="shrink-0 px-6 pt-6">
       <template #right>
         <div class="flex items-center gap-2">
           <div class="w-full sm:w-auto">

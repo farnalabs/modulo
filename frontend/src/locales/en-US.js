@@ -164,6 +164,8 @@ export default {
     },
     "LibraryView": {
       "title": "Library",
+      "subtitle": "Browse reusable pipelines, agents, schemas, integrations, and collections.",
+      "collection_create_subtitle": "Create a reusable collection of pinned library primitives.",
       "all_types": "All types",
       "failed_to_load_primitives": "Failed to load modules",
       "test_fixtures": "Test Fixtures",
@@ -226,6 +228,7 @@ export default {
       "page_of": "Page {page} of {total}",
     },
     "CollectionDetail": {
+      "subtitle": "Review this collection's pinned primitives, status, and installation options.",
       "install": "Install",
       "installing": "Installing...",
       "install_failed": "Failed to install this collection",
@@ -372,6 +375,7 @@ export default {
       "context_source_feature_overview_label": "Feature Overview",
     },
     "PipelineListView": {
+      "subtitle": "Build, monitor, and manage the pipelines that automate your delivery workflows.",
       "title": "Pipelines",
       "no_pipelines_match_your_search": "No pipelines match your search",
       "search_pipelines": "Search pipelines...",
@@ -528,6 +532,8 @@ export default {
     "AdminErrorDetailView": {
       "assign_to": "Assign to:",
       "error_group_detail": "Error Group Detail",
+      "subtitle": "Inspect occurrences, status, ownership, and event context for this error group.",
+      "fingerprint": "Fingerprint",
       "failed_to_load_events": "Failed to load events:",
       "last_seen": "Last Seen",
       "failed_to_update_status": "Failed to update status:",
@@ -2291,6 +2297,7 @@ export default {
       "input_tokens": "Input Tokens",
       "trace_id": "Trace ID",
       "run_detail": "Run Detail",
+      "subtitle": "Inspect the inputs, outputs, status, and audit trail for this pipeline run.",
       "run_error": "Run Error",
       "run_input": "Run Input",
       "hide": "Hide",
@@ -2890,6 +2897,7 @@ export default {
       "view_pipeline": "View pipeline",
       "failed_to_create_pipeline": "Failed to create pipeline",
       "create_pipeline_from_template": "Create Pipeline from Template",
+      "subtitle": "Configure a new pipeline from a reusable library template.",
       "primitivedescription_pipeline_created_from_library_template": "Pipeline created from library template",
       "pipeline_created": "Pipeline created!",
       "primitivename_pipeline_from_template": "Pipeline (from template)",
@@ -4215,6 +4223,7 @@ export default {
       "description": "Description",
       "edit": "Edit",
       "title": "Lifecycle Maps",
+      "subtitle": "Model delivery stages and track work as it moves through your SDLC.",
       "search_placeholder": "Search maps...",
       "filter_owner": "All teams",
       "filter_owner_aria": "Filter by owner team",
@@ -4238,6 +4247,7 @@ export default {
       "creating": "Creating..."
     },
     "LifecycleMapView": {
+      "subtitle": "Inspect versions, stages, and work-item progress for this lifecycle map.",
       "version_label": "Version:",
       "version_placeholder": "Select version",
       "edit": "Edit",
