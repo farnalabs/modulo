@@ -30,6 +30,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect, select, text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -533,3 +534,199 @@ class TestSystemMapModelRoundTrip:
         assert loaded_reservation.run_id == reservation.run_id
         assert loaded_reservation.status == "active"
         assert loaded_reservation.deleted_by is None
+
+    @pytest.mark.asyncio
+    async def test_reservation_rejects_foreign_organisation_run_on_insert(
+        self,
+        db_session: AsyncSession,
+        graph_parents: _GraphParents,
+        test_org: uuid.UUID,
+    ) -> None:
+        foreign_org = uuid.uuid4()
+        foreign_account = uuid.uuid4()
+        foreign_pipeline = uuid.uuid4()
+        foreign_snapshot = uuid.uuid4()
+        foreign_run = uuid.uuid4()
+        await db_session.execute(
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
+            {"id": foreign_org, "name": "Foreign System Map Org", "slug": f"foreign-{foreign_org.hex[:8]}"},
+        )
+        await db_session.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
+                "VALUES (:id, :email, :name, 'hash', 'local', true)"
+            ),
+            {
+                "id": foreign_account,
+                "email": f"foreign-{foreign_account.hex[:8]}@example.com",
+                "name": "Foreign System Map User",
+            },
+        )
+        await db_session.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json) VALUES "
+                "(:id, :oid, :name, :account_id, 10, 30, 300, '{}'::json, '[]'::json)"
+            ),
+            {
+                "id": foreign_pipeline,
+                "oid": foreign_org,
+                "name": "Foreign System Map Pipeline",
+                "account_id": foreign_account,
+            },
+        )
+        await db_session.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, snapshot_version, "
+                "graph_json, connector_bindings_json, schema_pins_json, prompt_pins_json, "
+                "model_backend_pins_json, run_context_defaults, config_json) VALUES "
+                "(:id, :pipeline_id, :oid, 1, '{}'::json, '[]'::json, '[]'::json, '[]'::json, "
+                "'[]'::json, '{}'::json, '{}'::json)"
+            ),
+            {"id": foreign_snapshot, "pipeline_id": foreign_pipeline, "oid": foreign_org},
+        )
+        await db_session.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
+                "run_number, input_hash, langgraph_thread_id) VALUES "
+                "(:id, :oid, :pipeline_id, :snapshot_id, 'manual', 999998, :input_hash, :thread_id)"
+            ),
+            {
+                "id": foreign_run,
+                "oid": foreign_org,
+                "pipeline_id": foreign_pipeline,
+                "snapshot_id": foreign_snapshot,
+                "input_hash": "1" * 64,
+                "thread_id": str(uuid.uuid4()),
+            },
+        )
+
+        reservation = SystemMapLoopReservation(
+            organisation_id=test_org,
+            loop_config_id=graph_parents.loop_config.id,
+            run_id=foreign_run,
+            idempotency_key=f"foreign-insert-{uuid.uuid4().hex}",
+            cooldown_until=datetime.now(UTC) + timedelta(hours=1),
+            status="active",
+        )
+        db_session.add(reservation)
+        with pytest.raises(IntegrityError, match="system map reservation run"):
+            await db_session.flush()
+
+    @pytest.mark.asyncio
+    async def test_reservation_rejects_foreign_organisation_run_on_update(
+        self,
+        db_session: AsyncSession,
+        graph_parents: _GraphParents,
+        test_org: uuid.UUID,
+        test_pipeline: uuid.UUID,
+        test_snapshot: uuid.UUID,
+    ) -> None:
+        foreign_org = uuid.uuid4()
+        foreign_account = uuid.uuid4()
+        foreign_pipeline = uuid.uuid4()
+        foreign_snapshot = uuid.uuid4()
+        foreign_run = uuid.uuid4()
+        await db_session.execute(
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
+            {"id": foreign_org, "name": "Foreign Update Org", "slug": f"foreign-update-{foreign_org.hex[:8]}"},
+        )
+        await db_session.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
+                "VALUES (:id, :email, :name, 'hash', 'local', true)"
+            ),
+            {
+                "id": foreign_account,
+                "email": f"foreign-update-{foreign_account.hex[:8]}@example.com",
+                "name": "Foreign Update User",
+            },
+        )
+        await db_session.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json) VALUES "
+                "(:id, :oid, :name, :account_id, 10, 30, 300, '{}'::json, '[]'::json)"
+            ),
+            {
+                "id": foreign_pipeline,
+                "oid": foreign_org,
+                "name": "Foreign Update Pipeline",
+                "account_id": foreign_account,
+            },
+        )
+        await db_session.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, snapshot_version, "
+                "graph_json, connector_bindings_json, schema_pins_json, prompt_pins_json, "
+                "model_backend_pins_json, run_context_defaults, config_json) VALUES "
+                "(:id, :pipeline_id, :oid, 1, '{}'::json, '[]'::json, '[]'::json, '[]'::json, "
+                "'[]'::json, '{}'::json, '{}'::json)"
+            ),
+            {"id": foreign_snapshot, "pipeline_id": foreign_pipeline, "oid": foreign_org},
+        )
+        await db_session.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
+                "run_number, input_hash, langgraph_thread_id) VALUES "
+                "(:id, :oid, :pipeline_id, :snapshot_id, 'manual', 999997, :input_hash, :thread_id)"
+            ),
+            {
+                "id": foreign_run,
+                "oid": foreign_org,
+                "pipeline_id": foreign_pipeline,
+                "snapshot_id": foreign_snapshot,
+                "input_hash": "2" * 64,
+                "thread_id": str(uuid.uuid4()),
+            },
+        )
+        own_run = uuid.uuid4()
+        await db_session.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
+                "run_number, input_hash, langgraph_thread_id) VALUES "
+                "(:id, :oid, :pipeline_id, :snapshot_id, 'manual', 999996, :input_hash, :thread_id)"
+            ),
+            {
+                "id": own_run,
+                "oid": test_org,
+                "pipeline_id": test_pipeline,
+                "snapshot_id": test_snapshot,
+                "input_hash": "3" * 64,
+                "thread_id": str(uuid.uuid4()),
+            },
+        )
+        reservation = SystemMapLoopReservation(
+            organisation_id=test_org,
+            loop_config_id=graph_parents.loop_config.id,
+            run_id=own_run,
+            idempotency_key=f"foreign-update-{uuid.uuid4().hex}",
+            cooldown_until=datetime.now(UTC) + timedelta(hours=1),
+            status="active",
+        )
+        db_session.add(reservation)
+        await db_session.flush()
+        reservation.run_id = foreign_run
+        with pytest.raises(IntegrityError, match="system map reservation run"):
+            await db_session.flush()
+
+    @pytest.mark.asyncio
+    async def test_reservation_rejects_missing_run_reference(
+        self,
+        db_session: AsyncSession,
+        graph_parents: _GraphParents,
+        test_org: uuid.UUID,
+    ) -> None:
+        reservation = SystemMapLoopReservation(
+            organisation_id=test_org,
+            loop_config_id=graph_parents.loop_config.id,
+            run_id=uuid.uuid4(),
+            idempotency_key=f"missing-run-{uuid.uuid4().hex}",
+            cooldown_until=datetime.now(UTC) + timedelta(hours=1),
+            status="active",
+        )
+        db_session.add(reservation)
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
