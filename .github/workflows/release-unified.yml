@@ -255,11 +255,23 @@ jobs:
         id: cut-commit
         if: inputs.mode == 'cut'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # FAR-2213: the release PR and the PR-driving dispatches must run as
+          # the trusted `farnalabs` identity. A `github.token`-authored PR is
+          # authored by `github-actions[bot]` with `author_association: NONE`,
+          # which `.github/scripts/same-repo-author-guard.py` treats as
+          # external - so pr-review.yml skips the review dispatch and
+          # merge-queue.yml skips the PR, and the release can never merge.
+          # GH_TOKEN authenticates `gh` only; the branch push below still uses
+          # the checkout's `github.token` credential (least privilege).
+          GH_TOKEN: ${{ secrets.MODULO_RELEASE_PR_TOKEN }}
           VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::MODULO_RELEASE_PR_TOKEN is missing or empty; refusing to create the release PR as github-actions[bot] (author_association NONE is rejected by the same-repo author guard)."
+            exit 1
+          fi
           git fetch origin main
           CURRENT="$(python3 -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')"
           if [ "$CURRENT" = "$VERSION" ]; then
@@ -299,9 +311,10 @@ jobs:
               echo "::error::Release PR #${PR_NUMBER} has no head SHA; refusing to dispatch validation."
               exit 1
             fi
-            # PRs created with GITHUB_TOKEN do not receive pull_request-triggered
-            # workflows. Explicitly dispatch the normal CI and reviewer workflows
-            # for this exact branch/SHA; the merge queue remains the only merger.
+            # The PR is authored by the trusted bot PAT, so pull_request-triggered
+            # workflows do fire. Keep the explicit dispatches as a deterministic
+            # hand-off so the release never depends on webhook delivery for its
+            # CI run and reviewer dispatch; the merge queue remains the only merger.
             gh workflow run "CI: Fast Validation" --repo "${GITHUB_REPOSITORY}" --ref "$BRANCH"
             gh workflow run pr-review.yml --repo "${GITHUB_REPOSITORY}" --ref main \
               -f pr_number="$PR_NUMBER" -f head_sha="$PR_SHA" -f head_branch="$BRANCH"
