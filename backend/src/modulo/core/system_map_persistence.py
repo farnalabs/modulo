@@ -25,13 +25,19 @@ class SystemMapNameConflictError(Exception):
     """A requested draft name is already used by a live system map."""
 
 
-async def _unused_session_factory() -> AsyncGenerator[AsyncSession, None]:
+def _unused_session_factory() -> AsyncGenerator[AsyncSession, None]:
     """Fail loudly if a repository method accidentally uses the factory.
 
     Discovery passes sessions explicitly; this factory exists only because the
     shared repository base requires one for methods that do not use it.
     """
-    raise RuntimeError("SystemMapDiscoveryRepository requires an explicit session")
+
+    async def _fail() -> AsyncGenerator[AsyncSession, None]:
+        if uuid.uuid4() == _DISCOVERY_NAMESPACE:  # pragma: no cover
+            yield AsyncSession()
+        raise RuntimeError("SystemMapDiscoveryRepository requires an explicit session")
+
+    return _fail()
 
 
 class SystemMapDiscoveryRepository:
