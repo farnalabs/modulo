@@ -340,19 +340,20 @@ const comparisonName = ref('')
 const variants = ref<VariantForm[]>([])
 const snapshots = ref<Array<{ id: string; snapshot_version: number; tag: string | null }>>([])
 const promptVersionOptions = ref<Array<{ value: string; label: string }>>([])
-const error = ref<string | null>(null)
 const fireError = ref<string | null>(null)
 const firing = ref(false)
 const showFireDialog = ref(false)
 
-const { loading: pipelinesLoading, data: pipelinesData } = useDataFetch(
+const { loading: pipelinesLoading, data: pipelinesData, error: pipelinesError } = useDataFetch(
   () => api.GET('/api/v1/pipelines'),
   { immediate: true }
 )
-const { loading: backendsLoading, data: backendsData } = useDataFetch(
+const { loading: backendsLoading, data: backendsData, error: backendsError } = useDataFetch(
   () => api.GET('/api/v1/model-backends'),
   { immediate: true }
 )
+
+const error = computed(() => pipelinesError.value ?? backendsError.value)
 
 watch(() => backendsData.value, (data) => {
   if (data) {
