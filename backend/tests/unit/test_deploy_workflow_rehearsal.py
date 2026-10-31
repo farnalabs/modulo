@@ -580,17 +580,21 @@ def test_release_cut_tags_the_exact_merged_commit_after_schema_gate() -> None:
 def _release_step(name: str) -> dict[str, Any]:
     workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["release"]["steps"]
-    return steps[_step_names(steps).index(name)]
+    return cast(dict[str, Any], steps[_step_names(steps).index(name)])
 
 
 def _cut_wait_budget_seconds(script: str) -> int:
-    max_polls = int(re.search(r"MAX_POLLS=(\d+)", script).group(1))
+    match = re.search(r"MAX_POLLS=(\d+)", script)
+    assert match is not None, "cut script must define MAX_POLLS"
+    max_polls = int(match.group(1))
     sleep_seconds = 15
     return max_polls * sleep_seconds
 
 
 def _schema_wait_budget_seconds(script: str) -> int:
-    return int(re.search(r"MAX_WAIT_SECONDS=(\d+)", script).group(1))
+    match = re.search(r"MAX_WAIT_SECONDS=(\d+)", script)
+    assert match is not None, "schema script must define MAX_WAIT_SECONDS"
+    return int(match.group(1))
 
 
 def _release_job_run(name: str) -> str:
@@ -881,7 +885,7 @@ def _cut_path_scripts() -> list[tuple[Path, str]]:
 
 
 def _shell_tokens(script: str) -> list[str]:
-    """Tokenize executable shell lines without treating comments or quoted text as commands."""
+    """Tokenize shell lines, retaining executable boundaries but not quoted text."""
     tokens: list[str] = []
     logical_lines: list[str] = []
     for line in script.splitlines():
@@ -893,15 +897,20 @@ def _shell_tokens(script: str) -> list[str]:
         stripped = line.lstrip()
         if not stripped or stripped.startswith("#"):
             continue
-        lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|!")
+        lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|!(){}")
         lexer.commenters = "#"
         lexer.whitespace_split = True
         try:
-            tokens.extend(list(lexer))
+            raw_tokens = list(lexer)
         except ValueError:
             # A malformed shell fragment cannot be safely classified; retain its
             # raw command words so a bypass still fails closed.
-            tokens.extend(stripped.split())
+            raw_tokens = stripped.split()
+        for raw_token in raw_tokens:
+            # shlex groups adjacent punctuation (for example ``);``). Split it
+            # back into boundaries while leaving words and quoted literals intact.
+            parts = re.split(r"(&&|\|\||[;&|!(){}])", raw_token)
+            tokens.extend(part for part in parts if part)
         tokens.append(";")
     return tokens
 
@@ -911,17 +920,17 @@ def _assert_protected_cut_commands_are_safe(cut_path: str) -> None:
     violations: list[str] = []
     force_pushes: list[list[str]] = []
 
-    command_prefixes = {";", "&", "|", "if", "then", "elif", "!"}
-    for index, token in enumerate(tokens[:-1]):
+    command_prefixes = {";", "&&", "||", "&", "|", "(", "{", "if", "then", "elif", "else", "do", "!"}
+    for index, token in enumerate(tokens):
         is_command_start = index == 0 or tokens[index - 1] in command_prefixes
         if not is_command_start:
             continue
         if token == "gh" and tokens[index + 1 : index + 3] == ["pr", "merge"]:
             violations.append("gh pr merge")
-        if token != "git" or tokens[index + 1] != "push":
+        if token != "git" or index + 1 >= len(tokens) or tokens[index + 1] != "push":
             continue
         end = index + 2
-        while end < len(tokens) and tokens[end] not in {";", "&", "|"}:
+        while end < len(tokens) and tokens[end] not in {";", "&&", "||", "&", "|", ")", "}"}:
             end += 1
         invocation = tokens[index:end]
         if "main" in invocation:
@@ -951,6 +960,10 @@ def test_protected_cut_contracts_are_scanned_across_the_complete_cut_workflow_gr
 @pytest.mark.parametrize(
     "script",
     [
+        "echo x && git push origin main",
+        "echo x && gh pr merge 1",
+        "if (git push origin main); then exit 1; fi",
+        "x=$(git push origin main)",
         "if ! git push origin main; then exit 1; fi",
         "git push origin branch --force",
         "gh pr merge --admin 123",
