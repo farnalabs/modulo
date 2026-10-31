@@ -846,24 +846,52 @@ exit 0
     assert "git push origin --delete release-publication-hold" in cleanup_log.read_text(encoding="utf-8")
 
 
-def test_protected_cut_contracts_are_scanned_across_the_cut_shell_path() -> None:
-    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["release"]["steps"]
-    cut_scripts = [
-        step["run"]
-        for step in steps
+_CUT_PATH_WORKFLOWS = (
+    RELEASE_WORKFLOW,
+    BUNDLE_WORKFLOW,
+    REPO_ROOT / ".github" / "workflows" / "windows-installer.yml",
+    REPO_ROOT / ".github" / "workflows" / "macos-installer.yml",
+)
+
+
+def _cut_path_scripts() -> list[tuple[Path, str]]:
+    """Return shell steps reachable from cut/recut, including called workflows.
+
+    The promote job intentionally contains a direct ``git push origin main`` for
+    its changelog commit. It is not part of the cut graph and must not weaken
+    this guard, so only the release job's cut/recut steps are selected from the
+    caller; reusable workflows called by those modes are scanned completely.
+    """
+    release = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    release_steps = release["jobs"]["release"]["steps"]
+    scripts = [
+        (RELEASE_WORKFLOW, step["run"])
+        for step in release_steps
         if isinstance(step.get("run"), str) and "inputs.mode == 'promote'" not in str(step.get("if", ""))
     ]
-    cut_path = "\n".join(cut_scripts)
-    assert "gh pr merge --admin" not in cut_path
-    assert re.search(r"gh pr merge(?:\s|$)", cut_path) is None
-    assert re.search(r"git push[^\n]*--force[^\n]*main|git push[^\n]*main[^\n]*--force", cut_path) is None
-    assert "git push origin main" not in cut_path
+    for workflow_path in _CUT_PATH_WORKFLOWS[1:]:
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        scripts.extend(
+            (workflow_path, step["run"])
+            for job in workflow.get("jobs", {}).values()
+            for step in job.get("steps", [])
+            if isinstance(step.get("run"), str)
+        )
+    return scripts
 
-    # This is the one intended force-push in the cut/recut path: it moves the
-    # release-freeze tag, never a branch or main.
-    freeze_pushes = re.findall(r"git push origin release-freeze --force", cut_path)
-    assert len(freeze_pushes) == 2
+
+def test_protected_cut_contracts_are_scanned_across_the_complete_cut_workflow_graph() -> None:
+    scripts = _cut_path_scripts()
+    assert {path for path, _script in scripts} == set(_CUT_PATH_WORKFLOWS)
+    cut_path = "\n".join(script for _path, script in scripts)
+
+    assert re.search(r"(?m)^\s*gh\s+pr\s+merge\b", cut_path) is None
+    assert re.search(r"(?m)^\s*git\s+push\b[^\n]*\bmain\b", cut_path) is None
+
+    force_pushes = re.findall(r"(?m)^\s*git\s+push\b[^\n]*--force(?:-with-lease)?\b[^\n]*$", cut_path)
+    assert len(force_pushes) == 2
+    assert all(push.strip() == "git push origin release-freeze --force" for push in force_pushes)
+
     cut_step = _release_step("Cut release candidate and freeze main")["run"]
     assert "git push origin release-freeze --force" in cut_step
 
