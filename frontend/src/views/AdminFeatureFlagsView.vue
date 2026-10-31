@@ -288,7 +288,7 @@ const { t } = useI18n()
 const devModeEnabled = ref(planStore.devMode)
 const devModeSaving = ref(false)
 const devModeError = ref<string | null>(null)
-const devModeTarget = ref<boolean | null>(null)
+const devModeTarget = ref(planStore.devMode)
 
 async function applyDevMode(enabled: boolean) {
   devModeError.value = null
@@ -319,7 +319,7 @@ function toggleDevMode(enabled: boolean) {
 // offer a retry for the value the operator actually asked for, not a
 // re-toggle of whatever the switch shows now.
 function retryDevMode() {
-  if (devModeTarget.value !== null) void applyDevMode(devModeTarget.value)
+  void applyDevMode(devModeTarget.value)
 }
 
 // Never decide "has the plan loaded" from a loaded value: the store's default

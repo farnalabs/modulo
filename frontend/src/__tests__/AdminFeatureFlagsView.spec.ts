@@ -334,6 +334,63 @@ describe('AdminFeatureFlagsView', () => {
     expect(wrapper.text()).not.toContain('Failed to update developer mode:')
   })
 
+  it('surfaces a thrown dev-mode toggle rejection and retries the requested value', async () => {
+    const wrapper = await mountView()
+    const put = vi.fn()
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({ data: { enabled: true }, error: undefined })
+    api.PUT = put as unknown as typeof api.PUT
+
+    await wrapper.find('[data-testid="developer-mode-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Failed to update developer mode:')
+    expect(wrapper.find('[data-testid="developer-mode-toggle"]').attributes('aria-checked')).toBe('false')
+
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+    for (let i = 0; i < 5; i++) {
+      await flushPromises()
+    }
+    expect(put).toHaveBeenCalledTimes(2)
+    expect(put).toHaveBeenLastCalledWith('/api/v1/admin/dev-mode', { body: { enabled: true } })
+    expect(wrapper.find('[data-testid="developer-mode-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.text()).not.toContain('Failed to update developer mode:')
+  })
+
+  it('renders an em dash for a flag with no description', async () => {
+    api.GET = vi.fn((path: string) => {
+      if (path.startsWith('/api/v1/admin/feature-flags') && path.includes('org-override')) {
+        return Promise.resolve({ data: { override: null }, error: undefined })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({
+          data: {
+            ...mockFlagsData,
+            flags: [
+              { name: 'flag-no-desc', description: '', tier: 'community', currently_active: false, depends_on: null },
+            ],
+            would_activate: [],
+          },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/plan') {
+        return Promise.resolve({ data: mockPlanData, error: undefined })
+      }
+      if (path === '/api/v1/admin/tiers') {
+        return Promise.resolve({ data: mockTiersData, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    }) as unknown as typeof api.GET
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(AdminFeatureFlagsView, { global: { plugins: [pinia] } })
+    for (let i = 0; i < 10; i++) {
+      await flushPromises()
+    }
+    const cells = wrapper.find('tbody tr').findAll('td')
+    expect(cells[3].text()).toBe('—')
+  })
+
   it('clamps back to the last page when a refetch shrinks the result set', async () => {
     const manyFlags = Array.from({ length: 25 }, (_, i) => ({
       name: `flag-${i}`,
