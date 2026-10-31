@@ -935,13 +935,11 @@ jobs:
           # notarytool accepts the submission. Run 41127149139 observed "Record not found"
           # and "Could not find base64 encoded ticket in response" from stapler (exit 65).
           # DMG stapling is best-effort: up to 6 retries, 20s delay. Failure is logged but
-          # does not fail the build. dmg_staple_succeeded=1 if staple succeeded, 0 otherwise.
-          dmg_staple_succeeded=0
+          # does not fail the build when stapler reports only ticket propagation/network trouble.
           staple_dmg_with_retry() {
             local attempt
             for attempt in 1 2 3 4 5 6; do
               if xcrun stapler staple "$DMG"; then
-                dmg_staple_succeeded=1
                 return 0
               fi
               if [[ "$attempt" -lt 6 ]]; then
@@ -959,25 +957,33 @@ jobs:
           printf 'run_pre_smoke: dmg_staple command_exit=%d\n' "$dmg_staple_exit"
           if [[ "$dmg_staple_exit" -eq 0 ]]; then
             printf 'pre_smoke: dmg_staple=ok (exit=%d)\n' "$dmg_staple_exit"
+            # A stapled DMG must pass both ticket validation and the DMG-level
+            # Gatekeeper assessment. These remain hard gates in the success path.
+            run_pre_smoke dmg_staple_validate xcrun stapler validate "$DMG"
+            run_pre_smoke dmg_spctl spctl --assess --type open --context context:primary-signature "$DMG"
           else
             printf 'pre_smoke: dmg_staple=FAILED (exit=%d)\n' "$dmg_staple_exit" >&2
             if [[ -s "$dmg_staple_output_file" ]]; then
               printf 'pre_smoke output: dmg_staple\n' >&2
               redact_pre_smoke_output < "$dmg_staple_output_file" >&2
             fi
-            echo "::warning::DMG stapling failed after 6 retries; continuing without staple verification"
+            # An accepted notarization can briefly lack a CloudKit ticket, or
+            # CloudKit can lose the connection while stapler fetches it. Only
+            # those explicit propagation/network diagnostics may defer the DMG
+            # ticket gates; every other stapler failure remains fail-closed.
+            if grep -Eiq 'NSURLErrorDomain.*-1005|network connection was lost|CloudKit.*(Record not found|response is inconsistent)|Could not find base64 encoded ticket' "$dmg_staple_output_file"; then
+              echo '::warning::DMG stapling failed because the notarization ticket could not be fetched from Apple CloudKit; DMG stapler validation and DMG-specific spctl assessment are deferred. Mounted-app codesign and Gatekeeper checks remain hard gates.'
+            else
+              echo '::error::DMG stapling failed for a non-propagation/non-network reason; refusing to defer DMG ticket verification.' >&2
+              exit 1
+            fi
           fi
-          # shellcheck disable=SC2016
-          if [[ "$dmg_staple_succeeded" -eq 1 ]]; then
-            run_pre_smoke dmg_staple_validate xcrun stapler validate "$DMG"
-          fi
-
           # shellcheck disable=SC2016
           run_pre_smoke dmg_codesign_verify codesign --verify --verbose=2 "$DMG"
-          # shellcheck disable=SC2016
-          run_pre_smoke dmg_spctl spctl --assess --type open --context context:primary-signature "$DMG"
+          # hdiutil verification is independent of notarization ticket stapling.
           # shellcheck disable=SC2016
           run_pre_smoke dmg_verify hdiutil verify "$DMG"
+
           DMG_WITH_SPACES="$RUNNER_TEMP/Modulo ${VERSION_NUM} macos arm64.dmg"
           # shellcheck disable=SC2016
           run_pre_smoke dmg_copy cp "$DMG" "$DMG_WITH_SPACES"
