@@ -43,7 +43,21 @@ formatted value columns. All strings are i18n-backed and status regions use
       i18n-backed strings and `role=status`/`aria-live` status regions
 - [x] Facet filters (key prefix, pipeline, time window, action) drive
       server-side filtering through the risk assessment store and update URL
-      query params for deep-linking
+      query params for deep-linking. Deep-link hydration accepts ONLY values
+      the facet vocabulary can express and the wire contract parses: the time
+      window must be one of the offered `RISK_WINDOW_CHOICES`, the action must
+      be in the gate-action list, and `pipeline_id` must be a canonical UUID
+      (`key_prefix` stays free text — the API treats it as a LIKE prefix). An
+      out-of-contract value is a malformed link and degrades to the default
+      rather than being sent, because the backend answers it 422 and the error
+      alert's Retry re-applies the same filters, turning a stale or
+      hand-tampered link into an error the retry can never clear. The select
+      renders the same `RISK_WINDOW_CHOICES` the hydration accepts, so the
+      facet and the deep-link contract cannot drift
+      (`frontend/src/lib/riskAssessment.ts`,
+      `frontend/src/views/RiskAssessmentView.vue`,
+      `frontend/src/components/risk-assessment/RiskAssessmentFacets.vue`,
+      `frontend/src/__tests__/RiskAssessmentView.spec.ts`)
 - [x] The pipeline facet loads EVERY selectable pipeline, not just the first
       page: the list endpoint ignores ``limit`` and caps ``page_size`` at 100,
       so the view walks the offset pages (``page_size=100``, bounded at 20
@@ -69,6 +83,22 @@ formatted value columns. All strings are i18n-backed and status regions use
   surface only
 
 ## QA History
+
+- 2026-10-31: **Improve Architecture product-map walk** - fixed MAJOR
+  (behaviour-adversarial / Lens 9 - *unreachable-in-tested-states retry*): a
+  deep link carrying an out-of-contract value (`?days=400`, `?days=-5`,
+  `?action=nonsense`, `?pipeline_id=not-a-uuid`) was hydrated verbatim and sent
+  to the API, which answers 422 (`days` is bounded 1..365, `action` is
+  vocabulary-checked, `pipeline_id` is a `uuid.UUID` query parameter) — and the
+  error alert's Retry re-applies the same filters, so the error could never
+  clear: a permanently stuck error state reachable from a stale bookmark or a
+  hand-tampered URL. Hydration now validates every param against the same
+  contract (facet-vocabulary windows, gate-action list, canonical-UUID
+  pipeline id; `key_prefix` remains free text) and drops out-of-contract values
+  to the defaults, and the offered time windows are the one shared
+  `RISK_WINDOW_CHOICES` list the select renders and the hydration accepts.
+  Regression tests pin every malformed class degrading to the default fetch and
+  every offered window round-tripping.
 
 - 2026-10-26: **Improve Architecture product-map walk** - fixed MAJOR
   (behaviour-adversarial / Lens 9 List B - *listed but vacuously covered*): the
