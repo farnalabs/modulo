@@ -3385,7 +3385,6 @@ export default {
       "param_options": "Options",
       "param_default": "Default Value",
       "param_default_label": "Parameter default",
-      "parameter_values": "Parameter value",
       "parameter_values_label": "Parameter value",
       "model_backend_label": "Model backend",
       "model_backend_select_label": "Model backend",
