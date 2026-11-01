@@ -108,6 +108,7 @@ describe('BaseCard', () => {
     ['bordered', 'bordered', 'border'],
     ['elevated', 'elevated', 'shadow'],
     ['muted', 'muted', 'bg-muted/50'],
+    ['context', 'context', 'bg-primary/5'],
   ] as const)('maps the %s variant', (_name, variant, expectedClass) => {
     const wrapper = mount(BaseCard, { props: { variant } })
 

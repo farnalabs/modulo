@@ -2,6 +2,7 @@
   <div class="flex h-[calc(100vh-3.5rem)] flex-col">
     <PageHeader
       :title="$t('views.SchemaEditorView.schemas')"
+      :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')"
       :tabs="[
         { label: $t('views.SchemaInferenceView.browse'), to: '/schemas' },
         { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },

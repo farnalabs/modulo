@@ -472,6 +472,35 @@ describe('SettingsTriggersView — FAR-191 streak surfacing + operator re-enable
     expect(wrapper.find('[data-testid="settings-triggers-reenable"]').exists()).toBe(false)
   })
 
+  it('FAR-2274: a cron streak made only of no_work outcomes is neutral, not red', async () => {
+    const outcomes = Array.from({ length: 5 }, (_, i) => ({ run_id: `r${i}`, classification: 'no_delivery', reason: 'no_work' }))
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [cron({ streak_status: streakStatus({ streak: 191, threshold: 5, state: 'ok', deactivated_reason: null, last_outcomes: outcomes }) })],
+    })
+    await flush()
+
+    const badge = wrapper.find('[data-testid="settings-triggers-streak"]')
+    expect(badge.text()).toContain('No-delivery streak 191/5')
+    expect(badge.classes()).toContain('text-muted-foreground')
+    expect(badge.classes()).not.toContain('text-destructive-text')
+  })
+
+  it('FAR-2274: a streak with any genuine failure outcome stays red', async () => {
+    const outcomes = [
+      { run_id: 'r1', classification: 'no_delivery', reason: 'no_work' },
+      { run_id: 'r2', classification: 'no_delivery', reason: 'source_error' },
+    ]
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [cron({ streak_status: streakStatus({ streak: 5, threshold: 5, state: 'ok', deactivated_reason: null, last_outcomes: outcomes }) })],
+    })
+    await flush()
+
+    const badge = wrapper.find('[data-testid="settings-triggers-streak"]')
+    expect(badge.classes()).toContain('text-destructive-text')
+  })
+
   it('FAR-1405: a cron streak AT threshold stays active — red tier, still no deactivated wording', async () => {
     const wrapper = mountView(fakeJwt('admin'), {
       ...baseListData,

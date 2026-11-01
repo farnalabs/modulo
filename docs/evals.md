@@ -361,9 +361,14 @@ monitored error event to the Error Dashboard (source = `suite_run`). The SAQ
 `execute_suite_run` job re-raises after the run is terminalised so the SAQ
 `after_process` hook sinks it too.
 
-### Feature flag
+### Plan and permission gates
 
-The SuiteRun / comparison ENDPOINTS and UI are gated behind feature flags.
+No feature flag gates the eval surface. The eval endpoints (including
+`POST /api/v1/evals/compare`) are authenticated and gated by the `evals.*`
+permission codes in `backend/src/modulo/api/routes/evals.py`; suite runs are
+executed from triggers with `run_kind: suite_run`, not from a gated REST or UI
+surface. The two eval UI views (`EvalEditorView`, `EvalProposalsQueueView`) are
+wrapped in the community-tier `eval_system` feature gate.
 
 ## Leaderboard / rollup read-model (FAR-378)
 

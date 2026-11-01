@@ -38,6 +38,8 @@ on:
 env:
   SECRET_KEY: ${{ secrets.SECRET_KEY }}
   FERNET_KEY: ${{ secrets.FERNET_KEY }}
+  # Common content type for Linear API calls (avoids duplicate literal S1192)
+  LINEAR_CONTENT_TYPE: "Content-Type: application/json"
   # THE single git-credential mechanism for this workflow (FAR-1940). It is an
   # env-driven `url.<base>.insteadOf` rewrite, so the token travels in the
   # remote URL and git sends ONE Authorization header. The default token is
@@ -2248,7 +2250,6 @@ jobs:
         env:
           MODULO_SELF_REPORT_URL: ${{ secrets.MODULO_SELF_REPORT_URL }}
           MODULO_SELF_REPORT_TOKEN: ${{ secrets.MODULO_SELF_REPORT_TOKEN }}
-          LINEAR_CONTENT_TYPE: "Content-Type: application/json"
         shell: bash
         run: |
           # FAR-145 follow-up (workflow self-report): the merge queue DISCOVERS the
@@ -2326,7 +2327,6 @@ jobs:
           # git-log range whose emptiness depends on step ordering.
           GH_MERGED_PRS: ${{ steps.ghmerge.outputs.gh_merged_pr_nums }}
           REPO: ${{ github.repository }}
-          LINEAR_CONTENT_TYPE: "Content-Type: application/json"
         shell: bash
         run: |
           # Build the candidate PR list from two sources (FAR-530):
@@ -2716,7 +2716,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CHAIN_DEPTH: ${{ github.event.client_payload.depth || 0 }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          LINEAR_CONTENT_TYPE: "Content-Type: application/json"
         shell: bash
         run: |
           set -euo pipefail

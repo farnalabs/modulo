@@ -137,7 +137,9 @@ MySQL and MariaDB are configured through `MODULO_DB` (`settings.py` accepts
 dependency, but they are **not** production-conformant:
 
 * `db/crud/run_node_outputs.py::dialect_insert` raises
-  `NotImplementedError` for any dialect other than `postgres` / `sqlite`. That
+  `NotImplementedError` for any SQLAlchemy dialect other than `postgresql` /
+  `sqlite` (note the dialect name is `postgresql`, not the `MODULO_DB` value
+  `postgres`). That
   module is the chokepoint for every `run_node_outputs` read and write (FAR-583),
   so a run cannot store its node outputs, telemetry, markers, or artifacts on
   either backend.
@@ -183,7 +185,7 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 | Redis | 8+ | **Yes** (production) | SAQ task queue, rate limiting, event broker |
 | Python | 3.12+ | Yes | Application runtime |
 | `uv` | 0.11.13 | Yes | Python package manager (exact pin in `backend/Dockerfile` and `deploy/docker/Dockerfile.all-in-one`) |
-| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.8` via `packageManager`), not npm |
+| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.9` via `packageManager`), not npm |
 | Docker | 24+ | For Docker Compose | Container runtime |
 
 ### Redis Requirement Table

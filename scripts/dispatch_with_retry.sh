@@ -97,18 +97,12 @@ for REQUIRED_VAR in DISPATCH_URL DISPATCH_SECRET; do
     echo "::error::${DISPATCH_LABEL:-webhook} dispatch not attempted: ${REQUIRED_VAR} is empty (secret not available to this run, e.g. a dependabot PR)."
     if [[ -n "${DISPATCH_RESULT_FILE:-}" ]]; then
       {
-        printf 'DISPATCH_LAST_HTTP=%q
-' "none"
-        printf 'DISPATCH_LAST_CLASS=%q
-' "config"
-        printf 'DISPATCH_LAST_DETAIL=%q
-' "${REQUIRED_VAR} is empty"
-        printf 'DISPATCH_ATTEMPTS=%q
-' "0"
-        printf 'DISPATCH_BUDGET_ELAPSED=%q
-' "0"
-        printf 'DISPATCH_DELIVERED=%q
-' "false"
+        printf 'DISPATCH_LAST_HTTP=%q\n' "none"
+        printf 'DISPATCH_LAST_CLASS=%q\n' "config"
+        printf 'DISPATCH_LAST_DETAIL=%q\n' "${REQUIRED_VAR} is empty"
+        printf 'DISPATCH_ATTEMPTS=%q\n' "0"
+        printf 'DISPATCH_BUDGET_ELAPSED=%q\n' "0"
+        printf 'DISPATCH_DELIVERED=%q\n' "false"
       } > "${DISPATCH_RESULT_FILE}"
     fi
     exit 1
@@ -126,12 +120,13 @@ DISPATCH_JITTER_MAX="${DISPATCH_JITTER_MAX:-5}"
 DISPATCH_RESULT_FILE="${DISPATCH_RESULT_FILE:-}"
 
 classify_http() {
+  local http_code="$1"
   # Retryable (capacity|transient) vs terminal. Acceptance (202 / any-2xx)
   # is handled by the caller before this is invoked — but a non-202 2xx under
   # the 202-only contract falls through as terminal: the webhook contract is
   # 202, so a bare 200 means something other than the app answered and the
   # dispatch must not be recorded as delivered.
-  case "$1" in
+  case "$http_code" in
     429) printf 'capacity\n' ;;
     000|502|503|504) printf 'transient\n' ;;
     *) printf 'terminal\n' ;;
@@ -139,7 +134,7 @@ classify_http() {
 }
 
 parse_retry_after() {
-  local retry_after=${1-}
+  local retry_after="${1-}"
   # Whole seconds from a Retry-After value, or empty when absent or
   # unparseable. Never emits a negative value.
   case "$retry_after" in
@@ -147,16 +142,18 @@ parse_retry_after() {
     *[!0-9]*) ;;
     *) printf '%s\n' "$retry_after"; return 0 ;;
   esac
-  RETRY_EPOCH=$(date -u -d "$1" +%s 2>/dev/null) || return 0
-  RETRY_NOW=$(date +%s)
-  if [[ "$RETRY_EPOCH" -gt "$RETRY_NOW" ]]; then
-    printf '%s\n' "$((RETRY_EPOCH - RETRY_NOW))"
+  local retry_epoch
+  local retry_now
+  retry_epoch=$(date -u -d "$retry_after" +%s 2>/dev/null) || return 0
+  retry_now=$(date +%s)
+  if [[ "$retry_epoch" -gt "$retry_now" ]]; then
+    printf '%s\n' "$((retry_epoch - retry_now))"
   fi
 }
 
 retry_delay() {
-  local attempt=${1:?attempt number is required}
-  local retry_after=${2-}
+  local attempt="${1:?attempt number is required}"
+  local retry_after="${2-}"
   local backoff
   # Retry-After is a FLOOR, not the schedule: the delay is the larger of the
   # server's value and this attempt's exponential backoff (clamped to
@@ -211,8 +208,20 @@ while [[ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]]; do
   LAST_HTTP="$HTTP_CODE"
 
   # ---- acceptance ----
+  # Check for 2xx success first
+  is_2xx=false
   if [[ "${HTTP_CODE:0:1}" == "2" ]]; then
+    is_2xx=true
+  fi
+
+  if [[ "$is_2xx" == "true" ]]; then
+    # 202-only by default; DISPATCH_ACCEPT_ANY_2XX=1 widens to any 2xx
+    accepts_this_2xx=false
     if [[ "$HTTP_CODE" == "202" ]] || [[ "$DISPATCH_ACCEPT_ANY_2XX" == "1" ]]; then
+      accepts_this_2xx=true
+    fi
+
+    if [[ "$accepts_this_2xx" == "true" ]]; then
       RESP_STATUS=$(printf '%s' "$BODY_RESP" | jq -r '.status // "accepted"' 2>/dev/null || printf 'accepted')
       if [[ "$RESP_STATUS" == "coalesced" ]]; then
         # FAR-1034 handled no-op: duplicate delivery for the same key
@@ -226,7 +235,16 @@ while [[ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]]; do
       break
     fi
   fi
-  if [[ "$HTTP_CODE" == "400" ]] && [[ "$DISPATCH_DUP_400_IS_OK" == "1" ]] && printf '%s' "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
+
+  # Check for 400 duplicate payload (handled no-op)
+  is_400_dup=false
+  if [[ "$HTTP_CODE" == "400" ]] && [[ "$DISPATCH_DUP_400_IS_OK" == "1" ]]; then
+    if printf '%s' "$BODY_RESP" | grep -q "Duplicate webhook payload"; then
+      is_400_dup=true
+    fi
+  fi
+
+  if [[ "$is_400_dup" == "true" ]]; then
     # FAR-1097 follow-up: HTTP 400 "Duplicate webhook payload" is the
     # engine's byte-level idempotency guard (DuplicateWebhookError) — the
     # identical payload was already ACCEPTED within the ~5-min dedup window
@@ -249,20 +267,28 @@ while [[ "$ATTEMPTS" -lt "$DISPATCH_MAX_ATTEMPTS" ]]; do
 
   DISPATCH_ELAPSED=$(( $(date +%s) - DISPATCH_STARTED ))
   DISPATCH_REMAINING=$(( DISPATCH_BUDGET_SECONDS - DISPATCH_ELAPSED ))
+
+  # Check attempt cap
   if [[ "$ATTEMPTS" -ge "$DISPATCH_MAX_ATTEMPTS" ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (${LAST_CLASS}) on attempt ${ATTEMPTS}/${DISPATCH_MAX_ATTEMPTS} — attempt cap reached"
     break
   fi
+
+  # Check budget exhaustion
   if [[ "$DISPATCH_REMAINING" -le 0 ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (${LAST_CLASS}) — ${DISPATCH_BUDGET_SECONDS}s dispatch budget exhausted after ${DISPATCH_ELAPSED}s"
     break
   fi
+
   RETRY_AFTER=$(grep -i '^retry-after:' "${HEADER_FILE}" 2>/dev/null | tail -1 | cut -d: -f2- | tr -d '\r' | sed 's/^[[:space:]]*//' || true)
   DISPATCH_DELAY=$(retry_delay "$ATTEMPTS" "$(parse_retry_after "${RETRY_AFTER}")")
+
+  # Check if delay exceeds remaining budget
   if [[ "$DISPATCH_DELAY" -gt "$DISPATCH_REMAINING" ]]; then
     echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (${LAST_CLASS}); the next attempt needs ${DISPATCH_DELAY}s but only ${DISPATCH_REMAINING}s of the ${DISPATCH_BUDGET_SECONDS}s budget remain — not waiting"
     break
   fi
+
   echo "::warning::${DISPATCH_LABEL} returned HTTP ${HTTP_CODE} (${LAST_CLASS}, attempt ${ATTEMPTS}/${DISPATCH_MAX_ATTEMPTS}) — retrying in ${DISPATCH_DELAY}s"
   sleep "$DISPATCH_DELAY"
 done

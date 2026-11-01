@@ -831,6 +831,9 @@ function isStreakDeactivated(trigger: TriggerItem): boolean {
   return trigger.streak_status?.state === 'deactivated'
 }
 
+// Frozen backend wire value (trigger_streak._STREAK_PAYLOAD_ALLOWED_REASONS).
+const STREAK_REASON_NO_WORK = 'no_work'
+
 function streakBadgeClass(trigger: TriggerItem): string {
   const s = trigger.streak_status
   if (!s) return 'bg-muted text-muted-foreground'
@@ -842,6 +845,14 @@ function streakBadgeClass(trigger: TriggerItem): string {
   // imminent; a notify-only cron (FAR-1387) stays ACTIVE at the threshold, so
   // the tier reads as "tripped / needs attention". Colour only — no copy here
   // claims deactivation; that wording lives on the state-driven badge above.
+  // FAR-2274: a streak made only of `no_work` outcomes (the poller had nothing
+  // to do) is not a failure, so it stays neutral. Display only: the backend
+  // still counts these toward alerting / auto-deactivation unchanged. An empty
+  // outcome window gives no evidence, so it keeps the tiered colours.
+  const outcomes = s.last_outcomes ?? []
+  if (outcomes.length > 0 && outcomes.every((o) => o.reason === STREAK_REASON_NO_WORK)) {
+    return 'bg-muted text-muted-foreground'
+  }
   if (s.enabled && threshold > 0 && streak > 0 && streak >= threshold - 1) {
     if (streak >= threshold) return 'bg-destructive/10 text-destructive-text'
     return 'bg-amber-500/10 text-amber-600'

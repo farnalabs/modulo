@@ -321,3 +321,4 @@ minimumReleaseAgeExclude:
   - 'rollup@4.67.2'
   - '@lucide/vue@1.65.0'
   - 'eslint@10.14.0'
+  - '@lucide/vue@1.66.0'

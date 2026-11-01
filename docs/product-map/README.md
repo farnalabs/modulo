@@ -1213,6 +1213,18 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `modulo evidence verify` CLI and the `hashing.py` extraction now have one.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-10-31):** tracked the shipped-but-untracked
+> System Maps preview (FAR-2244 backend discovery, FAR-2245 dashboard
+> draft-review card) in `pipelines/system-maps.md`. The feature has no route of
+> its own (the only UI is a gated card on the existing `/` dashboard route), so
+> it is tracked in this graph rather than the manifest `features:` registry.
+> The entry records the internal-flag visibility rules, the triple access gate,
+> the deterministic discovery contract, the collision-safe lifecycle-map
+> persistence adapter, the audit event, the fail-closed frontend store and the
+> MCP flag-visibility gate. Its honest remaining gap - the UI never calls the
+> shipped discovery endpoint - keeps it `partial`; `_ORPHANED_BDD_FEATURES`
+> stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A
@@ -1289,6 +1301,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-pipelines-pipeline-diff-rollback](pipelines/pipeline-diff-rollback.md) => PRD 8.13
 - [feat-router](pipelines/router-hitl-nodes.md) => PRD N/A
 - [feat-lifecycle-maps](pipelines/lifecycle-maps.md) => PRD N/A
+- [feat-system-maps](pipelines/system-maps.md) => PRD N/A
 
 ### Schema & Data
 - [feat-schemas](schemas/schemas.md) => PRD N/A

@@ -298,52 +298,55 @@ jobs:
           MOUNT_ATTACHED=0
           DATA="$RUNNER_TEMP/modulo-native-smoke-data"
 
-          prepare_data_directory() {
-            local data_uid data_mode mkdir_error current_uid
-            current_uid="$(id -u)"
-            if [[ -L "$DATA" ]]; then
-              printf '::error::smoke data path is an unexpected symlink: path=%q\n' "$DATA" >&2
-              return 1
-            fi
-             if [[ -e "$DATA" ]]; then
-               if [[ -d "$DATA" ]]; then
-                 :
-               else
-
-              printf '::error::smoke data path is not a directory: path=%q\n' "$DATA" >&2
-                 stat -f '%Sp %Su:%Sg' "$DATA" >&2
-                 return 1
-               fi
-             fi
-             if [[ ! -d "$DATA" ]]; then
-
-              if ! mkdir_error="$(mkdir -p "$DATA" 2>&1)"; then
-                printf '::error::could not create smoke data directory: path=%q error=%s\n' "$DATA" "$mkdir_error" >&2
+            prepare_data_directory() {
+              local data_uid data_mode mkdir_error current_uid
+              current_uid="$(id -u)"
+              # Early return for symlink
+              if [[ -L "$DATA" ]]; then
+                printf '::error::smoke data path is an unexpected symlink: path=%q\n' "$DATA" >&2
                 return 1
               fi
-            fi
-            if [[ -L "$DATA" ]]; then
-              printf '::error::smoke data path became a symlink during setup: path=%q\n' "$DATA" >&2
-              return 1
-            fi
-            data_uid="$(stat -f '%u' "$DATA" 2>&1)" || {
-              printf '::error::could not inspect smoke data directory ownership: path=%q error=%s\n' "$DATA" "$data_uid" >&2
-              return 1
-            }
-            data_mode="$(stat -f '%Sp' "$DATA" 2>&1)" || {
-              printf '::error::could not inspect smoke data directory permissions: path=%q error=%s\n' "$DATA" "$data_mode" >&2
-              return 1
-            }
-            if [[ "$data_uid" != "$current_uid" ]]; then
-              printf '::error::smoke data directory has foreign ownership: path=%q owner_uid=%s expected_uid=%s mode=%s\n' "$DATA" "$data_uid" "$current_uid" "$data_mode" >&2
-              stat -f '%Sp %Su:%Sg' "$DATA" >&2
-              return 1
-            fi
-            if [[ ! -w "$DATA" ]]; then
-              printf '::error::smoke data directory is not writable: path=%q owner_uid=%s expected_uid=%s mode=%s\n' "$DATA" "$data_uid" "$current_uid" "$data_mode" >&2
-              stat -f '%Sp %Su:%Sg' "$DATA" >&2
-              return 1
-            fi
+
+              # Check if exists and validate it's a directory
+              if [[ -e "$DATA" ]]; then
+                if [[ ! -d "$DATA" ]]; then
+                  printf '::error::smoke data path is not a directory: path=%q\n' "$DATA" >&2
+                  stat -f '%Sp %Su:%Sg' "$DATA" >&2
+                  return 1
+                fi
+              else
+                # Create directory if it doesn't exist
+                if ! mkdir_error="$(mkdir -p "$DATA" 2>&1)"; then
+                  printf '::error::could not create smoke data directory: path=%q error=%s\n' "$DATA" "$mkdir_error" >&2
+                  return 1
+                fi
+              fi
+
+              # Verify it didn't become a symlink
+              if [[ -L "$DATA" ]]; then
+                printf '::error::smoke data path became a symlink during setup: path=%q\n' "$DATA" >&2
+                return 1
+              fi
+
+              # Check ownership and permissions
+              data_uid="$(stat -f '%u' "$DATA" 2>&1)" || {
+                printf '::error::could not inspect smoke data directory ownership: path=%q error=%s\n' "$DATA" "$data_uid" >&2
+                return 1
+              }
+              data_mode="$(stat -f '%Sp' "$DATA" 2>&1)" || {
+                printf '::error::could not inspect smoke data directory permissions: path=%q error=%s\n' "$DATA" "$data_mode" >&2
+                return 1
+              }
+              if [[ "$data_uid" != "$current_uid" ]]; then
+                printf '::error::smoke data directory has foreign ownership: path=%q owner_uid=%s expected_uid=%s mode=%s\n' "$DATA" "$data_uid" "$current_uid" "$data_mode" >&2
+                stat -f '%Sp %Su:%Sg' "$DATA" >&2
+                return 1
+              fi
+              if [[ ! -w "$DATA" ]]; then
+                printf '::error::smoke data directory is not writable: path=%q owner_uid=%s expected_uid=%s mode=%s\n' "$DATA" "$data_uid" "$current_uid" "$data_mode" >&2
+                stat -f '%Sp %Su:%Sg' "$DATA" >&2
+                return 1
+              fi
           }
 
           prepare_data_directory
@@ -369,31 +372,31 @@ jobs:
 
           cleanup() {
 
-              local original_status="${1:-0}"
-              local final_status="$original_status"
-              set +e
-              cleanup_result() {
-                local name="$1" result="$2" detail="${3:-}"
-                if [[ "$result" == ok ]]; then
-                  printf 'cleanup result: %s=ok' "$name"
-                else
-                  printf 'cleanup result: %s=failed' "$name" >&2
-                  [[ "$final_status" -eq 0 ]] && final_status=1
-                fi
-                [[ -n "$detail" ]] && printf ' (%s)' "$detail"
-                printf '\n'
-              }
+            local original_status="${1:-0}"
+            local final_status="$original_status"
+            set +e
+            cleanup_result() {
+              local name="$1" result="$2" detail="${3:-}"
+              if [[ "$result" == ok ]]; then
+                printf 'cleanup result: %s=ok' "$name"
+              else
+                printf 'cleanup result: %s=failed' "$name" >&2
+                [[ "$final_status" -eq 0 ]] && final_status=1
+              fi
+              [[ -n "$detail" ]] && printf ' (%s)' "$detail"
+              printf '\n'
+            }
 
-              # Disable the LaunchAgent job first (prevents KeepAlive from restarting)
-              launchctl disable "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
+            # Disable the LaunchAgent job first (prevents KeepAlive from restarting)
+            launchctl disable "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
 
-              # Stop the LaunchAgent service (ignore failure if not running)
-              launchctl stop "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
+            # Stop the LaunchAgent service (ignore failure if not running)
+            launchctl stop "gui/$(id -u)/run.modulo.launcher" 2>/dev/null || true
 
-              # Unload the LaunchAgent with retry loop (up to 3 attempts, 1s delay)
-              PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
-              unload_ok=0
-              for _attempt in 1 2 3; do
+            # Unload the LaunchAgent with retry loop (up to 3 attempts, 1s delay)
+            PLIST="$HOME/Library/LaunchAgents/run.modulo.launcher.plist"
+            unload_ok=0
+            for _attempt in 1 2 3; do
                 if launchctl unload -w "$PLIST" 2>/dev/null; then
                   unload_ok=1
                   break
@@ -457,49 +460,57 @@ jobs:
               if [[ "$mount_info_ok" -eq 1 ]] && grep -Fq "$MOUNT" <<< "$mount_info"; then
                 mount_present=1
               fi
+
+              # Early exit if inspection failed
               if [[ "$mount_info_ok" -eq 0 ]]; then
                 cleanup_result mount_inspection failed
                 cleanup_result mount_detached failed "inspection unavailable"
-              elif [[ "$MOUNT_ATTACHED" -eq 0 && "$mount_present" -eq 0 ]]; then
-                echo "cleanup: mount already detached: $MOUNT"
-                cleanup_result mount_inspection ok
-                cleanup_result mount_detached ok "already detached"
               else
-                if [[ "$MOUNT_ATTACHED" -eq 0 ]]; then
-                  echo "cleanup: mount state was detached, but an owned mount remains; retrying detach: $MOUNT" >&2
-                else
-                  echo "cleanup: mount state is attached; retrying detach: $MOUNT" >&2
-                fi
-                detach_succeeded=0
-                for _attempt in 1 2 3; do
-                  if hdiutil detach "$MOUNT" >/dev/null 2>&1; then
-                    detach_succeeded=1
-                  fi
-                  mount_info_ok=1
-                  if ! mount_info="$(hdiutil info 2>&1)"; then
-                    mount_info_ok=0
-                    echo "::error::cleanup could not inspect mounted volumes after detach attempt $_attempt for $MOUNT: $mount_info" >&2
-                  fi
-                  mount_present=0
-                  if [[ "$mount_info_ok" -eq 1 ]] && grep -Fq "$MOUNT" <<< "$mount_info"; then
-                    mount_present=1
-                  fi
-                  if [[ "$mount_info_ok" -eq 1 && "$mount_present" -eq 0 ]]; then
-                    if [[ "$detach_succeeded" -eq 1 ]]; then
-                      echo "cleanup: detached mount: $MOUNT"
-                    else
-                      echo "cleanup: mount already detached: $MOUNT"
-                    fi
-                    break
-                  fi
-                  sleep 1
-                done
-                if [[ "$mount_info_ok" -eq 1 && "$mount_present" -eq 0 ]]; then
+                # Inspection succeeded - check mount state
+                if [[ "$MOUNT_ATTACHED" -eq 0 && "$mount_present" -eq 0 ]]; then
+                  echo "cleanup: mount already detached: $MOUNT"
                   cleanup_result mount_inspection ok
-                  cleanup_result mount_detached ok
+                  cleanup_result mount_detached ok "already detached"
                 else
-                  cleanup_result mount_inspection failed
-                  cleanup_result mount_detached failed
+                  # Mount needs detaching - attempt up to 3 times
+                  if [[ "$MOUNT_ATTACHED" -eq 0 ]]; then
+                    echo "cleanup: mount state was detached, but an owned mount remains; retrying detach: $MOUNT" >&2
+                  else
+                    echo "cleanup: mount state is attached; retrying detach: $MOUNT" >&2
+                  fi
+                  detach_succeeded=0
+                  for _attempt in 1 2 3; do
+                    if hdiutil detach "$MOUNT" >/dev/null 2>&1; then
+                      detach_succeeded=1
+                    fi
+                    mount_info_ok=1
+                    if ! mount_info="$(hdiutil info 2>&1)"; then
+                      mount_info_ok=0
+                      echo "::error::cleanup could not inspect mounted volumes after detach attempt $_attempt for $MOUNT: $mount_info" >&2
+                    fi
+                    mount_present=0
+                    if [[ "$mount_info_ok" -eq 1 ]] && grep -Fq "$MOUNT" <<< "$mount_info"; then
+                      mount_present=1
+                    fi
+                    # Check if detach succeeded (mount no longer present)
+                    if [[ "$mount_info_ok" -eq 1 && "$mount_present" -eq 0 ]]; then
+                      if [[ "$detach_succeeded" -eq 1 ]]; then
+                        echo "cleanup: detached mount: $MOUNT"
+                      else
+                        echo "cleanup: mount already detached: $MOUNT"
+                      fi
+                      break
+                    fi
+                    sleep 1
+                  done
+                  # Final result after retry loop
+                  if [[ "$mount_info_ok" -eq 1 && "$mount_present" -eq 0 ]]; then
+                    cleanup_result mount_inspection ok
+                    cleanup_result mount_detached ok
+                  else
+                    cleanup_result mount_inspection failed
+                    cleanup_result mount_detached failed
+                  fi
                 fi
               fi
 
@@ -527,19 +538,27 @@ jobs:
                 keychain_list_status=$?
                 echo "::error::cleanup could not inspect registered keychains: $keychain_list" >&2
               fi
+
+              # Handle keychain inspection failure first
               if [[ "$keychain_list_status" -ne 0 ]]; then
                 cleanup_result keychain_registration failed "inspection exit=$keychain_list_status"
-              elif grep -Fq "$KEYCHAIN" <<< "$keychain_list"; then
-                echo "::error::cleanup left temporary keychain registered: $KEYCHAIN" >&2
-                cleanup_result keychain_registration failed
               else
-                if [[ "$delete_keychain_status" -eq 0 ]]; then
-                  cleanup_result keychain_delete ok
+                # Inspection succeeded - check if keychain still registered
+                if grep -Fq "$KEYCHAIN" <<< "$keychain_list"; then
+                  echo "::error::cleanup left temporary keychain registered: $KEYCHAIN" >&2
+                  cleanup_result keychain_registration failed
                 else
-                  cleanup_result keychain_delete ok "already absent or already deleted (exit=$delete_keychain_status)"
+                  # Keychain not registered - check delete status
+                  if [[ "$delete_keychain_status" -eq 0 ]]; then
+                    cleanup_result keychain_delete ok
+                  else
+                    cleanup_result keychain_delete ok "already absent or already deleted (exit=$delete_keychain_status)"
+                  fi
+                  cleanup_result keychain_registration ok
                 fi
-                cleanup_result keychain_registration ok
               fi
+
+              # Check if keychain file remains on disk
               if [[ -e "$KEYCHAIN" ]]; then
                 echo "::error::cleanup left temporary keychain on disk: $KEYCHAIN" >&2
                 cleanup_result keychain_disk failed

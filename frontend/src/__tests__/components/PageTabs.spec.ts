@@ -38,30 +38,43 @@ import { useRoute } from 'vue-router'
 import { usePlanStore } from '../../stores/planStore'
 import PageTabs from '../../components/PageTabs.vue'
 
-function createWrapper(tabs: any[], routePath = '/evals/editor') {
-  ;(useRoute as any).mockReturnValue({
-    path: routePath,
-    fullPath: routePath,
-    params: {},
-    query: {},
-    hash: '',
-    matched: [],
-    name: null,
-    redirectedFrom: undefined,
-  })
-
+function mountPageTabs(tabs: any[]) {
   return mount(PageTabs as any, {
     props: { tabs },
     global: {
       plugins: [i18n],
       stubs: {
         'router-link': {
-          template: '<a :href="to" data-testid="router-link-stub"><slot /></a>',
+          template: '<a :href="to" data-testid="router-link-stub" @click.prevent="$emit(\'click\', $event)"><slot /></a>',
           props: ['to'],
         },
       },
     },
   })
+}
+
+function createWrapper(tabs: any[], routePath = '/evals/editor', query: Record<string, unknown> = {}) {
+  ;(useRoute as any).mockReturnValue({
+    path: routePath,
+    fullPath: Object.keys(query).length > 0 ? `${routePath}?${new URLSearchParams(query as Record<string, string>)}` : routePath,
+    params: {},
+    query,
+    hash: '',
+    matched: [],
+    name: null,
+    redirectedFrom: undefined,
+  })
+
+  return mountPageTabs(tabs)
+}
+
+/**
+ * Mount against an arbitrary route shape, including the partial route objects
+ * some views are mounted with (no `query` at all).
+ */
+function createWrapperForRoute(tabs: any[], route: Record<string, unknown>) {
+  ;(useRoute as any).mockReturnValue(route)
+  return mountPageTabs(tabs)
 }
 
 describe('PageTabs', () => {
@@ -188,6 +201,19 @@ describe('PageTabs', () => {
     expect(links[1].classes()).toContain('active')
   })
 
+  it('activates only the tab matching the current query section', () => {
+    const tabs = [
+      { label: 'Native', to: '/library?section=native' },
+      { label: 'Community', to: '/library?section=community' },
+      { label: 'Collections', to: '/library?section=collections' },
+    ]
+    const wrapper = createWrapper(tabs, '/library', { section: 'community' })
+    const links = wrapper.findAll('[data-testid="router-link-stub"]')
+    expect(links[0].classes()).not.toContain('active')
+    expect(links[1].classes()).toContain('active')
+    expect(links[2].classes()).not.toContain('active')
+  })
+
   it('sets aria-label on nav element', () => {
     const tabs = [
       { label: 'Evals', to: '/evals/editor' },
@@ -208,6 +234,130 @@ describe('PageTabs', () => {
   it('spaces adjacent mobile tabs at least 0.5rem apart', () => {
     const mobile = mobileStyleBlock()
     expect(mobile).toMatch(/gap:\s*0\.5rem/)
+  })
+
+  // ── FAR-2260: generic query matching ──────────────────────────────────────
+  //
+  // The active tab is resolved from the tab's own destination — path first,
+  // then every query pair it declares — with no knowledge of any particular
+  // view's query vocabulary.
+
+  describe('query matching (FAR-2260)', () => {
+    it('does not crash when the route has no query object', () => {
+      const tabs = [
+        { label: 'Browse', to: '/schemas' },
+        { label: 'Editor', to: '/schemas/editor' },
+      ]
+      const wrapper = createWrapperForRoute(tabs, { path: '/schemas' })
+      const links = wrapper.findAll('.page-tab')
+      expect(links).toHaveLength(2)
+      expect(links[0].classes()).toContain('active')
+      expect(links[1].classes()).not.toContain('active')
+    })
+
+    it('keeps a query-bearing tab inactive when the route has no query object and the tab is not a default', () => {
+      const wrapper = createWrapperForRoute(
+        [{ label: 'Native', to: '/library?section=native' }],
+        { path: '/library' },
+      )
+      expect(wrapper.find('.page-tab').classes()).not.toContain('active')
+    })
+
+    it('tolerates null query values', () => {
+      const wrapper = createWrapper(
+        [{ label: 'Native', to: '/library?section=native', defaultQuery: true }],
+        '/library',
+        { section: null },
+      )
+      expect(wrapper.find('.page-tab').classes()).toContain('active')
+    })
+
+    it('matches arbitrary query pairs, not a hardcoded section key', () => {
+      const tabs = [
+        { label: 'List', to: '/reports?view=list' },
+        { label: 'High', to: '/reports?view=errors&severity=high' },
+        { label: 'Low', to: '/reports?view=errors&severity=low' },
+      ]
+      const wrapper = createWrapper(tabs, '/reports', { view: 'errors', severity: 'low' })
+      const links = wrapper.findAll('.page-tab')
+      expect(links[0].classes()).not.toContain('active')
+      expect(links[1].classes()).not.toContain('active')
+      expect(links[2].classes()).toContain('active')
+    })
+
+    it('ignores unrelated query params when matching a tab', () => {
+      const tabs = [
+        { label: 'Errors', to: '/reports?view=errors' },
+        { label: 'List', to: '/reports?view=list' },
+      ]
+      const wrapper = createWrapper(tabs, '/reports', { view: 'errors', page: '2', sort: 'asc' })
+      const links = wrapper.findAll('.page-tab')
+      expect(links[0].classes()).toContain('active')
+      expect(links[1].classes()).not.toContain('active')
+    })
+
+    it('matches a pair when the route holds an array of values for the key', () => {
+      const tabs = [
+        { label: 'Alpha', to: '/reports?tag=alpha' },
+        { label: 'Beta', to: '/reports?tag=beta' },
+      ]
+      const wrapper = createWrapper(tabs, '/reports', { tag: ['beta', 'gamma'] })
+      const links = wrapper.findAll('.page-tab')
+      expect(links[0].classes()).not.toContain('active')
+      expect(links[1].classes()).toContain('active')
+    })
+
+    it('activates a default tab when its query keys are absent from the route', () => {
+      const tabs = [
+        { label: 'Native', to: '/library?section=native', defaultQuery: true },
+        { label: 'Community', to: '/library?section=community' },
+      ]
+      const wrapper = createWrapper(tabs, '/library', {})
+      const links = wrapper.findAll('.page-tab')
+      expect(links[0].classes()).toContain('active')
+      expect(links[1].classes()).not.toContain('active')
+    })
+
+    it('hands the default tab over as soon as its key is present on the route', () => {
+      const tabs = [
+        { label: 'Native', to: '/library?section=native', defaultQuery: true },
+        { label: 'Community', to: '/library?section=community' },
+      ]
+      const wrapper = createWrapper(tabs, '/library', { section: 'community' })
+      const links = wrapper.findAll('.page-tab')
+      expect(links[0].classes()).not.toContain('active')
+      expect(links[1].classes()).toContain('active')
+    })
+
+    it('ignores a hash fragment when matching a tab destination', () => {
+      const tabs = [
+        { label: 'Native', to: '/library?section=native#top', defaultQuery: true },
+        { label: 'Community', to: '/library?section=community#top' },
+      ]
+      const wrapper = createWrapper(tabs, '/library', { section: 'community' })
+      const links = wrapper.findAll('.page-tab')
+      expect(links[0].classes()).not.toContain('active')
+      expect(links[1].classes()).toContain('active')
+    })
+
+    it('leaves no tab active when the route has an empty path', () => {
+      const wrapper = createWrapperForRoute(
+        [{ label: 'Native', to: '/library?section=native', defaultQuery: true }],
+        { path: '', query: {} },
+      )
+      expect(wrapper.find('.page-tab').classes()).not.toContain('active')
+    })
+
+    it('prefers the tab with more matching query pairs on the same path', () => {
+      const tabs = [
+        { label: 'Errors', to: '/reports?view=errors' },
+        { label: 'High', to: '/reports?view=errors&severity=high' },
+      ]
+      const wrapper = createWrapper(tabs, '/reports', { view: 'errors', severity: 'high' })
+      const links = wrapper.findAll('.page-tab')
+      expect(links[0].classes()).not.toContain('active')
+      expect(links[1].classes()).toContain('active')
+    })
   })
 
   // ── FAR-47: tier-locked tabs ──────────────────────────────────────────────

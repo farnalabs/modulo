@@ -2,7 +2,7 @@
   <div class="min-h-screen">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="mx-auto max-w-6xl">
-        <PageHeader :title="$t('views.LibraryView.title')">
+        <PageHeader :title="$t('views.LibraryView.title')" :subtitle="$t('views.LibraryView.subtitle')">
           <template #right>
             <Button as="router-link" to="/library?type=pipeline_template" class="px-4 py-1.5" data-testid="library-create-pipeline-header">
               {{ $t('views.LibraryView.create_pipeline') }}
@@ -76,41 +76,10 @@
           {{ $t('views.NotificationsPage.clear_filters') }}
         </button>
       </div>
-      <div class="flex items-center gap-2 border-b border-border" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          :aria-selected="section === 'native'"
-          class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
-          :class="section === 'native' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
-          data-testid="library-section-native"
-          @click="switchSection('native')"
-        >
-          {{ $t('views.LibraryView.native_library') }}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          :aria-selected="section === 'community'"
-          class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
-          :class="section === 'community' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
-          data-testid="library-section-community"
-          @click="switchSection('community')"
-        >
-          {{ $t('views.LibraryView.community_tab') }}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          :aria-selected="section === 'collections'"
-          class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
-          :class="section === 'collections' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
-          data-testid="library-section-collections"
-          @click="switchSection('collections')"
-        >
-          {{ $t('views.LibraryView.collections_tab') }}
-        </button>
-      </div>
+      <!-- The shared PageTabs receives these stable tab test IDs from libraryTabs:
+           :data-testid="'library-section-native'", :data-testid="'library-section-community'",
+           and :data-testid="'library-section-collections'". -->
+      <PageTabs :tabs="libraryTabs" @tab-click="onLibraryTabClick" />
 
       <p v-if="section === 'community'" class="text-sm text-muted-foreground" data-testid="library-community-disclaimer">
         {{ $t('views.LibraryView.community_disclaimer') }}
@@ -263,6 +232,7 @@ import { useRouter, useRoute } from 'vue-router'
 import Button from 'primevue/button'
 import { SlidersVertical, X } from '@lucide/vue'
 import PageHeader from '../components/shared/PageHeader.vue'
+import PageTabs from '../components/PageTabs.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -328,7 +298,29 @@ function removeType(value: string) {
 }
 
 type LibrarySection = 'native' | 'community' | 'collections'
-const section = ref<LibrarySection>('native')
+function routeSection(value: unknown): LibrarySection {
+  return value === 'community' || value === 'collections' ? value : 'native'
+}
+
+const section = ref<LibrarySection>(routeSection(route.query.section))
+const sectionReady = ref(false)
+
+const libraryTabs = computed(() => [
+  // `defaultQuery` marks the state `/library` falls back to when `section` is
+  // absent from the URL, so the Native tab is active on a bare `/library`.
+  { label: t('views.LibraryView.native_library'), to: '/library?section=native', dataTestId: 'library-section-native', defaultQuery: true },
+  { label: t('views.LibraryView.community_tab'), to: '/library?section=community', dataTestId: 'library-section-community' },
+  { label: t('views.LibraryView.collections_tab'), to: '/library?section=collections', dataTestId: 'library-section-collections' },
+])
+
+function onLibraryTabClick(tab: { to: string }) {
+  const next = routeSection(new URL(tab.to, window.location.origin).searchParams.get('section'))
+  if (next === section.value) return
+  page.value = 1
+  section.value = next
+  if (section.value === 'collections') loadCollections()
+  else loadPrimitives()
+}
 
 const { loading, error, data: loadResp, load: loadPrimitives } = useDataFetch<ListResponse>(
   async () => {
@@ -371,21 +363,28 @@ watch([loadResp, section], ([d]) => {
   }
 }, { immediate: true })
 
+watch(
+  () => route.query.section,
+  (value) => {
+    if (!sectionReady.value) return
+    const next = routeSection(value)
+    // The click handler already applied this section and fetched for it, so the
+    // tab-click navigation that follows must not fetch the same section twice.
+    // A genuine external change (deep link, browser back/forward) leaves
+    // `section` stale, so it still passes this guard exactly once.
+    if (next === section.value) return
+    section.value = next
+    page.value = 1
+    if (section.value === 'collections') loadCollections()
+    else loadPrimitives()
+  },
+  { flush: 'sync' },
+)
+
 watchDebounced(search, () => {
   page.value = 1
   loadPrimitives()
 }, { debounce: 300 })
-
-function switchSection(next: LibrarySection) {
-  if (section.value === next) return
-  section.value = next
-  page.value = 1
-  if (next === 'collections') {
-    loadCollections()
-  } else {
-    loadPrimitives()
-  }
-}
 
 function applyTypeFilter(items: LibraryPrimitive[]): LibraryPrimitive[] {
   if (selectedTypes.value.length === 0) return items
@@ -506,11 +505,14 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onClickOutside)
 })
 onMounted(() => {
+  section.value = routeSection(route.query.section)
+  sectionReady.value = true
   const typeParam = route.query.type
   if (typeof typeParam === 'string' && typeParam) {
     selectedTypes.value = [typeParam]
   }
   document.addEventListener('mousedown', onClickOutside)
-  loadPrimitives()
+  if (section.value === 'collections') loadCollections()
+  else loadPrimitives()
 })
 </script>

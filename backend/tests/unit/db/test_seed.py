@@ -61,6 +61,10 @@ async def session(engine) -> AsyncGenerator[AsyncSession, None]:
 
 
 async def _seed_all(session: AsyncSession, org_id: uuid.UUID, account_id: uuid.UUID) -> None:
+    # Production callers always hold an open transaction (the seeder scopes it
+    # to the org via set_rls_org, which requires one).
+    if not session.in_transaction():
+        await session.begin()
     await seed_system_schemas(session, org_id, account_id)
     await session.commit()
     session.expire_all()

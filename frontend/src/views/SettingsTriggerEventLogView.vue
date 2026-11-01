@@ -166,10 +166,10 @@
 
       <div class="flex items-center justify-between">
         <button type="button"
-          :disabled="cursorStack.length === 0"
+          :disabled="!canGoPrevious"
           data-testid="settings-trigger-event-log-previous"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="goToPreviousPage()"
+          @click="goToPreviousPage"
         >
           {{ $t('views.SettingsTriggerEventLogView.previous') }}
         </button>
@@ -180,7 +180,7 @@
           :disabled="!nextCursor"
           data-testid="settings-trigger-event-log-next"
           class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
-          @click="goToNextPage()"
+          @click="goToNextPage"
         >
           {{ $t('views.SettingsTriggerEventLogView.next') }}
         </button>
@@ -194,6 +194,7 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
+import { useCursorPageStack } from '../composables/useCursorPageStack'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -202,9 +203,14 @@ import { shortId } from '../utils/format'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 
-const cursorStack = ref<(string | null)[]>([])
-const currentCursor = ref<string | null>(null)
-const nextCursor = ref<string | null>(null)
+const {
+  cursor: currentCursor,
+  nextCursor,
+  canGoPrevious,
+  goToNextPage,
+  goToPreviousPage,
+  reset: resetCursor,
+} = useCursorPageStack(() => loadEvents())
 
 // Filter refs must be declared BEFORE the useDataFetch call: vue-query
 // subscribes during setup, so the fetcher runs immediately and reads these
@@ -316,31 +322,15 @@ function resultBadge(result: string): string {
   return 'badge badge-context-slate'
 }
 
-function goToPreviousPage() {
-  const prev = cursorStack.value.pop()
-  if (prev === undefined) return
-  currentCursor.value = prev
-  loadEvents()
-}
-
-function goToNextPage() {
-  if (!nextCursor.value) return
-  cursorStack.value.push(currentCursor.value)
-  currentCursor.value = nextCursor.value
-  loadEvents()
-}
-
 function applyFilters() {
-  currentCursor.value = null
-  cursorStack.value = []
+  resetCursor()
   loadEvents()
 }
 
 function resetFilters() {
   filterTriggerType.value = '__all__'
   filterResult.value = '__all__'
-  currentCursor.value = null
-  cursorStack.value = []
+  resetCursor()
   loadEvents()
 }
 </script>
