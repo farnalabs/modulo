@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { cn } from '@/lib/utils'
 
@@ -17,7 +17,6 @@ export interface DataTableRow {
 }
 
 const { t } = useI18n()
-let nextDataTableId = 0
 
 const props = withDefaults(defineProps<{
   columns: Column[]
@@ -43,7 +42,7 @@ const emit = defineEmits<{
   'row-click': [row: DataTableRow]
 }>()
 
-const scrollInstructionsId = `data-table-scroll-instructions-${nextDataTableId++}`
+const scrollInstructionsId = `data-table-scroll-instructions-${useId()}`
 const sortColumn = ref<string | null>(props.initialSortColumn)
 const sortDirection = ref<'asc' | 'desc'>(props.initialSortDirection)
 

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { defineComponent, h } from 'vue'
 import { mount } from '@vue/test-utils'
 import DataTable, { type Column } from '../components/ui/data-table/DataTable.vue'
 
@@ -75,5 +76,24 @@ describe('DataTable keyboard accessibility', () => {
     expect(headerCells(wrapper)[0].attributes('aria-sort')).toBe('descending')
     const firstName = wrapper.findAll('tbody tr')[0].text()
     expect(firstName).toContain('beta')
+  })
+
+  it('gives each mounted table a unique scroll-instructions id', () => {
+    const Parent = defineComponent({
+      setup() {
+        return () => h('div', [
+          h(DataTable, { columns, rows }),
+          h(DataTable, { columns, rows }),
+        ])
+      },
+    })
+    const wrapper = mount(Parent)
+    const regions = wrapper.findAll('[aria-describedby^="data-table-scroll-instructions-"]')
+    expect(regions).toHaveLength(2)
+    const ids = regions.map(region => region.attributes('aria-describedby')!)
+    expect(new Set(ids).size).toBe(2)
+    for (const id of ids) {
+      expect(wrapper.find(`#${id}`).exists()).toBe(true)
+    }
   })
 })
