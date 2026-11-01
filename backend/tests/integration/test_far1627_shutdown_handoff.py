@@ -180,7 +180,7 @@ async def _seed_node_evidence(
     outputs: dict[str, object] | None = None,
     telemetry: dict[str, object] | None = None,
 ) -> None:
-    """Seed one final per-node output row using the production split shape."""
+    """Seed one final per-node output row using the production flat split shape."""
     async with db_engine.begin() as conn:
         await conn.execute(
             text(
@@ -191,8 +191,8 @@ async def _seed_node_evidence(
             {
                 "rid": str(run_id),
                 "oid": str(env.org_id),
-                "outputs": json.dumps({"n1": outputs}) if outputs is not None else None,
-                "telemetry": json.dumps({"n1": telemetry}) if telemetry is not None else None,
+                "outputs": json.dumps(outputs) if outputs is not None else None,
+                "telemetry": json.dumps(telemetry) if telemetry is not None else None,
             },
         )
 

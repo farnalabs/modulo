@@ -141,35 +141,56 @@ def _engine_evidence_expr(column: Any) -> Any:
     Agent-return values remain in ``outputs_json`` and are excluded by this
     expression, preserving their self-reported provenance.
     """
-    node_entries = (
-        func.jsonb_each(cast(column, JSONB)).table_valued("node_id", "node_value").render_derived(name="node_entries")
-    )
-    node_value = node_entries.c.node_value
 
-    def _positive_length(field: str) -> Any:
-        value = node_value.op("->>")(literal(field))
+    def _positive_length(value: Any, field: str) -> Any:
+        field_value = value.op("->>")(literal(field))
         numeric_value = case(
-            (value.op("~")(literal("^[0-9]+$")), cast(value, Integer)),
+            (field_value.op("~")(literal("^[0-9]+$")), cast(field_value, Integer)),
             else_=literal(0),
         )
         return numeric_value > 0
 
-    def _nonempty_text(field: str) -> Any:
-        value = node_value.op("->>")(literal(field))
-        return and_(value.is_not(None), func.length(value) > 0)
+    def _nonempty_text(value: Any, field: str) -> Any:
+        field_value = value.op("->>")(literal(field))
+        return and_(field_value.is_not(None), func.length(field_value) > 0)
 
-    node_has_evidence = and_(
-        func.jsonb_typeof(node_value) == literal("object"),
-        or_(
-            _positive_length("stdout_length"),
-            _positive_length("stderr_length"),
-            _nonempty_text("agent_stdout"),
-            _nonempty_text("agent_stderr"),
-            _nonempty_text("sandbox_log_tail"),
-            _nonempty_text("stderr_artifact"),
-        ),
+    def _nonempty_text_field(value: Any, field: str) -> Any:
+        pointer = value.op("->")(literal(field))
+        return and_(func.jsonb_typeof(pointer) == literal("string"), _nonempty_text(value, field))
+
+    def _nonempty_object(value: Any, field: str) -> Any:
+        pointer = value.op("->")(literal(field))
+        pointer_entries = func.jsonb_each(pointer).table_valued("key", "value")
+        return and_(
+            func.jsonb_typeof(pointer) == literal("object"),
+            exists(select(1).select_from(pointer_entries)),
+        )
+
+    def _has_evidence(value: Any) -> Any:
+        return and_(
+            func.jsonb_typeof(value) == literal("object"),
+            or_(
+                _positive_length(value, "stdout_length"),
+                _positive_length(value, "stderr_length"),
+                _nonempty_text(value, "agent_stdout"),
+                _nonempty_text(value, "agent_stderr"),
+                _nonempty_text(value, "sandbox_log_tail"),
+                _nonempty_text_field(value, "stdout_artifact"),
+                _nonempty_text_field(value, "stderr_artifact"),
+                _nonempty_object(value, "stdout_artifact"),
+                _nonempty_object(value, "stderr_artifact"),
+            ),
+        )
+
+    # P1+ rows store one node's return and telemetry directly in the JSONB
+    # columns. Keep the nested scan as a legacy-compatible read path for rows
+    # written before the split, while evaluating the production flat shape too.
+    flat_value = cast(column, JSONB)
+    node_entries = func.jsonb_each(flat_value).table_valued("node_id", "node_value").render_derived(name="node_entries")
+    return or_(
+        _has_evidence(flat_value),
+        exists(select(1).select_from(node_entries).where(_has_evidence(node_entries.c.node_value))),
     )
-    return exists(select(1).select_from(node_entries).where(node_has_evidence))
 
 
 # The handback RE-QUEUE arm. Fenced exactly like every other claim-fenced

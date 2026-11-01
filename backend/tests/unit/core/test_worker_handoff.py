@@ -29,6 +29,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import literal, select
+from sqlalchemy.dialects import postgresql
 
 import modulo.core.pipeline_execution as pipeline_execution
 import modulo.core.saq_worker as sw
@@ -282,6 +284,28 @@ def test_gate_requeues_zero_node_run_even_on_non_idempotent_graph() -> None:
 
     decision = _handback_decision(_row(dispatch_phase="claimed"), {"nodes": [{"id": "n1", "idempotent": False}]})
     assert decision.may_requeue is True
+
+
+def _compiled_evidence_sql() -> tuple[str, list[object]]:
+    """Compile the SQL evidence predicate with a flat telemetry column."""
+    statement = select(wh._engine_evidence_expr(literal("telemetry", wh.JSONB)))
+    compiled = statement.compile(dialect=postgresql.dialect())
+    return str(compiled), list(compiled.params.values())
+
+
+def test_engine_evidence_accepts_dict_shaped_artifact_pointers() -> None:
+    sql, params = _compiled_evidence_sql()
+
+    assert "jsonb_each" in sql
+    assert "stdout_artifact" in params
+    assert "stderr_artifact" in params
+
+
+def test_engine_evidence_excludes_self_reported_output_json() -> None:
+    _sql, params = _compiled_evidence_sql()
+
+    assert "output_json" not in params
+    assert "provenance" not in params
 
 
 def test_gate_terminalises_node_started_run_with_observed_sandbox_activity() -> None:
