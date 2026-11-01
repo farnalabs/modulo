@@ -1222,7 +1222,9 @@ jobs:
 
            # Resolve the process text executable without shell globbing.  Bash 3.2
            # parses an unquoted glob in [[ ]] as syntax, and command= + awk '{print
-           # $1}' also loses spaces in an executable path.
+           # $1}' also loses spaces in an executable path. Expansion is deferred to
+           # the child shell on purpose, so SC2016 does not apply here.
+           # shellcheck disable=SC2016
            run_assertion "service_binary" bash -c '
              SERVICE_PID="$1"
              INSTALL_ROOT="$2"
