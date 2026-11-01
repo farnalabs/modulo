@@ -91,7 +91,8 @@ from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import Integer, and_, case, cast, exists, func, literal, or_, select, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
@@ -126,6 +127,71 @@ WORKER_LOST_NOT_REQUEUED_DETAIL = (
 # RLS set_config helper — same contract as the periodic sweeps (the per-org
 # statement runs inside set_config('app.organisation_id', ...)).
 _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
+
+
+def _engine_evidence_expr(column: Any) -> Any:
+    """Return a PostgreSQL expression for substantial engine-owned activity.
+
+    ``node_telemetry_json`` contains both useful engine observations and routine
+    lifecycle facts.  Status, summary, exit code, wall-clock time, and provider
+    metadata are present even when a sandbox produced no useful activity, so a
+    non-null telemetry envelope is deliberately *not* evidence.  The qualifying
+    fields below are bounded signals that the runtime actually did work: output
+    stream bytes, retained tails/artifacts, or other durable engine artefacts.
+    Agent-return values remain in ``outputs_json`` and are excluded by this
+    expression, preserving their self-reported provenance.
+    """
+
+    def _positive_length(value: Any, field: str) -> Any:
+        field_value = value.op("->>")(literal(field))
+        numeric_value = case(
+            (field_value.op("~")(literal("^[0-9]+$")), cast(field_value, Integer)),
+            else_=literal(0),
+        )
+        return numeric_value > 0
+
+    def _nonempty_text(value: Any, field: str) -> Any:
+        field_value = value.op("->>")(literal(field))
+        return and_(field_value.is_not(None), func.length(field_value) > 0)
+
+    def _nonempty_text_field(value: Any, field: str) -> Any:
+        pointer = value.op("->")(literal(field))
+        return and_(func.jsonb_typeof(pointer) == literal("string"), _nonempty_text(value, field))
+
+    def _nonempty_object(value: Any, field: str) -> Any:
+        pointer = value.op("->")(literal(field))
+        pointer_entries = func.jsonb_each(pointer).table_valued("key", "value")
+        return and_(
+            func.jsonb_typeof(pointer) == literal("object"),
+            exists(select(1).select_from(pointer_entries)),
+        )
+
+    def _has_evidence(value: Any) -> Any:
+        return and_(
+            func.jsonb_typeof(value) == literal("object"),
+            or_(
+                _positive_length(value, "stdout_length"),
+                _positive_length(value, "stderr_length"),
+                _nonempty_text(value, "agent_stdout"),
+                _nonempty_text(value, "agent_stderr"),
+                _nonempty_text(value, "sandbox_log_tail"),
+                _nonempty_text_field(value, "stdout_artifact"),
+                _nonempty_text_field(value, "stderr_artifact"),
+                _nonempty_object(value, "stdout_artifact"),
+                _nonempty_object(value, "stderr_artifact"),
+            ),
+        )
+
+    # P1+ rows store one node's return and telemetry directly in the JSONB
+    # columns. Keep the nested scan as a legacy-compatible read path for rows
+    # written before the split, while evaluating the production flat shape too.
+    flat_value = cast(column, JSONB)
+    node_entries = func.jsonb_each(flat_value).table_valued("node_id", "node_value").render_derived(name="node_entries")
+    return or_(
+        _has_evidence(flat_value),
+        exists(select(1).select_from(node_entries).where(_has_evidence(node_entries.c.node_value))),
+    )
+
 
 # The handback RE-QUEUE arm. Fenced exactly like every other claim-fenced
 # writer:
@@ -330,6 +396,39 @@ async def _load_handback_row(
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.pipeline_snapshot import PipelineSnapshot
     from modulo.db.models.run import Run
+    from modulo.db.models.run_node_outputs import RunNodeOutput
+
+    def _nonempty_json_expr(column: Any) -> Any:
+        """Match a retained JSON blob that contains at least one value."""
+        json_value = cast(column, JSONB)
+        json_type = func.jsonb_typeof(json_value)
+        object_entries = func.jsonb_each(json_value).table_valued("key", "value")
+        array_entries = func.jsonb_array_elements(json_value).table_valued("value")
+        return and_(
+            column.is_not(None),
+            or_(
+                and_(json_type == literal("object"), exists(select(1).select_from(object_entries))),
+                and_(json_type == literal("array"), exists(select(1).select_from(array_entries))),
+                and_(json_type.not_in(("object", "array")), json_type.is_not(None)),
+            ),
+        )
+
+    observed_activity = exists(
+        select(1).where(
+            RunNodeOutput.run_id == Run.id,
+            RunNodeOutput.organisation_id == org_id,
+            or_(
+                _engine_evidence_expr(RunNodeOutput.node_telemetry_json),
+                and_(
+                    RunNodeOutput.node_telemetry_json.is_(None),
+                    _engine_evidence_expr(RunNodeOutput.outputs_json),
+                ),
+                _nonempty_json_expr(RunNodeOutput.raw_output_markers),
+                _nonempty_json_expr(RunNodeOutput.artifacts_json),
+                _nonempty_json_expr(RunNodeOutput.schema_enforcement_json),
+            ),
+        )
+    ).label("observed_activity")
 
     stmt = (
         select(
@@ -347,6 +446,7 @@ async def _load_handback_row(
             Run.sandbox_dispatch_state,
             Pipeline.retry_policy,
             PipelineSnapshot.graph_json,
+            observed_activity,
             _final_row_absent_expr().label("outputs_absent"),
             _checkpoint_absent_expr().label("checkpoints_absent"),
         )
@@ -367,6 +467,7 @@ async def _load_handback_row(
         dispatched_at=values["dispatched_at"],
         sandbox_dispatch_state=values["sandbox_dispatch_state"],
         retry_policy=values["retry_policy"],
+        observed_activity=bool(values["observed_activity"]),
         outputs_absent=bool(values["outputs_absent"]),
         checkpoints_absent=bool(values["checkpoints_absent"]),
     )
@@ -436,6 +537,16 @@ def _handback_decision(row: Any, graph_json: Any) -> _HandbackDecision:
     graph_idempotent = _graph_is_idempotent(graph)
     policy_ok, policy_reason = _node_started_policy_allows(row)
     node_start_safe = graph_idempotent and policy_ok
+
+    # Durable evidence wins before every requeue arm, including a row that
+    # otherwise satisfies the zero-node premise. Re-running after any observed
+    # or derived activity can repeat side effects and discard that evidence.
+    if getattr(row, "observed_activity", False):
+        return _HandbackDecision(
+            may_requeue=False,
+            node_start_safe=False,
+            reason="durable sandbox activity was observed; terminalisation is safer than re-execution",
+        )
 
     # age_minutes=0 disables ONLY the age leg (a shutdown hands back runs of
     # ANY age); the in-flight shield leg inside _is_nodeless_zombie_row stays
