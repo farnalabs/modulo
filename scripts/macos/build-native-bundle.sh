@@ -116,8 +116,16 @@ from modulo.launcher.initdb import postgres_server_argv
 bundle = Path(sys.argv[1])
 pgdata = bundle / "runtime-contract-pgdata"
 argv = postgres_server_argv(pgdata, "127.0.0.1", 18000, bundle / "bin")
-assert argv[1:3] == ["-D", str(pgdata)], argv
-assert argv[3:] == ["--host", "127.0.0.1", "--port", "18000"], argv
+assert argv == [
+    str(bundle / "bin" / "postgres"),
+    "-D",
+    str(pgdata),
+    "-h",
+    "127.0.0.1",
+    "-p",
+    "18000",
+], argv
+assert "--host" not in argv and "--port" not in argv, argv
 assert f"--pgdata={pgdata}" not in argv, argv
 print(f"bundled postgres argv contract: {argv}")
 PY

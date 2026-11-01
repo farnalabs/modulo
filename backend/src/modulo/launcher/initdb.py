@@ -161,8 +161,10 @@ def postgres_server_argv(pgdata: Path, host: str, port: int, bin_dir: Path) -> l
     Every bundled-binary invocation pins its endpoint arguments — the
     postmaster binds ONLY the launcher-owned host/port persisted in
     state.json, never defaults. PostgreSQL's long-form command-line parser
-    requires value-bearing GUC options to use ``--name=value``; the combined
-    pgdata argument is therefore intentional.
+    interprets server options as
+    valueless GUC-style arguments in this invocation, so use the unambiguous
+    short forms for the data directory, host, and port.
+
     """
     return [
         _binary(bin_dir, "postgres"),
@@ -172,9 +174,9 @@ def postgres_server_argv(pgdata: Path, host: str, port: int, bin_dir: Path) -> l
         # is unambiguous and universally accepted.
         "-D",
         str(pgdata),
-        "--host",
+        "-h",
         host,
-        "--port",
+        "-p",
         str(port),
     ]
 
