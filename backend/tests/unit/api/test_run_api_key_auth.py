@@ -73,8 +73,8 @@ async def test_api_key_runner_principal_is_accepted() -> None:
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")) as validate_patch,
         patch(
-            "modulo.auth.dependencies.resolve_role_from_membership",
-            new=AsyncMock(return_value="runner"),
+            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            new=AsyncMock(return_value=("runner", "human")),
         ),
     ):
         principal = await get_current_tenant_user_or_api_key(
@@ -125,8 +125,8 @@ async def test_api_key_grants_unavailable_raises_503() -> None:
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
         patch(
-            "modulo.auth.dependencies.resolve_role_from_membership",
-            new=AsyncMock(return_value="runner"),
+            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            new=AsyncMock(return_value=("runner", "human")),
         ),
         patch(
             "modulo.auth.api_key.resolve_key_grants",
@@ -183,8 +183,8 @@ async def test_api_key_postgres_dialect_uses_lookup_function() -> None:
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
         patch(
-            "modulo.auth.dependencies.resolve_role_from_membership",
-            new=AsyncMock(return_value="runner"),
+            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            new=AsyncMock(return_value=("runner", "human")),
         ),
     ):
         principal = await get_current_tenant_user_or_api_key(
@@ -209,8 +209,8 @@ async def test_api_key_operator_role_principal_is_accepted() -> None:
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
         patch(
-            "modulo.auth.dependencies.resolve_role_from_membership",
-            new=AsyncMock(return_value="operator"),
+            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            new=AsyncMock(return_value=("operator", "human")),
         ),
     ):
         principal = await get_current_tenant_user_or_api_key(
@@ -236,8 +236,8 @@ async def test_api_key_minted_operator_live_runner_is_demoted() -> None:
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
         patch(
-            "modulo.auth.dependencies.resolve_role_from_membership",
-            new=AsyncMock(return_value="runner"),
+            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            new=AsyncMock(return_value=("runner", "human")),
         ),
     ):
         principal = await get_current_tenant_user_or_api_key(
@@ -260,8 +260,8 @@ async def test_api_key_minted_runner_live_operator_does_not_escalate() -> None:
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
         patch(
-            "modulo.auth.dependencies.resolve_role_from_membership",
-            new=AsyncMock(return_value="operator"),
+            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            new=AsyncMock(return_value=("operator", "human")),
         ),
     ):
         principal = await get_current_tenant_user_or_api_key(
@@ -284,8 +284,8 @@ async def test_api_key_minted_operator_live_admin_does_not_escalate_to_admin() -
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("operator")),
         patch(
-            "modulo.auth.dependencies.resolve_role_from_membership",
-            new=AsyncMock(return_value="admin"),
+            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
+            new=AsyncMock(return_value=("admin", "human")),
         ),
     ):
         principal = await get_current_tenant_user_or_api_key(
@@ -308,7 +308,7 @@ async def test_api_key_removed_member_raises_401() -> None:
         ),
         patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
         patch(
-            "modulo.auth.dependencies.resolve_role_from_membership",
+            "modulo.db.crud.org_membership.resolve_live_role_and_kind",
             new=AsyncMock(return_value=None),
         ),
         pytest.raises(HTTPException) as exc_info,
